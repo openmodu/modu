@@ -16,6 +16,8 @@ type Config struct {
 	EmbeddingModel string
 	// RerankModel 重排模型
 	RerankModel string
+	// GenerateModel 生成模型（用于查询扩展）
+	GenerateModel string
 	// ChunkSize 分块大小（字符数）
 	ChunkSize int
 	// ChunkOverlap 分块重叠（字符数）
@@ -35,9 +37,10 @@ func DefaultConfig() Config {
 		CacheDir:          filepath.Join(homeDir, ".cache", "modu", "models"),
 		EmbeddingModel:    "embeddinggemma-300M-Q8_0",
 		RerankModel:       "qwen3-reranker-0.6b-q8_0",
-		ChunkSize:         3200,           // ~800 tokens
-		ChunkOverlap:      480,            // 15% overlap
-		Threads:           4,              // 4线程
+		GenerateModel:     "Qwen3-0.6B-Q8_0",
+		ChunkSize:         3200,            // ~800 tokens
+		ChunkOverlap:      480,             // 15% overlap
+		Threads:           4,               // 4线程
 		InactivityTimeout: 5 * time.Minute, // 5分钟自动卸载
 	}
 }
@@ -76,6 +79,10 @@ func (c *Config) Validate() error {
 
 	if c.RerankModel == "" {
 		c.RerankModel = "qwen3-reranker-0.6b-q8_0"
+	}
+
+	if c.GenerateModel == "" {
+		c.GenerateModel = "Qwen3-0.6B-Q8_0"
 	}
 
 	if c.Threads == 0 {

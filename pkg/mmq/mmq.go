@@ -58,6 +58,7 @@ func New(cfg Config) (*MMQ, error) {
 
 	setPath(llm.ModelTypeEmbedding, cfg.EmbeddingModel)
 	setPath(llm.ModelTypeRerank, cfg.RerankModel)
+	setPath(llm.ModelTypeGenerate, cfg.GenerateModel)
 
 	// 创建嵌入生成器
 	embeddingGen := llm.NewEmbeddingGenerator(llmImpl, cfg.EmbeddingModel, 300)
