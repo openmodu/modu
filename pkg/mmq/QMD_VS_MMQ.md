@@ -34,16 +34,14 @@ If the goal is to have a library, `mmq` is in a good state (Phase 5.4). If the g
 - Environment variable support (MMQ_DB)
 - Auto-completion support
 
-**Location:** `examples/mmq/` with complete documentation in `PHASE5.5_COMPLETE.md`
+**Location:** `examples/mmq/` with complete documentation in `examples/mmq/README.md`
 
 ### 2. Vector Search Scalability ✅ **RESOLVED**
 **Status:** `mmq` now uses `sqlite-vec` with the same two-step query pattern as `qmd`.
 
 **Implementation:**
 - Uses `vec0` virtual table with cosine distance metric
-- Two-step query to avoid JOIN performance issues:
-  1. Query `vectors_vec` using MATCH operator for k-NN
-  2. Fetch document metadata using hash_seq keys
+- Two-step query to avoid JOIN performance issues
 - Vectors stored in dual tables: `content_vectors` (metadata) + `vectors_vec` (index)
 - Dependency: `github.com/asg017/sqlite-vec-go-bindings/cgo v0.1.6`
 
@@ -54,38 +52,30 @@ If the goal is to have a library, `mmq` is in a good state (Phase 5.4). If the g
 
 **Implementation:**
 - `LLM.ExpandQuery()` generates query variants (lex/vec/hyde types)
-- Each variant uses appropriate search strategy (FTS for lex, vector for vec/hyde)
+- Each variant uses appropriate search strategy
 - Results fused using RRF with variant-specific weights
 - Full caching support via `store.CacheKey()` and LLM cache table
 - Enable via `RetrieveOptions.ExpandQuery = true`
 
-**Pipeline comparison:**
-- **QMD:** `Query` -> `LLM Expansion` -> `[Q1, Q2, Q3]` -> `Search(Q1, Q2, Q3)` -> `Fusion`
-- **MMQ:** `Query` -> `LLM Expansion` -> `[Q1, Q2, Q3]` -> `Search(Q1, Q2, Q3)` -> `Fusion`
-
 **Testing:** See pkg/mmq/advanced_features_test.go (all tests passing)
 
-### 4. LLM Integration & Model Management ✅ **COMPLETE**
-**Status:** Full LLM support with automatic model downloading.
+### 4. LLM Integration & Model Management ✅ **RESOLVED**
+**Status:** Full LLM support with automatic model downloading and compile-time switching.
 
 **Implementation:**
-- **MockLLM**: Works out-of-the-box, no build tags needed. Perfect for development and testing.
-- **LlamaCpp**: Full llama.cpp integration via `go-llama.cpp` (requires `-tags llama`)
-- **Model Downloader**: `pkg/mmq/llm/downloader.go` with HuggingFace integration
-- **CLI Command**: `mmq pull` downloads default models automatically
-
-**Model Management:**
-- Downloads GGUF models from HuggingFace Hub
-- ETag-based caching (avoids re-downloading)
-- SHA256 checksum verification
-- Progress tracking
-- Default models: embeddinggemma (300M), qwen3-reranker (0.6B), qwen3 (0.6B)
+- **Factory Pattern**: `pkg/mmq/llm/factory.go` handles switching between MockLLM and LlamaCpp based on build tags.
+- **MockLLM**: Default for development (no tags needed).
+- **LlamaCpp**: Production mode enabled via `-tags llama`.
+- **Model Downloader**: `mmq pull` command downloads GGUF models from HuggingFace.
+- **Configuration**: API supports configuring model paths dynamically.
 
 **Usage:**
 ```bash
-mmq pull                    # Download all models
-mmq pull --refresh          # Force re-download
-mmq pull --cache-dir /path  # Custom cache location
+# Development (Mock LLM)
+go build -tags fts5 -o mmq examples/mmq/main.go
+
+# Production (Real LLM)
+go build -tags "fts5,llama" -o mmq examples/mmq/main.go
 ```
 
 ## Conclusion

@@ -1,3 +1,4 @@
+//go:build !llama
 // +build !llama
 
 package llm
@@ -131,6 +132,11 @@ func (m *MockLLM) Close() error {
 // IsLoaded 检查模型是否已加载
 func (m *MockLLM) IsLoaded(modelType ModelType) bool {
 	return m.loaded[modelType]
+}
+
+// SetModelPath 设置模型路径（模拟实现）
+func (m *MockLLM) SetModelPath(modelType ModelType, path string) {
+	// 模拟无需设置路径
 }
 
 // computeSimpleTextSimilarity 计算简单的文本相似度

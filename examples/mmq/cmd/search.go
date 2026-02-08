@@ -160,7 +160,7 @@ func runQuery(cmd *cobra.Command, args []string) error {
 		MinScore:   minScore,
 		Collection: collectionFlag,
 		Strategy:   mmq.StrategyHybrid,
-		Rerank:     false, // MockLLM 不支持重排
+		Rerank:     true, // 启用重排 (支持 MockLLM 和 LlamaCpp)
 	})
 
 	if err != nil {

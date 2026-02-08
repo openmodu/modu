@@ -3,6 +3,7 @@ package mmq
 
 import (
 	"fmt"
+	"path/filepath"
 
 	"github.com/crosszan/modu/pkg/mmq/llm"
 	"github.com/crosszan/modu/pkg/mmq/memory"
@@ -34,10 +35,29 @@ func New(cfg Config) (*MMQ, error) {
 	}
 
 	// 初始化LLM
-	// 默认使用MockLLM（用于测试和开发）
-	// 生产环境需要使用真实的LlamaCpp实现
-	var llmImpl llm.LLM
-	llmImpl = llm.NewMockLLM(300) // 300维嵌入
+	// 使用工厂方法创建LLM实例（根据build tags决定是Mock还是Real）
+	modelCfg := llm.DefaultModelConfig()
+	modelCfg.Threads = cfg.Threads
+	modelCfg.Timeout = cfg.InactivityTimeout
+
+	llmImpl, err := llm.NewLLM(modelCfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create LLM: %w", err)
+	}
+
+	// 设置模型路径
+	// 注意：这里假设模型文件名在Config中或者是相对于CacheDir的路径
+	// 如果是完整路径，则直接使用；否则拼接CacheDir
+	setPath := func(t llm.ModelType, info string) {
+		path := info
+		if !filepath.IsAbs(path) && cfg.CacheDir != "" {
+			path = filepath.Join(cfg.CacheDir, path)
+		}
+		llmImpl.SetModelPath(t, path)
+	}
+
+	setPath(llm.ModelTypeEmbedding, cfg.EmbeddingModel)
+	setPath(llm.ModelTypeRerank, cfg.RerankModel)
 
 	// 创建嵌入生成器
 	embeddingGen := llm.NewEmbeddingGenerator(llmImpl, cfg.EmbeddingModel, 300)

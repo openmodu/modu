@@ -28,6 +28,9 @@ type LLM interface {
 
 	// IsLoaded 检查模型是否已加载
 	IsLoaded(modelType ModelType) bool
+
+	// SetModelPath 设置模型路径
+	SetModelPath(modelType ModelType, path string)
 }
 
 // ModelType 模型类型
