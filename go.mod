@@ -9,6 +9,7 @@ require (
 )
 
 require (
+	github.com/asg017/sqlite-vec-go-bindings v0.1.6 // indirect
 	github.com/bmatcuk/doublestar/v4 v4.10.0 // indirect
 	github.com/deckarep/golang-set/v2 v2.7.0 // indirect
 	github.com/go-jose/go-jose/v3 v3.0.4 // indirect

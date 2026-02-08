@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 
+	sqlite_vec "github.com/asg017/sqlite-vec-go-bindings/cgo"
 	_ "github.com/mattn/go-sqlite3" // SQLite driver
 )
 
@@ -132,6 +133,9 @@ type Store struct {
 
 // New 创建新的Store实例
 func New(dbPath string) (*Store, error) {
+	// 初始化 sqlite-vec 扩展
+	sqlite_vec.Auto()
+
 	// 打开数据库
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
@@ -170,4 +174,30 @@ func (s *Store) Close() error {
 // DB 返回底层数据库连接（用于高级操作）
 func (s *Store) DB() *sql.DB {
 	return s.db
+}
+
+// ensureVectorTable 确保vectors_vec虚拟表存在
+// 如果表不存在，根据提供的向量维度创建它
+func (s *Store) ensureVectorTable(dimensions int) error {
+	// 检查表是否存在
+	var tableName string
+	err := s.db.QueryRow(`
+		SELECT name FROM sqlite_master
+		WHERE type='table' AND name='vectors_vec'
+	`).Scan(&tableName)
+
+	if err == sql.ErrNoRows {
+		// 表不存在，创建它
+		createSQL := fmt.Sprintf(
+			"CREATE VIRTUAL TABLE vectors_vec USING vec0(hash_seq TEXT PRIMARY KEY, embedding float[%d] distance_metric=cosine)",
+			dimensions,
+		)
+		if _, err := s.db.Exec(createSQL); err != nil {
+			return fmt.Errorf("failed to create vectors_vec table: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("failed to check vectors_vec table: %w", err)
+	}
+
+	return nil
 }
