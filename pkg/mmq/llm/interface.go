@@ -20,6 +20,9 @@ type LLM interface {
 	// Generate 生成文本（用于查询扩展等）
 	Generate(prompt string, opts GenerateOptions) (string, error)
 
+	// ExpandQuery 查询扩展，生成查询变体以提高检索召回率
+	ExpandQuery(query string) ([]QueryExpansion, error)
+
 	// Close 关闭并释放资源
 	Close() error
 

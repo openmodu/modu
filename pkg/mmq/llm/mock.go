@@ -97,6 +97,31 @@ func (m *MockLLM) Generate(prompt string, opts GenerateOptions) (string, error) 
 	return fmt.Sprintf("Mock generated response for: %s", prompt), nil
 }
 
+// ExpandQuery 查询扩展（模拟实现）
+func (m *MockLLM) ExpandQuery(query string) ([]QueryExpansion, error) {
+	m.loaded[ModelTypeGenerate] = true
+
+	// 返回模拟的查询扩展结果
+	// 包含原始查询的不同变体
+	return []QueryExpansion{
+		{
+			Type:   "lex",
+			Text:   query,
+			Weight: 1.0,
+		},
+		{
+			Type:   "vec",
+			Text:   query + " explanation",
+			Weight: 0.8,
+		},
+		{
+			Type:   "hyde",
+			Text:   "This document explains " + query,
+			Weight: 0.6,
+		},
+	}, nil
+}
+
 // Close 关闭
 func (m *MockLLM) Close() error {
 	m.loaded = make(map[ModelType]bool)

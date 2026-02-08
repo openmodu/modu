@@ -346,6 +346,213 @@ func (l *LlamaCpp) Generate(prompt string, opts GenerateOptions) (string, error)
 	return result, nil
 }
 
+// ExpandQuery 查询扩展，生成查询变体
+func (l *LlamaCpp) ExpandQuery(query string) ([]QueryExpansion, error) {
+	// 构建提示词（参考 qmd 的实现）
+	prompt := fmt.Sprintf(`Expand this search query into different variations. Output each on a new line in the format "type: content" where type is lex, vec, or hyde.
+
+Query: %s
+
+Expansions:`, query)
+
+	// 设置生成选项
+	opts := GenerateOptions{
+		Temperature: 0.7,
+		TopK:        20,
+		TopP:        0.8,
+		MaxTokens:   600,
+		StopWords:   []string{"\n\n"},
+	}
+
+	// 生成扩展查询
+	result, err := l.Generate(prompt, opts)
+	if err != nil {
+		// 出错时返回原始查询作为后备
+		return []QueryExpansion{
+			{Type: "vec", Text: query, Weight: 1.0},
+		}, nil
+	}
+
+	// 解析结果
+	expansions := parseQueryExpansions(result, query)
+	if len(expansions) == 0 {
+		// 如果解析失败，返回默认扩展
+		return []QueryExpansion{
+			{Type: "lex", Text: query, Weight: 1.0},
+			{Type: "vec", Text: query, Weight: 0.9},
+			{Type: "hyde", Text: fmt.Sprintf("Information about %s", query), Weight: 0.7},
+		}, nil
+	}
+
+	return expansions, nil
+}
+
+// parseQueryExpansions 解析查询扩展结果
+func parseQueryExpansions(text, originalQuery string) []QueryExpansion {
+	var expansions []QueryExpansion
+	queryLower := toLower(originalQuery)
+	queryTerms := splitIntoTerms(queryLower)
+
+	lines := splitLines(text)
+	for _, line := range lines {
+		line = trimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		// 查找冒号分隔符
+		colonIdx := -1
+		for i, r := range line {
+			if r == ':' {
+				colonIdx = i
+				break
+			}
+		}
+
+		if colonIdx == -1 {
+			continue
+		}
+
+		typ := trimSpace(line[:colonIdx])
+		content := trimSpace(line[colonIdx+1:])
+
+		// 验证类型
+		if typ != "lex" && typ != "vec" && typ != "hyde" {
+			continue
+		}
+
+		// 验证内容包含查询词
+		if !hasAnyTerm(content, queryTerms) {
+			continue
+		}
+
+		// 根据类型设置权重
+		weight := 1.0
+		switch typ {
+		case "lex":
+			weight = 1.0
+		case "vec":
+			weight = 0.8
+		case "hyde":
+			weight = 0.6
+		}
+
+		expansions = append(expansions, QueryExpansion{
+			Type:   typ,
+			Text:   content,
+			Weight: weight,
+		})
+	}
+
+	return expansions
+}
+
+// 辅助函数
+
+func toLower(s string) string {
+	result := make([]rune, 0, len(s))
+	for _, r := range s {
+		if r >= 'A' && r <= 'Z' {
+			result = append(result, r+32)
+		} else {
+			result = append(result, r)
+		}
+	}
+	return string(result)
+}
+
+func trimSpace(s string) string {
+	start := 0
+	end := len(s)
+
+	runes := []rune(s)
+	for start < end && (runes[start] == ' ' || runes[start] == '\t' || runes[start] == '\n' || runes[start] == '\r') {
+		start++
+	}
+	for end > start && (runes[end-1] == ' ' || runes[end-1] == '\t' || runes[end-1] == '\n' || runes[end-1] == '\r') {
+		end--
+	}
+
+	return string(runes[start:end])
+}
+
+func splitLines(s string) []string {
+	var lines []string
+	var line []rune
+
+	for _, r := range s {
+		if r == '\n' {
+			lines = append(lines, string(line))
+			line = nil
+		} else {
+			line = append(line, r)
+		}
+	}
+
+	if len(line) > 0 {
+		lines = append(lines, string(line))
+	}
+
+	return lines
+}
+
+func splitIntoTerms(s string) []string {
+	var terms []string
+	var term []rune
+
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			term = append(term, r)
+		} else if len(term) > 0 {
+			terms = append(terms, string(term))
+			term = nil
+		}
+	}
+
+	if len(term) > 0 {
+		terms = append(terms, string(term))
+	}
+
+	return terms
+}
+
+func hasAnyTerm(text string, terms []string) bool {
+	if len(terms) == 0 {
+		return true
+	}
+
+	textLower := toLower(text)
+	for _, term := range terms {
+		if contains(textLower, term) {
+			return true
+		}
+	}
+	return false
+}
+
+func contains(s, substr string) bool {
+	if len(substr) == 0 {
+		return true
+	}
+	if len(s) < len(substr) {
+		return false
+	}
+
+	for i := 0; i <= len(s)-len(substr); i++ {
+		match := true
+		for j := 0; j < len(substr); j++ {
+			if s[i+j] != substr[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
 // Close 关闭并释放所有资源
 func (l *LlamaCpp) Close() error {
 	l.mu.Lock()

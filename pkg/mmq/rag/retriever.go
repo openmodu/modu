@@ -1,6 +1,7 @@
 package rag
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/crosszan/modu/pkg/mmq/llm"
@@ -34,24 +35,26 @@ const (
 
 // RetrieveOptions 检索选项
 type RetrieveOptions struct {
-	Limit      int               // 返回结果数量
-	MinScore   float64           // 最小分数阈值
-	Collection string            // 集合过滤
-	Strategy   RetrievalStrategy // 检索策略
-	Rerank     bool              // 是否重排序
-	RRFWeights []float64         // RRF权重
-	RRFK       int               // RRF参数K
+	Limit         int               // 返回结果数量
+	MinScore      float64           // 最小分数阈值
+	Collection    string            // 集合过滤
+	Strategy      RetrievalStrategy // 检索策略
+	Rerank        bool              // 是否重排序
+	ExpandQuery   bool              // 是否使用查询扩展
+	RRFWeights    []float64         // RRF权重
+	RRFK          int               // RRF参数K
 }
 
 // DefaultRetrieveOptions 默认检索选项
 func DefaultRetrieveOptions() RetrieveOptions {
 	return RetrieveOptions{
-		Limit:      10,
-		MinScore:   0.0,
-		Strategy:   StrategyHybrid,
-		Rerank:     false,
-		RRFWeights: []float64{1.0, 1.0},
-		RRFK:       60,
+		Limit:       10,
+		MinScore:    0.0,
+		Strategy:    StrategyHybrid,
+		Rerank:      false,
+		ExpandQuery: false,
+		RRFWeights:  []float64{1.0, 1.0},
+		RRFK:        60,
 	}
 }
 
@@ -68,15 +71,21 @@ func (r *Retriever) Retrieve(query string, opts RetrieveOptions) ([]Context, err
 	var results []store.SearchResult
 	var err error
 
-	switch opts.Strategy {
-	case StrategyFTS:
-		results, err = r.retrieveFTS(query, opts)
-	case StrategyVector:
-		results, err = r.retrieveVector(query, opts)
-	case StrategyHybrid:
-		results, err = r.retrieveHybrid(query, opts)
-	default:
-		return nil, fmt.Errorf("unknown strategy: %s", opts.Strategy)
+	// 如果启用查询扩展，执行多查询并合并结果
+	if opts.ExpandQuery {
+		results, err = r.retrieveWithExpansion(query, opts)
+	} else {
+		// 标准检索
+		switch opts.Strategy {
+		case StrategyFTS:
+			results, err = r.retrieveFTS(query, opts)
+		case StrategyVector:
+			results, err = r.retrieveVector(query, opts)
+		case StrategyHybrid:
+			results, err = r.retrieveHybrid(query, opts)
+		default:
+			return nil, fmt.Errorf("unknown strategy: %s", opts.Strategy)
+		}
 	}
 
 	if err != nil {
@@ -277,4 +286,101 @@ func splitWords(text string) []string {
 	}
 
 	return words
+}
+
+// retrieveWithExpansion 使用查询扩展进行检索
+func (r *Retriever) retrieveWithExpansion(query string, opts RetrieveOptions) ([]store.SearchResult, error) {
+	// 1. 扩展查询（带缓存）
+	expansions, err := r.expandQueryWithCache(query)
+	if err != nil {
+		// 如果扩展失败，回退到原始查询
+		return r.retrieveSingleQuery(query, opts)
+	}
+
+	if len(expansions) == 0 {
+		return r.retrieveSingleQuery(query, opts)
+	}
+
+	// 2. 对每个扩展查询执行检索
+	var allResultLists [][]store.SearchResult
+	var weights []float64
+
+	for _, exp := range expansions {
+		var results []store.SearchResult
+		var err error
+
+		// 根据扩展类型选择检索策略
+		switch exp.Type {
+		case "lex":
+			// 词法查询 -> FTS
+			results, err = r.retrieveFTS(exp.Text, opts)
+		case "vec", "hyde":
+			// 向量/假设文档查询 -> Vector Search
+			results, err = r.retrieveVector(exp.Text, opts)
+		default:
+			// 默认使用混合搜索
+			results, err = r.retrieveHybrid(exp.Text, opts)
+		}
+
+		if err == nil && len(results) > 0 {
+			allResultLists = append(allResultLists, results)
+			weights = append(weights, exp.Weight)
+		}
+	}
+
+	// 3. 如果所有查询都失败，使用原始查询
+	if len(allResultLists) == 0 {
+		return r.retrieveSingleQuery(query, opts)
+	}
+
+	// 4. 使用 RRF 融合所有结果
+	fused := store.ReciprocalRankFusion(allResultLists, weights, opts.RRFK)
+
+	return fused, nil
+}
+
+// retrieveSingleQuery 执行单个查询的检索
+func (r *Retriever) retrieveSingleQuery(query string, opts RetrieveOptions) ([]store.SearchResult, error) {
+	switch opts.Strategy {
+	case StrategyFTS:
+		return r.retrieveFTS(query, opts)
+	case StrategyVector:
+		return r.retrieveVector(query, opts)
+	case StrategyHybrid:
+		return r.retrieveHybrid(query, opts)
+	default:
+		return nil, fmt.Errorf("unknown strategy: %s", opts.Strategy)
+	}
+}
+
+// expandQueryWithCache 扩展查询并使用缓存
+func (r *Retriever) expandQueryWithCache(query string) ([]llm.QueryExpansion, error) {
+	// 生成缓存键
+	cacheKey := store.CacheKey("expandQuery", map[string]string{"query": query})
+
+	// 检查缓存
+	cached, err := r.store.GetCachedResult(cacheKey)
+	if err == nil && cached != "" {
+		// 解析缓存的结果
+		var expansions []llm.QueryExpansion
+		if err := json.Unmarshal([]byte(cached), &expansions); err == nil {
+			return expansions, nil
+		}
+	}
+
+	// 调用 LLM 扩展查询
+	expansions, err := r.llm.ExpandQuery(query)
+	if err != nil {
+		return nil, err
+	}
+
+	// 缓存结果
+	if len(expansions) > 0 {
+		data, err := json.Marshal(expansions)
+		if err == nil {
+			r.store.SetCachedResult(cacheKey, string(data))
+		}
+	}
+
+	return expansions, nil
 }
