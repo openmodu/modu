@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/crosszan/modu/pkg/mmq"
 	"github.com/spf13/cobra"
@@ -64,7 +65,7 @@ func init() {
 // getMMQ 获取MMQ实例（辅助函数）
 func getMMQ() (*mmq.MMQ, error) {
 	// 确保数据库目录存在
-	dbDir := dbPath[:len(dbPath)-len("/index.db")]
+	dbDir := filepath.Dir(dbPath)
 	if err := os.MkdirAll(dbDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create db directory: %w", err)
 	}

@@ -21,13 +21,13 @@ func TestAddContext(t *testing.T) {
 	}
 
 	// 添加集合级上下文
-	err = m.AddContext("qmd://docs", "This collection contains documentation")
+	err = m.AddContext("mmq://docs", "This collection contains documentation")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// 添加路径级上下文
-	err = m.AddContext("qmd://docs/api", "API documentation section")
+	err = m.AddContext("mmq://docs/api", "API documentation section")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,10 +56,10 @@ func TestListContexts(t *testing.T) {
 	// 添加多个上下文
 	contexts := map[string]string{
 		"/":                  "Global context",
-		"qmd://docs":         "Documentation collection",
-		"qmd://code":         "Code examples collection",
-		"qmd://docs/api":     "API documentation",
-		"qmd://docs/guides":  "User guides",
+		"mmq://docs":         "Documentation collection",
+		"mmq://code":         "Code examples collection",
+		"mmq://docs/api":     "API documentation",
+		"mmq://docs/guides":  "User guides",
 	}
 
 	for path, content := range contexts {
@@ -93,7 +93,7 @@ func TestUpdateContext(t *testing.T) {
 	}
 	defer m.Close()
 
-	path := "qmd://test"
+	path := "mmq://test"
 
 	// 添加上下文
 	err = m.AddContext(path, "Original content")
@@ -128,7 +128,7 @@ func TestRemoveContext(t *testing.T) {
 	}
 	defer m.Close()
 
-	path := "qmd://temp"
+	path := "mmq://temp"
 
 	// 添加上下文
 	err = m.AddContext(path, "Temporary context")
@@ -164,7 +164,7 @@ func TestCheckMissingContexts(t *testing.T) {
 	m.CreateCollection("code", "/tmp/code", CollectionOptions{})
 
 	// 只为docs添加上下文
-	m.AddContext("qmd://docs", "Documentation collection")
+	m.AddContext("mmq://docs", "Documentation collection")
 
 	// 检查缺失的上下文
 	missing, err := m.CheckMissingContexts()
@@ -212,17 +212,17 @@ func TestGetContextsForPath(t *testing.T) {
 
 	// 添加层级上下文
 	m.AddContext("/", "Global context")
-	m.AddContext("qmd://docs", "Docs collection context")
-	m.AddContext("qmd://docs/api", "API section context")
+	m.AddContext("mmq://docs", "Docs collection context")
+	m.AddContext("mmq://docs/api", "API section context")
 
 	// 测试获取特定路径的上下文
 	t.Run("Document in API section", func(t *testing.T) {
-		contexts, err := m.GetContextsForPath("qmd://docs/api/endpoints.md")
+		contexts, err := m.GetContextsForPath("mmq://docs/api/endpoints.md")
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		t.Logf("Found %d contexts for qmd://docs/api/endpoints.md", len(contexts))
+		t.Logf("Found %d contexts for mmq://docs/api/endpoints.md", len(contexts))
 		for _, ctx := range contexts {
 			t.Logf("  - %s: %s", ctx.Path, ctx.Content)
 		}
@@ -234,12 +234,12 @@ func TestGetContextsForPath(t *testing.T) {
 	})
 
 	t.Run("Document in docs root", func(t *testing.T) {
-		contexts, err := m.GetContextsForPath("qmd://docs/readme.md")
+		contexts, err := m.GetContextsForPath("mmq://docs/readme.md")
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		t.Logf("Found %d contexts for qmd://docs/readme.md", len(contexts))
+		t.Logf("Found %d contexts for mmq://docs/readme.md", len(contexts))
 
 		// 应该匹配全局和docs集合
 		if len(contexts) < 2 {
@@ -258,8 +258,8 @@ func TestGetDocumentContexts(t *testing.T) {
 
 	// 添加层级上下文
 	m.AddContext("/", "Global: All documents in the system")
-	m.AddContext("qmd://docs", "Collection: Technical documentation")
-	m.AddContext("qmd://docs/api/endpoints.md", "Document: REST API endpoints reference")
+	m.AddContext("mmq://docs", "Collection: Technical documentation")
+	m.AddContext("mmq://docs/api/endpoints.md", "Document: REST API endpoints reference")
 
 	// 获取文档的上下文（按优先级排序）
 	contexts, err := m.GetDocumentContexts("docs", "api/endpoints.md")
@@ -294,19 +294,19 @@ func TestContextPathMatching(t *testing.T) {
 
 	// 添加不同层级的上下文
 	m.AddContext("/", "Global")
-	m.AddContext("qmd://docs", "Docs collection")
-	m.AddContext("qmd://docs/guides", "Guides section")
-	m.AddContext("qmd://code", "Code collection")
+	m.AddContext("mmq://docs", "Docs collection")
+	m.AddContext("mmq://docs/guides", "Guides section")
+	m.AddContext("mmq://code", "Code collection")
 
 	tests := []struct {
 		targetPath      string
 		expectedMatches int
 		description     string
 	}{
-		{"qmd://docs/guides/intro.md", 3, "Should match /, docs, and guides"},
-		{"qmd://docs/api/rest.md", 2, "Should match / and docs"},
-		{"qmd://code/example.go", 2, "Should match / and code"},
-		{"qmd://other/file.md", 1, "Should only match /"},
+		{"mmq://docs/guides/intro.md", 3, "Should match /, docs, and guides"},
+		{"mmq://docs/api/rest.md", 2, "Should match / and docs"},
+		{"mmq://code/example.go", 2, "Should match / and code"},
+		{"mmq://other/file.md", 1, "Should only match /"},
 	}
 
 	for _, tt := range tests {
@@ -343,8 +343,8 @@ func TestContextWithCollections(t *testing.T) {
 	m.AddContext("/", "Global context for all collections")
 
 	// 为每个集合添加上下文
-	m.AddContext("qmd://notes", "Personal notes and ideas")
-	m.AddContext("qmd://articles", "Published articles and blog posts")
+	m.AddContext("mmq://notes", "Personal notes and ideas")
+	m.AddContext("mmq://articles", "Published articles and blog posts")
 
 	// 检查缺失的上下文
 	missing, err := m.CheckMissingContexts()

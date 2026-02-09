@@ -21,8 +21,8 @@ var contextAddCmd = &cobra.Command{
 Examples:
   mmq context add "Global context"              # Add to current directory
   mmq context add / "Global context"            # Add global context
-  mmq context add qmd://docs "Documentation"    # Add for collection
-  mmq context add qmd://docs/api "API docs"     # Add for path`,
+  mmq context add mmq://docs "Documentation"    # Add for collection
+  mmq context add mmq://docs/api "API docs"     # Add for path`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: runContextAdd,
 }

@@ -128,7 +128,7 @@ func (s *Store) ListDocumentsByPath(collection, path string) ([]DocumentListEntr
 }
 
 // GetDocumentByPath 通过路径获取文档
-// 路径格式：collection/path 或 qmd://collection/path
+// 路径格式：collection/path 或 mmq://collection/path
 func (s *Store) GetDocumentByPath(filePath string) (*DocumentDetail, error) {
 	// 解析路径
 	collection, path := parseFilePath(filePath)
@@ -415,11 +415,13 @@ func (s *Store) getDocumentSingle(identifier string, maxBytes int) (*DocumentDet
 
 // parseFilePath 解析文件路径
 // 支持格式：
-// - qmd://collection/path -> (collection, path)
+// - mmq://collection/path -> (collection, path)
+// - qmd://collection/path -> (collection, path) (兼容旧格式)
 // - collection/path -> (collection, path)
 // - path -> ("", path)
 func parseFilePath(filePath string) (collection, path string) {
-	// 移除 qmd:// 前缀
+	// 移除 mmq:// 或 qmd:// 前缀
+	filePath = strings.TrimPrefix(filePath, "mmq://")
 	filePath = strings.TrimPrefix(filePath, "qmd://")
 
 	// 分割路径

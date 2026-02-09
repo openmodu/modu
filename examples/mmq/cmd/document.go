@@ -19,7 +19,7 @@ Examples:
   mmq ls                    # List all documents
   mmq ls docs               # List documents in 'docs' collection
   mmq ls docs/api           # List documents in 'docs/api' path
-  mmq ls qmd://docs/2024    # List using qmd:// URI`,
+  mmq ls mmq://docs/2024    # List using mmq:// URI`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runLs,
 }
@@ -32,7 +32,7 @@ var getCmd = &cobra.Command{
 
 Examples:
   mmq get docs/readme.md       # Get by path
-  mmq get qmd://docs/readme.md # Get by qmd:// URI
+  mmq get mmq://docs/readme.md # Get by mmq:// URI
   mmq get "#abc123"            # Get by docid
   mmq get abc123               # Get by docid (# optional)`,
 	Args: cobra.ExactArgs(1),
@@ -83,7 +83,8 @@ func runLs(cmd *cobra.Command, args []string) error {
 
 	if len(args) > 0 {
 		// 解析 collection[/path]
-		parts := strings.SplitN(strings.TrimPrefix(args[0], "qmd://"), "/", 2)
+		arg := strings.TrimPrefix(strings.TrimPrefix(args[0], "mmq://"), "qmd://")
+		parts := strings.SplitN(arg, "/", 2)
 		coll = parts[0]
 		if len(parts) > 1 {
 			path = parts[1]

@@ -7,7 +7,7 @@
 ### 构建
 
 ```bash
-go build -tags="fts5" -o mmq
+ CGO_CFLAGS="-Wno-deprecated-declarations" go build -tags="fts5" -o mmq
 ```
 
 ### 基本使用

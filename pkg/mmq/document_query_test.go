@@ -160,8 +160,8 @@ func TestGetDocumentByPath(t *testing.T) {
 		t.Logf("Content: %s", detail.Content)
 	})
 
-	t.Run("Get by qmd:// URI", func(t *testing.T) {
-		detail, err := m.GetDocumentByPath("qmd://notes/2025/daily.md")
+	t.Run("Get by mmq:// URI", func(t *testing.T) {
+		detail, err := m.GetDocumentByPath("mmq://notes/2025/daily.md")
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -121,7 +121,7 @@ func (s *Store) RemoveContext(path string) error {
 }
 
 // GetContextsForPath 获取路径的所有相关上下文
-// 支持层级匹配：/ -> qmd://collection -> qmd://collection/path
+// 支持层级匹配：/ -> mmq://collection -> mmq://collection/path
 func (s *Store) GetContextsForPath(targetPath string) ([]ContextEntry, error) {
 	rows, err := s.db.Query(`
 		SELECT path, content, created_at, updated_at
@@ -174,7 +174,7 @@ func (s *Store) CheckMissingContexts() ([]string, error) {
 
 	// 检查每个集合
 	for _, coll := range collections {
-		collPath := fmt.Sprintf("qmd://%s", coll)
+		collPath := fmt.Sprintf("mmq://%s", coll)
 		ctx, _ := s.GetContext(collPath)
 		if ctx == nil {
 			missing = append(missing, collPath)
@@ -198,8 +198,8 @@ func (s *Store) ContextExists(path string) (bool, error) {
 // isPathMatch 检查上下文路径是否匹配目标路径
 // 支持：
 // - "/" 匹配所有路径（全局）
-// - "qmd://collection" 匹配该集合下所有文档
-// - "qmd://collection/path" 匹配特定路径
+// - "mmq://collection" 匹配该集合下所有文档
+// - "mmq://collection/path" 匹配特定路径
 func isPathMatch(contextPath, targetPath string) bool {
 	// 全局上下文
 	if contextPath == "/" {
@@ -217,9 +217,9 @@ func isPathMatch(contextPath, targetPath string) bool {
 	}
 
 	// collection级别匹配
-	// contextPath: "qmd://collection"
-	// targetPath: "qmd://collection/path"
-	if strings.HasPrefix(contextPath, "qmd://") && strings.HasPrefix(targetPath, contextPath+"/") {
+	// contextPath: "mmq://collection"
+	// targetPath: "mmq://collection/path"
+	if strings.HasPrefix(contextPath, "mmq://") && strings.HasPrefix(targetPath, contextPath+"/") {
 		return true
 	}
 
@@ -228,12 +228,12 @@ func isPathMatch(contextPath, targetPath string) bool {
 
 // GetAllContextsForDocument 获取文档的所有相关上下文（按优先级排序）
 func (s *Store) GetAllContextsForDocument(collection, path string) ([]ContextEntry, error) {
-	targetPath := fmt.Sprintf("qmd://%s/%s", collection, path)
+	targetPath := fmt.Sprintf("mmq://%s/%s", collection, path)
 
 	// 可能的上下文路径（按优先级从高到低）
 	paths := []string{
 		targetPath,                      // 精确路径
-		fmt.Sprintf("qmd://%s", collection), // 集合级别
+		fmt.Sprintf("mmq://%s", collection), // 集合级别
 		"/",                             // 全局
 	}
 

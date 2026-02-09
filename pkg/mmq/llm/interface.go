@@ -85,6 +85,8 @@ type ModelConfig struct {
 	BatchSize   int           // 批处理大小
 	GPU         bool          // 是否使用GPU
 	Timeout     time.Duration // 超时时间
+	CacheDir    string        // 模型缓存目录
+	LibPath     string        // yzma 库路径（YZMA_LIB）
 }
 
 // DefaultModelConfig 默认模型配置

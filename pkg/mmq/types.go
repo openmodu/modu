@@ -135,7 +135,7 @@ type CollectionOptions struct {
 
 // ContextEntry 上下文条目
 type ContextEntry struct {
-	Path      string    `json:"path"`       // 路径（/为全局，qmd://collection为集合级）
+	Path      string    `json:"path"`       // 路径（/为全局，mmq://collection为集合级）
 	Content   string    `json:"content"`    // 上下文内容
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

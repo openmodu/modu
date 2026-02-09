@@ -3,6 +3,7 @@ package mmq
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/crosszan/modu/pkg/mmq/llm"
@@ -39,6 +40,8 @@ func New(cfg Config) (*MMQ, error) {
 	modelCfg := llm.DefaultModelConfig()
 	modelCfg.Threads = cfg.Threads
 	modelCfg.Timeout = cfg.InactivityTimeout
+	modelCfg.CacheDir = cfg.CacheDir
+	modelCfg.LibPath = os.Getenv("YZMA_LIB")
 
 	llmImpl, err := llm.NewLLM(modelCfg)
 	if err != nil {
@@ -61,7 +64,8 @@ func New(cfg Config) (*MMQ, error) {
 	setPath(llm.ModelTypeGenerate, cfg.GenerateModel)
 
 	// 创建嵌入生成器
-	embeddingGen := llm.NewEmbeddingGenerator(llmImpl, cfg.EmbeddingModel, 300)
+	// 维度设为 0，由 EmbeddingGenerator 自动适配实际模型维度
+	embeddingGen := llm.NewEmbeddingGenerator(llmImpl, cfg.EmbeddingModel, 0)
 
 	// 创建RAG检索器
 	retriever := rag.NewRetriever(st, llmImpl, embeddingGen)
@@ -557,7 +561,7 @@ func (m *MMQ) ListDocuments(collection, path string) ([]DocumentListEntry, error
 }
 
 // GetDocumentByPath 通过路径获取文档
-// 路径格式：collection/path 或 qmd://collection/path
+// 路径格式：collection/path 或 mmq://collection/path
 func (m *MMQ) GetDocumentByPath(filePath string) (*DocumentDetail, error) {
 	storeDoc, err := m.store.GetDocumentByPath(filePath)
 	if err != nil {
