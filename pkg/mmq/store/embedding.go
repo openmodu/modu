@@ -44,11 +44,8 @@ func (s *Store) StoreEmbedding(hash string, seq int, pos int, embedding []float3
 		return fmt.Errorf("failed to ensure vector table: %w", err)
 	}
 
-	// 将float32数组转换为blob（用于content_vectors表）
-	blob := float32ToBlob(embedding)
-
-	// 序列化向量用于 sqlite-vec（用于vectors_vec表）
-	vecBlob, err := sqlite_vec.SerializeFloat32(embedding)
+	// 序列化向量（content_vectors 和 vectors_vec 共用）
+	blob, err := sqlite_vec.SerializeFloat32(embedding)
 	if err != nil {
 		return fmt.Errorf("failed to serialize vector: %w", err)
 	}
@@ -78,7 +75,7 @@ func (s *Store) StoreEmbedding(hash string, seq int, pos int, embedding []float3
 	_, err = tx.Exec(`
 		INSERT OR REPLACE INTO vectors_vec (hash_seq, embedding)
 		VALUES (?, ?)
-	`, hashSeq, vecBlob)
+	`, hashSeq, blob)
 	if err != nil {
 		return fmt.Errorf("failed to store vector in vec table: %w", err)
 	}

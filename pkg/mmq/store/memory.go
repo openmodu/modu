@@ -7,6 +7,7 @@ import (
 	"math"
 	"time"
 
+	sqlite_vec "github.com/asg017/sqlite-vec-go-bindings/cgo"
 	"github.com/google/uuid"
 )
 
@@ -57,7 +58,10 @@ func (s *Store) InsertMemory(
 	}
 
 	// 序列化embedding为BLOB
-	embeddingBlob := float32ToBlob(embedding)
+	embeddingBlob, err := sqlite_vec.SerializeFloat32(embedding)
+	if err != nil {
+		return fmt.Errorf("failed to serialize embedding: %w", err)
+	}
 
 	// 处理expires_at
 	var expiresAtStr *string
@@ -67,7 +71,7 @@ func (s *Store) InsertMemory(
 	}
 
 	// 插入数据库
-	_, err := s.db.Exec(`
+	_, err = s.db.Exec(`
 		INSERT INTO memories (id, type, content, metadata, tags, timestamp, expires_at, importance, embedding)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, id, memType, content, metadataJSON, tagsJSON, timestamp.Format(time.RFC3339), expiresAtStr, importance, embeddingBlob)
@@ -320,7 +324,10 @@ func (s *Store) UpdateMemory(
 	}
 
 	// 序列化embedding
-	embeddingBlob := float32ToBlob(embedding)
+	embeddingBlob, err := sqlite_vec.SerializeFloat32(embedding)
+	if err != nil {
+		return fmt.Errorf("failed to serialize embedding: %w", err)
+	}
 
 	// 处理expires_at
 	var expiresAtStr *string
@@ -329,7 +336,7 @@ func (s *Store) UpdateMemory(
 		expiresAtStr = &str
 	}
 
-	_, err := s.db.Exec(`
+	_, err = s.db.Exec(`
 		UPDATE memories
 		SET content = ?, metadata = ?, tags = ?, expires_at = ?, importance = ?, embedding = ?
 		WHERE id = ?

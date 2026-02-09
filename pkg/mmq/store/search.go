@@ -1,12 +1,13 @@
 package store
 
 import (
+	"encoding/binary"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
 	"unicode"
-	"unsafe"
 
 	"github.com/crosszan/modu/pkg/mmq/internal/vectordb"
 )
@@ -345,24 +346,9 @@ func blobToFloat32(blob []byte) []float32 {
 	}
 
 	result := make([]float32, len(blob)/4)
-	for i := 0; i < len(result); i++ {
-		// 假设小端序存储
-		bits := uint32(blob[i*4]) | uint32(blob[i*4+1])<<8 | uint32(blob[i*4+2])<<16 | uint32(blob[i*4+3])<<24
-		result[i] = *(*float32)(unsafe.Pointer(&bits))
+	for i := range result {
+		result[i] = math.Float32frombits(binary.LittleEndian.Uint32(blob[i*4:]))
 	}
 
 	return result
-}
-
-// float32ToBlob 将float32切片转换为BLOB
-func float32ToBlob(vec []float32) []byte {
-	blob := make([]byte, len(vec)*4)
-	for i, v := range vec {
-		bits := *(*uint32)(unsafe.Pointer(&v))
-		blob[i*4] = byte(bits)
-		blob[i*4+1] = byte(bits >> 8)
-		blob[i*4+2] = byte(bits >> 16)
-		blob[i*4+3] = byte(bits >> 24)
-	}
-	return blob
 }
