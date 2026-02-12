@@ -25,6 +25,7 @@ const (
 	KnownApiGoogleGenerativeAI    KnownApi = "google-generative-ai"
 	KnownApiGoogleGeminiCLI       KnownApi = "google-gemini-cli"
 	KnownApiGoogleVertex          KnownApi = "google-vertex"
+	KnownApiDeepSeekChat          KnownApi = "deepseek-chat-completions"
 )
 
 const (
@@ -50,6 +51,7 @@ const (
 	KnownProviderHuggingFace       KnownProvider = "huggingface"
 	KnownProviderOpencode          KnownProvider = "opencode"
 	KnownProviderKimiCoding        KnownProvider = "kimi-coding"
+	KnownProviderDeepSeek          KnownProvider = "deepseek"
 )
 
 type ThinkingBudgets struct {

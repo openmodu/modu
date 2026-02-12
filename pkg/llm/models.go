@@ -36,6 +36,21 @@ func init() {
 		MaxTokens:     8192,
 	}
 	Models["anthropic"] = anthropicModels
+
+	deepseekModels := make(map[string]*Model)
+	deepseekModels["deepseek-chat"] = &Model{
+		ID:            "deepseek-chat",
+		Name:          "DeepSeek Chat",
+		Api:           "deepseek-chat-completions",
+		Provider:      "deepseek",
+		BaseURL:       "https://api.deepseek.com/v1",
+		Reasoning:     false,
+		Input:         []string{"text"},
+		Cost:          ModelCost{Input: 0, Output: 0},
+		ContextWindow: 128000,
+		MaxTokens:     4096,
+	}
+	Models["deepseek"] = deepseekModels
 }
 
 func GetModel(provider Provider, id string) *Model {
