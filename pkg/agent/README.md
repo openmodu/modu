@@ -17,29 +17,40 @@ package main
 import (
         "context"
         "fmt"
-        "github.com/crosszan/modu/pkg/agent" // pseudo-path
+
+        "github.com/crosszan/modu/pkg/agent"
+        "github.com/crosszan/modu/pkg/llm"
 )
 
 func main() {
         // Initialize Agent
-        agent := NewAgent(AgentOptions{
-                InitialState: AgentState{
+        agent := agent.NewAgent(agent.AgentOptions{
+                InitialState: &agent.AgentState{
                         SystemPrompt: "You are a helpful assistant.",
-                        Model:        &MyModel{}, // Implement Model interface
+                        Model:        llm.GetModel("openai", "gpt-4o"),
+                },
+                ConvertToLlm: func(messages []agent.AgentMessage) ([]llm.Message, error) {
+                        out := make([]llm.Message, 0, len(messages))
+                        for _, m := range messages {
+                                switch m.(type) {
+                                case llm.UserMessage, *llm.UserMessage, llm.AssistantMessage, *llm.AssistantMessage, llm.ToolResultMessage, *llm.ToolResultMessage:
+                                        out = append(out, m)
+                                }
+                        }
+                        return out, nil
                 },
         })
 
         // Subscribe to events
-        agent.Subscribe(func(e AgentEvent) {
-                if e.Type == EventTypeMessageUpdate {
-                        // Stream partial text
-                        fmt.Print(e.Partial)
+        agent.Subscribe(func(e agent.AgentEvent) {
+                if e.Type == agent.EventTypeMessageUpdate && e.AssistantMessageEvent != nil && e.AssistantMessageEvent.Type == "text_delta" {
+                        fmt.Print(e.AssistantMessageEvent.Delta)
                 }
         })
 
         // Prompt
         ctx := context.Background()
-        agent.Prompt(ctx, "Hello!")
+        _ = agent.Prompt(ctx, "Hello!")
 }
 ```
 
@@ -47,11 +58,9 @@ func main() {
 
 ### AgentMessage vs LLM Message
 
-The agent works with a unified [Message](./agent_types.go#L60-L68) struct that supports:
-- Standard roles: `user`, `assistant`, `tool`, [system](./agent_types.go#L60-L68)
-- Custom extension roles: `custom` via `CustomType` field
+The agent works with `AgentMessage` which is an alias of `llm.Message` and can include custom message types.
 
-The [Model](./agent_types.go#L94-L97) interface implementation is responsible for converting these generic messages into the specific format required by the LLM provider (OpenAI, Anthropic, etc.).
+The `ConvertToLlm` option converts `AgentMessage[]` into LLM-compatible messages before each call.
 
 ### Event Flow
 

@@ -2,75 +2,129 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
+
+	"github.com/crosszan/modu/pkg/llm"
+	"github.com/crosszan/modu/pkg/llm/utils"
 )
 
-// --- Mock Implementations ---
-
-// MockWeatherTool implements new Tool interface
-type MockWeatherTool struct{}
-
-func (t *MockWeatherTool) Name() string        { return "get_weather" }
-func (t *MockWeatherTool) Description() string { return "Get current weather" }
-func (t *MockWeatherTool) Execute(ctx context.Context, id string, args string, onUpdate func(partial interface{})) (string, error) {
-	// Simulate work
-	onUpdate("Checking satellite...")
-	time.Sleep(100 * time.Millisecond)
-	onUpdate("Querying sensor...")
-
-	return "Sunny, 25C", nil
+type mockTool struct {
+	executed []string
 }
 
-// MockModel implements new Model interface
-type MockModel struct{}
-
-func (m *MockModel) Stream(ctx context.Context, messages []Message, tools []Tool) (<-chan ModelStreamEvent, error) {
-	ch := make(chan ModelStreamEvent)
-	go func() {
-		defer close(ch)
-		lastMsg := messages[len(messages)-1]
-
-		if lastMsg.Role == RoleUser {
-			ch <- ModelStreamEvent{Type: "text_delta", Payload: "Thinking..."}
-			time.Sleep(200 * time.Millisecond)
-			ch <- ModelStreamEvent{Type: "tool_call", Payload: ToolCall{ID: "call_1", Name: "get_weather", Args: "{}"}}
-		} else if lastMsg.Role == RoleTool {
-			ch <- ModelStreamEvent{Type: "text_delta", Payload: "It is sunny today."}
-		}
-	}()
-	return ch, nil
+func (t *mockTool) Name() string        { return "echo" }
+func (t *mockTool) Label() string       { return "Echo" }
+func (t *mockTool) Description() string { return "Echo tool" }
+func (t *mockTool) Parameters() any     { return nil }
+func (t *mockTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate AgentToolUpdateCallback) (AgentToolResult, error) {
+	value, _ := args["value"].(string)
+	t.executed = append(t.executed, value)
+	onUpdate(AgentToolResult{
+		Content: []llm.ContentBlock{&llm.TextContent{Type: "text", Text: "partial"}},
+		Details: map[string]any{"value": value},
+	})
+	return AgentToolResult{
+		Content: []llm.ContentBlock{&llm.TextContent{Type: "text", Text: "echoed: " + value}},
+		Details: map[string]any{"value": value},
+	}, nil
 }
 
-func TestAgent(t *testing.T) {
-	agent := NewAgent(AgentOptions{
-		InitialState: AgentState{
-			Model:        &MockModel{},
-			Tools:        []Tool{&MockWeatherTool{}},
-			SystemPrompt: "You are a helpful assistant.",
-		},
-	})
+func TestAgentLoopBasic(t *testing.T) {
+	model := &llm.Model{ID: "mock", Api: "openai-responses", Provider: "openai"}
+	user := llm.UserMessage{Role: "user", Content: "Hello", Timestamp: time.Now().UnixMilli()}
 
-	// Subscribe to events to visualize specific lifecycle hooks
-	agent.Subscribe(func(e AgentEvent) {
-		switch e.Type {
-		case EventTypeAgentStart:
-			fmt.Println("🟢 [Event] Agent Start")
-		case EventTypeTurnStart:
-			fmt.Println("🔄 [Event] Turn Start")
-		case EventTypeMessageStart:
-			fmt.Printf("📩 [Event] Message Start (%s)\n", e.Message.Role)
-		case EventTypeToolExecutionStart:
-			fmt.Printf("🛠️ [Event] Tool Start: %s\n", e.ToolName)
-		case EventTypeToolExecutionUpdate:
-			fmt.Printf(".. [Event] Tool Update: %v\n", e.Partial)
-		case EventTypeAgentEnd:
-			fmt.Println("🏁 [Event] Agent End")
+	streamFn := func(_ *llm.Model, _ *llm.Context, _ *llm.SimpleStreamOptions) (llm.AssistantMessageEventStream, error) {
+		stream := utils.NewEventStream()
+		go func() {
+			msg := &llm.AssistantMessage{
+				Role:       "assistant",
+				Api:        model.Api,
+				Provider:   model.Provider,
+				Model:      model.ID,
+				Usage:      llm.Usage{},
+				StopReason: "stop",
+				Content:    []llm.ContentBlock{&llm.TextContent{Type: "text", Text: "Hi"}},
+				Timestamp:  time.Now().UnixMilli(),
+			}
+			stream.Push(llm.AssistantMessageEvent{Type: "done", Reason: "stop", Message: msg})
+			stream.Close()
+		}()
+		return stream, nil
+	}
+
+	stream := AgentLoop([]AgentMessage{user}, AgentContext{SystemPrompt: "", Messages: []AgentMessage{}}, AgentLoopConfig{
+		Model:        model,
+		ConvertToLlm: defaultConvertToLlm,
+	}, context.Background(), streamFn)
+
+	var gotEnd bool
+	for event := range stream.Events() {
+		t.Logf("event=%s", event.Type)
+		if event.Type == EventTypeAgentEnd {
+			gotEnd = true
 		}
-	})
+	}
+	if !gotEnd {
+		t.Fatalf("expected agent_end")
+	}
+}
 
-	ctx := context.Background()
-	fmt.Println("User: Check weather")
-	agent.Prompt(ctx, "Check weather")
+func TestAgentLoopToolCalls(t *testing.T) {
+	model := &llm.Model{ID: "mock", Api: "openai-responses", Provider: "openai"}
+	tool := &mockTool{}
+	callIndex := 0
+
+	streamFn := func(_ *llm.Model, _ *llm.Context, _ *llm.SimpleStreamOptions) (llm.AssistantMessageEventStream, error) {
+		stream := utils.NewEventStream()
+		go func() {
+			if callIndex == 0 {
+				msg := &llm.AssistantMessage{
+					Role:       "assistant",
+					Api:        model.Api,
+					Provider:   model.Provider,
+					Model:      model.ID,
+					Usage:      llm.Usage{},
+					StopReason: "toolUse",
+					Content:    []llm.ContentBlock{llm.ToolCall{Type: "toolCall", ID: "tool-1", Name: "echo", Arguments: map[string]any{"value": "hello"}}},
+					Timestamp:  time.Now().UnixMilli(),
+				}
+				stream.Push(llm.AssistantMessageEvent{Type: "done", Reason: "toolUse", Message: msg})
+			} else {
+				msg := &llm.AssistantMessage{
+					Role:       "assistant",
+					Api:        model.Api,
+					Provider:   model.Provider,
+					Model:      model.ID,
+					Usage:      llm.Usage{},
+					StopReason: "stop",
+					Content:    []llm.ContentBlock{&llm.TextContent{Type: "text", Text: "done"}},
+					Timestamp:  time.Now().UnixMilli(),
+				}
+				stream.Push(llm.AssistantMessageEvent{Type: "done", Reason: "stop", Message: msg})
+			}
+			callIndex++
+			stream.Close()
+		}()
+		return stream, nil
+	}
+
+	stream := AgentLoop([]AgentMessage{llm.UserMessage{Role: "user", Content: "go", Timestamp: time.Now().UnixMilli()}}, AgentContext{
+		SystemPrompt: "",
+		Messages:     []AgentMessage{},
+		Tools:        []AgentTool{tool},
+	}, AgentLoopConfig{
+		Model:        model,
+		ConvertToLlm: defaultConvertToLlm,
+	}, context.Background(), streamFn)
+
+	for range stream.Events() {
+		if len(tool.executed) > 0 {
+			t.Logf("tool executed=%v", tool.executed)
+		}
+	}
+
+	if len(tool.executed) != 1 || tool.executed[0] != "hello" {
+		t.Fatalf("expected tool executed once")
+	}
 }

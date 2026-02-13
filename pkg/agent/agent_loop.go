@@ -3,190 +3,389 @@ package agent
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
+
+	"github.com/crosszan/modu/pkg/llm"
+	"github.com/crosszan/modu/pkg/llm/utils"
 )
 
-// RunLoop implements the ReAct loop logic from agent-loop.ts
-func (a *Agent) RunLoop(ctx context.Context, initialMessages []Message) error {
-	a.SetStreaming(true)
-	defer a.SetStreaming(false)
+func AgentLoop(prompts []AgentMessage, context AgentContext, config AgentLoopConfig, ctx context.Context, streamFn StreamFn) *EventStream {
+	stream := NewEventStream()
+	go func() {
+		defer stream.Close()
+		newMessages := append([]AgentMessage{}, prompts...)
+		currentContext := AgentContext{
+			SystemPrompt: context.SystemPrompt,
+			Messages:     append(append([]AgentMessage{}, context.Messages...), prompts...),
+			Tools:        context.Tools,
+		}
+		stream.Push(AgentEvent{Type: EventTypeAgentStart})
+		stream.Push(AgentEvent{Type: EventTypeTurnStart})
+		for _, prompt := range prompts {
+			stream.Push(AgentEvent{Type: EventTypeMessageStart, Message: prompt})
+			stream.Push(AgentEvent{Type: EventTypeMessageEnd, Message: prompt})
+		}
+		runLoop(currentContext, newMessages, config, ctx, stream, streamFn)
+	}()
+	return stream
+}
 
-	// Add initial messages to state
-	for _, msg := range initialMessages {
-		a.AppendMessage(msg)
+func AgentLoopContinue(context AgentContext, config AgentLoopConfig, ctx context.Context, streamFn StreamFn) (*EventStream, error) {
+	if len(context.Messages) == 0 {
+		return nil, fmt.Errorf("cannot continue: no messages in context")
 	}
-
-	a.Emit(AgentEvent{Type: EventTypeAgentStart})
-
-	// Add new messages events
-	for _, msg := range initialMessages {
-		a.Emit(AgentEvent{Type: EventTypeMessageStart, Message: &msg})
-		a.Emit(AgentEvent{Type: EventTypeMessageEnd, Message: &msg})
+	lastRole := extractRole(context.Messages[len(context.Messages)-1])
+	if lastRole == string(RoleAssistant) {
+		return nil, fmt.Errorf("cannot continue from message role: assistant")
 	}
+	stream := NewEventStream()
+	go func() {
+		defer stream.Close()
+		stream.Push(AgentEvent{Type: EventTypeAgentStart})
+		stream.Push(AgentEvent{Type: EventTypeTurnStart})
+		runLoop(context, []AgentMessage{}, config, ctx, stream, streamFn)
+	}()
+	return stream, nil
+}
 
+func runLoop(currentContext AgentContext, newMessages []AgentMessage, config AgentLoopConfig, ctx context.Context, stream *EventStream, streamFn StreamFn) {
 	firstTurn := true
-
-	// Outer loop handles follow-ups
+	pendingMessages := getSteeringMessages(config)
 	for {
-		pendingSteering := a.GetSteeringMessages()
-
-		// Inner loop handles tool calls and steering
-		// Corresponds to `while (hasMoreToolCalls || pendingMessages.length > 0)` in TS
-		for hasMoreToolCalls := true; hasMoreToolCalls || len(pendingSteering) > 0; {
-
+		hasMoreToolCalls := true
+		var steeringAfterTools []AgentMessage
+		for hasMoreToolCalls || len(pendingMessages) > 0 {
 			if !firstTurn {
-				a.Emit(AgentEvent{Type: EventTypeTurnStart})
+				stream.Push(AgentEvent{Type: EventTypeTurnStart})
 			} else {
 				firstTurn = false
 			}
-
-			// Process pending steering messages
-			if len(pendingSteering) > 0 {
-				for _, msg := range pendingSteering {
-					a.AppendMessage(msg)
-					a.Emit(AgentEvent{Type: EventTypeMessageStart, Message: &msg})
-					a.Emit(AgentEvent{Type: EventTypeMessageEnd, Message: &msg})
+			if len(pendingMessages) > 0 {
+				for _, message := range pendingMessages {
+					stream.Push(AgentEvent{Type: EventTypeMessageStart, Message: message})
+					stream.Push(AgentEvent{Type: EventTypeMessageEnd, Message: message})
+					currentContext.Messages = append(currentContext.Messages, message)
+					newMessages = append(newMessages, message)
 				}
-				pendingSteering = []Message{}
+				pendingMessages = nil
 			}
-
-			// Stream Assistant Response
-			state := a.GetState()
-			stream, err := state.Model.Stream(ctx, state.Messages, state.Tools)
+			assistantMessage, err := streamAssistantResponse(currentContext, config, ctx, stream, streamFn)
 			if err != nil {
-				a.Emit(AgentEvent{Type: EventTypeAgentEnd, IsError: true})
-				a.SetError(err)
-				return err
+				stream.Push(AgentEvent{Type: EventTypeAgentEnd, Messages: newMessages})
+				return
 			}
-
-			var currentAssistantMsg Message
-			currentAssistantMsg.Role = RoleAssistant
-			currentAssistantMsg.Timestamp = time.Now().UnixMilli()
-
-			// Accumulators
-			var textBuilder strings.Builder
-			var toolCalls []ToolCall
-
-			// Emit MessageStart once
-			a.Emit(AgentEvent{Type: EventTypeMessageStart, Message: &currentAssistantMsg})
-
-			for event := range stream {
-				switch event.Type {
-				case "text_delta":
-					chunk := event.Payload.(string)
-					textBuilder.WriteString(chunk)
-					// Update current message
-					currentAssistantMsg.Content = []ContentBlock{{Type: ContentTypeText, Text: textBuilder.String()}}
-					// Emit update
-					a.Emit(AgentEvent{Type: EventTypeMessageUpdate, Message: &currentAssistantMsg, Partial: chunk})
-
-				case "tool_call":
-					tc := event.Payload.(ToolCall)
-					toolCalls = append(toolCalls, tc)
-					// In a real stream, we might receive partial tool calls, here we assume full for simplicity
-
-				case "error":
-					err := event.Payload.(error)
-					a.SetError(err)
-					return err
-				}
+			newMessages = append(newMessages, assistantMessage)
+			if assistantMessage.StopReason == "error" || assistantMessage.StopReason == "aborted" {
+				stream.Push(AgentEvent{Type: EventTypeTurnEnd, Message: assistantMessage, ToolResults: []llm.ToolResultMessage{}})
+				stream.Push(AgentEvent{Type: EventTypeAgentEnd, Messages: newMessages})
+				return
 			}
-
-			// Finalize assistant message content
-			currentAssistantMsg.Content = []ContentBlock{}
-			if textBuilder.Len() > 0 {
-				currentAssistantMsg.Content = append(currentAssistantMsg.Content, ContentBlock{Type: ContentTypeText, Text: textBuilder.String()})
-			}
-			for _, tc := range toolCalls {
-				t := tc // Copy
-				currentAssistantMsg.Content = append(currentAssistantMsg.Content, ContentBlock{Type: ContentTypeToolCall, ToolCall: &t})
-			}
-
-			a.AppendMessage(currentAssistantMsg)
-			a.Emit(AgentEvent{Type: EventTypeMessageEnd, Message: &currentAssistantMsg})
-
-			// Execute Tools
+			toolCalls := extractToolCalls(&assistantMessage)
 			hasMoreToolCalls = len(toolCalls) > 0
-			var toolResults []Message
-
+			toolResults := []llm.ToolResultMessage{}
 			if hasMoreToolCalls {
-				// Check for Steering BEFORE execution? In TS it's checked inside executeToolCalls loop
-				// We'll mimic the chunked execution
-
-				newSteering := a.GetSteeringMessages()
-				if len(newSteering) > 0 {
-					// Logic to skip tools if steering present
-					pendingSteering = newSteering
-					// Skip execution of remaining tools
-					// For now, let's just break and handle steering in next iteration
-					// But we should mark tools as skipped ideally
-				} else {
-					for _, tc := range toolCalls {
-						a.Emit(AgentEvent{Type: EventTypeToolExecutionStart, ToolCallID: tc.ID, ToolName: tc.Name, Result: tc.Args})
-
-						var tool Tool
-						for _, t := range state.Tools {
-							if t.Name() == tc.Name {
-								tool = t
-								break
-							}
-						}
-
-						var resultStr string
-						var execErr error
-
-						if tool != nil {
-							resultStr, execErr = tool.Execute(ctx, tc.ID, tc.Args, func(partial interface{}) {
-								a.Emit(AgentEvent{Type: EventTypeToolExecutionUpdate, ToolCallID: tc.ID, ToolName: tc.Name, Partial: partial})
-							})
-						} else {
-							execErr = fmt.Errorf("tool not found")
-						}
-
-						a.Emit(AgentEvent{Type: EventTypeToolExecutionEnd, ToolCallID: tc.ID, ToolName: tc.Name, Result: resultStr, IsError: execErr != nil})
-
-						// Create Tool Result Message
-						content := resultStr
-						if execErr != nil {
-							content = fmt.Sprintf("Error: %v", execErr)
-						}
-
-						trMsg := Message{
-							Role:      RoleTool,
-							Content:   []ContentBlock{{Type: ContentTypeText, Text: content}},
-							Timestamp: time.Now().UnixMilli(),
-							// In real impl, link to ToolCallID
-						}
-						toolResults = append(toolResults, trMsg)
-						a.AppendMessage(trMsg)
-
-						a.Emit(AgentEvent{Type: EventTypeMessageStart, Message: &trMsg})
-						a.Emit(AgentEvent{Type: EventTypeMessageEnd, Message: &trMsg})
-
-						// Check steering mid-execution
-						midSteering := a.GetSteeringMessages()
-						if len(midSteering) > 0 {
-							pendingSteering = midSteering
-							break // Stop executing tools
-						}
-					}
+				execResults, steering := executeToolCalls(currentContext.Tools, toolCalls, ctx, stream, config)
+				toolResults = append(toolResults, execResults...)
+				steeringAfterTools = steering
+				for i := range toolResults {
+					currentContext.Messages = append(currentContext.Messages, toolResults[i])
+					newMessages = append(newMessages, toolResults[i])
 				}
 			}
-
-			a.Emit(AgentEvent{Type: EventTypeTurnEnd, Message: &currentAssistantMsg, ToolResults: toolResults})
+			stream.Push(AgentEvent{Type: EventTypeTurnEnd, Message: assistantMessage, ToolResults: toolResults})
+			if len(steeringAfterTools) > 0 {
+				pendingMessages = steeringAfterTools
+				steeringAfterTools = nil
+			} else {
+				pendingMessages = getSteeringMessages(config)
+			}
 		}
-
-		// Check Follow Ups
-		followUps := a.GetFollowUpMessages()
+		followUps := getFollowUpMessages(config)
 		if len(followUps) > 0 {
-			pendingSteering = followUps // Treat as pending messages for next loop
+			pendingMessages = followUps
 			continue
 		}
-
 		break
 	}
+	stream.Push(AgentEvent{Type: EventTypeAgentEnd, Messages: newMessages})
+}
 
-	a.Emit(AgentEvent{Type: EventTypeAgentEnd, Messages: a.GetState().Messages})
+func streamAssistantResponse(context AgentContext, config AgentLoopConfig, ctx context.Context, stream *EventStream, streamFn StreamFn) (llm.AssistantMessage, error) {
+	if config.Model == nil {
+		return llm.AssistantMessage{}, fmt.Errorf("model is required")
+	}
+	messages := context.Messages
+	if config.TransformContext != nil {
+		next, err := config.TransformContext(messages, ctx)
+		if err != nil {
+			return llm.AssistantMessage{}, err
+		}
+		messages = next
+	}
+	if config.ConvertToLlm == nil {
+		return llm.AssistantMessage{}, fmt.Errorf("convertToLlm is required")
+	}
+	llmMessages, err := config.ConvertToLlm(messages)
+	if err != nil {
+		return llm.AssistantMessage{}, err
+	}
+	toolDefs := buildToolDefinitions(context.Tools)
+	llmContext := &llm.Context{
+		SystemPrompt: context.SystemPrompt,
+		Messages:     llmMessages,
+		Tools:        toolDefs,
+	}
+	resolvedKey := config.APIKey
+	if config.GetAPIKey != nil {
+		key, err := config.GetAPIKey(string(config.Model.Provider))
+		if err == nil && key != "" {
+			resolvedKey = key
+		}
+	}
+	opts := &llm.SimpleStreamOptions{
+		StreamOptions: llm.StreamOptions{
+			Temperature:     config.Temperature,
+			MaxTokens:       config.MaxTokens,
+			APIKey:          resolvedKey,
+			CacheRetention:  config.CacheRetention,
+			SessionID:       config.SessionID,
+			Headers:         config.Headers,
+			MaxRetryDelayMs: config.MaxRetryDelayMs,
+		},
+		Reasoning:       mapThinkingLevel(config.Reasoning),
+		ThinkingBudgets: config.ThinkingBudgets,
+	}
+	if streamFn == nil {
+		streamFn = llm.StreamSimple
+	}
+	response, err := streamFn(config.Model, llmContext, opts)
+	if err != nil {
+		return llm.AssistantMessage{}, err
+	}
+	var partial *llm.AssistantMessage
+	addedPartial := false
+	for event := range response.Events() {
+		switch event.Type {
+		case "start":
+			partial = event.Partial
+			if partial != nil {
+				context.Messages = append(context.Messages, *partial)
+				addedPartial = true
+				stream.Push(AgentEvent{Type: EventTypeMessageStart, Message: *partial})
+			}
+		case "text_start", "text_delta", "text_end", "thinking_start", "thinking_delta", "thinking_end", "toolcall_start", "toolcall_delta", "toolcall_end":
+			if event.Partial != nil {
+				partial = event.Partial
+				context.Messages[len(context.Messages)-1] = *partial
+				stream.Push(AgentEvent{Type: EventTypeMessageUpdate, Message: *partial, AssistantMessageEvent: &event})
+			}
+		case "done", "error":
+			finalMessage, err := response.Result()
+			if err != nil || finalMessage == nil {
+				if err == nil {
+					err = fmt.Errorf("missing final message")
+				}
+				return llm.AssistantMessage{}, err
+			}
+			if addedPartial {
+				context.Messages[len(context.Messages)-1] = *finalMessage
+			} else {
+				context.Messages = append(context.Messages, *finalMessage)
+				stream.Push(AgentEvent{Type: EventTypeMessageStart, Message: *finalMessage})
+			}
+			stream.Push(AgentEvent{Type: EventTypeMessageEnd, Message: *finalMessage})
+			return *finalMessage, nil
+		}
+	}
+	finalMessage, err := response.Result()
+	if err != nil || finalMessage == nil {
+		if err == nil {
+			err = fmt.Errorf("missing final message")
+		}
+		return llm.AssistantMessage{}, err
+	}
+	return *finalMessage, nil
+}
+
+func executeToolCalls(tools []AgentTool, toolCalls []llm.ToolCall, ctx context.Context, stream *EventStream, config AgentLoopConfig) ([]llm.ToolResultMessage, []AgentMessage) {
+	results := []llm.ToolResultMessage{}
+	var steeringMessages []AgentMessage
+	for index, toolCall := range toolCalls {
+		stream.Push(AgentEvent{Type: EventTypeToolExecutionStart, ToolCallID: toolCall.ID, ToolName: toolCall.Name, Args: toolCall.Arguments})
+		var result AgentToolResult
+		isError := false
+		tool := findTool(tools, toolCall.Name)
+		if tool == nil {
+			result = AgentToolResult{
+				Content: []llm.ContentBlock{&llm.TextContent{Type: "text", Text: "Tool not found"}},
+				Details: map[string]any{},
+			}
+			isError = true
+		} else {
+			args := toolCall.Arguments
+			toolDef := llm.ToolDefinition{Name: tool.Name(), Description: tool.Description(), Parameters: tool.Parameters()}
+			parsed, err := utils.ValidateToolArguments(toolDef, llm.ToolCall{Name: toolCall.Name, Arguments: args})
+			if err != nil {
+				result = AgentToolResult{
+					Content: []llm.ContentBlock{&llm.TextContent{Type: "text", Text: err.Error()}},
+					Details: map[string]any{},
+				}
+				isError = true
+			} else {
+				r, err := tool.Execute(ctx, toolCall.ID, parsed, func(partial AgentToolResult) {
+					stream.Push(AgentEvent{Type: EventTypeToolExecutionUpdate, ToolCallID: toolCall.ID, ToolName: toolCall.Name, Args: toolCall.Arguments, Partial: partial})
+				})
+				result = r
+				if err != nil {
+					result = AgentToolResult{
+						Content: []llm.ContentBlock{&llm.TextContent{Type: "text", Text: err.Error()}},
+						Details: map[string]any{},
+					}
+					isError = true
+				}
+			}
+		}
+		stream.Push(AgentEvent{Type: EventTypeToolExecutionEnd, ToolCallID: toolCall.ID, ToolName: toolCall.Name, Result: result, IsError: isError})
+		toolResult := llm.ToolResultMessage{
+			Role:       "toolResult",
+			ToolCallID: toolCall.ID,
+			ToolName:   toolCall.Name,
+			Content:    result.Content,
+			Details:    result.Details,
+			IsError:    isError,
+			Timestamp:  time.Now().UnixMilli(),
+		}
+		results = append(results, toolResult)
+		stream.Push(AgentEvent{Type: EventTypeMessageStart, Message: toolResult})
+		stream.Push(AgentEvent{Type: EventTypeMessageEnd, Message: toolResult})
+		if config.GetSteeringMessages != nil {
+			steering, err := config.GetSteeringMessages()
+			if err == nil && len(steering) > 0 {
+				steeringMessages = steering
+				for _, skipped := range toolCalls[index+1:] {
+					results = append(results, skipToolCall(skipped, stream))
+				}
+				break
+			}
+		}
+	}
+	return results, steeringMessages
+}
+
+func skipToolCall(toolCall llm.ToolCall, stream *EventStream) llm.ToolResultMessage {
+	result := AgentToolResult{
+		Content: []llm.ContentBlock{&llm.TextContent{Type: "text", Text: "Skipped due to queued user message."}},
+		Details: map[string]any{},
+	}
+	stream.Push(AgentEvent{Type: EventTypeToolExecutionStart, ToolCallID: toolCall.ID, ToolName: toolCall.Name, Args: toolCall.Arguments})
+	stream.Push(AgentEvent{Type: EventTypeToolExecutionEnd, ToolCallID: toolCall.ID, ToolName: toolCall.Name, Result: result, IsError: true})
+	toolResult := llm.ToolResultMessage{
+		Role:       "toolResult",
+		ToolCallID: toolCall.ID,
+		ToolName:   toolCall.Name,
+		Content:    result.Content,
+		Details:    result.Details,
+		IsError:    true,
+		Timestamp:  time.Now().UnixMilli(),
+	}
+	stream.Push(AgentEvent{Type: EventTypeMessageStart, Message: toolResult})
+	stream.Push(AgentEvent{Type: EventTypeMessageEnd, Message: toolResult})
+	return toolResult
+}
+
+func findTool(tools []AgentTool, name string) AgentTool {
+	for _, tool := range tools {
+		if tool.Name() == name {
+			return tool
+		}
+	}
 	return nil
+}
+
+func buildToolDefinitions(tools []AgentTool) []llm.ToolDefinition {
+	out := make([]llm.ToolDefinition, 0, len(tools))
+	for _, tool := range tools {
+		out = append(out, llm.ToolDefinition{
+			Name:        tool.Name(),
+			Description: tool.Description(),
+			Parameters:  tool.Parameters(),
+		})
+	}
+	return out
+}
+
+func mapThinkingLevel(level ThinkingLevel) llm.ThinkingLevel {
+	switch level {
+	case ThinkingLevelMinimal:
+		return llm.ThinkingLevelMinimal
+	case ThinkingLevelLow:
+		return llm.ThinkingLevelLow
+	case ThinkingLevelMedium:
+		return llm.ThinkingLevelMedium
+	case ThinkingLevelHigh:
+		return llm.ThinkingLevelHigh
+	case ThinkingLevelXHigh:
+		return llm.ThinkingLevelXHigh
+	default:
+		return ""
+	}
+}
+
+func extractToolCalls(message *llm.AssistantMessage) []llm.ToolCall {
+	var out []llm.ToolCall
+	for _, block := range message.Content {
+		switch v := block.(type) {
+		case llm.ToolCall:
+			out = append(out, v)
+		case *llm.ToolCall:
+			out = append(out, *v)
+		default:
+		}
+	}
+	return out
+}
+
+func getSteeringMessages(config AgentLoopConfig) []AgentMessage {
+	if config.GetSteeringMessages == nil {
+		return nil
+	}
+	msgs, err := config.GetSteeringMessages()
+	if err != nil {
+		return nil
+	}
+	return msgs
+}
+
+func getFollowUpMessages(config AgentLoopConfig) []AgentMessage {
+	if config.GetFollowUpMessages == nil {
+		return nil
+	}
+	msgs, err := config.GetFollowUpMessages()
+	if err != nil {
+		return nil
+	}
+	return msgs
+}
+
+func extractRole(message AgentMessage) string {
+	switch m := message.(type) {
+	case llm.UserMessage:
+		return m.Role
+	case *llm.UserMessage:
+		return m.Role
+	case llm.AssistantMessage:
+		return m.Role
+	case *llm.AssistantMessage:
+		return m.Role
+	case llm.ToolResultMessage:
+		return m.Role
+	case *llm.ToolResultMessage:
+		return m.Role
+	case Message:
+		return string(m.Role)
+	case *Message:
+		return string(m.Role)
+	default:
+		return ""
+	}
 }

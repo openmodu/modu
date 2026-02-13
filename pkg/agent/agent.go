@@ -3,37 +3,71 @@ package agent
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"sync"
 	"time"
+
+	"github.com/crosszan/modu/pkg/llm"
 )
 
 type AgentOptions struct {
-	InitialState AgentState // Partial state in TS, full struct here for simplicity
-	SteeringMode ExecutionMode
-	FollowUpMode ExecutionMode
-	GetAPIKey    func(provider string) (string, error)
+	InitialState     *AgentState
+	ConvertToLlm     func(messages []AgentMessage) ([]llm.Message, error)
+	TransformContext func(messages []AgentMessage, ctx context.Context) ([]AgentMessage, error)
+	SteeringMode     ExecutionMode
+	FollowUpMode     ExecutionMode
+	StreamFn         StreamFn
+	SessionID        string
+	GetAPIKey        func(provider string) (string, error)
+	ThinkingBudgets  *llm.ThinkingBudgets
+	MaxRetryDelayMs  int
 }
 
 type Agent struct {
-	state        AgentState
-	steeringMode ExecutionMode
-	followUpMode ExecutionMode
-	getAPIKey    func(provider string) (string, error)
+	state            AgentState
+	steeringMode     ExecutionMode
+	followUpMode     ExecutionMode
+	convertToLlm     func(messages []AgentMessage) ([]llm.Message, error)
+	transformContext func(messages []AgentMessage, ctx context.Context) ([]AgentMessage, error)
+	streamFn         StreamFn
+	sessionID        string
+	getAPIKey        func(provider string) (string, error)
+	thinkingBudgets  *llm.ThinkingBudgets
+	maxRetryDelayMs  int
 
 	// Queues
-	steeringQueue []Message
-	followUpQueue []Message
+	steeringQueue []AgentMessage
+	followUpQueue []AgentMessage
 
 	// Concurency
-	mu        sync.RWMutex
-	listeners []func(AgentEvent)
+	mu         sync.RWMutex
+	listeners  map[int]func(AgentEvent)
+	listenerID int
+	running    chan struct{}
 }
 
 func NewAgent(opts AgentOptions) *Agent {
-	// Initialize defaults
-	if opts.InitialState.ThinkingLevel == "" {
-		opts.InitialState.ThinkingLevel = ThinkingLevelOff
+	initial := AgentState{
+		SystemPrompt:     "",
+		Model:            nil,
+		ThinkingLevel:    ThinkingLevelOff,
+		Tools:            []AgentTool{},
+		Messages:         []AgentMessage{},
+		IsStreaming:      false,
+		StreamMessage:    nil,
+		PendingToolCalls: map[string]struct{}{},
+		Error:            "",
+	}
+	if opts.InitialState != nil {
+		initial = *opts.InitialState
+	}
+	if initial.PendingToolCalls == nil {
+		initial.PendingToolCalls = make(map[string]struct{})
+	}
+	if initial.Messages == nil {
+		initial.Messages = []AgentMessage{}
+	}
+	if initial.Tools == nil {
+		initial.Tools = []AgentTool{}
 	}
 	if opts.SteeringMode == "" {
 		opts.SteeringMode = ExecutionModeOneAtATime
@@ -41,44 +75,30 @@ func NewAgent(opts AgentOptions) *Agent {
 	if opts.FollowUpMode == "" {
 		opts.FollowUpMode = ExecutionModeOneAtATime
 	}
-	if opts.InitialState.PendingToolCalls == nil {
-		opts.InitialState.PendingToolCalls = make(map[string]struct{})
+	convertToLlm := opts.ConvertToLlm
+	if convertToLlm == nil {
+		convertToLlm = defaultConvertToLlm
 	}
-	if opts.InitialState.Messages == nil {
-		opts.InitialState.Messages = make([]Message, 0)
+	streamFn := opts.StreamFn
+	if streamFn == nil {
+		streamFn = llm.StreamSimple
 	}
-
 	return &Agent{
-		state:        opts.InitialState,
-		steeringMode: opts.SteeringMode,
-		followUpMode: opts.FollowUpMode,
-		getAPIKey:    opts.GetAPIKey,
-		listeners:    make([]func(AgentEvent), 0),
+		state:            initial,
+		steeringMode:     opts.SteeringMode,
+		followUpMode:     opts.FollowUpMode,
+		convertToLlm:     convertToLlm,
+		transformContext: opts.TransformContext,
+		streamFn:         streamFn,
+		sessionID:        opts.SessionID,
+		getAPIKey:        opts.GetAPIKey,
+		thinkingBudgets:  opts.ThinkingBudgets,
+		maxRetryDelayMs:  opts.MaxRetryDelayMs,
+		listeners:        map[int]func(AgentEvent){},
 	}
 }
 
 // --- Public API ---
-
-func (a *Agent) Subscribe(listener func(AgentEvent)) func() {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.listeners = append(a.listeners, listener)
-
-	// Return unsubscribe function
-	return func() {
-		a.mu.Lock()
-		defer a.mu.Unlock()
-		for i, l := range a.listeners {
-			// Compare function pointers (simplified)
-			// In real Go utilizing list element pointers or IDs is safer
-			if reflect.ValueOf(l).Pointer() == reflect.ValueOf(listener).Pointer() {
-				a.listeners = append(a.listeners[:i], a.listeners[i+1:]...)
-				break
-			}
-		}
-	}
-}
-
 func (a *Agent) Prompt(ctx context.Context, input interface{}) error {
 	a.mu.Lock()
 	if a.state.IsStreaming {
@@ -87,29 +107,56 @@ func (a *Agent) Prompt(ctx context.Context, input interface{}) error {
 	}
 	a.mu.Unlock()
 
-	var newMessages []Message
+	var newMessages []AgentMessage
 
 	switch v := input.(type) {
 	case string:
-		newMessages = []Message{{Role: RoleUser, Content: []ContentBlock{{Type: ContentTypeText, Text: v}}, Timestamp: time.Now().UnixMilli()}}
-	case Message:
-		newMessages = []Message{v}
-	case []Message:
+		newMessages = []AgentMessage{llm.UserMessage{Role: "user", Content: v, Timestamp: time.Now().UnixMilli()}}
+	case AgentMessage:
+		newMessages = []AgentMessage{v}
+	case []AgentMessage:
 		newMessages = v
 	default:
 		return fmt.Errorf("invalid input type")
 	}
 
-	return a.RunLoop(ctx, newMessages)
+	return a.runLoop(ctx, newMessages, false)
 }
 
-func (a *Agent) Steer(msg Message) {
+func (a *Agent) Continue(ctx context.Context) error {
+	a.mu.Lock()
+	if a.state.IsStreaming {
+		a.mu.Unlock()
+		return fmt.Errorf("agent is already processing")
+	}
+	a.mu.Unlock()
+	a.mu.RLock()
+	messages := a.state.Messages
+	a.mu.RUnlock()
+	if len(messages) == 0 {
+		return fmt.Errorf("no messages to continue from")
+	}
+	if extractRole(messages[len(messages)-1]) == string(RoleAssistant) {
+		steering := a.dequeueSteeringMessages()
+		if len(steering) > 0 {
+			return a.runLoop(ctx, steering, true)
+		}
+		followUps := a.dequeueFollowUpMessages()
+		if len(followUps) > 0 {
+			return a.runLoop(ctx, followUps, false)
+		}
+		return fmt.Errorf("cannot continue from message role: assistant")
+	}
+	return a.runLoop(ctx, nil, false)
+}
+
+func (a *Agent) Steer(msg AgentMessage) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.steeringQueue = append(a.steeringQueue, msg)
 }
 
-func (a *Agent) FollowUp(msg Message) {
+func (a *Agent) FollowUp(msg AgentMessage) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.followUpQueue = append(a.followUpQueue, msg)
@@ -124,69 +171,292 @@ func (a *Agent) GetState() AgentState {
 	return a.state
 }
 
-func (a *Agent) GetSteeringMessages() []Message {
+func (a *Agent) Subscribe(fn func(AgentEvent)) func() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-
-	if a.steeringMode == ExecutionModeOneAtATime {
-		if len(a.steeringQueue) > 0 {
-			msg := a.steeringQueue[0]
-			a.steeringQueue = a.steeringQueue[1:]
-			return []Message{msg}
-		}
-		return []Message{}
+	id := a.listenerID
+	a.listenerID++
+	a.listeners[id] = fn
+	return func() {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		delete(a.listeners, id)
 	}
-
-	msgs := a.steeringQueue
-	a.steeringQueue = []Message{}
-	return msgs
 }
 
-func (a *Agent) GetFollowUpMessages() []Message {
+func (a *Agent) SetSystemPrompt(v string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-
-	if a.followUpMode == ExecutionModeOneAtATime {
-		if len(a.followUpQueue) > 0 {
-			msg := a.followUpQueue[0]
-			a.followUpQueue = a.followUpQueue[1:]
-			return []Message{msg}
-		}
-		return []Message{}
-	}
-
-	msgs := a.followUpQueue
-	a.followUpQueue = []Message{}
-	return msgs
+	a.state.SystemPrompt = v
 }
 
-// Internal helper to emit events
-func (a *Agent) Emit(event AgentEvent) {
-	a.mu.RLock()
-	listeners := make([]func(AgentEvent), len(a.listeners))
-	copy(listeners, a.listeners)
-	a.mu.RUnlock()
-
-	for _, l := range listeners {
-		l(event)
-	}
+func (a *Agent) SetModel(m *llm.Model) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.state.Model = m
 }
 
-// Internal state mutators
-func (a *Agent) AppendMessage(msg Message) {
+func (a *Agent) SetThinkingLevel(l ThinkingLevel) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.state.ThinkingLevel = l
+}
+
+func (a *Agent) SetSteeringMode(mode ExecutionMode) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.steeringMode = mode
+}
+
+func (a *Agent) SetFollowUpMode(mode ExecutionMode) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.followUpMode = mode
+}
+
+func (a *Agent) SetTools(t []AgentTool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.state.Tools = t
+}
+
+func (a *Agent) ReplaceMessages(ms []AgentMessage) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.state.Messages = append([]AgentMessage{}, ms...)
+}
+
+func (a *Agent) AppendMessage(msg AgentMessage) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.state.Messages = append(a.state.Messages, msg)
 }
 
-func (a *Agent) SetStreaming(streaming bool) {
+func (a *Agent) ClearSteeringQueue() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.state.IsStreaming = streaming
+	a.steeringQueue = []AgentMessage{}
 }
 
-func (a *Agent) SetError(err error) {
+func (a *Agent) ClearFollowUpQueue() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.state.Error = err
+	a.followUpQueue = []AgentMessage{}
+}
+
+func (a *Agent) ClearAllQueues() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.steeringQueue = []AgentMessage{}
+	a.followUpQueue = []AgentMessage{}
+}
+
+func (a *Agent) HasQueuedMessages() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return len(a.steeringQueue) > 0 || len(a.followUpQueue) > 0
+}
+
+func (a *Agent) Abort() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.running != nil {
+		close(a.running)
+		a.running = nil
+	}
+}
+
+func (a *Agent) WaitForIdle() {
+	a.mu.RLock()
+	running := a.running
+	a.mu.RUnlock()
+	if running != nil {
+		<-running
+	}
+}
+
+func (a *Agent) Reset() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.state.Messages = []AgentMessage{}
+	a.state.IsStreaming = false
+	a.state.StreamMessage = nil
+	a.state.PendingToolCalls = map[string]struct{}{}
+	a.state.Error = ""
+	a.steeringQueue = []AgentMessage{}
+	a.followUpQueue = []AgentMessage{}
+}
+
+func (a *Agent) dequeueSteeringMessages() []AgentMessage {
+	if a.steeringMode == ExecutionModeOneAtATime {
+		if len(a.steeringQueue) > 0 {
+			first := a.steeringQueue[0]
+			a.steeringQueue = a.steeringQueue[1:]
+			return []AgentMessage{first}
+		}
+		return []AgentMessage{}
+	}
+	steering := a.steeringQueue
+	a.steeringQueue = []AgentMessage{}
+	return steering
+}
+
+func (a *Agent) dequeueFollowUpMessages() []AgentMessage {
+	if a.followUpMode == ExecutionModeOneAtATime {
+		if len(a.followUpQueue) > 0 {
+			first := a.followUpQueue[0]
+			a.followUpQueue = a.followUpQueue[1:]
+			return []AgentMessage{first}
+		}
+		return []AgentMessage{}
+	}
+	followUp := a.followUpQueue
+	a.followUpQueue = []AgentMessage{}
+	return followUp
+}
+
+func (a *Agent) runLoop(ctx context.Context, messages []AgentMessage, skipInitialSteeringPoll bool) error {
+	a.mu.Lock()
+	if a.state.Model == nil {
+		a.mu.Unlock()
+		return fmt.Errorf("no model configured")
+	}
+	if a.running != nil {
+		a.mu.Unlock()
+		return fmt.Errorf("agent is already processing")
+	}
+	a.running = make(chan struct{})
+	a.state.IsStreaming = true
+	a.state.StreamMessage = nil
+	a.state.Error = ""
+	a.mu.Unlock()
+
+	defer func() {
+		a.mu.Lock()
+		if a.running != nil {
+			close(a.running)
+			a.running = nil
+		}
+		a.state.IsStreaming = false
+		a.state.StreamMessage = nil
+		a.state.PendingToolCalls = map[string]struct{}{}
+		a.mu.Unlock()
+	}()
+
+	a.mu.RLock()
+	context := AgentContext{
+		SystemPrompt: a.state.SystemPrompt,
+		Messages:     append([]AgentMessage{}, a.state.Messages...),
+		Tools:        a.state.Tools,
+	}
+	model := a.state.Model
+	reasoning := a.state.ThinkingLevel
+	a.mu.RUnlock()
+
+	config := AgentLoopConfig{
+		Model:            model,
+		Reasoning:        reasoning,
+		SessionID:        a.sessionID,
+		ThinkingBudgets:  a.thinkingBudgets,
+		MaxRetryDelayMs:  a.maxRetryDelayMs,
+		ConvertToLlm:     a.convertToLlm,
+		TransformContext: a.transformContext,
+		GetAPIKey:        a.getAPIKey,
+		GetSteeringMessages: func() ([]AgentMessage, error) {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			if skipInitialSteeringPoll {
+				skipInitialSteeringPoll = false
+				return []AgentMessage{}, nil
+			}
+			return a.dequeueSteeringMessages(), nil
+		},
+		GetFollowUpMessages: func() ([]AgentMessage, error) {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			return a.dequeueFollowUpMessages(), nil
+		},
+	}
+
+	var stream *EventStream
+	if messages != nil {
+		stream = AgentLoop(messages, context, config, ctx, a.streamFn)
+	} else {
+		cont, err := AgentLoopContinue(context, config, ctx, a.streamFn)
+		if err != nil {
+			return err
+		}
+		stream = cont
+	}
+
+	for event := range stream.Events() {
+		switch event.Type {
+		case EventTypeMessageStart:
+			a.mu.Lock()
+			a.state.StreamMessage = event.Message
+			a.mu.Unlock()
+		case EventTypeMessageUpdate:
+			a.mu.Lock()
+			a.state.StreamMessage = event.Message
+			a.mu.Unlock()
+		case EventTypeMessageEnd:
+			a.mu.Lock()
+			a.state.StreamMessage = nil
+			a.state.Messages = append(a.state.Messages, event.Message)
+			a.mu.Unlock()
+		case EventTypeToolExecutionStart:
+			a.mu.Lock()
+			s := a.state.PendingToolCalls
+			s[event.ToolCallID] = struct{}{}
+			a.state.PendingToolCalls = s
+			a.mu.Unlock()
+		case EventTypeToolExecutionEnd:
+			a.mu.Lock()
+			s := a.state.PendingToolCalls
+			delete(s, event.ToolCallID)
+			a.state.PendingToolCalls = s
+			a.mu.Unlock()
+		case EventTypeTurnEnd:
+			if msg, ok := event.Message.(llm.AssistantMessage); ok && msg.ErrorMessage != "" {
+				a.mu.Lock()
+				a.state.Error = msg.ErrorMessage
+				a.mu.Unlock()
+			}
+			if msg, ok := event.Message.(*llm.AssistantMessage); ok && msg.ErrorMessage != "" {
+				a.mu.Lock()
+				a.state.Error = msg.ErrorMessage
+				a.mu.Unlock()
+			}
+		case EventTypeAgentEnd:
+			a.mu.Lock()
+			a.state.IsStreaming = false
+			a.state.StreamMessage = nil
+			a.mu.Unlock()
+		}
+		a.emit(event)
+	}
+	return nil
+}
+
+func (a *Agent) emit(event AgentEvent) {
+	a.mu.RLock()
+	listeners := make([]func(AgentEvent), 0, len(a.listeners))
+	for _, l := range a.listeners {
+		listeners = append(listeners, l)
+	}
+	a.mu.RUnlock()
+	for _, l := range listeners {
+		l(event)
+	}
+}
+
+func defaultConvertToLlm(messages []AgentMessage) ([]llm.Message, error) {
+	out := make([]llm.Message, 0, len(messages))
+	for _, m := range messages {
+		role := extractRole(m)
+		if role == "user" || role == "assistant" || role == "toolResult" {
+			out = append(out, m)
+		}
+	}
+	return out, nil
 }
