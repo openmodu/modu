@@ -112,12 +112,13 @@ func (a *Agent) Prompt(ctx context.Context, input interface{}) error {
 	switch v := input.(type) {
 	case string:
 		newMessages = []AgentMessage{llm.UserMessage{Role: "user", Content: v, Timestamp: time.Now().UnixMilli()}}
-	case AgentMessage:
-		newMessages = []AgentMessage{v}
 	case []AgentMessage:
 		newMessages = v
 	default:
-		return fmt.Errorf("invalid input type")
+		if input == nil {
+			return fmt.Errorf("invalid input type")
+		}
+		newMessages = []AgentMessage{input}
 	}
 
 	return a.runLoop(ctx, newMessages, false)
