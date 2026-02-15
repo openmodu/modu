@@ -1,0 +1,417 @@
+package coding_agent
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/crosszan/modu/pkg/agent"
+	"github.com/crosszan/modu/pkg/coding_agent/compaction"
+	"github.com/crosszan/modu/pkg/coding_agent/extension"
+	"github.com/crosszan/modu/pkg/coding_agent/resource"
+	"github.com/crosszan/modu/pkg/coding_agent/session"
+	"github.com/crosszan/modu/pkg/coding_agent/skills"
+	"github.com/crosszan/modu/pkg/coding_agent/tools"
+	"github.com/crosszan/modu/pkg/llm"
+)
+
+// CodingSessionOptions configures a new CodingSession.
+type CodingSessionOptions struct {
+	// Cwd is the working directory.
+	Cwd string
+	// AgentDir is the configuration directory (default: ~/.coding_agent/).
+	AgentDir string
+	// Model is the LLM model to use.
+	Model *llm.Model
+	// ThinkingLevel controls reasoning depth.
+	ThinkingLevel agent.ThinkingLevel
+	// Tools are the tools to make available. If nil, defaults to AllTools.
+	Tools []agent.AgentTool
+	// CustomTools are additional tools provided by the caller.
+	CustomTools []agent.AgentTool
+	// Extensions are extensions to initialize.
+	Extensions []extension.Extension
+	// CustomSystemPrompt overrides the default system prompt.
+	CustomSystemPrompt string
+	// GetAPIKey retrieves an API key for a provider.
+	GetAPIKey func(provider string) (string, error)
+	// StreamFn overrides the default stream function.
+	StreamFn agent.StreamFn
+}
+
+// CodingSession is the main entry point for the coding agent system.
+type CodingSession struct {
+	agent          *agent.Agent
+	sessionManager *session.Manager
+	sessionTree    *session.Tree
+	config         *Config
+	extensions     *extension.Runner
+	skillManager   *skills.Manager
+	templateMgr    *skills.TemplateManager
+	resources      *resource.Loader
+	cwd            string
+	agentDir       string
+	model          *llm.Model
+	activeTools    []agent.AgentTool
+	slashCommands  map[string]SlashCommand
+}
+
+// NewCodingSession creates and initializes a new coding session.
+func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
+	if opts.Cwd == "" {
+		return nil, fmt.Errorf("Cwd is required")
+	}
+	if opts.Model == nil {
+		return nil, fmt.Errorf("Model is required")
+	}
+
+	// Default agent directory
+	agentDir := opts.AgentDir
+	if agentDir == "" {
+		agentDir = resource.DefaultAgentDir()
+	}
+
+	// Ensure directories exist
+	loader := resource.NewLoader(agentDir, opts.Cwd)
+	if err := loader.EnsureAgentDir(); err != nil {
+		return nil, fmt.Errorf("failed to ensure agent dir: %w", err)
+	}
+
+	// Load config
+	cfg, err := LoadConfig(agentDir, opts.Cwd)
+	if err != nil {
+		cfg = DefaultConfig()
+	}
+
+	// Override config with options
+	if opts.ThinkingLevel != "" {
+		cfg.ThinkingLevel = opts.ThinkingLevel
+	}
+
+	// Set up tools
+	activeTools := opts.Tools
+	if activeTools == nil {
+		activeTools = tools.AllTools(opts.Cwd)
+	}
+	if len(opts.CustomTools) > 0 {
+		activeTools = append(activeTools, opts.CustomTools...)
+	}
+
+	// Create session manager
+	sessionMgr, err := session.NewManager(agentDir, opts.Cwd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create session manager: %w", err)
+	}
+
+	// Record session start
+	_ = sessionMgr.Append(session.NewEntry(session.EntryTypeSessionInfo, "", session.SessionInfoData{
+		Cwd:       opts.Cwd,
+		StartTime: time.Now().UnixMilli(),
+	}))
+
+	// Create extension runner
+	extRunner := extension.NewRunner()
+
+	// Initialize skills
+	skillMgr := skills.NewManager(agentDir, opts.Cwd)
+	_ = skillMgr.Discover()
+
+	templateMgr := skills.NewTemplateManager(agentDir, opts.Cwd)
+	_ = templateMgr.Discover()
+
+	// Build system prompt
+	promptBuilder := NewSystemPromptBuilder(opts.Cwd)
+	promptBuilder.SetTools(activeTools)
+
+	if opts.CustomSystemPrompt != "" {
+		promptBuilder.SetCustomPrompt(opts.CustomSystemPrompt)
+	} else if cfg.CustomSystemPrompt != "" {
+		promptBuilder.SetCustomPrompt(cfg.CustomSystemPrompt)
+	}
+
+	for _, p := range cfg.AppendPrompts {
+		promptBuilder.AppendPrompt(p)
+	}
+
+	// Add skill descriptions
+	for _, desc := range skillMgr.GetDescriptions() {
+		promptBuilder.AddSkillDescription(desc)
+	}
+
+	systemPrompt := promptBuilder.Build()
+
+	// Determine stream function
+	streamFn := opts.StreamFn
+	if streamFn == nil {
+		streamFn = func(model *llm.Model, ctx *llm.Context, sOpts *llm.SimpleStreamOptions) (llm.AssistantMessageEventStream, error) {
+			return llm.StreamSimple(model, ctx, sOpts)
+		}
+	}
+
+	// Determine API key function
+	getAPIKey := opts.GetAPIKey
+	if getAPIKey == nil {
+		keyStore := NewAPIKeyStore(agentDir)
+		_ = keyStore.Load()
+		getAPIKey = func(provider string) (string, error) {
+			key, ok := keyStore.Get(provider)
+			if ok {
+				return key, nil
+			}
+			key = llm.GetEnvAPIKey(provider)
+			if key != "" {
+				return key, nil
+			}
+			return "", fmt.Errorf("no API key found for provider: %s", provider)
+		}
+	}
+
+	// Create the underlying agent
+	ag := agent.NewAgent(agent.AgentOptions{
+		InitialState: &agent.AgentState{
+			SystemPrompt:  systemPrompt,
+			Model:         opts.Model,
+			ThinkingLevel: cfg.ThinkingLevel,
+			Tools:         activeTools,
+		},
+		StreamFn:  streamFn,
+		GetAPIKey: getAPIKey,
+	})
+
+	cs := &CodingSession{
+		agent:          ag,
+		sessionManager: sessionMgr,
+		sessionTree:    session.NewTree(sessionMgr),
+		config:         cfg,
+		extensions:     extRunner,
+		skillManager:   skillMgr,
+		templateMgr:    templateMgr,
+		resources:      loader,
+		cwd:            opts.Cwd,
+		agentDir:       agentDir,
+		model:          opts.Model,
+		activeTools:    activeTools,
+		slashCommands:  make(map[string]SlashCommand),
+	}
+
+	// Register built-in slash commands
+	for _, cmd := range BuiltinCommands() {
+		cs.slashCommands[cmd.Name] = cmd
+	}
+
+	// Initialize extensions
+	if len(opts.Extensions) > 0 {
+		extRunner.SetCallbacks(
+			func(text string) error {
+				msg := &CustomMessage{Source: "extension", Text: text}
+				ag.Steer(msg.ToLlmMessage())
+				return nil
+			},
+			func(names []string) {
+				cs.SetActiveTools(names)
+			},
+			func(provider, modelID string) error {
+				return cs.SetModelByID(provider, modelID)
+			},
+		)
+
+		if err := extRunner.Init(opts.Extensions); err != nil {
+			return nil, fmt.Errorf("failed to init extensions: %w", err)
+		}
+
+		// Add extension tools
+		for _, tool := range extRunner.GetTools() {
+			cs.activeTools = append(cs.activeTools, tool)
+		}
+		ag.SetTools(cs.activeTools)
+
+		// Register extension slash commands
+		for _, cmd := range extRunner.GetCommands() {
+			cs.slashCommands[cmd.Name] = SlashCommand{
+				Name:        cmd.Name,
+				Description: cmd.Description,
+				Handler: func(s *CodingSession, args string) error {
+					return extRunner.ExecuteCommand(cmd.Name, args)
+				},
+			}
+		}
+	}
+
+	return cs, nil
+}
+
+// Prompt sends a user message and starts processing.
+func (s *CodingSession) Prompt(ctx context.Context, text string) error {
+	// Check for slash commands
+	if strings.HasPrefix(text, "/") {
+		parts := strings.SplitN(text[1:], " ", 2)
+		cmdName := parts[0]
+		cmdArgs := ""
+		if len(parts) > 1 {
+			cmdArgs = parts[1]
+		}
+
+		if cmd, ok := s.slashCommands[cmdName]; ok {
+			return cmd.Handler(s, cmdArgs)
+		}
+
+		// Check template expansion
+		if expanded, ok := s.templateMgr.Expand(text); ok {
+			text = expanded
+		}
+
+		// Check skills
+		if skill, ok := s.skillManager.Get(cmdName); ok {
+			text = skill.Content
+			if cmdArgs != "" {
+				text = text + "\n\n" + cmdArgs
+			}
+		}
+	}
+
+	// Record to session
+	_ = s.sessionManager.Append(session.NewEntry(session.EntryTypeMessage, "", session.MessageData{
+		Role:    agent.RoleUser,
+		Content: text,
+	}))
+
+	return s.agent.Prompt(ctx, text)
+}
+
+// Steer injects a high-priority message during processing.
+func (s *CodingSession) Steer(text string) {
+	msg := llm.UserMessage{
+		Role:      "user",
+		Content:   text,
+		Timestamp: time.Now().UnixMilli(),
+	}
+	s.agent.Steer(msg)
+}
+
+// FollowUp queues a message for processing after the current task.
+func (s *CodingSession) FollowUp(text string) {
+	msg := llm.UserMessage{
+		Role:      "user",
+		Content:   text,
+		Timestamp: time.Now().UnixMilli(),
+	}
+	s.agent.FollowUp(msg)
+}
+
+// Subscribe registers an event listener. Returns an unsubscribe function.
+func (s *CodingSession) Subscribe(fn func(agent.AgentEvent)) func() {
+	return s.agent.Subscribe(fn)
+}
+
+// SetActiveTools sets which tools are active by name.
+func (s *CodingSession) SetActiveTools(names []string) {
+	nameSet := make(map[string]bool)
+	for _, n := range names {
+		nameSet[n] = true
+	}
+
+	var active []agent.AgentTool
+	for _, tool := range s.activeTools {
+		if nameSet[tool.Name()] {
+			active = append(active, tool)
+		}
+	}
+
+	s.agent.SetTools(active)
+}
+
+// GetActiveToolNames returns the names of currently active tools.
+func (s *CodingSession) GetActiveToolNames() []string {
+	state := s.agent.GetState()
+	names := make([]string, len(state.Tools))
+	for i, t := range state.Tools {
+		names[i] = t.Name()
+	}
+	return names
+}
+
+// SetModel changes the active model.
+func (s *CodingSession) SetModel(model *llm.Model) {
+	s.model = model
+	s.agent.SetModel(model)
+
+	_ = s.sessionManager.Append(session.NewEntry(session.EntryTypeModelChange, "", session.ModelChangeData{
+		Provider: string(model.Provider),
+		ModelID:  model.ID,
+	}))
+}
+
+// SetModelByID changes the active model by provider and model ID.
+func (s *CodingSession) SetModelByID(provider, modelID string) error {
+	model := llm.GetModel(llm.Provider(provider), modelID)
+	if model == nil {
+		return fmt.Errorf("model not found: %s/%s", provider, modelID)
+	}
+	s.SetModel(model)
+	return nil
+}
+
+// Compact triggers context compaction.
+func (s *CodingSession) Compact(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	state := s.agent.GetState()
+
+	streamFn := func(model *llm.Model, llmCtx *llm.Context, sOpts *llm.SimpleStreamOptions) (llm.AssistantMessageEventStream, error) {
+		return llm.StreamSimple(model, llmCtx, sOpts)
+	}
+
+	result, err := compaction.Compact(ctx, state.Messages, compaction.Options{
+		PreserveRecent: s.config.CompactionSettings.PreserveRecentMessages,
+		Model:          s.model,
+		StreamFn:       streamFn,
+	})
+	if err != nil {
+		return fmt.Errorf("compaction failed: %w", err)
+	}
+
+	// Replace messages
+	s.agent.ReplaceMessages(result.Messages)
+
+	// Record compaction
+	_ = s.sessionManager.Append(session.NewEntry(session.EntryTypeCompaction, "", session.CompactionData{
+		Summary:       result.Summary,
+		OriginalCount: result.OriginalCount,
+		NewCount:      result.NewCount,
+	}))
+
+	return nil
+}
+
+// Fork creates a new branch from the given entry ID.
+func (s *CodingSession) Fork(entryID string) error {
+	return s.sessionManager.Fork(entryID)
+}
+
+// NavigateTree navigates to a specific point in the session tree.
+func (s *CodingSession) NavigateTree(entryID string) error {
+	return s.sessionTree.NavigateTo(entryID)
+}
+
+// GetAgent returns the underlying agent.
+func (s *CodingSession) GetAgent() *agent.Agent {
+	return s.agent
+}
+
+// WaitForIdle blocks until the agent is idle.
+func (s *CodingSession) WaitForIdle() {
+	s.agent.WaitForIdle()
+}
+
+// Abort cancels the current operation.
+func (s *CodingSession) Abort() {
+	s.agent.Abort()
+}
+
+// GetConfig returns the current configuration.
+func (s *CodingSession) GetConfig() *Config {
+	return s.config
+}
