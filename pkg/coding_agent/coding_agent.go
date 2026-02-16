@@ -55,6 +55,10 @@ type CodingSession struct {
 	model          *llm.Model
 	activeTools    []agent.AgentTool
 	slashCommands  map[string]SlashCommand
+	getAPIKey      func(provider string) (string, error)
+	streamFn       agent.StreamFn
+	// totalTokens tracks accumulated token usage for auto-compaction.
+	totalTokens int
 }
 
 // NewCodingSession creates and initializes a new coding session.
@@ -193,7 +197,18 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		model:          opts.Model,
 		activeTools:    activeTools,
 		slashCommands:  make(map[string]SlashCommand),
+		getAPIKey:      getAPIKey,
+		streamFn:       streamFn,
 	}
+
+	// Subscribe to events for token usage tracking (auto-compaction)
+	ag.Subscribe(func(event agent.AgentEvent) {
+		if event.Type == agent.EventTypeMessageEnd {
+			if msg, ok := event.Message.(llm.AssistantMessage); ok {
+				cs.totalTokens += msg.Usage.TotalTokens
+			}
+		}
+	})
 
 	// Register built-in slash commands
 	for _, cmd := range BuiltinCommands() {
@@ -224,15 +239,23 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		for _, tool := range extRunner.GetTools() {
 			cs.activeTools = append(cs.activeTools, tool)
 		}
+
+		// Apply extension hooks to all tools via WrapTools
+		hooks := extRunner.GetHooks()
+		if len(hooks) > 0 {
+			cs.activeTools = extension.WrapTools(cs.activeTools, hooks)
+		}
+
 		ag.SetTools(cs.activeTools)
 
 		// Register extension slash commands
 		for _, cmd := range extRunner.GetCommands() {
+			cmdName := cmd.Name // capture for closure
 			cs.slashCommands[cmd.Name] = SlashCommand{
 				Name:        cmd.Name,
 				Description: cmd.Description,
 				Handler: func(s *CodingSession, args string) error {
-					return extRunner.ExecuteCommand(cmd.Name, args)
+					return extRunner.ExecuteCommand(cmdName, args)
 				},
 			}
 		}
@@ -276,7 +299,15 @@ func (s *CodingSession) Prompt(ctx context.Context, text string) error {
 		Content: text,
 	}))
 
-	return s.agent.Prompt(ctx, text)
+	err := s.agent.Prompt(ctx, text)
+	if err != nil {
+		return err
+	}
+
+	// Auto-compaction: check if we should compact after the agent finishes
+	s.maybeAutoCompact(ctx)
+
+	return nil
 }
 
 // Steer injects a high-priority message during processing.
@@ -360,14 +391,11 @@ func (s *CodingSession) Compact(ctx context.Context) error {
 
 	state := s.agent.GetState()
 
-	streamFn := func(model *llm.Model, llmCtx *llm.Context, sOpts *llm.SimpleStreamOptions) (llm.AssistantMessageEventStream, error) {
-		return llm.StreamSimple(model, llmCtx, sOpts)
-	}
-
 	result, err := compaction.Compact(ctx, state.Messages, compaction.Options{
 		PreserveRecent: s.config.CompactionSettings.PreserveRecentMessages,
 		Model:          s.model,
-		StreamFn:       streamFn,
+		GetAPIKey:      s.getAPIKey,
+		StreamFn:       s.streamFn,
 	})
 	if err != nil {
 		return fmt.Errorf("compaction failed: %w", err)
@@ -375,6 +403,9 @@ func (s *CodingSession) Compact(ctx context.Context) error {
 
 	// Replace messages
 	s.agent.ReplaceMessages(result.Messages)
+
+	// Reset token counter after compaction
+	s.totalTokens = 0
 
 	// Record compaction
 	_ = s.sessionManager.Append(session.NewEntry(session.EntryTypeCompaction, "", session.CompactionData{
@@ -384,6 +415,27 @@ func (s *CodingSession) Compact(ctx context.Context) error {
 	}))
 
 	return nil
+}
+
+// maybeAutoCompact checks whether auto-compaction should be triggered
+// based on accumulated token usage vs. the model's context window.
+func (s *CodingSession) maybeAutoCompact(ctx context.Context) {
+	if !s.config.AutoCompaction {
+		return
+	}
+	if s.model == nil || s.model.ContextWindow <= 0 {
+		return
+	}
+
+	threshold := s.config.CompactionSettings.MaxContextPercentage
+	if threshold <= 0 {
+		threshold = 80.0
+	}
+
+	usagePercent := float64(s.totalTokens) / float64(s.model.ContextWindow) * 100.0
+	if usagePercent >= threshold {
+		_ = s.Compact(ctx)
+	}
 }
 
 // Fork creates a new branch from the given entry ID.

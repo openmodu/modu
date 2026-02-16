@@ -3,10 +3,21 @@ package agent
 import (
 	"context"
 	"fmt"
+	"math"
+	"math/rand"
+	"net"
+	"strings"
 	"time"
 
 	"github.com/crosszan/modu/pkg/llm"
 	"github.com/crosszan/modu/pkg/llm/utils"
+)
+
+const (
+	defaultMaxRetries    = 3
+	defaultBaseDelayMs   = 1000
+	defaultMaxDelayMs    = 30000
+	defaultRetryJitterMs = 500
 )
 
 func AgentLoop(prompts []AgentMessage, context AgentContext, config AgentLoopConfig, ctx context.Context, streamFn StreamFn) *EventStream {
@@ -69,7 +80,7 @@ func runLoop(currentContext AgentContext, newMessages []AgentMessage, config Age
 				}
 				pendingMessages = nil
 			}
-			assistantMessage, err := streamAssistantResponse(currentContext, config, ctx, stream, streamFn)
+			assistantMessage, err := streamAssistantResponseWithRetry(currentContext, config, ctx, stream, streamFn)
 			if err != nil {
 				stream.Push(AgentEvent{Type: EventTypeAgentEnd, Messages: newMessages})
 				return
@@ -365,6 +376,92 @@ func getFollowUpMessages(config AgentLoopConfig) []AgentMessage {
 		return nil
 	}
 	return msgs
+}
+
+// streamAssistantResponseWithRetry wraps streamAssistantResponse with
+// error classification and exponential backoff retry.
+func streamAssistantResponseWithRetry(context AgentContext, config AgentLoopConfig, ctx context.Context, stream *EventStream, streamFn StreamFn) (llm.AssistantMessage, error) {
+	maxRetries := defaultMaxRetries
+	maxDelayMs := defaultMaxDelayMs
+	if config.MaxRetryDelayMs > 0 {
+		maxDelayMs = config.MaxRetryDelayMs
+	}
+
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			// Check context before retry
+			if ctx.Err() != nil {
+				return llm.AssistantMessage{}, ctx.Err()
+			}
+
+			// Exponential backoff with jitter
+			baseDelay := float64(defaultBaseDelayMs) * math.Pow(2, float64(attempt-1))
+			if baseDelay > float64(maxDelayMs) {
+				baseDelay = float64(maxDelayMs)
+			}
+			jitter := rand.Float64() * float64(defaultRetryJitterMs)
+			delay := time.Duration(baseDelay+jitter) * time.Millisecond
+
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return llm.AssistantMessage{}, ctx.Err()
+			}
+		}
+
+		msg, err := streamAssistantResponse(context, config, ctx, stream, streamFn)
+		if err == nil {
+			return msg, nil
+		}
+
+		lastErr = err
+
+		// Classify: only retry transient errors
+		if !isRetryableError(err) {
+			return llm.AssistantMessage{}, err
+		}
+	}
+
+	return llm.AssistantMessage{}, fmt.Errorf("max retries (%d) exceeded: %w", maxRetries, lastErr)
+}
+
+// isRetryableError classifies errors as transient (retryable) or permanent.
+func isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	msg := err.Error()
+
+	// Network / connectivity errors — retryable
+	if _, ok := err.(net.Error); ok {
+		return true
+	}
+
+	// HTTP 429 (rate limit), 500, 502, 503, 504 — retryable
+	retryablePatterns := []string{
+		"429", "rate limit", "too many requests",
+		"500", "internal server error",
+		"502", "bad gateway",
+		"503", "service unavailable", "overloaded",
+		"504", "gateway timeout",
+		"connection refused", "connection reset",
+		"eof", "broken pipe",
+		"timeout", "timed out",
+		"temporary", "unavailable",
+	}
+	lower := strings.ToLower(msg)
+	for _, pattern := range retryablePatterns {
+		if strings.Contains(lower, pattern) {
+			return true
+		}
+	}
+
+	// Permanent errors — do NOT retry
+	// 400 bad request, 401 unauthorized, 403 forbidden, 404 not found,
+	// schema validation, model not found, etc.
+	return false
 }
 
 func extractRole(message AgentMessage) string {
