@@ -5,13 +5,80 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/crosszan/modu/pkg/agent"
 	coding_agent "github.com/crosszan/modu/pkg/coding_agent"
+	"github.com/crosszan/modu/pkg/coding_agent/extension"
 	"github.com/crosszan/modu/pkg/coding_agent/tools"
 	"github.com/crosszan/modu/pkg/llm"
 	_ "github.com/crosszan/modu/pkg/llm/providers/ollama"
 )
+
+// --- Hook Extension Demo ---
+
+// auditHookExtension demonstrates the three hook types: Before, After, Transform.
+type auditHookExtension struct {
+	mu         sync.Mutex
+	blocked    []string // tools blocked by Before hook
+	afterCalls []string // tools observed by After hook
+	transforms int      // number of Transform invocations
+}
+
+func (e *auditHookExtension) Name() string { return "audit-hook" }
+
+func (e *auditHookExtension) Init(api extension.ExtensionAPI) error {
+	runner, ok := api.(*extension.Runner)
+	if !ok {
+		return fmt.Errorf("expected *extension.Runner")
+	}
+
+	runner.AddHook(extension.ToolHook{
+		// Before: log every tool call; block dangerous commands (e.g. rm -rf /)
+		Before: func(toolName string, args map[string]any) bool {
+			e.mu.Lock()
+			defer e.mu.Unlock()
+
+			if toolName == "bash" {
+				cmd, _ := args["command"].(string)
+				if strings.Contains(cmd, "rm -rf /") {
+					fmt.Printf("\n  [Hook:Before] BLOCKED dangerous bash command: %s\n", cmd)
+					e.blocked = append(e.blocked, cmd)
+					return false
+				}
+			}
+			fmt.Printf("  [Hook:Before] allowing %s\n", toolName)
+			return true
+		},
+
+		// After: audit log for every completed tool call
+		After: func(toolName string, args map[string]any, result agent.AgentToolResult) {
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			e.afterCalls = append(e.afterCalls, toolName)
+			fmt.Printf("  [Hook:After] %s completed\n", toolName)
+		},
+
+		// Transform: append a watermark to text results
+		Transform: func(toolName string, result agent.AgentToolResult) agent.AgentToolResult {
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			e.transforms++
+			return result
+		},
+	})
+
+	return nil
+}
+
+func (e *auditHookExtension) PrintSummary() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	fmt.Println("\n--- Hook Summary ---")
+	fmt.Printf("  Blocked commands : %d %v\n", len(e.blocked), e.blocked)
+	fmt.Printf("  After calls      : %d %v\n", len(e.afterCalls), e.afterCalls)
+	fmt.Printf("  Transforms       : %d\n", e.transforms)
+}
 
 func main() {
 	ollamaHost := "192.168.5.149"
@@ -39,11 +106,15 @@ func main() {
 	fmt.Printf("Working directory: %s\n", cwd)
 	fmt.Printf("Ollama: http://%s:11434, model: %s\n\n", ollamaHost, ollamaModel)
 
-	// Create CodingSession
+	// Create hook extension
+	hookExt := &auditHookExtension{}
+
+	// Create CodingSession with hook extension
 	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
-		Cwd:   cwd,
-		Model: model,
-		Tools: tools.AllTools(cwd),
+		Cwd:        cwd,
+		Model:      model,
+		Tools:      tools.AllTools(cwd),
+		Extensions: []extension.Extension{hookExt},
 		GetAPIKey: func(provider string) (string, error) {
 			return "", nil
 		},
@@ -138,6 +209,9 @@ func main() {
 		session.WaitForIdle()
 		fmt.Println()
 	}
+
+	// Print hook summary
+	hookExt.PrintSummary()
 
 	fmt.Println("\nAll tests done!")
 }
