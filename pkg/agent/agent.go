@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,6 +20,7 @@ type AgentOptions struct {
 	SessionID        string
 	GetAPIKey        func(provider string) (string, error)
 	ThinkingBudgets  *llm.ThinkingBudgets
+	Transport        llm.Transport
 	MaxRetryDelayMs  int
 }
 
@@ -32,13 +34,14 @@ type Agent struct {
 	sessionID        string
 	getAPIKey        func(provider string) (string, error)
 	thinkingBudgets  *llm.ThinkingBudgets
+	transport        llm.Transport
 	maxRetryDelayMs  int
 
 	// Queues
 	steeringQueue []AgentMessage
 	followUpQueue []AgentMessage
 
-	// Concurency
+	// Concurrency
 	mu         sync.RWMutex
 	listeners  map[int]func(AgentEvent)
 	listenerID int
@@ -83,6 +86,10 @@ func NewAgent(opts AgentOptions) *Agent {
 	if streamFn == nil {
 		streamFn = llm.StreamSimple
 	}
+	transport := opts.Transport
+	if transport == "" {
+		transport = llm.TransportSSE
+	}
 	return &Agent{
 		state:            initial,
 		steeringMode:     opts.SteeringMode,
@@ -93,12 +100,18 @@ func NewAgent(opts AgentOptions) *Agent {
 		sessionID:        opts.SessionID,
 		getAPIKey:        opts.GetAPIKey,
 		thinkingBudgets:  opts.ThinkingBudgets,
+		transport:        transport,
 		maxRetryDelayMs:  opts.MaxRetryDelayMs,
 		listeners:        map[int]func(AgentEvent){},
 	}
 }
 
 // --- Public API ---
+
+// Prompt sends a message to the agent. Input can be:
+//   - string: creates a user message with text content
+//   - []AgentMessage: sends multiple messages
+//   - AgentMessage: sends a single message
 func (a *Agent) Prompt(ctx context.Context, input interface{}) error {
 	a.mu.Lock()
 	if a.state.IsStreaming {
@@ -122,6 +135,27 @@ func (a *Agent) Prompt(ctx context.Context, input interface{}) error {
 	}
 
 	return a.runLoop(ctx, newMessages, false)
+}
+
+// PromptWithImages sends a text message with attached images to the agent.
+func (a *Agent) PromptWithImages(ctx context.Context, text string, images []llm.ImageContent) error {
+	a.mu.Lock()
+	if a.state.IsStreaming {
+		a.mu.Unlock()
+		return fmt.Errorf("agent is already processing")
+	}
+	a.mu.Unlock()
+
+	content := []llm.ContentBlock{&llm.TextContent{Type: "text", Text: text}}
+	for i := range images {
+		content = append(content, &images[i])
+	}
+	msg := llm.UserMessage{
+		Role:      "user",
+		Content:   content,
+		Timestamp: time.Now().UnixMilli(),
+	}
+	return a.runLoop(ctx, []AgentMessage{msg}, false)
 }
 
 func (a *Agent) Continue(ctx context.Context) error {
@@ -288,6 +322,72 @@ func (a *Agent) Reset() {
 	a.followUpQueue = []AgentMessage{}
 }
 
+func (a *Agent) ClearMessages() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.state.Messages = []AgentMessage{}
+}
+
+func (a *Agent) GetSteeringMode() ExecutionMode {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.steeringMode
+}
+
+func (a *Agent) GetFollowUpMode() ExecutionMode {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.followUpMode
+}
+
+func (a *Agent) GetSessionID() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.sessionID
+}
+
+func (a *Agent) SetSessionID(id string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.sessionID = id
+}
+
+func (a *Agent) GetThinkingBudgets() *llm.ThinkingBudgets {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.thinkingBudgets
+}
+
+func (a *Agent) SetThinkingBudgets(b *llm.ThinkingBudgets) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.thinkingBudgets = b
+}
+
+func (a *Agent) GetTransport() llm.Transport {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.transport
+}
+
+func (a *Agent) SetTransport(t llm.Transport) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.transport = t
+}
+
+func (a *Agent) GetMaxRetryDelayMs() int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.maxRetryDelayMs
+}
+
+func (a *Agent) SetMaxRetryDelayMs(ms int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.maxRetryDelayMs = ms
+}
+
 func (a *Agent) dequeueSteeringMessages() []AgentMessage {
 	if a.steeringMode == ExecutionModeOneAtATime {
 		if len(a.steeringQueue) > 0 {
@@ -358,6 +458,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []AgentMessage, skipInitia
 		Model:            model,
 		Reasoning:        reasoning,
 		SessionID:        a.sessionID,
+		Transport:        a.transport,
 		ThinkingBudgets:  a.thinkingBudgets,
 		MaxRetryDelayMs:  a.maxRetryDelayMs,
 		ConvertToLlm:     a.convertToLlm,
@@ -380,6 +481,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []AgentMessage, skipInitia
 	}
 
 	var stream *EventStream
+	var loopErr error
 	if messages != nil {
 		stream = AgentLoop(messages, context, config, ctx, a.streamFn)
 	} else {
@@ -390,17 +492,22 @@ func (a *Agent) runLoop(ctx context.Context, messages []AgentMessage, skipInitia
 		stream = cont
 	}
 
+	var partial AgentMessage
+
 	for event := range stream.Events() {
 		switch event.Type {
 		case EventTypeMessageStart:
+			partial = event.Message
 			a.mu.Lock()
 			a.state.StreamMessage = event.Message
 			a.mu.Unlock()
 		case EventTypeMessageUpdate:
+			partial = event.Message
 			a.mu.Lock()
 			a.state.StreamMessage = event.Message
 			a.mu.Unlock()
 		case EventTypeMessageEnd:
+			partial = nil
 			a.mu.Lock()
 			a.state.StreamMessage = nil
 			a.state.Messages = append(a.state.Messages, event.Message)
@@ -436,7 +543,55 @@ func (a *Agent) runLoop(ctx context.Context, messages []AgentMessage, skipInitia
 		}
 		a.emit(event)
 	}
-	return nil
+
+	// Check for stream result errors
+	_, resultErr := stream.Result()
+	if resultErr != nil {
+		loopErr = resultErr
+	}
+
+	// Handle remaining partial message (pi-mono behavior: append non-empty partial on abort)
+	if partial != nil {
+		if msg, ok := partial.(llm.AssistantMessage); ok && hasNonEmptyContent(msg) {
+			a.mu.Lock()
+			a.state.Messages = append(a.state.Messages, partial)
+			a.mu.Unlock()
+		} else if msg, ok := partial.(*llm.AssistantMessage); ok && hasNonEmptyContent(*msg) {
+			a.mu.Lock()
+			a.state.Messages = append(a.state.Messages, partial)
+			a.mu.Unlock()
+		}
+	}
+
+	// On error, append an error assistant message (pi-mono behavior)
+	if loopErr != nil {
+		a.mu.RLock()
+		m := a.state.Model
+		a.mu.RUnlock()
+
+		stopReason := llm.StopReason("error")
+		if ctx.Err() != nil {
+			stopReason = "aborted"
+		}
+		errorMsg := llm.AssistantMessage{
+			Role:         "assistant",
+			Content:      []llm.ContentBlock{&llm.TextContent{Type: "text", Text: ""}},
+			Api:          m.Api,
+			Provider:     m.Provider,
+			Model:        m.ID,
+			Usage:        llm.Usage{},
+			StopReason:   stopReason,
+			ErrorMessage: loopErr.Error(),
+			Timestamp:    time.Now().UnixMilli(),
+		}
+		a.mu.Lock()
+		a.state.Messages = append(a.state.Messages, errorMsg)
+		a.state.Error = loopErr.Error()
+		a.mu.Unlock()
+		a.emit(AgentEvent{Type: EventTypeAgentEnd, Messages: []AgentMessage{errorMsg}})
+	}
+
+	return loopErr
 }
 
 func (a *Agent) emit(event AgentEvent) {
@@ -449,6 +604,39 @@ func (a *Agent) emit(event AgentEvent) {
 	for _, l := range listeners {
 		l(event)
 	}
+}
+
+// hasNonEmptyContent checks if an AssistantMessage has any non-empty content blocks.
+func hasNonEmptyContent(msg llm.AssistantMessage) bool {
+	for _, block := range msg.Content {
+		switch v := block.(type) {
+		case *llm.ThinkingContent:
+			if v != nil && strings.TrimSpace(v.Thinking) != "" {
+				return true
+			}
+		case llm.ThinkingContent:
+			if strings.TrimSpace(v.Thinking) != "" {
+				return true
+			}
+		case *llm.TextContent:
+			if v != nil && strings.TrimSpace(v.Text) != "" {
+				return true
+			}
+		case llm.TextContent:
+			if strings.TrimSpace(v.Text) != "" {
+				return true
+			}
+		case *llm.ToolCall:
+			if v != nil && strings.TrimSpace(v.Name) != "" {
+				return true
+			}
+		case llm.ToolCall:
+			if strings.TrimSpace(v.Name) != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func defaultConvertToLlm(messages []AgentMessage) ([]llm.Message, error) {

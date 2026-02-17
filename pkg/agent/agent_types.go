@@ -174,4 +174,5 @@ type AgentLoopConfig struct {
 	Reasoning           ThinkingLevel
 	ThinkingBudgets     *llm.ThinkingBudgets
 	MaxRetryDelayMs     int
+	Transport           llm.Transport
 }

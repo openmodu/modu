@@ -6,6 +6,13 @@ type KnownApi string
 type KnownProvider string
 type ThinkingLevel string
 type CacheRetention string
+type Transport string
+
+const (
+	TransportSSE       Transport = "sse"
+	TransportWebSocket Transport = "websocket"
+	TransportAuto      Transport = "auto"
+)
 
 const (
 	ThinkingLevelMinimal ThinkingLevel = "minimal"
@@ -71,6 +78,7 @@ type StreamOptions struct {
 	SessionID       string            `json:"sessionId,omitempty"`
 	Headers         map[string]string `json:"headers,omitempty"`
 	MaxRetryDelayMs int               `json:"maxRetryDelayMs,omitempty"`
+	Transport       Transport         `json:"transport,omitempty"`
 }
 
 type SimpleStreamOptions struct {
