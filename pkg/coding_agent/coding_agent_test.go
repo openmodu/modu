@@ -303,6 +303,287 @@ func TestMaybeAutoCompact_AboveThreshold(t *testing.T) {
 	}
 }
 
+// --- Retry Manager Tests ---
+
+func TestIsRetryableError(t *testing.T) {
+	tests := []struct {
+		msg      string
+		expected bool
+	}{
+		{"server overloaded", true},
+		{"rate limit exceeded", true},
+		{"429 too many requests", true},
+		{"HTTP 502 bad gateway", true},
+		{"HTTP 503 service unavailable", true},
+		{"normal error", false},
+		{"invalid input", false},
+		{"temporarily unavailable", true},
+	}
+	for _, tt := range tests {
+		if got := IsRetryableError(tt.msg); got != tt.expected {
+			t.Errorf("IsRetryableError(%q) = %v, want %v", tt.msg, got, tt.expected)
+		}
+	}
+}
+
+func TestRetryManagerReset(t *testing.T) {
+	rm := NewRetryManager(RetryConfig{MaxRetries: 2, BaseDelayMs: 10, MaxDelayMs: 100}, true)
+	rm.Reset()
+	if !rm.IsEnabled() {
+		t.Fatal("should be enabled")
+	}
+}
+
+func TestRetryManagerDisabled(t *testing.T) {
+	rm := NewRetryManager(RetryConfig{}, false)
+	if rm.IsEnabled() {
+		t.Fatal("should be disabled")
+	}
+	rm.SetEnabled(true)
+	if !rm.IsEnabled() {
+		t.Fatal("should be enabled after SetEnabled(true)")
+	}
+}
+
+func TestRetryManagerAbort(t *testing.T) {
+	rm := NewRetryManager(RetryConfig{MaxRetries: 3, BaseDelayMs: 10, MaxDelayMs: 100}, true)
+	// AbortRetry should not panic when no retry is pending
+	rm.AbortRetry()
+}
+
+// --- CycleModel Tests ---
+
+func TestCycleModelNoScoped(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	model := &llm.Model{
+		ID: "test", Api: "ollama", Provider: "ollama",
+		ContextWindow: 8192, MaxTokens: 2048,
+	}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd: dir, AgentDir: agentDir, Model: model,
+		GetAPIKey: func(p string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No scoped models configured
+	result := session.CycleModel()
+	if result != nil {
+		t.Fatal("expected nil when no scoped models")
+	}
+}
+
+func TestCycleModelWithScoped(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	model := &llm.Model{
+		ID: "model-a", Api: "ollama", Provider: "ollama",
+		ContextWindow: 8192, MaxTokens: 2048,
+	}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd: dir, AgentDir: agentDir, Model: model,
+		GetAPIKey: func(p string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.scopedModels = []string{"model-a", "model-b", "model-c"}
+
+	// Cycle from model-a -> model-b
+	next := session.CycleModel()
+	if next == nil || next.ID != "model-b" {
+		t.Fatalf("expected model-b, got %v", next)
+	}
+
+	// Cycle from model-b -> model-c
+	next = session.CycleModel()
+	if next == nil || next.ID != "model-c" {
+		t.Fatalf("expected model-c, got %v", next)
+	}
+
+	// Cycle from model-c -> model-a (wrap around)
+	next = session.CycleModel()
+	if next == nil || next.ID != "model-a" {
+		t.Fatalf("expected model-a, got %v", next)
+	}
+}
+
+// --- CycleThinkingLevel Tests ---
+
+func TestCycleThinkingLevel(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	model := &llm.Model{
+		ID: "test", Api: "ollama", Provider: "ollama",
+		ContextWindow: 8192, MaxTokens: 2048,
+	}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd: dir, AgentDir: agentDir, Model: model,
+		ThinkingLevel: agent.ThinkingLevelOff,
+		GetAPIKey:     func(p string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// off -> low
+	level := session.CycleThinkingLevel()
+	if level != agent.ThinkingLevelLow {
+		t.Fatalf("expected low, got %s", level)
+	}
+
+	// low -> medium
+	level = session.CycleThinkingLevel()
+	if level != agent.ThinkingLevelMedium {
+		t.Fatalf("expected medium, got %s", level)
+	}
+
+	// medium -> high
+	level = session.CycleThinkingLevel()
+	if level != agent.ThinkingLevelHigh {
+		t.Fatalf("expected high, got %s", level)
+	}
+
+	// high -> off
+	level = session.CycleThinkingLevel()
+	if level != agent.ThinkingLevelOff {
+		t.Fatalf("expected off, got %s", level)
+	}
+}
+
+// --- Getter/Setter Tests ---
+
+func TestGetSetAutoCompaction(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	model := &llm.Model{
+		ID: "test", Api: "ollama", Provider: "ollama",
+		ContextWindow: 8192, MaxTokens: 2048,
+	}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd: dir, AgentDir: agentDir, Model: model,
+		GetAPIKey: func(p string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	session.SetAutoCompaction(false)
+	if session.GetConfig().AutoCompaction {
+		t.Fatal("expected auto compaction disabled")
+	}
+	session.SetAutoCompaction(true)
+	if !session.GetConfig().AutoCompaction {
+		t.Fatal("expected auto compaction enabled")
+	}
+}
+
+func TestGetSetAutoRetry(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	model := &llm.Model{
+		ID: "test", Api: "ollama", Provider: "ollama",
+		ContextWindow: 8192, MaxTokens: 2048,
+	}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd: dir, AgentDir: agentDir, Model: model,
+		GetAPIKey: func(p string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	session.SetAutoRetry(true)
+	if !session.GetConfig().AutoRetry {
+		t.Fatal("expected auto retry enabled")
+	}
+	session.SetAutoRetry(false)
+	if session.GetConfig().AutoRetry {
+		t.Fatal("expected auto retry disabled")
+	}
+}
+
+func TestGetModel(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	model := &llm.Model{
+		ID: "my-model", Api: "ollama", Provider: "ollama",
+		ContextWindow: 8192, MaxTokens: 2048,
+	}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd: dir, AgentDir: agentDir, Model: model,
+		GetAPIKey: func(p string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := session.GetModel()
+	if got.ID != "my-model" {
+		t.Fatalf("expected 'my-model', got %s", got.ID)
+	}
+}
+
+func TestGetMessages(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	model := &llm.Model{
+		ID: "test", Api: "ollama", Provider: "ollama",
+		ContextWindow: 8192, MaxTokens: 2048,
+	}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd: dir, AgentDir: agentDir, Model: model,
+		GetAPIKey: func(p string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msgs := session.GetMessages()
+	if len(msgs) != 0 {
+		t.Fatalf("expected 0 messages, got %d", len(msgs))
+	}
+
+	session.GetAgent().AppendMessage(llm.UserMessage{Role: "user", Content: "hi"})
+	msgs = session.GetMessages()
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+}
+
+func TestSubscribeSession(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	model := &llm.Model{
+		ID: "test", Api: "ollama", Provider: "ollama",
+		ContextWindow: 8192, MaxTokens: 2048,
+	}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd: dir, AgentDir: agentDir, Model: model,
+		GetAPIKey: func(p string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var received SessionEvent
+	unsub := session.SubscribeSession(func(evt SessionEvent) {
+		received = evt
+	})
+	defer unsub()
+
+	// Trigger a thinking level change which emits a session event
+	session.SetThinkingLevel(agent.ThinkingLevelHigh)
+
+	if received.Type != SessionEventThinkingChange {
+		t.Fatalf("expected thinking_change event, got %s", received.Type)
+	}
+	if received.Level != string(agent.ThinkingLevelHigh) {
+		t.Fatalf("expected level 'high', got %s", received.Level)
+	}
+}
+
 func TestMaybeAutoCompact_DisabledByConfig(t *testing.T) {
 	dir := t.TempDir()
 	agentDir := filepath.Join(dir, ".coding_agent")

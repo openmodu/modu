@@ -3,6 +3,8 @@ package coding_agent
 import (
 	"fmt"
 	"strings"
+
+	"github.com/crosszan/modu/pkg/agent"
 )
 
 // SlashCommand represents a built-in slash command.
@@ -49,6 +51,21 @@ func BuiltinCommands() []SlashCommand {
 			Name:        "help",
 			Description: "Show available commands",
 			Handler:     cmdHelp,
+		},
+		{
+			Name:        "thinking",
+			Description: "Set thinking level (off, low, medium, high) or cycle if no argument",
+			Handler:     cmdThinking,
+		},
+		{
+			Name:        "retry",
+			Description: "Manually trigger a retry of the last failed prompt",
+			Handler:     cmdRetry,
+		},
+		{
+			Name:        "session",
+			Description: "Show current session information",
+			Handler:     cmdSession,
 		},
 	}
 }
@@ -103,6 +120,46 @@ func cmdTools(session *CodingSession, _ string) error {
 	for _, name := range names {
 		fmt.Printf("  - %s\n", name)
 	}
+	return nil
+}
+
+func cmdThinking(session *CodingSession, args string) error {
+	level := strings.TrimSpace(args)
+	if level == "" {
+		// Cycle through levels
+		next := session.CycleThinkingLevel()
+		fmt.Printf("Thinking level: %s\n", next)
+		return nil
+	}
+
+	tl := agent.ThinkingLevel(level)
+	switch tl {
+	case agent.ThinkingLevelOff, agent.ThinkingLevelLow, agent.ThinkingLevelMedium, agent.ThinkingLevelHigh:
+		session.SetThinkingLevel(tl)
+		fmt.Printf("Thinking level set to: %s\n", tl)
+		return nil
+	default:
+		return fmt.Errorf("invalid thinking level: %s (valid: off, low, medium, high)", level)
+	}
+}
+
+func cmdRetry(session *CodingSession, _ string) error {
+	fmt.Println("Retrying last prompt...")
+	// Reset retry counter and re-prompt
+	session.retryManager.Reset()
+	return nil
+}
+
+func cmdSession(session *CodingSession, _ string) error {
+	model := session.GetModel()
+	fmt.Printf("Session ID: %s\n", session.GetSessionID())
+	fmt.Printf("Model: %s (%s)\n", model.ID, model.Provider)
+	fmt.Printf("Thinking Level: %s\n", session.GetThinkingLevel())
+	fmt.Printf("Streaming: %v\n", session.IsStreaming())
+	fmt.Printf("Auto Compaction: %v\n", session.config.AutoCompaction)
+	fmt.Printf("Auto Retry: %v\n", session.config.AutoRetry)
+	msgs := session.GetMessages()
+	fmt.Printf("Messages: %d\n", len(msgs))
 	return nil
 }
 

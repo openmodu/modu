@@ -33,6 +33,24 @@ type Config struct {
 
 	// AppendPrompts are additional prompt texts appended to the system prompt.
 	AppendPrompts []string `json:"appendPrompts,omitempty"`
+
+	// AutoRetry enables automatic retry on transient errors.
+	AutoRetry bool `json:"autoRetry,omitempty"`
+
+	// RetrySettings configures retry behavior.
+	RetrySettings RetryConfig `json:"retrySettings,omitempty"`
+
+	// ScopedModels lists models available for cycling.
+	ScopedModels []string `json:"scopedModels,omitempty"`
+
+	// SteeringMode controls how steering messages are consumed.
+	SteeringMode agent.ExecutionMode `json:"steeringMode,omitempty"`
+
+	// FollowUpMode controls how follow-up messages are consumed.
+	FollowUpMode agent.ExecutionMode `json:"followUpMode,omitempty"`
+
+	// BlockImages prevents image content from being sent to the model.
+	BlockImages bool `json:"blockImages,omitempty"`
 }
 
 // CompactionConfig controls context compaction behavior.
@@ -41,6 +59,16 @@ type CompactionConfig struct {
 	MaxContextPercentage float64 `json:"maxContextPercentage,omitempty"`
 	// PreserveRecentMessages is the number of recent messages to preserve during compaction.
 	PreserveRecentMessages int `json:"preserveRecentMessages,omitempty"`
+}
+
+// RetryConfig controls auto-retry behavior.
+type RetryConfig struct {
+	// MaxRetries is the maximum number of retry attempts. Default: 3.
+	MaxRetries int `json:"maxRetries,omitempty"`
+	// BaseDelayMs is the base delay in milliseconds for exponential backoff. Default: 1000.
+	BaseDelayMs int `json:"baseDelayMs,omitempty"`
+	// MaxDelayMs is the maximum delay in milliseconds. Default: 30000.
+	MaxDelayMs int `json:"maxDelayMs,omitempty"`
 }
 
 // DefaultConfig returns a config with sensible defaults.

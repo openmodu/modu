@@ -8,6 +8,7 @@ import (
 
 	"github.com/crosszan/modu/pkg/agent"
 	"github.com/crosszan/modu/pkg/coding_agent/compaction"
+	"github.com/crosszan/modu/pkg/coding_agent/eventbus"
 	"github.com/crosszan/modu/pkg/coding_agent/extension"
 	"github.com/crosszan/modu/pkg/coding_agent/resource"
 	"github.com/crosszan/modu/pkg/coding_agent/session"
@@ -58,7 +59,11 @@ type CodingSession struct {
 	getAPIKey      func(provider string) (string, error)
 	streamFn       agent.StreamFn
 	// totalTokens tracks accumulated token usage for auto-compaction.
-	totalTokens int
+	totalTokens    int
+	retryManager   *RetryManager
+	eventBus       eventbus.EventBusController
+	scopedModels   []string
+	thinkingLevel  agent.ThinkingLevel
 }
 
 // NewCodingSession creates and initializes a new coding session.
@@ -199,6 +204,10 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		slashCommands:  make(map[string]SlashCommand),
 		getAPIKey:      getAPIKey,
 		streamFn:       streamFn,
+		retryManager:   NewRetryManager(cfg.RetrySettings, cfg.AutoRetry),
+		eventBus:       eventbus.NewEventBus(),
+		scopedModels:   cfg.ScopedModels,
+		thinkingLevel:  cfg.ThinkingLevel,
 	}
 
 	// Subscribe to events for token usage tracking (auto-compaction)
@@ -466,4 +475,125 @@ func (s *CodingSession) Abort() {
 // GetConfig returns the current configuration.
 func (s *CodingSession) GetConfig() *Config {
 	return s.config
+}
+
+// CycleModel cycles to the next model in the scopedModels list.
+// Returns the new model, or nil if no scoped models are configured.
+func (s *CodingSession) CycleModel() *llm.Model {
+	if len(s.scopedModels) == 0 {
+		return nil
+	}
+
+	currentID := s.model.ID
+	nextIdx := 0
+	for i, id := range s.scopedModels {
+		if id == currentID {
+			nextIdx = (i + 1) % len(s.scopedModels)
+			break
+		}
+	}
+
+	nextID := s.scopedModels[nextIdx]
+	model := llm.GetModel("", nextID)
+	if model == nil {
+		// Create a minimal model if not in registry
+		model = &llm.Model{
+			ID:   nextID,
+			Name: nextID,
+		}
+	}
+
+	s.SetModel(model)
+	s.eventBus.Emit(sessionEventChannel, SessionEvent{
+		Type:     SessionEventModelChange,
+		Provider: string(model.Provider),
+		ModelID:  model.ID,
+	})
+	return model
+}
+
+// CycleThinkingLevel cycles through: off -> low -> medium -> high -> off.
+func (s *CodingSession) CycleThinkingLevel() agent.ThinkingLevel {
+	var next agent.ThinkingLevel
+	switch s.thinkingLevel {
+	case agent.ThinkingLevelOff:
+		next = agent.ThinkingLevelLow
+	case agent.ThinkingLevelLow:
+		next = agent.ThinkingLevelMedium
+	case agent.ThinkingLevelMedium:
+		next = agent.ThinkingLevelHigh
+	case agent.ThinkingLevelHigh:
+		next = agent.ThinkingLevelOff
+	default:
+		next = agent.ThinkingLevelLow
+	}
+
+	s.SetThinkingLevel(next)
+	return next
+}
+
+// SetThinkingLevel sets the thinking level.
+func (s *CodingSession) SetThinkingLevel(level agent.ThinkingLevel) {
+	s.thinkingLevel = level
+	s.agent.SetThinkingLevel(level)
+	s.eventBus.Emit(sessionEventChannel, SessionEvent{
+		Type:  SessionEventThinkingChange,
+		Level: string(level),
+	})
+}
+
+// GetThinkingLevel returns the current thinking level.
+func (s *CodingSession) GetThinkingLevel() agent.ThinkingLevel {
+	return s.thinkingLevel
+}
+
+// GetModel returns the current model.
+func (s *CodingSession) GetModel() *llm.Model {
+	return s.model
+}
+
+// IsStreaming returns whether the agent is currently streaming.
+func (s *CodingSession) IsStreaming() bool {
+	return s.agent.GetState().IsStreaming
+}
+
+// GetSessionID returns the current session ID.
+func (s *CodingSession) GetSessionID() string {
+	return s.agent.GetSessionID()
+}
+
+// SetAutoCompaction enables or disables auto-compaction.
+func (s *CodingSession) SetAutoCompaction(enabled bool) {
+	s.config.AutoCompaction = enabled
+}
+
+// SetAutoRetry enables or disables auto-retry.
+func (s *CodingSession) SetAutoRetry(enabled bool) {
+	s.config.AutoRetry = enabled
+	s.retryManager.SetEnabled(enabled)
+}
+
+// AbortRetry cancels any pending retry wait.
+func (s *CodingSession) AbortRetry() {
+	s.retryManager.AbortRetry()
+}
+
+// GetMessages returns the current message history.
+func (s *CodingSession) GetMessages() []agent.AgentMessage {
+	return s.agent.GetState().Messages
+}
+
+// GetEventBus returns the session's event bus.
+func (s *CodingSession) GetEventBus() eventbus.EventBusController {
+	return s.eventBus
+}
+
+// SubscribeSession registers a handler for session-level events.
+// Returns an unsubscribe function.
+func (s *CodingSession) SubscribeSession(fn func(SessionEvent)) func() {
+	return s.eventBus.On(sessionEventChannel, func(data any) {
+		if event, ok := data.(SessionEvent); ok {
+			fn(event)
+		}
+	})
 }
