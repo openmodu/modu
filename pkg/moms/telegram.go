@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"encoding/base64"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/crosszan/modu/pkg/llm"
@@ -21,6 +22,7 @@ type Bot struct {
 	workingDir string
 	llmModel   *llm.Model
 	getAPIKey  func(provider string) (string, error)
+	settings   *Settings
 
 	mu      sync.Mutex
 	runners map[int64]*Runner
@@ -28,8 +30,9 @@ type Bot struct {
 }
 
 type queuedMessage struct {
-	update tgbotapi.Update
-	ts     string
+	update      tgbotapi.Update
+	ts          string
+	attachments []string
 }
 
 // NewBot creates a new Telegram bot.
@@ -47,6 +50,7 @@ func NewBot(token string, sandbox *Sandbox, workingDir string, llmModel *llm.Mod
 		workingDir: workingDir,
 		llmModel:   llmModel,
 		getAPIKey:  getAPIKey,
+		settings:   NewSettingsManager(workingDir),
 		runners:    make(map[int64]*Runner),
 		queue:      make(map[int64]chan *queuedMessage),
 	}, nil
@@ -137,7 +141,7 @@ func (b *Bot) handleUpdate(ctx context.Context, update tgbotapi.Update) {
 	b.mu.Unlock()
 
 	select {
-	case ch <- &queuedMessage{update: update, ts: ts}:
+	case ch <- &queuedMessage{update: update, ts: ts, attachments: attachmentPaths}:
 	default:
 		b.sendText(chatID, "_Too many messages queued. Please wait._", tgbotapi.ModeMarkdownV2)
 	}
@@ -197,6 +201,7 @@ func (b *Bot) processMessage(ctx context.Context, chatID int64, qm *queuedMessag
 		messageText: text,
 		messageTS:   qm.ts,
 		senderName:  senderName,
+		attachments: qm.attachments,
 	}
 
 	result := runner.Run(ctx, tgCtx)
@@ -210,7 +215,7 @@ func (b *Bot) processMessage(ctx context.Context, chatID int64, qm *queuedMessag
 
 // newRunnerFromBot creates a Runner using Bot's sandbox, model, and working dir.
 func newRunnerFromBot(b *Bot, chatID int64) *Runner {
-	return NewRunner(b.sandbox, b.workingDir, chatID, b.llmModel, b.getAPIKey)
+	return NewRunner(b.sandbox, b.workingDir, chatID, b.llmModel, b.getAPIKey, b.settings)
 }
 
 // getOrCreateRunner returns the persistent runner for a chat.
@@ -319,6 +324,7 @@ type tgContext struct {
 	messageText string
 	messageTS   string
 	senderName  string
+	attachments []string
 
 	mu           sync.Mutex
 	mainMsgID    int
@@ -331,6 +337,60 @@ func (c *tgContext) ChatID() int64      { return c.chatID }
 func (c *tgContext) MessageText() string { return c.messageText }
 func (c *tgContext) MessageTS() string   { return c.messageTS }
 func (c *tgContext) SenderName() string  { return c.senderName }
+
+func (c *tgContext) Images() []llm.ImageContent {
+	var images []llm.ImageContent
+	for _, path := range c.attachments {
+		ext := strings.ToLower(filepath.Ext(path))
+		mimeType := ""
+		switch ext {
+		case ".jpg", ".jpeg":
+			mimeType = "image/jpeg"
+		case ".png":
+			mimeType = "image/png"
+		case ".gif":
+			mimeType = "image/gif"
+		case ".webp":
+			mimeType = "image/webp"
+		}
+
+		if mimeType != "" {
+			data, err := os.ReadFile(path)
+			if err == nil {
+				images = append(images, llm.ImageContent{
+					Type:     "image",
+					Data:     string(data), // Note: llm package expects raw data string? Or base64?
+					// Checking llm.ImageContent definition in types.go (viewed earlier):
+					// Data string `json:"data"`
+					// Usually this is base64 for APIs.
+					// Let's check agent.go PromptWithImages... it passes directly to LLM.
+					// Most providers expect base64. 
+					// However, the llm package interface might expect raw bytes cast to string 
+					// or base64 string. 
+					// Let's assume the provider implementation handles it. 
+					// Actually, checking standard `llm` implementations, they often expect base64.
+					// Let's encode to base64 to be safe? 
+					// Wait, if I change Data to be base64 encoded, I need to know if the provider expects it.
+					// The `anthropic` provider in `modu` likely expects base64 in `Data`.
+					// Let's encode it.
+					// But `pkg/llm/types.go` says `Data string`. 
+					// Let's import encoding/base64.
+					MimeType: mimeType,
+				})
+			}
+		}
+	}
+	// Post-processing to base64 encode if needed. 
+	// Actually I'll do it right here.
+	for i := range images {
+		images[i].Data = base64Encode(images[i].Data)
+	}
+	return images
+}
+
+func base64Encode(raw string) string {
+	return base64.StdEncoding.EncodeToString([]byte(raw))
+}
 
 func (c *tgContext) Respond(text string, shouldLog bool) error {
 	c.mu.Lock()

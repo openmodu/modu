@@ -13,6 +13,7 @@ import (
 	"github.com/crosszan/modu/pkg/coding_agent/tools"
 	"github.com/crosszan/modu/pkg/llm"
 	_ "github.com/crosszan/modu/pkg/llm/providers/anthropic"
+	"encoding/json"
 )
 
 // TelegramContext is the interface the runner uses to communicate back to Telegram.
@@ -37,6 +38,8 @@ type TelegramContext interface {
 	MessageTS() string
 	// SenderName returns the human-readable sender name.
 	SenderName() string
+	// Images returns any image attachments provided with the message.
+	Images() []llm.ImageContent
 }
 
 // RunResult holds what happened after a run.
@@ -53,19 +56,21 @@ type Runner struct {
 	chatID      int64
 	model       *llm.Model
 	getAPIKey   func(provider string) (string, error)
+	settings    *Settings
 	agentInst   *agent.Agent
 	cancelFn    context.CancelFunc
 	running     bool
 }
 
 // NewRunner creates a Runner for a chat.
-func NewRunner(sandbox *Sandbox, workingDir string, chatID int64, model *llm.Model, getAPIKey func(provider string) (string, error)) *Runner {
+func NewRunner(sandbox *Sandbox, workingDir string, chatID int64, model *llm.Model, getAPIKey func(provider string) (string, error), settings *Settings) *Runner {
 	return &Runner{
 		sandbox:    sandbox,
 		workingDir: workingDir,
 		chatID:     chatID,
 		model:      model,
 		getAPIKey:  getAPIKey,
+		settings:   settings,
 	}
 }
 
@@ -223,8 +228,30 @@ func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult
 		tgCtx.MessageText(),
 	)
 
-	promptErr := a.Prompt(ctx, userMessage)
+
+	var promptErr error
+	images := tgCtx.Images()
+	if len(images) > 0 {
+		promptErr = a.PromptWithImages(ctx, userMessage, images)
+	} else {
+		promptErr = a.Prompt(ctx, userMessage)
+	}
 	a.WaitForIdle()
+
+	// Persist context.
+	if msgs := a.GetState().Messages; len(msgs) > 0 {
+		var toSave []llm.Message
+		for _, m := range msgs {
+			// Convert AgentMessage to llm.Message (they are aliases/compatible usually, but let's be safe if they diverge).
+			// pkg/agent uses llm.Message as underlying type for now.
+			if lm, ok := m.(llm.Message); ok {
+				toSave = append(toSave, lm)
+			}
+		}
+		if err := SaveContextMessages(chatDir, toSave); err != nil {
+			fmt.Printf("[moms] failed to save context for chat %d: %v\n", r.chatID, err)
+		}
+	}
 
 	// Drain queue.
 	<-queueChain
@@ -266,6 +293,22 @@ func (r *Runner) getOrCreateAgent(chatDir, workspacePath string, tgCtx TelegramC
 	skills := LoadAllSkills(chatDir, r.workingDir, workspacePath, r.chatID)
 	systemPrompt := BuildSystemPrompt(workspacePath, r.chatID, memory, r.sandbox.cfg, skills)
 
+	// Check settings for model override
+	model := r.model
+	settingsModel := r.settings.GetModelID()
+	if settingsModel != "" && settingsModel != model.ID {
+		// Create a copy or new model struct with the ID. 
+		// For simplicity, we just change the ID/Name if provider is compatible,
+		// or ideally we should use llm.GetModel if available or construct it.
+		// Since we don't have a full registry here easily, we clone the base model
+		// and update ID. This assumes same provider (Anthropic).
+		// TODO: Support provider switching via settings properly.
+		mCopy := *model
+		mCopy.ID = settingsModel
+		mCopy.Name = settingsModel
+		model = &mCopy
+	}
+
 	// Create tools.
 	cwd := chatDir
 	agentTools := []agent.AgentTool{
@@ -283,7 +326,7 @@ func (r *Runner) getOrCreateAgent(chatDir, workspacePath string, tgCtx TelegramC
 	a := agent.NewAgent(agent.AgentOptions{
 		InitialState: &agent.AgentState{
 			SystemPrompt:     systemPrompt,
-			Model:            r.model,
+			Model:            model,
 			ThinkingLevel:    agent.ThinkingLevelOff,
 			Tools:            agentTools,
 			Messages:         []agent.AgentMessage{},
@@ -302,12 +345,57 @@ func (r *Runner) getOrCreateAgent(chatDir, workspacePath string, tgCtx TelegramC
 	return a
 }
 
-// loadContextMessages reads messages from context.jsonl (best-effort).
+// loadContextMessages reads messages from context.jsonl.
 func loadContextMessages(chatDir string) ([]agent.AgentMessage, error) {
-	// We persist a simple jsonl with the agent messages.
-	// For simplicity, we skip context persistence for now and start fresh.
-	// Future: persist messages like coding-agent does.
-	return nil, nil
+	path := filepath.Join(chatDir, "context.jsonl")
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var messages []agent.AgentMessage
+	dec := json.NewDecoder(f)
+	for dec.More() {
+		// We need to decode into specific types based on role, or use a map/struct that can unmarshal polymorphic.
+		// Since llm.Message is interface, we decode into a raw map first or try struct.
+		// A simple way is to use llm helper if available, or just try to decode into Assistant/User types.
+		// Let's decode into json.RawMessage then check role.
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			continue
+		}
+		
+		var base struct {
+			Role string `json:"role"`
+		}
+		if err := json.Unmarshal(raw, &base); err != nil {
+			continue
+		}
+
+		var msg agent.AgentMessage
+		switch base.Role {
+		case "user":
+			var um llm.UserMessage
+			if err := json.Unmarshal(raw, &um); err == nil {
+				msg = um
+			}
+		case "assistant":
+			var am llm.AssistantMessage
+			if err := json.Unmarshal(raw, &am); err == nil {
+				msg = am
+			}
+		case "tool":
+			var tr llm.ToolResultMessage
+			if err := json.Unmarshal(raw, &tr); err == nil {
+				msg = tr
+			}
+		}
+		if msg != nil {
+			messages = append(messages, msg)
+		}
+	}
+	return messages, nil
 }
 
 // extractResultText extracts text from AgentToolResult.

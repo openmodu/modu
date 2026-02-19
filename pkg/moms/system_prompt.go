@@ -3,6 +3,7 @@ package moms
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -27,7 +28,12 @@ func LoadSkills(dir, sandboxBasePath string) []SkillInfo {
 		if !e.IsDir() {
 			continue
 		}
-		skillMd := filepath.Join(dir, e.Name(), "SKILL.md")
+		skillDir := filepath.Join(dir, e.Name())
+		if err := EnsureSkillPrepared(skillDir); err != nil {
+			fmt.Printf("[moms] failed to prepare skill %s: %v\n", e.Name(), err)
+		}
+
+		skillMd := filepath.Join(skillDir, "SKILL.md")
 		data, err := os.ReadFile(skillMd)
 		if err != nil {
 			continue
@@ -83,7 +89,11 @@ func LoadSkillsInChatDir(chatDir, sandboxChatPath string) []SkillInfo {
 		if !e.IsDir() {
 			continue
 		}
-		skillMd := filepath.Join(dir, e.Name(), "SKILL.md")
+		skillDir := filepath.Join(dir, e.Name())
+		if err := EnsureSkillPrepared(skillDir); err != nil {
+			fmt.Printf("[moms] failed to prepare chat skill %s: %v\n", e.Name(), err)
+		}
+		skillMd := filepath.Join(skillDir, "SKILL.md")
 		data, err := os.ReadFile(skillMd)
 		if err != nil {
 			continue
@@ -124,6 +134,37 @@ func parseSkillFrontmatter(content string) (name, description string) {
 		}
 	}
 	return
+}
+
+// EnsureSkillPrepared runs prepare.sh if it exists and hasn't been run.
+func EnsureSkillPrepared(skillDir string) error {
+	prepareScript := filepath.Join(skillDir, "prepare.sh")
+	marker := filepath.Join(skillDir, ".prepared")
+
+	if _, err := os.Stat(prepareScript); os.IsNotExist(err) {
+		return nil
+	}
+
+	// If marker exists, we assume it's done. 
+	// To be smarter, we could check modtime of prepare.sh > marker.
+	if info, err := os.Stat(marker); err == nil {
+		scriptInfo, err2 := os.Stat(prepareScript)
+		if err2 == nil && !scriptInfo.ModTime().After(info.ModTime()) {
+			return nil
+		}
+	}
+
+	fmt.Printf("[moms] running prepare.sh for %s\n", filepath.Base(skillDir))
+	cmd := exec.Command("/bin/sh", "prepare.sh")
+	cmd.Dir = skillDir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+
+	_, _ = os.Create(marker)
+	return nil
 }
 
 // GetMemory reads MEMORY.md files (global + chat-specific).
