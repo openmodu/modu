@@ -1,6 +1,6 @@
 # pkg/moms — Telegram 版 mom 机器人
 
-基于 `pkg/agent` 和 `pkg/llm` 构建的 Telegram 智能机器人，是 [pi-mono mom](https://github.com/mariozechner/mom) Slack 机器人的 Go/Telegram 移植版本。
+基于 `pkg/agent` 和 `pkg/llm` 构建的 Telegram 智能机器人，是Slack 机器人的 Go/Telegram 移植版本。
 
 机器人可以**执行 bash 命令、读写文件**，拥有持久化工作空间、技能系统（skills）、定时事件（events）和跨会话记忆（MEMORY.md），可以自主安装工具、配置环境，完成开发场景中的各类任务。
 
