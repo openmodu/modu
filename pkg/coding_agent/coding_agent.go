@@ -1,9 +1,14 @@
 package coding_agent
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"html"
+	"os"
+	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crosszan/modu/pkg/agent"
@@ -64,6 +69,13 @@ type CodingSession struct {
 	eventBus       eventbus.EventBusController
 	scopedModels   []string
 	thinkingLevel  agent.ThinkingLevel
+
+	// RPC parity fields
+	sessionName    string
+	isCompacting   bool
+	bashCancel     context.CancelFunc
+	bashMu         sync.Mutex
+	sessionStarted int64
 }
 
 // NewCodingSession creates and initializes a new coding session.
@@ -208,6 +220,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		eventBus:       eventbus.NewEventBus(),
 		scopedModels:   cfg.ScopedModels,
 		thinkingLevel:  cfg.ThinkingLevel,
+		sessionStarted: time.Now().UnixMilli(),
 	}
 
 	// Subscribe to events for token usage tracking (auto-compaction)
@@ -397,6 +410,9 @@ func (s *CodingSession) Compact(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+
+	s.isCompacting = true
+	defer func() { s.isCompacting = false }()
 
 	state := s.agent.GetState()
 
@@ -596,4 +612,232 @@ func (s *CodingSession) SubscribeSession(fn func(SessionEvent)) func() {
 			fn(event)
 		}
 	})
+}
+
+// GetSessionFile returns the session file path.
+func (s *CodingSession) GetSessionFile() string {
+	return s.sessionManager.FilePath()
+}
+
+// SetSessionName sets the display name for this session.
+func (s *CodingSession) SetSessionName(name string) {
+	s.sessionName = name
+}
+
+// GetSessionName returns the display name for this session.
+func (s *CodingSession) GetSessionName() string {
+	return s.sessionName
+}
+
+// IsCompacting returns whether compaction is currently in progress.
+func (s *CodingSession) IsCompacting() bool {
+	return s.isCompacting
+}
+
+// GetLastAssistantText returns the text content of the last assistant message.
+func (s *CodingSession) GetLastAssistantText() string {
+	msgs := s.agent.GetState().Messages
+	for i := len(msgs) - 1; i >= 0; i-- {
+		msg, ok := msgs[i].(llm.AssistantMessage)
+		if !ok {
+			if ptr, ok2 := msgs[i].(*llm.AssistantMessage); ok2 {
+				msg = *ptr
+			} else {
+				continue
+			}
+		}
+		for _, block := range msg.Content {
+			if tc, ok := block.(*llm.TextContent); ok && tc.Text != "" {
+				return tc.Text
+			}
+			if tc, ok := block.(llm.TextContent); ok && tc.Text != "" {
+				return tc.Text
+			}
+		}
+	}
+	return ""
+}
+
+// GetForkMessages returns user messages from the session history, suitable for forking.
+func (s *CodingSession) GetForkMessages() []ForkMessage {
+	entries := s.sessionManager.Load()
+	var result []ForkMessage
+	for _, entry := range entries {
+		if entry.Type != session.EntryTypeMessage {
+			continue
+		}
+		data, ok := entry.Data.(session.MessageData)
+		if !ok {
+			// Try map-based extraction (from JSON deserialization)
+			if m, ok := entry.Data.(map[string]interface{}); ok {
+				role, _ := m["role"].(string)
+				if role != string(agent.RoleUser) {
+					continue
+				}
+				content, _ := m["content"].(string)
+				result = append(result, ForkMessage{
+					EntryID: entry.ID,
+					Role:    role,
+					Content: content,
+				})
+			}
+			continue
+		}
+		if data.Role != agent.RoleUser {
+			continue
+		}
+		content, _ := data.Content.(string)
+		result = append(result, ForkMessage{
+			EntryID: entry.ID,
+			Role:    string(data.Role),
+			Content: content,
+		})
+	}
+	return result
+}
+
+// GetSessionStats returns aggregate statistics for the current session.
+func (s *CodingSession) GetSessionStats() SessionStats {
+	msgs := s.agent.GetState().Messages
+	now := time.Now().UnixMilli()
+	return SessionStats{
+		TotalTokens:    s.totalTokens,
+		MessageCount:   len(msgs),
+		SessionStarted: s.sessionStarted,
+		DurationMs:     now - s.sessionStarted,
+	}
+}
+
+// GetAvailableModels returns all registered models from all providers.
+func (s *CodingSession) GetAvailableModels() []*llm.Model {
+	var result []*llm.Model
+	for _, provider := range llm.GetProviders() {
+		result = append(result, llm.GetModels(provider)...)
+	}
+	return result
+}
+
+// ExecuteBash executes a shell command and returns the result.
+func (s *CodingSession) ExecuteBash(ctx context.Context, command string, timeoutMs int) (*BashResult, error) {
+	if timeoutMs <= 0 {
+		timeoutMs = 30000
+	}
+
+	bashCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutMs)*time.Millisecond)
+
+	s.bashMu.Lock()
+	s.bashCancel = cancel
+	s.bashMu.Unlock()
+
+	defer func() {
+		cancel()
+		s.bashMu.Lock()
+		s.bashCancel = nil
+		s.bashMu.Unlock()
+	}()
+
+	cmd := exec.CommandContext(bashCtx, "sh", "-c", command)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	cmd.Dir = s.cwd
+
+	err := cmd.Run()
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			return nil, err
+		}
+	}
+
+	return &BashResult{
+		Stdout:   stdout.String(),
+		Stderr:   stderr.String(),
+		ExitCode: exitCode,
+	}, nil
+}
+
+// AbortBash cancels the currently running bash command, if any.
+func (s *CodingSession) AbortBash() {
+	s.bashMu.Lock()
+	defer s.bashMu.Unlock()
+	if s.bashCancel != nil {
+		s.bashCancel()
+	}
+}
+
+// ExportHTML writes the session messages as a simple HTML file.
+func (s *CodingSession) ExportHTML(path string) error {
+	msgs := s.agent.GetState().Messages
+
+	var buf bytes.Buffer
+	buf.WriteString("<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>Session Export</title></head><body>\n")
+
+	for _, msg := range msgs {
+		role := "unknown"
+		content := ""
+
+		switch m := msg.(type) {
+		case llm.UserMessage:
+			role = "user"
+			if s, ok := m.Content.(string); ok {
+				content = s
+			}
+		case llm.AssistantMessage:
+			role = "assistant"
+			for _, block := range m.Content {
+				if tc, ok := block.(*llm.TextContent); ok {
+					content += tc.Text
+				} else if tc, ok := block.(llm.TextContent); ok {
+					content += tc.Text
+				}
+			}
+		case *llm.AssistantMessage:
+			role = "assistant"
+			for _, block := range m.Content {
+				if tc, ok := block.(*llm.TextContent); ok {
+					content += tc.Text
+				} else if tc, ok := block.(llm.TextContent); ok {
+					content += tc.Text
+				}
+			}
+		}
+
+		buf.WriteString(fmt.Sprintf("<div class=\"message %s\"><strong>%s:</strong><pre>%s</pre></div>\n",
+			role, role, html.EscapeString(content)))
+	}
+
+	buf.WriteString("</body></html>\n")
+	return os.WriteFile(path, buf.Bytes(), 0o644)
+}
+
+// SwitchSession loads messages from a different session file and replaces the current agent messages.
+func (s *CodingSession) SwitchSession(sessionFile string) error {
+	newMgr, err := session.NewManagerFromFile(sessionFile)
+	if err != nil {
+		return fmt.Errorf("failed to load session: %w", err)
+	}
+
+	entries := newMgr.Load()
+	var messages []agent.AgentMessage
+	for _, entry := range entries {
+		if entry.Type != session.EntryTypeMessage {
+			continue
+		}
+		if m, ok := entry.Data.(map[string]interface{}); ok {
+			role, _ := m["role"].(string)
+			content, _ := m["content"].(string)
+			switch role {
+			case "user":
+				messages = append(messages, llm.UserMessage{Role: "user", Content: content})
+			case "assistant":
+				messages = append(messages, llm.AssistantMessage{Role: "assistant", Content: []llm.ContentBlock{&llm.TextContent{Type: "text", Text: content}}})
+			}
+		}
+	}
+
+	s.agent.ReplaceMessages(messages)
+	return nil
 }

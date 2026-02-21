@@ -45,6 +45,18 @@ func NewManager(agentDir, projectPath string) (*Manager, error) {
 	return m, nil
 }
 
+// NewManagerFromFile creates a manager from an existing session file path.
+func NewManagerFromFile(filePath string) (*Manager, error) {
+	m := &Manager{
+		dir:      filepath.Dir(filePath),
+		filePath: filePath,
+	}
+	if err := m.load(); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // Append adds a new entry to the session.
 func (m *Manager) Append(entry SessionEntry) error {
 	m.mu.Lock()
@@ -109,6 +121,13 @@ func (m *Manager) GetEntry(id string) (SessionEntry, bool) {
 		}
 	}
 	return SessionEntry{}, false
+}
+
+// FilePath returns the session file path.
+func (m *Manager) FilePath() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.filePath
 }
 
 // Clear removes all entries.

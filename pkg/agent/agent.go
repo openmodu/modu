@@ -292,6 +292,13 @@ func (a *Agent) HasQueuedMessages() bool {
 	return len(a.steeringQueue) > 0 || len(a.followUpQueue) > 0
 }
 
+// QueuedMessageCount returns the total number of queued steering and follow-up messages.
+func (a *Agent) QueuedMessageCount() int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return len(a.steeringQueue) + len(a.followUpQueue)
+}
+
 func (a *Agent) Abort() {
 	a.mu.Lock()
 	defer a.mu.Unlock()

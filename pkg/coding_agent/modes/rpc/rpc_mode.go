@@ -38,13 +38,40 @@ func (r *RpcMode) SetIO(input io.Reader, output io.Writer) {
 
 // Run starts the RPC mode main loop.
 func (r *RpcMode) Run(ctx context.Context) error {
-	// Subscribe to agent events and forward as JSON lines
+	// Subscribe to agent events and forward full event data
 	unsubAgent := r.session.Subscribe(func(event agent.AgentEvent) {
-		r.writeEvent("agent_event", map[string]any{
-			"eventType": string(event.Type),
-			"toolName":  event.ToolName,
-			"isError":   event.IsError,
-		})
+		data := map[string]any{"eventType": string(event.Type)}
+		if event.ToolName != "" {
+			data["toolName"] = event.ToolName
+		}
+		if event.ToolCallID != "" {
+			data["toolCallId"] = event.ToolCallID
+		}
+		if event.IsError {
+			data["isError"] = true
+		}
+		if event.Args != nil {
+			data["args"] = event.Args
+		}
+		if event.Result != nil {
+			data["result"] = event.Result
+		}
+		if event.Message != nil {
+			data["message"] = event.Message
+		}
+		if len(event.Messages) > 0 {
+			data["messages"] = event.Messages
+		}
+		if len(event.ToolResults) > 0 {
+			data["toolResults"] = event.ToolResults
+		}
+		if event.AssistantMessageEvent != nil {
+			data["assistantMessageEvent"] = event.AssistantMessageEvent
+		}
+		if event.Partial != nil {
+			data["partial"] = event.Partial
+		}
+		r.writeEvent("agent_event", data)
 	})
 	defer unsubAgent()
 
@@ -87,44 +114,60 @@ func (r *RpcMode) Run(ctx context.Context) error {
 	return scanner.Err()
 }
 
+// resolveMessage extracts the message string from either the flat Message field or the Data payload.
+func resolveMessage(cmd RpcCommand) (string, error) {
+	if cmd.Message != "" {
+		return cmd.Message, nil
+	}
+	if cmd.Data != nil {
+		var data PromptData
+		if err := json.Unmarshal(cmd.Data, &data); err != nil {
+			return "", err
+		}
+		return data.Message, nil
+	}
+	return "", fmt.Errorf("missing message")
+}
+
 func (r *RpcMode) handleCommand(ctx context.Context, cmd RpcCommand) RpcResponse {
+	cmdType := cmd.CommandType()
 	resp := RpcResponse{
 		ID:      cmd.ID,
 		Type:    "response",
-		Command: cmd.Command,
+		Command: cmdType,
 	}
 
-	switch cmd.Command {
+	switch cmdType {
 	case RpcCmdPrompt:
-		var data PromptData
-		if err := json.Unmarshal(cmd.Data, &data); err != nil {
+		msg, err := resolveMessage(cmd)
+		if err != nil {
 			resp.Error = fmt.Sprintf("invalid prompt data: %v", err)
 			return resp
 		}
 		// Run prompt in background
 		go func() {
-			if err := r.session.Prompt(ctx, data.Message); err != nil {
+			if err := r.session.Prompt(ctx, msg); err != nil {
 				r.writeEvent("prompt_error", map[string]string{"error": err.Error()})
 			}
 		}()
 		resp.Success = true
 
 	case RpcCmdSteer:
-		var data PromptData
-		if err := json.Unmarshal(cmd.Data, &data); err != nil {
+		msg, err := resolveMessage(cmd)
+		if err != nil {
 			resp.Error = fmt.Sprintf("invalid steer data: %v", err)
 			return resp
 		}
-		r.session.Steer(data.Message)
+		r.session.Steer(msg)
 		resp.Success = true
 
 	case RpcCmdFollowUp:
-		var data PromptData
-		if err := json.Unmarshal(cmd.Data, &data); err != nil {
+		msg, err := resolveMessage(cmd)
+		if err != nil {
 			resp.Error = fmt.Sprintf("invalid follow_up data: %v", err)
 			return resp
 		}
-		r.session.FollowUp(data.Message)
+		r.session.FollowUp(msg)
 		resp.Success = true
 
 	case RpcCmdAbort:
@@ -135,14 +178,20 @@ func (r *RpcMode) handleCommand(ctx context.Context, cmd RpcCommand) RpcResponse
 		state := r.session.GetAgent().GetState()
 		model := r.session.GetModel()
 		rpcState := RpcSessionState{
-			Model:          model.ID,
-			Provider:       string(model.Provider),
-			ThinkingLevel:  string(r.session.GetThinkingLevel()),
-			IsStreaming:     state.IsStreaming,
-			SessionID:      r.session.GetSessionID(),
-			AutoCompaction: r.session.GetConfig().AutoCompaction,
-			AutoRetry:      r.session.GetConfig().AutoRetry,
-			MessageCount:   len(state.Messages),
+			Model:               model.ID,
+			Provider:            string(model.Provider),
+			ThinkingLevel:       string(r.session.GetThinkingLevel()),
+			IsStreaming:         state.IsStreaming,
+			SessionID:           r.session.GetSessionID(),
+			AutoCompaction:      r.session.GetConfig().AutoCompaction,
+			AutoRetry:           r.session.GetConfig().AutoRetry,
+			MessageCount:        len(state.Messages),
+			IsCompacting:        r.session.IsCompacting(),
+			SteeringMode:        string(r.session.GetAgent().GetSteeringMode()),
+			FollowUpMode:        string(r.session.GetAgent().GetFollowUpMode()),
+			SessionFile:         r.session.GetSessionFile(),
+			SessionName:         r.session.GetSessionName(),
+			PendingMessageCount: r.session.GetAgent().QueuedMessageCount(),
 		}
 		resp.Success = true
 		resp.Data = rpcState
@@ -214,13 +263,127 @@ func (r *RpcMode) handleCommand(ctx context.Context, cmd RpcCommand) RpcResponse
 		resp.Success = true
 		resp.Data = msgs
 
-	case RpcCmdGetCommands:
-		names := r.session.GetActiveToolNames()
+	case RpcCmdNewSession:
+		r.session.GetAgent().ClearMessages()
 		resp.Success = true
-		resp.Data = names
+
+	case RpcCmdGetCommands:
+		var commands []RpcSlashCommand
+		// Tool names
+		for _, name := range r.session.GetActiveToolNames() {
+			commands = append(commands, RpcSlashCommand{
+				Name:   name,
+				Source: "tool",
+			})
+		}
+		resp.Success = true
+		resp.Data = commands
+
+	// --- New commands (pi-mono parity) ---
+
+	case RpcCmdGetAvailableModels:
+		models := r.session.GetAvailableModels()
+		resp.Success = true
+		resp.Data = models
+
+	case RpcCmdSetSteeringMode:
+		var data SetModeData
+		if err := json.Unmarshal(cmd.Data, &data); err != nil {
+			resp.Error = fmt.Sprintf("invalid set_steering_mode data: %v", err)
+			return resp
+		}
+		r.session.GetAgent().SetSteeringMode(agent.ExecutionMode(data.Mode))
+		resp.Success = true
+
+	case RpcCmdSetFollowUpMode:
+		var data SetModeData
+		if err := json.Unmarshal(cmd.Data, &data); err != nil {
+			resp.Error = fmt.Sprintf("invalid set_follow_up_mode data: %v", err)
+			return resp
+		}
+		r.session.GetAgent().SetFollowUpMode(agent.ExecutionMode(data.Mode))
+		resp.Success = true
+
+	case RpcCmdBash:
+		var data BashData
+		if err := json.Unmarshal(cmd.Data, &data); err != nil {
+			resp.Error = fmt.Sprintf("invalid bash data: %v", err)
+			return resp
+		}
+		result, err := r.session.ExecuteBash(ctx, data.Command, data.TimeoutMs)
+		if err != nil {
+			resp.Error = err.Error()
+			return resp
+		}
+		resp.Success = true
+		resp.Data = result
+
+	case RpcCmdAbortBash:
+		r.session.AbortBash()
+		resp.Success = true
+
+	case RpcCmdGetSessionStats:
+		stats := r.session.GetSessionStats()
+		resp.Success = true
+		resp.Data = stats
+
+	case RpcCmdExportHTML:
+		var data ExportHTMLData
+		if err := json.Unmarshal(cmd.Data, &data); err != nil {
+			resp.Error = fmt.Sprintf("invalid export_html data: %v", err)
+			return resp
+		}
+		if err := r.session.ExportHTML(data.Path); err != nil {
+			resp.Error = err.Error()
+			return resp
+		}
+		resp.Success = true
+
+	case RpcCmdSwitchSession:
+		var data SwitchSessionData
+		if err := json.Unmarshal(cmd.Data, &data); err != nil {
+			resp.Error = fmt.Sprintf("invalid switch_session data: %v", err)
+			return resp
+		}
+		if err := r.session.SwitchSession(data.SessionFile); err != nil {
+			resp.Error = err.Error()
+			return resp
+		}
+		resp.Success = true
+
+	case RpcCmdFork:
+		var data ForkData
+		if err := json.Unmarshal(cmd.Data, &data); err != nil {
+			resp.Error = fmt.Sprintf("invalid fork data: %v", err)
+			return resp
+		}
+		if err := r.session.Fork(data.EntryID); err != nil {
+			resp.Error = err.Error()
+			return resp
+		}
+		resp.Success = true
+
+	case RpcCmdGetForkMessages:
+		msgs := r.session.GetForkMessages()
+		resp.Success = true
+		resp.Data = msgs
+
+	case RpcCmdGetLastAssistantText:
+		text := r.session.GetLastAssistantText()
+		resp.Success = true
+		resp.Data = map[string]string{"text": text}
+
+	case RpcCmdSetSessionName:
+		var data SetSessionNameData
+		if err := json.Unmarshal(cmd.Data, &data); err != nil {
+			resp.Error = fmt.Sprintf("invalid set_session_name data: %v", err)
+			return resp
+		}
+		r.session.SetSessionName(data.Name)
+		resp.Success = true
 
 	default:
-		resp.Error = fmt.Sprintf("unknown command: %s", cmd.Command)
+		resp.Error = fmt.Sprintf("unknown command: %s", cmdType)
 	}
 
 	return resp

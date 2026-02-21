@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/crosszan/modu/pkg/agent"
@@ -549,6 +550,269 @@ func TestGetMessages(t *testing.T) {
 	msgs = session.GetMessages()
 	if len(msgs) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+}
+
+// --- New method tests ---
+
+func TestGetLastAssistantText(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	model := &llm.Model{
+		ID: "test", Api: "ollama", Provider: "ollama",
+		ContextWindow: 8192, MaxTokens: 2048,
+	}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd: dir, AgentDir: agentDir, Model: model,
+		GetAPIKey: func(p string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// No messages yet
+	text := session.GetLastAssistantText()
+	if text != "" {
+		t.Fatalf("expected empty, got %s", text)
+	}
+
+	// Add an assistant message
+	session.GetAgent().AppendMessage(llm.AssistantMessage{
+		Role: "assistant",
+		Content: []llm.ContentBlock{
+			&llm.TextContent{Type: "text", Text: "hello from assistant"},
+		},
+	})
+
+	text = session.GetLastAssistantText()
+	if text != "hello from assistant" {
+		t.Fatalf("expected 'hello from assistant', got %s", text)
+	}
+
+	// Add another user message then assistant
+	session.GetAgent().AppendMessage(llm.UserMessage{Role: "user", Content: "question"})
+	session.GetAgent().AppendMessage(llm.AssistantMessage{
+		Role: "assistant",
+		Content: []llm.ContentBlock{
+			&llm.TextContent{Type: "text", Text: "second response"},
+		},
+	})
+
+	text = session.GetLastAssistantText()
+	if text != "second response" {
+		t.Fatalf("expected 'second response', got %s", text)
+	}
+}
+
+func TestSessionName(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	model := &llm.Model{
+		ID: "test", Api: "ollama", Provider: "ollama",
+		ContextWindow: 8192, MaxTokens: 2048,
+	}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd: dir, AgentDir: agentDir, Model: model,
+		GetAPIKey: func(p string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if session.GetSessionName() != "" {
+		t.Fatal("expected empty session name")
+	}
+
+	session.SetSessionName("my-session")
+	if session.GetSessionName() != "my-session" {
+		t.Fatalf("expected 'my-session', got %s", session.GetSessionName())
+	}
+}
+
+func TestIsCompacting(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	model := &llm.Model{
+		ID: "test", Api: "ollama", Provider: "ollama",
+		ContextWindow: 8192, MaxTokens: 2048,
+	}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd: dir, AgentDir: agentDir, Model: model,
+		GetAPIKey: func(p string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if session.IsCompacting() {
+		t.Fatal("should not be compacting initially")
+	}
+}
+
+func TestGetSessionFile(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	model := &llm.Model{
+		ID: "test", Api: "ollama", Provider: "ollama",
+		ContextWindow: 8192, MaxTokens: 2048,
+	}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd: dir, AgentDir: agentDir, Model: model,
+		GetAPIKey: func(p string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	filePath := session.GetSessionFile()
+	if filePath == "" {
+		t.Fatal("expected non-empty session file path")
+	}
+}
+
+func TestGetSessionStats(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	model := &llm.Model{
+		ID: "test", Api: "ollama", Provider: "ollama",
+		ContextWindow: 8192, MaxTokens: 2048,
+	}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd: dir, AgentDir: agentDir, Model: model,
+		GetAPIKey: func(p string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stats := session.GetSessionStats()
+	if stats.SessionStarted <= 0 {
+		t.Fatal("sessionStarted should be positive")
+	}
+	if stats.DurationMs < 0 {
+		t.Fatal("durationMs should be non-negative")
+	}
+	if stats.MessageCount != 0 {
+		t.Fatalf("expected 0 messages, got %d", stats.MessageCount)
+	}
+
+	// Add messages and check count
+	session.GetAgent().AppendMessage(llm.UserMessage{Role: "user", Content: "hi"})
+	stats = session.GetSessionStats()
+	if stats.MessageCount != 1 {
+		t.Fatalf("expected 1 message, got %d", stats.MessageCount)
+	}
+}
+
+func TestExecuteBash(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	model := &llm.Model{
+		ID: "test", Api: "ollama", Provider: "ollama",
+		ContextWindow: 8192, MaxTokens: 2048,
+	}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd: dir, AgentDir: agentDir, Model: model,
+		GetAPIKey: func(p string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := session.ExecuteBash(context.Background(), "echo hello", 5000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ExitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", result.ExitCode)
+	}
+	if result.Stdout != "hello\n" {
+		t.Fatalf("expected 'hello\\n', got %q", result.Stdout)
+	}
+}
+
+func TestExecuteBashNonZeroExit(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	model := &llm.Model{
+		ID: "test", Api: "ollama", Provider: "ollama",
+		ContextWindow: 8192, MaxTokens: 2048,
+	}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd: dir, AgentDir: agentDir, Model: model,
+		GetAPIKey: func(p string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := session.ExecuteBash(context.Background(), "exit 42", 5000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ExitCode != 42 {
+		t.Fatalf("expected exit code 42, got %d", result.ExitCode)
+	}
+}
+
+func TestGetAvailableModels(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	model := &llm.Model{
+		ID: "test", Api: "ollama", Provider: "ollama",
+		ContextWindow: 8192, MaxTokens: 2048,
+	}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd: dir, AgentDir: agentDir, Model: model,
+		GetAPIKey: func(p string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	models := session.GetAvailableModels()
+	// At minimum, the init() models should be present
+	if len(models) == 0 {
+		t.Fatal("expected at least some models")
+	}
+}
+
+func TestExportHTML(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	model := &llm.Model{
+		ID: "test", Api: "ollama", Provider: "ollama",
+		ContextWindow: 8192, MaxTokens: 2048,
+	}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd: dir, AgentDir: agentDir, Model: model,
+		GetAPIKey: func(p string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	session.GetAgent().AppendMessage(llm.UserMessage{Role: "user", Content: "test prompt"})
+	session.GetAgent().AppendMessage(llm.AssistantMessage{
+		Role:    "assistant",
+		Content: []llm.ContentBlock{&llm.TextContent{Type: "text", Text: "test response"}},
+	})
+
+	outPath := filepath.Join(dir, "export.html")
+	if err := session.ExportHTML(outPath); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "test prompt") {
+		t.Fatal("expected user message in HTML")
+	}
+	if !strings.Contains(content, "test response") {
+		t.Fatal("expected assistant message in HTML")
 	}
 }
 
