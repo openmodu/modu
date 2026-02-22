@@ -7,18 +7,24 @@
 //
 //	OLLAMA_HOST=192.168.5.149 go run ./examples/coding_agent_rpc/
 //
-// Example commands to paste:
+// Example commands to paste (new "type" format, also supports legacy "command" field):
 //
-//	{"id":"1","command":"get_state"}
-//	{"id":"2","command":"cycle_thinking_level"}
-//	{"id":"3","command":"set_auto_retry","data":{"enabled":true}}
-//	{"id":"4","command":"prompt","data":{"message":"What is 2+2?"}}
-//	{"id":"5","command":"get_messages"}
-//	{"id":"6","command":"abort"}
+//	{"id":"1","type":"get_state"}
+//	{"id":"2","type":"cycle_thinking_level"}
+//	{"id":"3","type":"set_auto_retry","data":{"enabled":true}}
+//	{"id":"4","type":"prompt","message":"What is 2+2?"}
+//	{"id":"5","type":"get_messages"}
+//	{"id":"6","type":"abort"}
+//	{"id":"7","type":"bash","data":{"command":"ls -la"}}
+//	{"id":"8","type":"get_session_stats"}
+//	{"id":"9","type":"set_session_name","data":{"name":"my-session"}}
+//	{"id":"10","type":"get_available_models"}
+//	{"id":"11","type":"get_last_assistant_text"}
+//	{"id":"12","type":"get_commands"}
 //
 // Or pipe commands programmatically:
 //
-//	echo '{"id":"1","command":"get_state"}' | go run ./examples/coding_agent_rpc/
+//	echo '{"id":"1","type":"get_state"}' | go run ./examples/coding_agent_rpc/
 package main
 
 import (
