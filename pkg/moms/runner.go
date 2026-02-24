@@ -139,13 +139,18 @@ func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult
 	r.mu.Unlock()
 
 	// Set up per-call queue for Telegram messages.
-	var queueChain = make(chan struct{}, 1)
-	queueChain <- struct{}{} // pre-fill
+	// We use a mutex + WaitGroup: the mutex serialises Telegram API calls,
+	// and the WaitGroup lets us block in Run() until every goroutine has
+	// finished before we return to the caller.
+	var queueMu sync.Mutex
+	var queueWg sync.WaitGroup
 
 	enqueue := func(fn func() error) {
+		queueWg.Add(1)
 		go func() {
-			<-queueChain
-			defer func() { queueChain <- struct{}{} }()
+			defer queueWg.Done()
+			queueMu.Lock()
+			defer queueMu.Unlock()
 			if err := fn(); err != nil {
 				fmt.Printf("[moms] telegram api error: %v\n", err)
 			}
@@ -204,16 +209,35 @@ func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult
 				runErr = fmt.Errorf("%s", msg.ErrorMessage)
 			}
 			for _, block := range msg.Content {
-				if tc, ok := block.(*llm.TextContent); ok && strings.TrimSpace(tc.Text) != "" {
-					text := tc.Text
-					enqueue(func() error {
-						return tgCtx.Respond(text, true)
-					})
-				} else if tc, ok := block.(llm.TextContent); ok && strings.TrimSpace(tc.Text) != "" {
-					text := tc.Text
-					enqueue(func() error {
-						return tgCtx.Respond(text, true)
-					})
+				switch b := block.(type) {
+				case llm.ThinkingContent:
+					if strings.TrimSpace(b.Thinking) != "" {
+						thinking := b.Thinking
+						enqueue(func() error {
+							return tgCtx.RespondInThread(fmt.Sprintf("_%s_", escapeMarkdown(thinking)))
+						})
+					}
+				case *llm.ThinkingContent:
+					if b != nil && strings.TrimSpace(b.Thinking) != "" {
+						thinking := b.Thinking
+						enqueue(func() error {
+							return tgCtx.RespondInThread(fmt.Sprintf("_%s_", escapeMarkdown(thinking)))
+						})
+					}
+				case llm.TextContent:
+					if strings.TrimSpace(b.Text) != "" {
+						text := b.Text
+						enqueue(func() error {
+							return tgCtx.Respond(text, true)
+						})
+					}
+				case *llm.TextContent:
+					if b != nil && strings.TrimSpace(b.Text) != "" {
+						text := b.Text
+						enqueue(func() error {
+							return tgCtx.Respond(text, true)
+						})
+					}
 				}
 			}
 		}
@@ -253,8 +277,8 @@ func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult
 		}
 	}
 
-	// Drain queue.
-	<-queueChain
+	// Wait for all queued Telegram API calls to complete.
+	queueWg.Wait()
 
 	// Handle aborted.
 	if ctx.Err() != nil {
@@ -401,11 +425,13 @@ func loadContextMessages(chatDir string) ([]agent.AgentMessage, error) {
 // extractResultText extracts text from AgentToolResult.
 func extractResultText(r agent.AgentToolResult) string {
 	for _, block := range r.Content {
-		if tc, ok := block.(*llm.TextContent); ok {
+		switch tc := block.(type) {
+		case llm.TextContent:
 			return tc.Text
-		}
-		if tc, ok := block.(llm.TextContent); ok {
-			return tc.Text
+		case *llm.TextContent:
+			if tc != nil {
+				return tc.Text
+			}
 		}
 	}
 	return ""

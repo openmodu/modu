@@ -647,11 +647,15 @@ func (s *CodingSession) GetLastAssistantText() string {
 			}
 		}
 		for _, block := range msg.Content {
-			if tc, ok := block.(*llm.TextContent); ok && tc.Text != "" {
-				return tc.Text
-			}
-			if tc, ok := block.(llm.TextContent); ok && tc.Text != "" {
-				return tc.Text
+			switch tc := block.(type) {
+			case llm.TextContent:
+				if tc.Text != "" {
+					return tc.Text
+				}
+			case *llm.TextContent:
+				if tc != nil && tc.Text != "" {
+					return tc.Text
+				}
 			}
 		}
 	}
@@ -788,19 +792,25 @@ func (s *CodingSession) ExportHTML(path string) error {
 		case llm.AssistantMessage:
 			role = "assistant"
 			for _, block := range m.Content {
-				if tc, ok := block.(*llm.TextContent); ok {
+				switch tc := block.(type) {
+				case llm.TextContent:
 					content += tc.Text
-				} else if tc, ok := block.(llm.TextContent); ok {
-					content += tc.Text
+				case *llm.TextContent:
+					if tc != nil {
+						content += tc.Text
+					}
 				}
 			}
 		case *llm.AssistantMessage:
 			role = "assistant"
 			for _, block := range m.Content {
-				if tc, ok := block.(*llm.TextContent); ok {
+				switch tc := block.(type) {
+				case llm.TextContent:
 					content += tc.Text
-				} else if tc, ok := block.(llm.TextContent); ok {
-					content += tc.Text
+				case *llm.TextContent:
+					if tc != nil {
+						content += tc.Text
+					}
 				}
 			}
 		}

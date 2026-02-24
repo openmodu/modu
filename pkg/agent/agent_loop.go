@@ -91,6 +91,12 @@ func runLoop(currentContext AgentContext, newMessages []AgentMessage, config Age
 				return
 			}
 			newMessages = append(newMessages, assistantMessage)
+			// In TypeScript, context is an object reference so streamAssistantResponse's
+			// mutations (appending the assistant message) propagate back to runLoop.
+			// In Go, AgentContext is passed by value so we must re-add the assistant
+			// message here; otherwise the LLM won't see its own prior response on the
+			// next inner-loop iteration and will re-issue the same tool calls.
+			currentContext.Messages = append(currentContext.Messages, assistantMessage)
 			if assistantMessage.StopReason == "error" || assistantMessage.StopReason == "aborted" {
 				stream.Push(AgentEvent{Type: EventTypeTurnEnd, Message: assistantMessage, ToolResults: []llm.ToolResultMessage{}})
 				stream.Push(AgentEvent{Type: EventTypeAgentEnd, Messages: newMessages})
