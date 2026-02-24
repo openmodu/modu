@@ -66,6 +66,11 @@ func runLoop(currentContext AgentContext, newMessages []AgentMessage, config Age
 		hasMoreToolCalls := true
 		var steeringAfterTools []AgentMessage
 		for hasMoreToolCalls || len(pendingMessages) > 0 {
+			// Check context cancellation at the top of every iteration.
+			if ctx.Err() != nil {
+				stream.Push(AgentEvent{Type: EventTypeAgentEnd, Messages: newMessages})
+				return
+			}
 			if !firstTurn {
 				stream.Push(AgentEvent{Type: EventTypeTurnStart})
 			} else {
