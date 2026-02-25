@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -85,34 +86,19 @@ func (p *DeepSeekProvider) StreamSimple(model *llm.Model, ctx *llm.Context, opts
 				payload["temperature"] = *opts.Temperature
 			}
 		}
+		if len(ctx.Tools) > 0 {
+			payload["tools"] = buildTools(ctx.Tools)
+		}
 
 		body, err := json.Marshal(payload)
 		if err != nil {
-			output.StopReason = "error"
-			output.ErrorMessage = err.Error()
-			stream.Push(llm.AssistantMessageEvent{
-				Type:         "error",
-				Reason:       "error",
-				Partial:      output,
-				Message:      output,
-				ErrorMessage: output,
-				Error:        err,
-			})
+			emitError(stream, output, err.Error(), err)
 			return
 		}
 
 		req, err := http.NewRequest("POST", strings.TrimRight(baseURL, "/")+"/chat/completions", bytes.NewReader(body))
 		if err != nil {
-			output.StopReason = "error"
-			output.ErrorMessage = err.Error()
-			stream.Push(llm.AssistantMessageEvent{
-				Type:         "error",
-				Reason:       "error",
-				Partial:      output,
-				Message:      output,
-				ErrorMessage: output,
-				Error:        err,
-			})
+			emitError(stream, output, err.Error(), err)
 			return
 		}
 		req.Header.Set("Authorization", "Bearer "+apiKey)
@@ -126,45 +112,38 @@ func (p *DeepSeekProvider) StreamSimple(model *llm.Model, ctx *llm.Context, opts
 			}
 		}
 
-		client := &http.Client{}
+		client := &http.Client{Timeout: 10 * time.Minute}
 		resp, err := client.Do(req)
 		if err != nil {
-			output.StopReason = "error"
-			output.ErrorMessage = err.Error()
-			stream.Push(llm.AssistantMessageEvent{
-				Type:         "error",
-				Reason:       "error",
-				Partial:      output,
-				Message:      output,
-				ErrorMessage: output,
-				Error:        err,
-			})
+			emitError(stream, output, err.Error(), err)
 			return
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode >= 400 {
 			data, _ := io.ReadAll(resp.Body)
-			output.StopReason = "error"
-			output.ErrorMessage = strings.TrimSpace(string(data))
-			if output.ErrorMessage == "" {
-				output.ErrorMessage = resp.Status
+			errMsg := strings.TrimSpace(string(data))
+			if errMsg == "" {
+				errMsg = resp.Status
 			}
-			stream.Push(llm.AssistantMessageEvent{
-				Type:         "error",
-				Reason:       "error",
-				Partial:      output,
-				Message:      output,
-				ErrorMessage: output,
-			})
+			emitError(stream, output, errMsg, nil)
 			return
 		}
 
 		reader := bufio.NewScanner(resp.Body)
 		reader.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
-		var text strings.Builder
-		started := false
+		var textBuilder strings.Builder
+		textStarted := false
 		stopReason := llm.StopReason("stop")
+
+		type toolCallAccumulator struct {
+			id       string
+			name     string
+			argsJSON strings.Builder
+			index    int
+		}
+		toolCallAccumulators := map[int]*toolCallAccumulator{}
+
 		for reader.Scan() {
 			line := reader.Text()
 			if line == "" {
@@ -177,29 +156,36 @@ func (p *DeepSeekProvider) StreamSimple(model *llm.Model, ctx *llm.Context, opts
 			if data == "[DONE]" {
 				break
 			}
-			var payload map[string]any
-			if err := json.Unmarshal([]byte(data), &payload); err != nil {
+			var chunk map[string]any
+			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 				log.Printf("[deepseek] SSE JSON parse error: %v (data=%q)", err, data)
 				continue
 			}
-			if errObj, ok := payload["error"].(map[string]any); ok {
-				output.StopReason = "error"
-				if msg, ok := errObj["message"].(string); ok {
-					output.ErrorMessage = msg
+			if errObj, ok := chunk["error"].(map[string]any); ok {
+				msg := ""
+				if m, ok := errObj["message"].(string); ok {
+					msg = m
 				} else {
-					raw, _ := json.Marshal(payload)
-					output.ErrorMessage = string(raw)
+					raw, _ := json.Marshal(chunk)
+					msg = string(raw)
 				}
-				stream.Push(llm.AssistantMessageEvent{
-					Type:         "error",
-					Reason:       "error",
-					Partial:      output,
-					Message:      output,
-					ErrorMessage: output,
-				})
+				emitError(stream, output, msg, nil)
 				return
 			}
-			choices, ok := payload["choices"].([]any)
+
+			if usage, ok := chunk["usage"].(map[string]any); ok {
+				if v, ok := usage["prompt_tokens"].(float64); ok {
+					output.Usage.Input = int(v)
+				}
+				if v, ok := usage["completion_tokens"].(float64); ok {
+					output.Usage.Output = int(v)
+				}
+				if v, ok := usage["total_tokens"].(float64); ok {
+					output.Usage.TotalTokens = int(v)
+				}
+			}
+
+			choices, ok := chunk["choices"].([]any)
 			if !ok || len(choices) == 0 {
 				continue
 			}
@@ -207,58 +193,122 @@ func (p *DeepSeekProvider) StreamSimple(model *llm.Model, ctx *llm.Context, opts
 			if !ok {
 				continue
 			}
+
 			if finish, ok := choice["finish_reason"].(string); ok && finish != "" {
-				stopReason = llm.StopReason(finish)
+				if finish == "tool_calls" {
+					stopReason = "toolUse"
+				} else {
+					stopReason = llm.StopReason(finish)
+				}
 			}
+
 			delta, ok := choice["delta"].(map[string]any)
 			if !ok {
 				continue
 			}
-			part, _ := delta["content"].(string)
-			if part == "" {
-				continue
-			}
-			if !started {
-				started = true
-				output.Content = append(output.Content, &llm.TextContent{Type: "text", Text: ""})
+
+			// Handle text content
+			if content, ok := delta["content"].(string); ok && content != "" {
+				if !textStarted {
+					textStarted = true
+					output.Content = append(output.Content, &llm.TextContent{Type: "text", Text: ""})
+					stream.Push(llm.AssistantMessageEvent{
+						Type:         "text_start",
+						ContentIndex: 0,
+						Partial:      output,
+					})
+				}
+				if tc, ok := output.Content[0].(*llm.TextContent); ok {
+					tc.Text += content
+				}
+				textBuilder.WriteString(content)
 				stream.Push(llm.AssistantMessageEvent{
-					Type:         "text_start",
+					Type:         "text_delta",
 					ContentIndex: 0,
+					Delta:        content,
 					Partial:      output,
 				})
 			}
-			if tc, ok := output.Content[0].(*llm.TextContent); ok {
-				tc.Text += part
+
+			// Handle tool calls
+			if toolCalls, ok := delta["tool_calls"].([]any); ok {
+				for _, tc := range toolCalls {
+					tcMap, ok := tc.(map[string]any)
+					if !ok {
+						continue
+					}
+					idx := 0
+					if v, ok := tcMap["index"].(float64); ok {
+						idx = int(v)
+					}
+					acc, exists := toolCallAccumulators[idx]
+					if !exists {
+						acc = &toolCallAccumulator{index: idx}
+						toolCallAccumulators[idx] = acc
+					}
+					if id, ok := tcMap["id"].(string); ok && id != "" {
+						acc.id = id
+					}
+					if fn, ok := tcMap["function"].(map[string]any); ok {
+						if name, ok := fn["name"].(string); ok && name != "" {
+							acc.name = name
+						}
+						if args, ok := fn["arguments"].(string); ok {
+							acc.argsJSON.WriteString(args)
+						}
+					}
+				}
 			}
-			text.WriteString(part)
-			stream.Push(llm.AssistantMessageEvent{
-				Type:         "text_delta",
-				ContentIndex: 0,
-				Delta:        part,
-				Partial:      output,
-			})
 		}
+
 		if err := reader.Err(); err != nil {
-			output.StopReason = "error"
-			output.ErrorMessage = err.Error()
-			stream.Push(llm.AssistantMessageEvent{
-				Type:         "error",
-				Reason:       "error",
-				Partial:      output,
-				Message:      output,
-				ErrorMessage: output,
-				Error:        err,
-			})
+			emitError(stream, output, err.Error(), err)
 			return
 		}
-		if started {
+
+		if textStarted {
 			stream.Push(llm.AssistantMessageEvent{
 				Type:         "text_end",
 				ContentIndex: 0,
-				Content:      text.String(),
+				Content:      textBuilder.String(),
 				Partial:      output,
 			})
 		}
+
+		if len(toolCallAccumulators) > 0 {
+			for _, acc := range toolCallAccumulators {
+				var args map[string]any
+				if acc.argsJSON.Len() > 0 {
+					if err := json.Unmarshal([]byte(acc.argsJSON.String()), &args); err != nil {
+						args = map[string]any{}
+					}
+				} else {
+					args = map[string]any{}
+				}
+				toolCall := &llm.ToolCall{
+					Type:      "toolCall",
+					ID:        acc.id,
+					Name:      acc.name,
+					Arguments: args,
+				}
+				output.Content = append(output.Content, toolCall)
+				contentIdx := len(output.Content) - 1
+				stream.Push(llm.AssistantMessageEvent{
+					Type:         "toolcall_start",
+					ContentIndex: contentIdx,
+					ToolCall:     toolCall,
+					Partial:      output,
+				})
+				stream.Push(llm.AssistantMessageEvent{
+					Type:         "toolcall_end",
+					ContentIndex: contentIdx,
+					ToolCall:     toolCall,
+					Partial:      output,
+				})
+			}
+			stopReason = "toolUse"
+		}
+
 		output.StopReason = stopReason
 		stream.Push(llm.AssistantMessageEvent{
 			Type:    "done",
@@ -275,6 +325,37 @@ func init() {
 	llm.RegisterApiProvider(&DeepSeekProvider{})
 }
 
+func emitError(stream *utils.EventStream, output *llm.AssistantMessage, msg string, err error) {
+	output.StopReason = "error"
+	output.ErrorMessage = msg
+	stream.Push(llm.AssistantMessageEvent{
+		Type:         "error",
+		Reason:       "error",
+		Partial:      output,
+		Message:      output,
+		ErrorMessage: output,
+		Error:        err,
+	})
+}
+
+func buildTools(tools []llm.ToolDefinition) []map[string]any {
+	var out []map[string]any
+	for _, tool := range tools {
+		t := map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name":        tool.Name,
+				"description": tool.Description,
+			},
+		}
+		if tool.Parameters != nil {
+			t["function"].(map[string]any)["parameters"] = tool.Parameters
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
 func buildMessages(ctx *llm.Context) []map[string]any {
 	if ctx == nil {
 		return nil
@@ -289,30 +370,83 @@ func buildMessages(ctx *llm.Context) []map[string]any {
 	for _, msg := range ctx.Messages {
 		switch m := msg.(type) {
 		case llm.UserMessage:
-			appendMessage(&out, "user", extractText(m.Content))
+			appendUserMessage(&out, m.Content)
 		case *llm.UserMessage:
-			appendMessage(&out, "user", extractText(m.Content))
+			appendUserMessage(&out, m.Content)
 		case llm.AssistantMessage:
-			appendMessage(&out, "assistant", extractText(m.Content))
+			appendAssistantMessage(&out, &m)
 		case *llm.AssistantMessage:
-			appendMessage(&out, "assistant", extractText(m.Content))
+			appendAssistantMessage(&out, m)
 		case llm.ToolResultMessage:
-			appendMessage(&out, "tool", extractText(m.Content))
+			appendToolResultMessage(&out, &m)
 		case *llm.ToolResultMessage:
-			appendMessage(&out, "tool", extractText(m.Content))
-		default:
+			appendToolResultMessage(&out, m)
 		}
 	}
 	return out
 }
 
-func appendMessage(out *[]map[string]any, role string, text string) {
+func appendUserMessage(out *[]map[string]any, content any) {
+	text := extractText(content)
 	if text == "" {
 		return
 	}
 	*out = append(*out, map[string]any{
-		"role":    role,
+		"role":    "user",
 		"content": text,
+	})
+}
+
+func appendAssistantMessage(out *[]map[string]any, m *llm.AssistantMessage) {
+	msg := map[string]any{"role": "assistant"}
+	var toolCalls []map[string]any
+	var textContent string
+	for _, block := range m.Content {
+		switch v := block.(type) {
+		case *llm.ToolCall:
+			argsJSON, _ := json.Marshal(v.Arguments)
+			toolCalls = append(toolCalls, map[string]any{
+				"id":   v.ID,
+				"type": "function",
+				"function": map[string]any{
+					"name":      v.Name,
+					"arguments": string(argsJSON),
+				},
+			})
+		case llm.ToolCall:
+			argsJSON, _ := json.Marshal(v.Arguments)
+			toolCalls = append(toolCalls, map[string]any{
+				"id":   v.ID,
+				"type": "function",
+				"function": map[string]any{
+					"name":      v.Name,
+					"arguments": string(argsJSON),
+				},
+			})
+		case *llm.TextContent:
+			textContent += v.Text
+		case llm.TextContent:
+			textContent += v.Text
+		}
+	}
+	if textContent != "" {
+		msg["content"] = textContent
+	}
+	if len(toolCalls) > 0 {
+		msg["tool_calls"] = toolCalls
+		if textContent == "" {
+			msg["content"] = nil
+		}
+	}
+	*out = append(*out, msg)
+}
+
+func appendToolResultMessage(out *[]map[string]any, m *llm.ToolResultMessage) {
+	text := extractText(m.Content)
+	*out = append(*out, map[string]any{
+		"role":         "tool",
+		"tool_call_id": m.ToolCallID,
+		"content":      text,
 	})
 }
 
@@ -351,6 +485,9 @@ func extractText(content any) string {
 		}
 		return b.String()
 	default:
-		return ""
+		if v == nil {
+			return ""
+		}
+		return fmt.Sprintf("%v", v)
 	}
 }
