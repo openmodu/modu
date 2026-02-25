@@ -55,9 +55,10 @@ func (p *OllamaProvider) StreamSimple(model *llm.Model, ctx *llm.Context, opts *
 
 		messages := buildMessages(ctx)
 		payload := map[string]any{
-			"model":    model.ID,
-			"messages": messages,
-			"stream":   true,
+			"model":      model.ID,
+			"messages":   messages,
+			"stream":     true,
+			"keep_alive": "1h",
 		}
 		if opts != nil {
 			if opts.MaxTokens != nil {
@@ -125,10 +126,10 @@ func (p *OllamaProvider) StreamSimple(model *llm.Model, ctx *llm.Context, opts *
 
 		// Track tool calls being built up from deltas
 		type toolCallAccumulator struct {
-			id        string
-			name      string
-			argsJSON  strings.Builder
-			index     int
+			id       string
+			name     string
+			argsJSON strings.Builder
+			index    int
 		}
 		toolCallAccumulators := map[int]*toolCallAccumulator{}
 
