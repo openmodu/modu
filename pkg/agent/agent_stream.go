@@ -8,6 +8,7 @@ import (
 type EventStream struct {
 	ch         chan AgentEvent
 	done       chan struct{}
+	mu         sync.Mutex // protects closed and the close sequence
 	closed     bool
 	result     chan result
 	resultOnce sync.Once
@@ -36,12 +37,15 @@ func (s *EventStream) Events() <-chan AgentEvent {
 }
 
 func (s *EventStream) Close() {
-	if !s.closed {
-		s.resolveResult(nil, fmt.Errorf("stream closed"))
-		close(s.done)
-		close(s.ch)
-		s.closed = true
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
 	}
+	s.closed = true
+	s.resolveResult(nil, fmt.Errorf("stream closed"))
+	close(s.done) // signal Push() to stop sending before closing ch
+	close(s.ch)
 }
 
 func (s *EventStream) Result() ([]AgentMessage, error) {

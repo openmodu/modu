@@ -199,7 +199,14 @@ func streamAssistantResponse(context AgentContext, config AgentLoopConfig, ctx c
 		case "text_start", "text_delta", "text_end", "thinking_start", "thinking_delta", "thinking_end", "toolcall_start", "toolcall_delta", "toolcall_end":
 			if event.Partial != nil {
 				partial = event.Partial
-				context.Messages[len(context.Messages)-1] = *partial
+				if addedPartial && len(context.Messages) > 0 {
+					// Normal path: update the assistant placeholder appended by "start"
+					context.Messages[len(context.Messages)-1] = *partial
+				} else if !addedPartial {
+					// "start" had nil Partial; append the assistant message now
+					context.Messages = append(context.Messages, *partial)
+					addedPartial = true
+				}
 				stream.Push(AgentEvent{Type: EventTypeMessageUpdate, Message: *partial, AssistantMessageEvent: &event})
 			}
 		case "done", "error":

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -185,6 +186,7 @@ func (p *OpenAIProvider) StreamSimple(model *llm.Model, ctx *llm.Context, opts *
 			}
 			var payload map[string]any
 			if err := json.Unmarshal([]byte(data), &payload); err != nil {
+				log.Printf("[openai] SSE JSON parse error: %v (data=%q)", err, data)
 				continue
 			}
 			t, _ := payload["type"].(string)
