@@ -23,7 +23,8 @@ const (
 )
 
 const (
-	KnownApiOpenAICompletions     KnownApi = "openai-completions"
+	KnownApiOpenAICompletions        KnownApi = "openai-completions"
+	KnownApiOpenAIChatCompletions    KnownApi = "openai-chat-completions"
 	KnownApiOpenAIResponses       KnownApi = "openai-responses"
 	KnownApiAzureOpenAIResponses  KnownApi = "azure-openai-responses"
 	KnownApiOpenAICodexResponses  KnownApi = "openai-codex-responses"
