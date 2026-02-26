@@ -2,27 +2,30 @@ package moms
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
-	"encoding/base64"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/crosszan/modu/pkg/llm"
+	"github.com/crosszan/modu/pkg/skills"
 )
 
 // Bot is the Telegram bot that processes messages.
 type Bot struct {
-	api        *tgbotapi.BotAPI
-	store      *Store
-	sandbox    *Sandbox
-	workingDir string
-	llmModel   *llm.Model
-	getAPIKey  func(provider string) (string, error)
-	settings   *Settings
+	api         *tgbotapi.BotAPI
+	store       *Store
+	sandbox     *Sandbox
+	workingDir  string
+	llmModel    *llm.Model
+	getAPIKey   func(provider string) (string, error)
+	settings    *Settings
+	registryMgr *skills.RegistryManager
+	searchCache *skills.SearchCache
 
 	mu      sync.Mutex
 	runners map[int64]*Runner
@@ -36,7 +39,7 @@ type queuedMessage struct {
 }
 
 // NewBot creates a new Telegram bot.
-func NewBot(token string, sandbox *Sandbox, workingDir string, llmModel *llm.Model, getAPIKey func(provider string) (string, error)) (*Bot, error) {
+func NewBot(token string, sandbox *Sandbox, workingDir string, llmModel *llm.Model, getAPIKey func(provider string) (string, error), registryMgr *skills.RegistryManager, searchCache *skills.SearchCache) (*Bot, error) {
 	api, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Telegram bot: %w", err)
@@ -44,15 +47,17 @@ func NewBot(token string, sandbox *Sandbox, workingDir string, llmModel *llm.Mod
 	fmt.Printf("[moms] authorized as @%s\n", api.Self.UserName)
 
 	return &Bot{
-		api:        api,
-		store:      NewStore(workingDir),
-		sandbox:    sandbox,
-		workingDir: workingDir,
-		llmModel:   llmModel,
-		getAPIKey:  getAPIKey,
-		settings:   NewSettingsManager(workingDir),
-		runners:    make(map[int64]*Runner),
-		queue:      make(map[int64]chan *queuedMessage),
+		api:         api,
+		store:       NewStore(workingDir),
+		sandbox:     sandbox,
+		workingDir:  workingDir,
+		llmModel:    llmModel,
+		getAPIKey:   getAPIKey,
+		settings:    NewSettingsManager(workingDir),
+		registryMgr: registryMgr,
+		searchCache: searchCache,
+		runners:     make(map[int64]*Runner),
+		queue:       make(map[int64]chan *queuedMessage),
 	}, nil
 }
 
@@ -215,7 +220,7 @@ func (b *Bot) processMessage(ctx context.Context, chatID int64, qm *queuedMessag
 
 // newRunnerFromBot creates a Runner using Bot's sandbox, model, and working dir.
 func newRunnerFromBot(b *Bot, chatID int64) *Runner {
-	return NewRunner(b.sandbox, b.workingDir, chatID, b.llmModel, b.getAPIKey, b.settings)
+	return NewRunner(b.sandbox, b.workingDir, chatID, b.llmModel, b.getAPIKey, b.settings, b.registryMgr, b.searchCache)
 }
 
 // getOrCreateRunner returns the persistent runner for a chat.

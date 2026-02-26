@@ -6,9 +6,11 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/crosszan/modu/pkg/llm"
 	"github.com/crosszan/modu/pkg/moms"
+	"github.com/crosszan/modu/pkg/skills"
 
 	// Register Anthropic provider.
 	_ "github.com/crosszan/modu/pkg/llm/providers/anthropic"
@@ -98,7 +100,19 @@ func main() {
 		return "", fmt.Errorf("no API key for provider: %s", provider)
 	}
 
-	bot, err := moms.NewBot(tgToken, sandbox, workingDir, model, getAPIKey)
+	// Build skills registry (opt-in via CLAWHUB_AUTH_TOKEN env var).
+	registryCfg := skills.RegistryConfig{}
+	if clawHubToken := os.Getenv("CLAWHUB_AUTH_TOKEN"); clawHubToken != "" {
+		registryCfg.ClawHub = skills.ClawHubConfig{
+			Enabled:   true,
+			AuthToken: clawHubToken,
+		}
+		fmt.Println("[moms] ClawHub registry enabled")
+	}
+	registryMgr := skills.NewRegistryManagerFromConfig(registryCfg)
+	searchCache := skills.NewSearchCache(50, 5*time.Minute)
+
+	bot, err := moms.NewBot(tgToken, sandbox, workingDir, model, getAPIKey, registryMgr, searchCache)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create bot: %v\n", err)
 		os.Exit(1)

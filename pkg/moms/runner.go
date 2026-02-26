@@ -2,6 +2,7 @@ package moms
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,7 +14,8 @@ import (
 	"github.com/crosszan/modu/pkg/coding_agent/tools"
 	"github.com/crosszan/modu/pkg/llm"
 	_ "github.com/crosszan/modu/pkg/llm/providers/anthropic"
-	"encoding/json"
+	"github.com/crosszan/modu/pkg/skills"
+	skillstools "github.com/crosszan/modu/pkg/skills/tools"
 )
 
 // TelegramContext is the interface the runner uses to communicate back to Telegram.
@@ -50,27 +52,31 @@ type RunResult struct {
 
 // Runner manages an agent per chat channel.
 type Runner struct {
-	mu          sync.Mutex
-	sandbox     *Sandbox
-	workingDir  string
-	chatID      int64
-	model       *llm.Model
-	getAPIKey   func(provider string) (string, error)
-	settings    *Settings
-	agentInst   *agent.Agent
-	cancelFn    context.CancelFunc
-	running     bool
+	mu           sync.Mutex
+	sandbox      *Sandbox
+	workingDir   string
+	chatID       int64
+	model        *llm.Model
+	getAPIKey    func(provider string) (string, error)
+	settings     *Settings
+	agentInst    *agent.Agent
+	cancelFn     context.CancelFunc
+	running      bool
+	registryMgr  *skills.RegistryManager
+	searchCache  *skills.SearchCache
 }
 
 // NewRunner creates a Runner for a chat.
-func NewRunner(sandbox *Sandbox, workingDir string, chatID int64, model *llm.Model, getAPIKey func(provider string) (string, error), settings *Settings) *Runner {
+func NewRunner(sandbox *Sandbox, workingDir string, chatID int64, model *llm.Model, getAPIKey func(provider string) (string, error), settings *Settings, registryMgr *skills.RegistryManager, searchCache *skills.SearchCache) *Runner {
 	return &Runner{
-		sandbox:    sandbox,
-		workingDir: workingDir,
-		chatID:     chatID,
-		model:      model,
-		getAPIKey:  getAPIKey,
-		settings:   settings,
+		sandbox:      sandbox,
+		workingDir:   workingDir,
+		chatID:       chatID,
+		model:        model,
+		getAPIKey:    getAPIKey,
+		settings:     settings,
+		registryMgr:  registryMgr,
+		searchCache:  searchCache,
 	}
 }
 
@@ -345,6 +351,12 @@ func (r *Runner) getOrCreateAgent(chatDir, workspacePath string, tgCtx TelegramC
 			// We capture tgCtx here for the lifetime of each tool call.
 			return tgCtx.UploadFile(filePath, title)
 		}),
+	}
+	if r.registryMgr != nil {
+		agentTools = append(agentTools,
+			skillstools.NewFindSkillsTool(r.registryMgr, r.searchCache),
+			skillstools.NewInstallSkillTool(r.registryMgr, workspacePath),
+		)
 	}
 
 	a := agent.NewAgent(agent.AgentOptions{
