@@ -12,7 +12,7 @@ import (
 	"github.com/crosszan/modu/pkg/coding_agent/extension"
 	"github.com/crosszan/modu/pkg/coding_agent/tools"
 	"github.com/crosszan/modu/pkg/llm"
-	_ "github.com/crosszan/modu/pkg/llm/providers/ollama"
+	_ "github.com/crosszan/modu/pkg/llm/providers/openai_chat_completions"
 )
 
 // --- Hook Extension Demo ---
@@ -81,8 +81,8 @@ func (e *auditHookExtension) PrintSummary() {
 }
 
 func main() {
-	ollamaHost := "192.168.5.149"
-	ollamaModel := "qwen3-coder-next"
+	ollamaHost := "http://192.168.5.149:1234/v1"
+	ollamaModel := "qwen3.5-30b-a3b"
 
 	if h := os.Getenv("OLLAMA_HOST"); h != "" {
 		ollamaHost = h
@@ -91,12 +91,15 @@ func main() {
 		ollamaModel = m
 	}
 
+	enableThinking := os.Getenv("ENABLE_THINKING")
+
 	model := &llm.Model{
 		ID:            ollamaModel,
 		Name:          ollamaModel + " (Ollama)",
-		Api:           llm.Api(llm.KnownApiOllama),
-		Provider:      llm.Provider(llm.KnownProviderOllama),
-		BaseURL:       fmt.Sprintf("http://%s:11434", ollamaHost),
+		Api:           llm.Api(llm.KnownApiOpenAIChatCompletions),
+		Provider:      llm.Provider(llm.KnownApiOpenAIChatCompletions),
+		BaseURL:       fmt.Sprintf("%s", ollamaHost),
+		Reasoning:     enableThinking == "1" || enableThinking == "true",
 		Input:         []string{"text"},
 		ContextWindow: 32768,
 		MaxTokens:     4096,
@@ -104,7 +107,7 @@ func main() {
 
 	cwd, _ := os.Getwd()
 	fmt.Printf("Working directory: %s\n", cwd)
-	fmt.Printf("Ollama: http://%s:11434, model: %s\n\n", ollamaHost, ollamaModel)
+	fmt.Printf("Ollama: %s, model: %s, thinking: %v\n\n", ollamaHost, ollamaModel, model.Reasoning)
 
 	// Create hook extension
 	hookExt := &auditHookExtension{}
@@ -132,7 +135,14 @@ func main() {
 		case agent.EventTypeMessageUpdate:
 			if event.AssistantMessageEvent != nil {
 				evt := event.AssistantMessageEvent
-				if evt.Type == "text_delta" {
+				switch evt.Type {
+				case "thinking_delta":
+					fmt.Print(evt.Delta)
+				case "thinking_end":
+					fmt.Print("\n--- end thinking ---\n\n")
+				case "thinking_start":
+					fmt.Print("\n--- thinking ---\n")
+				case "text_delta":
 					fmt.Print(evt.Delta)
 				}
 			}

@@ -58,10 +58,7 @@ func (p *OpenAIChatCompletionsProvider) StreamSimple(model *llm.Model, ctx *llm.
 		} else {
 			apiKey = llm.GetEnvAPIKey(string(model.Provider))
 		}
-		if apiKey == "" {
-			emitError(stream, output, "API key is required (provider: "+string(model.Provider)+")", nil)
-			return
-		}
+
 
 		baseURL := model.BaseURL
 		if baseURL == "" {
@@ -92,13 +89,14 @@ func (p *OpenAIChatCompletionsProvider) StreamSimple(model *llm.Model, ctx *llm.
 			emitError(stream, output, err.Error(), err)
 			return
 		}
-
 		req, err := http.NewRequest("POST", strings.TrimRight(baseURL, "/")+"/chat/completions", bytes.NewReader(body))
 		if err != nil {
 			emitError(stream, output, err.Error(), err)
 			return
 		}
-		req.Header.Set("Authorization", "Bearer "+apiKey)
+		if apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+apiKey)
+		}
 		req.Header.Set("Content-Type", "application/json")
 		for k, v := range model.Headers {
 			req.Header.Set(k, v)
@@ -131,7 +129,12 @@ func (p *OpenAIChatCompletionsProvider) StreamSimple(model *llm.Model, ctx *llm.
 		reader.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 		var textBuilder strings.Builder
+		var thinkingBuilder strings.Builder
 		textStarted := false
+		thinkingStarted := false
+		nextContentIndex := 0
+		thinkingContentIndex := -1
+		textContentIndex := -1
 		stopReason := llm.StopReason("stop")
 
 		type toolCallAccumulator struct {
@@ -210,24 +213,63 @@ func (p *OpenAIChatCompletionsProvider) StreamSimple(model *llm.Model, ctx *llm.
 				continue
 			}
 
-			// --- Handle text content ---
-			if content, ok := delta["content"].(string); ok && content != "" {
-				if !textStarted {
-					textStarted = true
-					output.Content = append(output.Content, &llm.TextContent{Type: "text", Text: ""})
+			// --- Handle reasoning_content (vLLM, official Qwen API) ---
+			if rc, ok := delta["reasoning_content"].(string); ok && rc != "" {
+				if model.Reasoning {
+					if !thinkingStarted {
+						thinkingStarted = true
+						thinkingContentIndex = nextContentIndex
+						nextContentIndex++
+						output.Content = append(output.Content, &llm.ThinkingContent{Type: "thinking", Thinking: ""})
+						stream.Push(llm.AssistantMessageEvent{
+							Type:         "thinking_start",
+							ContentIndex: thinkingContentIndex,
+							Partial:      output,
+						})
+					}
+					if tc, ok := output.Content[thinkingContentIndex].(*llm.ThinkingContent); ok {
+						tc.Thinking += rc
+					}
+					thinkingBuilder.WriteString(rc)
 					stream.Push(llm.AssistantMessageEvent{
-						Type:         "text_start",
-						ContentIndex: 0,
+						Type:         "thinking_delta",
+						ContentIndex: thinkingContentIndex,
+						Delta:        rc,
 						Partial:      output,
 					})
 				}
-				if tc, ok := output.Content[0].(*llm.TextContent); ok {
+				// When !model.Reasoning, silently discard reasoning_content
+			}
+
+			// --- Handle text content ---
+			if content, ok := delta["content"].(string); ok && content != "" {
+				// Close thinking block if it was open and text starts
+				if thinkingStarted && !textStarted {
+					stream.Push(llm.AssistantMessageEvent{
+						Type:         "thinking_end",
+						ContentIndex: thinkingContentIndex,
+						Content:      thinkingBuilder.String(),
+						Partial:      output,
+					})
+				}
+				if !textStarted {
+					textStarted = true
+					textContentIndex = nextContentIndex
+					nextContentIndex++
+					output.Content = append(output.Content, &llm.TextContent{Type: "text", Text: ""})
+					stream.Push(llm.AssistantMessageEvent{
+						Type:         "text_start",
+						ContentIndex: textContentIndex,
+						Partial:      output,
+					})
+				}
+				if tc, ok := output.Content[textContentIndex].(*llm.TextContent); ok {
 					tc.Text += content
 				}
 				textBuilder.WriteString(content)
 				stream.Push(llm.AssistantMessageEvent{
 					Type:         "text_delta",
-					ContentIndex: 0,
+					ContentIndex: textContentIndex,
 					Delta:        content,
 					Partial:      output,
 				})
@@ -269,11 +311,21 @@ func (p *OpenAIChatCompletionsProvider) StreamSimple(model *llm.Model, ctx *llm.
 			return
 		}
 
+		// Close thinking block if it was never closed (no text content followed).
+		if thinkingStarted && !textStarted {
+			stream.Push(llm.AssistantMessageEvent{
+				Type:         "thinking_end",
+				ContentIndex: thinkingContentIndex,
+				Content:      thinkingBuilder.String(),
+				Partial:      output,
+			})
+		}
+
 		// Close text block if started.
 		if textStarted {
 			stream.Push(llm.AssistantMessageEvent{
 				Type:         "text_end",
-				ContentIndex: 0,
+				ContentIndex: textContentIndex,
 				Content:      textBuilder.String(),
 				Partial:      output,
 			})
@@ -498,3 +550,4 @@ func extractText(content any) string {
 		return fmt.Sprintf("%v", v)
 	}
 }
+

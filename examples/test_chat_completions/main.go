@@ -11,11 +11,11 @@ import (
 
 func main() {
 	model := &llm.Model{
-		ID:       "qwen3-coder-next",
-		Name:     "qwen3-coder-next",
+		ID:       "qwen3.5-30b-a3b",
+		Name:     "qwen3.5-30b-a3b",
 		Api:      llm.Api(llm.KnownApiOpenAIChatCompletions),
 		Provider: llm.Provider("local"),
-		BaseURL:  "http://192.168.5.149:1234/v1",
+		BaseURL:  "http://localhost:1234/v1",
 	}
 
 	// Define a simple tool for testing tool call support.
