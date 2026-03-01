@@ -64,11 +64,11 @@ type CodingSession struct {
 	getAPIKey      func(provider string) (string, error)
 	streamFn       agent.StreamFn
 	// totalTokens tracks accumulated token usage for auto-compaction.
-	totalTokens    int
-	retryManager   *RetryManager
-	eventBus       eventbus.EventBusController
-	scopedModels   []string
-	thinkingLevel  agent.ThinkingLevel
+	totalTokens   int
+	retryManager  *RetryManager
+	eventBus      eventbus.EventBusController
+	scopedModels  []string
+	thinkingLevel agent.ThinkingLevel
 
 	// RPC parity fields
 	sessionName    string
@@ -155,9 +155,9 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		promptBuilder.AppendPrompt(p)
 	}
 
-	// Add skill descriptions
-	for _, desc := range skillMgr.GetDescriptions() {
-		promptBuilder.AddSkillDescription(desc)
+	// Add skills in XML format per Agent Skills spec
+	if skillsPrompt := skillMgr.FormatForPrompt(); skillsPrompt != "" {
+		promptBuilder.SetSkillsPrompt(skillsPrompt)
 	}
 
 	systemPrompt := promptBuilder.Build()

@@ -219,8 +219,11 @@ func TestBuildSkillsSummary_FormatsXML(t *testing.T) {
 	if summary == "" {
 		t.Fatal("expected non-empty summary")
 	}
-	if !strings.HasPrefix(summary, "<skills>") {
-		t.Errorf("expected summary to start with <skills>, got: %q", summary[:min(50, len(summary))])
+	if !strings.Contains(summary, "<available_skills>") {
+		t.Errorf("expected summary to contain <available_skills>, got: %q", summary[:min(80, len(summary))])
+	}
+	if !strings.Contains(summary, "The following skills provide specialized instructions") {
+		t.Error("expected summary to contain intro text")
 	}
 	if !strings.Contains(summary, "my-skill") {
 		t.Error("expected summary to contain skill name")
@@ -228,12 +231,83 @@ func TestBuildSkillsSummary_FormatsXML(t *testing.T) {
 	if !strings.Contains(summary, "A cool skill") {
 		t.Error("expected summary to contain description")
 	}
+	if !strings.Contains(summary, "</available_skills>") {
+		t.Error("expected summary to contain closing </available_skills>")
+	}
 }
 
 func TestBuildSkillsSummary_EmptyWhenNoSkills(t *testing.T) {
 	sl := NewSkillsLoader("", t.TempDir(), "")
 	if sl.BuildSkillsSummary() != "" {
 		t.Error("expected empty summary when no skills")
+	}
+}
+
+// ---------- DisableModelInvocation ----------
+
+func TestDisableModelInvocation_Parsed(t *testing.T) {
+	tmp := t.TempDir()
+	globalDir := filepath.Join(tmp, "global")
+	createSkillDir(t, globalDir, "hidden-skill",
+		"---\nname: hidden-skill\ndescription: A hidden skill\ndisable-model-invocation: true\n---\nBody.")
+
+	sl := NewSkillsLoader("", globalDir, "")
+	list := sl.ListSkills()
+	if len(list) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(list))
+	}
+	if !list[0].DisableModelInvocation {
+		t.Error("expected DisableModelInvocation to be true")
+	}
+}
+
+func TestBuildSkillsSummary_ExcludesDisabledSkills(t *testing.T) {
+	tmp := t.TempDir()
+	globalDir := filepath.Join(tmp, "global")
+	createSkillDir(t, globalDir, "visible-skill",
+		"---\nname: visible-skill\ndescription: A visible skill\n---\nBody.")
+	createSkillDir(t, globalDir, "hidden-skill",
+		"---\nname: hidden-skill\ndescription: A hidden skill\ndisable-model-invocation: true\n---\nBody.")
+
+	sl := NewSkillsLoader("", globalDir, "")
+	summary := sl.BuildSkillsSummary()
+	if !strings.Contains(summary, "visible-skill") {
+		t.Error("expected visible-skill in summary")
+	}
+	if strings.Contains(summary, "hidden-skill") {
+		t.Error("expected hidden-skill to be excluded from summary")
+	}
+}
+
+func TestBuildSkillsSummary_EmptyWhenAllDisabled(t *testing.T) {
+	tmp := t.TempDir()
+	globalDir := filepath.Join(tmp, "global")
+	createSkillDir(t, globalDir, "only-skill",
+		"---\nname: only-skill\ndescription: A skill\ndisable-model-invocation: true\n---\nBody.")
+
+	sl := NewSkillsLoader("", globalDir, "")
+	summary := sl.BuildSkillsSummary()
+	if summary != "" {
+		t.Errorf("expected empty summary when all skills disabled, got: %q", summary)
+	}
+}
+
+func TestListSkills_HasBaseDir(t *testing.T) {
+	tmp := t.TempDir()
+	globalDir := filepath.Join(tmp, "global")
+	createSkillDir(t, globalDir, "my-skill", "---\nname: my-skill\ndescription: desc\n---\nBody.")
+
+	sl := NewSkillsLoader("", globalDir, "")
+	list := sl.ListSkills()
+	if len(list) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(list))
+	}
+	if list[0].BaseDir == "" {
+		t.Error("expected BaseDir to be set")
+	}
+	expected := filepath.Join(globalDir, "my-skill")
+	if list[0].BaseDir != expected {
+		t.Errorf("expected BaseDir=%q, got %q", expected, list[0].BaseDir)
 	}
 }
 

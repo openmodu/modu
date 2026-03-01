@@ -19,15 +19,18 @@ const (
 )
 
 type SkillMetadata struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	Name                   string `json:"name"`
+	Description            string `json:"description"`
+	DisableModelInvocation bool   `json:"disable-model-invocation"`
 }
 
 type SkillInfo struct {
-	Name        string `json:"name"`
-	Path        string `json:"path"`
-	Source      string `json:"source"`
-	Description string `json:"description"`
+	Name                   string `json:"name"`
+	Path                   string `json:"path"`
+	BaseDir                string `json:"baseDir"`
+	Source                 string `json:"source"`
+	Description            string `json:"description"`
+	DisableModelInvocation bool   `json:"disableModelInvocation"`
 }
 
 func (info SkillInfo) validate() error {
@@ -96,14 +99,16 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 				continue
 			}
 			info := SkillInfo{
-				Name:   d.Name(),
-				Path:   skillFile,
-				Source: source,
+				Name:    d.Name(),
+				Path:    skillFile,
+				BaseDir: filepath.Join(dir, d.Name()),
+				Source:  source,
 			}
 			metadata := sl.getSkillMetadata(skillFile)
 			if metadata != nil {
 				info.Description = metadata.Description
 				info.Name = metadata.Name
+				info.DisableModelInvocation = metadata.DisableModelInvocation
 			}
 			if err := info.validate(); err != nil {
 				slog.Warn("invalid skill", "source", source, "name", info.Name, "error", err)
@@ -175,15 +180,31 @@ func (sl *SkillsLoader) LoadSkillsForContext(skillNames []string) string {
 
 // BuildSkillsSummary returns an XML-formatted listing of all available skills,
 // suitable for injection into a system prompt so the LLM knows what skills exist.
+// Skills with DisableModelInvocation=true are excluded (they can only be invoked
+// explicitly via /skill:name commands).
 func (sl *SkillsLoader) BuildSkillsSummary() string {
 	allSkills := sl.ListSkills()
-	if len(allSkills) == 0 {
+
+	// Filter out skills with DisableModelInvocation
+	var visibleSkills []SkillInfo
+	for _, s := range allSkills {
+		if !s.DisableModelInvocation {
+			visibleSkills = append(visibleSkills, s)
+		}
+	}
+
+	if len(visibleSkills) == 0 {
 		return ""
 	}
 
 	var lines []string
-	lines = append(lines, "<skills>")
-	for _, s := range allSkills {
+	lines = append(lines, "")
+	lines = append(lines, "The following skills provide specialized instructions for specific tasks.")
+	lines = append(lines, "Use the read tool to load a skill's file when the task matches its description.")
+	lines = append(lines, "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.")
+	lines = append(lines, "")
+	lines = append(lines, "<available_skills>")
+	for _, s := range visibleSkills {
 		escapedName := escapeXML(s.Name)
 		escapedDesc := escapeXML(s.Description)
 		escapedPath := escapeXML(s.Path)
@@ -192,10 +213,9 @@ func (sl *SkillsLoader) BuildSkillsSummary() string {
 		lines = append(lines, fmt.Sprintf("    <name>%s</name>", escapedName))
 		lines = append(lines, fmt.Sprintf("    <description>%s</description>", escapedDesc))
 		lines = append(lines, fmt.Sprintf("    <location>%s</location>", escapedPath))
-		lines = append(lines, fmt.Sprintf("    <source>%s</source>", s.Source))
 		lines = append(lines, "  </skill>")
 	}
-	lines = append(lines, "</skills>")
+	lines = append(lines, "</available_skills>")
 
 	return strings.Join(lines, "\n")
 }
@@ -228,9 +248,14 @@ func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {
 
 	// Fall back to simple YAML parsing
 	yamlMeta := sl.parseSimpleYAML(frontmatter)
+	disable := false
+	if v, ok := yamlMeta["disable-model-invocation"]; ok {
+		disable = v == "true"
+	}
 	return &SkillMetadata{
-		Name:        yamlMeta["name"],
-		Description: yamlMeta["description"],
+		Name:                   yamlMeta["name"],
+		Description:            yamlMeta["description"],
+		DisableModelInvocation: disable,
 	}
 }
 

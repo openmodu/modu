@@ -21,12 +21,12 @@ Guidelines:
 
 // SystemPromptBuilder constructs the system prompt from multiple sources.
 type SystemPromptBuilder struct {
-	customPrompt   string
-	tools          []agent.AgentTool
-	contextFiles   []string
-	skillDescs     []string
-	appendPrompts  []string
-	cwd            string
+	customPrompt  string
+	tools         []agent.AgentTool
+	contextFiles  []string
+	skillsPrompt  string
+	appendPrompts []string
+	cwd           string
 }
 
 // NewSystemPromptBuilder creates a new system prompt builder.
@@ -52,9 +52,9 @@ func (b *SystemPromptBuilder) AddContextFile(path string) *SystemPromptBuilder {
 	return b
 }
 
-// AddSkillDescription adds a skill description to include.
-func (b *SystemPromptBuilder) AddSkillDescription(desc string) *SystemPromptBuilder {
-	b.skillDescs = append(b.skillDescs, desc)
+// SetSkillsPrompt sets the pre-formatted skills prompt (XML format per Agent Skills spec).
+func (b *SystemPromptBuilder) SetSkillsPrompt(prompt string) *SystemPromptBuilder {
+	b.skillsPrompt = prompt
 	return b
 }
 
@@ -102,9 +102,9 @@ func (b *SystemPromptBuilder) Build() string {
 		}
 	}
 
-	// 4. Skill descriptions
-	if len(b.skillDescs) > 0 {
-		parts = append(parts, "# Available Skills\n"+strings.Join(b.skillDescs, "\n\n"))
+	// 4. Skill descriptions (XML format per Agent Skills spec)
+	if b.skillsPrompt != "" {
+		parts = append(parts, b.skillsPrompt)
 	}
 
 	// 5. Append prompts
