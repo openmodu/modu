@@ -10,16 +10,18 @@ import (
 
 	"github.com/crosszan/modu/pkg/agent"
 	"github.com/crosszan/modu/pkg/llm"
-	_ "github.com/crosszan/modu/pkg/llm/providers/ollama"
+	_ "github.com/crosszan/modu/pkg/llm/providers/openai_chat_completions"
 )
 
 // --- Tool: Calculator ---
 
 type CalculatorTool struct{}
 
-func (t *CalculatorTool) Name() string        { return "calculator" }
-func (t *CalculatorTool) Label() string       { return "Calculator" }
-func (t *CalculatorTool) Description() string { return "Perform basic math operations: add, subtract, multiply, divide, sqrt, power" }
+func (t *CalculatorTool) Name() string  { return "calculator" }
+func (t *CalculatorTool) Label() string { return "Calculator" }
+func (t *CalculatorTool) Description() string {
+	return "Perform basic math operations: add, subtract, multiply, divide, sqrt, power"
+}
 func (t *CalculatorTool) Parameters() any {
 	return map[string]any{
 		"type": "object",
@@ -126,22 +128,15 @@ func toFloat(v any) float64 {
 }
 
 func main() {
-	ollamaHost := "192.168.5.149"
-	ollamaModel := "qwen3-coder-next"
-
-	if h := os.Getenv("OLLAMA_HOST"); h != "" {
-		ollamaHost = h
-	}
-	if m := os.Getenv("OLLAMA_MODEL"); m != "" {
-		ollamaModel = m
-	}
+	modelName := "qwen/qwen3.5-35b-a3b"
+	baseUrl := "http://192.168.5.149:1234/v1"
 
 	model := &llm.Model{
-		ID:            ollamaModel,
-		Name:          "Qwen3 Coder Next (Ollama)",
-		Api:           "ollama",
-		Provider:      "ollama",
-		BaseURL:       fmt.Sprintf("http://%s:11434", ollamaHost),
+		ID:            modelName,
+		Name:          "Qwen3.5 35B A3B",
+		Api:           "openai-chat-completions",
+		Provider:      "openai-chat-completions",
+		BaseURL:       baseUrl,
 		Reasoning:     false,
 		Input:         []string{"text"},
 		ContextWindow: 32768,
