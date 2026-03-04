@@ -9,8 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crosszan/modu/pkg/llm"
-	"github.com/crosszan/modu/pkg/llm/utils"
+	"github.com/crosszan/modu/pkg/providers"
 )
 
 const (
@@ -66,7 +65,6 @@ func runLoop(currentContext AgentContext, newMessages []AgentMessage, config Age
 		hasMoreToolCalls := true
 		var steeringAfterTools []AgentMessage
 		for hasMoreToolCalls || len(pendingMessages) > 0 {
-			// Check context cancellation at the top of every iteration.
 			if ctx.Err() != nil {
 				stream.Push(AgentEvent{Type: EventTypeAgentEnd, Messages: newMessages})
 				return
@@ -91,20 +89,15 @@ func runLoop(currentContext AgentContext, newMessages []AgentMessage, config Age
 				return
 			}
 			newMessages = append(newMessages, assistantMessage)
-			// In TypeScript, context is an object reference so streamAssistantResponse's
-			// mutations (appending the assistant message) propagate back to runLoop.
-			// In Go, AgentContext is passed by value so we must re-add the assistant
-			// message here; otherwise the LLM won't see its own prior response on the
-			// next inner-loop iteration and will re-issue the same tool calls.
 			currentContext.Messages = append(currentContext.Messages, assistantMessage)
 			if assistantMessage.StopReason == "error" || assistantMessage.StopReason == "aborted" {
-				stream.Push(AgentEvent{Type: EventTypeTurnEnd, Message: assistantMessage, ToolResults: []llm.ToolResultMessage{}})
+				stream.Push(AgentEvent{Type: EventTypeTurnEnd, Message: assistantMessage, ToolResults: []providers.ToolResultMessage{}})
 				stream.Push(AgentEvent{Type: EventTypeAgentEnd, Messages: newMessages})
 				return
 			}
-			toolCalls := extractToolCalls(&assistantMessage)
+			toolCalls := extractToolCalls(assistantMessage)
 			hasMoreToolCalls = len(toolCalls) > 0
-			toolResults := []llm.ToolResultMessage{}
+			toolResults := []providers.ToolResultMessage{}
 			if hasMoreToolCalls {
 				execResults, steering := executeToolCalls(currentContext.Tools, toolCalls, ctx, stream, config)
 				toolResults = append(toolResults, execResults...)
@@ -132,40 +125,40 @@ func runLoop(currentContext AgentContext, newMessages []AgentMessage, config Age
 	stream.Push(AgentEvent{Type: EventTypeAgentEnd, Messages: newMessages})
 }
 
-func streamAssistantResponse(context AgentContext, config AgentLoopConfig, ctx context.Context, stream *EventStream, streamFn StreamFn) (llm.AssistantMessage, error) {
+func streamAssistantResponse(context AgentContext, config AgentLoopConfig, ctx context.Context, stream *EventStream, streamFn StreamFn) (*providers.AssistantMessage, error) {
 	if config.Model == nil {
-		return llm.AssistantMessage{}, fmt.Errorf("model is required")
+		return nil, fmt.Errorf("model is required")
 	}
 	messages := context.Messages
 	if config.TransformContext != nil {
 		next, err := config.TransformContext(messages, ctx)
 		if err != nil {
-			return llm.AssistantMessage{}, err
+			return nil, err
 		}
 		messages = next
 	}
 	if config.ConvertToLlm == nil {
-		return llm.AssistantMessage{}, fmt.Errorf("convertToLlm is required")
+		return nil, fmt.Errorf("convertToLlm is required")
 	}
 	llmMessages, err := config.ConvertToLlm(messages)
 	if err != nil {
-		return llm.AssistantMessage{}, err
+		return nil, err
 	}
 	toolDefs := buildToolDefinitions(context.Tools)
-	llmContext := &llm.Context{
+	llmCtx := &providers.LLMContext{
 		SystemPrompt: context.SystemPrompt,
 		Messages:     llmMessages,
 		Tools:        toolDefs,
 	}
 	resolvedKey := config.APIKey
 	if config.GetAPIKey != nil {
-		key, err := config.GetAPIKey(string(config.Model.Provider))
+		key, err := config.GetAPIKey(config.Model.ProviderID)
 		if err == nil && key != "" {
 			resolvedKey = key
 		}
 	}
-	opts := &llm.SimpleStreamOptions{
-		StreamOptions: llm.StreamOptions{
+	opts := &providers.SimpleStreamOptions{
+		StreamOptions: providers.StreamOptions{
 			Temperature:     config.Temperature,
 			MaxTokens:       config.MaxTokens,
 			APIKey:          resolvedKey,
@@ -179,13 +172,13 @@ func streamAssistantResponse(context AgentContext, config AgentLoopConfig, ctx c
 		ThinkingBudgets: config.ThinkingBudgets,
 	}
 	if streamFn == nil {
-		streamFn = llm.StreamSimple
+		streamFn = providers.StreamDefault
 	}
-	response, err := streamFn(config.Model, llmContext, opts)
+	response, err := streamFn(ctx, config.Model, llmCtx, opts)
 	if err != nil {
-		return llm.AssistantMessage{}, err
+		return nil, err
 	}
-	var partial *llm.AssistantMessage
+	var partial *providers.AssistantMessage
 	addedPartial := false
 	for event := range response.Events() {
 		switch event.Type {
@@ -200,10 +193,8 @@ func streamAssistantResponse(context AgentContext, config AgentLoopConfig, ctx c
 			if event.Partial != nil {
 				partial = event.Partial
 				if addedPartial && len(context.Messages) > 0 {
-					// Normal path: update the assistant placeholder appended by "start"
 					context.Messages[len(context.Messages)-1] = *partial
 				} else if !addedPartial {
-					// "start" had nil Partial; append the assistant message now
 					context.Messages = append(context.Messages, *partial)
 					addedPartial = true
 				}
@@ -215,7 +206,7 @@ func streamAssistantResponse(context AgentContext, config AgentLoopConfig, ctx c
 				if err == nil {
 					err = fmt.Errorf("missing final message")
 				}
-				return llm.AssistantMessage{}, err
+				return nil, err
 			}
 			if addedPartial {
 				context.Messages[len(context.Messages)-1] = *finalMessage
@@ -224,7 +215,7 @@ func streamAssistantResponse(context AgentContext, config AgentLoopConfig, ctx c
 				stream.Push(AgentEvent{Type: EventTypeMessageStart, Message: *finalMessage})
 			}
 			stream.Push(AgentEvent{Type: EventTypeMessageEnd, Message: *finalMessage})
-			return *finalMessage, nil
+			return finalMessage, nil
 		}
 	}
 	finalMessage, err := response.Result()
@@ -232,13 +223,13 @@ func streamAssistantResponse(context AgentContext, config AgentLoopConfig, ctx c
 		if err == nil {
 			err = fmt.Errorf("missing final message")
 		}
-		return llm.AssistantMessage{}, err
+		return nil, err
 	}
-	return *finalMessage, nil
+	return finalMessage, nil
 }
 
-func executeToolCalls(tools []AgentTool, toolCalls []llm.ToolCall, ctx context.Context, stream *EventStream, config AgentLoopConfig) ([]llm.ToolResultMessage, []AgentMessage) {
-	results := []llm.ToolResultMessage{}
+func executeToolCalls(tools []AgentTool, toolCalls []providers.ToolCallContent, ctx context.Context, stream *EventStream, config AgentLoopConfig) ([]providers.ToolResultMessage, []AgentMessage) {
+	results := []providers.ToolResultMessage{}
 	var steeringMessages []AgentMessage
 	for index, toolCall := range toolCalls {
 		stream.Push(AgentEvent{Type: EventTypeToolExecutionStart, ToolCallID: toolCall.ID, ToolName: toolCall.Name, Args: toolCall.Arguments})
@@ -247,28 +238,29 @@ func executeToolCalls(tools []AgentTool, toolCalls []llm.ToolCall, ctx context.C
 		tool := findTool(tools, toolCall.Name)
 		if tool == nil {
 			result = AgentToolResult{
-				Content: []llm.ContentBlock{&llm.TextContent{Type: "text", Text: "Tool not found"}},
+				Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: "Tool not found"}},
 				Details: map[string]any{},
 			}
 			isError = true
 		} else {
 			args := toolCall.Arguments
-			toolDef := llm.ToolDefinition{Name: tool.Name(), Description: tool.Description(), Parameters: tool.Parameters()}
-			parsed, err := utils.ValidateToolArguments(toolDef, llm.ToolCall{Name: toolCall.Name, Arguments: args})
+			toolDef := providers.ToolDefinition{Name: tool.Name(), Description: tool.Description(), Parameters: tool.Parameters()}
+			parsed, err := providers.ValidateToolArguments(toolDef, toolCall)
 			if err != nil {
 				result = AgentToolResult{
-					Content: []llm.ContentBlock{&llm.TextContent{Type: "text", Text: err.Error()}},
+					Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: err.Error()}},
 					Details: map[string]any{},
 				}
 				isError = true
 			} else {
+				_ = args
 				r, err := tool.Execute(ctx, toolCall.ID, parsed, func(partial AgentToolResult) {
 					stream.Push(AgentEvent{Type: EventTypeToolExecutionUpdate, ToolCallID: toolCall.ID, ToolName: toolCall.Name, Args: toolCall.Arguments, Partial: partial})
 				})
 				result = r
 				if err != nil {
 					result = AgentToolResult{
-						Content: []llm.ContentBlock{&llm.TextContent{Type: "text", Text: err.Error()}},
+						Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: err.Error()}},
 						Details: map[string]any{},
 					}
 					isError = true
@@ -276,7 +268,7 @@ func executeToolCalls(tools []AgentTool, toolCalls []llm.ToolCall, ctx context.C
 			}
 		}
 		stream.Push(AgentEvent{Type: EventTypeToolExecutionEnd, ToolCallID: toolCall.ID, ToolName: toolCall.Name, Result: result, IsError: isError})
-		toolResult := llm.ToolResultMessage{
+		toolResult := providers.ToolResultMessage{
 			Role:       "toolResult",
 			ToolCallID: toolCall.ID,
 			ToolName:   toolCall.Name,
@@ -302,14 +294,14 @@ func executeToolCalls(tools []AgentTool, toolCalls []llm.ToolCall, ctx context.C
 	return results, steeringMessages
 }
 
-func skipToolCall(toolCall llm.ToolCall, stream *EventStream) llm.ToolResultMessage {
+func skipToolCall(toolCall providers.ToolCallContent, stream *EventStream) providers.ToolResultMessage {
 	result := AgentToolResult{
-		Content: []llm.ContentBlock{&llm.TextContent{Type: "text", Text: "Skipped due to queued user message."}},
+		Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: "Skipped due to queued user message."}},
 		Details: map[string]any{},
 	}
 	stream.Push(AgentEvent{Type: EventTypeToolExecutionStart, ToolCallID: toolCall.ID, ToolName: toolCall.Name, Args: toolCall.Arguments})
 	stream.Push(AgentEvent{Type: EventTypeToolExecutionEnd, ToolCallID: toolCall.ID, ToolName: toolCall.Name, Result: result, IsError: true})
-	toolResult := llm.ToolResultMessage{
+	toolResult := providers.ToolResultMessage{
 		Role:       "toolResult",
 		ToolCallID: toolCall.ID,
 		ToolName:   toolCall.Name,
@@ -332,10 +324,10 @@ func findTool(tools []AgentTool, name string) AgentTool {
 	return nil
 }
 
-func buildToolDefinitions(tools []AgentTool) []llm.ToolDefinition {
-	out := make([]llm.ToolDefinition, 0, len(tools))
+func buildToolDefinitions(tools []AgentTool) []providers.ToolDefinition {
+	out := make([]providers.ToolDefinition, 0, len(tools))
 	for _, tool := range tools {
-		out = append(out, llm.ToolDefinition{
+		out = append(out, providers.ToolDefinition{
 			Name:        tool.Name(),
 			Description: tool.Description(),
 			Parameters:  tool.Parameters(),
@@ -344,32 +336,31 @@ func buildToolDefinitions(tools []AgentTool) []llm.ToolDefinition {
 	return out
 }
 
-func mapThinkingLevel(level ThinkingLevel) llm.ThinkingLevel {
+func mapThinkingLevel(level ThinkingLevel) providers.ThinkingLevel {
 	switch level {
 	case ThinkingLevelMinimal:
-		return llm.ThinkingLevelMinimal
+		return providers.ThinkingLevelMinimal
 	case ThinkingLevelLow:
-		return llm.ThinkingLevelLow
+		return providers.ThinkingLevelLow
 	case ThinkingLevelMedium:
-		return llm.ThinkingLevelMedium
+		return providers.ThinkingLevelMedium
 	case ThinkingLevelHigh:
-		return llm.ThinkingLevelHigh
+		return providers.ThinkingLevelHigh
 	case ThinkingLevelXHigh:
-		return llm.ThinkingLevelXHigh
+		return providers.ThinkingLevelXHigh
 	default:
 		return ""
 	}
 }
 
-func extractToolCalls(message *llm.AssistantMessage) []llm.ToolCall {
-	var out []llm.ToolCall
+func extractToolCalls(message *providers.AssistantMessage) []providers.ToolCallContent {
+	var out []providers.ToolCallContent
 	for _, block := range message.Content {
 		switch v := block.(type) {
-		case llm.ToolCall:
+		case providers.ToolCallContent:
 			out = append(out, v)
-		case *llm.ToolCall:
+		case *providers.ToolCallContent:
 			out = append(out, *v)
-		default:
 		}
 	}
 	return out
@@ -397,9 +388,7 @@ func getFollowUpMessages(config AgentLoopConfig) []AgentMessage {
 	return msgs
 }
 
-// streamAssistantResponseWithRetry wraps streamAssistantResponse with
-// error classification and exponential backoff retry.
-func streamAssistantResponseWithRetry(context AgentContext, config AgentLoopConfig, ctx context.Context, stream *EventStream, streamFn StreamFn) (llm.AssistantMessage, error) {
+func streamAssistantResponseWithRetry(context AgentContext, config AgentLoopConfig, ctx context.Context, stream *EventStream, streamFn StreamFn) (*providers.AssistantMessage, error) {
 	maxRetries := defaultMaxRetries
 	maxDelayMs := defaultMaxDelayMs
 	if config.MaxRetryDelayMs > 0 {
@@ -409,12 +398,9 @@ func streamAssistantResponseWithRetry(context AgentContext, config AgentLoopConf
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
-			// Check context before retry
 			if ctx.Err() != nil {
-				return llm.AssistantMessage{}, ctx.Err()
+				return nil, ctx.Err()
 			}
-
-			// Exponential backoff with jitter
 			baseDelay := float64(defaultBaseDelayMs) * math.Pow(2, float64(attempt-1))
 			if baseDelay > float64(maxDelayMs) {
 				baseDelay = float64(maxDelayMs)
@@ -425,7 +411,7 @@ func streamAssistantResponseWithRetry(context AgentContext, config AgentLoopConf
 			select {
 			case <-time.After(delay):
 			case <-ctx.Done():
-				return llm.AssistantMessage{}, ctx.Err()
+				return nil, ctx.Err()
 			}
 		}
 
@@ -435,30 +421,22 @@ func streamAssistantResponseWithRetry(context AgentContext, config AgentLoopConf
 		}
 
 		lastErr = err
-
-		// Classify: only retry transient errors
 		if !isRetryableError(err) {
-			return llm.AssistantMessage{}, err
+			return nil, err
 		}
 	}
 
-	return llm.AssistantMessage{}, fmt.Errorf("max retries (%d) exceeded: %w", maxRetries, lastErr)
+	return nil, fmt.Errorf("max retries (%d) exceeded: %w", maxRetries, lastErr)
 }
 
-// isRetryableError classifies errors as transient (retryable) or permanent.
 func isRetryableError(err error) bool {
 	if err == nil {
 		return false
 	}
-
 	msg := err.Error()
-
-	// Network / connectivity errors — retryable
 	if _, ok := err.(net.Error); ok {
 		return true
 	}
-
-	// HTTP 429 (rate limit), 500, 502, 503, 504 — retryable
 	retryablePatterns := []string{
 		"429", "rate limit", "too many requests",
 		"500", "internal server error",
@@ -476,26 +454,22 @@ func isRetryableError(err error) bool {
 			return true
 		}
 	}
-
-	// Permanent errors — do NOT retry
-	// 400 bad request, 401 unauthorized, 403 forbidden, 404 not found,
-	// schema validation, model not found, etc.
 	return false
 }
 
 func extractRole(message AgentMessage) string {
 	switch m := message.(type) {
-	case llm.UserMessage:
+	case providers.UserMessage:
 		return m.Role
-	case *llm.UserMessage:
+	case *providers.UserMessage:
 		return m.Role
-	case llm.AssistantMessage:
+	case providers.AssistantMessage:
 		return m.Role
-	case *llm.AssistantMessage:
+	case *providers.AssistantMessage:
 		return m.Role
-	case llm.ToolResultMessage:
+	case providers.ToolResultMessage:
 		return m.Role
-	case *llm.ToolResultMessage:
+	case *providers.ToolResultMessage:
 		return m.Role
 	case Message:
 		return string(m.Role)

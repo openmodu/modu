@@ -11,8 +11,7 @@ import (
 	coding_agent "github.com/crosszan/modu/pkg/coding_agent"
 	"github.com/crosszan/modu/pkg/coding_agent/extension"
 	"github.com/crosszan/modu/pkg/coding_agent/tools"
-	"github.com/crosszan/modu/pkg/llm"
-	_ "github.com/crosszan/modu/pkg/llm/providers/openai_chat_completions"
+	"github.com/crosszan/modu/pkg/providers"
 )
 
 // --- Hook Extension Demo ---
@@ -93,21 +92,22 @@ func main() {
 
 	enableThinking := os.Getenv("ENABLE_THINKING")
 
-	model := &llm.Model{
-		ID:            ollamaModel,
-		Name:          ollamaModel + " (Ollama)",
-		Api:           llm.Api(llm.KnownApiOpenAIChatCompletions),
-		Provider:      llm.Provider(llm.KnownApiOpenAIChatCompletions),
-		BaseURL:       fmt.Sprintf("%s", ollamaHost),
-		Reasoning:     enableThinking == "1" || enableThinking == "true",
-		Input:         []string{"text"},
-		ContextWindow: 32768,
-		MaxTokens:     4096,
+	// Register Ollama as an OpenAI-compatible provider
+	providers.Register(providers.NewOpenAIChatCompletionsProvider(
+		"ollama",
+		providers.WithBaseURL(fmt.Sprintf("%s/v1", ollamaHost)),
+	))
+
+	_ = enableThinking // used via ThinkingLevel config
+	model := &providers.Model{
+		ID:         ollamaModel,
+		Name:       ollamaModel + " (Ollama)",
+		ProviderID: "ollama",
 	}
 
 	cwd, _ := os.Getwd()
 	fmt.Printf("Working directory: %s\n", cwd)
-	fmt.Printf("Ollama: %s, model: %s, thinking: %v\n\n", ollamaHost, ollamaModel, model.Reasoning)
+	fmt.Printf("Ollama: %s, model: %s, thinking: %v\n\n", ollamaHost, ollamaModel, enableThinking)
 
 	// Create hook extension
 	hookExt := &auditHookExtension{}
@@ -161,7 +161,7 @@ func main() {
 			fmt.Printf("<< Result:\n")
 			if result, ok := event.Result.(agent.AgentToolResult); ok {
 				for _, block := range result.Content {
-					if tc, ok := block.(llm.TextContent); ok {
+					if tc, ok := block.(*providers.TextContent); ok {
 						text := tc.Text
 						if len(text) > 500 {
 							text = text[:500] + "\n   ... (truncated)"

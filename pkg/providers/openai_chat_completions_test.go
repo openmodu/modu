@@ -1,8 +1,3 @@
-// Integration tests against a local LM Studio instance.
-// Run with: go test -tags integration -timeout 5m -v -run TestLMStudio ./pkg/providers/
-
-//go:build integration
-
 package providers
 
 import (

@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/crosszan/modu/pkg/agent"
-	"github.com/crosszan/modu/pkg/llm"
+	"github.com/crosszan/modu/pkg/providers"
 )
 
 // Options configures the compaction process.
@@ -14,7 +14,7 @@ type Options struct {
 	// PreserveRecent is the number of recent messages to keep unchanged.
 	PreserveRecent int
 	// Model is the LLM model to use for generating summaries.
-	Model *llm.Model
+	Model *providers.Model
 	// GetAPIKey retrieves an API key for the given provider.
 	GetAPIKey func(provider string) (string, error)
 	// StreamFn creates an LLM stream for summary generation.
@@ -26,7 +26,7 @@ type Result struct {
 	Summary       string
 	OriginalCount int
 	NewCount      int
-	Messages      []llm.Message
+	Messages      []providers.AgentMessage
 }
 
 const compactionPrompt = `You are summarizing a conversation between a user and a coding assistant. Create a concise summary that captures:
@@ -42,7 +42,7 @@ Be specific about technical details. The summary will be used to continue the co
 Format as a structured summary with clear sections.`
 
 // Compact compresses older messages into a summary while preserving recent messages.
-func Compact(ctx context.Context, messages []llm.Message, opts Options) (*Result, error) {
+func Compact(ctx context.Context, messages []providers.AgentMessage, opts Options) (*Result, error) {
 	if len(messages) == 0 {
 		return &Result{Messages: messages}, nil
 	}
@@ -78,17 +78,17 @@ func Compact(ctx context.Context, messages []llm.Message, opts Options) (*Result
 	}
 
 	// Build new message list: summary + preserved messages
-	summaryMsg := llm.UserMessage{
+	summaryMsg := providers.UserMessage{
 		Role: "user",
-		Content: []llm.ContentBlock{
-			llm.TextContent{
+		Content: []providers.ContentBlock{
+			&providers.TextContent{
 				Type: "text",
 				Text: "[Previous Conversation Summary]\n\n" + summary,
 			},
 		},
 	}
 
-	newMessages := make([]llm.Message, 0, 1+len(toPreserve))
+	newMessages := make([]providers.AgentMessage, 0, 1+len(toPreserve))
 	newMessages = append(newMessages, summaryMsg)
 	newMessages = append(newMessages, toPreserve...)
 
@@ -109,10 +109,10 @@ func generateSummary(ctx context.Context, conversationText string, opts Options)
 		return conversationText, nil
 	}
 
-	summaryCtx := &llm.Context{
+	summaryCtx := &providers.LLMContext{
 		SystemPrompt: compactionPrompt,
-		Messages: []llm.Message{
-			llm.UserMessage{
+		Messages: []providers.AgentMessage{
+			providers.UserMessage{
 				Role:    "user",
 				Content: "Please summarize this conversation:\n\n" + conversationText,
 			},
@@ -121,12 +121,12 @@ func generateSummary(ctx context.Context, conversationText string, opts Options)
 
 	apiKey := ""
 	if opts.GetAPIKey != nil {
-		key, _ := opts.GetAPIKey(string(opts.Model.Provider))
+		key, _ := opts.GetAPIKey(opts.Model.ProviderID)
 		apiKey = key
 	}
 
-	stream, err := opts.StreamFn(opts.Model, summaryCtx, &llm.SimpleStreamOptions{
-		StreamOptions: llm.StreamOptions{
+	stream, err := opts.StreamFn(ctx, opts.Model, summaryCtx, &providers.SimpleStreamOptions{
+		StreamOptions: providers.StreamOptions{
 			APIKey: apiKey,
 		},
 	})
@@ -142,7 +142,7 @@ func generateSummary(ctx context.Context, conversationText string, opts Options)
 	// Extract text from the assistant message
 	var summary strings.Builder
 	for _, block := range result.Content {
-		if tc, ok := block.(llm.TextContent); ok {
+		if tc, ok := block.(*providers.TextContent); ok {
 			summary.WriteString(tc.Text)
 		}
 	}
@@ -150,23 +150,40 @@ func generateSummary(ctx context.Context, conversationText string, opts Options)
 	return summary.String(), nil
 }
 
-func formatMessageForSummary(msg llm.Message) string {
+func formatMessageForSummary(msg providers.AgentMessage) string {
 	switch m := msg.(type) {
-	case llm.UserMessage:
+	case providers.UserMessage:
 		content := formatContent(m.Content)
 		return fmt.Sprintf("User: %s", content)
-	case llm.AssistantMessage:
+	case *providers.UserMessage:
+		content := formatContent(m.Content)
+		return fmt.Sprintf("User: %s", content)
+	case providers.AssistantMessage:
 		var parts []string
 		for _, block := range m.Content {
 			switch b := block.(type) {
-			case llm.TextContent:
+			case *providers.TextContent:
 				parts = append(parts, b.Text)
-			case llm.ToolCall:
+			case *providers.ToolCallContent:
 				parts = append(parts, fmt.Sprintf("[Tool call: %s]", b.Name))
 			}
 		}
 		return fmt.Sprintf("Assistant: %s", strings.Join(parts, " "))
-	case llm.ToolResultMessage:
+	case *providers.AssistantMessage:
+		var parts []string
+		for _, block := range m.Content {
+			switch b := block.(type) {
+			case *providers.TextContent:
+				parts = append(parts, b.Text)
+			case *providers.ToolCallContent:
+				parts = append(parts, fmt.Sprintf("[Tool call: %s]", b.Name))
+			}
+		}
+		return fmt.Sprintf("Assistant: %s", strings.Join(parts, " "))
+	case providers.ToolResultMessage:
+		content := formatContent(m.Content)
+		return fmt.Sprintf("Tool result (%s): %s", m.ToolName, content)
+	case *providers.ToolResultMessage:
 		content := formatContent(m.Content)
 		return fmt.Sprintf("Tool result (%s): %s", m.ToolName, content)
 	default:
@@ -178,10 +195,10 @@ func formatContent(content any) string {
 	switch c := content.(type) {
 	case string:
 		return c
-	case []llm.ContentBlock:
+	case []providers.ContentBlock:
 		var parts []string
 		for _, block := range c {
-			if tc, ok := block.(llm.TextContent); ok {
+			if tc, ok := block.(*providers.TextContent); ok {
 				parts = append(parts, tc.Text)
 			}
 		}

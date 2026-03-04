@@ -14,8 +14,7 @@ import (
 	"github.com/crosszan/modu/pkg/agent"
 	coding_agent "github.com/crosszan/modu/pkg/coding_agent"
 	"github.com/crosszan/modu/pkg/coding_agent/tools"
-	"github.com/crosszan/modu/pkg/llm"
-	_ "github.com/crosszan/modu/pkg/llm/providers/deepseek"
+	"github.com/crosszan/modu/pkg/providers"
 )
 
 func main() {
@@ -30,15 +29,13 @@ func main() {
 		modelID = m
 	}
 
-	model := &llm.Model{
-		ID:            modelID,
-		Name:          "DeepSeek Chat",
-		Api:           llm.Api(llm.KnownApiDeepSeekChat),
-		Provider:      llm.Provider(llm.KnownProviderDeepSeek),
-		BaseURL:       "https://api.deepseek.com/v1",
-		Input:         []string{"text"},
-		ContextWindow: 128000,
-		MaxTokens:     4096,
+	// Register DeepSeek provider
+	providers.Register(providers.NewDeepSeekProvider(apiKey))
+
+	model := &providers.Model{
+		ID:         modelID,
+		Name:       "DeepSeek Chat",
+		ProviderID: "deepseek",
 	}
 
 	cwd, _ := os.Getwd()
@@ -83,13 +80,13 @@ func main() {
 		case agent.EventTypeToolExecutionEnd:
 			if result, ok := event.Result.(agent.AgentToolResult); ok {
 				for _, block := range result.Content {
-					if tc, ok := block.(llm.TextContent); ok {
+					if tc, ok := block.(*providers.TextContent); ok {
 						text := tc.Text
 						if len(text) > 400 {
 							text = text[:400] + "\n   ...(truncated)"
 						}
 						fmt.Printf("<< %s\n", text)
-					} else if tc, ok := block.(*llm.TextContent); ok {
+					} else if tc, ok := block.(*providers.TextContent); ok {
 						text := tc.Text
 						if len(text) > 400 {
 							text = text[:400] + "\n   ...(truncated)"

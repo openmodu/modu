@@ -3,7 +3,7 @@ package agent
 import (
 	"context"
 
-	"github.com/crosszan/modu/pkg/llm"
+	"github.com/crosszan/modu/pkg/providers"
 )
 
 // --- Enums & Basic Types ---
@@ -49,20 +49,20 @@ const (
 // --- Content Structures ---
 
 type ContentBlock struct {
-	Type               ContentType    `json:"type"`
-	Text               string         `json:"text,omitempty"`
-	TextSignature      string         `json:"textSignature,omitempty"`
-	Thinking           string         `json:"thinking,omitempty"`
-	ThinkingSignature  string         `json:"thinkingSignature,omitempty"`
-	ImageData          string         `json:"data,omitempty"`
-	ImageMimeType      string         `json:"mimeType,omitempty"`
-	ToolCall           *llm.ToolCall  `json:"toolCall,omitempty"`
-	ToolCallDelta      string         `json:"toolCallDelta,omitempty"`
-	ToolCallSignature  string         `json:"toolCallSignature,omitempty"`
-	ToolCallArguments  map[string]any `json:"toolCallArguments,omitempty"`
-	ToolCallName       string         `json:"toolCallName,omitempty"`
-	ToolCallID         string         `json:"toolCallId,omitempty"`
-	ToolCallThoughtSig string         `json:"toolCallThoughtSignature,omitempty"`
+	Type               ContentType              `json:"type"`
+	Text               string                   `json:"text,omitempty"`
+	TextSignature      string                   `json:"textSignature,omitempty"`
+	Thinking           string                   `json:"thinking,omitempty"`
+	ThinkingSignature  string                   `json:"thinkingSignature,omitempty"`
+	ImageData          string                   `json:"data,omitempty"`
+	ImageMimeType      string                   `json:"mimeType,omitempty"`
+	ToolCall           *providers.ToolCallContent `json:"toolCall,omitempty"`
+	ToolCallDelta      string                   `json:"toolCallDelta,omitempty"`
+	ToolCallSignature  string                   `json:"toolCallSignature,omitempty"`
+	ToolCallArguments  map[string]any           `json:"toolCallArguments,omitempty"`
+	ToolCallName       string                   `json:"toolCallName,omitempty"`
+	ToolCallID         string                   `json:"toolCallId,omitempty"`
+	ToolCallThoughtSig string                   `json:"toolCallThoughtSignature,omitempty"`
 }
 
 type Message struct {
@@ -70,24 +70,23 @@ type Message struct {
 	Content   []ContentBlock `json:"content"`
 	Timestamp int64          `json:"timestamp"`
 	// Custom fields for extension
-	CustomType   string         `json:"customType,omitempty"`
-	Details      interface{}    `json:"details,omitempty"`
-	Api          llm.Api        `json:"api,omitempty"`
-	Provider     llm.Provider   `json:"provider,omitempty"`
-	Model        string         `json:"model,omitempty"`
-	Usage        llm.Usage      `json:"usage,omitempty"`
-	StopReason   llm.StopReason `json:"stopReason,omitempty"`
-	ErrorMessage string         `json:"errorMessage,omitempty"`
-	ToolCallID   string         `json:"toolCallId,omitempty"`
-	ToolName     string         `json:"toolName,omitempty"`
-	IsError      bool           `json:"isError,omitempty"`
+	CustomType   string               `json:"customType,omitempty"`
+	Details      interface{}          `json:"details,omitempty"`
+	ProviderID   string               `json:"provider,omitempty"`
+	Model        string               `json:"model,omitempty"`
+	Usage        providers.AgentUsage `json:"usage,omitempty"`
+	StopReason   providers.StopReason `json:"stopReason,omitempty"`
+	ErrorMessage string               `json:"errorMessage,omitempty"`
+	ToolCallID   string               `json:"toolCallId,omitempty"`
+	ToolName     string               `json:"toolName,omitempty"`
+	IsError      bool                 `json:"isError,omitempty"`
 }
 
 // --- Agent State ---
 
 type AgentState struct {
 	SystemPrompt     string
-	Model            *llm.Model
+	Model            *providers.Model
 	ThinkingLevel    ThinkingLevel
 	Tools            []AgentTool
 	Messages         []AgentMessage
@@ -100,8 +99,8 @@ type AgentState struct {
 // --- Interfaces ---
 
 type AgentToolResult struct {
-	Content []llm.ContentBlock `json:"content"`
-	Details any                `json:"details"`
+	Content []providers.ContentBlock `json:"content"`
+	Details any                      `json:"details"`
 }
 
 type AgentToolUpdateCallback func(partial AgentToolResult)
@@ -136,7 +135,7 @@ type AgentEvent struct {
 	Type        EventType
 	Messages    []AgentMessage
 	Message     AgentMessage
-	ToolResults []llm.ToolResultMessage
+	ToolResults []providers.ToolResultMessage
 
 	// Tool Execution specific
 	ToolCallID            string
@@ -145,10 +144,10 @@ type AgentEvent struct {
 	Result                interface{}
 	IsError               bool
 	Partial               interface{}
-	AssistantMessageEvent *llm.AssistantMessageEvent
+	AssistantMessageEvent *providers.AssistantMessageEvent
 }
 
-type AgentMessage = llm.Message
+type AgentMessage = providers.AgentMessage
 
 type AgentContext struct {
 	SystemPrompt string
@@ -156,11 +155,11 @@ type AgentContext struct {
 	Tools        []AgentTool
 }
 
-type StreamFn func(model *llm.Model, ctx *llm.Context, opts *llm.SimpleStreamOptions) (llm.AssistantMessageEventStream, error)
+type StreamFn func(ctx context.Context, model *providers.Model, llmCtx *providers.LLMContext, opts *providers.SimpleStreamOptions) (providers.AssistantMessageEventStream, error)
 
 type AgentLoopConfig struct {
-	Model               *llm.Model
-	ConvertToLlm        func(messages []AgentMessage) ([]llm.Message, error)
+	Model               *providers.Model
+	ConvertToLlm        func(messages []AgentMessage) ([]providers.AgentMessage, error)
 	TransformContext    func(messages []AgentMessage, ctx context.Context) ([]AgentMessage, error)
 	GetAPIKey           func(provider string) (string, error)
 	GetSteeringMessages func() ([]AgentMessage, error)
@@ -168,11 +167,11 @@ type AgentLoopConfig struct {
 	Temperature         *float64
 	MaxTokens           *int
 	APIKey              string
-	CacheRetention      llm.CacheRetention
+	CacheRetention      providers.CacheRetention
 	SessionID           string
 	Headers             map[string]string
 	Reasoning           ThinkingLevel
-	ThinkingBudgets     *llm.ThinkingBudgets
+	ThinkingBudgets     *providers.ThinkingBudgets
 	MaxRetryDelayMs     int
-	Transport           llm.Transport
+	Transport           providers.Transport
 }

@@ -17,8 +17,7 @@ import (
 	coding_agent "github.com/crosszan/modu/pkg/coding_agent"
 	"github.com/crosszan/modu/pkg/coding_agent/modes"
 	"github.com/crosszan/modu/pkg/coding_agent/tools"
-	"github.com/crosszan/modu/pkg/llm"
-	_ "github.com/crosszan/modu/pkg/llm/providers/ollama"
+	"github.com/crosszan/modu/pkg/providers"
 )
 
 func main() {
@@ -40,15 +39,16 @@ func main() {
 		}
 	}
 
-	model := &llm.Model{
-		ID:            ollamaModel,
-		Name:          ollamaModel + " (Ollama)",
-		Api:           llm.Api(llm.KnownApiOllama),
-		Provider:      llm.Provider(llm.KnownProviderOllama),
-		BaseURL:       fmt.Sprintf("http://%s:11434", ollamaHost),
-		Input:         []string{"text"},
-		ContextWindow: 32768,
-		MaxTokens:     4096,
+	// Register Ollama as an OpenAI-compatible provider
+	providers.Register(providers.NewOpenAIChatCompletionsProvider(
+		"ollama",
+		providers.WithBaseURL(fmt.Sprintf("http://%s:1234/v1", ollamaHost)),
+	))
+
+	model := &providers.Model{
+		ID:         ollamaModel,
+		Name:       ollamaModel + " (Ollama)",
+		ProviderID: "ollama",
 	}
 
 	cwd, _ := os.Getwd()

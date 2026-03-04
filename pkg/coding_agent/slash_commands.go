@@ -153,7 +153,7 @@ func cmdRetry(session *CodingSession, _ string) error {
 func cmdSession(session *CodingSession, _ string) error {
 	model := session.GetModel()
 	fmt.Printf("Session ID: %s\n", session.GetSessionID())
-	fmt.Printf("Model: %s (%s)\n", model.ID, model.Provider)
+	fmt.Printf("Model: %s (%s)\n", model.ID, model.ProviderID)
 	fmt.Printf("Thinking Level: %s\n", session.GetThinkingLevel())
 	fmt.Printf("Streaming: %v\n", session.IsStreaming())
 	fmt.Printf("Auto Compaction: %v\n", session.config.AutoCompaction)

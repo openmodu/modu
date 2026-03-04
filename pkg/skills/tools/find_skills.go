@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/crosszan/modu/pkg/agent"
-	"github.com/crosszan/modu/pkg/llm"
+	"github.com/crosszan/modu/pkg/providers"
 	"github.com/crosszan/modu/pkg/skills"
 )
 
@@ -123,13 +123,13 @@ func formatSearchResults(query string, results []skills.SearchResult, cached boo
 
 func textResult(text string) agent.AgentToolResult {
 	return agent.AgentToolResult{
-		Content: []llm.ContentBlock{llm.TextContent{Type: "text", Text: text}},
+		Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: text}},
 	}
 }
 
 func errorResult(msg string) agent.AgentToolResult {
 	return agent.AgentToolResult{
-		Content: []llm.ContentBlock{llm.TextContent{Type: "text", Text: msg}},
+		Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: msg}},
 		Details: map[string]any{"isError": true},
 	}
 }

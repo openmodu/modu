@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/crosszan/modu/pkg/agent"
-	"github.com/crosszan/modu/pkg/llm"
+	"github.com/crosszan/modu/pkg/providers"
 )
 
 const branchSummaryPrompt = `You are generating a context summary for a branch navigation event. The user is jumping from one point in the conversation to another. Summarize what was happening at the target point so the assistant can smoothly continue from there.
@@ -21,14 +21,14 @@ Be concise but specific.`
 
 // BranchSummaryOptions configures branch summary generation.
 type BranchSummaryOptions struct {
-	Model     *llm.Model
+	Model     *providers.Model
 	GetAPIKey func(provider string) (string, error)
 	StreamFn  agent.StreamFn
 }
 
 // GenerateBranchSummary creates a summary of the conversation context
 // at a specific branch point.
-func GenerateBranchSummary(ctx context.Context, messages []llm.Message, opts BranchSummaryOptions) (string, error) {
+func GenerateBranchSummary(ctx context.Context, messages []providers.AgentMessage, opts BranchSummaryOptions) (string, error) {
 	if len(messages) == 0 {
 		return "No previous context.", nil
 	}
@@ -50,10 +50,10 @@ func GenerateBranchSummary(ctx context.Context, messages []llm.Message, opts Bra
 		return conversationText, nil
 	}
 
-	summaryCtx := &llm.Context{
+	summaryCtx := &providers.LLMContext{
 		SystemPrompt: branchSummaryPrompt,
-		Messages: []llm.Message{
-			llm.UserMessage{
+		Messages: []providers.AgentMessage{
+			providers.UserMessage{
 				Role:    "user",
 				Content: "Summarize the context at this branch point:\n\n" + conversationText,
 			},
@@ -62,12 +62,12 @@ func GenerateBranchSummary(ctx context.Context, messages []llm.Message, opts Bra
 
 	apiKey := ""
 	if opts.GetAPIKey != nil {
-		key, _ := opts.GetAPIKey(string(opts.Model.Provider))
+		key, _ := opts.GetAPIKey(opts.Model.ProviderID)
 		apiKey = key
 	}
 
-	stream, err := opts.StreamFn(opts.Model, summaryCtx, &llm.SimpleStreamOptions{
-		StreamOptions: llm.StreamOptions{
+	stream, err := opts.StreamFn(ctx, opts.Model, summaryCtx, &providers.SimpleStreamOptions{
+		StreamOptions: providers.StreamOptions{
 			APIKey: apiKey,
 		},
 	})
@@ -82,7 +82,7 @@ func GenerateBranchSummary(ctx context.Context, messages []llm.Message, opts Bra
 
 	var summary strings.Builder
 	for _, block := range result.Content {
-		if tc, ok := block.(llm.TextContent); ok {
+		if tc, ok := block.(*providers.TextContent); ok {
 			summary.WriteString(tc.Text)
 		}
 	}

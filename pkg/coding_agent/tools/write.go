@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/crosszan/modu/pkg/agent"
-	"github.com/crosszan/modu/pkg/llm"
+	"github.com/crosszan/modu/pkg/providers"
 )
 
 // WriteTool implements the file writing tool.
@@ -66,8 +66,8 @@ func (t *WriteTool) Execute(ctx context.Context, toolCallID string, args map[str
 	bytes := len([]byte(content))
 
 	return agent.AgentToolResult{
-		Content: []llm.ContentBlock{
-			llm.TextContent{
+		Content: []providers.ContentBlock{
+			providers.TextContent{
 				Type: "text",
 				Text: fmt.Sprintf("Successfully wrote %s to %s", FormatSize(int64(bytes)), pathArg),
 			},

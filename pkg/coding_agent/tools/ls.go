@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/crosszan/modu/pkg/agent"
-	"github.com/crosszan/modu/pkg/llm"
+	"github.com/crosszan/modu/pkg/providers"
 )
 
 const defaultLsLimit = 500
@@ -96,8 +96,8 @@ func (t *LsTool) Execute(ctx context.Context, toolCallID string, args map[string
 	}
 
 	return agent.AgentToolResult{
-		Content: []llm.ContentBlock{
-			llm.TextContent{Type: "text", Text: text},
+		Content: []providers.ContentBlock{
+			providers.TextContent{Type: "text", Text: text},
 		},
 	}, nil
 }

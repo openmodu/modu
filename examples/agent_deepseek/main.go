@@ -14,8 +14,7 @@ import (
 	"time"
 
 	"github.com/crosszan/modu/pkg/agent"
-	"github.com/crosszan/modu/pkg/llm"
-	_ "github.com/crosszan/modu/pkg/llm/providers/deepseek"
+	"github.com/crosszan/modu/pkg/providers"
 )
 
 // --- Tool: Calculator ---
@@ -73,7 +72,7 @@ func (t *CalculatorTool) Execute(_ context.Context, _ string, args map[string]an
 		return textResult("Unknown operation: " + op), nil
 	}
 	return agent.AgentToolResult{
-		Content: []llm.ContentBlock{&llm.TextContent{Type: "text", Text: desc}},
+		Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: desc}},
 		Details: map[string]any{"result": result},
 	}, nil
 }
@@ -91,14 +90,14 @@ func (t *GetTimeTool) Parameters() any {
 func (t *GetTimeTool) Execute(_ context.Context, _ string, _ map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
 	now := time.Now().Format("2006-01-02 15:04:05 MST")
 	return agent.AgentToolResult{
-		Content: []llm.ContentBlock{&llm.TextContent{Type: "text", Text: now}},
+		Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: now}},
 		Details: map[string]any{"time": now},
 	}, nil
 }
 
 func textResult(text string) agent.AgentToolResult {
 	return agent.AgentToolResult{
-		Content: []llm.ContentBlock{&llm.TextContent{Type: "text", Text: text}},
+		Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: text}},
 	}
 }
 
@@ -128,15 +127,13 @@ func main() {
 		modelID = m
 	}
 
-	model := &llm.Model{
-		ID:            modelID,
-		Name:          "DeepSeek Chat",
-		Api:           llm.Api(llm.KnownApiDeepSeekChat),
-		Provider:      llm.Provider(llm.KnownProviderDeepSeek),
-		BaseURL:       "https://api.deepseek.com/v1",
-		Input:         []string{"text"},
-		ContextWindow: 128000,
-		MaxTokens:     4096,
+	// Register DeepSeek as an OpenAI-compatible provider
+	providers.Register(providers.NewDeepSeekProvider(apiKey))
+
+	model := &providers.Model{
+		ID:         modelID,
+		Name:       "DeepSeek Chat",
+		ProviderID: "deepseek",
 	}
 
 	a := agent.NewAgent(agent.AgentOptions{
@@ -165,7 +162,7 @@ func main() {
 		case agent.EventTypeToolExecutionEnd:
 			if result, ok := event.Result.(agent.AgentToolResult); ok {
 				for _, c := range result.Content {
-					if tc, ok := c.(*llm.TextContent); ok {
+					if tc, ok := c.(*providers.TextContent); ok {
 						fmt.Printf("<< %s\n", tc.Text)
 					}
 				}
@@ -195,10 +192,10 @@ func main() {
 		}
 		// Print token usage from last assistant message
 		for j := len(state.Messages) - 1; j >= 0; j-- {
-			var usage llm.Usage
-			if msg, ok := state.Messages[j].(llm.AssistantMessage); ok {
+			var usage providers.AgentUsage
+			if msg, ok := state.Messages[j].(providers.AssistantMessage); ok {
 				usage = msg.Usage
-			} else if msg, ok := state.Messages[j].(*llm.AssistantMessage); ok {
+			} else if msg, ok := state.Messages[j].(*providers.AssistantMessage); ok {
 				usage = msg.Usage
 			} else {
 				continue

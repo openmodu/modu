@@ -20,6 +20,7 @@ import (
 	"github.com/crosszan/modu/pkg/coding_agent/skills"
 	"github.com/crosszan/modu/pkg/coding_agent/tools"
 	"github.com/crosszan/modu/pkg/llm"
+	"github.com/crosszan/modu/pkg/providers"
 )
 
 // CodingSessionOptions configures a new CodingSession.
@@ -29,7 +30,7 @@ type CodingSessionOptions struct {
 	// AgentDir is the configuration directory (default: ~/.coding_agent/).
 	AgentDir string
 	// Model is the LLM model to use.
-	Model *llm.Model
+	Model *providers.Model
 	// ThinkingLevel controls reasoning depth.
 	ThinkingLevel agent.ThinkingLevel
 	// Tools are the tools to make available. If nil, defaults to AllTools.
@@ -58,7 +59,7 @@ type CodingSession struct {
 	resources      *resource.Loader
 	cwd            string
 	agentDir       string
-	model          *llm.Model
+	model          *providers.Model
 	activeTools    []agent.AgentTool
 	slashCommands  map[string]SlashCommand
 	getAPIKey      func(provider string) (string, error)
@@ -165,9 +166,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	// Determine stream function
 	streamFn := opts.StreamFn
 	if streamFn == nil {
-		streamFn = func(model *llm.Model, ctx *llm.Context, sOpts *llm.SimpleStreamOptions) (llm.AssistantMessageEventStream, error) {
-			return llm.StreamSimple(model, ctx, sOpts)
-		}
+		streamFn = providers.StreamDefault
 	}
 
 	// Determine API key function
@@ -226,7 +225,9 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	// Subscribe to events for token usage tracking (auto-compaction)
 	ag.Subscribe(func(event agent.AgentEvent) {
 		if event.Type == agent.EventTypeMessageEnd {
-			if msg, ok := event.Message.(llm.AssistantMessage); ok {
+			if msg, ok := event.Message.(providers.AssistantMessage); ok {
+				cs.totalTokens += msg.Usage.TotalTokens
+			} else if msg, ok := event.Message.(*providers.AssistantMessage); ok {
 				cs.totalTokens += msg.Usage.TotalTokens
 			}
 		}
@@ -334,20 +335,18 @@ func (s *CodingSession) Prompt(ctx context.Context, text string) error {
 
 // Steer injects a high-priority message during processing.
 func (s *CodingSession) Steer(text string) {
-	msg := llm.UserMessage{
-		Role:      "user",
-		Content:   text,
-		Timestamp: time.Now().UnixMilli(),
+	msg := providers.UserMessage{
+		Role:    "user",
+		Content: text,
 	}
 	s.agent.Steer(msg)
 }
 
 // FollowUp queues a message for processing after the current task.
 func (s *CodingSession) FollowUp(text string) {
-	msg := llm.UserMessage{
-		Role:      "user",
-		Content:   text,
-		Timestamp: time.Now().UnixMilli(),
+	msg := providers.UserMessage{
+		Role:    "user",
+		Content: text,
 	}
 	s.agent.FollowUp(msg)
 }
@@ -385,23 +384,23 @@ func (s *CodingSession) GetActiveToolNames() []string {
 }
 
 // SetModel changes the active model.
-func (s *CodingSession) SetModel(model *llm.Model) {
+func (s *CodingSession) SetModel(model *providers.Model) {
 	s.model = model
 	s.agent.SetModel(model)
 
 	_ = s.sessionManager.Append(session.NewEntry(session.EntryTypeModelChange, "", session.ModelChangeData{
-		Provider: string(model.Provider),
+		Provider: model.ProviderID,
 		ModelID:  model.ID,
 	}))
 }
 
 // SetModelByID changes the active model by provider and model ID.
 func (s *CodingSession) SetModelByID(provider, modelID string) error {
-	model := llm.GetModel(llm.Provider(provider), modelID)
-	if model == nil {
+	llmModel := llm.GetModel(llm.Provider(provider), modelID)
+	if llmModel == nil {
 		return fmt.Errorf("model not found: %s/%s", provider, modelID)
 	}
-	s.SetModel(model)
+	s.SetModel(llmModelToProviders(llmModel))
 	return nil
 }
 
@@ -442,13 +441,16 @@ func (s *CodingSession) Compact(ctx context.Context) error {
 	return nil
 }
 
+// defaultContextWindow is the assumed context window when not available from the model.
+const defaultContextWindow = 128000
+
 // maybeAutoCompact checks whether auto-compaction should be triggered
-// based on accumulated token usage vs. the model's context window.
+// based on accumulated token usage vs. the assumed context window.
 func (s *CodingSession) maybeAutoCompact(ctx context.Context) {
 	if !s.config.AutoCompaction {
 		return
 	}
-	if s.model == nil || s.model.ContextWindow <= 0 {
+	if s.model == nil {
 		return
 	}
 
@@ -457,7 +459,7 @@ func (s *CodingSession) maybeAutoCompact(ctx context.Context) {
 		threshold = 80.0
 	}
 
-	usagePercent := float64(s.totalTokens) / float64(s.model.ContextWindow) * 100.0
+	usagePercent := float64(s.totalTokens) / float64(defaultContextWindow) * 100.0
 	if usagePercent >= threshold {
 		_ = s.Compact(ctx)
 	}
@@ -495,7 +497,7 @@ func (s *CodingSession) GetConfig() *Config {
 
 // CycleModel cycles to the next model in the scopedModels list.
 // Returns the new model, or nil if no scoped models are configured.
-func (s *CodingSession) CycleModel() *llm.Model {
+func (s *CodingSession) CycleModel() *providers.Model {
 	if len(s.scopedModels) == 0 {
 		return nil
 	}
@@ -510,19 +512,18 @@ func (s *CodingSession) CycleModel() *llm.Model {
 	}
 
 	nextID := s.scopedModels[nextIdx]
-	model := llm.GetModel("", nextID)
-	if model == nil {
-		// Create a minimal model if not in registry
-		model = &llm.Model{
-			ID:   nextID,
-			Name: nextID,
-		}
+	llmModel := llm.GetModel("", nextID)
+	var model *providers.Model
+	if llmModel != nil {
+		model = llmModelToProviders(llmModel)
+	} else {
+		model = &providers.Model{ID: nextID, Name: nextID}
 	}
 
 	s.SetModel(model)
 	s.eventBus.Emit(sessionEventChannel, SessionEvent{
 		Type:     SessionEventModelChange,
-		Provider: string(model.Provider),
+		Provider: model.ProviderID,
 		ModelID:  model.ID,
 	})
 	return model
@@ -564,7 +565,7 @@ func (s *CodingSession) GetThinkingLevel() agent.ThinkingLevel {
 }
 
 // GetModel returns the current model.
-func (s *CodingSession) GetModel() *llm.Model {
+func (s *CodingSession) GetModel() *providers.Model {
 	return s.model
 }
 
@@ -638,24 +639,17 @@ func (s *CodingSession) IsCompacting() bool {
 func (s *CodingSession) GetLastAssistantText() string {
 	msgs := s.agent.GetState().Messages
 	for i := len(msgs) - 1; i >= 0; i-- {
-		msg, ok := msgs[i].(llm.AssistantMessage)
+		msg, ok := msgs[i].(providers.AssistantMessage)
 		if !ok {
-			if ptr, ok2 := msgs[i].(*llm.AssistantMessage); ok2 {
+			if ptr, ok2 := msgs[i].(*providers.AssistantMessage); ok2 {
 				msg = *ptr
 			} else {
 				continue
 			}
 		}
 		for _, block := range msg.Content {
-			switch tc := block.(type) {
-			case llm.TextContent:
-				if tc.Text != "" {
-					return tc.Text
-				}
-			case *llm.TextContent:
-				if tc != nil && tc.Text != "" {
-					return tc.Text
-				}
+			if tc, ok := block.(*providers.TextContent); ok && tc != nil && tc.Text != "" {
+				return tc.Text
 			}
 		}
 	}
@@ -713,12 +707,26 @@ func (s *CodingSession) GetSessionStats() SessionStats {
 }
 
 // GetAvailableModels returns all registered models from all providers.
-func (s *CodingSession) GetAvailableModels() []*llm.Model {
-	var result []*llm.Model
-	for _, provider := range llm.GetProviders() {
-		result = append(result, llm.GetModels(provider)...)
+func (s *CodingSession) GetAvailableModels() []*providers.Model {
+	var result []*providers.Model
+	for _, p := range llm.GetProviders() {
+		for _, m := range llm.GetModels(p) {
+			result = append(result, llmModelToProviders(m))
+		}
 	}
 	return result
+}
+
+// llmModelToProviders converts a *llm.Model to *providers.Model.
+func llmModelToProviders(m *llm.Model) *providers.Model {
+	if m == nil {
+		return nil
+	}
+	return &providers.Model{
+		ID:         m.ID,
+		Name:       m.Name,
+		ProviderID: string(m.Provider),
+	}
 }
 
 // ExecuteBash executes a shell command and returns the result.
@@ -784,33 +792,28 @@ func (s *CodingSession) ExportHTML(path string) error {
 		content := ""
 
 		switch m := msg.(type) {
-		case llm.UserMessage:
+		case providers.UserMessage:
 			role = "user"
-			if s, ok := m.Content.(string); ok {
-				content = s
+			if str, ok := m.Content.(string); ok {
+				content = str
 			}
-		case llm.AssistantMessage:
+		case *providers.UserMessage:
+			role = "user"
+			if str, ok := m.Content.(string); ok {
+				content = str
+			}
+		case providers.AssistantMessage:
 			role = "assistant"
 			for _, block := range m.Content {
-				switch tc := block.(type) {
-				case llm.TextContent:
+				if tc, ok := block.(*providers.TextContent); ok && tc != nil {
 					content += tc.Text
-				case *llm.TextContent:
-					if tc != nil {
-						content += tc.Text
-					}
 				}
 			}
-		case *llm.AssistantMessage:
+		case *providers.AssistantMessage:
 			role = "assistant"
 			for _, block := range m.Content {
-				switch tc := block.(type) {
-				case llm.TextContent:
+				if tc, ok := block.(*providers.TextContent); ok && tc != nil {
 					content += tc.Text
-				case *llm.TextContent:
-					if tc != nil {
-						content += tc.Text
-					}
 				}
 			}
 		}
@@ -841,9 +844,9 @@ func (s *CodingSession) SwitchSession(sessionFile string) error {
 			content, _ := m["content"].(string)
 			switch role {
 			case "user":
-				messages = append(messages, llm.UserMessage{Role: "user", Content: content})
+				messages = append(messages, providers.UserMessage{Role: "user", Content: content})
 			case "assistant":
-				messages = append(messages, llm.AssistantMessage{Role: "assistant", Content: []llm.ContentBlock{&llm.TextContent{Type: "text", Text: content}}})
+				messages = append(messages, providers.AssistantMessage{Role: "assistant", Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: content}}})
 			}
 		}
 	}

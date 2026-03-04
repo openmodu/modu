@@ -9,8 +9,7 @@ import (
 	"time"
 
 	"github.com/crosszan/modu/pkg/agent"
-	"github.com/crosszan/modu/pkg/llm"
-	_ "github.com/crosszan/modu/pkg/llm/providers/openai_chat_completions"
+	"github.com/crosszan/modu/pkg/providers"
 )
 
 // --- Tool: Calculator ---
@@ -65,7 +64,7 @@ func (t *CalculatorTool) Execute(ctx context.Context, toolCallID string, args ma
 	case "divide":
 		if b == 0 {
 			return agent.AgentToolResult{
-				Content: []llm.ContentBlock{&llm.TextContent{Type: "text", Text: "Error: division by zero"}},
+				Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: "Error: division by zero"}},
 				Details: map[string]any{},
 			}, nil
 		}
@@ -79,13 +78,13 @@ func (t *CalculatorTool) Execute(ctx context.Context, toolCallID string, args ma
 		desc = fmt.Sprintf("%.2f ^ %.2f = %.2f", a, b, result)
 	default:
 		return agent.AgentToolResult{
-			Content: []llm.ContentBlock{&llm.TextContent{Type: "text", Text: "Unknown operation: " + op}},
+			Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: "Unknown operation: " + op}},
 			Details: map[string]any{},
 		}, nil
 	}
 
 	return agent.AgentToolResult{
-		Content: []llm.ContentBlock{&llm.TextContent{Type: "text", Text: desc}},
+		Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: desc}},
 		Details: map[string]any{"result": result},
 	}, nil
 }
@@ -107,7 +106,7 @@ func (t *GetTimeTool) Parameters() any {
 func (t *GetTimeTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
 	now := time.Now().Format("2006-01-02 15:04:05 MST")
 	return agent.AgentToolResult{
-		Content: []llm.ContentBlock{&llm.TextContent{Type: "text", Text: now}},
+		Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: now}},
 		Details: map[string]any{"time": now},
 	}, nil
 }
@@ -129,18 +128,19 @@ func toFloat(v any) float64 {
 
 func main() {
 	modelName := "qwen/qwen3.5-35b-a3b"
-	baseUrl := "http://192.168.5.149:1234/v1"
+	baseURL := "http://192.168.5.149:1234/v1"
+	providerID := "lmstudio"
 
-	model := &llm.Model{
-		ID:            modelName,
-		Name:          "Qwen3.5 35B A3B",
-		Api:           "openai-chat-completions",
-		Provider:      "openai-chat-completions",
-		BaseURL:       baseUrl,
-		Reasoning:     false,
-		Input:         []string{"text"},
-		ContextWindow: 32768,
-		MaxTokens:     4096,
+	// Register LM Studio as an OpenAI-compatible provider
+	providers.Register(providers.NewOpenAIChatCompletionsProvider(
+		providerID,
+		providers.WithBaseURL(baseURL),
+	))
+
+	model := &providers.Model{
+		ID:         modelName,
+		Name:       "Qwen3.5 35B A3B",
+		ProviderID: providerID,
 	}
 
 	a := agent.NewAgent(agent.AgentOptions{
@@ -166,12 +166,10 @@ func main() {
 		case agent.EventTypeTurnEnd:
 			fmt.Println("\n--- Turn End ---")
 		case agent.EventTypeMessageStart:
-			if msg, ok := event.Message.(llm.AssistantMessage); ok {
+			if _, ok := event.Message.(providers.AssistantMessage); ok {
 				fmt.Printf("[Assistant] ")
-				_ = msg
-			} else if msg, ok := event.Message.(*llm.AssistantMessage); ok {
+			} else if _, ok := event.Message.(*providers.AssistantMessage); ok {
 				fmt.Printf("[Assistant] ")
-				_ = msg
 			}
 		case agent.EventTypeMessageUpdate:
 			if event.AssistantMessageEvent != nil {
@@ -187,7 +185,7 @@ func main() {
 		case agent.EventTypeToolExecutionEnd:
 			if result, ok := event.Result.(agent.AgentToolResult); ok {
 				for _, c := range result.Content {
-					if tc, ok := c.(*llm.TextContent); ok {
+					if tc, ok := c.(*providers.TextContent); ok {
 						fmt.Printf("   Result: %s\n", tc.Text)
 					}
 				}
@@ -221,32 +219,25 @@ func main() {
 
 		// Print last assistant message content
 		for j := len(state.Messages) - 1; j >= 0; j-- {
-			if msg, ok := state.Messages[j].(llm.AssistantMessage); ok {
-				fmt.Printf("Final answer: ")
-				for _, c := range msg.Content {
-					if tc, ok := c.(*llm.TextContent); ok {
-						fmt.Print(tc.Text)
-					}
+			msg, ok := state.Messages[j].(providers.AssistantMessage)
+			if !ok {
+				if ptr, ok2 := state.Messages[j].(*providers.AssistantMessage); ok2 {
+					msg = *ptr
+				} else {
+					continue
 				}
-				fmt.Println()
-				if msg.Usage.TotalTokens > 0 {
-					fmt.Printf("Tokens: input=%d output=%d total=%d\n", msg.Usage.Input, msg.Usage.Output, msg.Usage.TotalTokens)
-				}
-				break
 			}
-			if msg, ok := state.Messages[j].(*llm.AssistantMessage); ok {
-				fmt.Printf("Final answer: ")
-				for _, c := range msg.Content {
-					if tc, ok := c.(*llm.TextContent); ok {
-						fmt.Print(tc.Text)
-					}
+			fmt.Printf("Final answer: ")
+			for _, c := range msg.Content {
+				if tc, ok := c.(*providers.TextContent); ok {
+					fmt.Print(tc.Text)
 				}
-				fmt.Println()
-				if msg.Usage.TotalTokens > 0 {
-					fmt.Printf("Tokens: input=%d output=%d total=%d\n", msg.Usage.Input, msg.Usage.Output, msg.Usage.TotalTokens)
-				}
-				break
 			}
+			fmt.Println()
+			if msg.Usage.TotalTokens > 0 {
+				fmt.Printf("Tokens: input=%d output=%d total=%d\n", msg.Usage.Input, msg.Usage.Output, msg.Usage.TotalTokens)
+			}
+			break
 		}
 
 		fmt.Println(strings.Repeat("=", 50))

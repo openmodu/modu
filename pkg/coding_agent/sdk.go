@@ -7,13 +7,14 @@ import (
 	"github.com/crosszan/modu/pkg/agent"
 	"github.com/crosszan/modu/pkg/coding_agent/extension"
 	"github.com/crosszan/modu/pkg/llm"
+	"github.com/crosszan/modu/pkg/providers"
 )
 
 // CreateSessionOptions configures session creation via the SDK factory.
 type CreateSessionOptions struct {
 	Cwd            string
 	AgentDir       string
-	Model          *llm.Model
+	Model          *providers.Model
 	ThinkingLevel  agent.ThinkingLevel
 	ScopedModels   []string
 	Tools          []agent.AgentTool
@@ -45,7 +46,7 @@ func CreateSession(opts CreateSessionOptions) (*CreateSessionResult, error) {
 		for _, sm := range opts.ScopedModels {
 			m := llm.GetModel("", sm)
 			if m != nil {
-				model = m
+				model = llmModelToProviders(m)
 				break
 			}
 		}
@@ -56,11 +57,9 @@ func CreateSession(opts CreateSessionOptions) (*CreateSessionResult, error) {
 
 	// Final fallback: create a minimal model
 	if model == nil {
-		model = &llm.Model{
-			ID:            "default",
-			Name:          "Default Model",
-			ContextWindow: 8192,
-			MaxTokens:     2048,
+		model = &providers.Model{
+			ID:   "default",
+			Name: "Default Model",
 		}
 	}
 

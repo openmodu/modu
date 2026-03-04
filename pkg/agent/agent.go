@@ -7,20 +7,20 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crosszan/modu/pkg/llm"
+	"github.com/crosszan/modu/pkg/providers"
 )
 
 type AgentOptions struct {
 	InitialState     *AgentState
-	ConvertToLlm     func(messages []AgentMessage) ([]llm.Message, error)
+	ConvertToLlm     func(messages []AgentMessage) ([]providers.AgentMessage, error)
 	TransformContext func(messages []AgentMessage, ctx context.Context) ([]AgentMessage, error)
 	SteeringMode     ExecutionMode
 	FollowUpMode     ExecutionMode
 	StreamFn         StreamFn
 	SessionID        string
 	GetAPIKey        func(provider string) (string, error)
-	ThinkingBudgets  *llm.ThinkingBudgets
-	Transport        llm.Transport
+	ThinkingBudgets  *providers.ThinkingBudgets
+	Transport        providers.Transport
 	MaxRetryDelayMs  int
 }
 
@@ -28,13 +28,13 @@ type Agent struct {
 	state            AgentState
 	steeringMode     ExecutionMode
 	followUpMode     ExecutionMode
-	convertToLlm     func(messages []AgentMessage) ([]llm.Message, error)
+	convertToLlm     func(messages []AgentMessage) ([]providers.AgentMessage, error)
 	transformContext func(messages []AgentMessage, ctx context.Context) ([]AgentMessage, error)
 	streamFn         StreamFn
 	sessionID        string
 	getAPIKey        func(provider string) (string, error)
-	thinkingBudgets  *llm.ThinkingBudgets
-	transport        llm.Transport
+	thinkingBudgets  *providers.ThinkingBudgets
+	transport        providers.Transport
 	maxRetryDelayMs  int
 
 	// Queues
@@ -80,15 +80,15 @@ func NewAgent(opts AgentOptions) *Agent {
 	}
 	convertToLlm := opts.ConvertToLlm
 	if convertToLlm == nil {
-		convertToLlm = defaultConvertToLlm
+		convertToLlm = defaultConvertToProviders
 	}
 	streamFn := opts.StreamFn
 	if streamFn == nil {
-		streamFn = llm.StreamSimple
+		streamFn = providers.StreamDefault
 	}
 	transport := opts.Transport
 	if transport == "" {
-		transport = llm.TransportSSE
+		transport = providers.TransportSSE
 	}
 	return &Agent{
 		state:            initial,
@@ -124,7 +124,7 @@ func (a *Agent) Prompt(ctx context.Context, input interface{}) error {
 
 	switch v := input.(type) {
 	case string:
-		newMessages = []AgentMessage{llm.UserMessage{Role: "user", Content: v, Timestamp: time.Now().UnixMilli()}}
+		newMessages = []AgentMessage{providers.UserMessage{Role: "user", Content: v, Timestamp: time.Now().UnixMilli()}}
 	case []AgentMessage:
 		newMessages = v
 	default:
@@ -138,7 +138,7 @@ func (a *Agent) Prompt(ctx context.Context, input interface{}) error {
 }
 
 // PromptWithImages sends a text message with attached images to the agent.
-func (a *Agent) PromptWithImages(ctx context.Context, text string, images []llm.ImageContent) error {
+func (a *Agent) PromptWithImages(ctx context.Context, text string, images []providers.ImageContent) error {
 	a.mu.Lock()
 	if a.state.IsStreaming {
 		a.mu.Unlock()
@@ -146,11 +146,11 @@ func (a *Agent) PromptWithImages(ctx context.Context, text string, images []llm.
 	}
 	a.mu.Unlock()
 
-	content := []llm.ContentBlock{&llm.TextContent{Type: "text", Text: text}}
+	content := []providers.ContentBlock{&providers.TextContent{Type: "text", Text: text}}
 	for i := range images {
 		content = append(content, &images[i])
 	}
-	msg := llm.UserMessage{
+	msg := providers.UserMessage{
 		Role:      "user",
 		Content:   content,
 		Timestamp: time.Now().UnixMilli(),
@@ -202,7 +202,6 @@ func (a *Agent) FollowUp(msg AgentMessage) {
 func (a *Agent) GetState() AgentState {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	// Deep copy needed for safety in real prod code
 	return a.state
 }
 
@@ -225,7 +224,7 @@ func (a *Agent) SetSystemPrompt(v string) {
 	a.state.SystemPrompt = v
 }
 
-func (a *Agent) SetModel(m *llm.Model) {
+func (a *Agent) SetModel(m *providers.Model) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.state.Model = m
@@ -292,7 +291,6 @@ func (a *Agent) HasQueuedMessages() bool {
 	return len(a.steeringQueue) > 0 || len(a.followUpQueue) > 0
 }
 
-// QueuedMessageCount returns the total number of queued steering and follow-up messages.
 func (a *Agent) QueuedMessageCount() int {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -359,25 +357,25 @@ func (a *Agent) SetSessionID(id string) {
 	a.sessionID = id
 }
 
-func (a *Agent) GetThinkingBudgets() *llm.ThinkingBudgets {
+func (a *Agent) GetThinkingBudgets() *providers.ThinkingBudgets {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.thinkingBudgets
 }
 
-func (a *Agent) SetThinkingBudgets(b *llm.ThinkingBudgets) {
+func (a *Agent) SetThinkingBudgets(b *providers.ThinkingBudgets) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.thinkingBudgets = b
 }
 
-func (a *Agent) GetTransport() llm.Transport {
+func (a *Agent) GetTransport() providers.Transport {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.transport
 }
 
-func (a *Agent) SetTransport(t llm.Transport) {
+func (a *Agent) SetTransport(t providers.Transport) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.transport = t
@@ -452,7 +450,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []AgentMessage, skipInitia
 	}()
 
 	a.mu.RLock()
-	context := AgentContext{
+	agentCtx := AgentContext{
 		SystemPrompt: a.state.SystemPrompt,
 		Messages:     append([]AgentMessage{}, a.state.Messages...),
 		Tools:        a.state.Tools,
@@ -490,9 +488,9 @@ func (a *Agent) runLoop(ctx context.Context, messages []AgentMessage, skipInitia
 	var stream *EventStream
 	var loopErr error
 	if messages != nil {
-		stream = AgentLoop(messages, context, config, ctx, a.streamFn)
+		stream = AgentLoop(messages, agentCtx, config, ctx, a.streamFn)
 	} else {
-		cont, err := AgentLoopContinue(context, config, ctx, a.streamFn)
+		cont, err := AgentLoopContinue(agentCtx, config, ctx, a.streamFn)
 		if err != nil {
 			return err
 		}
@@ -532,12 +530,12 @@ func (a *Agent) runLoop(ctx context.Context, messages []AgentMessage, skipInitia
 			a.state.PendingToolCalls = s
 			a.mu.Unlock()
 		case EventTypeTurnEnd:
-			if msg, ok := event.Message.(llm.AssistantMessage); ok && msg.ErrorMessage != "" {
+			if msg, ok := event.Message.(providers.AssistantMessage); ok && msg.ErrorMessage != "" {
 				a.mu.Lock()
 				a.state.Error = msg.ErrorMessage
 				a.mu.Unlock()
 			}
-			if msg, ok := event.Message.(*llm.AssistantMessage); ok && msg.ErrorMessage != "" {
+			if msg, ok := event.Message.(*providers.AssistantMessage); ok && msg.ErrorMessage != "" {
 				a.mu.Lock()
 				a.state.Error = msg.ErrorMessage
 				a.mu.Unlock()
@@ -551,42 +549,46 @@ func (a *Agent) runLoop(ctx context.Context, messages []AgentMessage, skipInitia
 		a.emit(event)
 	}
 
-	// Check for stream result errors
 	_, resultErr := stream.Result()
 	if resultErr != nil {
 		loopErr = resultErr
 	}
 
-	// Handle remaining partial message (pi-mono behavior: append non-empty partial on abort)
 	if partial != nil {
-		if msg, ok := partial.(llm.AssistantMessage); ok && hasNonEmptyContent(msg) {
+		if msg, ok := partial.(providers.AssistantMessage); ok && hasNonEmptyContent(msg) {
 			a.mu.Lock()
 			a.state.Messages = append(a.state.Messages, partial)
 			a.mu.Unlock()
-		} else if msg, ok := partial.(*llm.AssistantMessage); ok && hasNonEmptyContent(*msg) {
+		} else if msg, ok := partial.(*providers.AssistantMessage); ok && hasNonEmptyContent(*msg) {
 			a.mu.Lock()
 			a.state.Messages = append(a.state.Messages, partial)
 			a.mu.Unlock()
 		}
 	}
 
-	// On error, append an error assistant message (pi-mono behavior)
 	if loopErr != nil {
 		a.mu.RLock()
 		m := a.state.Model
 		a.mu.RUnlock()
 
-		stopReason := llm.StopReason("error")
+		stopReason := providers.StopReason("error")
 		if ctx.Err() != nil {
 			stopReason = "aborted"
 		}
-		errorMsg := llm.AssistantMessage{
+		providerID := ""
+		if m != nil {
+			providerID = m.ProviderID
+		}
+		modelID := ""
+		if m != nil {
+			modelID = m.ID
+		}
+		errorMsg := providers.AssistantMessage{
 			Role:         "assistant",
-			Content:      []llm.ContentBlock{&llm.TextContent{Type: "text", Text: ""}},
-			Api:          m.Api,
-			Provider:     m.Provider,
-			Model:        m.ID,
-			Usage:        llm.Usage{},
+			Content:      []providers.ContentBlock{&providers.TextContent{Type: "text", Text: ""}},
+			ProviderID:   providerID,
+			Model:        modelID,
+			Usage:        providers.AgentUsage{},
 			StopReason:   stopReason,
 			ErrorMessage: loopErr.Error(),
 			Timestamp:    time.Now().UnixMilli(),
@@ -613,31 +615,30 @@ func (a *Agent) emit(event AgentEvent) {
 	}
 }
 
-// hasNonEmptyContent checks if an AssistantMessage has any non-empty content blocks.
-func hasNonEmptyContent(msg llm.AssistantMessage) bool {
+func hasNonEmptyContent(msg providers.AssistantMessage) bool {
 	for _, block := range msg.Content {
 		switch v := block.(type) {
-		case *llm.ThinkingContent:
+		case *providers.ThinkingContent:
 			if v != nil && strings.TrimSpace(v.Thinking) != "" {
 				return true
 			}
-		case llm.ThinkingContent:
+		case providers.ThinkingContent:
 			if strings.TrimSpace(v.Thinking) != "" {
 				return true
 			}
-		case *llm.TextContent:
+		case *providers.TextContent:
 			if v != nil && strings.TrimSpace(v.Text) != "" {
 				return true
 			}
-		case llm.TextContent:
+		case providers.TextContent:
 			if strings.TrimSpace(v.Text) != "" {
 				return true
 			}
-		case *llm.ToolCall:
+		case *providers.ToolCallContent:
 			if v != nil && strings.TrimSpace(v.Name) != "" {
 				return true
 			}
-		case llm.ToolCall:
+		case providers.ToolCallContent:
 			if strings.TrimSpace(v.Name) != "" {
 				return true
 			}
@@ -646,8 +647,8 @@ func hasNonEmptyContent(msg llm.AssistantMessage) bool {
 	return false
 }
 
-func defaultConvertToLlm(messages []AgentMessage) ([]llm.Message, error) {
-	out := make([]llm.Message, 0, len(messages))
+func defaultConvertToProviders(messages []AgentMessage) ([]providers.AgentMessage, error) {
+	out := make([]providers.AgentMessage, 0, len(messages))
 	for _, m := range messages {
 		role := extractRole(m)
 		if role == "user" || role == "assistant" || role == "toolResult" {

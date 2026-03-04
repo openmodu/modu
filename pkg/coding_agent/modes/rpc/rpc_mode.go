@@ -179,7 +179,7 @@ func (r *RpcMode) handleCommand(ctx context.Context, cmd RpcCommand) RpcResponse
 		model := r.session.GetModel()
 		rpcState := RpcSessionState{
 			Model:               model.ID,
-			Provider:            string(model.Provider),
+			Provider:            model.ProviderID,
 			ThinkingLevel:       string(r.session.GetThinkingLevel()),
 			IsStreaming:         state.IsStreaming,
 			SessionID:           r.session.GetSessionID(),
@@ -211,7 +211,7 @@ func (r *RpcMode) handleCommand(ctx context.Context, cmd RpcCommand) RpcResponse
 	case RpcCmdCycleModel:
 		model := r.session.CycleModel()
 		if model != nil {
-			resp.Data = map[string]string{"model": model.ID, "provider": string(model.Provider)}
+			resp.Data = map[string]string{"model": model.ID, "provider": model.ProviderID}
 		}
 		resp.Success = true
 
