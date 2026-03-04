@@ -12,16 +12,29 @@ import (
 	"time"
 )
 
-// OpenAIConfig 配置 OpenAI-compatible chat completions provider
+// OpenAIConfig holds configuration for an OpenAI-compatible chat completions provider.
 type OpenAIConfig struct {
-	// BaseURL 默认 https://api.openai.com/v1
-	BaseURL string
-	// APIKey 鉴权 key
-	APIKey string
-	// DefaultModel 当 ChatRequest.Model 为空时使用
-	DefaultModel string
-	// Headers 附加请求头
-	Headers map[string]string
+	baseURL string
+	apiKey  string
+	headers map[string]string
+}
+
+// OpenAIOption is a functional option for OpenAIConfig.
+type OpenAIOption func(*OpenAIConfig)
+
+// WithBaseURL sets the API endpoint base URL (required).
+func WithBaseURL(url string) OpenAIOption {
+	return func(c *OpenAIConfig) { c.baseURL = url }
+}
+
+// WithAPIKey sets the bearer token used for authentication.
+func WithAPIKey(key string) OpenAIOption {
+	return func(c *OpenAIConfig) { c.apiKey = key }
+}
+
+// WithHeaders sets additional HTTP headers to include in every request.
+func WithHeaders(headers map[string]string) OpenAIOption {
+	return func(c *OpenAIConfig) { c.headers = headers }
 }
 
 type openAIProvider struct {
@@ -29,10 +42,14 @@ type openAIProvider struct {
 	config OpenAIConfig
 }
 
-// NewOpenAIProvider 创建 OpenAI chat completions 风格 provider。
-// id 用于标识来源（如 "openai"、"localai"、"lmstudio"）。
-func NewOpenAIProvider(id string, config OpenAIConfig) Provider {
-	return &openAIProvider{id: id, config: config}
+// NewOpenAIChatCompletionsProvider creates a provider that speaks the OpenAI
+// chat completions protocol. id identifies the provider (e.g. "openai", "lmstudio").
+func NewOpenAIChatCompletionsProvider(id string, opts ...OpenAIOption) Provider {
+	var cfg OpenAIConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
+	return &openAIProvider{id: id, config: cfg}
 }
 
 func (p *openAIProvider) ID() string { return p.id }
@@ -109,7 +126,7 @@ func (p *openAIProvider) Stream(ctx context.Context, req *ChatRequest) (Stream, 
 	return stream, nil
 }
 
-// readSSE 在独立 goroutine 中解析 SSE 流并推送细粒度事件
+// readSSE parses an SSE stream in a separate goroutine and pushes granular events.
 func (p *openAIProvider) readSSE(body io.ReadCloser, stream *EventStream) {
 	defer body.Close()
 	defer stream.Close()
@@ -117,7 +134,6 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *EventStream) {
 	partial := &ChatResponse{}
 	stream.Push(StreamEvent{Type: EventStart, Partial: partial})
 
-	// 追踪各 content block 是否已开始
 	textStarted := false
 	thinkingStarted := false
 	nextIndex := 0
@@ -127,7 +143,6 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *EventStream) {
 	var textBuf strings.Builder
 	var thinkingBuf strings.Builder
 
-	// tool call 增量累积（index → acc）
 	type tcAcc struct {
 		id       string
 		name     string
@@ -213,7 +228,6 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *EventStream) {
 
 		delta := choice.Delta
 
-		// --- thinking (reasoning_content) ---
 		if rc := delta.ReasoningContent; rc != "" {
 			if !thinkingStarted {
 				thinkingStarted = true
@@ -234,9 +248,7 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *EventStream) {
 			})
 		}
 
-		// --- text content ---
 		if content := delta.Content; content != "" {
-			// 思考块结束（text 开始前关闭）
 			if thinkingStarted && !textStarted {
 				stream.Push(StreamEvent{
 					Type:         EventThinkingEnd,
@@ -265,13 +277,11 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *EventStream) {
 			})
 		}
 
-		// --- tool calls 增量 ---
 		for _, tc := range delta.ToolCalls {
 			acc, ok := toolAccs[tc.Index]
 			if !ok {
 				acc = &tcAcc{}
 				toolAccs[tc.Index] = acc
-				// toolcall_start 在首次收到时发出（name 可能稍后才来，等 End 再发完整信息）
 			}
 			if tc.ID != "" {
 				acc.id = tc.ID
@@ -303,7 +313,6 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *EventStream) {
 		return
 	}
 
-	// 关闭未关闭的 thinking block
 	if thinkingStarted && !textStarted {
 		stream.Push(StreamEvent{
 			Type:         EventThinkingEnd,
@@ -313,7 +322,6 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *EventStream) {
 		})
 	}
 
-	// 关闭 text block
 	if textStarted {
 		stream.Push(StreamEvent{
 			Type:         EventTextEnd,
@@ -323,7 +331,6 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *EventStream) {
 		})
 	}
 
-	// 完成所有 tool calls，发出 toolcall_start + toolcall_end
 	for i := 0; i < len(toolAccs); i++ {
 		acc, ok := toolAccs[i]
 		if !ok {
@@ -366,12 +373,11 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *EventStream) {
 }
 
 func (p *openAIProvider) buildBody(req *ChatRequest, stream bool) ([]byte, error) {
-	model := req.Model
-	if model == "" {
-		model = p.config.DefaultModel
+	if req.Model == "" {
+		return nil, fmt.Errorf("%s: model must be specified in the request", p.id)
 	}
 	payload := map[string]any{
-		"model":    model,
+		"model":    req.Model,
 		"messages": req.Messages,
 		"stream":   stream,
 	}
@@ -391,21 +397,20 @@ func (p *openAIProvider) buildBody(req *ChatRequest, stream bool) ([]byte, error
 }
 
 func (p *openAIProvider) doRequest(ctx context.Context, body []byte) (*http.Response, error) {
-	baseURL := p.config.BaseURL
-	if baseURL == "" {
-		baseURL = "https://api.openai.com/v1"
+	if p.config.baseURL == "" {
+		return nil, fmt.Errorf("%s: BaseURL must be set", p.id)
 	}
-	url := strings.TrimRight(baseURL, "/") + "/chat/completions"
+	url := strings.TrimRight(p.config.baseURL, "/") + "/chat/completions"
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	if p.config.APIKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+p.config.APIKey)
+	if p.config.apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+p.config.apiKey)
 	}
-	for k, v := range p.config.Headers {
+	for k, v := range p.config.headers {
 		httpReq.Header.Set(k, v)
 	}
 	client := &http.Client{Timeout: 10 * time.Minute}
