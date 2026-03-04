@@ -137,12 +137,16 @@ func streamAssistantResponse(context AgentContext, config AgentLoopConfig, ctx c
 		}
 		messages = next
 	}
-	if config.ConvertToLlm == nil {
-		return nil, fmt.Errorf("convertToLlm is required")
-	}
-	llmMessages, err := config.ConvertToLlm(messages)
-	if err != nil {
-		return nil, err
+	var llmMessages []providers.AgentMessage
+	var err error
+	if config.ConvertToLlm != nil {
+		llmMessages, err = config.ConvertToLlm(messages)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// Just pass messages down since StreamDefault now handles it
+		llmMessages = messages
 	}
 	toolDefs := buildToolDefinitions(context.Tools)
 	llmCtx := &providers.LLMContext{
@@ -198,7 +202,7 @@ func streamAssistantResponse(context AgentContext, config AgentLoopConfig, ctx c
 					context.Messages = append(context.Messages, *partial)
 					addedPartial = true
 				}
-				stream.Push(AgentEvent{Type: EventTypeMessageUpdate, Message: *partial, AssistantMessageEvent: &event})
+				stream.Push(AgentEvent{Type: EventTypeMessageUpdate, Message: *partial, StreamEvent: &event})
 			}
 		case "done", "error":
 			finalMessage, err := response.Result()

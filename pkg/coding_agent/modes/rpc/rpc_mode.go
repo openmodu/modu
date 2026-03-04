@@ -65,8 +65,8 @@ func (r *RpcMode) Run(ctx context.Context) error {
 		if len(event.ToolResults) > 0 {
 			data["toolResults"] = event.ToolResults
 		}
-		if event.AssistantMessageEvent != nil {
-			data["assistantMessageEvent"] = event.AssistantMessageEvent
+		if event.StreamEvent != nil {
+			data["assistantMessageEvent"] = event.StreamEvent
 		}
 		if event.Partial != nil {
 			data["partial"] = event.Partial

@@ -10,6 +10,7 @@ import (
 
 	"github.com/crosszan/modu/pkg/llm"
 	"github.com/crosszan/modu/pkg/moms"
+	"github.com/crosszan/modu/pkg/providers"
 	"github.com/crosszan/modu/pkg/skills"
 
 	// Register Anthropic provider.
@@ -75,20 +76,13 @@ func main() {
 		modelID = "claude-sonnet-4-5"
 	}
 
-	model := &llm.Model{
+	model := &providers.Model{
 		ID:            modelID,
 		Name:          modelID + " (Anthropic)",
-		Api:           llm.Api(llm.KnownApiAnthropicMessages),
-		Provider:      llm.Provider(llm.KnownProviderAnthropic),
-		Input:         []string{"text", "image"},
+		Api:           string(llm.KnownApiAnthropicMessages),
+		ProviderID:    string(llm.KnownProviderAnthropic),
 		ContextWindow: 200000,
 		MaxTokens:     8192,
-		Cost: llm.ModelCost{
-			Input:      3.0 / 1e6,
-			Output:     15.0 / 1e6,
-			CacheRead:  0.3 / 1e6,
-			CacheWrite: 3.75 / 1e6,
-		},
 	}
 
 	getAPIKey := func(provider string) (string, error) {

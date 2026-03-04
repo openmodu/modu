@@ -58,7 +58,7 @@ func main() {
 
 		// Debug mode
 		if *debug {
-			fmt.Println("=== 调试模式 ===\n")
+			fmt.Println("=== 调试模式 ===")
 			err := scraper.DebugDouyinLivePage(*douyinURL)
 			if err != nil {
 				fmt.Printf("调试失败: %v\n", err)

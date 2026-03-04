@@ -81,7 +81,7 @@ func TestLMStudio_Stream(t *testing.T) {
 		case EventDone:
 			t.Logf("[done] finish_reason=%s", event.Reason)
 		case EventError:
-			t.Fatalf("stream error: %v", event.Err)
+			t.Fatalf("stream error: %v", event.Error)
 		}
 	}
 
@@ -96,15 +96,23 @@ func TestLMStudio_Stream(t *testing.T) {
 	if !sawTextStart || !sawTextEnd {
 		t.Error("expected text events")
 	}
-	if resp.Message.Content == "" {
+
+	finalContent := ""
+	for _, b := range resp.Content {
+		if tc, ok := b.(*TextContent); ok {
+			finalContent += tc.Text
+		}
+	}
+
+	if finalContent == "" {
 		t.Fatal("expected non-empty final content")
 	}
 
 	full := strings.Join(textDeltas, "")
-	if full != resp.Message.Content {
-		t.Errorf("accumulated text deltas do not match final content\ndeltas: %q\nfinal:  %q", full, resp.Message.Content)
+	if full != finalContent {
+		t.Errorf("accumulated text deltas do not match final content\ndeltas: %q\nfinal:  %q", full, finalContent)
 	}
-	t.Logf("response: %s", resp.Message.Content)
+	t.Logf("response: %s", finalContent)
 	t.Logf("usage: prompt=%d completion=%d total=%d",
-		resp.Usage.PromptTokens, resp.Usage.CompletionTokens, resp.Usage.TotalTokens)
+		resp.Usage.Input, resp.Usage.Output, resp.Usage.TotalTokens)
 }

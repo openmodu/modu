@@ -133,8 +133,8 @@ func main() {
 		case agent.EventTypeAgentStart:
 			fmt.Println("\n=== Agent Started ===")
 		case agent.EventTypeMessageUpdate:
-			if event.AssistantMessageEvent != nil {
-				evt := event.AssistantMessageEvent
+			if event.StreamEvent != nil {
+				evt := event.StreamEvent
 				switch evt.Type {
 				case "thinking_delta":
 					fmt.Print(evt.Delta)

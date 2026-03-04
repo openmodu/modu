@@ -154,8 +154,8 @@ func main() {
 		case agent.EventTypeAgentEnd:
 			fmt.Println("\n=== Agent End ===")
 		case agent.EventTypeMessageUpdate:
-			if event.AssistantMessageEvent != nil && event.AssistantMessageEvent.Type == "text_delta" {
-				fmt.Print(event.AssistantMessageEvent.Delta)
+			if event.StreamEvent != nil && event.StreamEvent.Type == "text_delta" {
+				fmt.Print(event.StreamEvent.Delta)
 			}
 		case agent.EventTypeToolExecutionStart:
 			fmt.Printf("\n>> Tool: %s %v\n", event.ToolName, event.Args)

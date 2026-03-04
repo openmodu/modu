@@ -5,16 +5,47 @@ import (
 	"sync"
 )
 
-// -------------------------------------------------------------------
-// EventStream — Stream 的通用实现，provider goroutine 通过 Push 推事件
-// -------------------------------------------------------------------
-type streamResult struct {
-	response *ChatResponse
-	err      error
+// StreamEventType 流式事件类型定义
+type StreamEventType = string
+
+const (
+	EventStart         StreamEventType = "start"
+	EventTextStart     StreamEventType = "text_start"
+	EventTextDelta     StreamEventType = "text_delta"
+	EventTextEnd       StreamEventType = "text_end"
+	EventThinkingStart StreamEventType = "thinking_start"
+	EventThinkingDelta StreamEventType = "thinking_delta"
+	EventThinkingEnd   StreamEventType = "thinking_end"
+	EventToolCallStart StreamEventType = "toolcall_start"
+	EventToolCallDelta StreamEventType = "toolcall_delta"
+	EventToolCallEnd   StreamEventType = "toolcall_end"
+	EventDone          StreamEventType = "done"
+	EventError         StreamEventType = "error"
+)
+
+// StreamEvent is an event emitted during assistant message streaming.
+type StreamEvent struct {
+	Type         StreamEventType
+	ContentIndex int
+	Delta        string
+	Content      string
+	ToolCall     *ToolCallContent
+	Partial      *AssistantMessage
+	Reason       StopReason
+	Message      *AssistantMessage
+	ErrorMessage *AssistantMessage
+	Error        error
 }
 
-// EventStream 是 Stream 接口的实现，线程安全
-type EventStream struct {
+// EventStream is the streaming interface for assistant messages.
+type EventStream interface {
+	Events() <-chan StreamEvent
+	Close()
+	Result() (*AssistantMessage, error)
+}
+
+// EventStreamImpl is the concrete implementation of EventStream.
+type EventStreamImpl struct {
 	ch         chan StreamEvent
 	done       chan struct{}
 	mu         sync.Mutex
@@ -23,28 +54,35 @@ type EventStream struct {
 	resultOnce sync.Once
 }
 
-func NewEventStream() *EventStream {
-	return &EventStream{
+// NewEventStream creates a new EventStreamImpl.
+func NewEventStream() *EventStreamImpl {
+	return &EventStreamImpl{
 		ch:     make(chan StreamEvent),
 		done:   make(chan struct{}),
 		result: make(chan streamResult, 1),
 	}
 }
 
-func (s *EventStream) Push(event StreamEvent) {
+func (s *EventStreamImpl) Push(event StreamEvent) {
 	switch event.Type {
 	case EventDone:
-		s.resolveResult(event.Partial, nil)
-	case EventError:
-		err := event.Err
-		if err == nil {
-			msg := "stream error"
-			if event.Partial != nil && event.Partial.ErrorMessage != "" {
-				msg = event.Partial.ErrorMessage
-			}
-			err = fmt.Errorf("%s", msg)
+		if event.Message != nil {
+			s.resolveResult(event.Message, nil)
 		}
-		s.resolveResult(event.Partial, err)
+	case EventError:
+		msg := event.ErrorMessage
+		if msg == nil {
+			msg = event.Message
+		}
+		err := event.Error
+		if err == nil {
+			errText := "stream error"
+			if msg != nil && msg.ErrorMessage != "" {
+				errText = msg.ErrorMessage
+			}
+			err = fmt.Errorf("%s", errText)
+		}
+		s.resolveResult(msg, err)
 	}
 	select {
 	case s.ch <- event:
@@ -52,11 +90,11 @@ func (s *EventStream) Push(event StreamEvent) {
 	}
 }
 
-func (s *EventStream) Events() <-chan StreamEvent {
+func (s *EventStreamImpl) Events() <-chan StreamEvent {
 	return s.ch
 }
 
-func (s *EventStream) Close() {
+func (s *EventStreamImpl) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.closed {
@@ -67,13 +105,18 @@ func (s *EventStream) Close() {
 	}
 }
 
-func (s *EventStream) Result() (*ChatResponse, error) {
+func (s *EventStreamImpl) Result() (*AssistantMessage, error) {
 	res := <-s.result
-	return res.response, res.err
+	return res.message, res.err
 }
 
-func (s *EventStream) resolveResult(response *ChatResponse, err error) {
+func (s *EventStreamImpl) resolveResult(msg *AssistantMessage, err error) {
 	s.resultOnce.Do(func() {
-		s.result <- streamResult{response: response, err: err}
+		s.result <- streamResult{message: msg, err: err}
 	})
+}
+
+type streamResult struct {
+	message *AssistantMessage
+	err     error
 }

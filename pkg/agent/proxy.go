@@ -24,9 +24,9 @@ type ProxyStreamOptions struct {
 	ProxyURL string
 }
 
-// ProxyAssistantMessageEvent represents events sent by the proxy server.
+// ProxyStreamEvent represents events sent by the proxy server.
 // The proxy strips the partial field from delta events to reduce bandwidth.
-type ProxyAssistantMessageEvent struct {
+type ProxyStreamEvent struct {
 	Type             string                `json:"type"`
 	ContentIndex     int                   `json:"contentIndex,omitempty"`
 	Delta            string                `json:"delta,omitempty"`
@@ -45,7 +45,7 @@ type ProxyAssistantMessageEvent struct {
 // Usage:
 //
 //	agent := NewAgent(AgentOptions{
-//	    StreamFn: func(ctx context.Context, model *providers.Model, llmCtx *providers.LLMContext, opts *providers.SimpleStreamOptions) (providers.AssistantMessageEventStream, error) {
+//	    StreamFn: func(ctx context.Context, model *providers.Model, llmCtx *providers.LLMContext, opts *providers.SimpleStreamOptions) (providers.EventStream, error) {
 //	        return StreamProxy(ctx, model, llmCtx, &ProxyStreamOptions{
 //	            SimpleStreamOptions: *opts,
 //	            AuthToken:           authToken,
@@ -53,8 +53,8 @@ type ProxyAssistantMessageEvent struct {
 //	        })
 //	    },
 //	})
-func StreamProxy(ctx context.Context, model *providers.Model, llmCtx *providers.LLMContext, opts *ProxyStreamOptions) (providers.AssistantMessageEventStream, error) {
-	stream := providers.NewAssistantEventStream()
+func StreamProxy(ctx context.Context, model *providers.Model, llmCtx *providers.LLMContext, opts *ProxyStreamOptions) (providers.EventStream, error) {
+	stream := providers.NewEventStream()
 
 	// Initialize partial message to build up from events
 	partial := &providers.AssistantMessage{
@@ -76,7 +76,7 @@ func StreamProxy(ctx context.Context, model *providers.Model, llmCtx *providers.
 			}
 			partial.StopReason = reason
 			partial.ErrorMessage = err.Error()
-			stream.Push(providers.AssistantMessageEvent{
+			stream.Push(providers.StreamEvent{
 				Type:         "error",
 				Reason:       reason,
 				ErrorMessage: partial,
@@ -87,7 +87,7 @@ func StreamProxy(ctx context.Context, model *providers.Model, llmCtx *providers.
 	return stream, nil
 }
 
-func doProxyStreamWithContext(ctx context.Context, model *providers.Model, llmCtx *providers.LLMContext, opts *ProxyStreamOptions, partial *providers.AssistantMessage, stream *providers.AssistantEventStream) error {
+func doProxyStreamWithContext(ctx context.Context, model *providers.Model, llmCtx *providers.LLMContext, opts *ProxyStreamOptions, partial *providers.AssistantMessage, stream *providers.EventStreamImpl) error {
 	type streamRequest struct {
 		Model   *providers.Model      `json:"model"`
 		Context *providers.LLMContext `json:"context"`
@@ -153,7 +153,7 @@ func doProxyStreamWithContext(ctx context.Context, model *providers.Model, llmCt
 			continue
 		}
 
-		var proxyEvent ProxyAssistantMessageEvent
+		var proxyEvent ProxyStreamEvent
 		if err := json.Unmarshal([]byte(data), &proxyEvent); err != nil {
 			continue
 		}
@@ -168,11 +168,11 @@ func doProxyStreamWithContext(ctx context.Context, model *providers.Model, llmCt
 }
 
 // processProxyEvent processes a proxy event and updates the partial message.
-// Returns the corresponding AssistantMessageEvent or nil if the event should be skipped.
-func processProxyEvent(proxyEvent *ProxyAssistantMessageEvent, partial *providers.AssistantMessage) *providers.AssistantMessageEvent {
+// Returns the corresponding StreamEvent or nil if the event should be skipped.
+func processProxyEvent(proxyEvent *ProxyStreamEvent, partial *providers.AssistantMessage) *providers.StreamEvent {
 	switch proxyEvent.Type {
 	case "start":
-		return &providers.AssistantMessageEvent{
+		return &providers.StreamEvent{
 			Type:    "start",
 			Partial: partial,
 		}
@@ -180,7 +180,7 @@ func processProxyEvent(proxyEvent *ProxyAssistantMessageEvent, partial *provider
 	case "text_start":
 		ensureContentIndex(partial, proxyEvent.ContentIndex)
 		partial.Content[proxyEvent.ContentIndex] = &providers.TextContent{Type: "text", Text: ""}
-		return &providers.AssistantMessageEvent{
+		return &providers.StreamEvent{
 			Type:         "text_start",
 			ContentIndex: proxyEvent.ContentIndex,
 			Partial:      partial,
@@ -189,7 +189,7 @@ func processProxyEvent(proxyEvent *ProxyAssistantMessageEvent, partial *provider
 	case "text_delta":
 		if tc, ok := getTextContent(partial, proxyEvent.ContentIndex); ok {
 			tc.Text += proxyEvent.Delta
-			return &providers.AssistantMessageEvent{
+			return &providers.StreamEvent{
 				Type:         "text_delta",
 				ContentIndex: proxyEvent.ContentIndex,
 				Delta:        proxyEvent.Delta,
@@ -201,7 +201,7 @@ func processProxyEvent(proxyEvent *ProxyAssistantMessageEvent, partial *provider
 	case "text_end":
 		if tc, ok := getTextContent(partial, proxyEvent.ContentIndex); ok {
 			tc.TextSignature = proxyEvent.ContentSignature
-			return &providers.AssistantMessageEvent{
+			return &providers.StreamEvent{
 				Type:         "text_end",
 				ContentIndex: proxyEvent.ContentIndex,
 				Content:      tc.Text,
@@ -213,7 +213,7 @@ func processProxyEvent(proxyEvent *ProxyAssistantMessageEvent, partial *provider
 	case "thinking_start":
 		ensureContentIndex(partial, proxyEvent.ContentIndex)
 		partial.Content[proxyEvent.ContentIndex] = &providers.ThinkingContent{Type: "thinking", Thinking: ""}
-		return &providers.AssistantMessageEvent{
+		return &providers.StreamEvent{
 			Type:         "thinking_start",
 			ContentIndex: proxyEvent.ContentIndex,
 			Partial:      partial,
@@ -222,7 +222,7 @@ func processProxyEvent(proxyEvent *ProxyAssistantMessageEvent, partial *provider
 	case "thinking_delta":
 		if tc, ok := getThinkingContent(partial, proxyEvent.ContentIndex); ok {
 			tc.Thinking += proxyEvent.Delta
-			return &providers.AssistantMessageEvent{
+			return &providers.StreamEvent{
 				Type:         "thinking_delta",
 				ContentIndex: proxyEvent.ContentIndex,
 				Delta:        proxyEvent.Delta,
@@ -234,7 +234,7 @@ func processProxyEvent(proxyEvent *ProxyAssistantMessageEvent, partial *provider
 	case "thinking_end":
 		if tc, ok := getThinkingContent(partial, proxyEvent.ContentIndex); ok {
 			tc.ThinkingSignature = proxyEvent.ContentSignature
-			return &providers.AssistantMessageEvent{
+			return &providers.StreamEvent{
 				Type:         "thinking_end",
 				ContentIndex: proxyEvent.ContentIndex,
 				Content:      tc.Thinking,
@@ -251,7 +251,7 @@ func processProxyEvent(proxyEvent *ProxyAssistantMessageEvent, partial *provider
 			Name:      proxyEvent.ToolName,
 			Arguments: map[string]any{},
 		}
-		return &providers.AssistantMessageEvent{
+		return &providers.StreamEvent{
 			Type:         "toolcall_start",
 			ContentIndex: proxyEvent.ContentIndex,
 			Partial:      partial,
@@ -261,7 +261,7 @@ func processProxyEvent(proxyEvent *ProxyAssistantMessageEvent, partial *provider
 		if tc, ok := getToolCallContent(partial, proxyEvent.ContentIndex); ok {
 			// Accumulate JSON delta — parse when complete at toolcall_end
 			_ = tc
-			return &providers.AssistantMessageEvent{
+			return &providers.StreamEvent{
 				Type:         "toolcall_delta",
 				ContentIndex: proxyEvent.ContentIndex,
 				Delta:        proxyEvent.Delta,
@@ -272,7 +272,7 @@ func processProxyEvent(proxyEvent *ProxyAssistantMessageEvent, partial *provider
 
 	case "toolcall_end":
 		if tc, ok := getToolCallContent(partial, proxyEvent.ContentIndex); ok {
-			return &providers.AssistantMessageEvent{
+			return &providers.StreamEvent{
 				Type:         "toolcall_end",
 				ContentIndex: proxyEvent.ContentIndex,
 				ToolCall:     tc,
@@ -286,7 +286,7 @@ func processProxyEvent(proxyEvent *ProxyAssistantMessageEvent, partial *provider
 		if proxyEvent.Usage != nil {
 			partial.Usage = *proxyEvent.Usage
 		}
-		return &providers.AssistantMessageEvent{
+		return &providers.StreamEvent{
 			Type:    "done",
 			Reason:  proxyEvent.Reason,
 			Message: partial,
@@ -298,7 +298,7 @@ func processProxyEvent(proxyEvent *ProxyAssistantMessageEvent, partial *provider
 		if proxyEvent.Usage != nil {
 			partial.Usage = *proxyEvent.Usage
 		}
-		return &providers.AssistantMessageEvent{
+		return &providers.StreamEvent{
 			Type:         "error",
 			Reason:       proxyEvent.Reason,
 			ErrorMessage: partial,

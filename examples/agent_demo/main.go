@@ -172,9 +172,9 @@ func main() {
 				fmt.Printf("[Assistant] ")
 			}
 		case agent.EventTypeMessageUpdate:
-			if event.AssistantMessageEvent != nil {
-				if event.AssistantMessageEvent.Type == "text_delta" {
-					fmt.Print(event.AssistantMessageEvent.Delta)
+			if event.StreamEvent != nil {
+				if event.StreamEvent.Type == "text_delta" {
+					fmt.Print(event.StreamEvent.Delta)
 				}
 			}
 		case agent.EventTypeToolExecutionStart:

@@ -8,9 +8,13 @@ import (
 // stubProvider is a minimal Provider implementation for testing.
 type stubProvider struct{ id string }
 
-func (s *stubProvider) ID() string                                            { return s.id }
-func (s *stubProvider) Chat(_ context.Context, _ *ChatRequest) (*ChatResponse, error) { return nil, nil }
-func (s *stubProvider) Stream(_ context.Context, _ *ChatRequest) (Stream, error)      { return nil, nil }
+func (s *stubProvider) ID() string { return s.id }
+func (s *stubProvider) Chat(_ context.Context, _ *ChatRequest) (*ChatResponse, error) {
+	return nil, nil
+}
+func (p *stubProvider) Stream(ctx context.Context, req *ChatRequest) (EventStream, error) {
+	return nil, nil
+}
 
 // resetRegistry clears the global registry between tests.
 func resetRegistry() {

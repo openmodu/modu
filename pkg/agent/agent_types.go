@@ -144,7 +144,7 @@ type AgentEvent struct {
 	Result                interface{}
 	IsError               bool
 	Partial               interface{}
-	AssistantMessageEvent *providers.AssistantMessageEvent
+	StreamEvent *providers.StreamEvent
 }
 
 type AgentMessage = providers.AgentMessage
@@ -155,7 +155,7 @@ type AgentContext struct {
 	Tools        []AgentTool
 }
 
-type StreamFn func(ctx context.Context, model *providers.Model, llmCtx *providers.LLMContext, opts *providers.SimpleStreamOptions) (providers.AssistantMessageEventStream, error)
+type StreamFn func(ctx context.Context, model *providers.Model, llmCtx *providers.LLMContext, opts *providers.SimpleStreamOptions) (providers.EventStream, error)
 
 type AgentLoopConfig struct {
 	Model               *providers.Model

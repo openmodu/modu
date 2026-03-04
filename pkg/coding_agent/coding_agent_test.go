@@ -267,15 +267,28 @@ func TestMaybeAutoCompact_BelowThreshold(t *testing.T) {
 func TestMaybeAutoCompact_AboveThreshold(t *testing.T) {
 	session := newTestSession(t, newTestModelWithContext(10000))
 
-	// Set streamFn to nil so compaction uses the fallback (no LLM) path
-	session.streamFn = nil
+	// Set streamFn to a mock so compaction uses it and succeeds without LLM
+	session.streamFn = func(ctx context.Context, model *providers.Model, llmCtx *providers.LLMContext, opts *providers.SimpleStreamOptions) (providers.EventStream, error) {
+		stream := providers.NewEventStream()
+		go func() {
+			msg := &providers.AssistantMessage{
+				Role:       "assistant",
+				ProviderID: model.ProviderID,
+				Model:      model.ID,
+				Content:    []providers.ContentBlock{&providers.TextContent{Type: "text", Text: "mock summary"}},
+			}
+			stream.Push(providers.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+			stream.Close()
+		}()
+		return stream, nil
+	}
 
 	for i := 0; i < 10; i++ {
 		session.agent.AppendMessage(providers.UserMessage{Role: "user", Content: "msg"})
 	}
 
-	// Set totalTokens above threshold (80% of 10000 = 8000)
-	session.totalTokens = 9000
+	// Set totalTokens above threshold (80% of 128000 = 102400)
+	session.totalTokens = 105000
 
 	msgsBefore := len(session.agent.GetState().Messages)
 
