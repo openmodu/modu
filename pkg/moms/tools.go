@@ -6,7 +6,7 @@ import (
 	"os"
 
 	"github.com/crosszan/modu/pkg/agent"
-	"github.com/crosszan/modu/pkg/llm"
+	"github.com/crosszan/modu/pkg/providers"
 )
 
 // BashSandboxTool is the bash tool that executes commands in the sandbox.
@@ -64,7 +64,7 @@ func (t *BashSandboxTool) Execute(ctx context.Context, _ string, args map[string
 		output = "(no output)"
 	}
 	return agent.AgentToolResult{
-		Content: []llm.ContentBlock{llm.TextContent{Type: "text", Text: truncateStr(output, 200000)}},
+		Content: []providers.ContentBlock{providers.TextContent{Type: "text", Text: truncateStr(output, 200000)}},
 		Details: map[string]any{"exitCode": res.ExitCode, "timedOut": res.TimedOut},
 	}, nil
 }
@@ -116,7 +116,7 @@ func (t *AttachTool) Execute(ctx context.Context, _ string, args map[string]any,
 		return errorToolResult(fmt.Sprintf("failed to send file: %v", err)), nil
 	}
 	return agent.AgentToolResult{
-		Content: []llm.ContentBlock{llm.TextContent{Type: "text", Text: fmt.Sprintf("File sent: %s", path)}},
+		Content: []providers.ContentBlock{providers.TextContent{Type: "text", Text: fmt.Sprintf("File sent: %s", path)}},
 	}, nil
 }
 
@@ -139,7 +139,7 @@ func (t *ReadTool) Parameters() any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"path": map[string]any{"type": "string", "description": "Absolute path to file"},
+			"path":  map[string]any{"type": "string", "description": "Absolute path to file"},
 			"label": map[string]any{"type": "string", "description": "Short label"},
 		},
 		"required": []string{"path"},
@@ -156,14 +156,14 @@ func (t *ReadTool) Execute(_ context.Context, _ string, args map[string]any, _ a
 	}
 	text := truncateStr(string(data), 200000)
 	return agent.AgentToolResult{
-		Content: []llm.ContentBlock{llm.TextContent{Type: "text", Text: text}},
+		Content: []providers.ContentBlock{providers.TextContent{Type: "text", Text: text}},
 	}, nil
 }
 
 // WriteTool creates or overwrites a file.
 type WriteTool struct{}
 
-func NewWriteTool() *WriteTool { return &WriteTool{} }
+func NewWriteTool() *WriteTool     { return &WriteTool{} }
 func (t *WriteTool) Name() string  { return "write" }
 func (t *WriteTool) Label() string { return "Write File" }
 func (t *WriteTool) Description() string {
@@ -193,7 +193,7 @@ func (t *WriteTool) Execute(_ context.Context, _ string, args map[string]any, _ 
 		return errorToolResult(fmt.Sprintf("write error: %v", err)), nil
 	}
 	return agent.AgentToolResult{
-		Content: []llm.ContentBlock{llm.TextContent{Type: "text", Text: fmt.Sprintf("Wrote %d bytes to %s", len(content), path)}},
+		Content: []providers.ContentBlock{providers.TextContent{Type: "text", Text: fmt.Sprintf("Wrote %d bytes to %s", len(content), path)}},
 	}, nil
 }
 
@@ -202,7 +202,7 @@ func (t *WriteTool) Execute(_ context.Context, _ string, args map[string]any, _ 
 
 func errorToolResult(msg string) agent.AgentToolResult {
 	return agent.AgentToolResult{
-		Content: []llm.ContentBlock{llm.TextContent{Type: "text", Text: msg}},
+		Content: []providers.ContentBlock{providers.TextContent{Type: "text", Text: msg}},
 		Details: map[string]any{"isError": true},
 	}
 }

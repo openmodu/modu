@@ -94,7 +94,7 @@ func main() {
 
 	// Register Ollama as an OpenAI-compatible provider
 	providers.Register(providers.NewOpenAIChatCompletionsProvider(
-		"ollama",
+		"lm_studio",
 		providers.WithBaseURL(fmt.Sprintf("%s/v1", ollamaHost)),
 	))
 

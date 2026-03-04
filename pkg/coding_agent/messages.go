@@ -3,7 +3,7 @@ package coding_agent
 import (
 	"time"
 
-	"github.com/crosszan/modu/pkg/llm"
+	"github.com/crosszan/modu/pkg/providers"
 )
 
 // BashExecutionMessage represents a `!command` inline execution result.
@@ -14,12 +14,12 @@ type BashExecutionMessage struct {
 }
 
 // ToLlmMessage converts a BashExecutionMessage to a UserMessage.
-func (m *BashExecutionMessage) ToLlmMessage() llm.UserMessage {
+func (m *BashExecutionMessage) ToLlmMessage() providers.UserMessage {
 	text := "$ " + m.Command + "\n" + m.Output
-	return llm.UserMessage{
+	return providers.UserMessage{
 		Role: "user",
-		Content: []llm.ContentBlock{
-			llm.TextContent{
+		Content: []providers.ContentBlock{
+			providers.TextContent{
 				Type: "text",
 				Text: text,
 			},
@@ -35,11 +35,11 @@ type CompactionSummaryMessage struct {
 }
 
 // ToLlmMessage converts a CompactionSummaryMessage to a UserMessage.
-func (m *CompactionSummaryMessage) ToLlmMessage() llm.UserMessage {
-	return llm.UserMessage{
+func (m *CompactionSummaryMessage) ToLlmMessage() providers.UserMessage {
+	return providers.UserMessage{
 		Role: "user",
-		Content: []llm.ContentBlock{
-			llm.TextContent{
+		Content: []providers.ContentBlock{
+			providers.TextContent{
 				Type: "text",
 				Text: "[Context Compaction Summary]\n\n" + m.Summary,
 			},
@@ -56,11 +56,11 @@ type BranchSummaryMessage struct {
 }
 
 // ToLlmMessage converts a BranchSummaryMessage to a UserMessage.
-func (m *BranchSummaryMessage) ToLlmMessage() llm.UserMessage {
-	return llm.UserMessage{
+func (m *BranchSummaryMessage) ToLlmMessage() providers.UserMessage {
+	return providers.UserMessage{
 		Role: "user",
-		Content: []llm.ContentBlock{
-			llm.TextContent{
+		Content: []providers.ContentBlock{
+			providers.TextContent{
 				Type: "text",
 				Text: "[Branch Navigation Summary]\n\n" + m.Summary,
 			},
@@ -76,11 +76,11 @@ type CustomMessage struct {
 }
 
 // ToLlmMessage converts a CustomMessage to a UserMessage.
-func (m *CustomMessage) ToLlmMessage() llm.UserMessage {
-	return llm.UserMessage{
+func (m *CustomMessage) ToLlmMessage() providers.UserMessage {
+	return providers.UserMessage{
 		Role: "user",
-		Content: []llm.ContentBlock{
-			llm.TextContent{
+		Content: []providers.ContentBlock{
+			providers.TextContent{
 				Type: "text",
 				Text: "[" + m.Source + "] " + m.Text,
 			},

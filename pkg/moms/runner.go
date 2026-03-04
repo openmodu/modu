@@ -12,8 +12,8 @@ import (
 
 	"github.com/crosszan/modu/pkg/agent"
 	"github.com/crosszan/modu/pkg/coding_agent/tools"
-	"github.com/crosszan/modu/pkg/llm"
 	_ "github.com/crosszan/modu/pkg/llm/providers/anthropic"
+	"github.com/crosszan/modu/pkg/providers"
 	"github.com/crosszan/modu/pkg/skills"
 	skillstools "github.com/crosszan/modu/pkg/skills/tools"
 )
@@ -41,7 +41,7 @@ type TelegramContext interface {
 	// SenderName returns the human-readable sender name.
 	SenderName() string
 	// Images returns any image attachments provided with the message.
-	Images() []llm.ImageContent
+	Images() []providers.ImageContent
 }
 
 // RunResult holds what happened after a run.
@@ -52,31 +52,31 @@ type RunResult struct {
 
 // Runner manages an agent per chat channel.
 type Runner struct {
-	mu           sync.Mutex
-	sandbox      *Sandbox
-	workingDir   string
-	chatID       int64
-	model        *llm.Model
-	getAPIKey    func(provider string) (string, error)
-	settings     *Settings
-	agentInst    *agent.Agent
-	cancelFn     context.CancelFunc
-	running      bool
-	registryMgr  *skills.RegistryManager
-	searchCache  *skills.SearchCache
+	mu          sync.Mutex
+	sandbox     *Sandbox
+	workingDir  string
+	chatID      int64
+	model       *providers.Model
+	getAPIKey   func(provider string) (string, error)
+	settings    *Settings
+	agentInst   *agent.Agent
+	cancelFn    context.CancelFunc
+	running     bool
+	registryMgr *skills.RegistryManager
+	searchCache *skills.SearchCache
 }
 
 // NewRunner creates a Runner for a chat.
-func NewRunner(sandbox *Sandbox, workingDir string, chatID int64, model *llm.Model, getAPIKey func(provider string) (string, error), settings *Settings, registryMgr *skills.RegistryManager, searchCache *skills.SearchCache) *Runner {
+func NewRunner(sandbox *Sandbox, workingDir string, chatID int64, model *providers.Model, getAPIKey func(provider string) (string, error), settings *Settings, registryMgr *skills.RegistryManager, searchCache *skills.SearchCache) *Runner {
 	return &Runner{
-		sandbox:      sandbox,
-		workingDir:   workingDir,
-		chatID:       chatID,
-		model:        model,
-		getAPIKey:    getAPIKey,
-		settings:     settings,
-		registryMgr:  registryMgr,
-		searchCache:  searchCache,
+		sandbox:     sandbox,
+		workingDir:  workingDir,
+		chatID:      chatID,
+		model:       model,
+		getAPIKey:   getAPIKey,
+		settings:    settings,
+		registryMgr: registryMgr,
+		searchCache: searchCache,
 	}
 }
 
@@ -145,9 +145,6 @@ func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult
 	r.mu.Unlock()
 
 	// Set up per-call queue for Telegram messages.
-	// We use a mutex + WaitGroup: the mutex serialises Telegram API calls,
-	// and the WaitGroup lets us block in Run() until every goroutine has
-	// finished before we return to the caller.
 	var queueMu sync.Mutex
 	var queueWg sync.WaitGroup
 
@@ -185,7 +182,6 @@ func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult
 			if r, ok := ev.Result.(agent.AgentToolResult); ok {
 				result = extractResultText(r)
 			}
-			// Post tool details as follow-up.
 			symbol := "✓"
 			if ev.IsError {
 				symbol = "✗"
@@ -204,7 +200,7 @@ func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult
 			if ev.Message == nil {
 				break
 			}
-			msg, ok := ev.Message.(llm.AssistantMessage)
+			msg, ok := ev.Message.(providers.AssistantMessage)
 			if !ok {
 				break
 			}
@@ -216,28 +212,28 @@ func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult
 			}
 			for _, block := range msg.Content {
 				switch b := block.(type) {
-				case llm.ThinkingContent:
+				case providers.ThinkingContent:
 					if strings.TrimSpace(b.Thinking) != "" {
 						thinking := b.Thinking
 						enqueue(func() error {
 							return tgCtx.RespondInThread(fmt.Sprintf("_%s_", escapeMarkdown(thinking)))
 						})
 					}
-				case *llm.ThinkingContent:
+				case *providers.ThinkingContent:
 					if b != nil && strings.TrimSpace(b.Thinking) != "" {
 						thinking := b.Thinking
 						enqueue(func() error {
 							return tgCtx.RespondInThread(fmt.Sprintf("_%s_", escapeMarkdown(thinking)))
 						})
 					}
-				case llm.TextContent:
+				case providers.TextContent:
 					if strings.TrimSpace(b.Text) != "" {
 						text := b.Text
 						enqueue(func() error {
 							return tgCtx.Respond(text, true)
 						})
 					}
-				case *llm.TextContent:
+				case *providers.TextContent:
 					if b != nil && strings.TrimSpace(b.Text) != "" {
 						text := b.Text
 						enqueue(func() error {
@@ -258,7 +254,6 @@ func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult
 		tgCtx.MessageText(),
 	)
 
-
 	var promptErr error
 	images := tgCtx.Images()
 	if len(images) > 0 {
@@ -270,13 +265,9 @@ func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult
 
 	// Persist context.
 	if msgs := a.GetState().Messages; len(msgs) > 0 {
-		var toSave []llm.Message
+		var toSave []providers.AgentMessage
 		for _, m := range msgs {
-			// Convert AgentMessage to llm.Message (they are aliases/compatible usually, but let's be safe if they diverge).
-			// pkg/agent uses llm.Message as underlying type for now.
-			if lm, ok := m.(llm.Message); ok {
-				toSave = append(toSave, lm)
-			}
+			toSave = append(toSave, m)
 		}
 		if err := SaveContextMessages(chatDir, toSave); err != nil {
 			fmt.Printf("[moms] failed to save context for chat %d: %v\n", r.chatID, err)
@@ -296,9 +287,6 @@ func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult
 		_ = tgCtx.ReplaceMessage("_Sorry, something went wrong_")
 		_ = tgCtx.RespondInThread(fmt.Sprintf("_Error: %s_", runErr.Error()))
 	}
-
-	// Handle [SILENT] for events.
-	// (The final message handling is in telegram.go which calls this.)
 
 	if promptErr != nil && runErr == nil {
 		runErr = promptErr
@@ -327,12 +315,6 @@ func (r *Runner) getOrCreateAgent(chatDir, workspacePath string, tgCtx TelegramC
 	model := r.model
 	settingsModel := r.settings.GetModelID()
 	if settingsModel != "" && settingsModel != model.ID {
-		// Create a copy or new model struct with the ID. 
-		// For simplicity, we just change the ID/Name if provider is compatible,
-		// or ideally we should use llm.GetModel if available or construct it.
-		// Since we don't have a full registry here easily, we clone the base model
-		// and update ID. This assumes same provider (Anthropic).
-		// TODO: Support provider switching via settings properly.
 		mCopy := *model
 		mCopy.ID = settingsModel
 		mCopy.Name = settingsModel
@@ -347,8 +329,6 @@ func (r *Runner) getOrCreateAgent(chatDir, workspacePath string, tgCtx TelegramC
 		NewWriteTool(),
 		tools.NewEditTool(cwd),
 		NewAttachTool(func(filePath, title string) error {
-			// The upload function is set per-run via the tgCtx.
-			// We capture tgCtx here for the lifetime of each tool call.
 			return tgCtx.UploadFile(filePath, title)
 		}),
 	}
@@ -393,15 +373,11 @@ func loadContextMessages(chatDir string) ([]agent.AgentMessage, error) {
 	var messages []agent.AgentMessage
 	dec := json.NewDecoder(f)
 	for dec.More() {
-		// We need to decode into specific types based on role, or use a map/struct that can unmarshal polymorphic.
-		// Since llm.Message is interface, we decode into a raw map first or try struct.
-		// A simple way is to use llm helper if available, or just try to decode into Assistant/User types.
-		// Let's decode into json.RawMessage then check role.
 		var raw json.RawMessage
 		if err := dec.Decode(&raw); err != nil {
 			continue
 		}
-		
+
 		var base struct {
 			Role string `json:"role"`
 		}
@@ -412,17 +388,17 @@ func loadContextMessages(chatDir string) ([]agent.AgentMessage, error) {
 		var msg agent.AgentMessage
 		switch base.Role {
 		case "user":
-			var um llm.UserMessage
+			var um providers.UserMessage
 			if err := json.Unmarshal(raw, &um); err == nil {
 				msg = um
 			}
 		case "assistant":
-			var am llm.AssistantMessage
+			var am providers.AssistantMessage
 			if err := json.Unmarshal(raw, &am); err == nil {
 				msg = am
 			}
 		case "tool":
-			var tr llm.ToolResultMessage
+			var tr providers.ToolResultMessage
 			if err := json.Unmarshal(raw, &tr); err == nil {
 				msg = tr
 			}
@@ -438,9 +414,9 @@ func loadContextMessages(chatDir string) ([]agent.AgentMessage, error) {
 func extractResultText(r agent.AgentToolResult) string {
 	for _, block := range r.Content {
 		switch tc := block.(type) {
-		case llm.TextContent:
+		case providers.TextContent:
 			return tc.Text
-		case *llm.TextContent:
+		case *providers.TextContent:
 			if tc != nil {
 				return tc.Text
 			}

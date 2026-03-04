@@ -6,7 +6,6 @@ import (
 
 	"github.com/crosszan/modu/pkg/agent"
 	"github.com/crosszan/modu/pkg/coding_agent/extension"
-	"github.com/crosszan/modu/pkg/llm"
 	"github.com/crosszan/modu/pkg/providers"
 )
 
@@ -44,9 +43,9 @@ func CreateSession(opts CreateSessionOptions) (*CreateSessionResult, error) {
 	if model == nil && opts.ScopedModels != nil && len(opts.ScopedModels) > 0 {
 		// Try the first scoped model
 		for _, sm := range opts.ScopedModels {
-			m := llm.GetModel("", sm)
+			m := providers.GetModel("", sm)
 			if m != nil {
-				model = llmModelToProviders(m)
+				model = m
 				break
 			}
 		}
@@ -120,7 +119,7 @@ func restoreSession(cs *CodingSession, path string) error {
 	}
 
 	for _, raw := range messages {
-		var msg llm.UserMessage
+		var msg providers.UserMessage
 		if err := json.Unmarshal(raw, &msg); err == nil && msg.Role == "user" {
 			cs.agent.AppendMessage(msg)
 		}

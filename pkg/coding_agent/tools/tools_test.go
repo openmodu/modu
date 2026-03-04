@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crosszan/modu/pkg/llm"
+	"github.com/crosszan/modu/pkg/providers"
 )
 
 func TestTruncateHead(t *testing.T) {
@@ -387,10 +387,10 @@ func TestReadOnlyTools(t *testing.T) {
 	}
 }
 
-func extractText(content []llm.ContentBlock) string {
+func extractText(content []providers.ContentBlock) string {
 	var parts []string
 	for _, block := range content {
-		if tc, ok := block.(llm.TextContent); ok {
+		if tc, ok := block.(providers.TextContent); ok {
 			parts = append(parts, tc.Text)
 		}
 	}

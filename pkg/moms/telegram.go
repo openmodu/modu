@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
-	"github.com/crosszan/modu/pkg/llm"
+	"github.com/crosszan/modu/pkg/providers"
 	"github.com/crosszan/modu/pkg/skills"
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 // Bot is the Telegram bot that processes messages.
@@ -21,7 +21,7 @@ type Bot struct {
 	store       *Store
 	sandbox     *Sandbox
 	workingDir  string
-	llmModel    *llm.Model
+	llmModel    *providers.Model
 	getAPIKey   func(provider string) (string, error)
 	settings    *Settings
 	registryMgr *skills.RegistryManager
@@ -39,7 +39,7 @@ type queuedMessage struct {
 }
 
 // NewBot creates a new Telegram bot.
-func NewBot(token string, sandbox *Sandbox, workingDir string, llmModel *llm.Model, getAPIKey func(provider string) (string, error), registryMgr *skills.RegistryManager, searchCache *skills.SearchCache) (*Bot, error) {
+func NewBot(token string, sandbox *Sandbox, workingDir string, llmModel *providers.Model, getAPIKey func(provider string) (string, error), registryMgr *skills.RegistryManager, searchCache *skills.SearchCache) (*Bot, error) {
 	api, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Telegram bot: %w", err)
@@ -338,13 +338,13 @@ type tgContext struct {
 	parts        []string
 }
 
-func (c *tgContext) ChatID() int64      { return c.chatID }
+func (c *tgContext) ChatID() int64       { return c.chatID }
 func (c *tgContext) MessageText() string { return c.messageText }
 func (c *tgContext) MessageTS() string   { return c.messageTS }
 func (c *tgContext) SenderName() string  { return c.senderName }
 
-func (c *tgContext) Images() []llm.ImageContent {
-	var images []llm.ImageContent
+func (c *tgContext) Images() []providers.ImageContent {
+	var images []providers.ImageContent
 	for _, path := range c.attachments {
 		ext := strings.ToLower(filepath.Ext(path))
 		mimeType := ""
@@ -362,33 +362,13 @@ func (c *tgContext) Images() []llm.ImageContent {
 		if mimeType != "" {
 			data, err := os.ReadFile(path)
 			if err == nil {
-				images = append(images, llm.ImageContent{
+				images = append(images, providers.ImageContent{
 					Type:     "image",
-					Data:     string(data), // Note: llm package expects raw data string? Or base64?
-					// Checking llm.ImageContent definition in types.go (viewed earlier):
-					// Data string `json:"data"`
-					// Usually this is base64 for APIs.
-					// Let's check agent.go PromptWithImages... it passes directly to LLM.
-					// Most providers expect base64. 
-					// However, the llm package interface might expect raw bytes cast to string 
-					// or base64 string. 
-					// Let's assume the provider implementation handles it. 
-					// Actually, checking standard `llm` implementations, they often expect base64.
-					// Let's encode to base64 to be safe? 
-					// Wait, if I change Data to be base64 encoded, I need to know if the provider expects it.
-					// The `anthropic` provider in `modu` likely expects base64 in `Data`.
-					// Let's encode it.
-					// But `pkg/llm/types.go` says `Data string`. 
-					// Let's import encoding/base64.
+					Data:     base64Encode(string(data)),
 					MimeType: mimeType,
 				})
 			}
 		}
-	}
-	// Post-processing to base64 encode if needed. 
-	// Actually I'll do it right here.
-	for i := range images {
-		images[i].Data = base64Encode(images[i].Data)
 	}
 	return images
 }

@@ -9,18 +9,18 @@ import (
 
 	"github.com/crosszan/modu/pkg/agent"
 	"github.com/crosszan/modu/pkg/coding_agent/extension"
-	"github.com/crosszan/modu/pkg/llm"
+	"github.com/crosszan/modu/pkg/providers"
 )
 
 func TestNewCodingSession(t *testing.T) {
 	dir := t.TempDir()
 	agentDir := filepath.Join(dir, ".coding_agent")
 
-	model := &llm.Model{
+	model := &providers.Model{
 		ID:            "test-model",
 		Name:          "Test Model",
 		Api:           "ollama",
-		Provider:      "ollama",
+		ProviderID:    "ollama",
 		ContextWindow: 8192,
 		MaxTokens:     2048,
 	}
@@ -52,7 +52,7 @@ func TestNewCodingSession(t *testing.T) {
 
 func TestCodingSessionRequiresCwd(t *testing.T) {
 	_, err := NewCodingSession(CodingSessionOptions{
-		Model: &llm.Model{ID: "test"},
+		Model: &providers.Model{ID: "test"},
 	})
 	if err == nil {
 		t.Fatal("expected error when Cwd is empty")
@@ -159,17 +159,17 @@ func TestExtensionHooksAreApplied(t *testing.T) {
 	dir := t.TempDir()
 	agentDir := filepath.Join(dir, ".coding_agent")
 
-	model := &llm.Model{
-		ID: "test", Api: "ollama", Provider: "ollama",
+	model := &providers.Model{
+		ID: "test", Api: "ollama", ProviderID: "ollama",
 		ContextWindow: 8192, MaxTokens: 2048,
 	}
 
 	hookExt := &testHookExtension{}
 
 	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd:      dir,
-		AgentDir: agentDir,
-		Model:    model,
+		Cwd:        dir,
+		AgentDir:   agentDir,
+		Model:      model,
 		Extensions: []extension.Extension{hookExt},
 		GetAPIKey: func(provider string) (string, error) {
 			return "", nil
@@ -180,7 +180,6 @@ func TestExtensionHooksAreApplied(t *testing.T) {
 	}
 
 	// Verify tools are wrapped by checking that bash tool is present
-	// (the wrapping is transparent—tools should still be there)
 	names := session.GetActiveToolNames()
 	hasBash := false
 	for _, n := range names {
@@ -203,7 +202,6 @@ func TestExtensionHooksAreApplied(t *testing.T) {
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			// Before hook returns false for bash, so result should be empty
 			if len(result.Content) != 0 {
 				t.Fatal("expected bash tool to be blocked by before hook")
 			}
@@ -218,71 +216,62 @@ func TestExtensionHooksAreApplied(t *testing.T) {
 
 // --- Fix 2: Auto Compaction Tests ---
 
-func TestMaybeAutoCompact_BelowThreshold(t *testing.T) {
+func newTestModel() *providers.Model {
+	return &providers.Model{
+		ID: "test", Api: "ollama", ProviderID: "ollama",
+		ContextWindow: 8192, MaxTokens: 2048,
+	}
+}
+
+func newTestModelWithContext(contextWindow int) *providers.Model {
+	return &providers.Model{
+		ID: "test", Api: "ollama", ProviderID: "ollama",
+		ContextWindow: contextWindow, MaxTokens: 2048,
+	}
+}
+
+func newTestSession(t *testing.T, model *providers.Model) *CodingSession {
+	t.Helper()
 	dir := t.TempDir()
 	agentDir := filepath.Join(dir, ".coding_agent")
-
-	model := &llm.Model{
-		ID: "test", Api: "ollama", Provider: "ollama",
-		ContextWindow: 10000, MaxTokens: 2048,
-	}
-
 	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd:      dir,
-		AgentDir: agentDir,
-		Model:    model,
-		GetAPIKey: func(provider string) (string, error) {
-			return "", nil
-		},
+		Cwd:       dir,
+		AgentDir:  agentDir,
+		Model:     model,
+		GetAPIKey: func(p string) (string, error) { return "", nil },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	return session
+}
+
+func TestMaybeAutoCompact_BelowThreshold(t *testing.T) {
+	session := newTestSession(t, newTestModelWithContext(10000))
 
 	// Set totalTokens below threshold (80% of 10000 = 8000)
 	session.totalTokens = 5000
 
-	// Add some messages to agent so we can check count before/after
-	session.agent.AppendMessage(llm.UserMessage{Role: "user", Content: "msg1"})
-	session.agent.AppendMessage(llm.UserMessage{Role: "user", Content: "msg2"})
+	session.agent.AppendMessage(providers.UserMessage{Role: "user", Content: "msg1"})
+	session.agent.AppendMessage(providers.UserMessage{Role: "user", Content: "msg2"})
 	msgsBefore := len(session.agent.GetState().Messages)
 
 	session.maybeAutoCompact(context.Background())
 
 	msgsAfter := len(session.agent.GetState().Messages)
-	// Should NOT compact since we're below threshold
 	if msgsAfter != msgsBefore {
 		t.Fatalf("should not compact below threshold: before=%d after=%d", msgsBefore, msgsAfter)
 	}
 }
 
 func TestMaybeAutoCompact_AboveThreshold(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-
-	model := &llm.Model{
-		ID: "test", Api: "ollama", Provider: "ollama",
-		ContextWindow: 10000, MaxTokens: 2048,
-	}
-
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd:      dir,
-		AgentDir: agentDir,
-		Model:    model,
-		GetAPIKey: func(provider string) (string, error) {
-			return "", nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	session := newTestSession(t, newTestModelWithContext(10000))
 
 	// Set streamFn to nil so compaction uses the fallback (no LLM) path
 	session.streamFn = nil
 
-	// Add enough messages to make compaction meaningful (more than preserve count of 4)
 	for i := 0; i < 10; i++ {
-		session.agent.AppendMessage(llm.UserMessage{Role: "user", Content: "msg"})
+		session.agent.AppendMessage(providers.UserMessage{Role: "user", Content: "msg"})
 	}
 
 	// Set totalTokens above threshold (80% of 10000 = 8000)
@@ -293,12 +282,10 @@ func TestMaybeAutoCompact_AboveThreshold(t *testing.T) {
 	session.maybeAutoCompact(context.Background())
 
 	msgsAfter := len(session.agent.GetState().Messages)
-	// Should compact: summary (1) + preserved (4) = 5, which is less than 10
 	if msgsAfter >= msgsBefore {
 		t.Fatalf("should compact above threshold: before=%d after=%d", msgsBefore, msgsAfter)
 	}
 
-	// Token counter should be reset
 	if session.totalTokens != 0 {
 		t.Fatalf("expected totalTokens reset to 0, got %d", session.totalTokens)
 	}
@@ -348,27 +335,13 @@ func TestRetryManagerDisabled(t *testing.T) {
 
 func TestRetryManagerAbort(t *testing.T) {
 	rm := NewRetryManager(RetryConfig{MaxRetries: 3, BaseDelayMs: 10, MaxDelayMs: 100}, true)
-	// AbortRetry should not panic when no retry is pending
 	rm.AbortRetry()
 }
 
 // --- CycleModel Tests ---
 
 func TestCycleModelNoScoped(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	model := &llm.Model{
-		ID: "test", Api: "ollama", Provider: "ollama",
-		ContextWindow: 8192, MaxTokens: 2048,
-	}
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd: dir, AgentDir: agentDir, Model: model,
-		GetAPIKey: func(p string) (string, error) { return "", nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// No scoped models configured
+	session := newTestSession(t, newTestModel())
 	result := session.CycleModel()
 	if result != nil {
 		t.Fatal("expected nil when no scoped models")
@@ -376,34 +349,23 @@ func TestCycleModelNoScoped(t *testing.T) {
 }
 
 func TestCycleModelWithScoped(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	model := &llm.Model{
-		ID: "model-a", Api: "ollama", Provider: "ollama",
+	model := &providers.Model{
+		ID: "model-a", Api: "ollama", ProviderID: "ollama",
 		ContextWindow: 8192, MaxTokens: 2048,
 	}
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd: dir, AgentDir: agentDir, Model: model,
-		GetAPIKey: func(p string) (string, error) { return "", nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	session := newTestSession(t, model)
 	session.scopedModels = []string{"model-a", "model-b", "model-c"}
 
-	// Cycle from model-a -> model-b
 	next := session.CycleModel()
 	if next == nil || next.ID != "model-b" {
 		t.Fatalf("expected model-b, got %v", next)
 	}
 
-	// Cycle from model-b -> model-c
 	next = session.CycleModel()
 	if next == nil || next.ID != "model-c" {
 		t.Fatalf("expected model-c, got %v", next)
 	}
 
-	// Cycle from model-c -> model-a (wrap around)
 	next = session.CycleModel()
 	if next == nil || next.ID != "model-a" {
 		t.Fatalf("expected model-a, got %v", next)
@@ -415,12 +377,8 @@ func TestCycleModelWithScoped(t *testing.T) {
 func TestCycleThinkingLevel(t *testing.T) {
 	dir := t.TempDir()
 	agentDir := filepath.Join(dir, ".coding_agent")
-	model := &llm.Model{
-		ID: "test", Api: "ollama", Provider: "ollama",
-		ContextWindow: 8192, MaxTokens: 2048,
-	}
 	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd: dir, AgentDir: agentDir, Model: model,
+		Cwd: dir, AgentDir: agentDir, Model: newTestModel(),
 		ThinkingLevel: agent.ThinkingLevelOff,
 		GetAPIKey:     func(p string) (string, error) { return "", nil },
 	})
@@ -428,25 +386,18 @@ func TestCycleThinkingLevel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// off -> low
 	level := session.CycleThinkingLevel()
 	if level != agent.ThinkingLevelLow {
 		t.Fatalf("expected low, got %s", level)
 	}
-
-	// low -> medium
 	level = session.CycleThinkingLevel()
 	if level != agent.ThinkingLevelMedium {
 		t.Fatalf("expected medium, got %s", level)
 	}
-
-	// medium -> high
 	level = session.CycleThinkingLevel()
 	if level != agent.ThinkingLevelHigh {
 		t.Fatalf("expected high, got %s", level)
 	}
-
-	// high -> off
 	level = session.CycleThinkingLevel()
 	if level != agent.ThinkingLevelOff {
 		t.Fatalf("expected off, got %s", level)
@@ -456,20 +407,7 @@ func TestCycleThinkingLevel(t *testing.T) {
 // --- Getter/Setter Tests ---
 
 func TestGetSetAutoCompaction(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	model := &llm.Model{
-		ID: "test", Api: "ollama", Provider: "ollama",
-		ContextWindow: 8192, MaxTokens: 2048,
-	}
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd: dir, AgentDir: agentDir, Model: model,
-		GetAPIKey: func(p string) (string, error) { return "", nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	session := newTestSession(t, newTestModel())
 	session.SetAutoCompaction(false)
 	if session.GetConfig().AutoCompaction {
 		t.Fatal("expected auto compaction disabled")
@@ -481,20 +419,7 @@ func TestGetSetAutoCompaction(t *testing.T) {
 }
 
 func TestGetSetAutoRetry(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	model := &llm.Model{
-		ID: "test", Api: "ollama", Provider: "ollama",
-		ContextWindow: 8192, MaxTokens: 2048,
-	}
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd: dir, AgentDir: agentDir, Model: model,
-		GetAPIKey: func(p string) (string, error) { return "", nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	session := newTestSession(t, newTestModel())
 	session.SetAutoRetry(true)
 	if !session.GetConfig().AutoRetry {
 		t.Fatal("expected auto retry enabled")
@@ -506,20 +431,11 @@ func TestGetSetAutoRetry(t *testing.T) {
 }
 
 func TestGetModel(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	model := &llm.Model{
-		ID: "my-model", Api: "ollama", Provider: "ollama",
+	model := &providers.Model{
+		ID: "my-model", Api: "ollama", ProviderID: "ollama",
 		ContextWindow: 8192, MaxTokens: 2048,
 	}
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd: dir, AgentDir: agentDir, Model: model,
-		GetAPIKey: func(p string) (string, error) { return "", nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	session := newTestSession(t, model)
 	got := session.GetModel()
 	if got.ID != "my-model" {
 		t.Fatalf("expected 'my-model', got %s", got.ID)
@@ -527,26 +443,13 @@ func TestGetModel(t *testing.T) {
 }
 
 func TestGetMessages(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	model := &llm.Model{
-		ID: "test", Api: "ollama", Provider: "ollama",
-		ContextWindow: 8192, MaxTokens: 2048,
-	}
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd: dir, AgentDir: agentDir, Model: model,
-		GetAPIKey: func(p string) (string, error) { return "", nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	session := newTestSession(t, newTestModel())
 	msgs := session.GetMessages()
 	if len(msgs) != 0 {
 		t.Fatalf("expected 0 messages, got %d", len(msgs))
 	}
 
-	session.GetAgent().AppendMessage(llm.UserMessage{Role: "user", Content: "hi"})
+	session.GetAgent().AppendMessage(providers.UserMessage{Role: "user", Content: "hi"})
 	msgs = session.GetMessages()
 	if len(msgs) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(msgs))
@@ -556,31 +459,17 @@ func TestGetMessages(t *testing.T) {
 // --- New method tests ---
 
 func TestGetLastAssistantText(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	model := &llm.Model{
-		ID: "test", Api: "ollama", Provider: "ollama",
-		ContextWindow: 8192, MaxTokens: 2048,
-	}
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd: dir, AgentDir: agentDir, Model: model,
-		GetAPIKey: func(p string) (string, error) { return "", nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	session := newTestSession(t, newTestModel())
 
-	// No messages yet
 	text := session.GetLastAssistantText()
 	if text != "" {
 		t.Fatalf("expected empty, got %s", text)
 	}
 
-	// Add an assistant message
-	session.GetAgent().AppendMessage(llm.AssistantMessage{
+	session.GetAgent().AppendMessage(providers.AssistantMessage{
 		Role: "assistant",
-		Content: []llm.ContentBlock{
-			&llm.TextContent{Type: "text", Text: "hello from assistant"},
+		Content: []providers.ContentBlock{
+			&providers.TextContent{Type: "text", Text: "hello from assistant"},
 		},
 	})
 
@@ -589,12 +478,11 @@ func TestGetLastAssistantText(t *testing.T) {
 		t.Fatalf("expected 'hello from assistant', got %s", text)
 	}
 
-	// Add another user message then assistant
-	session.GetAgent().AppendMessage(llm.UserMessage{Role: "user", Content: "question"})
-	session.GetAgent().AppendMessage(llm.AssistantMessage{
+	session.GetAgent().AppendMessage(providers.UserMessage{Role: "user", Content: "question"})
+	session.GetAgent().AppendMessage(providers.AssistantMessage{
 		Role: "assistant",
-		Content: []llm.ContentBlock{
-			&llm.TextContent{Type: "text", Text: "second response"},
+		Content: []providers.ContentBlock{
+			&providers.TextContent{Type: "text", Text: "second response"},
 		},
 	})
 
@@ -605,24 +493,10 @@ func TestGetLastAssistantText(t *testing.T) {
 }
 
 func TestSessionName(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	model := &llm.Model{
-		ID: "test", Api: "ollama", Provider: "ollama",
-		ContextWindow: 8192, MaxTokens: 2048,
-	}
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd: dir, AgentDir: agentDir, Model: model,
-		GetAPIKey: func(p string) (string, error) { return "", nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	session := newTestSession(t, newTestModel())
 	if session.GetSessionName() != "" {
 		t.Fatal("expected empty session name")
 	}
-
 	session.SetSessionName("my-session")
 	if session.GetSessionName() != "my-session" {
 		t.Fatalf("expected 'my-session', got %s", session.GetSessionName())
@@ -630,40 +504,14 @@ func TestSessionName(t *testing.T) {
 }
 
 func TestIsCompacting(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	model := &llm.Model{
-		ID: "test", Api: "ollama", Provider: "ollama",
-		ContextWindow: 8192, MaxTokens: 2048,
-	}
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd: dir, AgentDir: agentDir, Model: model,
-		GetAPIKey: func(p string) (string, error) { return "", nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	session := newTestSession(t, newTestModel())
 	if session.IsCompacting() {
 		t.Fatal("should not be compacting initially")
 	}
 }
 
 func TestGetSessionFile(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	model := &llm.Model{
-		ID: "test", Api: "ollama", Provider: "ollama",
-		ContextWindow: 8192, MaxTokens: 2048,
-	}
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd: dir, AgentDir: agentDir, Model: model,
-		GetAPIKey: func(p string) (string, error) { return "", nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	session := newTestSession(t, newTestModel())
 	filePath := session.GetSessionFile()
 	if filePath == "" {
 		t.Fatal("expected non-empty session file path")
@@ -671,20 +519,7 @@ func TestGetSessionFile(t *testing.T) {
 }
 
 func TestGetSessionStats(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	model := &llm.Model{
-		ID: "test", Api: "ollama", Provider: "ollama",
-		ContextWindow: 8192, MaxTokens: 2048,
-	}
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd: dir, AgentDir: agentDir, Model: model,
-		GetAPIKey: func(p string) (string, error) { return "", nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	session := newTestSession(t, newTestModel())
 	stats := session.GetSessionStats()
 	if stats.SessionStarted <= 0 {
 		t.Fatal("sessionStarted should be positive")
@@ -696,8 +531,7 @@ func TestGetSessionStats(t *testing.T) {
 		t.Fatalf("expected 0 messages, got %d", stats.MessageCount)
 	}
 
-	// Add messages and check count
-	session.GetAgent().AppendMessage(llm.UserMessage{Role: "user", Content: "hi"})
+	session.GetAgent().AppendMessage(providers.UserMessage{Role: "user", Content: "hi"})
 	stats = session.GetSessionStats()
 	if stats.MessageCount != 1 {
 		t.Fatalf("expected 1 message, got %d", stats.MessageCount)
@@ -705,20 +539,7 @@ func TestGetSessionStats(t *testing.T) {
 }
 
 func TestExecuteBash(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	model := &llm.Model{
-		ID: "test", Api: "ollama", Provider: "ollama",
-		ContextWindow: 8192, MaxTokens: 2048,
-	}
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd: dir, AgentDir: agentDir, Model: model,
-		GetAPIKey: func(p string) (string, error) { return "", nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	session := newTestSession(t, newTestModel())
 	result, err := session.ExecuteBash(context.Background(), "echo hello", 5000)
 	if err != nil {
 		t.Fatal(err)
@@ -732,20 +553,7 @@ func TestExecuteBash(t *testing.T) {
 }
 
 func TestExecuteBashNonZeroExit(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	model := &llm.Model{
-		ID: "test", Api: "ollama", Provider: "ollama",
-		ContextWindow: 8192, MaxTokens: 2048,
-	}
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd: dir, AgentDir: agentDir, Model: model,
-		GetAPIKey: func(p string) (string, error) { return "", nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	session := newTestSession(t, newTestModel())
 	result, err := session.ExecuteBash(context.Background(), "exit 42", 5000)
 	if err != nil {
 		t.Fatal(err)
@@ -756,48 +564,23 @@ func TestExecuteBashNonZeroExit(t *testing.T) {
 }
 
 func TestGetAvailableModels(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	model := &llm.Model{
-		ID: "test", Api: "ollama", Provider: "ollama",
-		ContextWindow: 8192, MaxTokens: 2048,
-	}
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd: dir, AgentDir: agentDir, Model: model,
-		GetAPIKey: func(p string) (string, error) { return "", nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	session := newTestSession(t, newTestModel())
 	models := session.GetAvailableModels()
-	// At minimum, the init() models should be present
 	if len(models) == 0 {
 		t.Fatal("expected at least some models")
 	}
 }
 
 func TestExportHTML(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	model := &llm.Model{
-		ID: "test", Api: "ollama", Provider: "ollama",
-		ContextWindow: 8192, MaxTokens: 2048,
-	}
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd: dir, AgentDir: agentDir, Model: model,
-		GetAPIKey: func(p string) (string, error) { return "", nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	session := newTestSession(t, newTestModel())
 
-	session.GetAgent().AppendMessage(llm.UserMessage{Role: "user", Content: "test prompt"})
-	session.GetAgent().AppendMessage(llm.AssistantMessage{
+	session.GetAgent().AppendMessage(providers.UserMessage{Role: "user", Content: "test prompt"})
+	session.GetAgent().AppendMessage(providers.AssistantMessage{
 		Role:    "assistant",
-		Content: []llm.ContentBlock{&llm.TextContent{Type: "text", Text: "test response"}},
+		Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: "test response"}},
 	})
 
+	dir := t.TempDir()
 	outPath := filepath.Join(dir, "export.html")
 	if err := session.ExportHTML(outPath); err != nil {
 		t.Fatal(err)
@@ -817,19 +600,7 @@ func TestExportHTML(t *testing.T) {
 }
 
 func TestSubscribeSession(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	model := &llm.Model{
-		ID: "test", Api: "ollama", Provider: "ollama",
-		ContextWindow: 8192, MaxTokens: 2048,
-	}
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd: dir, AgentDir: agentDir, Model: model,
-		GetAPIKey: func(p string) (string, error) { return "", nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	session := newTestSession(t, newTestModel())
 
 	var received SessionEvent
 	unsub := session.SubscribeSession(func(evt SessionEvent) {
@@ -837,7 +608,6 @@ func TestSubscribeSession(t *testing.T) {
 	})
 	defer unsub()
 
-	// Trigger a thinking level change which emits a session event
 	session.SetThinkingLevel(agent.ThinkingLevelHigh)
 
 	if received.Type != SessionEventThinkingChange {
@@ -849,32 +619,13 @@ func TestSubscribeSession(t *testing.T) {
 }
 
 func TestMaybeAutoCompact_DisabledByConfig(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
+	session := newTestSession(t, newTestModelWithContext(10000))
 
-	model := &llm.Model{
-		ID: "test", Api: "ollama", Provider: "ollama",
-		ContextWindow: 10000, MaxTokens: 2048,
-	}
-
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd:      dir,
-		AgentDir: agentDir,
-		Model:    model,
-		GetAPIKey: func(provider string) (string, error) {
-			return "", nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Disable auto compaction
 	session.config.AutoCompaction = false
 	session.totalTokens = 9000
 
 	for i := 0; i < 10; i++ {
-		session.agent.AppendMessage(llm.UserMessage{Role: "user", Content: "msg"})
+		session.agent.AppendMessage(providers.UserMessage{Role: "user", Content: "msg"})
 	}
 	msgsBefore := len(session.agent.GetState().Messages)
 
