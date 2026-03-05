@@ -8,19 +8,20 @@ import (
 	"time"
 
 	"github.com/crosszan/modu/pkg/providers"
+	"github.com/crosszan/modu/pkg/types"
 )
 
 type AgentOptions struct {
 	InitialState     *AgentState
-	ConvertToLlm     func(messages []AgentMessage) ([]providers.AgentMessage, error)
+	ConvertToLlm     func(messages []AgentMessage) ([]types.AgentMessage, error)
 	TransformContext func(messages []AgentMessage, ctx context.Context) ([]AgentMessage, error)
 	SteeringMode     ExecutionMode
 	FollowUpMode     ExecutionMode
 	StreamFn         StreamFn
 	SessionID        string
 	GetAPIKey        func(provider string) (string, error)
-	ThinkingBudgets  *providers.ThinkingBudgets
-	Transport        providers.Transport
+	ThinkingBudgets  *types.ThinkingBudgets
+	Transport        types.Transport
 	MaxRetryDelayMs  int
 }
 
@@ -28,13 +29,13 @@ type Agent struct {
 	state            AgentState
 	steeringMode     ExecutionMode
 	followUpMode     ExecutionMode
-	convertToLlm     func(messages []AgentMessage) ([]providers.AgentMessage, error)
+	convertToLlm     func(messages []AgentMessage) ([]types.AgentMessage, error)
 	transformContext func(messages []AgentMessage, ctx context.Context) ([]AgentMessage, error)
 	streamFn         StreamFn
 	sessionID        string
 	getAPIKey        func(provider string) (string, error)
-	thinkingBudgets  *providers.ThinkingBudgets
-	transport        providers.Transport
+	thinkingBudgets  *types.ThinkingBudgets
+	transport        types.Transport
 	maxRetryDelayMs  int
 
 	// Queues
@@ -88,7 +89,7 @@ func NewAgent(opts AgentOptions) *Agent {
 	}
 	transport := opts.Transport
 	if transport == "" {
-		transport = providers.TransportSSE
+		transport = types.TransportSSE
 	}
 	return &Agent{
 		state:            initial,
@@ -124,7 +125,7 @@ func (a *Agent) Prompt(ctx context.Context, input interface{}) error {
 
 	switch v := input.(type) {
 	case string:
-		newMessages = []AgentMessage{providers.UserMessage{Role: "user", Content: v, Timestamp: time.Now().UnixMilli()}}
+		newMessages = []AgentMessage{types.UserMessage{Role: "user", Content: v, Timestamp: time.Now().UnixMilli()}}
 	case []AgentMessage:
 		newMessages = v
 	default:
@@ -138,7 +139,7 @@ func (a *Agent) Prompt(ctx context.Context, input interface{}) error {
 }
 
 // PromptWithImages sends a text message with attached images to the agent.
-func (a *Agent) PromptWithImages(ctx context.Context, text string, images []providers.ImageContent) error {
+func (a *Agent) PromptWithImages(ctx context.Context, text string, images []types.ImageContent) error {
 	a.mu.Lock()
 	if a.state.IsStreaming {
 		a.mu.Unlock()
@@ -146,11 +147,11 @@ func (a *Agent) PromptWithImages(ctx context.Context, text string, images []prov
 	}
 	a.mu.Unlock()
 
-	content := []providers.ContentBlock{&providers.TextContent{Type: "text", Text: text}}
+	content := []types.ContentBlock{&types.TextContent{Type: "text", Text: text}}
 	for i := range images {
 		content = append(content, &images[i])
 	}
-	msg := providers.UserMessage{
+	msg := types.UserMessage{
 		Role:      "user",
 		Content:   content,
 		Timestamp: time.Now().UnixMilli(),
@@ -224,7 +225,7 @@ func (a *Agent) SetSystemPrompt(v string) {
 	a.state.SystemPrompt = v
 }
 
-func (a *Agent) SetModel(m *providers.Model) {
+func (a *Agent) SetModel(m *types.Model) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.state.Model = m
@@ -357,25 +358,25 @@ func (a *Agent) SetSessionID(id string) {
 	a.sessionID = id
 }
 
-func (a *Agent) GetThinkingBudgets() *providers.ThinkingBudgets {
+func (a *Agent) GetThinkingBudgets() *types.ThinkingBudgets {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.thinkingBudgets
 }
 
-func (a *Agent) SetThinkingBudgets(b *providers.ThinkingBudgets) {
+func (a *Agent) SetThinkingBudgets(b *types.ThinkingBudgets) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.thinkingBudgets = b
 }
 
-func (a *Agent) GetTransport() providers.Transport {
+func (a *Agent) GetTransport() types.Transport {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.transport
 }
 
-func (a *Agent) SetTransport(t providers.Transport) {
+func (a *Agent) SetTransport(t types.Transport) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.transport = t
@@ -530,12 +531,12 @@ func (a *Agent) runLoop(ctx context.Context, messages []AgentMessage, skipInitia
 			a.state.PendingToolCalls = s
 			a.mu.Unlock()
 		case EventTypeTurnEnd:
-			if msg, ok := event.Message.(providers.AssistantMessage); ok && msg.ErrorMessage != "" {
+			if msg, ok := event.Message.(types.AssistantMessage); ok && msg.ErrorMessage != "" {
 				a.mu.Lock()
 				a.state.Error = msg.ErrorMessage
 				a.mu.Unlock()
 			}
-			if msg, ok := event.Message.(*providers.AssistantMessage); ok && msg.ErrorMessage != "" {
+			if msg, ok := event.Message.(*types.AssistantMessage); ok && msg.ErrorMessage != "" {
 				a.mu.Lock()
 				a.state.Error = msg.ErrorMessage
 				a.mu.Unlock()
@@ -555,11 +556,11 @@ func (a *Agent) runLoop(ctx context.Context, messages []AgentMessage, skipInitia
 	}
 
 	if partial != nil {
-		if msg, ok := partial.(providers.AssistantMessage); ok && hasNonEmptyContent(msg) {
+		if msg, ok := partial.(types.AssistantMessage); ok && hasNonEmptyContent(msg) {
 			a.mu.Lock()
 			a.state.Messages = append(a.state.Messages, partial)
 			a.mu.Unlock()
-		} else if msg, ok := partial.(*providers.AssistantMessage); ok && hasNonEmptyContent(*msg) {
+		} else if msg, ok := partial.(*types.AssistantMessage); ok && hasNonEmptyContent(*msg) {
 			a.mu.Lock()
 			a.state.Messages = append(a.state.Messages, partial)
 			a.mu.Unlock()
@@ -571,7 +572,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []AgentMessage, skipInitia
 		m := a.state.Model
 		a.mu.RUnlock()
 
-		stopReason := providers.StopReason("error")
+		stopReason := types.StopReason("error")
 		if ctx.Err() != nil {
 			stopReason = "aborted"
 		}
@@ -583,12 +584,12 @@ func (a *Agent) runLoop(ctx context.Context, messages []AgentMessage, skipInitia
 		if m != nil {
 			modelID = m.ID
 		}
-		errorMsg := providers.AssistantMessage{
+		errorMsg := types.AssistantMessage{
 			Role:         "assistant",
-			Content:      []providers.ContentBlock{&providers.TextContent{Type: "text", Text: ""}},
+			Content:      []types.ContentBlock{&types.TextContent{Type: "text", Text: ""}},
 			ProviderID:   providerID,
 			Model:        modelID,
-			Usage:        providers.AgentUsage{},
+			Usage:        types.AgentUsage{},
 			StopReason:   stopReason,
 			ErrorMessage: loopErr.Error(),
 			Timestamp:    time.Now().UnixMilli(),
@@ -615,30 +616,30 @@ func (a *Agent) emit(event AgentEvent) {
 	}
 }
 
-func hasNonEmptyContent(msg providers.AssistantMessage) bool {
+func hasNonEmptyContent(msg types.AssistantMessage) bool {
 	for _, block := range msg.Content {
 		switch v := block.(type) {
-		case *providers.ThinkingContent:
+		case *types.ThinkingContent:
 			if v != nil && strings.TrimSpace(v.Thinking) != "" {
 				return true
 			}
-		case providers.ThinkingContent:
+		case types.ThinkingContent:
 			if strings.TrimSpace(v.Thinking) != "" {
 				return true
 			}
-		case *providers.TextContent:
+		case *types.TextContent:
 			if v != nil && strings.TrimSpace(v.Text) != "" {
 				return true
 			}
-		case providers.TextContent:
+		case types.TextContent:
 			if strings.TrimSpace(v.Text) != "" {
 				return true
 			}
-		case *providers.ToolCallContent:
+		case *types.ToolCallContent:
 			if v != nil && strings.TrimSpace(v.Name) != "" {
 				return true
 			}
-		case providers.ToolCallContent:
+		case types.ToolCallContent:
 			if strings.TrimSpace(v.Name) != "" {
 				return true
 			}
@@ -647,8 +648,8 @@ func hasNonEmptyContent(msg providers.AssistantMessage) bool {
 	return false
 }
 
-func defaultConvertToProviders(messages []AgentMessage) ([]providers.AgentMessage, error) {
-	out := make([]providers.AgentMessage, 0, len(messages))
+func defaultConvertToProviders(messages []AgentMessage) ([]types.AgentMessage, error) {
+	out := make([]types.AgentMessage, 0, len(messages))
 	for _, m := range messages {
 		role := extractRole(m)
 		if role == "user" || role == "assistant" || role == "toolResult" {

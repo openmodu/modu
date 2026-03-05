@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/crosszan/modu/pkg/agent"
-	"github.com/crosszan/modu/pkg/providers"
+	"github.com/crosszan/modu/pkg/types"
 )
 
 const (
@@ -146,8 +146,8 @@ func (t *BashTool) Execute(ctx context.Context, toolCallID string, args map[stri
 	}
 
 	return agent.AgentToolResult{
-		Content: []providers.ContentBlock{
-			providers.TextContent{
+		Content: []types.ContentBlock{
+			types.TextContent{
 				Type: "text",
 				Text: text,
 			},

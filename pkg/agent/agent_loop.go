@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crosszan/modu/pkg/providers"
+	"github.com/crosszan/modu/pkg/types"
 )
 
 const (
@@ -91,13 +92,13 @@ func runLoop(currentContext AgentContext, newMessages []AgentMessage, config Age
 			newMessages = append(newMessages, assistantMessage)
 			currentContext.Messages = append(currentContext.Messages, assistantMessage)
 			if assistantMessage.StopReason == "error" || assistantMessage.StopReason == "aborted" {
-				stream.Push(AgentEvent{Type: EventTypeTurnEnd, Message: assistantMessage, ToolResults: []providers.ToolResultMessage{}})
+				stream.Push(AgentEvent{Type: EventTypeTurnEnd, Message: assistantMessage, ToolResults: []types.ToolResultMessage{}})
 				stream.Push(AgentEvent{Type: EventTypeAgentEnd, Messages: newMessages})
 				return
 			}
 			toolCalls := extractToolCalls(assistantMessage)
 			hasMoreToolCalls = len(toolCalls) > 0
-			toolResults := []providers.ToolResultMessage{}
+			toolResults := []types.ToolResultMessage{}
 			if hasMoreToolCalls {
 				execResults, steering := executeToolCalls(currentContext.Tools, toolCalls, ctx, stream, config)
 				toolResults = append(toolResults, execResults...)
@@ -125,7 +126,7 @@ func runLoop(currentContext AgentContext, newMessages []AgentMessage, config Age
 	stream.Push(AgentEvent{Type: EventTypeAgentEnd, Messages: newMessages})
 }
 
-func streamAssistantResponse(context AgentContext, config AgentLoopConfig, ctx context.Context, stream *EventStream, streamFn StreamFn) (*providers.AssistantMessage, error) {
+func streamAssistantResponse(context AgentContext, config AgentLoopConfig, ctx context.Context, stream *EventStream, streamFn StreamFn) (*types.AssistantMessage, error) {
 	if config.Model == nil {
 		return nil, fmt.Errorf("model is required")
 	}
@@ -137,7 +138,7 @@ func streamAssistantResponse(context AgentContext, config AgentLoopConfig, ctx c
 		}
 		messages = next
 	}
-	var llmMessages []providers.AgentMessage
+	var llmMessages []types.AgentMessage
 	var err error
 	if config.ConvertToLlm != nil {
 		llmMessages, err = config.ConvertToLlm(messages)
@@ -149,7 +150,7 @@ func streamAssistantResponse(context AgentContext, config AgentLoopConfig, ctx c
 		llmMessages = messages
 	}
 	toolDefs := buildToolDefinitions(context.Tools)
-	llmCtx := &providers.LLMContext{
+	llmCtx := &types.LLMContext{
 		SystemPrompt: context.SystemPrompt,
 		Messages:     llmMessages,
 		Tools:        toolDefs,
@@ -161,8 +162,8 @@ func streamAssistantResponse(context AgentContext, config AgentLoopConfig, ctx c
 			resolvedKey = key
 		}
 	}
-	opts := &providers.SimpleStreamOptions{
-		StreamOptions: providers.StreamOptions{
+	opts := &types.SimpleStreamOptions{
+		StreamOptions: types.StreamOptions{
 			Temperature:     config.Temperature,
 			MaxTokens:       config.MaxTokens,
 			APIKey:          resolvedKey,
@@ -182,7 +183,7 @@ func streamAssistantResponse(context AgentContext, config AgentLoopConfig, ctx c
 	if err != nil {
 		return nil, err
 	}
-	var partial *providers.AssistantMessage
+	var partial *types.AssistantMessage
 	addedPartial := false
 	for event := range response.Events() {
 		switch event.Type {
@@ -232,8 +233,8 @@ func streamAssistantResponse(context AgentContext, config AgentLoopConfig, ctx c
 	return finalMessage, nil
 }
 
-func executeToolCalls(tools []AgentTool, toolCalls []providers.ToolCallContent, ctx context.Context, stream *EventStream, config AgentLoopConfig) ([]providers.ToolResultMessage, []AgentMessage) {
-	results := []providers.ToolResultMessage{}
+func executeToolCalls(tools []AgentTool, toolCalls []types.ToolCallContent, ctx context.Context, stream *EventStream, config AgentLoopConfig) ([]types.ToolResultMessage, []AgentMessage) {
+	results := []types.ToolResultMessage{}
 	var steeringMessages []AgentMessage
 	for index, toolCall := range toolCalls {
 		stream.Push(AgentEvent{Type: EventTypeToolExecutionStart, ToolCallID: toolCall.ID, ToolName: toolCall.Name, Args: toolCall.Arguments})
@@ -242,17 +243,17 @@ func executeToolCalls(tools []AgentTool, toolCalls []providers.ToolCallContent, 
 		tool := findTool(tools, toolCall.Name)
 		if tool == nil {
 			result = AgentToolResult{
-				Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: "Tool not found"}},
+				Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "Tool not found"}},
 				Details: map[string]any{},
 			}
 			isError = true
 		} else {
 			args := toolCall.Arguments
-			toolDef := providers.ToolDefinition{Name: tool.Name(), Description: tool.Description(), Parameters: tool.Parameters()}
+			toolDef := types.ToolDefinition{Name: tool.Name(), Description: tool.Description(), Parameters: tool.Parameters()}
 			parsed, err := providers.ValidateToolArguments(toolDef, toolCall)
 			if err != nil {
 				result = AgentToolResult{
-					Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: err.Error()}},
+					Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: err.Error()}},
 					Details: map[string]any{},
 				}
 				isError = true
@@ -264,7 +265,7 @@ func executeToolCalls(tools []AgentTool, toolCalls []providers.ToolCallContent, 
 				result = r
 				if err != nil {
 					result = AgentToolResult{
-						Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: err.Error()}},
+						Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: err.Error()}},
 						Details: map[string]any{},
 					}
 					isError = true
@@ -272,7 +273,7 @@ func executeToolCalls(tools []AgentTool, toolCalls []providers.ToolCallContent, 
 			}
 		}
 		stream.Push(AgentEvent{Type: EventTypeToolExecutionEnd, ToolCallID: toolCall.ID, ToolName: toolCall.Name, Result: result, IsError: isError})
-		toolResult := providers.ToolResultMessage{
+		toolResult := types.ToolResultMessage{
 			Role:       "toolResult",
 			ToolCallID: toolCall.ID,
 			ToolName:   toolCall.Name,
@@ -298,14 +299,14 @@ func executeToolCalls(tools []AgentTool, toolCalls []providers.ToolCallContent, 
 	return results, steeringMessages
 }
 
-func skipToolCall(toolCall providers.ToolCallContent, stream *EventStream) providers.ToolResultMessage {
+func skipToolCall(toolCall types.ToolCallContent, stream *EventStream) types.ToolResultMessage {
 	result := AgentToolResult{
-		Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: "Skipped due to queued user message."}},
+		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "Skipped due to queued user message."}},
 		Details: map[string]any{},
 	}
 	stream.Push(AgentEvent{Type: EventTypeToolExecutionStart, ToolCallID: toolCall.ID, ToolName: toolCall.Name, Args: toolCall.Arguments})
 	stream.Push(AgentEvent{Type: EventTypeToolExecutionEnd, ToolCallID: toolCall.ID, ToolName: toolCall.Name, Result: result, IsError: true})
-	toolResult := providers.ToolResultMessage{
+	toolResult := types.ToolResultMessage{
 		Role:       "toolResult",
 		ToolCallID: toolCall.ID,
 		ToolName:   toolCall.Name,
@@ -328,10 +329,10 @@ func findTool(tools []AgentTool, name string) AgentTool {
 	return nil
 }
 
-func buildToolDefinitions(tools []AgentTool) []providers.ToolDefinition {
-	out := make([]providers.ToolDefinition, 0, len(tools))
+func buildToolDefinitions(tools []AgentTool) []types.ToolDefinition {
+	out := make([]types.ToolDefinition, 0, len(tools))
 	for _, tool := range tools {
-		out = append(out, providers.ToolDefinition{
+		out = append(out, types.ToolDefinition{
 			Name:        tool.Name(),
 			Description: tool.Description(),
 			Parameters:  tool.Parameters(),
@@ -340,30 +341,30 @@ func buildToolDefinitions(tools []AgentTool) []providers.ToolDefinition {
 	return out
 }
 
-func mapThinkingLevel(level ThinkingLevel) providers.ThinkingLevel {
+func mapThinkingLevel(level ThinkingLevel) types.ThinkingLevel {
 	switch level {
 	case ThinkingLevelMinimal:
-		return providers.ThinkingLevelMinimal
+		return types.ThinkingLevelMinimal
 	case ThinkingLevelLow:
-		return providers.ThinkingLevelLow
+		return types.ThinkingLevelLow
 	case ThinkingLevelMedium:
-		return providers.ThinkingLevelMedium
+		return types.ThinkingLevelMedium
 	case ThinkingLevelHigh:
-		return providers.ThinkingLevelHigh
+		return types.ThinkingLevelHigh
 	case ThinkingLevelXHigh:
-		return providers.ThinkingLevelXHigh
+		return types.ThinkingLevelXHigh
 	default:
 		return ""
 	}
 }
 
-func extractToolCalls(message *providers.AssistantMessage) []providers.ToolCallContent {
-	var out []providers.ToolCallContent
+func extractToolCalls(message *types.AssistantMessage) []types.ToolCallContent {
+	var out []types.ToolCallContent
 	for _, block := range message.Content {
 		switch v := block.(type) {
-		case providers.ToolCallContent:
+		case types.ToolCallContent:
 			out = append(out, v)
-		case *providers.ToolCallContent:
+		case *types.ToolCallContent:
 			out = append(out, *v)
 		}
 	}
@@ -392,7 +393,7 @@ func getFollowUpMessages(config AgentLoopConfig) []AgentMessage {
 	return msgs
 }
 
-func streamAssistantResponseWithRetry(context AgentContext, config AgentLoopConfig, ctx context.Context, stream *EventStream, streamFn StreamFn) (*providers.AssistantMessage, error) {
+func streamAssistantResponseWithRetry(context AgentContext, config AgentLoopConfig, ctx context.Context, stream *EventStream, streamFn StreamFn) (*types.AssistantMessage, error) {
 	maxRetries := defaultMaxRetries
 	maxDelayMs := defaultMaxDelayMs
 	if config.MaxRetryDelayMs > 0 {
@@ -463,17 +464,17 @@ func isRetryableError(err error) bool {
 
 func extractRole(message AgentMessage) string {
 	switch m := message.(type) {
-	case providers.UserMessage:
+	case types.UserMessage:
 		return m.Role
-	case *providers.UserMessage:
+	case *types.UserMessage:
 		return m.Role
-	case providers.AssistantMessage:
+	case types.AssistantMessage:
 		return m.Role
-	case *providers.AssistantMessage:
+	case *types.AssistantMessage:
 		return m.Role
-	case providers.ToolResultMessage:
+	case types.ToolResultMessage:
 		return m.Role
-	case *providers.ToolResultMessage:
+	case *types.ToolResultMessage:
 		return m.Role
 	case Message:
 		return string(m.Role)

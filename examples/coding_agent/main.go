@@ -12,6 +12,7 @@ import (
 	"github.com/crosszan/modu/pkg/coding_agent/extension"
 	"github.com/crosszan/modu/pkg/coding_agent/tools"
 	"github.com/crosszan/modu/pkg/providers"
+	"github.com/crosszan/modu/pkg/types"
 )
 
 // --- Hook Extension Demo ---
@@ -80,8 +81,8 @@ func (e *auditHookExtension) PrintSummary() {
 }
 
 func main() {
-	ollamaHost := "http://192.168.5.149:1234/v1"
-	ollamaModel := "qwen3.5-30b-a3b"
+	ollamaHost := "http://192.168.5.149:1234"
+	ollamaModel := "qwen/qwen3.5-30b-a3b"
 
 	if h := os.Getenv("OLLAMA_HOST"); h != "" {
 		ollamaHost = h
@@ -94,12 +95,12 @@ func main() {
 
 	// Register Ollama as an OpenAI-compatible provider
 	providers.Register(providers.NewOpenAIChatCompletionsProvider(
-		"lm_studio",
+		"ollama",
 		providers.WithBaseURL(fmt.Sprintf("%s/v1", ollamaHost)),
 	))
 
 	_ = enableThinking // used via ThinkingLevel config
-	model := &providers.Model{
+	model := &types.Model{
 		ID:         ollamaModel,
 		Name:       ollamaModel + " (Ollama)",
 		ProviderID: "ollama",
@@ -161,8 +162,14 @@ func main() {
 			fmt.Printf("<< Result:\n")
 			if result, ok := event.Result.(agent.AgentToolResult); ok {
 				for _, block := range result.Content {
-					if tc, ok := block.(*providers.TextContent); ok {
-						text := tc.Text
+					var text string
+					switch tc := block.(type) {
+					case *types.TextContent:
+						text = tc.Text
+					case types.TextContent:
+						text = tc.Text
+					}
+					if text != "" {
 						if len(text) > 500 {
 							text = text[:500] + "\n   ... (truncated)"
 						}

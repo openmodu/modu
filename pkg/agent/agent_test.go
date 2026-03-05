@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crosszan/modu/pkg/providers"
+	"github.com/crosszan/modu/pkg/types"
 )
 
 type mockTool struct {
@@ -22,32 +22,32 @@ func (t *mockTool) Execute(ctx context.Context, toolCallID string, args map[stri
 	value, _ := args["value"].(string)
 	t.executed = append(t.executed, value)
 	onUpdate(AgentToolResult{
-		Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: "partial"}},
+		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "partial"}},
 		Details: map[string]any{"value": value},
 	})
 	return AgentToolResult{
-		Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: "echoed: " + value}},
+		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "echoed: " + value}},
 		Details: map[string]any{"value": value},
 	}, nil
 }
 
 func TestAgentLoopBasic(t *testing.T) {
-	model := &providers.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
-	user := providers.UserMessage{Role: "user", Content: "Hello", Timestamp: time.Now().UnixMilli()}
+	model := &types.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
+	user := types.UserMessage{Role: "user", Content: "Hello", Timestamp: time.Now().UnixMilli()}
 
-	streamFn := func(ctx context.Context, _ *providers.Model, _ *providers.LLMContext, _ *providers.SimpleStreamOptions) (providers.EventStream, error) {
-		stream := providers.NewEventStream()
+	streamFn := func(ctx context.Context, _ *types.Model, _ *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+		stream := types.NewEventStream()
 		go func() {
-			msg := &providers.AssistantMessage{
+			msg := &types.AssistantMessage{
 				Role:       "assistant",
 				ProviderID: model.ProviderID,
 				Model:      model.ID,
-				Usage:      providers.AgentUsage{},
+				Usage:      types.AgentUsage{},
 				StopReason: "stop",
-				Content:    []providers.ContentBlock{&providers.TextContent{Type: "text", Text: "Hi"}},
+				Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "Hi"}},
 				Timestamp:  time.Now().UnixMilli(),
 			}
-			stream.Push(providers.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+			stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
 			stream.Close()
 		}()
 		return stream, nil
@@ -70,35 +70,35 @@ func TestAgentLoopBasic(t *testing.T) {
 }
 
 func TestAgentLoopToolCalls(t *testing.T) {
-	model := &providers.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
+	model := &types.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
 	tool := &mockTool{}
 	callIndex := 0
 
-	streamFn := func(ctx context.Context, _ *providers.Model, _ *providers.LLMContext, _ *providers.SimpleStreamOptions) (providers.EventStream, error) {
-		stream := providers.NewEventStream()
+	streamFn := func(ctx context.Context, _ *types.Model, _ *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+		stream := types.NewEventStream()
 		go func() {
 			if callIndex == 0 {
-				msg := &providers.AssistantMessage{
+				msg := &types.AssistantMessage{
 					Role:       "assistant",
 					ProviderID: model.ProviderID,
 					Model:      model.ID,
-					Usage:      providers.AgentUsage{},
+					Usage:      types.AgentUsage{},
 					StopReason: "toolUse",
-					Content:    []providers.ContentBlock{providers.ToolCallContent{Type: "toolCall", ID: "tool-1", Name: "echo", Arguments: map[string]any{"value": "hello"}}},
+					Content:    []types.ContentBlock{types.ToolCallContent{Type: "toolCall", ID: "tool-1", Name: "echo", Arguments: map[string]any{"value": "hello"}}},
 					Timestamp:  time.Now().UnixMilli(),
 				}
-				stream.Push(providers.StreamEvent{Type: "done", Reason: "toolUse", Message: msg})
+				stream.Push(types.StreamEvent{Type: "done", Reason: "toolUse", Message: msg})
 			} else {
-				msg := &providers.AssistantMessage{
+				msg := &types.AssistantMessage{
 					Role:       "assistant",
 					ProviderID: model.ProviderID,
 					Model:      model.ID,
-					Usage:      providers.AgentUsage{},
+					Usage:      types.AgentUsage{},
 					StopReason: "stop",
-					Content:    []providers.ContentBlock{&providers.TextContent{Type: "text", Text: "done"}},
+					Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "done"}},
 					Timestamp:  time.Now().UnixMilli(),
 				}
-				stream.Push(providers.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+				stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
 			}
 			callIndex++
 			stream.Close()
@@ -106,7 +106,7 @@ func TestAgentLoopToolCalls(t *testing.T) {
 		return stream, nil
 	}
 
-	stream := AgentLoop([]AgentMessage{providers.UserMessage{Role: "user", Content: "go", Timestamp: time.Now().UnixMilli()}}, AgentContext{
+	stream := AgentLoop([]AgentMessage{types.UserMessage{Role: "user", Content: "go", Timestamp: time.Now().UnixMilli()}}, AgentContext{
 		SystemPrompt: "",
 		Messages:     []AgentMessage{},
 		Tools:        []AgentTool{tool},
@@ -163,18 +163,18 @@ func drainStream(s *EventStream) {
 }
 
 func TestStreamAssistantResponseWithRetry_Success(t *testing.T) {
-	model := &providers.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
+	model := &types.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
 
-	streamFn := func(ctx context.Context, _ *providers.Model, _ *providers.LLMContext, _ *providers.SimpleStreamOptions) (providers.EventStream, error) {
-		stream := providers.NewEventStream()
+	streamFn := func(ctx context.Context, _ *types.Model, _ *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+		stream := types.NewEventStream()
 		go func() {
-			msg := &providers.AssistantMessage{
+			msg := &types.AssistantMessage{
 				Role: "assistant", ProviderID: model.ProviderID, Model: model.ID,
 				StopReason: "stop",
-				Content:    []providers.ContentBlock{&providers.TextContent{Type: "text", Text: "ok"}},
+				Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "ok"}},
 				Timestamp:  time.Now().UnixMilli(),
 			}
-			stream.Push(providers.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+			stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
 			stream.Close()
 		}()
 		return stream, nil
@@ -197,23 +197,23 @@ func TestStreamAssistantResponseWithRetry_Success(t *testing.T) {
 }
 
 func TestStreamAssistantResponseWithRetry_RetriesTransient(t *testing.T) {
-	model := &providers.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
+	model := &types.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
 
 	var attempts int32
-	streamFn := func(ctx context.Context, _ *providers.Model, _ *providers.LLMContext, _ *providers.SimpleStreamOptions) (providers.EventStream, error) {
+	streamFn := func(ctx context.Context, _ *types.Model, _ *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
 		n := atomic.AddInt32(&attempts, 1)
 		if n <= 2 {
 			return nil, fmt.Errorf("HTTP 503 service unavailable")
 		}
-		stream := providers.NewEventStream()
+		stream := types.NewEventStream()
 		go func() {
-			msg := &providers.AssistantMessage{
+			msg := &types.AssistantMessage{
 				Role: "assistant", ProviderID: model.ProviderID, Model: model.ID,
 				StopReason: "stop",
-				Content:    []providers.ContentBlock{&providers.TextContent{Type: "text", Text: "recovered"}},
+				Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "recovered"}},
 				Timestamp:  time.Now().UnixMilli(),
 			}
-			stream.Push(providers.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+			stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
 			stream.Close()
 		}()
 		return stream, nil
@@ -242,10 +242,10 @@ func TestStreamAssistantResponseWithRetry_RetriesTransient(t *testing.T) {
 }
 
 func TestStreamAssistantResponseWithRetry_NoPermanentRetry(t *testing.T) {
-	model := &providers.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
+	model := &types.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
 
 	var attempts int32
-	streamFn := func(ctx context.Context, _ *providers.Model, _ *providers.LLMContext, _ *providers.SimpleStreamOptions) (providers.EventStream, error) {
+	streamFn := func(ctx context.Context, _ *types.Model, _ *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
 		atomic.AddInt32(&attempts, 1)
 		return nil, fmt.Errorf("HTTP 401 Unauthorized")
 	}
@@ -270,7 +270,7 @@ func TestStreamAssistantResponseWithRetry_NoPermanentRetry(t *testing.T) {
 
 func TestAgentClearMessages(t *testing.T) {
 	agent := NewAgent(AgentOptions{})
-	agent.AppendMessage(providers.UserMessage{Role: "user", Content: "hello", Timestamp: time.Now().UnixMilli()})
+	agent.AppendMessage(types.UserMessage{Role: "user", Content: "hello", Timestamp: time.Now().UnixMilli()})
 	if len(agent.GetState().Messages) != 1 {
 		t.Fatal("expected 1 message")
 	}
@@ -306,11 +306,11 @@ func TestAgentSessionIDGetterSetter(t *testing.T) {
 
 func TestAgentTransportGetterSetter(t *testing.T) {
 	agent := NewAgent(AgentOptions{})
-	if agent.GetTransport() != providers.TransportSSE {
+	if agent.GetTransport() != types.TransportSSE {
 		t.Fatalf("expected default transport 'sse', got %s", agent.GetTransport())
 	}
-	agent.SetTransport(providers.TransportWebSocket)
-	if agent.GetTransport() != providers.TransportWebSocket {
+	agent.SetTransport(types.TransportWebSocket)
+	if agent.GetTransport() != types.TransportWebSocket {
 		t.Fatalf("expected transport 'websocket', got %s", agent.GetTransport())
 	}
 }
@@ -320,7 +320,7 @@ func TestAgentThinkingBudgetsGetterSetter(t *testing.T) {
 	if agent.GetThinkingBudgets() != nil {
 		t.Fatal("expected nil thinking budgets by default")
 	}
-	budgets := &providers.ThinkingBudgets{Minimal: 100, Low: 500, Medium: 2000, High: 8000}
+	budgets := &types.ThinkingBudgets{Minimal: 100, Low: 500, Medium: 2000, High: 8000}
 	agent.SetThinkingBudgets(budgets)
 	if agent.GetThinkingBudgets() != budgets {
 		t.Fatal("expected thinking budgets to be set")
@@ -339,8 +339,8 @@ func TestAgentMaxRetryDelayMsGetterSetter(t *testing.T) {
 }
 
 func TestAgentErrorMessageAppendedOnFailure(t *testing.T) {
-	model := &providers.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
-	streamFn := func(ctx context.Context, _ *providers.Model, _ *providers.LLMContext, _ *providers.SimpleStreamOptions) (providers.EventStream, error) {
+	model := &types.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
+	streamFn := func(ctx context.Context, _ *types.Model, _ *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
 		return nil, fmt.Errorf("HTTP 401 Unauthorized")
 	}
 
@@ -382,20 +382,20 @@ func TestAgentErrorMessageAppendedOnFailure(t *testing.T) {
 }
 
 func TestAgentPromptWithImages(t *testing.T) {
-	model := &providers.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
+	model := &types.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
 
-	var receivedMessages []providers.AgentMessage
-	streamFn := func(ctx context.Context, _ *providers.Model, llmCtx *providers.LLMContext, _ *providers.SimpleStreamOptions) (providers.EventStream, error) {
+	var receivedMessages []types.AgentMessage
+	streamFn := func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
 		receivedMessages = llmCtx.Messages
-		stream := providers.NewEventStream()
+		stream := types.NewEventStream()
 		go func() {
-			msg := &providers.AssistantMessage{
+			msg := &types.AssistantMessage{
 				Role: "assistant", ProviderID: model.ProviderID, Model: model.ID,
 				StopReason: "stop",
-				Content:    []providers.ContentBlock{&providers.TextContent{Type: "text", Text: "I see the image"}},
+				Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "I see the image"}},
 				Timestamp:  time.Now().UnixMilli(),
 			}
-			stream.Push(providers.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+			stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
 			stream.Close()
 		}()
 		return stream, nil
@@ -412,7 +412,7 @@ func TestAgentPromptWithImages(t *testing.T) {
 		StreamFn: streamFn,
 	})
 
-	err := agent.PromptWithImages(context.Background(), "What is this?", []providers.ImageContent{
+	err := agent.PromptWithImages(context.Background(), "What is this?", []types.ImageContent{
 		{Type: "image", Data: "base64data", MimeType: "image/png"},
 	})
 	if err != nil {
@@ -432,47 +432,47 @@ func TestAgentPromptWithImages(t *testing.T) {
 func TestHasNonEmptyContent(t *testing.T) {
 	tests := []struct {
 		name     string
-		msg      providers.AssistantMessage
+		msg      types.AssistantMessage
 		expected bool
 	}{
 		{
 			name: "empty text",
-			msg: providers.AssistantMessage{
-				Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: ""}},
+			msg: types.AssistantMessage{
+				Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: ""}},
 			},
 			expected: false,
 		},
 		{
 			name: "whitespace text",
-			msg: providers.AssistantMessage{
-				Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: "   "}},
+			msg: types.AssistantMessage{
+				Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "   "}},
 			},
 			expected: false,
 		},
 		{
 			name: "non-empty text",
-			msg: providers.AssistantMessage{
-				Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: "hello"}},
+			msg: types.AssistantMessage{
+				Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "hello"}},
 			},
 			expected: true,
 		},
 		{
 			name: "non-empty thinking",
-			msg: providers.AssistantMessage{
-				Content: []providers.ContentBlock{&providers.ThinkingContent{Type: "thinking", Thinking: "let me think"}},
+			msg: types.AssistantMessage{
+				Content: []types.ContentBlock{&types.ThinkingContent{Type: "thinking", Thinking: "let me think"}},
 			},
 			expected: true,
 		},
 		{
 			name: "tool call with name",
-			msg: providers.AssistantMessage{
-				Content: []providers.ContentBlock{&providers.ToolCallContent{Type: "toolCall", Name: "read", ID: "1"}},
+			msg: types.AssistantMessage{
+				Content: []types.ContentBlock{&types.ToolCallContent{Type: "toolCall", Name: "read", ID: "1"}},
 			},
 			expected: true,
 		},
 		{
 			name:     "empty content slice",
-			msg:      providers.AssistantMessage{Content: []providers.ContentBlock{}},
+			msg:      types.AssistantMessage{Content: []types.ContentBlock{}},
 			expected: false,
 		},
 	}
@@ -488,9 +488,9 @@ func TestHasNonEmptyContent(t *testing.T) {
 }
 
 func TestProcessProxyEvent(t *testing.T) {
-	partial := &providers.AssistantMessage{
+	partial := &types.AssistantMessage{
 		Role:    "assistant",
-		Content: []providers.ContentBlock{},
+		Content: []types.ContentBlock{},
 	}
 
 	// Test "start" event
@@ -516,7 +516,7 @@ func TestProcessProxyEvent(t *testing.T) {
 	if event == nil || event.Type != "text_delta" {
 		t.Fatal("expected text_delta event")
 	}
-	tc, ok := partial.Content[0].(*providers.TextContent)
+	tc, ok := partial.Content[0].(*types.TextContent)
 	if !ok || tc.Text != "hello" {
 		t.Fatalf("expected text 'hello', got %v", partial.Content[0])
 	}
@@ -526,7 +526,7 @@ func TestProcessProxyEvent(t *testing.T) {
 	if event == nil {
 		t.Fatal("expected event")
 	}
-	tc, _ = partial.Content[0].(*providers.TextContent)
+	tc, _ = partial.Content[0].(*types.TextContent)
 	if tc.Text != "hello world" {
 		t.Fatalf("expected text 'hello world', got %s", tc.Text)
 	}
@@ -536,13 +536,13 @@ func TestProcessProxyEvent(t *testing.T) {
 	if event == nil || event.Type != "text_end" {
 		t.Fatal("expected text_end event")
 	}
-	tc, _ = partial.Content[0].(*providers.TextContent)
+	tc, _ = partial.Content[0].(*types.TextContent)
 	if tc.TextSignature != "sig123" {
 		t.Fatalf("expected signature 'sig123', got %s", tc.TextSignature)
 	}
 
 	// Test "done" event
-	usage := &providers.AgentUsage{Input: 10, Output: 20}
+	usage := &types.AgentUsage{Input: 10, Output: 20}
 	event = processProxyEvent(&ProxyStreamEvent{Type: "done", Reason: "stop", Usage: usage}, partial)
 	if event == nil || event.Type != "done" {
 		t.Fatal("expected done event")
@@ -568,9 +568,9 @@ func TestProcessProxyEvent(t *testing.T) {
 }
 
 func TestProcessProxyEventThinking(t *testing.T) {
-	partial := &providers.AssistantMessage{
+	partial := &types.AssistantMessage{
 		Role:    "assistant",
-		Content: []providers.ContentBlock{},
+		Content: []types.ContentBlock{},
 	}
 
 	// thinking_start
@@ -584,7 +584,7 @@ func TestProcessProxyEventThinking(t *testing.T) {
 	if event == nil {
 		t.Fatal("expected event")
 	}
-	thc, ok := partial.Content[0].(*providers.ThinkingContent)
+	thc, ok := partial.Content[0].(*types.ThinkingContent)
 	if !ok || thc.Thinking != "hmm" {
 		t.Fatal("expected thinking 'hmm'")
 	}
@@ -594,16 +594,16 @@ func TestProcessProxyEventThinking(t *testing.T) {
 	if event == nil || event.Type != "thinking_end" {
 		t.Fatal("expected thinking_end")
 	}
-	thc, _ = partial.Content[0].(*providers.ThinkingContent)
+	thc, _ = partial.Content[0].(*types.ThinkingContent)
 	if thc.ThinkingSignature != "tsig" {
 		t.Fatalf("expected signature 'tsig', got %s", thc.ThinkingSignature)
 	}
 }
 
 func TestProcessProxyEventToolCall(t *testing.T) {
-	partial := &providers.AssistantMessage{
+	partial := &types.AssistantMessage{
 		Role:    "assistant",
-		Content: []providers.ContentBlock{},
+		Content: []types.ContentBlock{},
 	}
 
 	// toolcall_start
@@ -613,7 +613,7 @@ func TestProcessProxyEventToolCall(t *testing.T) {
 	if event == nil || event.Type != "toolcall_start" {
 		t.Fatal("expected toolcall_start")
 	}
-	tcc, ok := partial.Content[0].(*providers.ToolCallContent)
+	tcc, ok := partial.Content[0].(*types.ToolCallContent)
 	if !ok || tcc.Name != "read_file" || tcc.ID != "tc1" {
 		t.Fatal("expected tool call with correct name and ID")
 	}

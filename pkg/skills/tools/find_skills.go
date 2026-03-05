@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/crosszan/modu/pkg/agent"
-	"github.com/crosszan/modu/pkg/providers"
 	"github.com/crosszan/modu/pkg/skills"
+	"github.com/crosszan/modu/pkg/types"
 )
 
 // FindSkillsTool allows the LLM agent to search for installable skills from registries.
@@ -123,13 +123,13 @@ func formatSearchResults(query string, results []skills.SearchResult, cached boo
 
 func textResult(text string) agent.AgentToolResult {
 	return agent.AgentToolResult{
-		Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: text}},
+		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: text}},
 	}
 }
 
 func errorResult(msg string) agent.AgentToolResult {
 	return agent.AgentToolResult{
-		Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: msg}},
+		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: msg}},
 		Details: map[string]any{"isError": true},
 	}
 }

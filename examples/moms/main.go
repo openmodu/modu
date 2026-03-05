@@ -10,8 +10,8 @@ import (
 
 	"github.com/crosszan/modu/pkg/llm"
 	"github.com/crosszan/modu/pkg/moms"
-	"github.com/crosszan/modu/pkg/providers"
 	"github.com/crosszan/modu/pkg/skills"
+	"github.com/crosszan/modu/pkg/types"
 
 	// Register Anthropic provider.
 	_ "github.com/crosszan/modu/pkg/llm/providers/anthropic"
@@ -76,7 +76,7 @@ func main() {
 		modelID = "claude-sonnet-4-5"
 	}
 
-	model := &providers.Model{
+	model := &types.Model{
 		ID:            modelID,
 		Name:          modelID + " (Anthropic)",
 		Api:           string(llm.KnownApiAnthropicMessages),

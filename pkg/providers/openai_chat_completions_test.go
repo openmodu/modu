@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/crosszan/modu/pkg/types"
 )
 
 const (
@@ -67,20 +69,20 @@ func TestLMStudio_Stream(t *testing.T) {
 
 	for event := range stream.Events() {
 		switch event.Type {
-		case EventThinkingStart:
+		case types.EventThinkingStart:
 			sawThinkingStart = true
-		case EventThinkingEnd:
+		case types.EventThinkingEnd:
 			sawThinkingEnd = true
 			t.Logf("[thinking] %s", event.Content)
-		case EventTextStart:
+		case types.EventTextStart:
 			sawTextStart = true
-		case EventTextDelta:
+		case types.EventTextDelta:
 			textDeltas = append(textDeltas, event.Delta)
-		case EventTextEnd:
+		case types.EventTextEnd:
 			sawTextEnd = true
-		case EventDone:
+		case types.EventDone:
 			t.Logf("[done] finish_reason=%s", event.Reason)
-		case EventError:
+		case types.EventError:
 			t.Fatalf("stream error: %v", event.Error)
 		}
 	}
@@ -99,7 +101,7 @@ func TestLMStudio_Stream(t *testing.T) {
 
 	finalContent := ""
 	for _, b := range resp.Content {
-		if tc, ok := b.(*TextContent); ok {
+		if tc, ok := b.(*types.TextContent); ok {
 			finalContent += tc.Text
 		}
 	}

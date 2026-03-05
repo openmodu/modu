@@ -6,12 +6,12 @@ import (
 )
 
 const (
-	DefaultMaxLines    = 2000
-	DefaultMaxBytes    = 50 * 1024 // 50KB
-	DefaultMaxLineLen  = 500
-	GrepMaxLineLen     = 500
-	BashMaxLines       = 2000
-	ReadMaxLines       = 2000
+	DefaultMaxLines   = 2000
+	DefaultMaxBytes   = 50 * 1024 // 50KB
+	DefaultMaxLineLen = 500
+	GrepMaxLineLen    = 500
+	BashMaxLines      = 2000
+	ReadMaxLines      = 2000
 )
 
 // TruncateOptions configures truncation behavior.

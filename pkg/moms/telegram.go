@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crosszan/modu/pkg/providers"
 	"github.com/crosszan/modu/pkg/skills"
+	"github.com/crosszan/modu/pkg/types"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
@@ -21,7 +21,7 @@ type Bot struct {
 	store       *Store
 	sandbox     *Sandbox
 	workingDir  string
-	llmModel    *providers.Model
+	llmModel    *types.Model
 	getAPIKey   func(provider string) (string, error)
 	settings    *Settings
 	registryMgr *skills.RegistryManager
@@ -39,7 +39,7 @@ type queuedMessage struct {
 }
 
 // NewBot creates a new Telegram bot.
-func NewBot(token string, sandbox *Sandbox, workingDir string, llmModel *providers.Model, getAPIKey func(provider string) (string, error), registryMgr *skills.RegistryManager, searchCache *skills.SearchCache) (*Bot, error) {
+func NewBot(token string, sandbox *Sandbox, workingDir string, llmModel *types.Model, getAPIKey func(provider string) (string, error), registryMgr *skills.RegistryManager, searchCache *skills.SearchCache) (*Bot, error) {
 	api, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Telegram bot: %w", err)
@@ -343,8 +343,8 @@ func (c *tgContext) MessageText() string { return c.messageText }
 func (c *tgContext) MessageTS() string   { return c.messageTS }
 func (c *tgContext) SenderName() string  { return c.senderName }
 
-func (c *tgContext) Images() []providers.ImageContent {
-	var images []providers.ImageContent
+func (c *tgContext) Images() []types.ImageContent {
+	var images []types.ImageContent
 	for _, path := range c.attachments {
 		ext := strings.ToLower(filepath.Ext(path))
 		mimeType := ""
@@ -362,7 +362,7 @@ func (c *tgContext) Images() []providers.ImageContent {
 		if mimeType != "" {
 			data, err := os.ReadFile(path)
 			if err == nil {
-				images = append(images, providers.ImageContent{
+				images = append(images, types.ImageContent{
 					Type:     "image",
 					Data:     base64Encode(string(data)),
 					MimeType: mimeType,

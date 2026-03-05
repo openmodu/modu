@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/crosszan/modu/pkg/agent"
-	"github.com/crosszan/modu/pkg/providers"
+	"github.com/crosszan/modu/pkg/types"
 )
 
 var imageExtensions = map[string]string{
@@ -107,8 +107,8 @@ func (t *ReadTool) readImage(path, mimeType string) (agent.AgentToolResult, erro
 	encoded := base64.StdEncoding.EncodeToString(data)
 
 	return agent.AgentToolResult{
-		Content: []providers.ContentBlock{
-			providers.ImageContent{
+		Content: []types.ContentBlock{
+			types.ImageContent{
 				Type:     "image",
 				Data:     encoded,
 				MimeType: mimeType,
@@ -151,8 +151,8 @@ func (t *ReadTool) readText(path string, info os.FileInfo, args map[string]any) 
 		lines = lines[offset:]
 	} else if offset >= len(lines) {
 		return agent.AgentToolResult{
-			Content: []providers.ContentBlock{
-				providers.TextContent{
+			Content: []types.ContentBlock{
+				types.TextContent{
 					Type: "text",
 					Text: fmt.Sprintf("offset %d is beyond end of file (%d lines)", offset+1, len(lines)),
 				},
@@ -184,8 +184,8 @@ func (t *ReadTool) readText(path string, info os.FileInfo, args map[string]any) 
 	}
 
 	return agent.AgentToolResult{
-		Content: []providers.ContentBlock{
-			providers.TextContent{
+		Content: []types.ContentBlock{
+			types.TextContent{
 				Type: "text",
 				Text: result,
 			},
@@ -216,8 +216,8 @@ func toInt(v any) int {
 
 func errorResult(msg string) agent.AgentToolResult {
 	return agent.AgentToolResult{
-		Content: []providers.ContentBlock{
-			providers.TextContent{
+		Content: []types.ContentBlock{
+			types.TextContent{
 				Type: "text",
 				Text: msg,
 			},

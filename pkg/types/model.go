@@ -1,7 +1,4 @@
-package providers
-
-// StopReason is the reason the model stopped generating.
-type StopReason = string
+package types
 
 // ThinkingLevel controls the reasoning effort the model applies.
 type ThinkingLevel = string

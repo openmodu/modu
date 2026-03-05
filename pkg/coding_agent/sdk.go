@@ -7,13 +7,14 @@ import (
 	"github.com/crosszan/modu/pkg/agent"
 	"github.com/crosszan/modu/pkg/coding_agent/extension"
 	"github.com/crosszan/modu/pkg/providers"
+	"github.com/crosszan/modu/pkg/types"
 )
 
 // CreateSessionOptions configures session creation via the SDK factory.
 type CreateSessionOptions struct {
 	Cwd            string
 	AgentDir       string
-	Model          *providers.Model
+	Model          *types.Model
 	ThinkingLevel  agent.ThinkingLevel
 	ScopedModels   []string
 	Tools          []agent.AgentTool
@@ -56,7 +57,7 @@ func CreateSession(opts CreateSessionOptions) (*CreateSessionResult, error) {
 
 	// Final fallback: create a minimal model
 	if model == nil {
-		model = &providers.Model{
+		model = &types.Model{
 			ID:   "default",
 			Name: "Default Model",
 		}
@@ -119,7 +120,7 @@ func restoreSession(cs *CodingSession, path string) error {
 	}
 
 	for _, raw := range messages {
-		var msg providers.UserMessage
+		var msg types.UserMessage
 		if err := json.Unmarshal(raw, &msg); err == nil && msg.Role == "user" {
 			cs.agent.AppendMessage(msg)
 		}

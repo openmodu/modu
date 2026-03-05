@@ -3,6 +3,8 @@ package providers
 import (
 	"context"
 	"testing"
+
+	"github.com/crosszan/modu/pkg/types"
 )
 
 // stubProvider is a minimal Provider implementation for testing.
@@ -12,7 +14,7 @@ func (s *stubProvider) ID() string { return s.id }
 func (s *stubProvider) Chat(_ context.Context, _ *ChatRequest) (*ChatResponse, error) {
 	return nil, nil
 }
-func (p *stubProvider) Stream(ctx context.Context, req *ChatRequest) (EventStream, error) {
+func (p *stubProvider) Stream(ctx context.Context, req *ChatRequest) (types.EventStream, error) {
 	return nil, nil
 }
 

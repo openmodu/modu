@@ -1,11 +1,11 @@
-package providers
+package types
 
 import (
 	"fmt"
 	"sync"
 )
 
-// StreamEventType 流式事件类型定义
+// StreamEventType defines the type of a stream event.
 type StreamEventType = string
 
 const (

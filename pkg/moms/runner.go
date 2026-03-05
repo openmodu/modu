@@ -13,9 +13,9 @@ import (
 	"github.com/crosszan/modu/pkg/agent"
 	"github.com/crosszan/modu/pkg/coding_agent/tools"
 	_ "github.com/crosszan/modu/pkg/llm/providers/anthropic"
-	"github.com/crosszan/modu/pkg/providers"
 	"github.com/crosszan/modu/pkg/skills"
 	skillstools "github.com/crosszan/modu/pkg/skills/tools"
+	"github.com/crosszan/modu/pkg/types"
 )
 
 // TelegramContext is the interface the runner uses to communicate back to Telegram.
@@ -41,7 +41,7 @@ type TelegramContext interface {
 	// SenderName returns the human-readable sender name.
 	SenderName() string
 	// Images returns any image attachments provided with the message.
-	Images() []providers.ImageContent
+	Images() []types.ImageContent
 }
 
 // RunResult holds what happened after a run.
@@ -56,7 +56,7 @@ type Runner struct {
 	sandbox     *Sandbox
 	workingDir  string
 	chatID      int64
-	model       *providers.Model
+	model       *types.Model
 	getAPIKey   func(provider string) (string, error)
 	settings    *Settings
 	agentInst   *agent.Agent
@@ -67,7 +67,7 @@ type Runner struct {
 }
 
 // NewRunner creates a Runner for a chat.
-func NewRunner(sandbox *Sandbox, workingDir string, chatID int64, model *providers.Model, getAPIKey func(provider string) (string, error), settings *Settings, registryMgr *skills.RegistryManager, searchCache *skills.SearchCache) *Runner {
+func NewRunner(sandbox *Sandbox, workingDir string, chatID int64, model *types.Model, getAPIKey func(provider string) (string, error), settings *Settings, registryMgr *skills.RegistryManager, searchCache *skills.SearchCache) *Runner {
 	return &Runner{
 		sandbox:     sandbox,
 		workingDir:  workingDir,
@@ -200,7 +200,7 @@ func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult
 			if ev.Message == nil {
 				break
 			}
-			msg, ok := ev.Message.(providers.AssistantMessage)
+			msg, ok := ev.Message.(types.AssistantMessage)
 			if !ok {
 				break
 			}
@@ -212,28 +212,28 @@ func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult
 			}
 			for _, block := range msg.Content {
 				switch b := block.(type) {
-				case providers.ThinkingContent:
+				case types.ThinkingContent:
 					if strings.TrimSpace(b.Thinking) != "" {
 						thinking := b.Thinking
 						enqueue(func() error {
 							return tgCtx.RespondInThread(fmt.Sprintf("_%s_", escapeMarkdown(thinking)))
 						})
 					}
-				case *providers.ThinkingContent:
+				case *types.ThinkingContent:
 					if b != nil && strings.TrimSpace(b.Thinking) != "" {
 						thinking := b.Thinking
 						enqueue(func() error {
 							return tgCtx.RespondInThread(fmt.Sprintf("_%s_", escapeMarkdown(thinking)))
 						})
 					}
-				case providers.TextContent:
+				case types.TextContent:
 					if strings.TrimSpace(b.Text) != "" {
 						text := b.Text
 						enqueue(func() error {
 							return tgCtx.Respond(text, true)
 						})
 					}
-				case *providers.TextContent:
+				case *types.TextContent:
 					if b != nil && strings.TrimSpace(b.Text) != "" {
 						text := b.Text
 						enqueue(func() error {
@@ -265,7 +265,7 @@ func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult
 
 	// Persist context.
 	if msgs := a.GetState().Messages; len(msgs) > 0 {
-		var toSave []providers.AgentMessage
+		var toSave []types.AgentMessage
 		for _, m := range msgs {
 			toSave = append(toSave, m)
 		}
@@ -388,17 +388,17 @@ func loadContextMessages(chatDir string) ([]agent.AgentMessage, error) {
 		var msg agent.AgentMessage
 		switch base.Role {
 		case "user":
-			var um providers.UserMessage
+			var um types.UserMessage
 			if err := json.Unmarshal(raw, &um); err == nil {
 				msg = um
 			}
 		case "assistant":
-			var am providers.AssistantMessage
+			var am types.AssistantMessage
 			if err := json.Unmarshal(raw, &am); err == nil {
 				msg = am
 			}
 		case "tool":
-			var tr providers.ToolResultMessage
+			var tr types.ToolResultMessage
 			if err := json.Unmarshal(raw, &tr); err == nil {
 				msg = tr
 			}
@@ -414,9 +414,9 @@ func loadContextMessages(chatDir string) ([]agent.AgentMessage, error) {
 func extractResultText(r agent.AgentToolResult) string {
 	for _, block := range r.Content {
 		switch tc := block.(type) {
-		case providers.TextContent:
+		case types.TextContent:
 			return tc.Text
-		case *providers.TextContent:
+		case *types.TextContent:
 			if tc != nil {
 				return tc.Text
 			}

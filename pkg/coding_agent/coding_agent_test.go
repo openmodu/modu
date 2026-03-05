@@ -9,14 +9,14 @@ import (
 
 	"github.com/crosszan/modu/pkg/agent"
 	"github.com/crosszan/modu/pkg/coding_agent/extension"
-	"github.com/crosszan/modu/pkg/providers"
+	"github.com/crosszan/modu/pkg/types"
 )
 
 func TestNewCodingSession(t *testing.T) {
 	dir := t.TempDir()
 	agentDir := filepath.Join(dir, ".coding_agent")
 
-	model := &providers.Model{
+	model := &types.Model{
 		ID:            "test-model",
 		Name:          "Test Model",
 		Api:           "ollama",
@@ -52,7 +52,7 @@ func TestNewCodingSession(t *testing.T) {
 
 func TestCodingSessionRequiresCwd(t *testing.T) {
 	_, err := NewCodingSession(CodingSessionOptions{
-		Model: &providers.Model{ID: "test"},
+		Model: &types.Model{ID: "test"},
 	})
 	if err == nil {
 		t.Fatal("expected error when Cwd is empty")
@@ -159,7 +159,7 @@ func TestExtensionHooksAreApplied(t *testing.T) {
 	dir := t.TempDir()
 	agentDir := filepath.Join(dir, ".coding_agent")
 
-	model := &providers.Model{
+	model := &types.Model{
 		ID: "test", Api: "ollama", ProviderID: "ollama",
 		ContextWindow: 8192, MaxTokens: 2048,
 	}
@@ -216,21 +216,21 @@ func TestExtensionHooksAreApplied(t *testing.T) {
 
 // --- Fix 2: Auto Compaction Tests ---
 
-func newTestModel() *providers.Model {
-	return &providers.Model{
+func newTestModel() *types.Model {
+	return &types.Model{
 		ID: "test", Api: "ollama", ProviderID: "ollama",
 		ContextWindow: 8192, MaxTokens: 2048,
 	}
 }
 
-func newTestModelWithContext(contextWindow int) *providers.Model {
-	return &providers.Model{
+func newTestModelWithContext(contextWindow int) *types.Model {
+	return &types.Model{
 		ID: "test", Api: "ollama", ProviderID: "ollama",
 		ContextWindow: contextWindow, MaxTokens: 2048,
 	}
 }
 
-func newTestSession(t *testing.T, model *providers.Model) *CodingSession {
+func newTestSession(t *testing.T, model *types.Model) *CodingSession {
 	t.Helper()
 	dir := t.TempDir()
 	agentDir := filepath.Join(dir, ".coding_agent")
@@ -252,8 +252,8 @@ func TestMaybeAutoCompact_BelowThreshold(t *testing.T) {
 	// Set totalTokens below threshold (80% of 10000 = 8000)
 	session.totalTokens = 5000
 
-	session.agent.AppendMessage(providers.UserMessage{Role: "user", Content: "msg1"})
-	session.agent.AppendMessage(providers.UserMessage{Role: "user", Content: "msg2"})
+	session.agent.AppendMessage(types.UserMessage{Role: "user", Content: "msg1"})
+	session.agent.AppendMessage(types.UserMessage{Role: "user", Content: "msg2"})
 	msgsBefore := len(session.agent.GetState().Messages)
 
 	session.maybeAutoCompact(context.Background())
@@ -268,23 +268,23 @@ func TestMaybeAutoCompact_AboveThreshold(t *testing.T) {
 	session := newTestSession(t, newTestModelWithContext(10000))
 
 	// Set streamFn to a mock so compaction uses it and succeeds without LLM
-	session.streamFn = func(ctx context.Context, model *providers.Model, llmCtx *providers.LLMContext, opts *providers.SimpleStreamOptions) (providers.EventStream, error) {
-		stream := providers.NewEventStream()
+	session.streamFn = func(ctx context.Context, model *types.Model, llmCtx *types.LLMContext, opts *types.SimpleStreamOptions) (types.EventStream, error) {
+		stream := types.NewEventStream()
 		go func() {
-			msg := &providers.AssistantMessage{
+			msg := &types.AssistantMessage{
 				Role:       "assistant",
 				ProviderID: model.ProviderID,
 				Model:      model.ID,
-				Content:    []providers.ContentBlock{&providers.TextContent{Type: "text", Text: "mock summary"}},
+				Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "mock summary"}},
 			}
-			stream.Push(providers.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+			stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
 			stream.Close()
 		}()
 		return stream, nil
 	}
 
 	for i := 0; i < 10; i++ {
-		session.agent.AppendMessage(providers.UserMessage{Role: "user", Content: "msg"})
+		session.agent.AppendMessage(types.UserMessage{Role: "user", Content: "msg"})
 	}
 
 	// Set totalTokens above threshold (80% of 128000 = 102400)
@@ -362,7 +362,7 @@ func TestCycleModelNoScoped(t *testing.T) {
 }
 
 func TestCycleModelWithScoped(t *testing.T) {
-	model := &providers.Model{
+	model := &types.Model{
 		ID: "model-a", Api: "ollama", ProviderID: "ollama",
 		ContextWindow: 8192, MaxTokens: 2048,
 	}
@@ -444,7 +444,7 @@ func TestGetSetAutoRetry(t *testing.T) {
 }
 
 func TestGetModel(t *testing.T) {
-	model := &providers.Model{
+	model := &types.Model{
 		ID: "my-model", Api: "ollama", ProviderID: "ollama",
 		ContextWindow: 8192, MaxTokens: 2048,
 	}
@@ -462,7 +462,7 @@ func TestGetMessages(t *testing.T) {
 		t.Fatalf("expected 0 messages, got %d", len(msgs))
 	}
 
-	session.GetAgent().AppendMessage(providers.UserMessage{Role: "user", Content: "hi"})
+	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "hi"})
 	msgs = session.GetMessages()
 	if len(msgs) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(msgs))
@@ -479,10 +479,10 @@ func TestGetLastAssistantText(t *testing.T) {
 		t.Fatalf("expected empty, got %s", text)
 	}
 
-	session.GetAgent().AppendMessage(providers.AssistantMessage{
+	session.GetAgent().AppendMessage(types.AssistantMessage{
 		Role: "assistant",
-		Content: []providers.ContentBlock{
-			&providers.TextContent{Type: "text", Text: "hello from assistant"},
+		Content: []types.ContentBlock{
+			&types.TextContent{Type: "text", Text: "hello from assistant"},
 		},
 	})
 
@@ -491,11 +491,11 @@ func TestGetLastAssistantText(t *testing.T) {
 		t.Fatalf("expected 'hello from assistant', got %s", text)
 	}
 
-	session.GetAgent().AppendMessage(providers.UserMessage{Role: "user", Content: "question"})
-	session.GetAgent().AppendMessage(providers.AssistantMessage{
+	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "question"})
+	session.GetAgent().AppendMessage(types.AssistantMessage{
 		Role: "assistant",
-		Content: []providers.ContentBlock{
-			&providers.TextContent{Type: "text", Text: "second response"},
+		Content: []types.ContentBlock{
+			&types.TextContent{Type: "text", Text: "second response"},
 		},
 	})
 
@@ -544,7 +544,7 @@ func TestGetSessionStats(t *testing.T) {
 		t.Fatalf("expected 0 messages, got %d", stats.MessageCount)
 	}
 
-	session.GetAgent().AppendMessage(providers.UserMessage{Role: "user", Content: "hi"})
+	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "hi"})
 	stats = session.GetSessionStats()
 	if stats.MessageCount != 1 {
 		t.Fatalf("expected 1 message, got %d", stats.MessageCount)
@@ -587,10 +587,10 @@ func TestGetAvailableModels(t *testing.T) {
 func TestExportHTML(t *testing.T) {
 	session := newTestSession(t, newTestModel())
 
-	session.GetAgent().AppendMessage(providers.UserMessage{Role: "user", Content: "test prompt"})
-	session.GetAgent().AppendMessage(providers.AssistantMessage{
+	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "test prompt"})
+	session.GetAgent().AppendMessage(types.AssistantMessage{
 		Role:    "assistant",
-		Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: "test response"}},
+		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "test response"}},
 	})
 
 	dir := t.TempDir()
@@ -638,7 +638,7 @@ func TestMaybeAutoCompact_DisabledByConfig(t *testing.T) {
 	session.totalTokens = 9000
 
 	for i := 0; i < 10; i++ {
-		session.agent.AppendMessage(providers.UserMessage{Role: "user", Content: "msg"})
+		session.agent.AppendMessage(types.UserMessage{Role: "user", Content: "msg"})
 	}
 	msgsBefore := len(session.agent.GetState().Messages)
 

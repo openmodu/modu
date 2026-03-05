@@ -15,6 +15,7 @@ import (
 	coding_agent "github.com/crosszan/modu/pkg/coding_agent"
 	"github.com/crosszan/modu/pkg/coding_agent/tools"
 	"github.com/crosszan/modu/pkg/providers"
+	"github.com/crosszan/modu/pkg/types"
 )
 
 func main() {
@@ -32,7 +33,7 @@ func main() {
 	// Register DeepSeek provider
 	providers.Register(providers.NewDeepSeekProvider(apiKey))
 
-	model := &providers.Model{
+	model := &types.Model{
 		ID:         modelID,
 		Name:       "DeepSeek Chat",
 		ProviderID: "deepseek",
@@ -80,14 +81,14 @@ func main() {
 		case agent.EventTypeToolExecutionEnd:
 			if result, ok := event.Result.(agent.AgentToolResult); ok {
 				for _, block := range result.Content {
-					if tc, ok := block.(*providers.TextContent); ok {
-						text := tc.Text
-						if len(text) > 400 {
-							text = text[:400] + "\n   ...(truncated)"
-						}
-						fmt.Printf("<< %s\n", text)
-					} else if tc, ok := block.(*providers.TextContent); ok {
-						text := tc.Text
+					var text string
+					switch tc := block.(type) {
+					case *types.TextContent:
+						text = tc.Text
+					case types.TextContent:
+						text = tc.Text
+					}
+					if text != "" {
 						if len(text) > 400 {
 							text = text[:400] + "\n   ...(truncated)"
 						}

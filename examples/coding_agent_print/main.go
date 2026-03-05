@@ -18,6 +18,7 @@ import (
 	"github.com/crosszan/modu/pkg/coding_agent/modes"
 	"github.com/crosszan/modu/pkg/coding_agent/tools"
 	"github.com/crosszan/modu/pkg/providers"
+	"github.com/crosszan/modu/pkg/types"
 )
 
 func main() {
@@ -45,7 +46,7 @@ func main() {
 		providers.WithBaseURL(fmt.Sprintf("http://%s:1234/v1", ollamaHost)),
 	))
 
-	model := &providers.Model{
+	model := &types.Model{
 		ID:         ollamaModel,
 		Name:       ollamaModel + " (Ollama)",
 		ProviderID: "ollama",

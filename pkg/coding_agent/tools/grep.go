@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/crosszan/modu/pkg/agent"
-	"github.com/crosszan/modu/pkg/providers"
+	"github.com/crosszan/modu/pkg/types"
 )
 
 const defaultGrepLimit = 100
@@ -135,8 +135,8 @@ func (t *GrepTool) executeRipgrep(ctx context.Context, rgPath, pattern, searchPa
 			if exitErr.ExitCode() == 1 {
 				// No matches
 				return agent.AgentToolResult{
-					Content: []providers.ContentBlock{
-						providers.TextContent{Type: "text", Text: "No matches found."},
+					Content: []types.ContentBlock{
+						types.TextContent{Type: "text", Text: "No matches found."},
 					},
 				}, nil
 			}
@@ -161,8 +161,8 @@ func (t *GrepTool) executeRipgrep(ctx context.Context, rgPath, pattern, searchPa
 	}
 
 	return agent.AgentToolResult{
-		Content: []providers.ContentBlock{
-			providers.TextContent{Type: "text", Text: result},
+		Content: []types.ContentBlock{
+			types.TextContent{Type: "text", Text: result},
 		},
 	}, nil
 }
@@ -250,8 +250,8 @@ func (t *GrepTool) executeBuiltin(ctx context.Context, pattern, searchPath, glob
 
 	if len(results) == 0 {
 		return agent.AgentToolResult{
-			Content: []providers.ContentBlock{
-				providers.TextContent{Type: "text", Text: "No matches found."},
+			Content: []types.ContentBlock{
+				types.TextContent{Type: "text", Text: "No matches found."},
 			},
 		}, nil
 	}
@@ -262,8 +262,8 @@ func (t *GrepTool) executeBuiltin(ctx context.Context, pattern, searchPath, glob
 	}
 
 	return agent.AgentToolResult{
-		Content: []providers.ContentBlock{
-			providers.TextContent{Type: "text", Text: text},
+		Content: []types.ContentBlock{
+			types.TextContent{Type: "text", Text: text},
 		},
 	}, nil
 }

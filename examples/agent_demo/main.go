@@ -10,6 +10,7 @@ import (
 
 	"github.com/crosszan/modu/pkg/agent"
 	"github.com/crosszan/modu/pkg/providers"
+	"github.com/crosszan/modu/pkg/types"
 )
 
 // --- Tool: Calculator ---
@@ -64,7 +65,7 @@ func (t *CalculatorTool) Execute(ctx context.Context, toolCallID string, args ma
 	case "divide":
 		if b == 0 {
 			return agent.AgentToolResult{
-				Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: "Error: division by zero"}},
+				Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "Error: division by zero"}},
 				Details: map[string]any{},
 			}, nil
 		}
@@ -78,13 +79,13 @@ func (t *CalculatorTool) Execute(ctx context.Context, toolCallID string, args ma
 		desc = fmt.Sprintf("%.2f ^ %.2f = %.2f", a, b, result)
 	default:
 		return agent.AgentToolResult{
-			Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: "Unknown operation: " + op}},
+			Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "Unknown operation: " + op}},
 			Details: map[string]any{},
 		}, nil
 	}
 
 	return agent.AgentToolResult{
-		Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: desc}},
+		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: desc}},
 		Details: map[string]any{"result": result},
 	}, nil
 }
@@ -106,7 +107,7 @@ func (t *GetTimeTool) Parameters() any {
 func (t *GetTimeTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
 	now := time.Now().Format("2006-01-02 15:04:05 MST")
 	return agent.AgentToolResult{
-		Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: now}},
+		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: now}},
 		Details: map[string]any{"time": now},
 	}, nil
 }
@@ -137,7 +138,7 @@ func main() {
 		providers.WithBaseURL(baseURL),
 	))
 
-	model := &providers.Model{
+	model := &types.Model{
 		ID:         modelName,
 		Name:       "Qwen3.5 35B A3B",
 		ProviderID: providerID,
@@ -166,9 +167,9 @@ func main() {
 		case agent.EventTypeTurnEnd:
 			fmt.Println("\n--- Turn End ---")
 		case agent.EventTypeMessageStart:
-			if _, ok := event.Message.(providers.AssistantMessage); ok {
+			if _, ok := event.Message.(types.AssistantMessage); ok {
 				fmt.Printf("[Assistant] ")
-			} else if _, ok := event.Message.(*providers.AssistantMessage); ok {
+			} else if _, ok := event.Message.(*types.AssistantMessage); ok {
 				fmt.Printf("[Assistant] ")
 			}
 		case agent.EventTypeMessageUpdate:
@@ -185,7 +186,7 @@ func main() {
 		case agent.EventTypeToolExecutionEnd:
 			if result, ok := event.Result.(agent.AgentToolResult); ok {
 				for _, c := range result.Content {
-					if tc, ok := c.(*providers.TextContent); ok {
+					if tc, ok := c.(*types.TextContent); ok {
 						fmt.Printf("   Result: %s\n", tc.Text)
 					}
 				}
@@ -219,9 +220,9 @@ func main() {
 
 		// Print last assistant message content
 		for j := len(state.Messages) - 1; j >= 0; j-- {
-			msg, ok := state.Messages[j].(providers.AssistantMessage)
+			msg, ok := state.Messages[j].(types.AssistantMessage)
 			if !ok {
-				if ptr, ok2 := state.Messages[j].(*providers.AssistantMessage); ok2 {
+				if ptr, ok2 := state.Messages[j].(*types.AssistantMessage); ok2 {
 					msg = *ptr
 				} else {
 					continue
@@ -229,7 +230,7 @@ func main() {
 			}
 			fmt.Printf("Final answer: ")
 			for _, c := range msg.Content {
-				if tc, ok := c.(*providers.TextContent); ok {
+				if tc, ok := c.(*types.TextContent); ok {
 					fmt.Print(tc.Text)
 				}
 			}

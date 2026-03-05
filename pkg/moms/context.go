@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crosszan/modu/pkg/providers"
+	"github.com/crosszan/modu/pkg/types"
 )
 
-// SyncLogToMessages reads log.jsonl and returns unseen user messages as providers.UserMessage,
+// SyncLogToMessages reads log.jsonl and returns unseen user messages as types.UserMessage,
 // excluding the message with excludeTs (which will be added via Prompt()).
-func SyncLogToMessages(chatDir string, existingMessages []providers.AgentMessage, excludeTs string) []providers.UserMessage {
+func SyncLogToMessages(chatDir string, existingMessages []types.AgentMessage, excludeTs string) []types.UserMessage {
 	logPath := filepath.Join(chatDir, "log.jsonl")
 	data, err := os.ReadFile(logPath)
 	if err != nil {
@@ -24,7 +24,7 @@ func SyncLogToMessages(chatDir string, existingMessages []providers.AgentMessage
 	// Build set of already-seen message texts from the existing context.
 	seen := make(map[string]struct{})
 	for _, m := range existingMessages {
-		um, ok := m.(providers.UserMessage)
+		um, ok := m.(types.UserMessage)
 		if !ok {
 			continue
 		}
@@ -36,7 +36,7 @@ func SyncLogToMessages(chatDir string, existingMessages []providers.AgentMessage
 
 	type candidate struct {
 		ts      int64
-		message providers.UserMessage
+		message types.UserMessage
 		key     string
 	}
 	var candidates []candidate
@@ -68,7 +68,7 @@ func SyncLogToMessages(chatDir string, existingMessages []providers.AgentMessage
 		candidates = append(candidates, candidate{
 			ts:  ts,
 			key: key,
-			message: providers.UserMessage{
+			message: types.UserMessage{
 				Role:      "user",
 				Content:   text,
 				Timestamp: ts,
@@ -81,7 +81,7 @@ func SyncLogToMessages(chatDir string, existingMessages []providers.AgentMessage
 		return candidates[i].ts < candidates[j].ts
 	})
 
-	out := make([]providers.UserMessage, len(candidates))
+	out := make([]types.UserMessage, len(candidates))
 	for i, c := range candidates {
 		out[i] = c.message
 	}
@@ -95,12 +95,12 @@ func extractText(content any) string {
 	switch v := content.(type) {
 	case string:
 		return v
-	case []providers.ContentBlock:
+	case []types.ContentBlock:
 		for _, b := range v {
-			if tc, ok := b.(*providers.TextContent); ok {
+			if tc, ok := b.(*types.TextContent); ok {
 				return tc.Text
 			}
-			if tc, ok := b.(providers.TextContent); ok {
+			if tc, ok := b.(types.TextContent); ok {
 				return tc.Text
 			}
 		}
@@ -142,7 +142,7 @@ func parseTs(dateStr string) int64 {
 }
 
 // SaveContextMessages serializes messages to context.jsonl.
-func SaveContextMessages(chatDir string, messages []providers.AgentMessage) error {
+func SaveContextMessages(chatDir string, messages []types.AgentMessage) error {
 	path := filepath.Join(chatDir, "context.jsonl")
 	f, err := os.Create(path)
 	if err != nil {

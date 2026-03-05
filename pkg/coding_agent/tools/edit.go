@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/crosszan/modu/pkg/agent"
-	"github.com/crosszan/modu/pkg/providers"
+	"github.com/crosszan/modu/pkg/types"
 )
 
 // EditTool implements the precise text replacement tool.
@@ -135,8 +135,8 @@ func (t *EditTool) Execute(ctx context.Context, toolCallID string, args map[stri
 	}
 
 	return agent.AgentToolResult{
-		Content: []providers.ContentBlock{
-			providers.TextContent{
+		Content: []types.ContentBlock{
+			types.TextContent{
 				Type: "text",
 				Text: fmt.Sprintf("Successfully edited %s (%d replacement(s))\n\n%s", pathArg, replacements, diff),
 			},

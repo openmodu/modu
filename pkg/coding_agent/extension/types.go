@@ -2,7 +2,7 @@ package extension
 
 import (
 	"github.com/crosszan/modu/pkg/agent"
-	"github.com/crosszan/modu/pkg/providers"
+	"github.com/crosszan/modu/pkg/types"
 )
 
 // Extension is the interface that all extensions must implement.
@@ -62,8 +62,8 @@ type ToolDefinition struct {
 }
 
 // ToLlmToolDef converts to an LLM ToolDefinition.
-func (d ToolDefinition) ToLlmToolDef() providers.ToolDefinition {
-	return providers.ToolDefinition{
+func (d ToolDefinition) ToLlmToolDef() types.ToolDefinition {
+	return types.ToolDefinition{
 		Name:        d.Name,
 		Description: d.Description,
 		Parameters:  d.Parameters,

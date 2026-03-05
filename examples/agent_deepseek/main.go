@@ -15,15 +15,18 @@ import (
 
 	"github.com/crosszan/modu/pkg/agent"
 	"github.com/crosszan/modu/pkg/providers"
+	"github.com/crosszan/modu/pkg/types"
 )
 
 // --- Tool: Calculator ---
 
 type CalculatorTool struct{}
 
-func (t *CalculatorTool) Name() string        { return "calculator" }
-func (t *CalculatorTool) Label() string       { return "Calculator" }
-func (t *CalculatorTool) Description() string { return "Perform basic math: add, subtract, multiply, divide, sqrt, power" }
+func (t *CalculatorTool) Name() string  { return "calculator" }
+func (t *CalculatorTool) Label() string { return "Calculator" }
+func (t *CalculatorTool) Description() string {
+	return "Perform basic math: add, subtract, multiply, divide, sqrt, power"
+}
 func (t *CalculatorTool) Parameters() any {
 	return map[string]any{
 		"type": "object",
@@ -72,7 +75,7 @@ func (t *CalculatorTool) Execute(_ context.Context, _ string, args map[string]an
 		return textResult("Unknown operation: " + op), nil
 	}
 	return agent.AgentToolResult{
-		Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: desc}},
+		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: desc}},
 		Details: map[string]any{"result": result},
 	}, nil
 }
@@ -90,14 +93,14 @@ func (t *GetTimeTool) Parameters() any {
 func (t *GetTimeTool) Execute(_ context.Context, _ string, _ map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
 	now := time.Now().Format("2006-01-02 15:04:05 MST")
 	return agent.AgentToolResult{
-		Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: now}},
+		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: now}},
 		Details: map[string]any{"time": now},
 	}, nil
 }
 
 func textResult(text string) agent.AgentToolResult {
 	return agent.AgentToolResult{
-		Content: []providers.ContentBlock{&providers.TextContent{Type: "text", Text: text}},
+		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: text}},
 	}
 }
 
@@ -130,7 +133,7 @@ func main() {
 	// Register DeepSeek as an OpenAI-compatible provider
 	providers.Register(providers.NewDeepSeekProvider(apiKey))
 
-	model := &providers.Model{
+	model := &types.Model{
 		ID:         modelID,
 		Name:       "DeepSeek Chat",
 		ProviderID: "deepseek",
@@ -162,7 +165,7 @@ func main() {
 		case agent.EventTypeToolExecutionEnd:
 			if result, ok := event.Result.(agent.AgentToolResult); ok {
 				for _, c := range result.Content {
-					if tc, ok := c.(*providers.TextContent); ok {
+					if tc, ok := c.(*types.TextContent); ok {
 						fmt.Printf("<< %s\n", tc.Text)
 					}
 				}
@@ -192,10 +195,10 @@ func main() {
 		}
 		// Print token usage from last assistant message
 		for j := len(state.Messages) - 1; j >= 0; j-- {
-			var usage providers.AgentUsage
-			if msg, ok := state.Messages[j].(providers.AssistantMessage); ok {
+			var usage types.AgentUsage
+			if msg, ok := state.Messages[j].(types.AssistantMessage); ok {
 				usage = msg.Usage
-			} else if msg, ok := state.Messages[j].(*providers.AssistantMessage); ok {
+			} else if msg, ok := state.Messages[j].(*types.AssistantMessage); ok {
 				usage = msg.Usage
 			} else {
 				continue

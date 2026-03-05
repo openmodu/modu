@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/crosszan/modu/pkg/types"
 	"github.com/santhosh-tekuri/jsonschema/v5"
 )
 
 // StreamDefault is the default StreamFn. It looks up the provider from the
-// global registry by model.ProviderID and adapts the stream to
-// AssistantMessageEventStream.
-func StreamDefault(ctx context.Context, model *Model, llmCtx *LLMContext, opts *SimpleStreamOptions) (EventStream, error) {
+// global registry by model.ProviderID and calls its Stream method.
+func StreamDefault(ctx context.Context, model *types.Model, llmCtx *types.LLMContext, opts *types.SimpleStreamOptions) (types.EventStream, error) {
 	p, ok := Get(model.ProviderID)
 	if !ok {
 		return nil, fmt.Errorf("no provider registered for %q", model.ProviderID)
@@ -22,7 +22,7 @@ func StreamDefault(ctx context.Context, model *Model, llmCtx *LLMContext, opts *
 	return p.Stream(ctx, req)
 }
 
-func buildChatRequest(model *Model, llmCtx *LLMContext, opts *SimpleStreamOptions) *ChatRequest {
+func buildChatRequest(model *types.Model, llmCtx *types.LLMContext, opts *types.SimpleStreamOptions) *ChatRequest {
 	req := &ChatRequest{
 		Model:       model.ID,
 		Temperature: opts.Temperature,
@@ -33,64 +33,80 @@ func buildChatRequest(model *Model, llmCtx *LLMContext, opts *SimpleStreamOption
 	}
 	for _, m := range llmCtx.Messages {
 		switch v := m.(type) {
-		case UserMessage:
+		case types.UserMessage:
 			if s, ok := v.Content.(string); ok {
 				req.Messages = append(req.Messages, Message{Role: RoleUser, Content: s})
 			}
-		case *UserMessage:
+		case *types.UserMessage:
 			if s, ok := v.Content.(string); ok {
 				req.Messages = append(req.Messages, Message{Role: RoleUser, Content: s})
 			}
-		case AssistantMessage:
+		case types.AssistantMessage:
 			msg := Message{Role: RoleAssistant}
 			for _, block := range v.Content {
-				if tc, ok := block.(*TextContent); ok {
+				switch tc := block.(type) {
+				case *types.TextContent:
+					msg.Content += tc.Text
+				case types.TextContent:
 					msg.Content += tc.Text
 				}
 			}
 			for _, block := range v.Content {
-				if tc, ok := block.(*ToolCallContent); ok {
+				switch tc := block.(type) {
+				case *types.ToolCallContent:
 					args, _ := json.Marshal(tc.Arguments)
 					msg.ToolCalls = append(msg.ToolCalls, ToolCall{
-						ID:   tc.ID,
-						Type: "function",
-						Function: FuncCall{
-							Name:      tc.Name,
-							Arguments: string(args),
-						},
+						ID:       tc.ID,
+						Type:     "function",
+						Function: FuncCall{Name: tc.Name, Arguments: string(args)},
+					})
+				case types.ToolCallContent:
+					args, _ := json.Marshal(tc.Arguments)
+					msg.ToolCalls = append(msg.ToolCalls, ToolCall{
+						ID:       tc.ID,
+						Type:     "function",
+						Function: FuncCall{Name: tc.Name, Arguments: string(args)},
 					})
 				}
 			}
 			req.Messages = append(req.Messages, msg)
-		case *AssistantMessage:
+		case *types.AssistantMessage:
 			msg := Message{Role: RoleAssistant}
 			for _, block := range v.Content {
-				if tc, ok := block.(*TextContent); ok {
+				switch tc := block.(type) {
+				case *types.TextContent:
+					msg.Content += tc.Text
+				case types.TextContent:
 					msg.Content += tc.Text
 				}
 			}
 			for _, block := range v.Content {
-				if tc, ok := block.(*ToolCallContent); ok {
+				switch tc := block.(type) {
+				case *types.ToolCallContent:
 					args, _ := json.Marshal(tc.Arguments)
 					msg.ToolCalls = append(msg.ToolCalls, ToolCall{
-						ID:   tc.ID,
-						Type: "function",
-						Function: FuncCall{
-							Name:      tc.Name,
-							Arguments: string(args),
-						},
+						ID:       tc.ID,
+						Type:     "function",
+						Function: FuncCall{Name: tc.Name, Arguments: string(args)},
+					})
+				case types.ToolCallContent:
+					args, _ := json.Marshal(tc.Arguments)
+					msg.ToolCalls = append(msg.ToolCalls, ToolCall{
+						ID:       tc.ID,
+						Type:     "function",
+						Function: FuncCall{Name: tc.Name, Arguments: string(args)},
 					})
 				}
 			}
 			req.Messages = append(req.Messages, msg)
-		case ToolResultMessage:
+		case types.ToolResultMessage:
 			req.Messages = append(req.Messages, Message{
 				Role:       RoleTool,
 				Content:    toolResultContent(v.Content),
 				ToolCallID: v.ToolCallID,
 				Name:       v.ToolName,
 			})
-		case *ToolResultMessage:
+		case *types.ToolResultMessage:
 			req.Messages = append(req.Messages, Message{
 				Role:       RoleTool,
 				Content:    toolResultContent(v.Content),
@@ -112,9 +128,12 @@ func buildChatRequest(model *Model, llmCtx *LLMContext, opts *SimpleStreamOption
 	return req
 }
 
-func toolResultContent(blocks []ContentBlock) string {
+func toolResultContent(blocks []types.ContentBlock) string {
 	for _, b := range blocks {
-		if tc, ok := b.(*TextContent); ok {
+		switch tc := b.(type) {
+		case *types.TextContent:
+			return tc.Text
+		case types.TextContent:
 			return tc.Text
 		}
 	}
@@ -130,7 +149,7 @@ var (
 
 // ValidateToolArguments validates tool call arguments against the tool's JSON schema.
 // Returns the parsed argument map on success.
-func ValidateToolArguments(tool ToolDefinition, toolCall ToolCallContent) (map[string]any, error) {
+func ValidateToolArguments(tool types.ToolDefinition, toolCall types.ToolCallContent) (map[string]any, error) {
 	if tool.Parameters == nil {
 		return toolCall.Arguments, nil
 	}

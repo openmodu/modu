@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/crosszan/modu/pkg/types"
 )
 
 // OpenAIConfig holds configuration for an OpenAI-compatible chat completions provider.
@@ -106,7 +108,7 @@ func (p *openAIProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatRespo
 	return out, nil
 }
 
-func (p *openAIProvider) Stream(ctx context.Context, req *ChatRequest) (EventStream, error) {
+func (p *openAIProvider) Stream(ctx context.Context, req *ChatRequest) (types.EventStream, error) {
 	body, err := p.buildBody(req, true)
 	if err != nil {
 		return nil, err
@@ -121,22 +123,22 @@ func (p *openAIProvider) Stream(ctx context.Context, req *ChatRequest) (EventStr
 		return nil, fmt.Errorf("%s: %s: %s", p.id, resp.Status, strings.TrimSpace(string(data)))
 	}
 
-	stream := NewEventStream()
+	stream := types.NewEventStream()
 	go p.readSSE(resp.Body, stream)
 	return stream, nil
 }
 
 // readSSE parses an SSE stream in a separate goroutine and pushes granular events.
-func (p *openAIProvider) readSSE(body io.ReadCloser, stream *EventStreamImpl) {
+func (p *openAIProvider) readSSE(body io.ReadCloser, stream *types.EventStreamImpl) {
 	defer body.Close()
 	defer stream.Close()
 
-	partial := &AssistantMessage{
+	partial := &types.AssistantMessage{
 		Role:       "assistant",
-		Content:    []ContentBlock{},
+		Content:    []types.ContentBlock{},
 		ProviderID: p.id,
 	}
-	stream.Push(StreamEvent{Type: EventStart, Partial: partial})
+	stream.Push(types.StreamEvent{Type: types.EventStart, Partial: partial})
 
 	textStarted := false
 	thinkingStarted := false
@@ -199,8 +201,8 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *EventStreamImpl) {
 		if chunk.Error != nil {
 			partial.ErrorMessage = chunk.Error.Message
 			partial.StopReason = "error"
-			stream.Push(StreamEvent{
-				Type:         EventError,
+			stream.Push(types.StreamEvent{
+				Type:         types.EventError,
 				Reason:       "error",
 				ErrorMessage: partial,
 				Error:        fmt.Errorf("%s", chunk.Error.Message),
@@ -212,7 +214,7 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *EventStreamImpl) {
 			partial.Model = chunk.Model
 		}
 		if chunk.Usage != nil {
-			partial.Usage = AgentUsage{
+			partial.Usage = types.AgentUsage{
 				Input:       chunk.Usage.PromptTokens,
 				Output:      chunk.Usage.CompletionTokens,
 				TotalTokens: chunk.Usage.TotalTokens,
@@ -223,7 +225,7 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *EventStreamImpl) {
 		}
 		choice := chunk.Choices[0]
 		if choice.FinishReason != "" {
-			partial.StopReason = StopReason(choice.FinishReason)
+			partial.StopReason = types.StopReason(choice.FinishReason)
 		}
 
 		delta := choice.Delta
@@ -234,9 +236,9 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *EventStreamImpl) {
 				thinkingIndex = nextIndex
 				nextIndex++
 				ensureContentIndex(partial, thinkingIndex)
-				partial.Content[thinkingIndex] = &ThinkingContent{Type: "thinking", Thinking: ""}
-				stream.Push(StreamEvent{
-					Type:         EventThinkingStart,
+				partial.Content[thinkingIndex] = &types.ThinkingContent{Type: "thinking", Thinking: ""}
+				stream.Push(types.StreamEvent{
+					Type:         types.EventThinkingStart,
 					ContentIndex: thinkingIndex,
 					Partial:      partial,
 				})
@@ -244,8 +246,8 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *EventStreamImpl) {
 			if tc, ok := getThinkingAt(partial, thinkingIndex); ok {
 				tc.Thinking += rc
 			}
-			stream.Push(StreamEvent{
-				Type:         EventThinkingDelta,
+			stream.Push(types.StreamEvent{
+				Type:         types.EventThinkingDelta,
 				ContentIndex: thinkingIndex,
 				Delta:        rc,
 				Partial:      partial,
@@ -258,8 +260,8 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *EventStreamImpl) {
 				if tc, ok := getThinkingAt(partial, thinkingIndex); ok {
 					contentStr = tc.Thinking
 				}
-				stream.Push(StreamEvent{
-					Type:         EventThinkingEnd,
+				stream.Push(types.StreamEvent{
+					Type:         types.EventThinkingEnd,
 					ContentIndex: thinkingIndex,
 					Content:      contentStr,
 					Partial:      partial,
@@ -270,9 +272,9 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *EventStreamImpl) {
 				textIndex = nextIndex
 				nextIndex++
 				ensureContentIndex(partial, textIndex)
-				partial.Content[textIndex] = &TextContent{Type: "text", Text: ""}
-				stream.Push(StreamEvent{
-					Type:         EventTextStart,
+				partial.Content[textIndex] = &types.TextContent{Type: "text", Text: ""}
+				stream.Push(types.StreamEvent{
+					Type:         types.EventTextStart,
 					ContentIndex: textIndex,
 					Partial:      partial,
 				})
@@ -280,8 +282,8 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *EventStreamImpl) {
 			if tc, ok := getTextAt(partial, textIndex); ok {
 				tc.Text += content
 			}
-			stream.Push(StreamEvent{
-				Type:         EventTextDelta,
+			stream.Push(types.StreamEvent{
+				Type:         types.EventTextDelta,
 				ContentIndex: textIndex,
 				Delta:        content,
 				Partial:      partial,
@@ -298,14 +300,14 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *EventStreamImpl) {
 				if tc.Function != nil {
 					name = tc.Function.Name
 				}
-				partial.Content[nextIndex+tc.Index] = &ToolCallContent{
+				partial.Content[nextIndex+tc.Index] = &types.ToolCallContent{
 					Type:      "toolCall",
 					ID:        tc.ID,
 					Name:      name,
 					Arguments: map[string]any{},
 				}
-				stream.Push(StreamEvent{
-					Type:         EventToolCallStart,
+				stream.Push(types.StreamEvent{
+					Type:         types.EventToolCallStart,
 					ContentIndex: nextIndex + tc.Index,
 					Partial:      partial,
 				})
@@ -319,8 +321,8 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *EventStreamImpl) {
 				}
 				if tc.Function.Arguments != "" {
 					acc.argsJSON.WriteString(tc.Function.Arguments)
-					stream.Push(StreamEvent{
-						Type:         EventToolCallDelta,
+					stream.Push(types.StreamEvent{
+						Type:         types.EventToolCallDelta,
 						ContentIndex: nextIndex + tc.Index,
 						Delta:        tc.Function.Arguments,
 						Partial:      partial,
@@ -333,8 +335,8 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *EventStreamImpl) {
 	if err := sc.Err(); err != nil {
 		partial.ErrorMessage = err.Error()
 		partial.StopReason = "error"
-		stream.Push(StreamEvent{
-			Type:         EventError,
+		stream.Push(types.StreamEvent{
+			Type:         types.EventError,
 			Reason:       "error",
 			ErrorMessage: partial,
 			Error:        err,
@@ -347,8 +349,8 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *EventStreamImpl) {
 		if tc, ok := getThinkingAt(partial, thinkingIndex); ok {
 			contentStr = tc.Thinking
 		}
-		stream.Push(StreamEvent{
-			Type:         EventThinkingEnd,
+		stream.Push(types.StreamEvent{
+			Type:         types.EventThinkingEnd,
 			ContentIndex: thinkingIndex,
 			Content:      contentStr,
 			Partial:      partial,
@@ -360,8 +362,8 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *EventStreamImpl) {
 		if tc, ok := getTextAt(partial, textIndex); ok {
 			contentStr = tc.Text
 		}
-		stream.Push(StreamEvent{
-			Type:         EventTextEnd,
+		stream.Push(types.StreamEvent{
+			Type:         types.EventTextEnd,
 			ContentIndex: textIndex,
 			Content:      contentStr,
 			Partial:      partial,
@@ -384,7 +386,7 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *EventStreamImpl) {
 			args = map[string]any{}
 		}
 
-		tcc := &ToolCallContent{
+		tcc := &types.ToolCallContent{
 			Type:      "toolCall",
 			ID:        acc.id,
 			Name:      acc.name,
@@ -394,16 +396,16 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *EventStreamImpl) {
 		ensureContentIndex(partial, idx)
 		partial.Content[idx] = tcc
 
-		stream.Push(StreamEvent{
-			Type:         EventToolCallEnd,
+		stream.Push(types.StreamEvent{
+			Type:         types.EventToolCallEnd,
 			ContentIndex: idx,
 			ToolCall:     tcc,
 			Partial:      partial,
 		})
 	}
 
-	stream.Push(StreamEvent{
-		Type:    EventDone,
+	stream.Push(types.StreamEvent{
+		Type:    types.EventDone,
 		Reason:  partial.StopReason,
 		Message: partial,
 	})
@@ -455,24 +457,24 @@ func (p *openAIProvider) doRequest(ctx context.Context, body []byte) (*http.Resp
 }
 
 // Helpers for array bounds protection and casting
-func ensureContentIndex(msg *AssistantMessage, index int) {
+func ensureContentIndex(msg *types.AssistantMessage, index int) {
 	for len(msg.Content) <= index {
 		msg.Content = append(msg.Content, nil)
 	}
 }
 
-func getTextAt(msg *AssistantMessage, index int) (*TextContent, bool) {
+func getTextAt(msg *types.AssistantMessage, index int) (*types.TextContent, bool) {
 	if index >= len(msg.Content) {
 		return nil, false
 	}
-	tc, ok := msg.Content[index].(*TextContent)
+	tc, ok := msg.Content[index].(*types.TextContent)
 	return tc, ok
 }
 
-func getThinkingAt(msg *AssistantMessage, index int) (*ThinkingContent, bool) {
+func getThinkingAt(msg *types.AssistantMessage, index int) (*types.ThinkingContent, bool) {
 	if index >= len(msg.Content) {
 		return nil, false
 	}
-	tc, ok := msg.Content[index].(*ThinkingContent)
+	tc, ok := msg.Content[index].(*types.ThinkingContent)
 	return tc, ok
 }

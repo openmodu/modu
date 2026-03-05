@@ -9,7 +9,7 @@ import (
 
 	"github.com/crosszan/modu/pkg/agent"
 	coding_agent "github.com/crosszan/modu/pkg/coding_agent"
-	"github.com/crosszan/modu/pkg/providers"
+	"github.com/crosszan/modu/pkg/types"
 )
 
 // PrintMode specifies the output format for print mode.
@@ -56,9 +56,9 @@ func runPrintText(ctx context.Context, opts PrintOptions) error {
 	// Subscribe to capture assistant messages
 	unsub := opts.Session.Subscribe(func(event agent.AgentEvent) {
 		if event.Type == agent.EventTypeMessageEnd {
-			if msg, ok := event.Message.(providers.AssistantMessage); ok {
+			if msg, ok := event.Message.(types.AssistantMessage); ok {
 				for _, block := range msg.Content {
-					if tc, ok := block.(providers.TextContent); ok {
+					if tc, ok := block.(types.TextContent); ok {
 						lastAssistantText = tc.Text
 					}
 				}
