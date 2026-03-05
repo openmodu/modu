@@ -8,13 +8,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/crosszan/modu/pkg/llm"
 	"github.com/crosszan/modu/pkg/moms"
+	"github.com/crosszan/modu/pkg/providers"
 	"github.com/crosszan/modu/pkg/skills"
 	"github.com/crosszan/modu/pkg/types"
-
-	// Register Anthropic provider.
-	_ "github.com/crosszan/modu/pkg/llm/providers/anthropic"
 )
 
 func main() {
@@ -76,17 +73,22 @@ func main() {
 		modelID = "claude-sonnet-4-5"
 	}
 
+	providers.Register(providers.NewOpenAIChatCompletionsProvider(types.KnownProviderAnthropic,
+		providers.WithBaseURL("https://api.anthropic.com"),
+		providers.WithAPIKey(anthropicKey),
+	))
+
 	model := &types.Model{
 		ID:            modelID,
 		Name:          modelID + " (Anthropic)",
-		Api:           string(llm.KnownApiAnthropicMessages),
-		ProviderID:    string(llm.KnownProviderAnthropic),
+		Api:           types.KnownApiAnthropicMessages,
+		ProviderID:    types.KnownProviderAnthropic,
 		ContextWindow: 200000,
 		MaxTokens:     8192,
 	}
 
 	getAPIKey := func(provider string) (string, error) {
-		if provider == string(llm.KnownProviderAnthropic) {
+		if provider == types.KnownProviderAnthropic {
 			if anthropicKey != "" {
 				return anthropicKey, nil
 			}

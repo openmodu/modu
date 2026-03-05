@@ -5,7 +5,6 @@ Stateful agent with tool execution and event streaming.
 ## Installation
 
 ```bash
-# Assuming this is part of your module
 go get github.com/crosszan/modu/pkg/agent
 ```
 
@@ -19,52 +18,58 @@ import (
         "fmt"
 
         "github.com/crosszan/modu/pkg/agent"
-        "github.com/crosszan/modu/pkg/llm"
+        "github.com/crosszan/modu/pkg/providers"
+        "github.com/crosszan/modu/pkg/types"
 )
 
 func main() {
+        // Register a provider once at startup
+        providers.Register(providers.NewOpenAIChatCompletionsProvider("anthropic",
+                providers.WithBaseURL("https://api.anthropic.com"),
+                providers.WithAPIKey(os.Getenv("ANTHROPIC_API_KEY")),
+        ))
+
+        model := &types.Model{
+                ID:         "claude-sonnet-4-5",
+                ProviderID: "anthropic",
+        }
+
         // Initialize Agent
-        agent := agent.NewAgent(agent.AgentOptions{
+        a := agent.NewAgent(agent.AgentOptions{
                 InitialState: &agent.AgentState{
                         SystemPrompt: "You are a helpful assistant.",
-                        Model:        llm.GetModel("openai", "gpt-4o"),
+                        Model:        model,
                 },
-                ConvertToLlm: func(messages []agent.AgentMessage) ([]llm.Message, error) {
-                        out := make([]llm.Message, 0, len(messages))
-                        for _, m := range messages {
-                                switch m.(type) {
-                                case llm.UserMessage, *llm.UserMessage, llm.AssistantMessage, *llm.AssistantMessage, llm.ToolResultMessage, *llm.ToolResultMessage:
-                                        out = append(out, m)
-                                }
-                        }
-                        return out, nil
+                GetAPIKey: func(provider string) (string, error) {
+                        return os.Getenv("ANTHROPIC_API_KEY"), nil
                 },
         })
 
         // Subscribe to events
-        agent.Subscribe(func(e agent.AgentEvent) {
-                if e.Type == agent.EventTypeMessageUpdate && e.AssistantMessageEvent != nil && e.AssistantMessageEvent.Type == "text_delta" {
-                        fmt.Print(e.AssistantMessageEvent.Delta)
+        a.Subscribe(func(e agent.AgentEvent) {
+                if e.Type == agent.EventTypeMessageUpdate && e.StreamEvent != nil {
+                        if e.StreamEvent.Type == "text_delta" {
+                                fmt.Print(e.StreamEvent.Delta)
+                        }
                 }
         })
 
         // Prompt
         ctx := context.Background()
-        _ = agent.Prompt(ctx, "Hello!")
+        _ = a.Prompt(ctx, "Hello!")
+        a.WaitForIdle()
 }
 ```
 
 ## Core Concepts
 
-### AgentMessage vs LLM Message
+### AgentMessage
 
-The agent works with `AgentMessage` which is an alias of `llm.Message` and can include custom message types.
-
-The `ConvertToLlm` option converts `AgentMessage[]` into LLM-compatible messages before each call.
+`AgentMessage` is an alias of `types.AgentMessage` (an empty interface). The conversation history holds `types.UserMessage`, `types.AssistantMessage`, and `types.ToolResultMessage` values.
 
 ### Event Flow
 
-The agent utilizes a synchronous event emission mechanism (via [Subscribe](./agent.go#L61-L80)). Understanding the event sequence is key for UI integration.
+The agent utilizes a synchronous event emission mechanism (via [Subscribe](./agent.go)). Understanding the event sequence is key for UI integration.
 
 #### prompt() Event Sequence
 
@@ -122,19 +127,22 @@ Prompt("Check Weather")
 ## Agent Options
 
 ```go
-agent := NewAgent(AgentOptions{
-    InitialState: AgentState{
-        SystemPrompt: "...",
-        Model:        myModel,
-        ThinkingLevel: ThinkingLevelOff, // "off", "low", "high"
-        Tools:        []Tool{weatherTool},
+a := agent.NewAgent(agent.AgentOptions{
+    InitialState: &agent.AgentState{
+        SystemPrompt:  "...",
+        Model:         myModel,
+        ThinkingLevel: agent.ThinkingLevelOff, // "off", "minimal", "low", "medium", "high", "xhigh"
+        Tools:         []agent.AgentTool{weatherTool},
     },
 
     // Steering mode: "one-at-a-time" (default) or "all"
-    SteeringMode: ExecutionModeOneAtATime,
+    SteeringMode: agent.ExecutionModeOneAtATime,
 
     // Follow-up mode: "one-at-a-time" (default) or "all"
-    FollowUpMode: ExecutionModeOneAtATime,
+    FollowUpMode: agent.ExecutionModeOneAtATime,
+
+    // Custom stream function (optional, defaults to providers.StreamDefault)
+    StreamFn: myStreamFn,
 })
 ```
 
@@ -142,13 +150,15 @@ agent := NewAgent(AgentOptions{
 
 ```go
 type AgentState struct {
-    SystemPrompt  string
-    Model         Model
-    ThinkingLevel ThinkingLevel
-    Tools         []Tool
-    Messages      []Message
-    IsStreaming   bool
-    Error         error
+    SystemPrompt     string
+    Model            *types.Model
+    ThinkingLevel    ThinkingLevel
+    Tools            []AgentTool
+    Messages         []AgentMessage
+    IsStreaming      bool
+    StreamMessage    AgentMessage
+    PendingToolCalls map[string]struct{}
+    Error            string
 }
 ```
 
@@ -160,58 +170,75 @@ Access via `agent.GetState()` (thread-safe).
 
 ```go
 // String input
-agent.Prompt(ctx, "Hello")
+a.Prompt(ctx, "Hello")
 
-// Message struct input
-agent.Prompt(ctx, Message{Role: RoleUser, Content: ...})
+// Send with images
+a.PromptWithImages(ctx, "What's in this image?", []types.ImageContent{
+    {Type: "image", Data: base64data, MimeType: "image/png"},
+})
 ```
 
 ### Control & Queueing
 
 **Steering** (Interrupts):
-Use [Steer](./agent.go#L105-L110) to inject high-priority messages while the agent is running (e.g., stopping a tool).
+Use `Steer` to inject high-priority messages while the agent is running.
 
 ```go
-agent.Steer(Message{
-    Role: RoleUser,
-    Content: []ContentBlock{{Type: ContentTypeText, Text: "Stop!"}},
-})
+a.Steer(types.UserMessage{Role: "user", Content: "Stop what you're doing!"})
 ```
 
 **Follow-Up** (Queueing):
-Use [FollowUp](./agent.go#L111-L116) to queue messages to be processed after the current task completes.
+Use `FollowUp` to queue messages to be processed after the current task completes.
 
 ```go
-agent.FollowUp(Message{
-    Role: RoleUser,
-    Content: []ContentBlock{{Type: ContentTypeText, Text: "Summarize session"}},
-})
+a.FollowUp(types.UserMessage{Role: "user", Content: "Summarize session"})
 ```
 
 ### Events
 
 ```go
-unsubscribe := agent.Subscribe(func(e AgentEvent) {
+unsubscribe := a.Subscribe(func(e agent.AgentEvent) {
     // Handle event
 })
-defer unsubscribe() // Calls the returned function to unregister
+defer unsubscribe()
 ```
 
 ## Tools
 
-Implement the [Tool](./agent_types.go#L86-L92) interface:
+Implement the `AgentTool` interface:
 
 ```go
-type MyTool struct {}
+type MyTool struct{}
 
-func (t *MyTool) Name() string { return "my_tool" }
-func (t *MyTool) Description() string { return "Does something" }
+func (t *MyTool) Name() string        { return "my_tool" }
+func (t *MyTool) Label() string       { return "My Tool" }
+func (t *MyTool) Description() string { return "Does something useful" }
+func (t *MyTool) Parameters() any     { return nil }
 
-func (t *MyTool) Execute(ctx context.Context, id string, args string, onUpdate func(interface{})) (string, error) {
-    onUpdate("Working...")
-    // ... logic ...
-    return "Result", nil
+func (t *MyTool) Execute(ctx context.Context, id string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+    onUpdate(agent.AgentToolResult{
+        Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "Working..."}},
+    })
+    return agent.AgentToolResult{
+        Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "Result"}},
+    }, nil
 }
+```
+
+## Proxy Streaming
+
+Use `StreamProxy` to route calls through an authenticating proxy server:
+
+```go
+a := agent.NewAgent(agent.AgentOptions{
+    StreamFn: func(ctx context.Context, model *types.Model, llmCtx *types.LLMContext, opts *types.SimpleStreamOptions) (types.EventStream, error) {
+        return agent.StreamProxy(ctx, model, llmCtx, &agent.ProxyStreamOptions{
+            SimpleStreamOptions: *opts,
+            AuthToken:           "my-token",
+            ProxyURL:            "https://genai.example.com",
+        })
+    },
+})
 ```
 
 ## License

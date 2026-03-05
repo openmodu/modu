@@ -19,7 +19,6 @@ import (
 	"github.com/crosszan/modu/pkg/coding_agent/session"
 	"github.com/crosszan/modu/pkg/coding_agent/skills"
 	"github.com/crosszan/modu/pkg/coding_agent/tools"
-	"github.com/crosszan/modu/pkg/llm"
 	"github.com/crosszan/modu/pkg/providers"
 	"github.com/crosszan/modu/pkg/types"
 )
@@ -180,7 +179,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 			if ok {
 				return key, nil
 			}
-			key = llm.GetEnvAPIKey(provider)
+			key = providers.GetEnvAPIKey(provider)
 			if key != "" {
 				return key, nil
 			}
@@ -397,11 +396,11 @@ func (s *CodingSession) SetModel(model *types.Model) {
 
 // SetModelByID changes the active model by provider and model ID.
 func (s *CodingSession) SetModelByID(provider, modelID string) error {
-	llmModel := llm.GetModel(llm.Provider(provider), modelID)
+	llmModel := providers.GetModel(provider, modelID)
 	if llmModel == nil {
 		return fmt.Errorf("model not found: %s/%s", provider, modelID)
 	}
-	s.SetModel(llmModelToProviders(llmModel))
+	s.SetModel(llmModel)
 	return nil
 }
 
@@ -513,10 +512,10 @@ func (s *CodingSession) CycleModel() *types.Model {
 	}
 
 	nextID := s.scopedModels[nextIdx]
-	llmModel := llm.GetModel("", nextID)
+	llmModel := providers.GetModel("", nextID)
 	var model *types.Model
 	if llmModel != nil {
-		model = llmModelToProviders(llmModel)
+		model = llmModel
 	} else {
 		model = &types.Model{ID: nextID, Name: nextID}
 	}
@@ -710,24 +709,10 @@ func (s *CodingSession) GetSessionStats() SessionStats {
 // GetAvailableModels returns all registered models from all providers.
 func (s *CodingSession) GetAvailableModels() []*types.Model {
 	var result []*types.Model
-	for _, p := range llm.GetProviders() {
-		for _, m := range llm.GetModels(p) {
-			result = append(result, llmModelToProviders(m))
-		}
+	for _, p := range providers.GetAllProviders() {
+		result = append(result, providers.GetModels(p)...)
 	}
 	return result
-}
-
-// llmModelToProviders converts a *llm.Model to *types.Model.
-func llmModelToProviders(m *llm.Model) *types.Model {
-	if m == nil {
-		return nil
-	}
-	return &types.Model{
-		ID:         m.ID,
-		Name:       m.Name,
-		ProviderID: string(m.Provider),
-	}
 }
 
 // ExecuteBash executes a shell command and returns the result.

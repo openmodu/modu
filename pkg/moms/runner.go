@@ -12,8 +12,7 @@ import (
 
 	"github.com/crosszan/modu/pkg/agent"
 	"github.com/crosszan/modu/pkg/coding_agent/tools"
-	_ "github.com/crosszan/modu/pkg/llm/providers/anthropic"
-	"github.com/crosszan/modu/pkg/skills"
+"github.com/crosszan/modu/pkg/skills"
 	skillstools "github.com/crosszan/modu/pkg/skills/tools"
 	"github.com/crosszan/modu/pkg/types"
 )

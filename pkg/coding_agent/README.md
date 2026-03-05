@@ -1,6 +1,6 @@
 # coding_agent
 
-`coding_agent` 是基于 `pkg/agent` 核心循环和 `pkg/llm` 多 Provider 抽象构建的上层编码代理系统，提供完整的 AI 辅助编码能力。
+`coding_agent` 是基于 `pkg/agent` 核心循环和 `pkg/providers` 多 Provider 抽象构建的上层编码代理系统，提供完整的 AI 辅助编码能力。
 
 ## 架构总览
 
@@ -235,16 +235,18 @@ import (
 
     coding_agent "github.com/crosszan/modu/pkg/coding_agent"
     "github.com/crosszan/modu/pkg/coding_agent/tools"
-    "github.com/crosszan/modu/pkg/llm"
-    _ "github.com/crosszan/modu/pkg/llm/providers/ollama"
+    "github.com/crosszan/modu/pkg/providers"
+    "github.com/crosszan/modu/pkg/types"
 )
 
 func main() {
-    model := &llm.Model{
+    providers.Register(providers.NewOpenAIChatCompletionsProvider("ollama",
+        providers.WithBaseURL("http://localhost:11434/v1"),
+    ))
+
+    model := &types.Model{
         ID:            "qwen3-coder-next",
-        Api:           llm.Api(llm.KnownApiOllama),
-        Provider:      llm.Provider(llm.KnownProviderOllama),
-        BaseURL:       "http://localhost:11434",
+        ProviderID:    "ollama",
         ContextWindow: 32768,
         MaxTokens:     4096,
     }
