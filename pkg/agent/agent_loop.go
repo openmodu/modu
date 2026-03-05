@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crosszan/modu/pkg/providers"
 	"github.com/crosszan/modu/pkg/types"
 )
 
@@ -177,7 +176,7 @@ func streamAssistantResponse(context AgentContext, config AgentLoopConfig, ctx c
 		ThinkingBudgets: config.ThinkingBudgets,
 	}
 	if streamFn == nil {
-		streamFn = providers.StreamDefault
+		streamFn = StreamDefault
 	}
 	response, err := streamFn(ctx, config.Model, llmCtx, opts)
 	if err != nil {
@@ -250,7 +249,7 @@ func executeToolCalls(tools []AgentTool, toolCalls []types.ToolCallContent, ctx 
 		} else {
 			args := toolCall.Arguments
 			toolDef := types.ToolDefinition{Name: tool.Name(), Description: tool.Description(), Parameters: tool.Parameters()}
-			parsed, err := providers.ValidateToolArguments(toolDef, toolCall)
+			parsed, err := ValidateToolArguments(toolDef, toolCall)
 			if err != nil {
 				result = AgentToolResult{
 					Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: err.Error()}},

@@ -1,4 +1,4 @@
-package providers
+package agent
 
 import (
 	"bytes"
@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/crosszan/modu/pkg/providers"
 	"github.com/crosszan/modu/pkg/types"
 	"github.com/santhosh-tekuri/jsonschema/v5"
 )
@@ -14,7 +15,7 @@ import (
 // StreamDefault is the default StreamFn. It looks up the provider from the
 // global registry by model.ProviderID and calls its Stream method.
 func StreamDefault(ctx context.Context, model *types.Model, llmCtx *types.LLMContext, opts *types.SimpleStreamOptions) (types.EventStream, error) {
-	p, ok := Get(model.ProviderID)
+	p, ok := providers.Get(model.ProviderID)
 	if !ok {
 		return nil, fmt.Errorf("no provider registered for %q", model.ProviderID)
 	}
@@ -22,27 +23,27 @@ func StreamDefault(ctx context.Context, model *types.Model, llmCtx *types.LLMCon
 	return p.Stream(ctx, req)
 }
 
-func buildChatRequest(model *types.Model, llmCtx *types.LLMContext, opts *types.SimpleStreamOptions) *ChatRequest {
-	req := &ChatRequest{
+func buildChatRequest(model *types.Model, llmCtx *types.LLMContext, opts *types.SimpleStreamOptions) *providers.ChatRequest {
+	req := &providers.ChatRequest{
 		Model:       model.ID,
 		Temperature: opts.Temperature,
 		MaxTokens:   opts.MaxTokens,
 	}
 	if llmCtx.SystemPrompt != "" {
-		req.Messages = append(req.Messages, Message{Role: RoleSystem, Content: llmCtx.SystemPrompt})
+		req.Messages = append(req.Messages, providers.Message{Role: providers.RoleSystem, Content: llmCtx.SystemPrompt})
 	}
 	for _, m := range llmCtx.Messages {
 		switch v := m.(type) {
 		case types.UserMessage:
 			if s, ok := v.Content.(string); ok {
-				req.Messages = append(req.Messages, Message{Role: RoleUser, Content: s})
+				req.Messages = append(req.Messages, providers.Message{Role: providers.RoleUser, Content: s})
 			}
 		case *types.UserMessage:
 			if s, ok := v.Content.(string); ok {
-				req.Messages = append(req.Messages, Message{Role: RoleUser, Content: s})
+				req.Messages = append(req.Messages, providers.Message{Role: providers.RoleUser, Content: s})
 			}
 		case types.AssistantMessage:
-			msg := Message{Role: RoleAssistant}
+			msg := providers.Message{Role: providers.RoleAssistant}
 			for _, block := range v.Content {
 				switch tc := block.(type) {
 				case *types.TextContent:
@@ -55,23 +56,23 @@ func buildChatRequest(model *types.Model, llmCtx *types.LLMContext, opts *types.
 				switch tc := block.(type) {
 				case *types.ToolCallContent:
 					args, _ := json.Marshal(tc.Arguments)
-					msg.ToolCalls = append(msg.ToolCalls, ToolCall{
+					msg.ToolCalls = append(msg.ToolCalls, providers.ToolCall{
 						ID:       tc.ID,
 						Type:     "function",
-						Function: FuncCall{Name: tc.Name, Arguments: string(args)},
+						Function: providers.FuncCall{Name: tc.Name, Arguments: string(args)},
 					})
 				case types.ToolCallContent:
 					args, _ := json.Marshal(tc.Arguments)
-					msg.ToolCalls = append(msg.ToolCalls, ToolCall{
+					msg.ToolCalls = append(msg.ToolCalls, providers.ToolCall{
 						ID:       tc.ID,
 						Type:     "function",
-						Function: FuncCall{Name: tc.Name, Arguments: string(args)},
+						Function: providers.FuncCall{Name: tc.Name, Arguments: string(args)},
 					})
 				}
 			}
 			req.Messages = append(req.Messages, msg)
 		case *types.AssistantMessage:
-			msg := Message{Role: RoleAssistant}
+			msg := providers.Message{Role: providers.RoleAssistant}
 			for _, block := range v.Content {
 				switch tc := block.(type) {
 				case *types.TextContent:
@@ -84,31 +85,31 @@ func buildChatRequest(model *types.Model, llmCtx *types.LLMContext, opts *types.
 				switch tc := block.(type) {
 				case *types.ToolCallContent:
 					args, _ := json.Marshal(tc.Arguments)
-					msg.ToolCalls = append(msg.ToolCalls, ToolCall{
+					msg.ToolCalls = append(msg.ToolCalls, providers.ToolCall{
 						ID:       tc.ID,
 						Type:     "function",
-						Function: FuncCall{Name: tc.Name, Arguments: string(args)},
+						Function: providers.FuncCall{Name: tc.Name, Arguments: string(args)},
 					})
 				case types.ToolCallContent:
 					args, _ := json.Marshal(tc.Arguments)
-					msg.ToolCalls = append(msg.ToolCalls, ToolCall{
+					msg.ToolCalls = append(msg.ToolCalls, providers.ToolCall{
 						ID:       tc.ID,
 						Type:     "function",
-						Function: FuncCall{Name: tc.Name, Arguments: string(args)},
+						Function: providers.FuncCall{Name: tc.Name, Arguments: string(args)},
 					})
 				}
 			}
 			req.Messages = append(req.Messages, msg)
 		case types.ToolResultMessage:
-			req.Messages = append(req.Messages, Message{
-				Role:       RoleTool,
+			req.Messages = append(req.Messages, providers.Message{
+				Role:       providers.RoleTool,
 				Content:    toolResultContent(v.Content),
 				ToolCallID: v.ToolCallID,
 				Name:       v.ToolName,
 			})
 		case *types.ToolResultMessage:
-			req.Messages = append(req.Messages, Message{
-				Role:       RoleTool,
+			req.Messages = append(req.Messages, providers.Message{
+				Role:       providers.RoleTool,
 				Content:    toolResultContent(v.Content),
 				ToolCallID: v.ToolCallID,
 				Name:       v.ToolName,
@@ -116,9 +117,9 @@ func buildChatRequest(model *types.Model, llmCtx *types.LLMContext, opts *types.
 		}
 	}
 	for _, t := range llmCtx.Tools {
-		req.Tools = append(req.Tools, Tool{
+		req.Tools = append(req.Tools, providers.Tool{
 			Type: "function",
-			Function: FuncDef{
+			Function: providers.FuncDef{
 				Name:        t.Name,
 				Description: t.Description,
 				Parameters:  t.Parameters,

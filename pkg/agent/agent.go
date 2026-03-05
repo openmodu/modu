@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crosszan/modu/pkg/providers"
 	"github.com/crosszan/modu/pkg/types"
 )
 
@@ -85,7 +84,7 @@ func NewAgent(opts AgentOptions) *Agent {
 	}
 	streamFn := opts.StreamFn
 	if streamFn == nil {
-		streamFn = providers.StreamDefault
+		streamFn = StreamDefault
 	}
 	transport := opts.Transport
 	if transport == "" {

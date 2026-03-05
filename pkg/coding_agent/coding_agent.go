@@ -166,7 +166,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	// Determine stream function
 	streamFn := opts.StreamFn
 	if streamFn == nil {
-		streamFn = providers.StreamDefault
+		streamFn = agent.StreamDefault
 	}
 
 	// Determine API key function
