@@ -179,10 +179,6 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 			if ok {
 				return key, nil
 			}
-			key = providers.GetEnvAPIKey(provider)
-			if key != "" {
-				return key, nil
-			}
 			return "", fmt.Errorf("no API key found for provider: %s", provider)
 		}
 	}
