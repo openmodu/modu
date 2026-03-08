@@ -452,6 +452,32 @@ func (c *tgContext) RespondInThread(text string) error {
 	return err
 }
 
+// SendCard sends a standalone MarkdownV2 message and returns its message ID.
+func (c *tgContext) SendCard(text string) (int, error) {
+	m, err := c.bot.sendText(c.chatID, text, tgbotapi.ModeMarkdownV2)
+	if err != nil {
+		// Fallback: strip markdown and send plain.
+		m, err = c.bot.sendText(c.chatID, stripMarkdown(text), "")
+	}
+	if err != nil {
+		return 0, err
+	}
+	return m.MessageID, nil
+}
+
+// EditCard replaces an existing message's text (MarkdownV2). Falls back to plain text.
+func (c *tgContext) EditCard(msgID int, text string) error {
+	edit := tgbotapi.NewEditMessageText(c.chatID, msgID, text)
+	edit.ParseMode = tgbotapi.ModeMarkdownV2
+	_, err := c.bot.api.Send(edit)
+	if err != nil {
+		// Fallback: plain text edit
+		plain := tgbotapi.NewEditMessageText(c.chatID, msgID, stripMarkdown(text))
+		_, err = c.bot.api.Send(plain)
+	}
+	return err
+}
+
 func (c *tgContext) SetWorking(working bool) error {
 	// No-op: we use chat actions (typing) in processMessage instead.
 	return nil

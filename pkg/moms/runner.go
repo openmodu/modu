@@ -25,6 +25,10 @@ type TelegramContext interface {
 	ReplaceMessage(text string) error
 	// RespondInThread posts a follow-up message in the same chat (used for tool details).
 	RespondInThread(text string) error
+	// SendCard sends a standalone card message and returns its Telegram message ID.
+	SendCard(text string) (int, error)
+	// EditCard replaces the text of a previously sent card message.
+	EditCard(msgID int, text string) error
 	// SetWorking toggles the "...working" indicator on the main message.
 	SetWorking(working bool) error
 	// UploadFile sends the file at filePath to Telegram.
@@ -155,6 +159,15 @@ func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult
 		}()
 	}
 
+	// Per-call tracking for tool cards.
+	var toolTrackMu sync.Mutex
+	type toolInfo struct {
+		start       time.Time
+		argsSummary string
+	}
+	toolInfos   := map[string]*toolInfo{}
+	toolMsgIDs  := map[string]int{}
+
 	stopReason := "stop"
 	var runErr error
 
@@ -162,32 +175,78 @@ func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult
 	unsubscribe := a.Subscribe(func(ev agent.AgentEvent) {
 		switch ev.Type {
 		case agent.EventTypeToolExecutionStart:
-			label := ev.ToolName
-			if args, ok := ev.Args.(map[string]any); ok {
-				if l, ok := args["label"].(string); ok && l != "" {
-					label = l
-				}
-			}
+			callID := ev.ToolCallID
+			toolName := ev.ToolName
+			icon := toolIcon(toolName)
+			header := renderToolCardHeader(icon, toolName)
+
+			args, _ := ev.Args.(map[string]any)
+			argsSummary := toolArgsSummary(toolName, args)
+
+			fmt.Printf("[tool/start] chat=%d id=%s tool=%s args=%q\n",
+				r.chatID, callID, toolName, argsSummary)
+
+			toolTrackMu.Lock()
+			toolInfos[callID] = &toolInfo{start: time.Now(), argsSummary: argsSummary}
+			toolTrackMu.Unlock()
+
 			enqueue(func() error {
-				return tgCtx.Respond(fmt.Sprintf("→ _%s_", escapeMarkdown(label)), false)
+				msgID, err := tgCtx.SendCard(header)
+				fmt.Printf("[tool/start] SendCard msgID=%d err=%v\n", msgID, err)
+				if err == nil && msgID != 0 {
+					toolTrackMu.Lock()
+					toolMsgIDs[callID] = msgID
+					toolTrackMu.Unlock()
+				}
+				return err
 			})
 
 		case agent.EventTypeToolExecutionEnd:
+			callID := ev.ToolCallID
+			toolName := ev.ToolName
+			isError := ev.IsError
 			result := ""
 			if r, ok := ev.Result.(agent.AgentToolResult); ok {
 				result = extractResultText(r)
 			}
-			symbol := "✓"
-			if ev.IsError {
-				symbol = "✗"
+			icon := toolIcon(toolName)
+
+			toolTrackMu.Lock()
+			info := toolInfos[callID]
+			delete(toolInfos, callID)
+			toolTrackMu.Unlock()
+
+			var argsSummary string
+			var durationMs int64
+			if info != nil {
+				argsSummary = info.argsSummary
+				durationMs = time.Since(info.start).Milliseconds()
 			}
-			threadMsg := fmt.Sprintf("*%s %s*\n```\n%s\n```", symbol, ev.ToolName, truncateStr(result, 2000))
+			card := renderToolCard(icon, toolName, argsSummary, result, durationMs, isError)
+
+			fmt.Printf("[tool/end] chat=%d id=%s tool=%s isError=%v duration=%dms result_len=%d\n",
+				r.chatID, callID, toolName, isError, durationMs, len(result))
+			fmt.Printf("[tool/end] card:\n%s\n---\n", card)
+
+			// Read msgID inside enqueue so Start's SendCard has already written it.
 			enqueue(func() error {
-				return tgCtx.RespondInThread(threadMsg)
+				toolTrackMu.Lock()
+				msgID := toolMsgIDs[callID]
+				delete(toolMsgIDs, callID)
+				toolTrackMu.Unlock()
+
+				fmt.Printf("[tool/end] EditCard msgID=%d\n", msgID)
+				if msgID != 0 {
+					return tgCtx.EditCard(msgID, card)
+				}
+				// Fallback: send new card if SendCard failed earlier.
+				_, err := tgCtx.SendCard(card)
+				return err
 			})
-			if ev.IsError {
+			if isError {
+				errSummary := truncateStr(result, 200)
 				enqueue(func() error {
-					return tgCtx.Respond(fmt.Sprintf("_Error: %s_", escapeMarkdown(truncateStr(result, 200))), false)
+					return tgCtx.Respond(fmt.Sprintf("_⚠️ %s: %s_", escapeMarkdown(toolName), escapeMarkdown(errSummary)), false)
 				})
 			}
 
@@ -197,14 +256,13 @@ func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult
 			}
 			msg, ok := ev.Message.(types.AssistantMessage)
 			if !ok {
-				// 可能是指针类型
 				if msgPtr, ok2 := ev.Message.(*types.AssistantMessage); ok2 && msgPtr != nil {
 					msg = *msgPtr
 					ok = true
 				}
 			}
 			if !ok {
-				fmt.Printf("[moms] chat %d: EventTypeMessageEnd: unexpected message type %T\n", r.chatID, ev.Message)
+				// UserMessage / ToolResultMessage 也会触发此事件，静默跳过.
 				break
 			}
 			fmt.Printf("[moms] chat %d: LLM reply stop=%q err=%q blocks=%d\n", r.chatID, msg.StopReason, msg.ErrorMessage, len(msg.Content))
