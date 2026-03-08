@@ -139,10 +139,6 @@ func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult
 	systemPrompt := BuildSystemPrompt(workspacePath, r.chatID, memory, r.sandbox.cfg, skills)
 	a.SetSystemPrompt(systemPrompt)
 
-	// Wire up upload function for the attach tool.
-	r.mu.Lock()
-	r.mu.Unlock()
-
 	// Set up per-call queue for Telegram messages.
 	var queueMu sync.Mutex
 	var queueWg sync.WaitGroup
@@ -201,8 +197,17 @@ func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult
 			}
 			msg, ok := ev.Message.(types.AssistantMessage)
 			if !ok {
+				// 可能是指针类型
+				if msgPtr, ok2 := ev.Message.(*types.AssistantMessage); ok2 && msgPtr != nil {
+					msg = *msgPtr
+					ok = true
+				}
+			}
+			if !ok {
+				fmt.Printf("[moms] chat %d: EventTypeMessageEnd: unexpected message type %T\n", r.chatID, ev.Message)
 				break
 			}
+			fmt.Printf("[moms] chat %d: LLM reply stop=%q err=%q blocks=%d\n", r.chatID, msg.StopReason, msg.ErrorMessage, len(msg.Content))
 			if msg.StopReason != "" {
 				stopReason = string(msg.StopReason)
 			}
@@ -259,6 +264,9 @@ func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult
 		promptErr = a.PromptWithImages(ctx, userMessage, images)
 	} else {
 		promptErr = a.Prompt(ctx, userMessage)
+	}
+	if promptErr != nil {
+		fmt.Printf("[moms] chat %d prompt error: %v\n", r.chatID, promptErr)
 	}
 	a.WaitForIdle()
 

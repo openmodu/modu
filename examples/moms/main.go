@@ -44,8 +44,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	anthropicKey := os.Getenv("ANTHROPIC_API_KEY")
-
 	// Parse sandbox.
 	sandboxCfg, err := moms.ParseSandboxArg(sandboxArg)
 	if err != nil {
@@ -67,31 +65,32 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Default model: claude-3-5-sonnet.
+	// Local LM Studio endpoint.
+	const localProviderID = "lmstudio"
+	const localBaseURL = "http://192.168.5.149:1234/v1"
+
 	modelID := os.Getenv("MOMS_MODEL")
 	if modelID == "" {
-		modelID = "claude-sonnet-4-5"
+		modelID = "qwen/qwen3.5-35b-a3b"
 	}
 
-	providers.Register(providers.NewOpenAIChatCompletionsProvider(types.KnownProviderAnthropic,
-		providers.WithBaseURL("https://api.anthropic.com"),
-		providers.WithAPIKey(anthropicKey),
+	providers.Register(providers.NewOpenAIChatCompletionsProvider(localProviderID,
+		providers.WithBaseURL(localBaseURL),
+		providers.WithAPIKey("lm-studio"), // LM Studio 不校验 key
 	))
 
 	model := &types.Model{
 		ID:            modelID,
-		Name:          modelID + " (Anthropic)",
-		Api:           types.KnownApiAnthropicMessages,
-		ProviderID:    types.KnownProviderAnthropic,
-		ContextWindow: 200000,
+		Name:          modelID + " (LM Studio)",
+		Api:           types.KnownApiOpenAIChatCompletions,
+		ProviderID:    localProviderID,
+		ContextWindow: 32768,
 		MaxTokens:     8192,
 	}
 
 	getAPIKey := func(provider string) (string, error) {
-		if provider == types.KnownProviderAnthropic {
-			if anthropicKey != "" {
-				return anthropicKey, nil
-			}
+		if provider == localProviderID {
+			return "lm-studio", nil
 		}
 		return "", fmt.Errorf("no API key for provider: %s", provider)
 	}
