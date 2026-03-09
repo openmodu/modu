@@ -145,7 +145,7 @@ func EnsureSkillPrepared(skillDir string) error {
 		return nil
 	}
 
-	// If marker exists, we assume it's done. 
+	// If marker exists, we assume it's done.
 	// To be smarter, we could check modtime of prepare.sh > marker.
 	if info, err := os.Stat(marker); err == nil {
 		scriptInfo, err2 := os.Stat(prepareScript)
@@ -228,7 +228,7 @@ func BuildSystemPrompt(workspacePath string, chatID int64, memory string, sandbo
 - For older history, search log.jsonl (contains user messages and your final responses).
 
 ## Telegram Formatting (MarkdownV2)
-Use Telegram MarkdownV2 formatting: *bold*, _italic_, ` + "`code`" + `, ` + "```code blocks```" + `, [text](url).
+Use Telegram MarkdownV2 formatting: *bold*, _italic_, `+"`code`"+`, `+"```code blocks```"+`, [text](url).
 For plain responses you may also send plain text.
 
 ## Environment
@@ -265,6 +265,9 @@ Schedule events in %s/events/ directory. JSON files:
 
 **Periodic** - triggers on cron schedule:
 {"type": "periodic", "chatId": %d, "text": "Check inbox", "schedule": "0 9 * * 1-5", "timezone": "Asia/Shanghai"}
+
+Cron schedule format:
+- 6 fields (second-level): "秒 分 时 日 月 周" e.g. "*/30 * * * * *" = every 30 seconds, "0 0 9 * * 1-5" = 9am weekdays
 
 Use unique filenames. Max 5 events queued per chat.
 

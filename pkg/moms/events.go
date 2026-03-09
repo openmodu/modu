@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,28 +28,26 @@ type EventTrigger func(chatID int64, filename, text string)
 
 // EventsWatcher watches the events/ directory for JSON event files.
 type EventsWatcher struct {
-	eventsDir  string
-	trigger    EventTrigger
-	startTime  time.Time
-	mu         sync.Mutex
-	knownFiles map[string]struct{}
-	timers     map[string]*time.Timer
-	crons      map[string]cron.EntryID
-	cronRunner *cron.Cron
-	stopCh     chan struct{}
+	eventsDir   string
+	trigger     EventTrigger
+	startTime   time.Time
+	mu          sync.Mutex
+	knownFiles  map[string]struct{}
+	timers      map[string]*time.Timer
+	cronRunners map[string]*cron.Cron // per-event cron runner (supports per-timezone)
+	stopCh      chan struct{}
 }
 
 // NewEventsWatcher creates an EventsWatcher.
 func NewEventsWatcher(workingDir string, trigger EventTrigger) *EventsWatcher {
 	eventsDir := filepath.Join(workingDir, "events")
 	return &EventsWatcher{
-		eventsDir:  eventsDir,
-		trigger:    trigger,
-		knownFiles: make(map[string]struct{}),
-		timers:     make(map[string]*time.Timer),
-		crons:      make(map[string]cron.EntryID),
-		cronRunner: cron.New(cron.WithLocation(time.Local)),
-		stopCh:     make(chan struct{}),
+		eventsDir:   eventsDir,
+		trigger:     trigger,
+		knownFiles:  make(map[string]struct{}),
+		timers:      make(map[string]*time.Timer),
+		cronRunners: make(map[string]*cron.Cron),
+		stopCh:      make(chan struct{}),
 	}
 }
 
@@ -58,7 +57,6 @@ func (w *EventsWatcher) Start() {
 		fmt.Printf("[moms/events] failed to create events dir: %v\n", err)
 	}
 	w.startTime = time.Now()
-	w.cronRunner.Start()
 
 	// Initial scan.
 	w.scan()
@@ -83,11 +81,13 @@ func (w *EventsWatcher) Start() {
 // Stop cancels all scheduled events and stops watching.
 func (w *EventsWatcher) Stop() {
 	close(w.stopCh)
-	w.cronRunner.Stop()
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for _, t := range w.timers {
 		t.Stop()
+	}
+	for _, cr := range w.cronRunners {
+		cr.Stop()
 	}
 }
 
@@ -152,18 +152,26 @@ func (w *EventsWatcher) handleFile(filename string) {
 		if info.ModTime().Before(w.startTime) {
 			fmt.Printf("[moms/events] stale immediate event, deleting: %s\n", filename)
 			w.deleteFile(filename)
+			delete(w.knownFiles, filename)
 			return
 		}
 		fmt.Printf("[moms/events] executing immediate: %s\n", filename)
-		w.trigger(ev.ChatID, filename, ev.Text)
+		name := filename
+		chatID := ev.ChatID
+		text := ev.Text
 		w.deleteFile(filename)
 		delete(w.knownFiles, filename)
+		// Run trigger in a goroutine to avoid blocking the scan loop (which holds mu).
+		go func() {
+			w.trigger(chatID, name, text)
+		}()
 
 	case "one-shot":
 		at, err := time.Parse(time.RFC3339, ev.At)
 		if err != nil {
 			fmt.Printf("[moms/events] invalid 'at' in %s: %v\n", filename, err)
 			w.deleteFile(filename)
+			delete(w.knownFiles, filename)
 			return
 		}
 		delay := time.Until(at)
@@ -192,26 +200,36 @@ func (w *EventsWatcher) handleFile(filename string) {
 		if ev.Timezone != "" {
 			if l, err := time.LoadLocation(ev.Timezone); err == nil {
 				loc = l
+			} else {
+				fmt.Printf("[moms/events] invalid timezone %q in %s, using local\n", ev.Timezone, filename)
 			}
 		}
 		name := filename
 		text := ev.Text
 		chatID := ev.ChatID
-		entryID, err := w.cronRunner.AddFunc(ev.Schedule, func() {
+		// Auto-detect: 6 fields = seconds-level, 5 fields = standard minute-level.
+		cronOpts := []cron.Option{cron.WithLocation(loc)}
+		if len(strings.Fields(ev.Schedule)) == 6 {
+			cronOpts = append(cronOpts, cron.WithSeconds())
+		}
+		cr := cron.New(cronOpts...)
+		_, err := cr.AddFunc(ev.Schedule, func() {
 			w.trigger(chatID, name, text)
 		})
 		if err != nil {
 			fmt.Printf("[moms/events] invalid schedule in %s: %v\n", filename, err)
 			w.deleteFile(filename)
-			_ = loc
+			delete(w.knownFiles, filename)
 			return
 		}
-		w.crons[filename] = entryID
-		fmt.Printf("[moms/events] scheduled periodic %s (%s)\n", filename, ev.Schedule)
+		cr.Start()
+		w.cronRunners[filename] = cr
+		fmt.Printf("[moms/events] scheduled periodic %s (schedule=%q, tz=%s)\n", filename, ev.Schedule, loc)
 
 	default:
 		fmt.Printf("[moms/events] unknown event type %q in %s\n", ev.Type, filename)
 		w.deleteFile(filename)
+		delete(w.knownFiles, filename)
 	}
 }
 
@@ -221,9 +239,9 @@ func (w *EventsWatcher) cancelScheduled(filename string) {
 		t.Stop()
 		delete(w.timers, filename)
 	}
-	if id, ok := w.crons[filename]; ok {
-		w.cronRunner.Remove(id)
-		delete(w.crons, filename)
+	if cr, ok := w.cronRunners[filename]; ok {
+		cr.Stop()
+		delete(w.cronRunners, filename)
 	}
 }
 

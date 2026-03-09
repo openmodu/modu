@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -103,24 +104,62 @@ func (s *Sandbox) Exec(ctx context.Context, command string, timeoutSecs int) Exe
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Env = os.Environ()
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	// Use pipes explicitly so we can force-close them after the foreground
+	// process exits. This prevents background processes (nohup ... &) from
+	// keeping the pipe write-end open and blocking cmd.Wait() forever.
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return ExecResult{Stderr: err.Error(), ExitCode: 1}
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return ExecResult{Stderr: err.Error(), ExitCode: 1}
+	}
 
-	err := cmd.Run()
+	if err := cmd.Start(); err != nil {
+		return ExecResult{Stderr: err.Error(), ExitCode: 1}
+	}
+
+	var stdout, stderr bytes.Buffer
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		io.CopyN(&stdout, stdoutPipe, 10*1024*1024) //nolint:errcheck
+	}()
+	go func() {
+		defer wg.Done()
+		io.CopyN(&stderr, stderrPipe, 10*1024*1024) //nolint:errcheck
+	}()
+
+	// Wait only for the foreground shell process to exit (not background children).
+	waitErr := cmd.Wait()
+
+	// Force-close the read ends so the copy goroutines unblock immediately,
+	// regardless of any background processes still holding the write ends.
+	stdoutPipe.Close()
+	stderrPipe.Close()
+
+	// Give a short grace period to flush any remaining buffered output.
+	waitDone := make(chan struct{})
+	go func() { wg.Wait(); close(waitDone) }()
+	select {
+	case <-waitDone:
+	case <-time.After(200 * time.Millisecond):
+	}
 
 	res := ExecResult{
 		Stdout: limitStr(stdout.String(), 10*1024*1024),
 		Stderr: limitStr(stderr.String(), 10*1024*1024),
 	}
 
-	if err != nil {
+	if waitErr != nil {
 		if cmdCtx.Err() == context.DeadlineExceeded {
 			res.TimedOut = true
 			if cmd.Process != nil {
 				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 			}
-		} else if exitErr, ok := err.(*exec.ExitError); ok {
+		} else if exitErr, ok := waitErr.(*exec.ExitError); ok {
 			res.ExitCode = exitErr.ExitCode()
 		}
 	}
