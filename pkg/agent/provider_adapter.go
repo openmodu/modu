@@ -35,23 +35,21 @@ func buildChatRequest(model *types.Model, llmCtx *types.LLMContext, opts *types.
 	for _, m := range llmCtx.Messages {
 		switch v := m.(type) {
 		case types.UserMessage:
-			if s, ok := v.Content.(string); ok {
-				req.Messages = append(req.Messages, providers.Message{Role: providers.RoleUser, Content: s})
-			}
+			req.Messages = append(req.Messages, userProviderMessage(v.Content))
 		case *types.UserMessage:
-			if s, ok := v.Content.(string); ok {
-				req.Messages = append(req.Messages, providers.Message{Role: providers.RoleUser, Content: s})
-			}
+			req.Messages = append(req.Messages, userProviderMessage(v.Content))
 		case types.AssistantMessage:
 			msg := providers.Message{Role: providers.RoleAssistant}
+			var textBuf string
 			for _, block := range v.Content {
 				switch tc := block.(type) {
 				case *types.TextContent:
-					msg.Content += tc.Text
+					textBuf += tc.Text
 				case types.TextContent:
-					msg.Content += tc.Text
+					textBuf += tc.Text
 				}
 			}
+			msg.Content = textBuf
 			for _, block := range v.Content {
 				switch tc := block.(type) {
 				case *types.ToolCallContent:
@@ -73,14 +71,16 @@ func buildChatRequest(model *types.Model, llmCtx *types.LLMContext, opts *types.
 			req.Messages = append(req.Messages, msg)
 		case *types.AssistantMessage:
 			msg := providers.Message{Role: providers.RoleAssistant}
+			var textBuf string
 			for _, block := range v.Content {
 				switch tc := block.(type) {
 				case *types.TextContent:
-					msg.Content += tc.Text
+					textBuf += tc.Text
 				case types.TextContent:
-					msg.Content += tc.Text
+					textBuf += tc.Text
 				}
 			}
+			msg.Content = textBuf
 			for _, block := range v.Content {
 				switch tc := block.(type) {
 				case *types.ToolCallContent:
@@ -127,6 +127,40 @@ func buildChatRequest(model *types.Model, llmCtx *types.LLMContext, opts *types.
 		})
 	}
 	return req
+}
+
+// userProviderMessage converts a UserMessage content (string or []ContentBlock) to a providers.Message.
+func userProviderMessage(content any) providers.Message {
+	switch c := content.(type) {
+	case string:
+		return providers.Message{Role: providers.RoleUser, Content: c}
+	case []types.ContentBlock:
+		var parts []any
+		for _, block := range c {
+			switch b := block.(type) {
+			case *types.TextContent:
+				parts = append(parts, map[string]any{"type": "text", "text": b.Text})
+			case types.TextContent:
+				parts = append(parts, map[string]any{"type": "text", "text": b.Text})
+			case *types.ImageContent:
+				parts = append(parts, map[string]any{
+					"type": "image_url",
+					"image_url": map[string]any{
+						"url": "data:" + b.MimeType + ";base64," + b.Data,
+					},
+				})
+			case types.ImageContent:
+				parts = append(parts, map[string]any{
+					"type": "image_url",
+					"image_url": map[string]any{
+						"url": "data:" + b.MimeType + ";base64," + b.Data,
+					},
+				})
+			}
+		}
+		return providers.Message{Role: providers.RoleUser, Content: parts}
+	}
+	return providers.Message{Role: providers.RoleUser}
 }
 
 func toolResultContent(blocks []types.ContentBlock) string {
