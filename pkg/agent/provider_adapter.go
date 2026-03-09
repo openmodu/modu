@@ -39,67 +39,9 @@ func buildChatRequest(model *types.Model, llmCtx *types.LLMContext, opts *types.
 		case *types.UserMessage:
 			req.Messages = append(req.Messages, userProviderMessage(v.Content))
 		case types.AssistantMessage:
-			msg := providers.Message{Role: providers.RoleAssistant}
-			var textBuf string
-			for _, block := range v.Content {
-				switch tc := block.(type) {
-				case *types.TextContent:
-					textBuf += tc.Text
-				case types.TextContent:
-					textBuf += tc.Text
-				}
-			}
-			msg.Content = textBuf
-			for _, block := range v.Content {
-				switch tc := block.(type) {
-				case *types.ToolCallContent:
-					args, _ := json.Marshal(tc.Arguments)
-					msg.ToolCalls = append(msg.ToolCalls, providers.ToolCall{
-						ID:       tc.ID,
-						Type:     "function",
-						Function: providers.FuncCall{Name: tc.Name, Arguments: string(args)},
-					})
-				case types.ToolCallContent:
-					args, _ := json.Marshal(tc.Arguments)
-					msg.ToolCalls = append(msg.ToolCalls, providers.ToolCall{
-						ID:       tc.ID,
-						Type:     "function",
-						Function: providers.FuncCall{Name: tc.Name, Arguments: string(args)},
-					})
-				}
-			}
-			req.Messages = append(req.Messages, msg)
+			req.Messages = append(req.Messages, assistantProviderMessage(v.Content))
 		case *types.AssistantMessage:
-			msg := providers.Message{Role: providers.RoleAssistant}
-			var textBuf string
-			for _, block := range v.Content {
-				switch tc := block.(type) {
-				case *types.TextContent:
-					textBuf += tc.Text
-				case types.TextContent:
-					textBuf += tc.Text
-				}
-			}
-			msg.Content = textBuf
-			for _, block := range v.Content {
-				switch tc := block.(type) {
-				case *types.ToolCallContent:
-					args, _ := json.Marshal(tc.Arguments)
-					msg.ToolCalls = append(msg.ToolCalls, providers.ToolCall{
-						ID:       tc.ID,
-						Type:     "function",
-						Function: providers.FuncCall{Name: tc.Name, Arguments: string(args)},
-					})
-				case types.ToolCallContent:
-					args, _ := json.Marshal(tc.Arguments)
-					msg.ToolCalls = append(msg.ToolCalls, providers.ToolCall{
-						ID:       tc.ID,
-						Type:     "function",
-						Function: providers.FuncCall{Name: tc.Name, Arguments: string(args)},
-					})
-				}
-			}
-			req.Messages = append(req.Messages, msg)
+			req.Messages = append(req.Messages, assistantProviderMessage(v.Content))
 		case types.ToolResultMessage:
 			req.Messages = append(req.Messages, providers.Message{
 				Role:       providers.RoleTool,
@@ -129,38 +71,134 @@ func buildChatRequest(model *types.Model, llmCtx *types.LLMContext, opts *types.
 	return req
 }
 
-// userProviderMessage converts a UserMessage content (string or []ContentBlock) to a providers.Message.
+// userProviderMessage converts a UserMessage content (string, []ContentBlock, or []interface{} from JSON) to a providers.Message.
 func userProviderMessage(content any) providers.Message {
 	switch c := content.(type) {
 	case string:
 		return providers.Message{Role: providers.RoleUser, Content: c}
 	case []types.ContentBlock:
-		var parts []any
-		for _, block := range c {
-			switch b := block.(type) {
-			case *types.TextContent:
-				parts = append(parts, map[string]any{"type": "text", "text": b.Text})
-			case types.TextContent:
-				parts = append(parts, map[string]any{"type": "text", "text": b.Text})
-			case *types.ImageContent:
+		parts := contentBlocksToParts(c)
+		return providers.Message{Role: providers.RoleUser, Content: parts}
+	case []interface{}:
+		// JSON round-trip: []ContentBlock becomes []interface{} with map[string]any elements
+		parts := rawBlocksToParts(c)
+		if len(parts) > 0 {
+			return providers.Message{Role: providers.RoleUser, Content: parts}
+		}
+	}
+	return providers.Message{Role: providers.RoleUser}
+}
+
+func contentBlocksToParts(blocks []types.ContentBlock) []any {
+	var parts []any
+	for _, block := range blocks {
+		switch b := block.(type) {
+		case *types.TextContent:
+			parts = append(parts, map[string]any{"type": "text", "text": b.Text})
+		case types.TextContent:
+			parts = append(parts, map[string]any{"type": "text", "text": b.Text})
+		case *types.ImageContent:
+			parts = append(parts, map[string]any{
+				"type": "image_url",
+				"image_url": map[string]any{
+					"url": "data:" + b.MimeType + ";base64," + b.Data,
+				},
+			})
+		case types.ImageContent:
+			parts = append(parts, map[string]any{
+				"type": "image_url",
+				"image_url": map[string]any{
+					"url": "data:" + b.MimeType + ";base64," + b.Data,
+				},
+			})
+		}
+	}
+	return parts
+}
+
+// rawBlocksToParts converts []interface{} (JSON-deserialized content blocks) to API parts.
+func rawBlocksToParts(blocks []interface{}) []any {
+	var parts []any
+	for _, block := range blocks {
+		m, ok := block.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		blockType, _ := m["type"].(string)
+		switch blockType {
+		case "text":
+			if text, ok := m["text"].(string); ok && text != "" {
+				parts = append(parts, map[string]any{"type": "text", "text": text})
+			}
+		case "image":
+			mimeType, _ := m["mimeType"].(string)
+			data, _ := m["data"].(string)
+			if mimeType != "" && data != "" {
 				parts = append(parts, map[string]any{
 					"type": "image_url",
 					"image_url": map[string]any{
-						"url": "data:" + b.MimeType + ";base64," + b.Data,
-					},
-				})
-			case types.ImageContent:
-				parts = append(parts, map[string]any{
-					"type": "image_url",
-					"image_url": map[string]any{
-						"url": "data:" + b.MimeType + ";base64," + b.Data,
+						"url": "data:" + mimeType + ";base64," + data,
 					},
 				})
 			}
 		}
-		return providers.Message{Role: providers.RoleUser, Content: parts}
 	}
-	return providers.Message{Role: providers.RoleUser}
+	return parts
+}
+
+// assistantProviderMessage converts AssistantMessage content blocks to a providers.Message,
+// handling both typed blocks and JSON-deserialized map[string]any blocks.
+func assistantProviderMessage(content []types.ContentBlock) providers.Message {
+	msg := providers.Message{Role: providers.RoleAssistant}
+	var textBuf string
+	for _, block := range content {
+		switch tc := block.(type) {
+		case *types.TextContent:
+			textBuf += tc.Text
+		case types.TextContent:
+			textBuf += tc.Text
+		case map[string]interface{}:
+			if blockType, _ := tc["type"].(string); blockType == "text" {
+				if text, ok := tc["text"].(string); ok {
+					textBuf += text
+				}
+			}
+		}
+	}
+	if textBuf != "" {
+		msg.Content = textBuf
+	}
+	for _, block := range content {
+		switch tc := block.(type) {
+		case *types.ToolCallContent:
+			args, _ := json.Marshal(tc.Arguments)
+			msg.ToolCalls = append(msg.ToolCalls, providers.ToolCall{
+				ID:       tc.ID,
+				Type:     "function",
+				Function: providers.FuncCall{Name: tc.Name, Arguments: string(args)},
+			})
+		case types.ToolCallContent:
+			args, _ := json.Marshal(tc.Arguments)
+			msg.ToolCalls = append(msg.ToolCalls, providers.ToolCall{
+				ID:       tc.ID,
+				Type:     "function",
+				Function: providers.FuncCall{Name: tc.Name, Arguments: string(args)},
+			})
+		case map[string]interface{}:
+			if blockType, _ := tc["type"].(string); blockType == "toolCall" {
+				id, _ := tc["id"].(string)
+				name, _ := tc["name"].(string)
+				argsRaw, _ := tc["arguments"].(map[string]interface{})
+				argsJSON, _ := json.Marshal(argsRaw)
+				msg.ToolCalls = append(msg.ToolCalls, providers.ToolCall{
+					ID:       id,
+					Type:     "function",
+					Function: providers.FuncCall{Name: name, Arguments: string(argsJSON)},
+				})
+			}
+		}
+	}
+	return msg
 }
 
 func toolResultContent(blocks []types.ContentBlock) string {

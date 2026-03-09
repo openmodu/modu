@@ -347,14 +347,14 @@ func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult
 		stopReason = "aborted"
 	}
 
+	if promptErr != nil && runErr == nil {
+		runErr = promptErr
+	}
+
 	// Handle error.
 	if runErr != nil {
 		_ = tgCtx.ReplaceMessage("_Sorry, something went wrong_")
 		_ = tgCtx.RespondInThread(fmt.Sprintf("_Error: %s_", runErr.Error()))
-	}
-
-	if promptErr != nil && runErr == nil {
-		runErr = promptErr
 	}
 
 	// Done - remove working indicator.
@@ -462,7 +462,7 @@ func loadContextMessages(chatDir string) ([]agent.AgentMessage, error) {
 			if err := json.Unmarshal(raw, &am); err == nil {
 				msg = am
 			}
-		case "tool":
+		case "tool", "toolResult":
 			var tr types.ToolResultMessage
 			if err := json.Unmarshal(raw, &tr); err == nil {
 				msg = tr
