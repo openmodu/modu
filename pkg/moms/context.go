@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crosszan/modu/pkg/agent"
 	"github.com/crosszan/modu/pkg/types"
 )
 
@@ -200,6 +201,145 @@ func CompactContext(messages []types.AgentMessage, maxTokens int) []types.AgentM
 	newMessages = append(newMessages, messages[len(messages)-1]) // Last message
 
 	return newMessages
+}
+
+// sanitizeHistory cleans the loaded message history before passing it to the
+// LLM. Mirrors picoclaw's sanitizeHistoryForProvider exactly:
+//
+//  1. Drop system messages (system prompt is always rebuilt fresh each turn).
+//  2. Drop orphaned tool-result messages that have no preceding assistant
+//     message with tool calls.
+//  3. Drop assistant tool-call turns that appear at the start of history or
+//     whose immediate predecessor is not a user / tool-result message.
+//  4. (Second pass) Drop any assistant-with-tool-calls message whose following
+//     tool results are incomplete, along with those partial tool results.
+//     This removes dangling tool calls from sessions interrupted mid-turn.
+func sanitizeHistory(msgs []agent.AgentMessage) []agent.AgentMessage {
+	if len(msgs) == 0 {
+		return msgs
+	}
+
+	// ── First pass ──────────────────────────────────────────────────────────
+	sanitized := make([]agent.AgentMessage, 0, len(msgs))
+	for _, m := range msgs {
+		switch msg := m.(type) {
+		case types.UserMessage:
+			sanitized = append(sanitized, msg)
+
+		case types.AssistantMessage:
+			if assistantHasToolCalls(msg) {
+				if len(sanitized) == 0 {
+					fmt.Println("[moms/sanitize] dropping assistant tool-call turn at history start")
+					continue
+				}
+				prevRole := messageRole(sanitized[len(sanitized)-1])
+				if prevRole != "user" && prevRole != "tool" && prevRole != "toolResult" {
+					fmt.Printf("[moms/sanitize] dropping assistant tool-call turn: invalid predecessor role=%q\n", prevRole)
+					continue
+				}
+			}
+			sanitized = append(sanitized, msg)
+
+		case types.ToolResultMessage:
+			if len(sanitized) == 0 {
+				fmt.Println("[moms/sanitize] dropping orphaned leading tool-result")
+				continue
+			}
+			// Walk backwards over any preceding tool-result messages to find
+			// the nearest assistant message that issued tool calls.
+			foundAssistant := false
+			for i := len(sanitized) - 1; i >= 0; i-- {
+				r := messageRole(sanitized[i])
+				if r == "tool" || r == "toolResult" {
+					continue
+				}
+				if am, ok := sanitized[i].(types.AssistantMessage); ok && assistantHasToolCalls(am) {
+					foundAssistant = true
+				}
+				break
+			}
+			if !foundAssistant {
+				fmt.Printf("[moms/sanitize] dropping orphaned tool-result id=%q\n", msg.ToolCallID)
+				continue
+			}
+			sanitized = append(sanitized, msg)
+
+		default:
+			sanitized = append(sanitized, m)
+		}
+	}
+
+	// ── Second pass ──────────────────────────────────────────────────────────
+	// Every assistant message with tool calls must be followed by a complete
+	// set of tool-result messages. If any tool-call ID is missing, drop the
+	// entire group (assistant + partial tool results).
+	final := make([]agent.AgentMessage, 0, len(sanitized))
+	for i := 0; i < len(sanitized); i++ {
+		am, ok := sanitized[i].(types.AssistantMessage)
+		if !ok || !assistantHasToolCalls(am) {
+			final = append(final, sanitized[i])
+			continue
+		}
+
+		expected := make(map[string]bool)
+		for _, block := range am.Content {
+			if tc, ok := block.(*types.ToolCallContent); ok {
+				expected[tc.ID] = false
+			}
+		}
+
+		toolMsgCount := 0
+		for j := i + 1; j < len(sanitized); j++ {
+			tr, ok := sanitized[j].(types.ToolResultMessage)
+			if !ok {
+				break
+			}
+			toolMsgCount++
+			if _, exists := expected[tr.ToolCallID]; exists {
+				expected[tr.ToolCallID] = true
+			}
+		}
+
+		allFound := true
+		for id, found := range expected {
+			if !found {
+				allFound = false
+				fmt.Printf("[moms/sanitize] dropping incomplete tool-call group: missing id=%q expected=%d found=%d\n",
+					id, len(expected), toolMsgCount)
+				break
+			}
+		}
+		if !allFound {
+			i += toolMsgCount
+			continue
+		}
+		final = append(final, sanitized[i])
+	}
+
+	return final
+}
+
+// assistantHasToolCalls reports whether an AssistantMessage contains any ToolCallContent blocks.
+func assistantHasToolCalls(am types.AssistantMessage) bool {
+	for _, block := range am.Content {
+		if _, ok := block.(*types.ToolCallContent); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// messageRole returns the role string for any AgentMessage.
+func messageRole(m agent.AgentMessage) string {
+	switch msg := m.(type) {
+	case types.UserMessage:
+		return msg.Role
+	case types.AssistantMessage:
+		return msg.Role
+	case types.ToolResultMessage:
+		return msg.Role
+	}
+	return ""
 }
 
 // SaveContextMessages serializes messages to context.jsonl.

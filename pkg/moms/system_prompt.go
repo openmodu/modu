@@ -277,8 +277,8 @@ func BuildSystemPrompt(workspacePath string, chatID int64, memory string, sandbo
 %s
 ## Context
 - For current date/time, use: date
-- You have access to previous conversation context.
-- For older history, search log.jsonl (contains user messages and your final responses).
+- You have access to previous conversation context in your message history.
+- Only read log.jsonl when explicitly asked to recall past conversations. Do NOT read it proactively for every new request.
 
 ## Telegram Formatting (MarkdownV2)
 Use Telegram MarkdownV2 formatting: *bold*, _italic_, `+"`code`"+`, `+"```code blocks```"+`, [text](url).
@@ -355,6 +355,8 @@ grep -i "topic" %s/log.jsonl | jq -c '{date: .date[0:19], user: (.userName // .u
 - write: Create/overwrite files
 - edit: Surgical file edits
 - attach: Send files to Telegram chat
+- web_search: Search the web (if configured). Use directly for information lookup tasks.
+- web_fetch: Fetch and read a URL (if configured). Use to read articles, docs, finance data.
 `,
 		bootstrapCtx,
 		envDesc,

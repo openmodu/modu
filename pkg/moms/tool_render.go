@@ -21,6 +21,10 @@ func toolIcon(name string) string {
 		return "📎"
 	case "find_skills", "install_skill":
 		return "🔌"
+	case "web_search":
+		return "🔍"
+	case "web_fetch":
+		return "🌐"
 	default:
 		return "⚡"
 	}
@@ -60,6 +64,14 @@ func toolArgsSummary(name string, args map[string]any) string {
 	case "install_skill":
 		if n, ok := args["name"].(string); ok {
 			return fmt.Sprintf("name: %q", n)
+		}
+	case "web_search":
+		if q, ok := args["query"].(string); ok {
+			return fmt.Sprintf("query: %q", truncateStr(q, 80))
+		}
+	case "web_fetch":
+		if u, ok := args["url"].(string); ok {
+			return truncateStr(u, 100)
 		}
 	}
 	// Fallback: compact JSON of all args.

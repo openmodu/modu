@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -159,15 +160,6 @@ func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult
 		}()
 	}
 
-	// Per-call tracking for tool cards.
-	var toolTrackMu sync.Mutex
-	type toolInfo struct {
-		start       time.Time
-		argsSummary string
-	}
-	toolInfos := map[string]*toolInfo{}
-	toolMsgIDs := map[string]int{}
-
 	stopReason := "stop"
 	var runErr error
 
@@ -177,78 +169,21 @@ func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult
 		case agent.EventTypeToolExecutionStart:
 			callID := ev.ToolCallID
 			toolName := ev.ToolName
-			icon := toolIcon(toolName)
-			header := renderToolCardHeader(icon, toolName)
-
 			args, _ := ev.Args.(map[string]any)
 			argsSummary := toolArgsSummary(toolName, args)
-
 			fmt.Printf("[tool/start] chat=%d id=%s tool=%s args=%q\n",
 				r.chatID, callID, toolName, argsSummary)
-
-			toolTrackMu.Lock()
-			toolInfos[callID] = &toolInfo{start: time.Now(), argsSummary: argsSummary}
-			toolTrackMu.Unlock()
-
-			enqueue(func() error {
-				msgID, err := tgCtx.SendCard(header)
-				fmt.Printf("[tool/start] SendCard msgID=%d err=%v\n", msgID, err)
-				if err == nil && msgID != 0 {
-					toolTrackMu.Lock()
-					toolMsgIDs[callID] = msgID
-					toolTrackMu.Unlock()
-				}
-				return err
-			})
 
 		case agent.EventTypeToolExecutionEnd:
 			callID := ev.ToolCallID
 			toolName := ev.ToolName
 			isError := ev.IsError
 			result := ""
-			if r, ok := ev.Result.(agent.AgentToolResult); ok {
-				result = extractResultText(r)
+			if res, ok := ev.Result.(agent.AgentToolResult); ok {
+				result = extractResultText(res)
 			}
-			icon := toolIcon(toolName)
-
-			toolTrackMu.Lock()
-			info := toolInfos[callID]
-			delete(toolInfos, callID)
-			toolTrackMu.Unlock()
-
-			var argsSummary string
-			var durationMs int64
-			if info != nil {
-				argsSummary = info.argsSummary
-				durationMs = time.Since(info.start).Milliseconds()
-			}
-			card := renderToolCard(icon, toolName, argsSummary, result, durationMs, isError)
-
-			fmt.Printf("[tool/end] chat=%d id=%s tool=%s isError=%v duration=%dms result_len=%d\n",
-				r.chatID, callID, toolName, isError, durationMs, len(result))
-			fmt.Printf("[tool/end] card:\n%s\n---\n", card)
-
-			// Read msgID inside enqueue so Start's SendCard has already written it.
-			enqueue(func() error {
-				toolTrackMu.Lock()
-				msgID := toolMsgIDs[callID]
-				delete(toolMsgIDs, callID)
-				toolTrackMu.Unlock()
-
-				fmt.Printf("[tool/end] EditCard msgID=%d\n", msgID)
-				if msgID != 0 {
-					return tgCtx.EditCard(msgID, card)
-				}
-				// Fallback: send new card if SendCard failed earlier.
-				_, err := tgCtx.SendCard(card)
-				return err
-			})
-			if isError {
-				errSummary := truncateStr(result, 200)
-				enqueue(func() error {
-					return tgCtx.Respond(fmt.Sprintf("_⚠️ %s: %s_", escapeMarkdown(toolName), escapeMarkdown(errSummary)), false)
-				})
-			}
+			fmt.Printf("[tool/end] chat=%d id=%s tool=%s isError=%v result_len=%d\n",
+				r.chatID, callID, toolName, isError, len(result))
 
 		case agent.EventTypeMessageEnd:
 			if ev.Message == nil {
@@ -405,6 +340,23 @@ func (r *Runner) getOrCreateAgent(chatDir, workspacePath string, tgCtx TelegramC
 		)
 	}
 
+	// Web tools from env vars.
+	if searchTool, err := newWebSearchToolFromEnv(); err != nil {
+		fmt.Printf("[moms] web_search init error: %v\n", err)
+	} else if searchTool != nil {
+		agentTools = append(agentTools, searchTool)
+	}
+	if fetchEnabled := os.Getenv("MOMS_WEB_FETCH"); fetchEnabled == "true" || fetchEnabled == "1" {
+		fetchTool, err := NewWebFetchAgentTool(WebFetchConfig{
+			Proxy: os.Getenv("MOMS_WEB_PROXY"),
+		})
+		if err != nil {
+			fmt.Printf("[moms] web_fetch init error: %v\n", err)
+		} else {
+			agentTools = append(agentTools, fetchTool)
+		}
+	}
+
 	a := agent.NewAgent(agent.AgentConfig{
 		GetAPIKey: r.getAPIKey,
 		InitialState: &agent.AgentState{
@@ -419,6 +371,7 @@ func (r *Runner) getOrCreateAgent(chatDir, workspacePath string, tgCtx TelegramC
 
 	// Load existing messages from context.jsonl if it exists.
 	if msgs, err := loadContextMessages(chatDir); err == nil && len(msgs) > 0 {
+		msgs = sanitizeHistory(msgs)
 		a.ReplaceMessages(msgs)
 		fmt.Printf("[moms] chat %d: loaded %d messages from context.jsonl\n", r.chatID, len(msgs))
 	}
@@ -474,6 +427,42 @@ func loadContextMessages(chatDir string) ([]agent.AgentMessage, error) {
 		}
 	}
 	return messages, nil
+}
+
+// newWebSearchToolFromEnv creates a WebSearchAgentTool from environment variables.
+// Returns nil, nil if MOMS_WEB_SEARCH is not set.
+//
+// Environment variables:
+//   - MOMS_WEB_SEARCH: provider name (brave/tavily/duckduckgo/perplexity/searxng/glm)
+//   - MOMS_WEB_MAX_RESULTS: max results (default 5)
+//   - MOMS_WEB_PROXY: optional proxy URL
+//   - MOMS_BRAVE_API_KEY, MOMS_TAVILY_API_KEY, MOMS_TAVILY_BASE_URL
+//   - MOMS_PERPLEXITY_API_KEY, MOMS_SEARXNG_URL
+//   - MOMS_GLM_API_KEY, MOMS_GLM_SEARCH_ENGINE, MOMS_GLM_BASE_URL
+func newWebSearchToolFromEnv() (*WebSearchAgentTool, error) {
+	provider := os.Getenv("MOMS_WEB_SEARCH")
+	if provider == "" {
+		return nil, nil
+	}
+	maxResults := 5
+	if v := os.Getenv("MOMS_WEB_MAX_RESULTS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			maxResults = n
+		}
+	}
+	return NewWebSearchAgentTool(WebSearchConfig{
+		Provider:         provider,
+		MaxResults:       maxResults,
+		Proxy:            os.Getenv("MOMS_WEB_PROXY"),
+		BraveAPIKey:      os.Getenv("MOMS_BRAVE_API_KEY"),
+		TavilyAPIKey:     os.Getenv("MOMS_TAVILY_API_KEY"),
+		TavilyURL:        os.Getenv("MOMS_TAVILY_BASE_URL"),
+		PerplexityAPIKey: os.Getenv("MOMS_PERPLEXITY_API_KEY"),
+		SearXNGURL:       os.Getenv("MOMS_SEARXNG_URL"),
+		GLMAPIKey:        os.Getenv("MOMS_GLM_API_KEY"),
+		GLMEngine:        os.Getenv("MOMS_GLM_SEARCH_ENGINE"),
+		GLMURL:           os.Getenv("MOMS_GLM_BASE_URL"),
+	})
 }
 
 // extractResultText extracts text from AgentToolResult.
