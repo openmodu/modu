@@ -20,7 +20,6 @@ type AgentOptions struct {
 	SessionID        string
 	GetAPIKey        func(provider string) (string, error)
 	ThinkingBudgets  *types.ThinkingBudgets
-	Transport        types.Transport
 	MaxRetryDelayMs  int
 }
 
@@ -34,7 +33,6 @@ type Agent struct {
 	sessionID        string
 	getAPIKey        func(provider string) (string, error)
 	thinkingBudgets  *types.ThinkingBudgets
-	transport        types.Transport
 	maxRetryDelayMs  int
 
 	// Queues
@@ -86,10 +84,6 @@ func NewAgent(opts AgentOptions) *Agent {
 	if streamFn == nil {
 		streamFn = StreamDefault
 	}
-	transport := opts.Transport
-	if transport == "" {
-		transport = types.TransportSSE
-	}
 	return &Agent{
 		state:            initial,
 		steeringMode:     opts.SteeringMode,
@@ -100,7 +94,6 @@ func NewAgent(opts AgentOptions) *Agent {
 		sessionID:        opts.SessionID,
 		getAPIKey:        opts.GetAPIKey,
 		thinkingBudgets:  opts.ThinkingBudgets,
-		transport:        transport,
 		maxRetryDelayMs:  opts.MaxRetryDelayMs,
 		listeners:        map[int]func(AgentEvent){},
 	}
@@ -369,18 +362,6 @@ func (a *Agent) SetThinkingBudgets(b *types.ThinkingBudgets) {
 	a.thinkingBudgets = b
 }
 
-func (a *Agent) GetTransport() types.Transport {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	return a.transport
-}
-
-func (a *Agent) SetTransport(t types.Transport) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.transport = t
-}
-
 func (a *Agent) GetMaxRetryDelayMs() int {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -463,7 +444,6 @@ func (a *Agent) runLoop(ctx context.Context, messages []AgentMessage, skipInitia
 		Model:            model,
 		Reasoning:        reasoning,
 		SessionID:        a.sessionID,
-		Transport:        a.transport,
 		ThinkingBudgets:  a.thinkingBudgets,
 		MaxRetryDelayMs:  a.maxRetryDelayMs,
 		ConvertToLlm:     a.convertToLlm,

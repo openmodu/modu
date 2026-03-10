@@ -1,16 +1,16 @@
 package agent
 
 import (
-	"github.com/crosszan/modu/pkg/stream"
+	msgstream "github.com/crosszan/modu/pkg/stream"
 )
 
 type EventStream struct {
-	underlying *stream.EventStream[AgentEvent, []AgentMessage]
+	underlying *msgstream.EventStream[AgentEvent, []AgentMessage]
 }
 
 func NewEventStream() *EventStream {
 	return &EventStream{
-		underlying: stream.New[AgentEvent, []AgentMessage](),
+		underlying: msgstream.New[AgentEvent, []AgentMessage](),
 	}
 }
 

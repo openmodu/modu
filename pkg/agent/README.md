@@ -180,19 +180,32 @@ a.PromptWithImages(ctx, "What's in this image?", []types.ImageContent{
 
 ### Control & Queueing
 
-**Steering** (Interrupts):
-Use `Steer` to inject high-priority messages while the agent is running.
+The Agent gives you fine-grained control over how new messages are injected into an ongoing or paused session through two distinct prioritized queues.
+
+**1. Steering Queue (High Priority / Interrupts)**
+Use `agent.Steer(msg)` to inject high-priority messages. These take precedence over any queued follow-ups. When the Agent reads queues (e.g. at the start of `Prompt` or `Continue`), it empties the Steering Queue first.
 
 ```go
-a.Steer(types.UserMessage{Role: "user", Content: "Stop what you're doing!"})
+// Interrupts whatever was planned and prioritizes this context
+a.Steer(types.UserMessage{Role: "user", Content: "Stop what you're doing! Answer this instead."})
 ```
 
-**Follow-Up** (Queueing):
-Use `FollowUp` to queue messages to be processed after the current task completes.
+**2. FollowUp Queue (Low Priority / Queueing)**
+Use `agent.FollowUp(msg)` to queue messages to be processed after the current task completes and the Steering queue is empty.
 
 ```go
-a.FollowUp(types.UserMessage{Role: "user", Content: "Summarize session"})
+// Adds a task to the back of the line
+a.FollowUp(types.UserMessage{Role: "user", Content: "After you finish that, summarize the session."})
 ```
+
+#### Execution Modes (`ExecutionMode`)
+
+You can control *how many* messages the Agent consumes from each queue at a time using `SetSteeringMode(...)` and `SetFollowUpMode(...)`:
+
+- `agent.ExecutionModeOneAtATime` **(Default)**: The Agent consumes exactly **one** message from the queue per turn. 
+  - *Business Use Case*: Executing a sequence of discrete tasks that depend on the previous task's completion, such as: "1. Create a file", then "2. Run tests to see if it works", then "3. Git commit the changes". By pulling one at a time, the model stays focused and guarantees chronological execution.
+- `agent.ExecutionModeAll`: The Agent consumes **all** currently queued messages from the respective queue at once, cramming them all into the LLM context simultaneously. 
+  - *Business Use Case*: Batching state updates, logs, or system notifications that the LLM needs as background context. For example, if a background watcher triggers 5 times with "File modified", you don't want the agent responding 5 separate times. Instead, it reads all 5 events at once and synthesizes a single response.
 
 ### Events
 
@@ -225,21 +238,6 @@ func (t *MyTool) Execute(ctx context.Context, id string, args map[string]any, on
 }
 ```
 
-## Proxy Streaming
-
-Use `StreamProxy` to route calls through an authenticating proxy server:
-
-```go
-a := agent.NewAgent(agent.AgentOptions{
-    StreamFn: func(ctx context.Context, model *types.Model, llmCtx *types.LLMContext, opts *types.SimpleStreamOptions) (types.EventStream, error) {
-        return agent.StreamProxy(ctx, model, llmCtx, &agent.ProxyStreamOptions{
-            SimpleStreamOptions: *opts,
-            AuthToken:           "my-token",
-            ProxyURL:            "https://genai.example.com",
-        })
-    },
-})
-```
 
 ## License
 

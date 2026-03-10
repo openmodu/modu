@@ -174,7 +174,6 @@ func streamAssistantResponse(context AgentContext, config AgentLoopConfig, ctx c
 			SessionID:       config.SessionID,
 			Headers:         config.Headers,
 			MaxRetryDelayMs: config.MaxRetryDelayMs,
-			Transport:       config.Transport,
 		},
 		Reasoning:       mapThinkingLevel(config.Reasoning),
 		ThinkingBudgets: config.ThinkingBudgets,

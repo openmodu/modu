@@ -309,17 +309,6 @@ func TestAgentSessionIDGetterSetter(t *testing.T) {
 	}
 }
 
-func TestAgentTransportGetterSetter(t *testing.T) {
-	agent := NewAgent(AgentOptions{})
-	if agent.GetTransport() != types.TransportSSE {
-		t.Fatalf("expected default transport 'sse', got %s", agent.GetTransport())
-	}
-	agent.SetTransport(types.TransportWebSocket)
-	if agent.GetTransport() != types.TransportWebSocket {
-		t.Fatalf("expected transport 'websocket', got %s", agent.GetTransport())
-	}
-}
-
 func TestAgentThinkingBudgetsGetterSetter(t *testing.T) {
 	agent := NewAgent(AgentOptions{})
 	if agent.GetThinkingBudgets() != nil {

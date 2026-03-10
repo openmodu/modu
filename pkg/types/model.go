@@ -11,15 +11,6 @@ const (
 	ThinkingLevelXHigh   ThinkingLevel = "xhigh"
 )
 
-// Transport controls the streaming transport protocol.
-type Transport = string
-
-const (
-	TransportSSE       Transport = "sse"
-	TransportWebSocket Transport = "websocket"
-	TransportAuto      Transport = "auto"
-)
-
 // CacheRetention controls prompt caching behaviour.
 type CacheRetention = string
 
@@ -40,7 +31,6 @@ type StreamOptions struct {
 	SessionID       string            `json:"sessionId,omitempty"`
 	Headers         map[string]string `json:"headers,omitempty"`
 	MaxRetryDelayMs int               `json:"maxRetryDelayMs,omitempty"`
-	Transport       Transport         `json:"transport,omitempty"`
 }
 
 // SimpleStreamOptions extends StreamOptions with reasoning configuration.

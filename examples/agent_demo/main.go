@@ -203,18 +203,108 @@ func main() {
 		"What is 42 * 17 + 3?",
 		"What time is it now?",
 		"Calculate the square root of 144, then raise it to the power of 3",
+		"[Demo: FollowUpMode OneAtATime]",
+		"[Demo: FollowUpMode All]",
+		"[Demo: SteeringMode Priority]",
 	}
 
 	for i, prompt := range testCases {
 		fmt.Printf("\n\n========== Test %d: %s ==========\n", i+1, prompt)
-		err := a.Prompt(context.Background(), prompt)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+
+		if prompt == "[Demo: FollowUpMode OneAtATime]" {
+			fmt.Println("\n[Demo] This test shows how FollowUp queues process exactly one message per completion.")
+			a.ClearMessages() // Start fresh
+
+			// 1. Initial Prompt
+			fmt.Println("\n>>> 1. Sending initial prompt: 'What is 10 + 10?'")
+			err := a.Prompt(context.Background(), "What is 10 + 10?")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			}
+
+			// 2. Queue FollowUps
+			fmt.Println("\n>>> 2. Injecting TWO FollowUp messages into the queue...")
+			a.FollowUp(types.UserMessage{Role: "user", Content: "Now multiply that result by 2.", Timestamp: time.Now().UnixMilli()})
+			a.FollowUp(types.UserMessage{Role: "user", Content: "And then subtract 5.", Timestamp: time.Now().UnixMilli()})
+
+			// 3. Set Mode and Continue
+			fmt.Println("\n>>> 3. Setting FollowUpMode to ExecutionModeOneAtATime and triggering process...")
+			a.SetFollowUpMode(agent.ExecutionModeOneAtATime)
+
+			err = a.Prompt(context.Background(), "Please process the queued follow-ups.")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Prompt Error: %v\n", err)
+			}
+
+			fmt.Println("\n>>> 4. Triggering again to process the second FollowUp...")
+			err = a.Prompt(context.Background(), "Process the remaining follow-up.")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Prompt Error: %v\n", err)
+			}
+
+		} else if prompt == "[Demo: FollowUpMode All]" {
+			fmt.Println("\n[Demo] This test shows ExecutionModeAll processing all queued messages simultaneously.")
+			a.ClearMessages()
+
+			// 1. Initial Prompt
+			fmt.Println("\n>>> 1. Sending initial prompt: 'What is 10 + 10?'")
+			err := a.Prompt(context.Background(), "What is 10 + 10?")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			}
+
+			// 2. Queue FollowUps
+			fmt.Println("\n>>> 2. Injecting TWO FollowUp messages into the queue...")
+			a.FollowUp(types.UserMessage{Role: "user", Content: "Now multiply that result by 2.", Timestamp: time.Now().UnixMilli()})
+			a.FollowUp(types.UserMessage{Role: "user", Content: "And then subtract 5.", Timestamp: time.Now().UnixMilli()})
+
+			// 3. Set Mode and Continue
+			fmt.Println("\n>>> 3. Setting FollowUpMode to ExecutionModeAll and triggering process...")
+			a.SetFollowUpMode(agent.ExecutionModeAll)
+
+			// This single prompt will pull BOTH queued follow-up messages into the same context block
+			err = a.Prompt(context.Background(), "Please process the queued follow-ups.")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Prompt Error: %v\n", err)
+			}
+
+		} else if prompt == "[Demo: SteeringMode Priority]" {
+			fmt.Println("\n[Demo] This test shows that Steering messages interrupt and take priority over FollowUp messages.")
+			a.ClearMessages()
+
+			// 1. Set modes to OneAtATime to clearly see what goes first
+			a.SetFollowUpMode(agent.ExecutionModeOneAtATime)
+			a.SetSteeringMode(agent.ExecutionModeOneAtATime)
+
+			// 2. Queue a FollowUp AND a Steering message *before* prompting
+			fmt.Println("\n>>> 1. Injecting one FollowUp message and one Steering message...")
+			a.FollowUp(types.UserMessage{Role: "user", Content: "[FollowUp Task] What is 2+2? Only answer this math problem.", Timestamp: time.Now().UnixMilli()})
+			a.Steer(types.UserMessage{Role: "user", Content: "[Steer Priority] Disregard any queued user tasks. Reply strictly with the exact phrase: 'EMERGENCY OVERRIDE'. Do not compute Math.", Timestamp: time.Now().UnixMilli()})
+
+			// 3. Trigger initial prompt. The agent will read SteeringQueue BEFORE FollowUpQueue!
+			fmt.Println("\n>>> 2. Sending trigger. The Steering message should be processed FIRST.")
+			err := a.Prompt(context.Background(), "(System action: trigger queues)")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Prompt Error: %v\n", err)
+			}
+
+			// 4. Trigger again to catch the FollowUp that was left behind
+			fmt.Println("\n>>> 3. Triggering again. Now the FollowUp message should be processed.")
+			err = a.Prompt(context.Background(), "(System action: trigger queues)")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Prompt Error: %v\n", err)
+			}
+
+		} else {
+			err := a.Prompt(context.Background(), prompt)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			}
 		}
 
 		// Print final state
 		state := a.GetState()
-		fmt.Printf("\nMessages count: %d\n", len(state.Messages))
+		fmt.Printf("\nFinal Messages count: %d\n", len(state.Messages))
 		if state.Error != "" {
 			fmt.Printf("Error: %s\n", state.Error)
 		}
