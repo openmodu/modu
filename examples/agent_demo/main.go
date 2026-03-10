@@ -128,7 +128,8 @@ func toFloat(v any) float64 {
 }
 
 func main() {
-	modelName := "qwen/qwen3.5-35b-a3b"
+	// modelName := "qwen/qwen3.5-35b-a3b"
+	modelName := "zai-org/glm-4.7-flash"
 	baseURL := "http://192.168.5.149:1234/v1"
 	providerID := "lmstudio"
 

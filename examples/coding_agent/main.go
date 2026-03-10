@@ -82,7 +82,8 @@ func (e *auditHookExtension) PrintSummary() {
 
 func main() {
 	ollamaHost := "http://192.168.5.149:1234"
-	ollamaModel := "qwen/qwen3.5-30b-a3b"
+	// ollamaModel := "qwen/qwen3.5-30b-a3b"
+	ollamaModel := "zai-org/glm-4.7-flash"
 
 	if h := os.Getenv("OLLAMA_HOST"); h != "" {
 		ollamaHost = h

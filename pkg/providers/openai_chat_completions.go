@@ -201,12 +201,14 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *types.EventStreamIm
 		if chunk.Error != nil {
 			partial.ErrorMessage = chunk.Error.Message
 			partial.StopReason = "error"
+			err := fmt.Errorf("%s", chunk.Error.Message)
 			stream.Push(types.StreamEvent{
 				Type:         types.EventError,
 				Reason:       "error",
 				ErrorMessage: partial,
-				Error:        fmt.Errorf("%s", chunk.Error.Message),
+				Error:        err,
 			})
+			stream.Resolve(partial, err)
 			return
 		}
 
@@ -341,6 +343,7 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *types.EventStreamIm
 			ErrorMessage: partial,
 			Error:        err,
 		})
+		stream.Resolve(partial, err)
 		return
 	}
 
@@ -409,6 +412,7 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *types.EventStreamIm
 		Reason:  partial.StopReason,
 		Message: partial,
 	})
+	stream.Resolve(partial, nil)
 }
 
 func (p *openAIProvider) buildBody(req *ChatRequest, stream bool) ([]byte, error) {

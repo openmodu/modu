@@ -278,6 +278,7 @@ func TestMaybeAutoCompact_AboveThreshold(t *testing.T) {
 				Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "mock summary"}},
 			}
 			stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+			stream.Resolve(msg, nil)
 			stream.Close()
 		}()
 		return stream, nil

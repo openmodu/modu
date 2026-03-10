@@ -48,6 +48,7 @@ func TestAgentLoopBasic(t *testing.T) {
 				Timestamp:  time.Now().UnixMilli(),
 			}
 			stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+			stream.Resolve(msg, nil)
 			stream.Close()
 		}()
 		return stream, nil
@@ -88,6 +89,7 @@ func TestAgentLoopToolCalls(t *testing.T) {
 					Timestamp:  time.Now().UnixMilli(),
 				}
 				stream.Push(types.StreamEvent{Type: "done", Reason: "toolUse", Message: msg})
+				stream.Resolve(msg, nil)
 			} else {
 				msg := &types.AssistantMessage{
 					Role:       "assistant",
@@ -99,6 +101,7 @@ func TestAgentLoopToolCalls(t *testing.T) {
 					Timestamp:  time.Now().UnixMilli(),
 				}
 				stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+				stream.Resolve(msg, nil)
 			}
 			callIndex++
 			stream.Close()
@@ -175,6 +178,7 @@ func TestStreamAssistantResponseWithRetry_Success(t *testing.T) {
 				Timestamp:  time.Now().UnixMilli(),
 			}
 			stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+			stream.Resolve(msg, nil)
 			stream.Close()
 		}()
 		return stream, nil
@@ -214,6 +218,7 @@ func TestStreamAssistantResponseWithRetry_RetriesTransient(t *testing.T) {
 				Timestamp:  time.Now().UnixMilli(),
 			}
 			stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+			stream.Resolve(msg, nil)
 			stream.Close()
 		}()
 		return stream, nil
@@ -396,6 +401,7 @@ func TestAgentPromptWithImages(t *testing.T) {
 				Timestamp:  time.Now().UnixMilli(),
 			}
 			stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+			stream.Resolve(msg, nil)
 			stream.Close()
 		}()
 		return stream, nil

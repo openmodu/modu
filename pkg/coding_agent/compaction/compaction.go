@@ -133,6 +133,13 @@ func generateSummary(ctx context.Context, conversationText string, opts Options)
 	if err != nil {
 		return "", fmt.Errorf("failed to create summary stream: %w", err)
 	}
+	defer stream.Close()
+
+	// Drain events to unblock the producer
+	go func() {
+		for range stream.Events() {
+		}
+	}()
 
 	result, err := stream.Result()
 	if err != nil {

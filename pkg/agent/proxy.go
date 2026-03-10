@@ -27,14 +27,14 @@ type ProxyStreamOptions struct {
 // ProxyStreamEvent represents events sent by the proxy server.
 // The proxy strips the partial field from delta events to reduce bandwidth.
 type ProxyStreamEvent struct {
-	Type             string           `json:"type"`
-	ContentIndex     int              `json:"contentIndex,omitempty"`
-	Delta            string           `json:"delta,omitempty"`
-	ContentSignature string           `json:"contentSignature,omitempty"`
-	ID               string           `json:"id,omitempty"`
-	ToolName         string           `json:"toolName,omitempty"`
-	Reason           string           `json:"reason,omitempty"`
-	ErrorMessage     string           `json:"errorMessage,omitempty"`
+	Type             string            `json:"type"`
+	ContentIndex     int               `json:"contentIndex,omitempty"`
+	Delta            string            `json:"delta,omitempty"`
+	ContentSignature string            `json:"contentSignature,omitempty"`
+	ID               string            `json:"id,omitempty"`
+	ToolName         string            `json:"toolName,omitempty"`
+	Reason           string            `json:"reason,omitempty"`
+	ErrorMessage     string            `json:"errorMessage,omitempty"`
 	Usage            *types.AgentUsage `json:"usage,omitempty"`
 }
 
@@ -81,6 +81,9 @@ func StreamProxy(ctx context.Context, model *types.Model, llmCtx *types.LLMConte
 				Reason:       reason,
 				ErrorMessage: partial,
 			})
+			stream.Resolve(partial, err)
+		} else {
+			stream.Resolve(partial, nil)
 		}
 	}()
 

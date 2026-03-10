@@ -67,6 +67,7 @@ func runLoop(currentContext AgentContext, newMessages []AgentMessage, config Age
 		for hasMoreToolCalls || len(pendingMessages) > 0 {
 			if ctx.Err() != nil {
 				stream.Push(AgentEvent{Type: EventTypeAgentEnd, Messages: newMessages})
+				stream.Resolve(newMessages, ctx.Err())
 				return
 			}
 			if !firstTurn {
@@ -86,6 +87,7 @@ func runLoop(currentContext AgentContext, newMessages []AgentMessage, config Age
 			assistantMessage, err := streamAssistantResponseWithRetry(currentContext, config, ctx, stream, streamFn)
 			if err != nil {
 				stream.Push(AgentEvent{Type: EventTypeAgentEnd, Messages: newMessages})
+				stream.Resolve(newMessages, err)
 				return
 			}
 			newMessages = append(newMessages, assistantMessage)
@@ -93,6 +95,7 @@ func runLoop(currentContext AgentContext, newMessages []AgentMessage, config Age
 			if assistantMessage.StopReason == "error" || assistantMessage.StopReason == "aborted" {
 				stream.Push(AgentEvent{Type: EventTypeTurnEnd, Message: assistantMessage, ToolResults: []types.ToolResultMessage{}})
 				stream.Push(AgentEvent{Type: EventTypeAgentEnd, Messages: newMessages})
+				stream.Resolve(newMessages, nil)
 				return
 			}
 			toolCalls := extractToolCalls(assistantMessage)
@@ -123,6 +126,7 @@ func runLoop(currentContext AgentContext, newMessages []AgentMessage, config Age
 		break
 	}
 	stream.Push(AgentEvent{Type: EventTypeAgentEnd, Messages: newMessages})
+	stream.Resolve(newMessages, nil)
 }
 
 func streamAssistantResponse(context AgentContext, config AgentLoopConfig, ctx context.Context, stream *EventStream, streamFn StreamFn) (*types.AssistantMessage, error) {
