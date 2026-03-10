@@ -19,15 +19,6 @@ const (
 	RoleCustom     MessageRole = "custom" // For extensible message types
 )
 
-type ContentType string
-
-const (
-	ContentTypeText     ContentType = "text"
-	ContentTypeImage    ContentType = "image"
-	ContentTypeToolCall ContentType = "toolCall"
-	ContentTypeThinking ContentType = "thinking"
-)
-
 type ThinkingLevel string
 
 const (
@@ -45,42 +36,6 @@ const (
 	ExecutionModeAll        ExecutionMode = "all"
 	ExecutionModeOneAtATime ExecutionMode = "one-at-a-time"
 )
-
-// --- Content Structures ---
-
-type ContentBlock struct {
-	Type               ContentType            `json:"type"`
-	Text               string                 `json:"text,omitempty"`
-	TextSignature      string                 `json:"textSignature,omitempty"`
-	Thinking           string                 `json:"thinking,omitempty"`
-	ThinkingSignature  string                 `json:"thinkingSignature,omitempty"`
-	ImageData          string                 `json:"data,omitempty"`
-	ImageMimeType      string                 `json:"mimeType,omitempty"`
-	ToolCall           *types.ToolCallContent `json:"toolCall,omitempty"`
-	ToolCallDelta      string                 `json:"toolCallDelta,omitempty"`
-	ToolCallSignature  string                 `json:"toolCallSignature,omitempty"`
-	ToolCallArguments  map[string]any         `json:"toolCallArguments,omitempty"`
-	ToolCallName       string                 `json:"toolCallName,omitempty"`
-	ToolCallID         string                 `json:"toolCallId,omitempty"`
-	ToolCallThoughtSig string                 `json:"toolCallThoughtSignature,omitempty"`
-}
-
-type Message struct {
-	Role      MessageRole    `json:"role"`
-	Content   []ContentBlock `json:"content"`
-	Timestamp int64          `json:"timestamp"`
-	// Custom fields for extension
-	CustomType   string           `json:"customType,omitempty"`
-	Details      interface{}      `json:"details,omitempty"`
-	ProviderID   string           `json:"provider,omitempty"`
-	Model        string           `json:"model,omitempty"`
-	Usage        types.AgentUsage `json:"usage,omitempty"`
-	StopReason   types.StopReason `json:"stopReason,omitempty"`
-	ErrorMessage string           `json:"errorMessage,omitempty"`
-	ToolCallID   string           `json:"toolCallId,omitempty"`
-	ToolName     string           `json:"toolName,omitempty"`
-	IsError      bool             `json:"isError,omitempty"`
-}
 
 // --- Agent State ---
 

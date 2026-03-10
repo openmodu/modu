@@ -478,10 +478,6 @@ func extractRole(message AgentMessage) string {
 		return m.Role
 	case *types.ToolResultMessage:
 		return m.Role
-	case Message:
-		return string(m.Role)
-	case *Message:
-		return string(m.Role)
 	default:
 		return ""
 	}
