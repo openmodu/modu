@@ -94,11 +94,21 @@ func (b *SystemPromptBuilder) Build() string {
 	}
 
 	// Auto-discover standard context files
-	for _, name := range []string{"AGENTS.md", ".agents.md", "CLAUDE.md", ".claude.md"} {
+	bootstrapFiles := []string{
+		"AGENTS.md",
+		"SOUL.md",
+		"USER.md",
+		"IDENTITY.md",
+		".agents.md",
+		"CLAUDE.md",
+		".claude.md",
+	}
+
+	for _, name := range bootstrapFiles {
 		path := filepath.Join(b.cwd, name)
 		content := b.loadContextFile(path)
 		if content != "" {
-			parts = append(parts, fmt.Sprintf("# Context: %s\n%s", name, content))
+			parts = append(parts, fmt.Sprintf("## %s\n\n%s", name, content))
 		}
 	}
 
