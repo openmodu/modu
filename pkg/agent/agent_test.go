@@ -54,7 +54,7 @@ func TestAgentLoopBasic(t *testing.T) {
 		return stream, nil
 	}
 
-	stream := AgentLoop([]AgentMessage{user}, AgentContext{SystemPrompt: "", Messages: []AgentMessage{}}, AgentLoopConfig{
+	stream := AgentLoop([]AgentMessage{user}, AgentContext{SystemPrompt: "", Messages: []AgentMessage{}}, AgentConfig{
 		Model: model,
 	}, context.Background(), streamFn)
 
@@ -85,7 +85,7 @@ func TestAgentLoopToolCalls(t *testing.T) {
 					Model:      model.ID,
 					Usage:      types.AgentUsage{},
 					StopReason: "toolUse",
-					Content:    []types.ContentBlock{types.ToolCallContent{Type: "toolCall", ID: "tool-1", Name: "echo", Arguments: map[string]any{"value": "hello"}}},
+					Content:    []types.ContentBlock{&types.ToolCallContent{Type: "toolCall", ID: "tool-1", Name: "echo", Arguments: map[string]any{"value": "hello"}}},
 					Timestamp:  time.Now().UnixMilli(),
 				}
 				stream.Push(types.StreamEvent{Type: "done", Reason: "toolUse", Message: msg})
@@ -113,7 +113,7 @@ func TestAgentLoopToolCalls(t *testing.T) {
 		SystemPrompt: "",
 		Messages:     []AgentMessage{},
 		Tools:        []AgentTool{tool},
-	}, AgentLoopConfig{
+	}, AgentConfig{
 		Model: model,
 	}, context.Background(), streamFn)
 
@@ -189,7 +189,7 @@ func TestStreamAssistantResponseWithRetry_Success(t *testing.T) {
 	defer agentStream.Close()
 
 	agentCtx := AgentContext{SystemPrompt: "", Messages: []AgentMessage{}, Tools: []AgentTool{}}
-	cfg := AgentLoopConfig{Model: model}
+	cfg := AgentConfig{Model: model}
 
 	msg, err := streamAssistantResponseWithRetry(agentCtx, cfg, context.Background(), agentStream, streamFn)
 	if err != nil {
@@ -229,7 +229,7 @@ func TestStreamAssistantResponseWithRetry_RetriesTransient(t *testing.T) {
 	defer agentStream.Close()
 
 	agentCtx := AgentContext{SystemPrompt: "", Messages: []AgentMessage{}, Tools: []AgentTool{}}
-	cfg := AgentLoopConfig{
+	cfg := AgentConfig{
 		Model:           model,
 		MaxRetryDelayMs: 50,
 	}
@@ -260,7 +260,7 @@ func TestStreamAssistantResponseWithRetry_NoPermanentRetry(t *testing.T) {
 	defer agentStream.Close()
 
 	agentCtx := AgentContext{SystemPrompt: "", Messages: []AgentMessage{}, Tools: []AgentTool{}}
-	cfg := AgentLoopConfig{Model: model}
+	cfg := AgentConfig{Model: model}
 
 	_, err := streamAssistantResponseWithRetry(agentCtx, cfg, context.Background(), agentStream, streamFn)
 	if err == nil {
@@ -274,7 +274,7 @@ func TestStreamAssistantResponseWithRetry_NoPermanentRetry(t *testing.T) {
 // --- New tests for added functionality ---
 
 func TestAgentClearMessages(t *testing.T) {
-	agent := NewAgent(AgentOptions{})
+	agent := NewAgent(AgentConfig{})
 	agent.AppendMessage(types.UserMessage{Role: "user", Content: "hello", Timestamp: time.Now().UnixMilli()})
 	if len(agent.GetState().Messages) != 1 {
 		t.Fatal("expected 1 message")
@@ -286,7 +286,7 @@ func TestAgentClearMessages(t *testing.T) {
 }
 
 func TestAgentModeGetters(t *testing.T) {
-	agent := NewAgent(AgentOptions{
+	agent := NewAgent(AgentConfig{
 		SteeringMode: ExecutionModeAll,
 		FollowUpMode: ExecutionModeOneAtATime,
 	})
@@ -299,7 +299,7 @@ func TestAgentModeGetters(t *testing.T) {
 }
 
 func TestAgentSessionIDGetterSetter(t *testing.T) {
-	agent := NewAgent(AgentOptions{SessionID: "initial"})
+	agent := NewAgent(AgentConfig{SessionID: "initial"})
 	if agent.GetSessionID() != "initial" {
 		t.Fatal("expected session ID 'initial'")
 	}
@@ -310,7 +310,7 @@ func TestAgentSessionIDGetterSetter(t *testing.T) {
 }
 
 func TestAgentThinkingBudgetsGetterSetter(t *testing.T) {
-	agent := NewAgent(AgentOptions{})
+	agent := NewAgent(AgentConfig{})
 	if agent.GetThinkingBudgets() != nil {
 		t.Fatal("expected nil thinking budgets by default")
 	}
@@ -322,7 +322,7 @@ func TestAgentThinkingBudgetsGetterSetter(t *testing.T) {
 }
 
 func TestAgentMaxRetryDelayMsGetterSetter(t *testing.T) {
-	agent := NewAgent(AgentOptions{MaxRetryDelayMs: 5000})
+	agent := NewAgent(AgentConfig{MaxRetryDelayMs: 5000})
 	if agent.GetMaxRetryDelayMs() != 5000 {
 		t.Fatalf("expected 5000, got %d", agent.GetMaxRetryDelayMs())
 	}
@@ -338,7 +338,7 @@ func TestAgentErrorMessageAppendedOnFailure(t *testing.T) {
 		return nil, fmt.Errorf("HTTP 401 Unauthorized")
 	}
 
-	agent := NewAgent(AgentOptions{
+	agent := NewAgent(AgentConfig{
 		InitialState: &AgentState{
 			Model:            model,
 			ThinkingLevel:    ThinkingLevelOff,
@@ -396,7 +396,7 @@ func TestAgentPromptWithImages(t *testing.T) {
 		return stream, nil
 	}
 
-	agent := NewAgent(AgentOptions{
+	agent := NewAgent(AgentConfig{
 		InitialState: &AgentState{
 			Model:            model,
 			ThinkingLevel:    ThinkingLevelOff,

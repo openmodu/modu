@@ -19,15 +19,17 @@ const (
 	RoleCustom     MessageRole = "custom" // For extensible message types
 )
 
-type ThinkingLevel string
+// ThinkingLevel is an alias for types.ThinkingLevel, re-exported for convenience.
+type ThinkingLevel = types.ThinkingLevel
 
+// Re-export ThinkingLevel constants from pkg/types so callers can use agent.ThinkingLevelXxx.
 const (
-	ThinkingLevelOff     ThinkingLevel = "off"
-	ThinkingLevelMinimal ThinkingLevel = "minimal"
-	ThinkingLevelLow     ThinkingLevel = "low"
-	ThinkingLevelMedium  ThinkingLevel = "medium"
-	ThinkingLevelHigh    ThinkingLevel = "high"
-	ThinkingLevelXHigh   ThinkingLevel = "xhigh"
+	ThinkingLevelOff     = types.ThinkingLevelOff
+	ThinkingLevelMinimal = types.ThinkingLevelMinimal
+	ThinkingLevelLow     = types.ThinkingLevelLow
+	ThinkingLevelMedium  = types.ThinkingLevelMedium
+	ThinkingLevelHigh    = types.ThinkingLevelHigh
+	ThinkingLevelXHigh   = types.ThinkingLevelXHigh
 )
 
 type ExecutionMode string

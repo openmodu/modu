@@ -12,6 +12,7 @@ import (
 	"github.com/crosszan/modu/pkg/coding_agent/extension"
 	"github.com/crosszan/modu/pkg/coding_agent/tools"
 	"github.com/crosszan/modu/pkg/providers"
+	"github.com/crosszan/modu/pkg/providers/openai"
 	"github.com/crosszan/modu/pkg/types"
 )
 
@@ -95,9 +96,9 @@ func main() {
 	enableThinking := os.Getenv("ENABLE_THINKING")
 
 	// Register Ollama as an OpenAI-compatible provider
-	providers.Register(providers.NewOpenAIChatCompletionsProvider(
+	providers.Register(openai.New(
 		"ollama",
-		providers.WithBaseURL(fmt.Sprintf("%s/v1", ollamaHost)),
+		openai.WithBaseURL(fmt.Sprintf("%s/v1", ollamaHost)),
 	))
 
 	_ = enableThinking // used via ThinkingLevel config
@@ -166,8 +167,6 @@ func main() {
 					var text string
 					switch tc := block.(type) {
 					case *types.TextContent:
-						text = tc.Text
-					case types.TextContent:
 						text = tc.Text
 					}
 					if text != "" {

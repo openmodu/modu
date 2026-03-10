@@ -15,6 +15,7 @@ import (
 	coding_agent "github.com/crosszan/modu/pkg/coding_agent"
 	"github.com/crosszan/modu/pkg/coding_agent/tools"
 	"github.com/crosszan/modu/pkg/providers"
+	"github.com/crosszan/modu/pkg/providers/deepseek"
 	"github.com/crosszan/modu/pkg/types"
 )
 
@@ -31,7 +32,7 @@ func main() {
 	}
 
 	// Register DeepSeek provider
-	providers.Register(providers.NewDeepSeekProvider(apiKey))
+	providers.Register(deepseek.New(apiKey))
 
 	model := &types.Model{
 		ID:         modelID,
@@ -84,8 +85,6 @@ func main() {
 					var text string
 					switch tc := block.(type) {
 					case *types.TextContent:
-						text = tc.Text
-					case types.TextContent:
 						text = tc.Text
 					}
 					if text != "" {

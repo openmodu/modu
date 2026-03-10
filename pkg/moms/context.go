@@ -100,9 +100,6 @@ func extractText(content any) string {
 			if tc, ok := b.(*types.TextContent); ok {
 				return tc.Text
 			}
-			if tc, ok := b.(types.TextContent); ok {
-				return tc.Text
-			}
 		}
 	}
 	return fmt.Sprintf("%v", content)

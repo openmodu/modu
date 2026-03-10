@@ -97,7 +97,7 @@ func (t *LsTool) Execute(ctx context.Context, toolCallID string, args map[string
 
 	return agent.AgentToolResult{
 		Content: []types.ContentBlock{
-			types.TextContent{Type: "text", Text: text},
+			&types.TextContent{Type: "text", Text: text},
 		},
 	}, nil
 }

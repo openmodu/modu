@@ -184,15 +184,15 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	}
 
 	// Create the underlying agent
-	ag := agent.NewAgent(agent.AgentOptions{
+	ag := agent.NewAgent(agent.AgentConfig{
+		GetAPIKey: getAPIKey,
 		InitialState: &agent.AgentState{
 			SystemPrompt:  systemPrompt,
 			Model:         opts.Model,
 			ThinkingLevel: cfg.ThinkingLevel,
 			Tools:         activeTools,
 		},
-		StreamFn:  streamFn,
-		GetAPIKey: getAPIKey,
+		StreamFn: streamFn,
 	})
 
 	cs := &CodingSession{

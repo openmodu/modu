@@ -16,6 +16,7 @@ import (
 	coding_agent "github.com/crosszan/modu/pkg/coding_agent"
 	"github.com/crosszan/modu/pkg/coding_agent/tools"
 	"github.com/crosszan/modu/pkg/providers"
+	"github.com/crosszan/modu/pkg/providers/openai"
 	"github.com/crosszan/modu/pkg/types"
 )
 
@@ -31,9 +32,9 @@ func main() {
 	}
 
 	// Register Ollama as an OpenAI-compatible provider
-	providers.Register(providers.NewOpenAIChatCompletionsProvider(
+	providers.Register(openai.New(
 		"ollama",
-		providers.WithBaseURL(fmt.Sprintf("http://%s:11434/v1", ollamaHost)),
+		openai.WithBaseURL(fmt.Sprintf("http://%s:11434/v1", ollamaHost)),
 	))
 
 	model := &types.Model{

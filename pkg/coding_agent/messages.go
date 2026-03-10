@@ -19,7 +19,7 @@ func (m *BashExecutionMessage) ToLlmMessage() types.UserMessage {
 	return types.UserMessage{
 		Role: "user",
 		Content: []types.ContentBlock{
-			types.TextContent{
+			&types.TextContent{
 				Type: "text",
 				Text: text,
 			},
@@ -39,7 +39,7 @@ func (m *CompactionSummaryMessage) ToLlmMessage() types.UserMessage {
 	return types.UserMessage{
 		Role: "user",
 		Content: []types.ContentBlock{
-			types.TextContent{
+			&types.TextContent{
 				Type: "text",
 				Text: "[Context Compaction Summary]\n\n" + m.Summary,
 			},
@@ -60,7 +60,7 @@ func (m *BranchSummaryMessage) ToLlmMessage() types.UserMessage {
 	return types.UserMessage{
 		Role: "user",
 		Content: []types.ContentBlock{
-			types.TextContent{
+			&types.TextContent{
 				Type: "text",
 				Text: "[Branch Navigation Summary]\n\n" + m.Summary,
 			},
@@ -80,7 +80,7 @@ func (m *CustomMessage) ToLlmMessage() types.UserMessage {
 	return types.UserMessage{
 		Role: "user",
 		Content: []types.ContentBlock{
-			types.TextContent{
+			&types.TextContent{
 				Type: "text",
 				Text: "[" + m.Source + "] " + m.Text,
 			},

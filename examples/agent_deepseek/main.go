@@ -15,6 +15,7 @@ import (
 
 	"github.com/crosszan/modu/pkg/agent"
 	"github.com/crosszan/modu/pkg/providers"
+	"github.com/crosszan/modu/pkg/providers/deepseek"
 	"github.com/crosszan/modu/pkg/types"
 )
 
@@ -131,7 +132,7 @@ func main() {
 	}
 
 	// Register DeepSeek as an OpenAI-compatible provider
-	providers.Register(providers.NewDeepSeekProvider(apiKey))
+	providers.Register(deepseek.New(apiKey))
 
 	model := &types.Model{
 		ID:         modelID,
@@ -139,7 +140,7 @@ func main() {
 		ProviderID: "deepseek",
 	}
 
-	a := agent.NewAgent(agent.AgentOptions{
+	a := agent.NewAgent(agent.AgentConfig{
 		InitialState: &agent.AgentState{
 			SystemPrompt: "You are a helpful assistant. Use tools when appropriate. Respond concisely.",
 			Model:        model,

@@ -390,7 +390,7 @@ func TestReadOnlyTools(t *testing.T) {
 func extractText(content []types.ContentBlock) string {
 	var parts []string
 	for _, block := range content {
-		if tc, ok := block.(types.TextContent); ok {
+		if tc, ok := block.(*types.TextContent); ok {
 			parts = append(parts, tc.Text)
 		}
 	}

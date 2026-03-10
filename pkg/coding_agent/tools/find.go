@@ -95,7 +95,7 @@ func (t *FindTool) executeFd(ctx context.Context, fdPath, pattern, searchPath st
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 			return agent.AgentToolResult{
 				Content: []types.ContentBlock{
-					types.TextContent{Type: "text", Text: "No files found."},
+					&types.TextContent{Type: "text", Text: "No files found."},
 				},
 			}, nil
 		}
@@ -107,7 +107,7 @@ func (t *FindTool) executeFd(ctx context.Context, fdPath, pattern, searchPath st
 	if result == "" {
 		return agent.AgentToolResult{
 			Content: []types.ContentBlock{
-				types.TextContent{Type: "text", Text: "No files found."},
+				&types.TextContent{Type: "text", Text: "No files found."},
 			},
 		}, nil
 	}
@@ -122,7 +122,7 @@ func (t *FindTool) executeFd(ctx context.Context, fdPath, pattern, searchPath st
 
 	return agent.AgentToolResult{
 		Content: []types.ContentBlock{
-			types.TextContent{Type: "text", Text: result},
+			&types.TextContent{Type: "text", Text: result},
 		},
 	}, nil
 }
@@ -185,7 +185,7 @@ func (t *FindTool) executeBuiltin(ctx context.Context, pattern, searchPath strin
 	if len(results) == 0 {
 		return agent.AgentToolResult{
 			Content: []types.ContentBlock{
-				types.TextContent{Type: "text", Text: "No files found."},
+				&types.TextContent{Type: "text", Text: "No files found."},
 			},
 		}, nil
 	}
@@ -198,7 +198,7 @@ func (t *FindTool) executeBuiltin(ctx context.Context, pattern, searchPath strin
 
 	return agent.AgentToolResult{
 		Content: []types.ContentBlock{
-			types.TextContent{Type: "text", Text: text},
+			&types.TextContent{Type: "text", Text: text},
 		},
 	}, nil
 }

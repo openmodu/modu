@@ -19,7 +19,7 @@ const (
 	defaultRetryJitterMs = 500
 )
 
-func AgentLoop(prompts []AgentMessage, context AgentContext, config AgentLoopConfig, ctx context.Context, streamFn StreamFn) *EventStream {
+func AgentLoop(prompts []AgentMessage, context AgentContext, config AgentConfig, ctx context.Context, streamFn StreamFn) *EventStream {
 	stream := NewEventStream()
 	go func() {
 		defer stream.Close()
@@ -40,7 +40,7 @@ func AgentLoop(prompts []AgentMessage, context AgentContext, config AgentLoopCon
 	return stream
 }
 
-func AgentLoopContinue(context AgentContext, config AgentLoopConfig, ctx context.Context, streamFn StreamFn) (*EventStream, error) {
+func AgentLoopContinue(context AgentContext, config AgentConfig, ctx context.Context, streamFn StreamFn) (*EventStream, error) {
 	if len(context.Messages) == 0 {
 		return nil, fmt.Errorf("cannot continue: no messages in context")
 	}
@@ -58,7 +58,7 @@ func AgentLoopContinue(context AgentContext, config AgentLoopConfig, ctx context
 	return stream, nil
 }
 
-func runLoop(currentContext AgentContext, newMessages []AgentMessage, config AgentLoopConfig, ctx context.Context, stream *EventStream, streamFn StreamFn) {
+func runLoop(currentContext AgentContext, newMessages []AgentMessage, config AgentConfig, ctx context.Context, stream *EventStream, streamFn StreamFn) {
 	firstTurn := true
 	pendingMessages := getSteeringMessages(config)
 	for {
@@ -129,7 +129,7 @@ func runLoop(currentContext AgentContext, newMessages []AgentMessage, config Age
 	stream.Resolve(newMessages, nil)
 }
 
-func streamAssistantResponse(context AgentContext, config AgentLoopConfig, ctx context.Context, stream *EventStream, streamFn StreamFn) (*types.AssistantMessage, error) {
+func streamAssistantResponse(context AgentContext, config AgentConfig, ctx context.Context, stream *EventStream, streamFn StreamFn) (*types.AssistantMessage, error) {
 	if config.Model == nil {
 		return nil, fmt.Errorf("model is required")
 	}
@@ -235,7 +235,7 @@ func streamAssistantResponse(context AgentContext, config AgentLoopConfig, ctx c
 	return finalMessage, nil
 }
 
-func executeToolCalls(tools []AgentTool, toolCalls []types.ToolCallContent, ctx context.Context, stream *EventStream, config AgentLoopConfig) ([]types.ToolResultMessage, []AgentMessage) {
+func executeToolCalls(tools []AgentTool, toolCalls []types.ToolCallContent, ctx context.Context, stream *EventStream, config AgentConfig) ([]types.ToolResultMessage, []AgentMessage) {
 	results := []types.ToolResultMessage{}
 	var steeringMessages []AgentMessage
 	for index, toolCall := range toolCalls {
@@ -363,17 +363,14 @@ func mapThinkingLevel(level ThinkingLevel) types.ThinkingLevel {
 func extractToolCalls(message *types.AssistantMessage) []types.ToolCallContent {
 	var out []types.ToolCallContent
 	for _, block := range message.Content {
-		switch v := block.(type) {
-		case types.ToolCallContent:
-			out = append(out, v)
-		case *types.ToolCallContent:
+		if v, ok := block.(*types.ToolCallContent); ok {
 			out = append(out, *v)
 		}
 	}
 	return out
 }
 
-func getSteeringMessages(config AgentLoopConfig) []AgentMessage {
+func getSteeringMessages(config AgentConfig) []AgentMessage {
 	if config.GetSteeringMessages == nil {
 		return nil
 	}
@@ -384,7 +381,7 @@ func getSteeringMessages(config AgentLoopConfig) []AgentMessage {
 	return msgs
 }
 
-func getFollowUpMessages(config AgentLoopConfig) []AgentMessage {
+func getFollowUpMessages(config AgentConfig) []AgentMessage {
 	if config.GetFollowUpMessages == nil {
 		return nil
 	}
@@ -395,7 +392,7 @@ func getFollowUpMessages(config AgentLoopConfig) []AgentMessage {
 	return msgs
 }
 
-func streamAssistantResponseWithRetry(context AgentContext, config AgentLoopConfig, ctx context.Context, stream *EventStream, streamFn StreamFn) (*types.AssistantMessage, error) {
+func streamAssistantResponseWithRetry(context AgentContext, config AgentConfig, ctx context.Context, stream *EventStream, streamFn StreamFn) (*types.AssistantMessage, error) {
 	maxRetries := defaultMaxRetries
 	maxDelayMs := defaultMaxDelayMs
 	if config.MaxRetryDelayMs > 0 {

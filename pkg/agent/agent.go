@@ -10,30 +10,12 @@ import (
 	"github.com/crosszan/modu/pkg/types"
 )
 
-type AgentOptions struct {
-	InitialState     *AgentState
-	ConvertToLlm     func(messages []AgentMessage) ([]types.AgentMessage, error)
-	TransformContext func(messages []AgentMessage, ctx context.Context) ([]AgentMessage, error)
-	SteeringMode     ExecutionMode
-	FollowUpMode     ExecutionMode
-	StreamFn         StreamFn
-	SessionID        string
-	GetAPIKey        func(provider string) (string, error)
-	ThinkingBudgets  *types.ThinkingBudgets
-	MaxRetryDelayMs  int
-}
-
 type Agent struct {
-	state            AgentState
-	steeringMode     ExecutionMode
-	followUpMode     ExecutionMode
-	convertToLlm     func(messages []AgentMessage) ([]types.AgentMessage, error)
-	transformContext func(messages []AgentMessage, ctx context.Context) ([]AgentMessage, error)
-	streamFn         StreamFn
-	sessionID        string
-	getAPIKey        func(provider string) (string, error)
-	thinkingBudgets  *types.ThinkingBudgets
-	maxRetryDelayMs  int
+	state        AgentState
+	steeringMode ExecutionMode
+	followUpMode ExecutionMode
+	config       AgentConfig
+	streamFn     StreamFn
 
 	// Queues
 	steeringQueue []AgentMessage
@@ -46,7 +28,7 @@ type Agent struct {
 	running    chan struct{}
 }
 
-func NewAgent(opts AgentOptions) *Agent {
+func NewAgent(cfg AgentConfig) *Agent {
 	initial := AgentState{
 		SystemPrompt:     "",
 		Model:            nil,
@@ -58,8 +40,8 @@ func NewAgent(opts AgentOptions) *Agent {
 		PendingToolCalls: map[string]struct{}{},
 		Error:            "",
 	}
-	if opts.InitialState != nil {
-		initial = *opts.InitialState
+	if cfg.InitialState != nil {
+		initial = *cfg.InitialState
 	}
 	if initial.PendingToolCalls == nil {
 		initial.PendingToolCalls = make(map[string]struct{})
@@ -70,32 +52,26 @@ func NewAgent(opts AgentOptions) *Agent {
 	if initial.Tools == nil {
 		initial.Tools = []AgentTool{}
 	}
-	if opts.SteeringMode == "" {
-		opts.SteeringMode = ExecutionModeOneAtATime
+	if cfg.SteeringMode == "" {
+		cfg.SteeringMode = ExecutionModeOneAtATime
 	}
-	if opts.FollowUpMode == "" {
-		opts.FollowUpMode = ExecutionModeOneAtATime
+	if cfg.FollowUpMode == "" {
+		cfg.FollowUpMode = ExecutionModeOneAtATime
 	}
-	convertToLlm := opts.ConvertToLlm
-	if convertToLlm == nil {
-		convertToLlm = defaultConvertToProviders
+	if cfg.ConvertToLlm == nil {
+		cfg.ConvertToLlm = defaultConvertToProviders
 	}
-	streamFn := opts.StreamFn
+	streamFn := cfg.StreamFn
 	if streamFn == nil {
 		streamFn = StreamDefault
 	}
 	return &Agent{
-		state:            initial,
-		steeringMode:     opts.SteeringMode,
-		followUpMode:     opts.FollowUpMode,
-		convertToLlm:     convertToLlm,
-		transformContext: opts.TransformContext,
-		streamFn:         streamFn,
-		sessionID:        opts.SessionID,
-		getAPIKey:        opts.GetAPIKey,
-		thinkingBudgets:  opts.ThinkingBudgets,
-		maxRetryDelayMs:  opts.MaxRetryDelayMs,
-		listeners:        map[int]func(AgentEvent){},
+		state:        initial,
+		steeringMode: cfg.SteeringMode,
+		followUpMode: cfg.FollowUpMode,
+		config:       cfg,
+		streamFn:     streamFn,
+		listeners:    map[int]func(AgentEvent){},
 	}
 }
 
@@ -341,37 +317,37 @@ func (a *Agent) GetFollowUpMode() ExecutionMode {
 func (a *Agent) GetSessionID() string {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return a.sessionID
+	return a.config.SessionID
 }
 
 func (a *Agent) SetSessionID(id string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.sessionID = id
+	a.config.SessionID = id
 }
 
 func (a *Agent) GetThinkingBudgets() *types.ThinkingBudgets {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return a.thinkingBudgets
+	return a.config.ThinkingBudgets
 }
 
 func (a *Agent) SetThinkingBudgets(b *types.ThinkingBudgets) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.thinkingBudgets = b
+	a.config.ThinkingBudgets = b
 }
 
 func (a *Agent) GetMaxRetryDelayMs() int {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return a.maxRetryDelayMs
+	return a.config.MaxRetryDelayMs
 }
 
 func (a *Agent) SetMaxRetryDelayMs(ms int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.maxRetryDelayMs = ms
+	a.config.MaxRetryDelayMs = ms
 }
 
 func (a *Agent) dequeueSteeringMessages() []AgentMessage {
@@ -440,29 +416,22 @@ func (a *Agent) runLoop(ctx context.Context, messages []AgentMessage, skipInitia
 	reasoning := a.state.ThinkingLevel
 	a.mu.RUnlock()
 
-	config := AgentLoopConfig{
-		Model:            model,
-		Reasoning:        reasoning,
-		SessionID:        a.sessionID,
-		ThinkingBudgets:  a.thinkingBudgets,
-		MaxRetryDelayMs:  a.maxRetryDelayMs,
-		ConvertToLlm:     a.convertToLlm,
-		TransformContext: a.transformContext,
-		GetAPIKey:        a.getAPIKey,
-		GetSteeringMessages: func() ([]AgentMessage, error) {
-			a.mu.Lock()
-			defer a.mu.Unlock()
-			if skipInitialSteeringPoll {
-				skipInitialSteeringPoll = false
-				return []AgentMessage{}, nil
-			}
-			return a.dequeueSteeringMessages(), nil
-		},
-		GetFollowUpMessages: func() ([]AgentMessage, error) {
-			a.mu.Lock()
-			defer a.mu.Unlock()
-			return a.dequeueFollowUpMessages(), nil
-		},
+	config := a.config
+	config.Model = model
+	config.Reasoning = reasoning
+	config.GetSteeringMessages = func() ([]AgentMessage, error) {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		if skipInitialSteeringPoll {
+			skipInitialSteeringPoll = false
+			return []AgentMessage{}, nil
+		}
+		return a.dequeueSteeringMessages(), nil
+	}
+	config.GetFollowUpMessages = func() ([]AgentMessage, error) {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return a.dequeueFollowUpMessages(), nil
 	}
 
 	var stream *EventStream
@@ -602,24 +571,12 @@ func hasNonEmptyContent(msg types.AssistantMessage) bool {
 			if v != nil && strings.TrimSpace(v.Thinking) != "" {
 				return true
 			}
-		case types.ThinkingContent:
-			if strings.TrimSpace(v.Thinking) != "" {
-				return true
-			}
 		case *types.TextContent:
 			if v != nil && strings.TrimSpace(v.Text) != "" {
 				return true
 			}
-		case types.TextContent:
-			if strings.TrimSpace(v.Text) != "" {
-				return true
-			}
 		case *types.ToolCallContent:
 			if v != nil && strings.TrimSpace(v.Name) != "" {
-				return true
-			}
-		case types.ToolCallContent:
-			if strings.TrimSpace(v.Name) != "" {
 				return true
 			}
 		}

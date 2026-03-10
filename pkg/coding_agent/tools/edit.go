@@ -136,7 +136,7 @@ func (t *EditTool) Execute(ctx context.Context, toolCallID string, args map[stri
 
 	return agent.AgentToolResult{
 		Content: []types.ContentBlock{
-			types.TextContent{
+			&types.TextContent{
 				Type: "text",
 				Text: fmt.Sprintf("Successfully edited %s (%d replacement(s))\n\n%s", pathArg, replacements, diff),
 			},

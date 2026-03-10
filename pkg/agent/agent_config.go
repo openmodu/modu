@@ -6,7 +6,7 @@ import (
 	"github.com/crosszan/modu/pkg/types"
 )
 
-type AgentLoopConfig struct {
+type AgentConfig struct {
 	Model               *types.Model
 	ConvertToLlm        func(messages []AgentMessage) ([]types.AgentMessage, error)
 	TransformContext    func(messages []AgentMessage, ctx context.Context) ([]AgentMessage, error)
@@ -22,4 +22,10 @@ type AgentLoopConfig struct {
 	Reasoning           ThinkingLevel
 	ThinkingBudgets     *types.ThinkingBudgets
 	MaxRetryDelayMs     int
+
+	// Moved from former AgentOptions
+	InitialState *AgentState
+	SteeringMode ExecutionMode
+	FollowUpMode ExecutionMode
+	StreamFn     StreamFn
 }

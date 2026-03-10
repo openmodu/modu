@@ -10,6 +10,7 @@ import (
 
 	"github.com/crosszan/modu/pkg/agent"
 	"github.com/crosszan/modu/pkg/providers"
+	"github.com/crosszan/modu/pkg/providers/openai"
 	"github.com/crosszan/modu/pkg/types"
 )
 
@@ -134,9 +135,9 @@ func main() {
 	providerID := "lmstudio"
 
 	// Register LM Studio as an OpenAI-compatible provider
-	providers.Register(providers.NewOpenAIChatCompletionsProvider(
+	providers.Register(openai.New(
 		providerID,
-		providers.WithBaseURL(baseURL),
+		openai.WithBaseURL(baseURL),
 	))
 
 	model := &types.Model{
@@ -145,7 +146,7 @@ func main() {
 		ProviderID: providerID,
 	}
 
-	a := agent.NewAgent(agent.AgentOptions{
+	a := agent.NewAgent(agent.AgentConfig{
 		InitialState: &agent.AgentState{
 			SystemPrompt: "You are a helpful assistant. When asked math questions, use the calculator tool. When asked about the time, use the get_current_time tool. Always respond in the same language as the user.",
 			Model:        model,

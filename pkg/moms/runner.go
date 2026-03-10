@@ -12,7 +12,7 @@ import (
 
 	"github.com/crosszan/modu/pkg/agent"
 	"github.com/crosszan/modu/pkg/coding_agent/tools"
-"github.com/crosszan/modu/pkg/skills"
+	"github.com/crosszan/modu/pkg/skills"
 	skillstools "github.com/crosszan/modu/pkg/skills/tools"
 	"github.com/crosszan/modu/pkg/types"
 )
@@ -165,8 +165,8 @@ func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult
 		start       time.Time
 		argsSummary string
 	}
-	toolInfos   := map[string]*toolInfo{}
-	toolMsgIDs  := map[string]int{}
+	toolInfos := map[string]*toolInfo{}
+	toolMsgIDs := map[string]int{}
 
 	stopReason := "stop"
 	var runErr error
@@ -274,25 +274,11 @@ func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult
 			}
 			for _, block := range msg.Content {
 				switch b := block.(type) {
-				case types.ThinkingContent:
-					if strings.TrimSpace(b.Thinking) != "" {
-						thinking := b.Thinking
-						enqueue(func() error {
-							return tgCtx.RespondInThread(fmt.Sprintf("_%s_", escapeMarkdown(thinking)))
-						})
-					}
 				case *types.ThinkingContent:
 					if b != nil && strings.TrimSpace(b.Thinking) != "" {
 						thinking := b.Thinking
 						enqueue(func() error {
 							return tgCtx.RespondInThread(fmt.Sprintf("_%s_", escapeMarkdown(thinking)))
-						})
-					}
-				case types.TextContent:
-					if strings.TrimSpace(b.Text) != "" {
-						text := b.Text
-						enqueue(func() error {
-							return tgCtx.Respond(text, true)
 						})
 					}
 				case *types.TextContent:
@@ -404,7 +390,8 @@ func (r *Runner) getOrCreateAgent(chatDir, workspacePath string, tgCtx TelegramC
 		)
 	}
 
-	a := agent.NewAgent(agent.AgentOptions{
+	a := agent.NewAgent(agent.AgentConfig{
+		GetAPIKey: r.getAPIKey,
 		InitialState: &agent.AgentState{
 			SystemPrompt:     systemPrompt,
 			Model:            model,
@@ -413,7 +400,6 @@ func (r *Runner) getOrCreateAgent(chatDir, workspacePath string, tgCtx TelegramC
 			Messages:         []agent.AgentMessage{},
 			PendingToolCalls: make(map[string]struct{}),
 		},
-		GetAPIKey: r.getAPIKey,
 	})
 
 	// Load existing messages from context.jsonl if it exists.
@@ -478,13 +464,8 @@ func loadContextMessages(chatDir string) ([]agent.AgentMessage, error) {
 // extractResultText extracts text from AgentToolResult.
 func extractResultText(r agent.AgentToolResult) string {
 	for _, block := range r.Content {
-		switch tc := block.(type) {
-		case types.TextContent:
+		if tc, ok := block.(*types.TextContent); ok && tc != nil {
 			return tc.Text
-		case *types.TextContent:
-			if tc != nil {
-				return tc.Text
-			}
 		}
 	}
 	return ""

@@ -108,7 +108,7 @@ func (t *ReadTool) readImage(path, mimeType string) (agent.AgentToolResult, erro
 
 	return agent.AgentToolResult{
 		Content: []types.ContentBlock{
-			types.ImageContent{
+			&types.ImageContent{
 				Type:     "image",
 				Data:     encoded,
 				MimeType: mimeType,
@@ -152,7 +152,7 @@ func (t *ReadTool) readText(path string, info os.FileInfo, args map[string]any) 
 	} else if offset >= len(lines) {
 		return agent.AgentToolResult{
 			Content: []types.ContentBlock{
-				types.TextContent{
+				&types.TextContent{
 					Type: "text",
 					Text: fmt.Sprintf("offset %d is beyond end of file (%d lines)", offset+1, len(lines)),
 				},
@@ -185,7 +185,7 @@ func (t *ReadTool) readText(path string, info os.FileInfo, args map[string]any) 
 
 	return agent.AgentToolResult{
 		Content: []types.ContentBlock{
-			types.TextContent{
+			&types.TextContent{
 				Type: "text",
 				Text: result,
 			},
@@ -217,7 +217,7 @@ func toInt(v any) int {
 func errorResult(msg string) agent.AgentToolResult {
 	return agent.AgentToolResult{
 		Content: []types.ContentBlock{
-			types.TextContent{
+			&types.TextContent{
 				Type: "text",
 				Text: msg,
 			},

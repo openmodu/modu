@@ -67,7 +67,7 @@ func (t *WriteTool) Execute(ctx context.Context, toolCallID string, args map[str
 
 	return agent.AgentToolResult{
 		Content: []types.ContentBlock{
-			types.TextContent{
+			&types.TextContent{
 				Type: "text",
 				Text: fmt.Sprintf("Successfully wrote %s to %s", FormatSize(int64(bytes)), pathArg),
 			},

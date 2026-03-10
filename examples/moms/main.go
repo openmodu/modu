@@ -10,6 +10,7 @@ import (
 
 	"github.com/crosszan/modu/pkg/moms"
 	"github.com/crosszan/modu/pkg/providers"
+	"github.com/crosszan/modu/pkg/providers/openai"
 	"github.com/crosszan/modu/pkg/skills"
 	"github.com/crosszan/modu/pkg/types"
 )
@@ -74,9 +75,9 @@ func main() {
 		modelID = "qwen/qwen3.5-35b-a3b"
 	}
 
-	providers.Register(providers.NewOpenAIChatCompletionsProvider(localProviderID,
-		providers.WithBaseURL(localBaseURL),
-		providers.WithAPIKey("lm-studio"), // LM Studio 不校验 key
+	providers.Register(openai.New(localProviderID,
+		openai.WithBaseURL(localBaseURL),
+		openai.WithAPIKey("lm-studio"), // LM Studio 不校验 key
 	))
 
 	model := &types.Model{

@@ -147,7 +147,7 @@ func (t *BashTool) Execute(ctx context.Context, toolCallID string, args map[stri
 
 	return agent.AgentToolResult{
 		Content: []types.ContentBlock{
-			types.TextContent{
+			&types.TextContent{
 				Type: "text",
 				Text: text,
 			},

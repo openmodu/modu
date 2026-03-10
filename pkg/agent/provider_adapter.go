@@ -95,16 +95,7 @@ func contentBlocksToParts(blocks []types.ContentBlock) []any {
 		switch b := block.(type) {
 		case *types.TextContent:
 			parts = append(parts, map[string]any{"type": "text", "text": b.Text})
-		case types.TextContent:
-			parts = append(parts, map[string]any{"type": "text", "text": b.Text})
 		case *types.ImageContent:
-			parts = append(parts, map[string]any{
-				"type": "image_url",
-				"image_url": map[string]any{
-					"url": "data:" + b.MimeType + ";base64," + b.Data,
-				},
-			})
-		case types.ImageContent:
 			parts = append(parts, map[string]any{
 				"type": "image_url",
 				"image_url": map[string]any{
@@ -146,56 +137,26 @@ func rawBlocksToParts(blocks []interface{}) []any {
 	return parts
 }
 
-// assistantProviderMessage converts AssistantMessage content blocks to a providers.Message,
-// handling both typed blocks and JSON-deserialized map[string]any blocks.
+// assistantProviderMessage converts AssistantMessage content blocks to a providers.Message.
 func assistantProviderMessage(content []types.ContentBlock) providers.Message {
 	msg := providers.Message{Role: providers.RoleAssistant}
 	var textBuf string
 	for _, block := range content {
-		switch tc := block.(type) {
-		case *types.TextContent:
+		if tc, ok := block.(*types.TextContent); ok {
 			textBuf += tc.Text
-		case types.TextContent:
-			textBuf += tc.Text
-		case map[string]interface{}:
-			if blockType, _ := tc["type"].(string); blockType == "text" {
-				if text, ok := tc["text"].(string); ok {
-					textBuf += text
-				}
-			}
 		}
 	}
 	if textBuf != "" {
 		msg.Content = textBuf
 	}
 	for _, block := range content {
-		switch tc := block.(type) {
-		case *types.ToolCallContent:
+		if tc, ok := block.(*types.ToolCallContent); ok {
 			args, _ := json.Marshal(tc.Arguments)
 			msg.ToolCalls = append(msg.ToolCalls, providers.ToolCall{
 				ID:       tc.ID,
 				Type:     "function",
 				Function: providers.FuncCall{Name: tc.Name, Arguments: string(args)},
 			})
-		case types.ToolCallContent:
-			args, _ := json.Marshal(tc.Arguments)
-			msg.ToolCalls = append(msg.ToolCalls, providers.ToolCall{
-				ID:       tc.ID,
-				Type:     "function",
-				Function: providers.FuncCall{Name: tc.Name, Arguments: string(args)},
-			})
-		case map[string]interface{}:
-			if blockType, _ := tc["type"].(string); blockType == "toolCall" {
-				id, _ := tc["id"].(string)
-				name, _ := tc["name"].(string)
-				argsRaw, _ := tc["arguments"].(map[string]interface{})
-				argsJSON, _ := json.Marshal(argsRaw)
-				msg.ToolCalls = append(msg.ToolCalls, providers.ToolCall{
-					ID:       id,
-					Type:     "function",
-					Function: providers.FuncCall{Name: name, Arguments: string(argsJSON)},
-				})
-			}
 		}
 	}
 	return msg
@@ -203,10 +164,7 @@ func assistantProviderMessage(content []types.ContentBlock) providers.Message {
 
 func toolResultContent(blocks []types.ContentBlock) string {
 	for _, b := range blocks {
-		switch tc := b.(type) {
-		case *types.TextContent:
-			return tc.Text
-		case types.TextContent:
+		if tc, ok := b.(*types.TextContent); ok {
 			return tc.Text
 		}
 	}

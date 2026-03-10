@@ -4,6 +4,7 @@ package types
 type ThinkingLevel = string
 
 const (
+	ThinkingLevelOff     ThinkingLevel = "off"
 	ThinkingLevelMinimal ThinkingLevel = "minimal"
 	ThinkingLevelLow     ThinkingLevel = "low"
 	ThinkingLevelMedium  ThinkingLevel = "medium"

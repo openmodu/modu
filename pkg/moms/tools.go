@@ -64,7 +64,7 @@ func (t *BashSandboxTool) Execute(ctx context.Context, _ string, args map[string
 		output = "(no output)"
 	}
 	return agent.AgentToolResult{
-		Content: []types.ContentBlock{types.TextContent{Type: "text", Text: truncateStr(output, 200000)}},
+		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: truncateStr(output, 200000)}},
 		Details: map[string]any{"exitCode": res.ExitCode, "timedOut": res.TimedOut},
 	}, nil
 }
@@ -116,7 +116,7 @@ func (t *AttachTool) Execute(ctx context.Context, _ string, args map[string]any,
 		return errorToolResult(fmt.Sprintf("failed to send file: %v", err)), nil
 	}
 	return agent.AgentToolResult{
-		Content: []types.ContentBlock{types.TextContent{Type: "text", Text: fmt.Sprintf("File sent: %s", path)}},
+		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: fmt.Sprintf("File sent: %s", path)}},
 	}, nil
 }
 
@@ -156,7 +156,7 @@ func (t *ReadTool) Execute(_ context.Context, _ string, args map[string]any, _ a
 	}
 	text := truncateStr(string(data), 200000)
 	return agent.AgentToolResult{
-		Content: []types.ContentBlock{types.TextContent{Type: "text", Text: text}},
+		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: text}},
 	}, nil
 }
 
@@ -193,7 +193,7 @@ func (t *WriteTool) Execute(_ context.Context, _ string, args map[string]any, _ 
 		return errorToolResult(fmt.Sprintf("write error: %v", err)), nil
 	}
 	return agent.AgentToolResult{
-		Content: []types.ContentBlock{types.TextContent{Type: "text", Text: fmt.Sprintf("Wrote %d bytes to %s", len(content), path)}},
+		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: fmt.Sprintf("Wrote %d bytes to %s", len(content), path)}},
 	}, nil
 }
 
@@ -202,7 +202,7 @@ func (t *WriteTool) Execute(_ context.Context, _ string, args map[string]any, _ 
 
 func errorToolResult(msg string) agent.AgentToolResult {
 	return agent.AgentToolResult{
-		Content: []types.ContentBlock{types.TextContent{Type: "text", Text: msg}},
+		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: msg}},
 		Details: map[string]any{"isError": true},
 	}
 }

@@ -58,7 +58,7 @@ func runPrintText(ctx context.Context, opts PrintOptions) error {
 		if event.Type == agent.EventTypeMessageEnd {
 			if msg, ok := event.Message.(types.AssistantMessage); ok {
 				for _, block := range msg.Content {
-					if tc, ok := block.(types.TextContent); ok {
+					if tc, ok := block.(*types.TextContent); ok {
 						lastAssistantText = tc.Text
 					}
 				}
