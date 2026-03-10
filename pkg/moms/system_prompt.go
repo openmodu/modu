@@ -200,10 +200,10 @@ func BuildSystemPrompt(workspacePath string, chatID int64, memory string, sandbo
 
 	var envDesc string
 	if isDocker {
-		envDesc = fmt.Sprintf(`You are running inside a Docker container (Alpine Linux).
+		envDesc = `You are running inside a Docker container (Alpine Linux).
 - Bash working directory: /
 - Install tools with: apk add <package>
-- Your changes persist across sessions`)
+- Your changes persist across sessions`
 	} else {
 		envDesc = `You are running directly on the host machine.
 - Be careful with system modifications`

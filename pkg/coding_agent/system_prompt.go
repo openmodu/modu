@@ -27,6 +27,7 @@ type SystemPromptBuilder struct {
 	skillsPrompt  string
 	appendPrompts []string
 	cwd           string
+	memoryStore   *MemoryStore
 }
 
 // NewSystemPromptBuilder creates a new system prompt builder.
@@ -61,6 +62,12 @@ func (b *SystemPromptBuilder) SetSkillsPrompt(prompt string) *SystemPromptBuilde
 // AppendPrompt adds additional prompt text from settings or extensions.
 func (b *SystemPromptBuilder) AppendPrompt(prompt string) *SystemPromptBuilder {
 	b.appendPrompts = append(b.appendPrompts, prompt)
+	return b
+}
+
+// SetMemoryStore sets the persistent memory store.
+func (b *SystemPromptBuilder) SetMemoryStore(store *MemoryStore) *SystemPromptBuilder {
+	b.memoryStore = store
 	return b
 }
 
@@ -122,7 +129,15 @@ func (b *SystemPromptBuilder) Build() string {
 		parts = append(parts, p)
 	}
 
-	// 6. Environment info
+	// 6. Memory Context
+	if b.memoryStore != nil {
+		memCtx := b.memoryStore.GetMemoryContext()
+		if memCtx != "" {
+			parts = append(parts, memCtx)
+		}
+	}
+
+	// 7. Environment info
 	envInfo := fmt.Sprintf("# Environment\n- Current date: %s\n- Working directory: %s",
 		time.Now().Format("2006-01-02"),
 		b.cwd)

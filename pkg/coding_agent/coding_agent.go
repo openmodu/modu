@@ -111,6 +111,9 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		cfg.ThinkingLevel = opts.ThinkingLevel
 	}
 
+	// Initialize memory store
+	memoryStore := NewMemoryStore(opts.Cwd)
+
 	// Set up tools
 	activeTools := opts.Tools
 	if activeTools == nil {
@@ -119,6 +122,9 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	if len(opts.CustomTools) > 0 {
 		activeTools = append(activeTools, opts.CustomTools...)
 	}
+
+	// Always include the memory tool
+	activeTools = append(activeTools, tools.NewMemoryTool(memoryStore))
 
 	// Create session manager
 	sessionMgr, err := session.NewManager(agentDir, opts.Cwd)
@@ -144,6 +150,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 
 	// Build system prompt
 	promptBuilder := NewSystemPromptBuilder(opts.Cwd)
+	promptBuilder.SetMemoryStore(memoryStore)
 	promptBuilder.SetTools(activeTools)
 
 	if opts.CustomSystemPrompt != "" {
