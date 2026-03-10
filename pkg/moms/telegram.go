@@ -46,6 +46,10 @@ func NewBot(token string, sandbox *Sandbox, workingDir string, llmModel *types.M
 	}
 	fmt.Printf("[moms] authorized as @%s\n", api.Self.UserName)
 
+	if err := InitBootstrapFiles(workingDir); err != nil {
+		fmt.Printf("[moms] warning: failed to init bootstrap files: %v\n", err)
+	}
+
 	return &Bot{
 		api:         api,
 		store:       NewStore(workingDir),

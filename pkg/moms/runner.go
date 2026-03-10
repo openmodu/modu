@@ -320,6 +320,21 @@ func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult
 		for _, m := range msgs {
 			toSave = append(toSave, m)
 		}
+
+		// Apply context compaction
+		if r.settings != nil && r.settings.Compaction != nil && r.settings.Compaction.Enabled {
+			compacted := CompactContext(toSave, r.settings.Compaction.KeepRecentTokens)
+			if len(compacted) < len(toSave) {
+				var newMsgs []agent.AgentMessage
+				for _, m := range compacted {
+					newMsgs = append(newMsgs, m)
+				}
+				a.ReplaceMessages(newMsgs)
+				toSave = compacted
+				fmt.Printf("[moms] chat %d: compacted context from %d to %d messages\n", r.chatID, len(msgs), len(compacted))
+			}
+		}
+
 		if err := SaveContextMessages(chatDir, toSave); err != nil {
 			fmt.Printf("[moms] failed to save context for chat %d: %v\n", r.chatID, err)
 		}

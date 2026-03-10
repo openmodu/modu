@@ -193,6 +193,56 @@ func GetMemory(chatDir, workingDir string) string {
 	return strings.Join(parts, "\n\n")
 }
 
+// GetBootstrapContext reads standard context files (AGENTS, SOUL, USER, IDENTITY).
+func GetBootstrapContext(chatDir, workingDir string) string {
+	var parts []string
+
+	files := []string{"AGENTS.md", "SOUL.md", "USER.md", "IDENTITY.md"}
+
+	for _, name := range files {
+		// Global
+		globalPath := filepath.Join(workingDir, name)
+		if data, err := os.ReadFile(globalPath); err == nil && len(strings.TrimSpace(string(data))) > 0 {
+			parts = append(parts, fmt.Sprintf("### Global %s\n%s", name, strings.TrimSpace(string(data))))
+		}
+
+		// Chat-specific
+		chatPath := filepath.Join(chatDir, name)
+		if data, err := os.ReadFile(chatPath); err == nil && len(strings.TrimSpace(string(data))) > 0 {
+			parts = append(parts, fmt.Sprintf("### Chat-Specific %s\n%s", name, strings.TrimSpace(string(data))))
+		}
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+	return "## Agent Configuration\n" + strings.Join(parts, "\n\n") + "\n"
+}
+
+// InitBootstrapFiles creates standard context files in the working directory if they do not exist.
+func InitBootstrapFiles(workingDir string) error {
+	files := map[string]string{
+		"AGENTS.md":   "# Global Agent Configuration\n\nDefine global behaviors and traits here.",
+		"SOUL.md":     "# Soul Configuration\n\nDefine the core personality and underlying motivations here.",
+		"USER.md":     "# User Preferences\n\nDefine user specific preferences and rules here.",
+		"IDENTITY.md": "# Identity\n\nDefine the strict identity and role boundaries here.",
+	}
+
+	if err := os.MkdirAll(workingDir, 0o755); err != nil {
+		return err
+	}
+
+	for name, defaultContent := range files {
+		path := filepath.Join(workingDir, name)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			if err := os.WriteFile(path, []byte(defaultContent), 0o644); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // BuildSystemPrompt creates the system prompt for moms, mirroring mom's buildSystemPrompt.
 func BuildSystemPrompt(workspacePath string, chatID int64, memory string, sandbox SandboxConfig, skills []SkillInfo) string {
 	chatPath := fmt.Sprintf("%s/%d", workspacePath, chatID)
@@ -220,8 +270,11 @@ func BuildSystemPrompt(workspacePath string, chatID int64, memory string, sandbo
 		skillsSection = strings.Join(skillLines, "\n")
 	}
 
+	bootstrapCtx := GetBootstrapContext(chatPath, workspacePath)
+
 	return fmt.Sprintf(`You are moms, a Telegram bot assistant. Be concise. No emojis unless the user uses them.
 
+%s
 ## Context
 - For current date/time, use: date
 - You have access to previous conversation context.
@@ -303,6 +356,7 @@ grep -i "topic" %s/log.jsonl | jq -c '{date: .date[0:19], user: (.userName // .u
 - edit: Surgical file edits
 - attach: Send files to Telegram chat
 `,
+		bootstrapCtx,
 		envDesc,
 		workspacePath, chatID,
 		workspacePath, chatPath,

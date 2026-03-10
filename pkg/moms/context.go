@@ -138,6 +138,70 @@ func parseTs(dateStr string) int64 {
 	return t.UnixMilli()
 }
 
+// getMessageContent extracts the content payload from an AgentMessage.
+func getMessageContent(m types.AgentMessage) any {
+	switch v := m.(type) {
+	case types.UserMessage:
+		return v.Content
+	case types.AssistantMessage:
+		return v.Content
+	case types.ToolResultMessage:
+		return v.Content
+	}
+	return ""
+}
+
+// EstimateTokens provides a rough estimate of the number of tokens in the messages.
+// It uses a conservative heuristic (2.5 characters per token) to account for CJK.
+func EstimateTokens(messages []types.AgentMessage) int {
+	totalChars := 0
+	for _, m := range messages {
+		totalChars += len([]rune(extractText(getMessageContent(m))))
+	}
+	return totalChars * 2 / 5
+}
+
+// CompactContext drops the oldest 50% of messages if the estimated token count exceeds maxTokens.
+// It preserves the first message (usually the system prompt) and the most recent messages.
+func CompactContext(messages []types.AgentMessage, maxTokens int) []types.AgentMessage {
+	if len(messages) <= 4 {
+		return messages
+	}
+
+	if EstimateTokens(messages) <= maxTokens {
+		return messages
+	}
+
+	// First message is typically the System prompt or initial context.
+	// We want to drop the oldest half of the *subsequent* conversation.
+	conversation := messages[1 : len(messages)-1]
+	if len(conversation) == 0 {
+		return messages
+	}
+
+	mid := len(conversation) / 2
+	droppedCount := mid
+	keptConversation := conversation[mid:]
+
+	newMessages := make([]types.AgentMessage, 0, 1+1+len(keptConversation)+1)
+
+	// Keep the first message
+	newMessages = append(newMessages, messages[0])
+
+	// Inject a system note about compression as a generic UserMessage
+	note := types.UserMessage{
+		Role:      "user",
+		Content:   fmt.Sprintf("[System Note: Emergency compression dropped %d oldest messages due to context limit]", droppedCount),
+		Timestamp: time.Now().UnixMilli(),
+	}
+	newMessages = append(newMessages, note)
+
+	newMessages = append(newMessages, keptConversation...)
+	newMessages = append(newMessages, messages[len(messages)-1]) // Last message
+
+	return newMessages
+}
+
 // SaveContextMessages serializes messages to context.jsonl.
 func SaveContextMessages(chatDir string, messages []types.AgentMessage) error {
 	path := filepath.Join(chatDir, "context.jsonl")
