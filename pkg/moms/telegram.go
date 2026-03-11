@@ -488,20 +488,47 @@ func (c *tgContext) SetWorking(working bool) error {
 }
 
 func (c *tgContext) UploadFile(filePath, title string) error {
+	const maxTelegramFileSize = 50 * 1024 * 1024 // 50MB Telegram Bot API limit
+
+	// Check file size before attempting upload.
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return fmt.Errorf("cannot stat file: %w", err)
+	}
+	if info.Size() > maxTelegramFileSize {
+		return fmt.Errorf("file too large (%d MB), Telegram limit is 50 MB. Consider compressing or splitting the file",
+			info.Size()/(1024*1024))
+	}
+
 	f, err := os.Open(filePath)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
-	doc := tgbotapi.NewDocument(c.chatID, tgbotapi.FileReader{
-		Name:   filepath.Base(filePath),
-		Reader: f,
-	})
-	if title != "" {
-		doc.Caption = title
+	ext := strings.ToLower(filepath.Ext(filePath))
+	name := filepath.Base(filePath)
+	reader := tgbotapi.FileReader{Name: name, Reader: f}
+
+	fmt.Printf("[moms] uploading %s (%d KB) to chat %d\n", name, info.Size()/1024, c.chatID)
+	start := time.Now()
+
+	switch ext {
+	case ".mp4", ".mov", ".avi", ".mkv", ".webm":
+		vid := tgbotapi.NewVideo(c.chatID, reader)
+		if title != "" {
+			vid.Caption = title
+		}
+		_, err = c.bot.api.Send(vid)
+	default:
+		doc := tgbotapi.NewDocument(c.chatID, reader)
+		if title != "" {
+			doc.Caption = title
+		}
+		_, err = c.bot.api.Send(doc)
 	}
-	_, err = c.bot.api.Send(doc)
+
+	fmt.Printf("[moms] upload %s done in %v (err=%v)\n", name, time.Since(start), err)
 	return err
 }
 

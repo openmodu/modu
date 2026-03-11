@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/crosszan/modu/pkg/agent"
+	"github.com/crosszan/modu/pkg/coding_agent/tools"
 	"github.com/crosszan/modu/pkg/types"
 )
 
@@ -55,16 +56,33 @@ func (t *BashSandboxTool) Execute(ctx context.Context, _ string, args map[string
 	}
 	res := t.sandbox.Exec(ctx, command, timeout)
 	output := buildOutput(res.Stdout, res.Stderr)
+
+	// Truncate output using line-based truncation (same as coding_agent bash tool)
+	truncated := tools.TruncateTail(output, tools.TruncateOptions{
+		MaxLines: tools.BashMaxLines,
+		MaxBytes: tools.DefaultMaxBytes,
+	})
+
+	var text string
 	if res.TimedOut {
-		output = fmt.Sprintf("Command timed out after %d seconds.\n%s", timeout, output)
-	} else if res.ExitCode != 0 {
-		output += fmt.Sprintf("\n\nExit code: %d", res.ExitCode)
+		text = fmt.Sprintf("Command timed out after %d seconds.\n", timeout)
+		if truncated.Content != "" {
+			text += "Partial output:\n" + truncated.Content
+		}
+	} else {
+		text = truncated.Content
+		if truncated.WasTruncated {
+			text = truncated.Message + text
+		}
+		if res.ExitCode != 0 {
+			text += fmt.Sprintf("\n\nExit code: %d", res.ExitCode)
+		}
 	}
-	if output == "" {
-		output = "(no output)"
+	if text == "" {
+		text = "(no output)"
 	}
 	return agent.AgentToolResult{
-		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: truncateStr(output, 200000)}},
+		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: text}},
 		Details: map[string]any{"exitCode": res.ExitCode, "timedOut": res.TimedOut},
 	}, nil
 }
