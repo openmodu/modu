@@ -1,7 +1,9 @@
 package feishu
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
@@ -56,6 +58,12 @@ func (b *Bot) Run(ctx context.Context) error {
 	eventDispatcher := dispatcher.NewEventDispatcher("", "").
 		OnP2MessageReceiveV1(func(ctx context.Context, event *larkim.P2MessageReceiveV1) error {
 			return b.handleMessageEvent(ctx, event)
+		}).
+		OnP2MessageReactionCreatedV1(func(_ context.Context, _ *larkim.P2MessageReactionCreatedV1) error {
+			return nil
+		}).
+		OnP2MessageReactionDeletedV1(func(_ context.Context, _ *larkim.P2MessageReactionDeletedV1) error {
+			return nil
 		})
 
 	wsClient := larkws.NewClient(b.appID, b.appSecret,
@@ -91,9 +99,14 @@ func (b *Bot) handleMessageEvent(ctx context.Context, event *larkim.P2MessageRec
 		messageID = *msg.MessageId
 	}
 
+	msgType := ""
+	if msg.MessageType != nil {
+		msgType = *msg.MessageType
+	}
+
 	// Parse text content.
 	text := ""
-	if msg.MessageType != nil && *msg.MessageType == "text" && msg.Content != nil {
+	if msgType == "text" && msg.Content != nil {
 		var textMsg struct {
 			Text string `json:"text"`
 		}
@@ -123,12 +136,28 @@ func (b *Bot) handleMessageEvent(ctx context.Context, event *larkim.P2MessageRec
 		senderName = *event.Event.Sender.SenderId.OpenId
 	}
 
+	// Download image attachment if present.
+	var images []types.ImageContent
+	if msgType == "image" && msg.Content != nil && messageID != "" {
+		var imgMsg struct {
+			ImageKey string `json:"image_key"`
+		}
+		if err := json.Unmarshal([]byte(*msg.Content), &imgMsg); err == nil && imgMsg.ImageKey != "" {
+			if img, err := b.downloadImage(ctx, messageID, imgMsg.ImageKey); err == nil {
+				images = append(images, img)
+			} else {
+				fmt.Printf("[feishu] downloadImage failed: %v\n", err)
+			}
+		}
+	}
+
 	fCtx := &feishuContext{
 		bot:         b,
 		chatID:      chatID,
 		messageID:   messageID,
 		messageText: text,
 		senderName:  senderName,
+		images:      images,
 	}
 
 	// Add a "processing" reaction to the incoming message so the user knows it was received.
@@ -178,6 +207,31 @@ func (b *Bot) sendText(ctx context.Context, chatID, text string) (string, error)
 		return *resp.Data.MessageId, nil
 	}
 	return "", nil
+}
+
+// downloadImage downloads an image attachment from a message and returns it as base64-encoded ImageContent.
+func (b *Bot) downloadImage(ctx context.Context, messageID, imageKey string) (types.ImageContent, error) {
+	resp, err := b.client.Im.MessageResource.Get(ctx,
+		larkim.NewGetMessageResourceReqBuilder().
+			MessageId(messageID).
+			FileKey(imageKey).
+			Type("image").
+			Build())
+	if err != nil {
+		return types.ImageContent{}, fmt.Errorf("feishu downloadImage: %w", err)
+	}
+	if !resp.Success() {
+		return types.ImageContent{}, fmt.Errorf("feishu downloadImage: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+	buf := &bytes.Buffer{}
+	if _, err := io.Copy(buf, resp.File); err != nil {
+		return types.ImageContent{}, fmt.Errorf("feishu downloadImage: read: %w", err)
+	}
+	return types.ImageContent{
+		Type:     "image",
+		Data:     base64.StdEncoding.EncodeToString(buf.Bytes()),
+		MimeType: "image/jpeg",
+	}, nil
 }
 
 // addReaction adds an emoji reaction to a message and returns the reaction_id.
@@ -258,14 +312,15 @@ type feishuContext struct {
 	mainMsgID  string // feishu message_id of the current response text message
 	responded  bool
 	parts      []string
-	reactionID string // reaction_id of the "processing" emoji on the incoming message
+	reactionID string              // reaction_id of the "processing" emoji on the incoming message
+	images     []types.ImageContent
 }
 
 func (c *feishuContext) ChatID() int64       { return c.bot.chatIDToInt64(c.chatID) }
 func (c *feishuContext) MessageText() string { return c.messageText }
 func (c *feishuContext) MessageTS() string   { return c.messageID }
 func (c *feishuContext) SenderName() string  { return c.senderName }
-func (c *feishuContext) Images() []types.ImageContent { return nil }
+func (c *feishuContext) Images() []types.ImageContent { return c.images }
 
 // clearReaction removes the "processing" reaction from the incoming message (idempotent).
 // Must be called with mu held.
