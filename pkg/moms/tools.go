@@ -172,7 +172,7 @@ func (t *ReadTool) Execute(_ context.Context, _ string, args map[string]any, _ a
 	if err != nil {
 		return errorToolResult(fmt.Sprintf("read error: %v", err)), nil
 	}
-	text := truncateStr(string(data), 200000)
+	text := TruncateStr(string(data), 200000)
 	return agent.AgentToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: text}},
 	}, nil
@@ -232,7 +232,7 @@ func buildOutput(stdout, stderr string) string {
 	return stdout + stderr
 }
 
-func truncateStr(s string, max int) string {
+func TruncateStr(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}

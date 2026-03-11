@@ -12,41 +12,12 @@ import (
 	"time"
 
 	"github.com/crosszan/modu/pkg/agent"
+	"github.com/crosszan/modu/pkg/channels"
 	"github.com/crosszan/modu/pkg/coding_agent/tools"
 	"github.com/crosszan/modu/pkg/skills"
 	skillstools "github.com/crosszan/modu/pkg/skills/tools"
 	"github.com/crosszan/modu/pkg/types"
 )
-
-// TelegramContext is the interface the runner uses to communicate back to Telegram.
-type TelegramContext interface {
-	// Respond appends text to the main response message (creates it on first call).
-	Respond(text string, shouldLog bool) error
-	// ReplaceMessage replaces the entire main message text.
-	ReplaceMessage(text string) error
-	// RespondInThread posts a follow-up message in the same chat (used for tool details).
-	RespondInThread(text string) error
-	// SendCard sends a standalone card message and returns its Telegram message ID.
-	SendCard(text string) (int, error)
-	// EditCard replaces the text of a previously sent card message.
-	EditCard(msgID int, text string) error
-	// SetWorking toggles the "...working" indicator on the main message.
-	SetWorking(working bool) error
-	// UploadFile sends the file at filePath to Telegram.
-	UploadFile(filePath, title string) error
-	// DeleteMessage deletes the main response message.
-	DeleteMessage() error
-	// ChatID returns the chat this context belongs to.
-	ChatID() int64
-	// MessageText returns the user's message text.
-	MessageText() string
-	// MessageTS returns a unique string for the message (used for dedup).
-	MessageTS() string
-	// SenderName returns the human-readable sender name.
-	SenderName() string
-	// Images returns any image attachments provided with the message.
-	Images() []types.ImageContent
-}
 
 // RunResult holds what happened after a run.
 type RunResult struct {
@@ -101,8 +72,8 @@ func (r *Runner) Abort() {
 	}
 }
 
-// Run processes one user message inside the given TelegramContext.
-func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult {
+// Run processes one user message via the given ChannelContext.
+func (r *Runner) Run(parentCtx context.Context, chCtx channels.ChannelContext) RunResult {
 	r.mu.Lock()
 	if r.running {
 		r.mu.Unlock()
@@ -129,11 +100,11 @@ func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult
 	workspacePath := r.sandbox.GetWorkspacePath(r.workingDir)
 
 	// Build (or reuse) the agent instance.
-	a := r.getOrCreateAgent(chatDir, workspacePath, tgCtx)
+	a := r.getOrCreateAgent(chatDir, workspacePath, chCtx)
 
 	// Sync missed messages from log.jsonl into the agent context.
 	state := a.GetState()
-	synced := SyncLogToMessages(chatDir, state.Messages, tgCtx.MessageTS())
+	synced := SyncLogToMessages(chatDir, state.Messages, chCtx.MessageTS())
 	for _, um := range synced {
 		a.AppendMessage(um)
 	}
@@ -213,14 +184,14 @@ func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult
 					if b != nil && strings.TrimSpace(b.Thinking) != "" {
 						thinking := b.Thinking
 						enqueue(func() error {
-							return tgCtx.RespondInThread(fmt.Sprintf("_%s_", escapeMarkdown(thinking)))
+							return chCtx.RespondInThread(thinking)
 						})
 					}
 				case *types.TextContent:
 					if b != nil && strings.TrimSpace(b.Text) != "" {
 						text := b.Text
 						enqueue(func() error {
-							return tgCtx.Respond(text, true)
+							return chCtx.Respond(text, true)
 						})
 					}
 				}
@@ -233,12 +204,12 @@ func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult
 	now := time.Now()
 	userMessage := fmt.Sprintf("[%s] [%s]: %s",
 		now.Format("2006-01-02 15:04:05-07:00"),
-		tgCtx.SenderName(),
-		tgCtx.MessageText(),
+		chCtx.SenderName(),
+		chCtx.MessageText(),
 	)
 
 	var promptErr error
-	images := tgCtx.Images()
+	images := chCtx.Images()
 	if len(images) > 0 {
 		promptErr = a.PromptWithImages(ctx, userMessage, images)
 	} else {
@@ -289,18 +260,18 @@ func (r *Runner) Run(parentCtx context.Context, tgCtx TelegramContext) RunResult
 
 	// Handle error.
 	if runErr != nil {
-		_ = tgCtx.ReplaceMessage("_Sorry, something went wrong_")
-		_ = tgCtx.RespondInThread(fmt.Sprintf("_Error: %s_", runErr.Error()))
+		_ = chCtx.ReplaceMessage("_Sorry, something went wrong_")
+		_ = chCtx.RespondInThread(fmt.Sprintf("_Error: %s_", runErr.Error()))
 	}
 
 	// Done - remove working indicator.
-	_ = tgCtx.SetWorking(false)
+	_ = chCtx.SetWorking(false)
 
 	return RunResult{StopReason: stopReason, Error: runErr}
 }
 
 // getOrCreateAgent returns the persistent agent for this chat, creating it if needed.
-func (r *Runner) getOrCreateAgent(chatDir, workspacePath string, tgCtx TelegramContext) *agent.Agent {
+func (r *Runner) getOrCreateAgent(chatDir, workspacePath string, chCtx channels.ChannelContext) *agent.Agent {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -330,7 +301,7 @@ func (r *Runner) getOrCreateAgent(chatDir, workspacePath string, tgCtx TelegramC
 		NewWriteTool(),
 		tools.NewEditTool(cwd),
 		NewAttachTool(func(filePath, title string) error {
-			return tgCtx.UploadFile(filePath, title)
+			return chCtx.UploadFile(filePath, title)
 		}),
 	}
 	if r.registryMgr != nil {
@@ -475,27 +446,54 @@ func extractResultText(r agent.AgentToolResult) string {
 	return ""
 }
 
-// escapeMarkdown escapes special MarkdownV2 characters for Telegram.
-func escapeMarkdown(s string) string {
-	replacer := strings.NewReplacer(
-		"_", "\\_",
-		"*", "\\*",
-		"[", "\\[",
-		"]", "\\]",
-		"(", "\\(",
-		")", "\\)",
-		"~", "\\~",
-		"`", "\\`",
-		">", "\\>",
-		"#", "\\#",
-		"+", "\\+",
-		"-", "\\-",
-		"=", "\\=",
-		"|", "\\|",
-		"{", "\\{",
-		"}", "\\}",
-		".", "\\.",
-		"!", "\\!",
-	)
-	return replacer.Replace(s)
+// toolArgsSummary extracts a one-line human-readable summary of the key argument(s).
+func toolArgsSummary(name string, args map[string]any) string {
+	if args == nil {
+		return ""
+	}
+	switch name {
+	case "bash":
+		if cmd, ok := args["command"].(string); ok {
+			return TruncateStr(cmd, 120)
+		}
+	case "read":
+		if path, ok := args["path"].(string); ok {
+			return path
+		}
+	case "write":
+		if path, ok := args["path"].(string); ok {
+			content, _ := args["content"].(string)
+			return fmt.Sprintf("%s (%d bytes)", path, len(content))
+		}
+	case "edit":
+		if path, ok := args["path"].(string); ok {
+			return path
+		}
+	case "attach":
+		if path, ok := args["path"].(string); ok {
+			return path
+		}
+	case "find_skills":
+		if q, ok := args["query"].(string); ok {
+			return fmt.Sprintf("query: %q", TruncateStr(q, 60))
+		}
+	case "install_skill":
+		if n, ok := args["name"].(string); ok {
+			return fmt.Sprintf("name: %q", n)
+		}
+	case "web_search":
+		if q, ok := args["query"].(string); ok {
+			return fmt.Sprintf("query: %q", TruncateStr(q, 80))
+		}
+	case "web_fetch":
+		if u, ok := args["url"].(string); ok {
+			return TruncateStr(u, 100)
+		}
+	}
+	// Fallback: compact JSON of all args.
+	b, err := json.Marshal(args)
+	if err != nil {
+		return ""
+	}
+	return TruncateStr(string(b), 120)
 }

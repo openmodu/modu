@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/crosszan/modu/pkg/channels/telegram"
 	"github.com/crosszan/modu/pkg/moms"
 	"github.com/crosszan/modu/pkg/providers"
 	"github.com/crosszan/modu/pkg/providers/openai"
@@ -109,7 +110,13 @@ func main() {
 	registryMgr := skills.NewRegistryManagerFromConfig(registryCfg)
 	searchCache := skills.NewSearchCache(50, 5*time.Minute)
 
-	bot, err := moms.NewBot(tgToken, sandbox, workingDir, model, getAPIKey, registryMgr, searchCache)
+	// Create the dispatcher (owns runner management, logging, context).
+	dispatcher := moms.NewDispatcher(sandbox, workingDir, model, getAPIKey, registryMgr, searchCache)
+
+	// Attach dir for telegram file downloads.
+	attachDir := workingDir
+
+	bot, err := telegram.NewBot(tgToken, attachDir, dispatcher.HandleMessage, dispatcher.HandleAbort)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create bot: %v\n", err)
 		os.Exit(1)
@@ -120,7 +127,7 @@ func main() {
 	defer cancel()
 
 	eventsWatcher := moms.NewEventsWatcher(workingDir, func(chatID int64, filename, text string) {
-		bot.TriggerEvent(ctx, chatID, filename, text)
+		dispatcher.TriggerEvent(ctx, chatID, filename, text)
 	})
 	eventsWatcher.Start()
 
