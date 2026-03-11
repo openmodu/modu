@@ -33,9 +33,9 @@ type Bot struct {
 	// chatID string → int64 stable mapping (FNV hash)
 	chatIDMap sync.Map
 
-	// card slot int → feishu message_id
-	cardMsgMap     sync.Map
-	cardMsgCounter atomic.Int64
+	// card slot int → feishu message_id (string), for SendCard/EditCard
+	cardMsgMap sync.Map
+	nextCardID atomic.Int64
 }
 
 // NewBot creates a new Feishu bot.
@@ -131,6 +131,15 @@ func (b *Bot) handleMessageEvent(ctx context.Context, event *larkim.P2MessageRec
 		senderName:  senderName,
 	}
 
+	// Add a "processing" reaction to the incoming message so the user knows it was received.
+	if messageID != "" {
+		if rid, err := b.addReaction(ctx, messageID, "THUMBSUP"); err == nil {
+			fCtx.reactionID = rid
+		} else {
+			fmt.Printf("[feishu] addReaction failed: %v\n", err)
+		}
+	}
+
 	b.onMessage(ctx, fCtx)
 	return nil
 }
@@ -171,76 +180,56 @@ func (b *Bot) sendText(ctx context.Context, chatID, text string) (string, error)
 	return "", nil
 }
 
-// sendCard sends an interactive card message to a Feishu chat_id.
-func (b *Bot) sendCard(ctx context.Context, chatID, text string) (string, error) {
-	content := buildCardContent(text)
-	resp, err := b.client.Im.Message.Create(ctx,
-		larkim.NewCreateMessageReqBuilder().
-			ReceiveIdType("chat_id").
-			Body(larkim.NewCreateMessageReqBodyBuilder().
-				ReceiveId(chatID).
-				MsgType("interactive").
-				Content(content).
+// addReaction adds an emoji reaction to a message and returns the reaction_id.
+func (b *Bot) addReaction(ctx context.Context, msgID, emojiType string) (string, error) {
+	resp, err := b.client.Im.MessageReaction.Create(ctx,
+		larkim.NewCreateMessageReactionReqBuilder().
+			MessageId(msgID).
+			Body(larkim.NewCreateMessageReactionReqBodyBuilder().
+				ReactionType(larkim.NewEmojiBuilder().EmojiType(emojiType).Build()).
 				Build()).
 			Build())
 	if err != nil {
-		return "", fmt.Errorf("feishu sendCard: %w", err)
+		return "", fmt.Errorf("feishu addReaction: %w", err)
 	}
 	if !resp.Success() {
-		return "", fmt.Errorf("feishu sendCard: code=%d msg=%s", resp.Code, resp.Msg)
+		return "", fmt.Errorf("feishu addReaction: code=%d msg=%s", resp.Code, resp.Msg)
 	}
-	if resp.Data != nil && resp.Data.MessageId != nil {
-		return *resp.Data.MessageId, nil
+	if resp.Data != nil && resp.Data.ReactionId != nil {
+		return *resp.Data.ReactionId, nil
 	}
 	return "", nil
 }
 
-// patchCard updates an existing interactive card message.
-func (b *Bot) patchCard(ctx context.Context, msgID, text string) error {
-	content := buildCardContent(text)
-	resp, err := b.client.Im.Message.Patch(ctx,
-		larkim.NewPatchMessageReqBuilder().
+// removeReaction removes an emoji reaction from a message.
+func (b *Bot) removeReaction(ctx context.Context, msgID, reactionID string) error {
+	resp, err := b.client.Im.MessageReaction.Delete(ctx,
+		larkim.NewDeleteMessageReactionReqBuilder().
 			MessageId(msgID).
-			Body(larkim.NewPatchMessageReqBodyBuilder().
-				Content(content).
-				Build()).
+			ReactionId(reactionID).
 			Build())
 	if err != nil {
-		return fmt.Errorf("feishu patchCard: %w", err)
+		return fmt.Errorf("feishu removeReaction: %w", err)
 	}
 	if !resp.Success() {
-		return fmt.Errorf("feishu patchCard: code=%d msg=%s", resp.Code, resp.Msg)
+		return fmt.Errorf("feishu removeReaction: code=%d msg=%s", resp.Code, resp.Msg)
 	}
 	return nil
 }
 
-// buildCardContent builds a simple interactive card JSON with markdown/plain_text content.
-func buildCardContent(text string) string {
-	type cardText struct {
-		Tag     string `json:"tag"`
-		Content string `json:"content"`
+// deleteMessage deletes a Feishu message by message_id.
+func (b *Bot) deleteMessage(ctx context.Context, msgID string) error {
+	resp, err := b.client.Im.Message.Delete(ctx,
+		larkim.NewDeleteMessageReqBuilder().
+			MessageId(msgID).
+			Build())
+	if err != nil {
+		return fmt.Errorf("feishu deleteMessage: %w", err)
 	}
-	type cardElement struct {
-		Tag  string   `json:"tag"`
-		Text cardText `json:"text"`
+	if !resp.Success() {
+		return fmt.Errorf("feishu deleteMessage: code=%d msg=%s", resp.Code, resp.Msg)
 	}
-	type cardBody struct {
-		Elements []cardElement `json:"elements"`
-	}
-	type card struct {
-		Config map[string]bool `json:"config"`
-		Body   cardBody        `json:"body"`
-	}
-	c := card{
-		Config: map[string]bool{"wide_screen_mode": true},
-		Body: cardBody{
-			Elements: []cardElement{
-				{Tag: "div", Text: cardText{Tag: "plain_text", Content: text}},
-			},
-		},
-	}
-	b, _ := json.Marshal(c)
-	return string(b)
+	return nil
 }
 
 // extToFeishuFileType maps a file extension to a Feishu file_type string.
@@ -265,10 +254,11 @@ type feishuContext struct {
 	messageText string
 	senderName  string
 
-	mu          sync.Mutex
-	mainMsgID   string // feishu message_id of the main response card
-	responded   bool
-	parts       []string
+	mu         sync.Mutex
+	mainMsgID  string // feishu message_id of the current response text message
+	responded  bool
+	parts      []string
+	reactionID string // reaction_id of the "processing" emoji on the incoming message
 }
 
 func (c *feishuContext) ChatID() int64       { return c.bot.chatIDToInt64(c.chatID) }
@@ -276,6 +266,19 @@ func (c *feishuContext) MessageText() string { return c.messageText }
 func (c *feishuContext) MessageTS() string   { return c.messageID }
 func (c *feishuContext) SenderName() string  { return c.senderName }
 func (c *feishuContext) Images() []types.ImageContent { return nil }
+
+// clearReaction removes the "processing" reaction from the incoming message (idempotent).
+// Must be called with mu held.
+func (c *feishuContext) clearReaction() {
+	if c.reactionID == "" {
+		return
+	}
+	rid := c.reactionID
+	c.reactionID = ""
+	go func() { //nolint:errcheck
+		_ = c.bot.removeReaction(context.Background(), c.messageID, rid)
+	}()
+}
 
 func (c *feishuContext) Respond(text string, _ bool) error {
 	if strings.TrimSpace(text) == "[SILENT]" {
@@ -287,16 +290,17 @@ func (c *feishuContext) Respond(text string, _ bool) error {
 	c.parts = append(c.parts, text)
 	combined := strings.Join(c.parts, "\n")
 
-	if c.mainMsgID == "" {
-		msgID, err := c.bot.sendCard(context.Background(), c.chatID, combined)
-		if err != nil {
-			return err
-		}
-		c.mainMsgID = msgID
-		c.responded = true
-		return nil
+	c.clearReaction()
+
+	// Send as a new message each time (text messages cannot be edited in Feishu).
+	// We do NOT delete the previous message to avoid showing "消息已撤回".
+	msgID, err := c.bot.sendText(context.Background(), c.chatID, combined)
+	if err != nil {
+		return err
 	}
-	return c.bot.patchCard(context.Background(), c.mainMsgID, combined)
+	c.mainMsgID = msgID
+	c.responded = true
+	return nil
 }
 
 func (c *feishuContext) ReplaceMessage(text string) error {
@@ -304,16 +308,18 @@ func (c *feishuContext) ReplaceMessage(text string) error {
 	defer c.mu.Unlock()
 
 	c.parts = []string{text}
-	if c.mainMsgID == "" {
-		msgID, err := c.bot.sendCard(context.Background(), c.chatID, text)
-		if err != nil {
-			return err
-		}
-		c.mainMsgID = msgID
-		c.responded = true
-		return nil
+	c.clearReaction()
+	if c.mainMsgID != "" {
+		_ = c.bot.deleteMessage(context.Background(), c.mainMsgID)
+		c.mainMsgID = ""
 	}
-	return c.bot.patchCard(context.Background(), c.mainMsgID, text)
+	msgID, err := c.bot.sendText(context.Background(), c.chatID, text)
+	if err != nil {
+		return err
+	}
+	c.mainMsgID = msgID
+	c.responded = true
+	return nil
 }
 
 func (c *feishuContext) RespondInThread(text string) error {
@@ -322,40 +328,33 @@ func (c *feishuContext) RespondInThread(text string) error {
 }
 
 func (c *feishuContext) SendCard(text string) (int, error) {
-	msgID, err := c.bot.sendCard(context.Background(), c.chatID, text)
+	msgID, err := c.bot.sendText(context.Background(), c.chatID, text)
 	if err != nil {
 		return 0, err
 	}
-	id := int(c.bot.cardMsgCounter.Add(1))
+	// Use a simple counter via the string msgID stored in a local map on Bot.
+	// Re-use the cardMsgMap but store string msgID directly via a fresh counter.
+	id := int(c.bot.nextCardID.Add(1))
 	c.bot.cardMsgMap.Store(id, msgID)
 	return id, nil
 }
 
-func (c *feishuContext) EditCard(msgID int, text string) error {
-	v, ok := c.bot.cardMsgMap.Load(msgID)
+func (c *feishuContext) EditCard(id int, text string) error {
+	v, ok := c.bot.cardMsgMap.Load(id)
 	if !ok {
-		return fmt.Errorf("feishu: unknown card msgID %d", msgID)
+		return fmt.Errorf("feishu: unknown card id %d", id)
 	}
-	return c.bot.patchCard(context.Background(), v.(string), text)
-}
-
-func (c *feishuContext) SetWorking(working bool) error {
-	if !working {
-		return nil
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.mainMsgID != "" {
-		// Already have a main message; nothing to do.
-		return nil
-	}
-	msgID, err := c.bot.sendCard(context.Background(), c.chatID, "⏳ 处理中...")
+	oldMsgID := v.(string)
+	_ = c.bot.deleteMessage(context.Background(), oldMsgID)
+	newMsgID, err := c.bot.sendText(context.Background(), c.chatID, text)
 	if err != nil {
 		return err
 	}
-	c.mainMsgID = msgID
+	c.bot.cardMsgMap.Store(id, newMsgID)
 	return nil
 }
+
+func (c *feishuContext) SetWorking(_ bool) error { return nil }
 
 func (c *feishuContext) UploadFile(filePath, title string) error {
 	f, err := os.Open(filePath)
@@ -417,15 +416,5 @@ func (c *feishuContext) DeleteMessage() error {
 	if msgID == "" {
 		return nil
 	}
-	resp, err := c.bot.client.Im.Message.Delete(context.Background(),
-		larkim.NewDeleteMessageReqBuilder().
-			MessageId(msgID).
-			Build())
-	if err != nil {
-		return fmt.Errorf("feishu DeleteMessage: %w", err)
-	}
-	if !resp.Success() {
-		return fmt.Errorf("feishu DeleteMessage: code=%d msg=%s", resp.Code, resp.Msg)
-	}
-	return nil
+	return c.bot.deleteMessage(context.Background(), msgID)
 }
