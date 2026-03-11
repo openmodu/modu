@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/crosszan/modu/pkg/channels/feishu"
 	"github.com/crosszan/modu/pkg/channels/telegram"
 	"github.com/crosszan/modu/pkg/moms"
 	"github.com/crosszan/modu/pkg/providers"
@@ -122,6 +123,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Optional: Feishu bot via WebSocket long connection.
+	feishuAppID := os.Getenv("FEISHU_APP_ID")
+	feishuAppSecret := os.Getenv("FEISHU_APP_SECRET")
+
 	// Start events watcher.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -144,6 +149,21 @@ func main() {
 	fmt.Printf("[moms] Working directory: %s\n", workingDir)
 	fmt.Printf("[moms] Sandbox: %s\n", sandboxArg)
 	fmt.Printf("[moms] Model: %s\n", modelID)
+
+	// Start Feishu bot if credentials are provided.
+	if feishuAppID != "" && feishuAppSecret != "" {
+		fsBot, err := feishu.NewBot(feishuAppID, feishuAppSecret, dispatcher.HandleMessage, dispatcher.HandleAbort)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to create Feishu bot: %v\n", err)
+			os.Exit(1)
+		}
+		go func() {
+			if err := fsBot.Run(ctx); err != nil && ctx.Err() == nil {
+				fmt.Fprintf(os.Stderr, "[feishu] bot error: %v\n", err)
+			}
+		}()
+		fmt.Println("[moms] Feishu bot started")
+	}
 
 	if err := bot.Run(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "Bot error: %v\n", err)
