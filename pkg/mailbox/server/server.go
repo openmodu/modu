@@ -31,6 +31,18 @@ func (s *MailboxServer) ListenAndServe(addr string) error {
 			case "PING":
 				conn.WriteString("PONG")
 
+			case "AGENT.PING": // AGENT.PING <agent_id>
+				if len(cmd.Args) != 2 {
+					conn.WriteError("ERR wrong number of arguments for 'AGENT.PING' command")
+					return
+				}
+				agentID := string(cmd.Args[1])
+				if err := s.hub.Heartbeat(agentID); err != nil {
+					conn.WriteError("ERR " + err.Error())
+				} else {
+					conn.WriteString("PONG")
+				}
+
 			case "AGENT.LIST": // AGENT.LIST
 				if len(cmd.Args) != 1 {
 					conn.WriteError("ERR wrong number of arguments for 'AGENT.LIST' command")
