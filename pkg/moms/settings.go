@@ -11,6 +11,12 @@ type CompactionSettings struct {
 	Enabled          bool `json:"enabled"`
 	ReserveTokens    int  `json:"reserveTokens"`
 	KeepRecentTokens int  `json:"keepRecentTokens"`
+
+	// Soft-summarization settings (mirrors PicoClaw).
+	SummarizeEnabled          bool `json:"summarizeEnabled"`
+	ContextWindow             int  `json:"contextWindow"`             // token capacity of the model; default 32768
+	SummarizeTokenPercent     int  `json:"summarizeTokenPercent"`     // trigger at this % of ContextWindow; default 75
+	SummarizeMessageThreshold int  `json:"summarizeMessageThreshold"` // also trigger above this many messages; default 20
 }
 
 type RetrySettings struct {
@@ -32,9 +38,13 @@ type Settings struct {
 }
 
 var DefaultCompaction = CompactionSettings{
-	Enabled:          true,
-	ReserveTokens:    16384,
-	KeepRecentTokens: 20000,
+	Enabled:                   true,
+	ReserveTokens:             16384,
+	KeepRecentTokens:          20000,
+	SummarizeEnabled:          true,
+	ContextWindow:             32768,
+	SummarizeTokenPercent:     75,
+	SummarizeMessageThreshold: 20,
 }
 
 var DefaultRetry = RetrySettings{
@@ -95,6 +105,36 @@ func (s *Settings) GetThinkingLevel() string {
 		return s.DefaultThinkingLevel
 	}
 	return "off"
+}
+
+// GetCompaction returns the effective compaction settings, applying defaults
+// to any zero-valued fields.
+func (s *Settings) GetCompaction() CompactionSettings {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := DefaultCompaction
+	if s.Compaction != nil {
+		if s.Compaction.Enabled != c.Enabled {
+			c.Enabled = s.Compaction.Enabled
+		}
+		if s.Compaction.ReserveTokens > 0 {
+			c.ReserveTokens = s.Compaction.ReserveTokens
+		}
+		if s.Compaction.KeepRecentTokens > 0 {
+			c.KeepRecentTokens = s.Compaction.KeepRecentTokens
+		}
+		c.SummarizeEnabled = s.Compaction.SummarizeEnabled
+		if s.Compaction.ContextWindow > 0 {
+			c.ContextWindow = s.Compaction.ContextWindow
+		}
+		if s.Compaction.SummarizeTokenPercent > 0 {
+			c.SummarizeTokenPercent = s.Compaction.SummarizeTokenPercent
+		}
+		if s.Compaction.SummarizeMessageThreshold > 0 {
+			c.SummarizeMessageThreshold = s.Compaction.SummarizeMessageThreshold
+		}
+	}
+	return c
 }
 
 func (s *Settings) SetModel(provider, model string) error {

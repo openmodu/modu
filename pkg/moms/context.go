@@ -162,46 +162,6 @@ func EstimateTokens(messages []types.AgentMessage) int {
 	return totalChars * 2 / 5
 }
 
-// CompactContext drops the oldest 50% of messages if the estimated token count exceeds maxTokens.
-// It preserves the first message (usually the system prompt) and the most recent messages.
-func CompactContext(messages []types.AgentMessage, maxTokens int) []types.AgentMessage {
-	if len(messages) <= 4 {
-		return messages
-	}
-
-	if EstimateTokens(messages) <= maxTokens {
-		return messages
-	}
-
-	// First message is typically the System prompt or initial context.
-	// We want to drop the oldest half of the *subsequent* conversation.
-	conversation := messages[1 : len(messages)-1]
-	if len(conversation) == 0 {
-		return messages
-	}
-
-	mid := len(conversation) / 2
-	droppedCount := mid
-	keptConversation := conversation[mid:]
-
-	newMessages := make([]types.AgentMessage, 0, 1+1+len(keptConversation)+1)
-
-	// Keep the first message
-	newMessages = append(newMessages, messages[0])
-
-	// Inject a system note about compression as a generic UserMessage
-	note := types.UserMessage{
-		Role:      "user",
-		Content:   fmt.Sprintf("[System Note: Emergency compression dropped %d oldest messages due to context limit]", droppedCount),
-		Timestamp: time.Now().UnixMilli(),
-	}
-	newMessages = append(newMessages, note)
-
-	newMessages = append(newMessages, keptConversation...)
-	newMessages = append(newMessages, messages[len(messages)-1]) // Last message
-
-	return newMessages
-}
 
 // sanitizeHistory cleans the loaded message history before passing it to the
 // LLM. Mirrors picoclaw's sanitizeHistoryForProvider exactly:
@@ -342,19 +302,3 @@ func messageRole(m agent.AgentMessage) string {
 	return ""
 }
 
-// SaveContextMessages serializes messages to context.jsonl.
-func SaveContextMessages(chatDir string, messages []types.AgentMessage) error {
-	path := filepath.Join(chatDir, "context.jsonl")
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	enc := json.NewEncoder(f)
-	for _, m := range messages {
-		if err := enc.Encode(m); err != nil {
-			return err
-		}
-	}
-	return nil
-}

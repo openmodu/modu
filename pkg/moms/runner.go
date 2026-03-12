@@ -39,10 +39,52 @@ type Runner struct {
 	running     bool
 	registryMgr *skills.RegistryManager
 	searchCache *skills.SearchCache
+	store       *ContextStore
+	summarizer  *Summarizer
 }
 
 // NewRunner creates a Runner for a chat.
 func NewRunner(sandbox *Sandbox, workingDir string, chatID int64, model *types.Model, getAPIKey func(provider string) (string, error), settings *Settings, registryMgr *skills.RegistryManager, searchCache *skills.SearchCache) *Runner {
+	store := NewContextStore(workingDir)
+
+	callLLM := func(ctx context.Context, prompt string) (string, error) {
+		llmCtx := &types.LLMContext{
+			Messages: []types.AgentMessage{
+				types.UserMessage{Role: "user", Content: prompt},
+			},
+		}
+		temp := 0.3
+		maxT := 1024
+		opts := &types.SimpleStreamOptions{
+			StreamOptions: types.StreamOptions{
+				Temperature: &temp,
+				MaxTokens:   &maxT,
+			},
+		}
+		if getAPIKey != nil {
+			key, err := getAPIKey(model.ProviderID)
+			if err == nil {
+				opts.APIKey = key
+			}
+		}
+
+		stream, err := agent.StreamDefault(ctx, model, llmCtx, opts)
+		if err != nil {
+			return "", err
+		}
+		// Drain stream events to allow resolution.
+		for range stream.Events() {
+		}
+		res, err := stream.Result()
+		if err != nil {
+			return "", err
+		}
+		if res == nil {
+			return "", fmt.Errorf("empty result from LLM")
+		}
+		return extractText(res.Content), nil
+	}
+
 	return &Runner{
 		sandbox:     sandbox,
 		workingDir:  workingDir,
@@ -52,6 +94,8 @@ func NewRunner(sandbox *Sandbox, workingDir string, chatID int64, model *types.M
 		settings:    settings,
 		registryMgr: registryMgr,
 		searchCache: searchCache,
+		store:       store,
+		summarizer:  NewSummarizer(store, callLLM),
 	}
 }
 
@@ -210,6 +254,8 @@ func (r *Runner) Run(parentCtx context.Context, chCtx channels.ChannelContext) R
 
 	var promptErr error
 	images := chCtx.Images()
+	// Capture message count before the LLM run so we can append only new ones.
+	prevMsgCount := len(a.GetState().Messages)
 	if len(images) > 0 {
 		promptErr = a.PromptWithImages(ctx, userMessage, images)
 	} else {
@@ -220,31 +266,40 @@ func (r *Runner) Run(parentCtx context.Context, chCtx channels.ChannelContext) R
 	}
 	a.WaitForIdle()
 
-	// Persist context.
-	if msgs := a.GetState().Messages; len(msgs) > 0 {
-		var toSave []types.AgentMessage
-		for _, m := range msgs {
-			toSave = append(toSave, m)
-		}
-
-		// Apply context compaction
-		if r.settings != nil && r.settings.Compaction != nil && r.settings.Compaction.Enabled {
-			compacted := CompactContext(toSave, r.settings.Compaction.KeepRecentTokens)
-			if len(compacted) < len(toSave) {
-				var newMsgs []agent.AgentMessage
-				for _, m := range compacted {
-					newMsgs = append(newMsgs, m)
-				}
-				a.ReplaceMessages(newMsgs)
-				toSave = compacted
-				fmt.Printf("[moms] chat %d: compacted context from %d to %d messages\n", r.chatID, len(msgs), len(compacted))
+	// Persist new messages to ContextStore (append-only, crash-safe).
+	// Compare the previous message count with the current to find what's new.
+	newState := a.GetState()
+	if len(newState.Messages) > prevMsgCount {
+		for i := prevMsgCount; i < len(newState.Messages); i++ {
+			if err := r.store.AddMessage(r.chatID, newState.Messages[i]); err != nil {
+				fmt.Printf("[moms] failed to persist message for chat %d: %v\n", r.chatID, err)
 			}
 		}
+	}
 
-		if err := SaveContextMessages(chatDir, toSave); err != nil {
-			fmt.Printf("[moms] failed to save context for chat %d: %v\n", r.chatID, err)
+	// Apply hard compaction (force compression) if enabled.
+	if r.settings != nil && r.settings.Compaction != nil && r.settings.Compaction.Enabled {
+		allMsgs := newState.Messages
+		maxTokens := r.settings.Compaction.KeepRecentTokens
+		if maxTokens > 0 && EstimateTokens(allMsgs) > maxTokens {
+			compacted := r.forceCompress(allMsgs)
+			if len(compacted) < len(allMsgs) {
+				var agentMsgs []agent.AgentMessage
+				for _, m := range compacted {
+					agentMsgs = append(agentMsgs, m)
+				}
+				a.ReplaceMessages(agentMsgs)
+				if err := r.store.SetHistory(r.chatID, agentMsgs); err != nil {
+					fmt.Printf("[moms] failed to persist compacted context for chat %d: %v\n", r.chatID, err)
+				}
+				fmt.Printf("[moms] chat %d: hard compaction from %d to %d messages\n",
+					r.chatID, len(allMsgs), len(compacted))
+			}
 		}
 	}
+
+	// Trigger soft summarization asynchronously.
+	r.summarizer.MaybeSummarize(r.chatID, r.model, r.settings)
 
 	// Wait for all queued Telegram API calls to complete.
 	queueWg.Wait()
@@ -340,65 +395,17 @@ func (r *Runner) getOrCreateAgent(chatDir, workspacePath string, chCtx channels.
 		},
 	})
 
-	// Load existing messages from context.jsonl if it exists.
-	if msgs, err := loadContextMessages(chatDir); err == nil && len(msgs) > 0 {
+	// Load existing messages from ContextStore (append-only JSONL with Summary).
+	if msgs, err := r.store.GetHistory(r.chatID); err == nil && len(msgs) > 0 {
 		msgs = sanitizeHistory(msgs)
 		a.ReplaceMessages(msgs)
-		fmt.Printf("[moms] chat %d: loaded %d messages from context.jsonl\n", r.chatID, len(msgs))
+		fmt.Printf("[moms] chat %d: loaded %d messages from context store\n", r.chatID, len(msgs))
 	}
 
 	r.agentInst = a
 	return a
 }
 
-// loadContextMessages reads messages from context.jsonl.
-func loadContextMessages(chatDir string) ([]agent.AgentMessage, error) {
-	path := filepath.Join(chatDir, "context.jsonl")
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	var messages []agent.AgentMessage
-	dec := json.NewDecoder(f)
-	for dec.More() {
-		var raw json.RawMessage
-		if err := dec.Decode(&raw); err != nil {
-			continue
-		}
-
-		var base struct {
-			Role string `json:"role"`
-		}
-		if err := json.Unmarshal(raw, &base); err != nil {
-			continue
-		}
-
-		var msg agent.AgentMessage
-		switch base.Role {
-		case "user":
-			var um types.UserMessage
-			if err := json.Unmarshal(raw, &um); err == nil {
-				msg = um
-			}
-		case "assistant":
-			var am types.AssistantMessage
-			if err := json.Unmarshal(raw, &am); err == nil {
-				msg = am
-			}
-		case "tool", "toolResult":
-			var tr types.ToolResultMessage
-			if err := json.Unmarshal(raw, &tr); err == nil {
-				msg = tr
-			}
-		}
-		if msg != nil {
-			messages = append(messages, msg)
-		}
-	}
-	return messages, nil
-}
 
 // newWebSearchToolFromEnv creates a WebSearchAgentTool from environment variables.
 // Returns nil, nil if MOMS_WEB_SEARCH is not set.
@@ -496,4 +503,46 @@ func toolArgsSummary(name string, args map[string]any) string {
 		return ""
 	}
 	return TruncateStr(string(b), 120)
+}
+
+// forceCompress mirrors PicoClaw's forceCompression: drops the oldest 50% of
+// conversation messages. The compression note is appended to the first message
+// (usually the system prompt) to avoid having two consecutive system messages,
+// which some APIs (e.g. Zhipu) reject.
+func (r *Runner) forceCompress(msgs []types.AgentMessage) []types.AgentMessage {
+	if len(msgs) <= 4 {
+		return msgs
+	}
+
+	// msgs[0] is typically the system-prompt user message.
+	// We operate on msgs[1:len-1] as "conversation".
+	conversation := msgs[1 : len(msgs)-1]
+	if len(conversation) == 0 {
+		return msgs
+	}
+
+	mid := len(conversation) / 2
+	dropped := mid
+	kept := conversation[mid:]
+
+	result := make([]types.AgentMessage, 0, 1+len(kept)+1)
+
+	// Append the compression note to the first message instead of injecting a
+	// new system message, so APIs that disallow two consecutive system messages
+	// remain compatible.
+	note := fmt.Sprintf(
+		"\n\n[System Note: Emergency compression dropped %d oldest messages due to context limit]",
+		dropped,
+	)
+	first := msgs[0]
+	if um, ok := first.(types.UserMessage); ok {
+		um.Content = extractText(um.Content) + note
+		result = append(result, um)
+	} else {
+		result = append(result, first)
+	}
+
+	result = append(result, kept...)
+	result = append(result, msgs[len(msgs)-1])
+	return result
 }
