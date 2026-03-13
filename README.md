@@ -23,6 +23,13 @@ modu/
 ├── pkg/                    # 核心工具包
 │   ├── agent/              # 通用 Agent 引擎（事件驱动、工具调用）
 │   ├── coding_agent/       # 高级编程 Agent（技能、会话、压缩）
+│   ├── mailbox/            # Agent Teams 通信基础设施
+│   │   ├── hub.go          # 内存消息中心（AgentInfo + Task 注册表）
+│   │   ├── event.go        # Hub 事件订阅机制
+│   │   ├── message.go      # 结构化消息协议（task_assign / task_result）
+│   │   ├── server/         # Redis 协议 Mailbox Server
+│   │   ├── client/         # Mailbox 客户端 SDK
+│   │   └── dashboard/      # HTTP 看板（REST API + SSE + 内嵌 HTML）
 │   ├── moms/               # Telegram 智能机器人（mom 的 Go/TG 移植）
 │   ├── providers/          # 多 Provider LLM 流式调用抽象
 │   ├── types/              # 共享类型定义（Model、消息、内容块等）
@@ -36,12 +43,130 @@ modu/
 ├── vo/                     # 值对象
 ├── consts/                 # 常量定义
 └── examples/               # 使用示例
+    ├── agent_teams/        # Agent Teams 完整示例（orchestrator + 2 workers）
+    ├── agent_mailbox/      # Mailbox 消息传递示例
     ├── coding_agent/       # CodingAgent 使用示例
     ├── moms/               # Telegram 机器人示例
     └── ...
 ```
 
 ## 📚 核心模块
+
+### pkg/mailbox — Agent Teams 通信基础设施
+
+多 agent 协作所需的完整通信层：消息传递、任务注册表、状态追踪、实时看板。
+
+#### 架构
+
+```
+MailboxServer (Redis 协议, :6380)
+     │
+     Hub ── AgentInfo 表（角色/状态/当前任务）
+     │    ── Task 注册表（pending→running→completed/failed）
+     │    ── 事件订阅（agent.registered / task.created 等）
+     │
+Dashboard (HTTP, :8080) ── SSE 实时推送 ── 内嵌 HTML 看板
+```
+
+#### 快速开始
+
+```go
+import (
+    "github.com/crosszan/modu/pkg/mailbox/server"
+    "github.com/crosszan/modu/pkg/mailbox/client"
+    "github.com/crosszan/modu/pkg/mailbox/dashboard"
+)
+
+// 启动 Mailbox Server
+s := server.NewMailboxServer()
+go s.ListenAndServe(":6380")
+
+// 启动 Dashboard（可选）
+dash := dashboard.NewDashboard(s.Hub())
+go dash.Start(ctx, ":8080")  // http://localhost:8080
+
+// Orchestrator
+orch := client.NewMailboxClient("orchestrator", "localhost:6380")
+orch.Register(ctx)
+orch.SetRole(ctx, "orchestrator")
+
+taskID, _ := orch.CreateTask(ctx, "analyze data")
+orch.AssignTask(ctx, taskID, "worker-1")
+
+msg, _ := mailbox.NewTaskAssignMessage("orchestrator", taskID, "analyze data")
+orch.Send(ctx, "worker-1", msg)
+
+// Worker
+worker := client.NewMailboxClient("worker-1", "localhost:6380")
+worker.Register(ctx)
+raw, _ := worker.Recv(ctx)
+parsed, _ := mailbox.ParseMessage(raw)
+worker.StartTask(ctx, parsed.TaskID)
+// ... do work ...
+worker.CompleteTask(ctx, parsed.TaskID, "result")
+```
+
+#### SpawnAgentTool（coding_agent 集成）
+
+`coding_agent.SpawnAgentTool` 将委派逻辑封装为 `AgentTool`，让 orchestrator agent 可以直接通过工具调用派遣任务：
+
+```go
+import (
+    coding_agent "github.com/crosszan/modu/pkg/coding_agent"
+    "github.com/crosszan/modu/pkg/mailbox/client"
+)
+
+mc := client.NewMailboxClient("orchestrator", "localhost:6380")
+mc.Register(ctx)
+
+tool := coding_agent.NewSpawnAgentTool(mc,
+    coding_agent.WithPollInterval(500*time.Millisecond),
+    coding_agent.WithSpawnTimeout(5*time.Minute),
+)
+
+// 加入 agent 工具列表后，agent 可以调用 spawn_agent 工具
+// 参数：target_agent_id, task_description
+```
+
+#### 服务端命令参考
+
+| 命令 | 说明 |
+|------|------|
+| `AGENT.REG <id>` | 注册 agent |
+| `AGENT.PING <id>` | 心跳保活 |
+| `AGENT.LIST` | 列出所有活跃 agent |
+| `AGENT.SETROLE <id> <role>` | 设置角色 |
+| `AGENT.SETSTATUS <id> <status> [task_id]` | 设置状态（idle/busy） |
+| `AGENT.INFO <id>` | 查询 agent 元数据 (JSON) |
+| `TASK.CREATE <creator> <desc>` | 创建任务，返回 task_id |
+| `TASK.ASSIGN <task_id> <agent_id>` | 分配任务 |
+| `TASK.START <task_id>` | 标记为运行中 |
+| `TASK.DONE <task_id> <result>` | 标记为已完成 |
+| `TASK.FAIL <task_id> <error>` | 标记为失败 |
+| `TASK.LIST` | 列出所有任务 (JSON) |
+| `TASK.GET <task_id>` | 查询任务详情 (JSON) |
+| `MSG.SEND <target> <msg>` | 发送消息 |
+| `MSG.RECV <id>` | 非阻塞接收 |
+| `MSG.BCAST <msg>` | 广播 |
+
+#### Dashboard API
+
+| 接口 | 说明 |
+|------|------|
+| `GET /` | HTML 看板（agents grid + tasks list，SSE 实时刷新） |
+| `GET /api/agents` | 所有 agent 信息 (JSON) |
+| `GET /api/tasks` | 所有任务列表 (JSON) |
+| `GET /api/tasks/:id` | 任务详情 (JSON) |
+| `GET /events` | SSE 事件流（实时推送状态变更） |
+
+运行完整示例：
+
+```bash
+go run ./examples/agent_teams
+# Dashboard: http://localhost:8080
+```
+
+---
 
 ### pkg/agent — Agent 引擎
 

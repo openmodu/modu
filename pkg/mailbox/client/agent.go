@@ -2,10 +2,13 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
+	"github.com/crosszan/modu/pkg/mailbox"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -24,9 +27,13 @@ func NewMailboxClient(agentID, addr string) *MailboxClient {
 	}
 }
 
+// AgentID 返回当前 client 绑定的 agent ID
+func (c *MailboxClient) AgentID() string {
+	return c.agentID
+}
+
 // Register 向 Mailbox 注册自己，并自动启动后台心跳保活
 func (c *MailboxClient) Register(ctx context.Context) error {
-	// rdb.Do 用于发送自定义 RESP 指令
 	res, err := c.rdb.Do(ctx, "AGENT.REG", c.agentID).Result()
 	if err != nil {
 		return err
@@ -34,11 +41,9 @@ func (c *MailboxClient) Register(ctx context.Context) error {
 	if res != "OK" {
 		return errors.New("failed to register")
 	}
-
 	c.once.Do(func() {
 		c.startKeepAlive(ctx)
 	})
-
 	return nil
 }
 
@@ -52,7 +57,7 @@ func (c *MailboxClient) Send(ctx context.Context, targetID, msg string) error {
 func (c *MailboxClient) Recv(ctx context.Context) (string, error) {
 	res, err := c.rdb.Do(ctx, "MSG.RECV", c.agentID).Result()
 	if err == redis.Nil {
-		return "", nil // 没有新消息
+		return "", nil
 	} else if err != nil {
 		return "", err
 	}
@@ -88,6 +93,136 @@ func (c *MailboxClient) Ping(ctx context.Context) error {
 	return nil
 }
 
+// --- Agent 元数据方法 ---
+
+// SetRole 设置当前 Agent 的角色
+func (c *MailboxClient) SetRole(ctx context.Context, role string) error {
+	res, err := c.rdb.Do(ctx, "AGENT.SETROLE", c.agentID, role).Result()
+	if err != nil {
+		return err
+	}
+	if res != "OK" {
+		return fmt.Errorf("AGENT.SETROLE unexpected response: %v", res)
+	}
+	return nil
+}
+
+// SetStatus 设置当前 Agent 的状态，taskID 为正在处理的任务（空闲时传空字符串）
+func (c *MailboxClient) SetStatus(ctx context.Context, status, taskID string) error {
+	var res interface{}
+	var err error
+	if taskID == "" {
+		res, err = c.rdb.Do(ctx, "AGENT.SETSTATUS", c.agentID, status).Result()
+	} else {
+		res, err = c.rdb.Do(ctx, "AGENT.SETSTATUS", c.agentID, status, taskID).Result()
+	}
+	if err != nil {
+		return err
+	}
+	if res != "OK" {
+		return fmt.Errorf("AGENT.SETSTATUS unexpected response: %v", res)
+	}
+	return nil
+}
+
+// GetAgentInfo 获取任意 Agent 的元数据
+func (c *MailboxClient) GetAgentInfo(ctx context.Context, agentID string) (mailbox.AgentInfo, error) {
+	raw, err := c.rdb.Do(ctx, "AGENT.INFO", agentID).Result()
+	if err != nil {
+		return mailbox.AgentInfo{}, err
+	}
+	var info mailbox.AgentInfo
+	if err := json.Unmarshal([]byte(fmt.Sprintf("%s", raw)), &info); err != nil {
+		return mailbox.AgentInfo{}, fmt.Errorf("unmarshal AgentInfo: %w", err)
+	}
+	return info, nil
+}
+
+// --- Task 方法 ---
+
+// CreateTask 创建一个新任务，返回 task ID
+func (c *MailboxClient) CreateTask(ctx context.Context, description string) (string, error) {
+	res, err := c.rdb.Do(ctx, "TASK.CREATE", c.agentID, description).Result()
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s", res), nil
+}
+
+// AssignTask 将任务分配给指定 Agent
+func (c *MailboxClient) AssignTask(ctx context.Context, taskID, agentID string) error {
+	res, err := c.rdb.Do(ctx, "TASK.ASSIGN", taskID, agentID).Result()
+	if err != nil {
+		return err
+	}
+	if res != "OK" {
+		return fmt.Errorf("TASK.ASSIGN unexpected response: %v", res)
+	}
+	return nil
+}
+
+// StartTask 将任务标记为运行中
+func (c *MailboxClient) StartTask(ctx context.Context, taskID string) error {
+	res, err := c.rdb.Do(ctx, "TASK.START", taskID).Result()
+	if err != nil {
+		return err
+	}
+	if res != "OK" {
+		return fmt.Errorf("TASK.START unexpected response: %v", res)
+	}
+	return nil
+}
+
+// CompleteTask 将任务标记为已完成
+func (c *MailboxClient) CompleteTask(ctx context.Context, taskID, result string) error {
+	res, err := c.rdb.Do(ctx, "TASK.DONE", taskID, result).Result()
+	if err != nil {
+		return err
+	}
+	if res != "OK" {
+		return fmt.Errorf("TASK.DONE unexpected response: %v", res)
+	}
+	return nil
+}
+
+// FailTask 将任务标记为失败
+func (c *MailboxClient) FailTask(ctx context.Context, taskID, errMsg string) error {
+	res, err := c.rdb.Do(ctx, "TASK.FAIL", taskID, errMsg).Result()
+	if err != nil {
+		return err
+	}
+	if res != "OK" {
+		return fmt.Errorf("TASK.FAIL unexpected response: %v", res)
+	}
+	return nil
+}
+
+// ListTasks 获取所有任务列表
+func (c *MailboxClient) ListTasks(ctx context.Context) ([]mailbox.Task, error) {
+	raw, err := c.rdb.Do(ctx, "TASK.LIST").Result()
+	if err != nil {
+		return nil, err
+	}
+	var tasks []mailbox.Task
+	if err := json.Unmarshal([]byte(fmt.Sprintf("%s", raw)), &tasks); err != nil {
+		return nil, fmt.Errorf("unmarshal tasks: %w", err)
+	}
+	return tasks, nil
+}
+
+// GetTask 获取指定任务详情
+func (c *MailboxClient) GetTask(ctx context.Context, taskID string) (mailbox.Task, error) {
+	raw, err := c.rdb.Do(ctx, "TASK.GET", taskID).Result()
+	if err != nil {
+		return mailbox.Task{}, err
+	}
+	var task mailbox.Task
+	if err := json.Unmarshal([]byte(fmt.Sprintf("%s", raw)), &task); err != nil {
+		return mailbox.Task{}, fmt.Errorf("unmarshal task: %w", err)
+	}
+	return task, nil
+}
+
 // startKeepAlive 启动一个后台协程，定期发送 PING 维持 Agent 在线状态
 func (c *MailboxClient) startKeepAlive(ctx context.Context) {
 	go func() {
@@ -98,9 +233,7 @@ func (c *MailboxClient) startKeepAlive(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				err := c.Ping(ctx)
-				if err != nil {
-					// 尝试重新注册
+				if err := c.Ping(ctx); err != nil {
 					_ = c.Register(ctx)
 				}
 			}
