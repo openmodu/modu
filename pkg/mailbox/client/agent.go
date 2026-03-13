@@ -223,6 +223,19 @@ func (c *MailboxClient) GetTask(ctx context.Context, taskID string) (mailbox.Tas
 	return task, nil
 }
 
+// GetConversation 获取指定任务的对话记录
+func (c *MailboxClient) GetConversation(ctx context.Context, taskID string) ([]mailbox.ConversationEntry, error) {
+	raw, err := c.rdb.Do(ctx, "CONV.GET", taskID).Result()
+	if err != nil {
+		return nil, err
+	}
+	var entries []mailbox.ConversationEntry
+	if err := json.Unmarshal([]byte(fmt.Sprintf("%s", raw)), &entries); err != nil {
+		return nil, fmt.Errorf("unmarshal conversation: %w", err)
+	}
+	return entries, nil
+}
+
 // startKeepAlive 启动一个后台协程，定期发送 PING 维持 Agent 在线状态
 func (c *MailboxClient) startKeepAlive(ctx context.Context) {
 	go func() {

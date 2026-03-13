@@ -7,8 +7,9 @@ const (
 	EventTypeAgentRegistered EventType = "agent.registered"
 	EventTypeAgentEvicted    EventType = "agent.evicted"
 	EventTypeAgentUpdated    EventType = "agent.updated"
-	EventTypeTaskCreated     EventType = "task.created"
-	EventTypeTaskUpdated     EventType = "task.updated"
+	EventTypeTaskCreated          EventType = "task.created"
+	EventTypeTaskUpdated          EventType = "task.updated"
+	EventTypeConversationAdded    EventType = "conversation.added"
 )
 
 // Event 是 Hub 向订阅者推送的状态变更通知

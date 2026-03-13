@@ -58,6 +58,7 @@ func (d *Dashboard) Start(ctx context.Context, addr string) error {
 	mux.HandleFunc("/api/agents", d.handleAgents)
 	mux.HandleFunc("/api/tasks", d.handleTasks)
 	mux.HandleFunc("/api/tasks/", d.handleTaskByID)
+	mux.HandleFunc("/api/conversations/", d.handleConversation)
 	mux.HandleFunc("/events", d.handleSSE)
 
 	srv := &http.Server{Addr: addr, Handler: mux}
@@ -90,6 +91,20 @@ func (d *Dashboard) handleTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	tasks := d.hub.ListTasks()
 	writeJSON(w, tasks)
+}
+
+func (d *Dashboard) handleConversation(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	taskID := strings.TrimPrefix(r.URL.Path, "/api/conversations/")
+	if taskID == "" {
+		http.Error(w, "task id required", http.StatusBadRequest)
+		return
+	}
+	entries := d.hub.GetConversation(taskID)
+	writeJSON(w, entries)
 }
 
 func (d *Dashboard) handleTaskByID(w http.ResponseWriter, r *http.Request) {
@@ -201,122 +216,303 @@ const indexHTML = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Agent Teams Dashboard</title>
+<title>Agent Teams</title>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f0f13; color: #e0e0e0; padding: 24px; }
-  h1 { font-size: 1.4rem; font-weight: 600; margin-bottom: 20px; color: #fff; letter-spacing: 0.5px; }
-  h2 { font-size: 1rem; font-weight: 500; margin-bottom: 12px; color: #aaa; text-transform: uppercase; letter-spacing: 1px; }
-  .section { margin-bottom: 32px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
-  .card { background: #1a1a24; border: 1px solid #2a2a38; border-radius: 8px; padding: 14px; }
-  .card .name { font-weight: 600; font-size: 0.9rem; margin-bottom: 6px; word-break: break-all; }
-  .card .meta { font-size: 0.78rem; color: #888; line-height: 1.6; }
-  .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.72rem; font-weight: 600; margin-left: 6px; }
-  .idle { background: #1e3a2a; color: #4ade80; }
-  .busy { background: #3a2a10; color: #fb923c; }
-  table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
-  thead th { text-align: left; padding: 8px 10px; color: #777; font-weight: 500; border-bottom: 1px solid #2a2a38; }
-  tbody tr { border-bottom: 1px solid #1e1e2a; }
-  tbody tr:hover { background: #1e1e2c; }
-  td { padding: 8px 10px; vertical-align: top; max-width: 300px; word-break: break-all; }
-  .status-pending   { color: #94a3b8; }
-  .status-running   { color: #60a5fa; }
-  .status-completed { color: #4ade80; }
-  .status-failed    { color: #f87171; }
-  .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; }
-  .dot-pending   { background: #94a3b8; }
-  .dot-running   { background: #60a5fa; animation: pulse 1.2s infinite; }
-  .dot-completed { background: #4ade80; }
-  .dot-failed    { background: #f87171; }
-  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
-  .conn { font-size: 0.75rem; color: #555; margin-bottom: 18px; }
-  .conn.ok { color: #4ade80; }
-  .result-cell { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #aaa; }
-  .empty { color: #444; font-style: italic; padding: 12px 0; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0c0c10; color: #d4d4d8; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+/* ── Top bar ── */
+.topbar { display: flex; align-items: center; gap: 16px; padding: 0 20px; height: 48px; background: #111118; border-bottom: 1px solid #222230; flex-shrink: 0; }
+.topbar h1 { font-size: 0.95rem; font-weight: 600; color: #fff; letter-spacing: 0.3px; }
+.conn { font-size: 0.72rem; color: #555; margin-left: auto; }
+.conn.ok { color: #4ade80; }
+
+/* ── Agents strip ── */
+.agents-strip { display: flex; gap: 8px; padding: 8px 20px; background: #0f0f16; border-bottom: 1px solid #1e1e28; flex-shrink: 0; overflow-x: auto; }
+.agent-chip { display: flex; align-items: center; gap: 6px; background: #1a1a26; border: 1px solid #2a2a3a; border-radius: 20px; padding: 4px 10px; font-size: 0.76rem; white-space: nowrap; }
+.agent-chip .aname { font-weight: 600; color: #c4c4d4; }
+.agent-chip .arole { color: #666; }
+.dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.dot-idle { background: #4ade80; }
+.dot-busy { background: #fb923c; animation: pulse 1.2s infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+/* ── Main split ── */
+.main { display: flex; flex: 1; overflow: hidden; }
+
+/* ── Task list (left) ── */
+.task-list { width: 280px; flex-shrink: 0; border-right: 1px solid #1e1e28; display: flex; flex-direction: column; overflow: hidden; }
+.task-list-header { padding: 12px 16px 8px; font-size: 0.7rem; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: 1px; flex-shrink: 0; }
+.task-items { flex: 1; overflow-y: auto; }
+.task-item { padding: 10px 16px; cursor: pointer; border-bottom: 1px solid #16161e; transition: background .1s; }
+.task-item:hover { background: #161620; }
+.task-item.active { background: #1a1e30; border-left: 2px solid #4f7ef0; }
+.task-item .tid { font-size: 0.7rem; color: #555; margin-bottom: 2px; }
+.task-item .tdesc { font-size: 0.82rem; color: #c4c4d4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 4px; }
+.task-item .tmeta { display: flex; align-items: center; gap: 6px; font-size: 0.72rem; color: #666; }
+.badge { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 0.68rem; font-weight: 600; }
+.badge-pending   { background: #1e2030; color: #94a3b8; }
+.badge-running   { background: #1a2a40; color: #60a5fa; }
+.badge-completed { background: #1a3028; color: #4ade80; }
+.badge-failed    { background: #301a1a; color: #f87171; }
+.empty-list { padding: 20px 16px; font-size: 0.8rem; color: #444; font-style: italic; }
+
+/* ── Detail panel (right) ── */
+.detail { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.detail-empty { flex: 1; display: flex; align-items: center; justify-content: center; color: #333; font-size: 0.9rem; }
+
+/* Task header */
+.task-header { padding: 16px 20px 12px; border-bottom: 1px solid #1e1e28; flex-shrink: 0; }
+.task-header .th-id { font-size: 0.72rem; color: #555; margin-bottom: 4px; }
+.task-header .th-desc { font-size: 1rem; font-weight: 600; color: #e8e8f0; margin-bottom: 8px; }
+.task-header .th-meta { display: flex; gap: 16px; font-size: 0.78rem; color: #666; }
+.task-header .th-meta span { display: flex; align-items: center; gap: 4px; }
+.result-box { margin-top: 8px; padding: 6px 10px; background: #1a2030; border-radius: 6px; font-size: 0.78rem; color: #a0c0e0; border-left: 2px solid #4f7ef0; max-height: 80px; overflow-y: auto; word-break: break-word; }
+.result-box.err { background: #201818; color: #f08080; border-color: #f87171; }
+
+/* Session log */
+.session-label { padding: 10px 20px 6px; font-size: 0.7rem; font-weight: 600; color: #444; text-transform: uppercase; letter-spacing: 1px; flex-shrink: 0; }
+.session-log { flex: 1; overflow-y: auto; padding: 0 20px 20px; }
+.session-empty { color: #333; font-size: 0.82rem; font-style: italic; padding-top: 12px; }
+
+/* Message entry */
+.msg-entry { display: flex; gap: 10px; margin-bottom: 10px; align-items: flex-start; }
+.msg-avatar { width: 28px; height: 28px; border-radius: 50%; background: #1e2030; display: flex; align-items: center; justify-content: center; font-size: 0.65rem; font-weight: 700; color: #7090d0; flex-shrink: 0; margin-top: 1px; }
+.msg-body { flex: 1; }
+.msg-header { display: flex; align-items: baseline; gap: 6px; margin-bottom: 3px; }
+.msg-from { font-size: 0.8rem; font-weight: 600; }
+.msg-arrow { font-size: 0.72rem; color: #444; }
+.msg-to   { font-size: 0.78rem; color: #666; }
+.msg-type-tag { font-size: 0.65rem; padding: 1px 5px; border-radius: 4px; background: #1e2030; color: #666; }
+.msg-time { font-size: 0.68rem; color: #444; margin-left: auto; }
+.msg-content { font-size: 0.82rem; color: #b0b0c0; line-height: 1.55; background: #141420; border-radius: 6px; padding: 6px 10px; word-break: break-word; }
+
+/* Color palette for agent avatars */
+.c0 { color: #7c9df0; } .c1 { color: #f09070; } .c2 { color: #70d0a0; }
+.c3 { color: #d0a070; } .c4 { color: #a070d0; } .c5 { color: #70c0d0; }
 </style>
 </head>
 <body>
-<h1>Agent Teams Dashboard</h1>
-<div class="conn" id="conn-status">⬤ connecting...</div>
 
-<div class="section">
-  <h2>Agents</h2>
-  <div class="grid" id="agents-grid"><div class="empty">No agents yet</div></div>
+<div class="topbar">
+  <h1>Agent Teams</h1>
+  <div class="conn" id="conn-status">⬤ connecting...</div>
 </div>
 
-<div class="section">
-  <h2>Tasks</h2>
-  <table>
-    <thead><tr><th>ID</th><th>Description</th><th>Status</th><th>Assigned To</th><th>Result / Error</th></tr></thead>
-    <tbody id="tasks-body"><tr><td colspan="5" class="empty">No tasks yet</td></tr></tbody>
-  </table>
+<div class="agents-strip" id="agents-strip">
+  <span style="font-size:0.75rem;color:#444;align-self:center">No agents</span>
+</div>
+
+<div class="main">
+  <div class="task-list">
+    <div class="task-list-header">Tasks</div>
+    <div class="task-items" id="task-items"><div class="empty-list">No tasks yet</div></div>
+  </div>
+  <div class="detail" id="detail">
+    <div class="detail-empty">← 选择一个任务查看详情</div>
+  </div>
 </div>
 
 <script>
 const agents = {};
 const tasks = {};
+const conversations = {};
+let selectedTaskID = null;
+const agentColors = {};
+let colorIdx = 0;
 
+function agentColor(id) {
+  if (!agentColors[id]) agentColors[id] = colorIdx++ % 6;
+  return agentColors[id];
+}
+function agentInitials(id) {
+  return id.replace(/[^a-zA-Z0-9]/g,'').slice(0,2).toUpperCase() || '?';
+}
+function escHtml(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function fmtTime(ts) {
+  return new Date(ts).toLocaleTimeString();
+}
+
+// ── Agents strip ──
 function renderAgents() {
-  const grid = document.getElementById('agents-grid');
+  const el = document.getElementById('agents-strip');
   const keys = Object.keys(agents);
-  if (!keys.length) { grid.innerHTML = '<div class="empty">No agents yet</div>'; return; }
-  grid.innerHTML = keys.map(id => {
+  if (!keys.length) { el.innerHTML = '<span style="font-size:0.75rem;color:#444;align-self:center">No agents</span>'; return; }
+  el.innerHTML = keys.map(id => {
     const a = agents[id];
-    const statusClass = a.status === 'busy' ? 'busy' : 'idle';
-    return ` + "`" + `<div class="card">
-      <div class="name">${a.id}<span class="badge ${statusClass}">${a.status}</span></div>
-      <div class="meta">
-        ${a.role ? '<div>Role: ' + a.role + '</div>' : ''}
-        ${a.current_task ? '<div>Task: ' + a.current_task + '</div>' : ''}
-        <div>Seen: ${new Date(a.last_seen).toLocaleTimeString()}</div>
+    const dc = a.status === 'busy' ? 'dot-busy' : 'dot-idle';
+    return ` + "`" + `<div class="agent-chip">
+      <span class="dot ${dc}"></span>
+      <span class="aname">${escHtml(a.id)}</span>
+      ${a.role ? ` + "`" + `<span class="arole">${escHtml(a.role)}</span>` + "`" + ` : ''}
+      ${a.current_task ? ` + "`" + `<span style="color:#4f7ef0;font-size:0.68rem">${escHtml(a.current_task)}</span>` + "`" + ` : ''}
+    </div>` + "`" + `;
+  }).join('');
+}
+
+// ── Task list ──
+function renderTaskList() {
+  const el = document.getElementById('task-items');
+  const keys = Object.keys(tasks).sort((a,b) => tasks[a].created_at > tasks[b].created_at ? 1 : -1);
+  if (!keys.length) { el.innerHTML = '<div class="empty-list">No tasks yet</div>'; return; }
+  el.innerHTML = keys.map(id => {
+    const t = tasks[id];
+    const active = selectedTaskID === id ? ' active' : '';
+    return ` + "`" + `<div class="task-item${active}" onclick="selectTask('${id}')">
+      <div class="tid">${escHtml(t.id)}</div>
+      <div class="tdesc">${escHtml(t.description)}</div>
+      <div class="tmeta">
+        <span class="badge badge-${t.status}">${t.status}</span>
+        ${t.assigned_to ? ` + "`" + `<span>${escHtml(t.assigned_to)}</span>` + "`" + ` : ''}
       </div>
     </div>` + "`" + `;
   }).join('');
 }
 
-function renderTasks() {
-  const tbody = document.getElementById('tasks-body');
-  const keys = Object.keys(tasks).sort((a,b) => tasks[a].created_at > tasks[b].created_at ? 1 : -1);
-  if (!keys.length) { tbody.innerHTML = '<tr><td colspan="5" class="empty">No tasks yet</td></tr>'; return; }
-  tbody.innerHTML = keys.map(id => {
-    const t = tasks[id];
-    const sc = 'status-' + t.status;
-    const result = t.result || t.error || '';
-    return ` + "`" + `<tr>
-      <td>${t.id}</td>
-      <td>${t.description}</td>
-      <td class="${sc}"><span class="dot dot-${t.status}"></span>${t.status}</td>
-      <td>${t.assigned_to || '-'}</td>
-      <td class="result-cell" title="${result}">${result || '-'}</td>
-    </tr>` + "`" + `;
-  }).join('');
+// ── Detail panel ──
+function renderDetail() {
+  const el = document.getElementById('detail');
+  if (!selectedTaskID || !tasks[selectedTaskID]) {
+    el.innerHTML = '<div class="detail-empty">← 选择一个任务查看详情</div>';
+    return;
+  }
+  const t = tasks[selectedTaskID];
+  const entries = conversations[selectedTaskID] || [];
+
+  let resultHtml = '';
+  if (t.result) {
+    resultHtml = ` + "`" + `<div class="result-box">${escHtml(t.result)}</div>` + "`" + `;
+  } else if (t.error) {
+    resultHtml = ` + "`" + `<div class="result-box err">${escHtml(t.error)}</div>` + "`" + `;
+  }
+
+  const msgHtml = entries.length === 0
+    ? '<div class="session-empty">暂无对话记录</div>'
+    : entries.map(e => {
+        const ci = agentColor(e.from);
+        const initials = agentInitials(e.from);
+        return ` + "`" + `<div class="msg-entry">
+          <div class="msg-avatar c${ci}">${initials}</div>
+          <div class="msg-body">
+            <div class="msg-header">
+              <span class="msg-from c${ci}">${escHtml(e.from)}</span>
+              <span class="msg-arrow">→</span>
+              <span class="msg-to">${escHtml(e.to)}</span>
+              <span class="msg-type-tag">${escHtml(e.msg_type)}</span>
+              <span class="msg-time">${fmtTime(e.at)}</span>
+            </div>
+            <div class="msg-content">${escHtml(e.content)}</div>
+          </div>
+        </div>` + "`" + `;
+      }).join('');
+
+  el.innerHTML = ` + "`" + `
+    <div class="task-header">
+      <div class="th-id">${escHtml(t.id)}</div>
+      <div class="th-desc">${escHtml(t.description)}</div>
+      <div class="th-meta">
+        <span><span class="badge badge-${t.status}">${t.status}</span></span>
+        ${t.assigned_to ? ` + "`" + `<span>assigned → ${escHtml(t.assigned_to)}</span>` + "`" + ` : ''}
+        ${t.created_by  ? ` + "`" + `<span>by ${escHtml(t.created_by)}</span>` + "`" + ` : ''}
+        <span>${fmtTime(t.created_at)}</span>
+      </div>
+      ${resultHtml}
+    </div>
+    <div class="session-label">Session Log</div>
+    <div class="session-log" id="session-log">${msgHtml}</div>
+  ` + "`" + `;
 }
 
+function scrollSessionToBottom() {
+  const el = document.getElementById('session-log');
+  if (el) el.scrollTop = el.scrollHeight;
+}
+
+function selectTask(id) {
+  selectedTaskID = id;
+  renderTaskList();
+  if (!conversations[id]) {
+    fetch('/api/conversations/' + id)
+      .then(r => r.json())
+      .then(data => { conversations[id] = data || []; renderDetail(); scrollSessionToBottom(); })
+      .catch(() => { conversations[id] = []; renderDetail(); });
+    renderDetail(); // 先渲染空状态
+    return;
+  }
+  renderDetail();
+  scrollSessionToBottom();
+}
+
+// ── SSE events ──
 function applyEvent(type, data) {
   if (type === 'snapshot.agents') {
     data.forEach(a => { agents[a.id] = a; });
     renderAgents();
   } else if (type === 'snapshot.tasks') {
     data.forEach(t => { tasks[t.id] = t; });
-    renderTasks();
+    renderTaskList();
+    if (selectedTaskID) renderDetail();
   } else if (type === 'agent.registered' || type === 'agent.updated') {
     if (data.data) { agents[data.agent_id] = data.data; renderAgents(); }
   } else if (type === 'agent.evicted') {
     delete agents[data.agent_id]; renderAgents();
-  } else if (type === 'task.created' || type === 'task.updated') {
-    if (data.data) { tasks[data.task_id] = data.data; renderTasks(); }
+  } else if (type === 'task.created') {
+    if (data.data) {
+      tasks[data.task_id] = data.data;
+      renderTaskList();
+      // 自动选中第一个任务
+      if (!selectedTaskID) selectTask(data.task_id);
+    }
+  } else if (type === 'task.updated') {
+    if (data.data) {
+      tasks[data.task_id] = data.data;
+      renderTaskList();
+      if (selectedTaskID === data.task_id) renderDetail();
+    }
+  } else if (type === 'conversation.added') {
+    const entry = data.data;
+    if (!entry) return;
+    const tid = entry.task_id;
+    if (!conversations[tid]) conversations[tid] = [];
+    conversations[tid].push(entry);
+    if (selectedTaskID === tid) {
+      // 追加一条消息而不重绘整个 detail（保留滚动位置判断）
+      const log = document.getElementById('session-log');
+      if (log) {
+        const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+        const ci = agentColor(entry.from);
+        const div = document.createElement('div');
+        div.className = 'msg-entry';
+        div.innerHTML = ` + "`" + `<div class="msg-avatar c${ci}">${agentInitials(entry.from)}</div>
+          <div class="msg-body">
+            <div class="msg-header">
+              <span class="msg-from c${ci}">${escHtml(entry.from)}</span>
+              <span class="msg-arrow">→</span>
+              <span class="msg-to">${escHtml(entry.to)}</span>
+              <span class="msg-type-tag">${escHtml(entry.msg_type)}</span>
+              <span class="msg-time">${fmtTime(entry.at)}</span>
+            </div>
+            <div class="msg-content">${escHtml(entry.content)}</div>
+          </div>` + "`" + `;
+        // 清除"暂无记录"占位
+        const empty = log.querySelector('.session-empty');
+        if (empty) empty.remove();
+        log.appendChild(div);
+        if (atBottom) log.scrollTop = log.scrollHeight;
+      }
+    }
   }
 }
 
 function connect() {
   const es = new EventSource('/events');
   const connEl = document.getElementById('conn-status');
-
   es.onopen = () => { connEl.textContent = '⬤ connected'; connEl.className = 'conn ok'; };
-  es.onerror = () => { connEl.textContent = '⬤ disconnected - reconnecting...'; connEl.className = 'conn'; };
-
-  ['snapshot.agents','snapshot.tasks','agent.registered','agent.updated','agent.evicted','task.created','task.updated'].forEach(evt => {
+  es.onerror = () => { connEl.textContent = '⬤ disconnected'; connEl.className = 'conn'; };
+  ['snapshot.agents','snapshot.tasks','agent.registered','agent.updated','agent.evicted',
+   'task.created','task.updated','conversation.added'].forEach(evt => {
     es.addEventListener(evt, e => {
       try { applyEvent(evt, JSON.parse(e.data)); } catch(err) { console.error(err); }
     });

@@ -1,11 +1,12 @@
 // examples/agent_teams 演示 Agent Teams 协作模式：
 // 1 个 orchestrator + 2 个 worker，通过 mailbox 完成任务委派与结果聚合。
+// orchestrator 会定期向 worker 发 chat 消息询问进展，worker 也会主动回报状态。
 //
 // 运行方式：
 //
 //	go run ./examples/agent_teams
 //
-// Dashboard 在 http://localhost:8080 可查看实时状态。
+// Dashboard 在 http://localhost:8080 可查看实时状态及对话记录。
 package main
 
 import (
@@ -69,22 +70,20 @@ func main() {
 	// 小等让 worker 注册完成
 	time.Sleep(300 * time.Millisecond)
 
-	// 4. 启动 orchestrator（在主 goroutine 运行，方便看输出）
+	// 4. 启动 orchestrator
 	runOrchestrator(ctx, mailboxAddr)
 
-	// 等待 worker 退出（worker 完成任务后自动退出）
 	wg.Wait()
 	fmt.Println("\nAll done!")
 	fmt.Printf("Dashboard still running at http://%s — press Ctrl+C to exit\n", dashboardAddr)
 
-	// 保持进程运行，让 dashboard 保持可访问，直到用户 Ctrl+C
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	fmt.Println("\nShutting down...")
 }
 
-// runOrchestrator 创建 2 个任务分别委派给 worker-1 和 worker-2，并等待结果
+// runOrchestrator 创建任务、委派给 worker，并通过 chat 消息与 worker 交流
 func runOrchestrator(ctx context.Context, addr string) {
 	c := client.NewMailboxClient("orchestrator", addr)
 	if err := c.Register(ctx); err != nil {
@@ -123,16 +122,24 @@ func runOrchestrator(ctx context.Context, addr string) {
 		}
 		taskIDs[i] = taskID
 		fmt.Printf("[orchestrator] task %s → %s: %q\n", taskID, t.worker, t.desc)
-		_ = c.SetStatus(ctx, "busy", taskID)
 	}
+	_ = c.SetStatus(ctx, "busy", taskIDs[0])
 
-	// 等待所有任务完成
+	// 等待所有任务完成，期间定期发 chat 消息询问进展
 	fmt.Println("[orchestrator] waiting for results...")
 	results := make([]string, len(taskIDs))
 	completed := make([]bool, len(taskIDs))
 	deadline := time.Now().Add(30 * time.Second)
+	checkTicker := time.NewTicker(2 * time.Second)
+	defer checkTicker.Stop()
 
 	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return
+		case <-checkTicker.C:
+		}
+
 		allDone := true
 		for i, taskID := range taskIDs {
 			if completed[i] {
@@ -140,17 +147,24 @@ func runOrchestrator(ctx context.Context, addr string) {
 			}
 			task, err := c.GetTask(ctx, taskID)
 			if err != nil {
+				allDone = false
 				continue
 			}
 			switch task.Status {
 			case mailbox.TaskStatusCompleted:
 				results[i] = task.Result
 				completed[i] = true
-				fmt.Printf("[orchestrator] task %s completed: %s\n", taskID, task.Result)
+				fmt.Printf("[orchestrator] task %s completed\n", taskID)
 			case mailbox.TaskStatusFailed:
 				results[i] = "ERROR: " + task.Error
 				completed[i] = true
 				fmt.Printf("[orchestrator] task %s failed: %s\n", taskID, task.Error)
+			case mailbox.TaskStatusRunning:
+				// 向 worker 发 chat 询问进展
+				msg, _ := mailbox.NewChatMessage("orchestrator", taskID,
+					fmt.Sprintf("任务进展怎么样了？(%s)", taskID))
+				_ = c.Send(ctx, tasks[i].worker, msg)
+				allDone = false
 			default:
 				allDone = false
 			}
@@ -158,7 +172,22 @@ func runOrchestrator(ctx context.Context, addr string) {
 		if allDone {
 			break
 		}
-		time.Sleep(200 * time.Millisecond)
+
+		// 处理 worker 发回来的 chat 回复
+		for {
+			raw, err := c.Recv(ctx)
+			if err != nil || raw == "" {
+				break
+			}
+			parsed, err := mailbox.ParseMessage(raw)
+			if err != nil {
+				continue
+			}
+			if parsed.Type == mailbox.MessageTypeChat {
+				p, _ := mailbox.ParseChatPayload(parsed)
+				fmt.Printf("[orchestrator] ← %s [%s]: %s\n", parsed.From, parsed.TaskID, p.Text)
+			}
+		}
 	}
 
 	_ = c.SetStatus(ctx, "idle", "")
@@ -170,7 +199,7 @@ func runOrchestrator(ctx context.Context, addr string) {
 	}
 }
 
-// runWorker 模拟一个 worker agent：注册，等待任务，完成后退出
+// runWorker 模拟分阶段执行任务，响应 orchestrator 的 chat 询问
 func runWorker(ctx context.Context, wg *sync.WaitGroup, id, addr string) {
 	defer wg.Done()
 
@@ -185,6 +214,9 @@ func runWorker(ctx context.Context, wg *sync.WaitGroup, id, addr string) {
 	fmt.Printf("[%s] registered\n", id)
 
 	deadline := time.Now().Add(30 * time.Second)
+	var currentTaskID string
+	progress := 0
+
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
@@ -194,7 +226,23 @@ func runWorker(ctx context.Context, wg *sync.WaitGroup, id, addr string) {
 
 		msg, err := c.Recv(ctx)
 		if err != nil || msg == "" {
-			time.Sleep(200 * time.Millisecond)
+			// 模拟分阶段推进任务进度
+			if currentTaskID != "" && progress < 100 {
+				time.Sleep(800 * time.Millisecond)
+				progress += 30
+				if progress > 100 {
+					progress = 100
+				}
+				if progress == 100 {
+					result := fmt.Sprintf("[%s] task done (simulated result)", id)
+					_ = c.CompleteTask(ctx, currentTaskID, result)
+					_ = c.SetStatus(ctx, "idle", "")
+					fmt.Printf("[%s] task %s done\n", id, currentTaskID)
+					return
+				}
+			} else {
+				time.Sleep(100 * time.Millisecond)
+			}
 			continue
 		}
 
@@ -204,27 +252,32 @@ func runWorker(ctx context.Context, wg *sync.WaitGroup, id, addr string) {
 			continue
 		}
 
-		if parsed.Type != mailbox.MessageTypeTaskAssign {
-			continue
+		switch parsed.Type {
+		case mailbox.MessageTypeTaskAssign:
+			payload, err := mailbox.ParseTaskAssignPayload(parsed)
+			if err != nil {
+				log.Printf("[%s] parse payload error: %v", id, err)
+				continue
+			}
+			currentTaskID = parsed.TaskID
+			progress = 0
+			fmt.Printf("[%s] received task %s: %q\n", id, currentTaskID, payload.Description)
+			_ = c.StartTask(ctx, currentTaskID)
+			_ = c.SetStatus(ctx, "busy", currentTaskID)
+			// 主动告知已开始
+			reply, _ := mailbox.NewChatMessage(id, currentTaskID, "收到任务，开始处理...")
+			_ = c.Send(ctx, parsed.From, reply)
+
+		case mailbox.MessageTypeChat:
+			// 响应 orchestrator 的询问
+			if currentTaskID == "" {
+				continue
+			}
+			p, _ := mailbox.ParseChatPayload(parsed)
+			fmt.Printf("[%s] ← orchestrator: %s\n", id, p.Text)
+			reply, _ := mailbox.NewChatMessage(id, currentTaskID,
+				fmt.Sprintf("当前进度 %d%%，正在处理中...", progress))
+			_ = c.Send(ctx, parsed.From, reply)
 		}
-
-		payload, err := mailbox.ParseTaskAssignPayload(parsed)
-		if err != nil {
-			log.Printf("[%s] parse payload error: %v", id, err)
-			continue
-		}
-
-		fmt.Printf("[%s] received task %s: %q\n", id, parsed.TaskID, payload.Description)
-		_ = c.StartTask(ctx, parsed.TaskID)
-		_ = c.SetStatus(ctx, "busy", parsed.TaskID)
-
-		// 模拟工作（实际场景可替换为真实的 LLM 调用）
-		time.Sleep(1 * time.Second)
-		result := fmt.Sprintf("[%s] completed: %s (simulated result)", id, payload.Description)
-
-		_ = c.CompleteTask(ctx, parsed.TaskID, result)
-		_ = c.SetStatus(ctx, "idle", "")
-		fmt.Printf("[%s] task %s done\n", id, parsed.TaskID)
-		return // 每个 worker 只处理一个任务（demo 场景）
 	}
 }

@@ -1,6 +1,7 @@
 package mailbox
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -48,16 +49,18 @@ type Task struct {
 
 // Hub 管理所有 Agent 的注册状态和消息队列
 type Hub struct {
-	mu          sync.RWMutex
-	inboxes     map[string]chan string
-	lastSeen    map[string]time.Time
-	agentInfos  map[string]*AgentInfo
-	tasks       map[string]*Task
-	taskCounter uint64
-	subscribers []chan Event
-	store       Store
+	mu            sync.RWMutex
+	inboxes       map[string]chan string
+	lastSeen      map[string]time.Time
+	agentInfos    map[string]*AgentInfo
+	tasks         map[string]*Task
+	taskCounter   uint64
+	subscribers   []chan Event
+	store         Store
 	// knownRoles 缓存从 store 加载的角色，在 agent 注册时自动应用
-	knownRoles map[string]string
+	knownRoles    map[string]string
+	// conversations 按 task_id 存储对话记录
+	conversations map[string][]ConversationEntry
 }
 
 // HubOption 是 NewHub 的函数式选项
@@ -70,12 +73,13 @@ func WithStore(s Store) HubOption {
 
 func NewHub(opts ...HubOption) *Hub {
 	h := &Hub{
-		inboxes:    make(map[string]chan string),
-		lastSeen:   make(map[string]time.Time),
-		agentInfos: make(map[string]*AgentInfo),
-		tasks:      make(map[string]*Task),
-		knownRoles: make(map[string]string),
-		store:      noopStore{},
+		inboxes:       make(map[string]chan string),
+		lastSeen:      make(map[string]time.Time),
+		agentInfos:    make(map[string]*AgentInfo),
+		tasks:         make(map[string]*Task),
+		knownRoles:    make(map[string]string),
+		conversations: make(map[string][]ConversationEntry),
+		store:         noopStore{},
 	}
 	for _, opt := range opts {
 		opt(h)
@@ -174,10 +178,10 @@ func (h *Hub) Heartbeat(agentID string) error {
 	return nil
 }
 
-// Send 向指定 Agent 的信箱投递消息
+// Send 向指定 Agent 的信箱投递消息；若消息携带 task_id 则自动记录至对话日志
 func (h *Hub) Send(targetID, message string) error {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
+	h.mu.Lock()
+	defer h.mu.Unlock()
 
 	ch, exists := h.inboxes[targetID]
 	if !exists {
@@ -186,10 +190,57 @@ func (h *Hub) Send(targetID, message string) error {
 
 	select {
 	case ch <- message:
-		return nil
 	default:
 		return errors.New("agent inbox is full")
 	}
+
+	// 尝试解析为结构化消息，有 task_id 则记录对话
+	var msg Message
+	if err := json.Unmarshal([]byte(message), &msg); err == nil && msg.TaskID != "" {
+		h.appendConversationLocked(msg.From, targetID, msg)
+	}
+	return nil
+}
+
+// appendConversationLocked 追加一条对话记录（调用方持有写锁）
+func (h *Hub) appendConversationLocked(from, to string, msg Message) {
+	content := string(msg.Payload)
+	// 对常见类型提取可读文本
+	switch msg.Type {
+	case MessageTypeTaskAssign:
+		var p TaskAssignPayload
+		if json.Unmarshal(msg.Payload, &p) == nil {
+			content = p.Description
+		}
+	case MessageTypeTaskResult:
+		var p TaskResultPayload
+		if json.Unmarshal(msg.Payload, &p) == nil {
+			if p.Error != "" {
+				content = "error: " + p.Error
+			} else {
+				content = p.Result
+			}
+		}
+	case MessageTypeChat:
+		var p ChatPayload
+		if json.Unmarshal(msg.Payload, &p) == nil {
+			content = p.Text
+		}
+	}
+	entry := ConversationEntry{
+		At:      time.Now(),
+		From:    from,
+		To:      to,
+		TaskID:  msg.TaskID,
+		MsgType: msg.Type,
+		Content: content,
+	}
+	h.conversations[msg.TaskID] = append(h.conversations[msg.TaskID], entry)
+	h.publishLocked(Event{
+		Type:   EventTypeConversationAdded,
+		TaskID: msg.TaskID,
+		Data:   entry,
+	})
 }
 
 // Recv 尝试从信箱中非阻塞读取一条消息
@@ -423,5 +474,15 @@ func (h *Hub) ListTasks() []Task {
 	for _, t := range h.tasks {
 		result = append(result, *t)
 	}
+	return result
+}
+
+// GetConversation 返回指定任务的对话记录（按时间顺序）
+func (h *Hub) GetConversation(taskID string) []ConversationEntry {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	src := h.conversations[taskID]
+	result := make([]ConversationEntry, len(src))
+	copy(result, src)
 	return result
 }

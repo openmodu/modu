@@ -233,8 +233,23 @@ func (s *MailboxServer) ListenAndServe(addr string) error {
 					return
 				}
 				conn.WriteBulkString(string(b))
+
+		// --- Conversation 命令 ---
+
+		case "CONV.GET": // CONV.GET <task_id>
+			if len(cmd.Args) != 2 {
+				conn.WriteError("ERR wrong number of arguments for 'CONV.GET' command")
+				return
 			}
-		},
+			entries := s.hub.GetConversation(string(cmd.Args[1]))
+			b, err := json.Marshal(entries)
+			if err != nil {
+				conn.WriteError("ERR failed to serialize conversation")
+				return
+			}
+			conn.WriteBulkString(string(b))
+		}
+	},
 		func(conn redcon.Conn) bool { return true },
 		func(conn redcon.Conn, err error) {},
 	)
