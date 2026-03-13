@@ -115,6 +115,20 @@ func (h *Hub) loadFromStore() {
 	} else if roles != nil {
 		h.knownRoles = roles
 	}
+
+	convs, err := h.store.LoadConversations()
+	if err != nil {
+		log.Printf("[Hub] load conversations from store: %v", err)
+	} else if convs != nil {
+		h.conversations = convs
+		total := 0
+		for _, v := range convs {
+			total += len(v)
+		}
+		if total > 0 {
+			log.Printf("[Hub] loaded %d conversation entries from store", total)
+		}
+	}
 }
 
 func (h *Hub) evictionLoop() {
@@ -241,6 +255,9 @@ func (h *Hub) appendConversationLocked(from, to string, msg Message) {
 		TaskID: msg.TaskID,
 		Data:   entry,
 	})
+	if err := h.store.SaveConversation(entry); err != nil {
+		log.Printf("[Hub] SaveConversation task=%s: %v", msg.TaskID, err)
+	}
 }
 
 // Recv 尝试从信箱中非阻塞读取一条消息

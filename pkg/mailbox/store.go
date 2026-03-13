@@ -12,6 +12,10 @@ type Store interface {
 	SaveAgentRole(agentID, role string) error
 	// LoadAgentRoles 加载所有 agent 的角色映射
 	LoadAgentRoles() (map[string]string, error)
+	// SaveConversation 追加一条对话记录
+	SaveConversation(entry ConversationEntry) error
+	// LoadConversations 加载所有对话记录，按 task_id 分组
+	LoadConversations() (map[string][]ConversationEntry, error)
 	// Close 关闭持久化后端（释放连接等）
 	Close() error
 }
@@ -19,8 +23,10 @@ type Store interface {
 // noopStore 是不做持久化的默认实现
 type noopStore struct{}
 
-func (noopStore) SaveTask(_ Task) error                      { return nil }
-func (noopStore) LoadTasks() ([]Task, error)                 { return nil, nil }
-func (noopStore) SaveAgentRole(_, _ string) error            { return nil }
-func (noopStore) LoadAgentRoles() (map[string]string, error) { return nil, nil }
-func (noopStore) Close() error                               { return nil }
+func (noopStore) SaveTask(_ Task) error                                          { return nil }
+func (noopStore) LoadTasks() ([]Task, error)                                     { return nil, nil }
+func (noopStore) SaveAgentRole(_, _ string) error                                { return nil }
+func (noopStore) LoadAgentRoles() (map[string]string, error)                     { return nil, nil }
+func (noopStore) SaveConversation(_ ConversationEntry) error                     { return nil }
+func (noopStore) LoadConversations() (map[string][]ConversationEntry, error)     { return nil, nil }
+func (noopStore) Close() error                                                   { return nil }

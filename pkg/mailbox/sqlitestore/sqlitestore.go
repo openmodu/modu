@@ -27,6 +27,16 @@ CREATE TABLE IF NOT EXISTS agent_roles (
 	agent_id TEXT PRIMARY KEY,
 	role     TEXT NOT NULL DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS conversations (
+	id         INTEGER PRIMARY KEY AUTOINCREMENT,
+	at         INTEGER NOT NULL DEFAULT 0,
+	from_agent TEXT    NOT NULL DEFAULT '',
+	to_agent   TEXT    NOT NULL DEFAULT '',
+	task_id    TEXT    NOT NULL DEFAULT '',
+	msg_type   TEXT    NOT NULL DEFAULT '',
+	content    TEXT    NOT NULL DEFAULT ''
+);
 `
 
 // SQLiteStore 是 mailbox.Store 的 SQLite 实现
@@ -134,6 +144,41 @@ func (s *SQLiteStore) LoadAgentRoles() (map[string]string, error) {
 		roles[id] = role
 	}
 	return roles, rows.Err()
+}
+
+// SaveConversation 追加一条对话记录
+func (s *SQLiteStore) SaveConversation(e mailbox.ConversationEntry) error {
+	_, err := s.db.Exec(`
+		INSERT INTO conversations (at, from_agent, to_agent, task_id, msg_type, content)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, e.At.UnixNano(), e.From, e.To, e.TaskID, string(e.MsgType), e.Content)
+	return err
+}
+
+// LoadConversations 加载所有对话记录，按 task_id 分组，按时间升序
+func (s *SQLiteStore) LoadConversations() (map[string][]mailbox.ConversationEntry, error) {
+	rows, err := s.db.Query(`
+		SELECT at, from_agent, to_agent, task_id, msg_type, content
+		FROM conversations ORDER BY at ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string][]mailbox.ConversationEntry)
+	for rows.Next() {
+		var e mailbox.ConversationEntry
+		var atNano int64
+		var msgType string
+		if err := rows.Scan(&atNano, &e.From, &e.To, &e.TaskID, &msgType, &e.Content); err != nil {
+			return nil, err
+		}
+		e.At = time.Unix(0, atNano)
+		e.MsgType = mailbox.MessageType(msgType)
+		result[e.TaskID] = append(result[e.TaskID], e)
+	}
+	return result, rows.Err()
 }
 
 // Close 关闭数据库连接
