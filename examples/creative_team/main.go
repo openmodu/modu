@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/crosszan/modu/pkg/agent"
+	coding_agent "github.com/crosszan/modu/pkg/coding_agent"
 	"github.com/crosszan/modu/pkg/mailbox"
 	"github.com/crosszan/modu/pkg/mailbox/client"
 	"github.com/crosszan/modu/pkg/mailbox/dashboard"
@@ -73,37 +74,28 @@ func setupModel() *types.Model {
 
 // ── LLM 工具函数 ──────────────────────────────────────────────────────────────
 
-func newLLMAgent(model *types.Model, systemPrompt string) *agent.Agent {
-	return agent.NewAgent(agent.AgentConfig{
-		InitialState: &agent.AgentState{
-			SystemPrompt: systemPrompt,
-			Model:        model,
-		},
+func newCodingSession(model *types.Model, systemPrompt string) *coding_agent.CodingSession {
+	cwd, _ := os.Getwd()
+	cs, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:                cwd,
+		Model:              model,
+		CustomSystemPrompt: systemPrompt,
+		Tools:              []agent.AgentTool{}, // empty: no file tools, LLM must respond as text
 	})
+	if err != nil {
+		log.Fatalf("[coding_agent] NewCodingSession: %v", err)
+	}
+	return cs
 }
 
-// llmCall 向 agent 发一条消息，等待完成后返回回复文本
-func llmCall(ctx context.Context, a *agent.Agent, prompt string) string {
-	if err := a.Prompt(ctx, prompt); err != nil {
+// llmCall 向 session 发一条消息，等待完成后返回回复文本
+func llmCall(ctx context.Context, cs *coding_agent.CodingSession, prompt string) string {
+	if err := cs.Prompt(ctx, prompt); err != nil {
 		log.Printf("[llm] error: %v", err)
 		return ""
 	}
-	a.WaitForIdle()
-	msgs := a.GetState().Messages
-	for i := len(msgs) - 1; i >= 0; i-- {
-		var content []types.ContentBlock
-		if m, ok := msgs[i].(types.AssistantMessage); ok {
-			content = m.Content
-		} else if m, ok := msgs[i].(*types.AssistantMessage); ok {
-			content = m.Content
-		}
-		for _, c := range content {
-			if tc, ok := c.(*types.TextContent); ok && tc.Text != "" {
-				return tc.Text
-			}
-		}
-	}
-	return ""
+	cs.WaitForIdle()
+	return cs.GetLastAssistantText()
 }
 
 func sendChat(ctx context.Context, c *client.MailboxClient, to, taskID, text string) {
@@ -170,7 +162,7 @@ func runWorker(agentID, role, systemPrompt string) {
 	_ = c.SetRole(ctx, role)
 	fmt.Printf("[%s] registered → mailbox %s\n", agentID, addr)
 
-	llm := newLLMAgent(model, systemPrompt)
+	llm := newCodingSession(model, systemPrompt)
 
 	// 捕获 Ctrl+C 优雅退出
 	go func() {
@@ -299,7 +291,7 @@ func cmdOrchestrator(brief string) {
 	fmt.Printf("[orchestrator] connected → %s\n", addr)
 	fmt.Printf("[orchestrator] 创作主题：%s\n\n", brief)
 
-	llm := newLLMAgent(model, orchestratorPrompt)
+	llm := newCodingSession(model, orchestratorPrompt)
 
 	// ── Phase 1: 生成选题任务 ─────────────────────────────────────────────
 	fmt.Println("[orchestrator] === Phase 1: 向选题编辑下发任务 ===")
@@ -385,7 +377,7 @@ func cmdOrchestrator(brief string) {
 func waitForTask(
 	ctx context.Context,
 	c *client.MailboxClient,
-	llm *agent.Agent,
+	llm *coding_agent.CodingSession,
 	taskID, workerID string,
 	chatPrompts []string,
 ) string {
