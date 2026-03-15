@@ -93,8 +93,8 @@ func (w *Workspace) IncrTaskCount(agentID string) {
 	_ = os.WriteFile(path, data, 0o644)
 }
 
-// SaveDoc writes a task result to docs/{agentID}-{taskID}.md.
-func (w *Workspace) SaveDoc(agentID, taskID, title, content string) {
+// SaveDoc writes a task result to docs/{agentID}-{taskID}.md and returns the file path.
+func (w *Workspace) SaveDoc(agentID, taskID, title, content string) string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -104,6 +104,7 @@ func (w *Workspace) SaveDoc(agentID, taskID, title, content string) {
 	body := fmt.Sprintf("# %s\n\n**Agent:** %s  \n**Task:** %s  \n**Time:** %s\n\n---\n\n%s\n",
 		title, agentID, taskID, time.Now().Format("2006-01-02 15:04:05"), content)
 	_ = os.WriteFile(path, []byte(body), 0o644)
+	return path
 }
 
 // SaveFinal writes the completed article + editor's note and returns the file path.

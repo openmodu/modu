@@ -103,7 +103,7 @@ func TestTaskLifecycle(t *testing.T) {
 	}
 
 	// CompleteTask
-	if err := h.CompleteTask(taskID, "result data"); err != nil {
+	if err := h.CompleteTask(taskID, "worker", "result data"); err != nil {
 		t.Fatalf("CompleteTask failed: %v", err)
 	}
 	task, _ = h.GetTask(taskID)

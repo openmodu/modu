@@ -86,7 +86,7 @@ func TestSubscribeReceivesTaskEvents(t *testing.T) {
 		t.Errorf("expected task.updated, got %s", e.Type)
 	}
 
-	_ = h.CompleteTask(taskID, "done")
+	_ = h.CompleteTask(taskID, "", "done")
 	e, ok = drainEvent(sub, 100*time.Millisecond)
 	if !ok {
 		t.Fatal("expected task.updated event after CompleteTask")

@@ -21,6 +21,8 @@ func NewMailboxTools(c *client.MailboxClient) []agent.AgentTool {
 		&getTaskTool{c: c},
 		&completeTaskTool{c: c},
 		&listAgentsTool{c: c},
+		&listProjectsTool{c: c},
+		&getProjectTool{c: c},
 	}
 }
 
@@ -115,6 +117,73 @@ func (t *postMessageTool) Execute(ctx context.Context, _ string, args map[string
 	return toolText("消息已发送"), nil
 }
 
+// ── mailbox_list_projects ─────────────────────────────────────────────────────
+
+type listProjectsTool struct{ c *client.MailboxClient }
+
+func (t *listProjectsTool) Name() string  { return "mailbox_list_projects" }
+func (t *listProjectsTool) Label() string { return "List Projects" }
+func (t *listProjectsTool) Description() string {
+	return "列出所有创作项目及其包含的任务 ID。"
+}
+func (t *listProjectsTool) Parameters() any {
+	return map[string]any{"type": "object", "properties": map[string]any{}}
+}
+func (t *listProjectsTool) Execute(ctx context.Context, _ string, _ map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+	projects, err := t.c.ListProjects(ctx)
+	if err != nil {
+		return toolText(fmt.Sprintf("error: %v", err)), nil
+	}
+	if len(projects) == 0 {
+		return toolText("（暂无项目）"), nil
+	}
+	var sb strings.Builder
+	for _, p := range projects {
+		sb.WriteString(fmt.Sprintf("- %s  name=%s  tasks=%d  status=%s\n",
+			p.ID, p.Name, len(p.TaskIDs), p.Status))
+	}
+	return toolText(sb.String()), nil
+}
+
+// ── mailbox_get_project ───────────────────────────────────────────────────────
+
+type getProjectTool struct{ c *client.MailboxClient }
+
+func (t *getProjectTool) Name() string  { return "mailbox_get_project" }
+func (t *getProjectTool) Label() string { return "Get Project Info" }
+func (t *getProjectTool) Description() string {
+	return "查询项目详情，包括所有任务 ID 和状态。"
+}
+func (t *getProjectTool) Parameters() any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"project_id": map[string]any{
+				"type":        "string",
+				"description": "项目 ID",
+			},
+		},
+		"required": []string{"project_id"},
+	}
+}
+func (t *getProjectTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+	projectID, _ := args["project_id"].(string)
+	if projectID == "" {
+		return toolText("project_id is required"), nil
+	}
+	proj, err := t.c.GetProject(ctx, projectID)
+	if err != nil {
+		return toolText(fmt.Sprintf("error: %v", err)), nil
+	}
+	data, _ := json.MarshalIndent(map[string]any{
+		"id":       proj.ID,
+		"name":     proj.Name,
+		"status":   proj.Status,
+		"task_ids": proj.TaskIDs,
+	}, "", "  ")
+	return toolText(string(data)), nil
+}
+
 // ── mailbox_get_task ──────────────────────────────────────────────────────────
 
 type getTaskTool struct{ c *client.MailboxClient }
@@ -145,14 +214,21 @@ func (t *getTaskTool) Execute(ctx context.Context, _ string, args map[string]any
 	if err != nil {
 		return toolText(fmt.Sprintf("error: %v", err)), nil
 	}
-	data, _ := json.MarshalIndent(map[string]any{
-		"id":          task.ID,
-		"status":      task.Status,
-		"description": task.Description,
-		"assignee":    task.AssignedTo,
-		"result":      task.Result,
-		"created_at":  task.CreatedAt.Format(time.RFC3339),
-	}, "", "  ")
+	info := map[string]any{
+		"id":           task.ID,
+		"status":       task.Status,
+		"description":  task.Description,
+		"assignees":    task.Assignees,
+		"result":       task.Result,
+		"created_at":   task.CreatedAt.Format(time.RFC3339),
+	}
+	if task.ProjectID != "" {
+		info["project_id"] = task.ProjectID
+	}
+	if len(task.AgentResults) > 0 {
+		info["agent_results"] = task.AgentResults
+	}
+	data, _ := json.MarshalIndent(info, "", "  ")
 	return toolText(string(data)), nil
 }
 

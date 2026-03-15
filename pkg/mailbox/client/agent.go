@@ -138,20 +138,83 @@ func (c *MailboxClient) GetAgentInfo(ctx context.Context, agentID string) (mailb
 	return info, nil
 }
 
-// --- Task 方法 ---
+// --- Project 方法 ---
 
-// CreateTask 创建一个新任务，返回 task ID
-func (c *MailboxClient) CreateTask(ctx context.Context, description string) (string, error) {
-	res, err := c.rdb.Do(ctx, "TASK.CREATE", c.agentID, description).Result()
+// CreateProject 创建一个新项目，返回 project ID
+func (c *MailboxClient) CreateProject(ctx context.Context, name string) (string, error) {
+	res, err := c.rdb.Do(ctx, "PROJ.CREATE", c.agentID, name).Result()
 	if err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("%s", res), nil
 }
 
-// AssignTask 将任务分配给指定 Agent
-func (c *MailboxClient) AssignTask(ctx context.Context, taskID, agentID string) error {
-	res, err := c.rdb.Do(ctx, "TASK.ASSIGN", taskID, agentID).Result()
+// CompleteProject 将项目标记为已完成
+func (c *MailboxClient) CompleteProject(ctx context.Context, projectID string) error {
+	res, err := c.rdb.Do(ctx, "PROJ.COMPLETE", projectID).Result()
+	if err != nil {
+		return err
+	}
+	if res != "OK" {
+		return fmt.Errorf("PROJ.COMPLETE unexpected response: %v", res)
+	}
+	return nil
+}
+
+// GetProject 获取指定项目详情
+func (c *MailboxClient) GetProject(ctx context.Context, projectID string) (mailbox.Project, error) {
+	raw, err := c.rdb.Do(ctx, "PROJ.GET", projectID).Result()
+	if err != nil {
+		return mailbox.Project{}, err
+	}
+	var proj mailbox.Project
+	if err := json.Unmarshal([]byte(fmt.Sprintf("%s", raw)), &proj); err != nil {
+		return mailbox.Project{}, fmt.Errorf("unmarshal Project: %w", err)
+	}
+	return proj, nil
+}
+
+// ListProjects 获取所有项目列表
+func (c *MailboxClient) ListProjects(ctx context.Context) ([]mailbox.Project, error) {
+	raw, err := c.rdb.Do(ctx, "PROJ.LIST").Result()
+	if err != nil {
+		return nil, err
+	}
+	var projects []mailbox.Project
+	if err := json.Unmarshal([]byte(fmt.Sprintf("%s", raw)), &projects); err != nil {
+		return nil, fmt.Errorf("unmarshal projects: %w", err)
+	}
+	return projects, nil
+}
+
+// --- Task 方法 ---
+
+// CreateTask 创建一个新任务，返回 task ID。可选传入 projectID 将任务归入项目。
+func (c *MailboxClient) CreateTask(ctx context.Context, description string, projectID ...string) (string, error) {
+	var res interface{}
+	var err error
+	if len(projectID) > 0 && projectID[0] != "" {
+		res, err = c.rdb.Do(ctx, "TASK.CREATE", c.agentID, description, projectID[0]).Result()
+	} else {
+		res, err = c.rdb.Do(ctx, "TASK.CREATE", c.agentID, description).Result()
+	}
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s", res), nil
+}
+
+// AssignTask 将任务分配给一个或多个 Agent
+func (c *MailboxClient) AssignTask(ctx context.Context, taskID string, agentIDs ...string) error {
+	if len(agentIDs) == 0 {
+		return nil
+	}
+	args := make([]interface{}, 0, 2+len(agentIDs))
+	args = append(args, "TASK.ASSIGN", taskID)
+	for _, id := range agentIDs {
+		args = append(args, id)
+	}
+	res, err := c.rdb.Do(ctx, args...).Result()
 	if err != nil {
 		return err
 	}
@@ -173,9 +236,9 @@ func (c *MailboxClient) StartTask(ctx context.Context, taskID string) error {
 	return nil
 }
 
-// CompleteTask 将任务标记为已完成
+// CompleteTask 将当前 agent 对任务的成果提交，标记为已完成
 func (c *MailboxClient) CompleteTask(ctx context.Context, taskID, result string) error {
-	res, err := c.rdb.Do(ctx, "TASK.DONE", taskID, result).Result()
+	res, err := c.rdb.Do(ctx, "TASK.DONE", taskID, c.agentID, result).Result()
 	if err != nil {
 		return err
 	}
@@ -197,9 +260,15 @@ func (c *MailboxClient) FailTask(ctx context.Context, taskID, errMsg string) err
 	return nil
 }
 
-// ListTasks 获取所有任务列表
-func (c *MailboxClient) ListTasks(ctx context.Context) ([]mailbox.Task, error) {
-	raw, err := c.rdb.Do(ctx, "TASK.LIST").Result()
+// ListTasks 获取任务列表，可选按项目过滤
+func (c *MailboxClient) ListTasks(ctx context.Context, projectID ...string) ([]mailbox.Task, error) {
+	var raw interface{}
+	var err error
+	if len(projectID) > 0 && projectID[0] != "" {
+		raw, err = c.rdb.Do(ctx, "TASK.LIST", projectID[0]).Result()
+	} else {
+		raw, err = c.rdb.Do(ctx, "TASK.LIST").Result()
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -58,6 +58,7 @@ func (d *Dashboard) Start(ctx context.Context, addr string) error {
 	mux.HandleFunc("/api/agents", d.handleAgents)
 	mux.HandleFunc("/api/tasks", d.handleTasks)
 	mux.HandleFunc("/api/tasks/", d.handleTaskByID)
+	mux.HandleFunc("/api/projects", d.handleProjects)
 	mux.HandleFunc("/api/conversations/", d.handleConversation)
 	mux.HandleFunc("/events", d.handleSSE)
 
@@ -82,6 +83,15 @@ func (d *Dashboard) handleAgents(w http.ResponseWriter, r *http.Request) {
 	}
 	agents := d.hub.ListAgentInfos()
 	writeJSON(w, agents)
+}
+
+func (d *Dashboard) handleProjects(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	projects := d.hub.ListProjects()
+	writeJSON(w, projects)
 }
 
 func (d *Dashboard) handleTasks(w http.ResponseWriter, r *http.Request) {
@@ -173,6 +183,10 @@ func (d *Dashboard) sendSnapshot(w http.ResponseWriter, flusher http.Flusher) {
 	if b, err := json.Marshal(tasks); err == nil {
 		fmt.Fprintf(w, "event: snapshot.tasks\ndata: %s\n\n", b)
 	}
+	projects := d.hub.ListProjects()
+	if b, err := json.Marshal(projects); err == nil {
+		fmt.Fprintf(w, "event: snapshot.projects\ndata: %s\n\n", b)
+	}
 	flusher.Flush()
 }
 
@@ -216,7 +230,7 @@ const indexHTML = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Agent Teams</title>
+<title>Agent Teams Dashboard</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0c0c10; color: #d4d4d8; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
@@ -236,6 +250,15 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 .dot-idle { background: #4ade80; }
 .dot-busy { background: #fb923c; animation: pulse 1.2s infinite; }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+/* ── Projects strip ── */
+.projects-strip { display: flex; gap: 6px; padding: 5px 20px; background: #0c0c14; border-bottom: 1px solid #18181e; flex-shrink: 0; overflow-x: auto; }
+.proj-chip { display: flex; align-items: center; gap: 5px; background: #141420; border: 1px solid #22223a; border-radius: 6px; padding: 3px 8px; font-size: 0.72rem; white-space: nowrap; cursor: pointer; }
+.proj-chip:hover { background: #1a1a2c; }
+.proj-chip .pname { color: #b0b0d0; font-weight: 500; }
+.proj-chip .pid { color: #444; font-size: 0.65rem; }
+.proj-chip .pstatus-active { color: #4ade80; }
+.proj-chip .pstatus-completed { color: #94a3b8; }
 
 /* ── Main split ── */
 .main { display: flex; flex: 1; overflow: hidden; }
@@ -292,6 +315,9 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 .result-card-body { padding: 12px 14px; font-size: 0.82rem; line-height: 1.65; word-break: break-word; }
 .result-card.ok  .result-card-body  { background: #111a16; color: #a8d8b8; }
 .result-card.err .result-card-body  { background: #180f0f; color: #e09090; }
+/* File reference result */
+.result-card.file .result-card-header { background: #141a28; color: #7c9df0; }
+.result-card.file .result-card-body { background: #0e1220; color: #8090b8; font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; }
 
 /* Markdown styles inside .msg-content and .result-card-body */
 .md h1,.md h2,.md h3,.md h4 { color: #d8d8e8; font-weight: 600; margin: 0.8em 0 0.3em; line-height: 1.3; }
@@ -323,6 +349,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 <div class="agents-strip" id="agents-strip">
   <span style="font-size:0.75rem;color:#444;align-self:center">No agents</span>
 </div>
+<div class="projects-strip" id="projects-strip" style="display:none"></div>
 
 <div class="main">
   <div class="task-list">
@@ -337,8 +364,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 <script>
 const agents = {};
 const tasks = {};
+const projects = {};
 const conversations = {};
 let selectedTaskID = null;
+let selectedProjectID = null;
 const agentColors = {};
 let colorIdx = 0;
 
@@ -405,6 +434,31 @@ function stripMd(s) {
   return String(s||'').replace(/\*+/g,'').replace(/#+\s*/g,'').replace(/\x60/g,'').replace(/\n/g,' ').trim();
 }
 
+// ── Projects strip ────────────────────────────────────────────────────────
+function renderProjects() {
+  const el = document.getElementById('projects-strip');
+  const keys = Object.keys(projects);
+  if (!keys.length) { el.style.display = 'none'; return; }
+  el.style.display = 'flex';
+  el.innerHTML = keys.map(id => {
+    const p = projects[id];
+    const sc = p.status === 'completed' ? 'pstatus-completed' : 'pstatus-active';
+    const active = selectedProjectID === id ? ' style="border-color:#4f7ef0"' : '';
+    return '<div class="proj-chip"' + active + ' onclick="filterByProject(\'' + id + '\')">' +
+      '<span class="' + sc + '">' + (p.status === 'completed' ? '✓' : '◉') + '</span>' +
+      '<span class="pname">' + (p.name || id).slice(0, 30) + '</span>' +
+      '<span class="pid">' + p.task_ids.length + ' tasks</span>' +
+      '</div>';
+  }).join('') +
+  (selectedProjectID ? '<div class="proj-chip" onclick="filterByProject(null)" style="color:#666">✕ 全部</div>' : '');
+}
+
+function filterByProject(id) {
+  selectedProjectID = id;
+  renderProjects();
+  renderTaskList();
+}
+
 // ── Agents strip ──────────────────────────────────────────────────────────
 function renderAgents() {
   const el = document.getElementById('agents-strip');
@@ -423,28 +477,46 @@ function renderAgents() {
 // ── Task list ─────────────────────────────────────────────────────────────
 function renderTaskList() {
   const el = document.getElementById('task-items');
-  const keys = Object.keys(tasks).sort((a,b) => tasks[a].created_at > tasks[b].created_at ? 1 : -1);
+  let keys = Object.keys(tasks).sort((a,b) => tasks[a].created_at > tasks[b].created_at ? 1 : -1);
+  if (selectedProjectID) {
+    const proj = projects[selectedProjectID];
+    const ids = new Set(proj ? (proj.task_ids || []) : []);
+    keys = keys.filter(id => ids.has(id));
+  }
   if (!keys.length) { el.innerHTML = '<div class="empty-list">No tasks yet</div>'; return; }
   el.innerHTML = keys.map(id => {
     const t = tasks[id];
     const active = selectedTaskID === id ? ' active' : '';
     const desc = stripMd(t.description).slice(0, 60);
     const assignee = t.assigned_to ? '<span>' + t.assigned_to + '</span>' : '';
+    const projTag = t.project_id ? '<span style="color:#4f7ef0;font-size:0.65rem">' + t.project_id + '</span>' : '';
+    const fileTag = t.result && isFilePath(t.result) ? '<span style="color:#7c9df0;font-size:0.65rem">📄</span>' : '';
     return '<div class="task-item' + active + '" onclick="selectTask(\'' + id + '\')">' +
-      '<div class="tid">' + t.id + '</div>' +
+      '<div class="tid">' + t.id + ' ' + projTag + '</div>' +
       '<div class="tdesc">' + desc + '</div>' +
-      '<div class="tmeta"><span class="badge badge-' + t.status + '">' + t.status + '</span>' + assignee + '</div>' +
+      '<div class="tmeta"><span class="badge badge-' + t.status + '">' + t.status + '</span>' + assignee + fileTag + '</div>' +
       '</div>';
   }).join('');
 }
 
 // ── Result card (placed in session log) ──────────────────────────────────
+function isFilePath(s) {
+  return typeof s === 'string' && s.length > 0 && s.length < 300 && !s.includes('\n') &&
+    (s.startsWith('workspace/') || s.startsWith('./workspace/') || /\.(md|txt|json|html|go)$/.test(s));
+}
+
 function buildResultCard(t) {
   if (!t.result && !t.error) return '';
   if (t.error) {
     return '<div class="result-card err" id="result-card">' +
       '<div class="result-card-header">✕ 任务失败</div>' +
       '<div class="result-card-body">' + renderMd(t.error) + '</div>' +
+      '</div>';
+  }
+  if (isFilePath(t.result)) {
+    return '<div class="result-card file" id="result-card">' +
+      '<div class="result-card-header">📄 输出文件</div>' +
+      '<div class="result-card-body">' + t.result + '</div>' +
       '</div>';
   }
   return '<div class="result-card ok" id="result-card">' +
@@ -584,6 +656,11 @@ function applyEvent(type, data) {
     if (rc) log.insertBefore(node, rc);
     else log.appendChild(node);
     if (atBottom) log.scrollTop = log.scrollHeight;
+  } else if (type === 'snapshot.projects') {
+    data.forEach(p => { projects[p.id] = p; });
+    renderProjects();
+  } else if (type === 'project.created' || type === 'project.updated') {
+    if (data.data) { projects[data.project_id] = data.data; renderProjects(); renderTaskList(); }
   }
 }
 
@@ -592,8 +669,10 @@ function connect() {
   const connEl = document.getElementById('conn-status');
   es.onopen = () => { connEl.textContent = '⬤ connected'; connEl.className = 'conn ok'; };
   es.onerror = () => { connEl.textContent = '⬤ disconnected'; connEl.className = 'conn'; };
-  ['snapshot.agents','snapshot.tasks','agent.registered','agent.updated','agent.evicted',
-   'task.created','task.updated','conversation.added'].forEach(evt => {
+  ['snapshot.agents','snapshot.tasks','snapshot.projects',
+   'agent.registered','agent.updated','agent.evicted',
+   'task.created','task.updated','conversation.added',
+   'project.created','project.updated'].forEach(evt => {
     es.addEventListener(evt, e => {
       try { applyEvent(evt, JSON.parse(e.data)); } catch(err) { console.error(err); }
     });

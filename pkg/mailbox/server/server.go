@@ -148,28 +148,37 @@ func (s *MailboxServer) ListenAndServe(addr string) error {
 
 			// --- Task 命令 ---
 
-			case "TASK.CREATE": // TASK.CREATE <creator_id> <description>
-				if len(cmd.Args) != 3 {
+			case "TASK.CREATE": // TASK.CREATE <creator_id> <description> [project_id]
+				if len(cmd.Args) < 3 || len(cmd.Args) > 4 {
 					conn.WriteError("ERR wrong number of arguments for 'TASK.CREATE' command")
 					return
 				}
-				taskID, err := s.hub.CreateTask(string(cmd.Args[1]), string(cmd.Args[2]))
+				var taskID string
+				var err error
+				if len(cmd.Args) == 4 {
+					taskID, err = s.hub.CreateTask(string(cmd.Args[1]), string(cmd.Args[2]), string(cmd.Args[3]))
+				} else {
+					taskID, err = s.hub.CreateTask(string(cmd.Args[1]), string(cmd.Args[2]))
+				}
 				if err != nil {
 					conn.WriteError("ERR " + err.Error())
 				} else {
 					conn.WriteBulkString(taskID)
 				}
 
-			case "TASK.ASSIGN": // TASK.ASSIGN <task_id> <agent_id>
-				if len(cmd.Args) != 3 {
+			case "TASK.ASSIGN": // TASK.ASSIGN <task_id> <agent_id> [agent_id...]
+				if len(cmd.Args) < 3 {
 					conn.WriteError("ERR wrong number of arguments for 'TASK.ASSIGN' command")
 					return
 				}
-				if err := s.hub.AssignTask(string(cmd.Args[1]), string(cmd.Args[2])); err != nil {
-					conn.WriteError("ERR " + err.Error())
-				} else {
-					conn.WriteString("OK")
+				taskID := string(cmd.Args[1])
+				for i := 2; i < len(cmd.Args); i++ {
+					if err := s.hub.AssignTask(taskID, string(cmd.Args[i])); err != nil {
+						conn.WriteError("ERR " + err.Error())
+						return
+					}
 				}
+				conn.WriteString("OK")
 
 			case "TASK.START": // TASK.START <task_id>
 				if len(cmd.Args) != 2 {
@@ -182,12 +191,20 @@ func (s *MailboxServer) ListenAndServe(addr string) error {
 					conn.WriteString("OK")
 				}
 
-			case "TASK.DONE": // TASK.DONE <task_id> <result>
-				if len(cmd.Args) != 3 {
+			case "TASK.DONE":
+				// TASK.DONE <task_id> <result>            (legacy, 3 args)
+				// TASK.DONE <task_id> <agent_id> <result> (new, 4 args)
+				if len(cmd.Args) != 3 && len(cmd.Args) != 4 {
 					conn.WriteError("ERR wrong number of arguments for 'TASK.DONE' command")
 					return
 				}
-				if err := s.hub.CompleteTask(string(cmd.Args[1]), string(cmd.Args[2])); err != nil {
+				var err error
+				if len(cmd.Args) == 4 {
+					err = s.hub.CompleteTask(string(cmd.Args[1]), string(cmd.Args[2]), string(cmd.Args[3]))
+				} else {
+					err = s.hub.CompleteTask(string(cmd.Args[1]), "", string(cmd.Args[2]))
+				}
+				if err != nil {
 					conn.WriteError("ERR " + err.Error())
 				} else {
 					conn.WriteString("OK")
@@ -204,12 +221,17 @@ func (s *MailboxServer) ListenAndServe(addr string) error {
 					conn.WriteString("OK")
 				}
 
-			case "TASK.LIST": // TASK.LIST
-				if len(cmd.Args) != 1 {
+			case "TASK.LIST": // TASK.LIST [project_id]
+				if len(cmd.Args) > 2 {
 					conn.WriteError("ERR wrong number of arguments for 'TASK.LIST' command")
 					return
 				}
-				tasks := s.hub.ListTasks()
+				var tasks []mailbox.Task
+				if len(cmd.Args) == 2 {
+					tasks = s.hub.ListTasks(string(cmd.Args[1]))
+				} else {
+					tasks = s.hub.ListTasks()
+				}
 				b, err := json.Marshal(tasks)
 				if err != nil {
 					conn.WriteError("ERR failed to serialize tasks")
@@ -234,22 +256,77 @@ func (s *MailboxServer) ListenAndServe(addr string) error {
 				}
 				conn.WriteBulkString(string(b))
 
-		// --- Conversation 命令 ---
+			// --- Conversation 命令 ---
 
-		case "CONV.GET": // CONV.GET <task_id>
-			if len(cmd.Args) != 2 {
-				conn.WriteError("ERR wrong number of arguments for 'CONV.GET' command")
-				return
+			case "CONV.GET": // CONV.GET <task_id>
+				if len(cmd.Args) != 2 {
+					conn.WriteError("ERR wrong number of arguments for 'CONV.GET' command")
+					return
+				}
+				entries := s.hub.GetConversation(string(cmd.Args[1]))
+				b, err := json.Marshal(entries)
+				if err != nil {
+					conn.WriteError("ERR failed to serialize conversation")
+					return
+				}
+				conn.WriteBulkString(string(b))
+
+			// --- Project 命令 ---
+
+			case "PROJ.CREATE": // PROJ.CREATE <creator_id> <name>
+				if len(cmd.Args) != 3 {
+					conn.WriteError("ERR wrong number of arguments for 'PROJ.CREATE' command")
+					return
+				}
+				projID, err := s.hub.CreateProject(string(cmd.Args[1]), string(cmd.Args[2]))
+				if err != nil {
+					conn.WriteError("ERR " + err.Error())
+				} else {
+					conn.WriteBulkString(projID)
+				}
+
+			case "PROJ.GET": // PROJ.GET <project_id>
+				if len(cmd.Args) != 2 {
+					conn.WriteError("ERR wrong number of arguments for 'PROJ.GET' command")
+					return
+				}
+				proj, err := s.hub.GetProject(string(cmd.Args[1]))
+				if err != nil {
+					conn.WriteError("ERR " + err.Error())
+					return
+				}
+				b, err := json.Marshal(proj)
+				if err != nil {
+					conn.WriteError("ERR failed to serialize project")
+					return
+				}
+				conn.WriteBulkString(string(b))
+
+			case "PROJ.COMPLETE": // PROJ.COMPLETE <project_id>
+				if len(cmd.Args) != 2 {
+					conn.WriteError("ERR wrong number of arguments for 'PROJ.COMPLETE' command")
+					return
+				}
+				if err := s.hub.CompleteProject(string(cmd.Args[1])); err != nil {
+					conn.WriteError("ERR " + err.Error())
+				} else {
+					conn.WriteString("OK")
+				}
+
+			case "PROJ.LIST": // PROJ.LIST
+				if len(cmd.Args) != 1 {
+					conn.WriteError("ERR wrong number of arguments for 'PROJ.LIST' command")
+					return
+				}
+				projects := s.hub.ListProjects()
+				b, err := json.Marshal(projects)
+				if err != nil {
+					conn.WriteError("ERR failed to serialize projects")
+					return
+				}
+				conn.WriteBulkString(string(b))
 			}
-			entries := s.hub.GetConversation(string(cmd.Args[1]))
-			b, err := json.Marshal(entries)
-			if err != nil {
-				conn.WriteError("ERR failed to serialize conversation")
-				return
-			}
-			conn.WriteBulkString(string(b))
-		}
-	},
+		},
 		func(conn redcon.Conn) bool { return true },
 		func(conn redcon.Conn, err error) {},
 	)

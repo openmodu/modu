@@ -99,7 +99,7 @@ func TestDashboardTaskByIDEndpoint(t *testing.T) {
 	addr, hub := startDashboard(t)
 	hub.Register("creator")
 	taskID, _ := hub.CreateTask("creator", "specific task")
-	_ = hub.CompleteTask(taskID, "finished!")
+	_ = hub.CompleteTask(taskID, "", "finished!")
 
 	resp, err := http.Get(fmt.Sprintf("http://%s/api/tasks/%s", addr, taskID))
 	if err != nil {

@@ -10,14 +10,17 @@ const (
 	EventTypeTaskCreated          EventType = "task.created"
 	EventTypeTaskUpdated          EventType = "task.updated"
 	EventTypeConversationAdded    EventType = "conversation.added"
+	EventTypeProjectCreated       EventType = "project.created"
+	EventTypeProjectUpdated       EventType = "project.updated"
 )
 
 // Event 是 Hub 向订阅者推送的状态变更通知
 type Event struct {
-	Type    EventType `json:"type"`
-	AgentID string    `json:"agent_id,omitempty"`
-	TaskID  string    `json:"task_id,omitempty"`
-	Data    any       `json:"data,omitempty"`
+	Type      EventType `json:"type"`
+	AgentID   string    `json:"agent_id,omitempty"`
+	TaskID    string    `json:"task_id,omitempty"`
+	ProjectID string    `json:"project_id,omitempty"`
+	Data      any       `json:"data,omitempty"`
 }
 
 // Subscribe 返回一个只读事件 channel，Hub 状态变更时会向其推送事件。

@@ -3,7 +3,9 @@ package sqlitestore
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/crosszan/modu/pkg/mailbox"
@@ -12,15 +14,28 @@ import (
 
 const schema = `
 CREATE TABLE IF NOT EXISTS tasks (
-	id          TEXT PRIMARY KEY,
-	description TEXT NOT NULL DEFAULT '',
-	created_by  TEXT NOT NULL DEFAULT '',
-	assigned_to TEXT NOT NULL DEFAULT '',
-	status      TEXT NOT NULL DEFAULT 'pending',
-	created_at  INTEGER NOT NULL DEFAULT 0,
-	updated_at  INTEGER NOT NULL DEFAULT 0,
-	result      TEXT NOT NULL DEFAULT '',
-	error       TEXT NOT NULL DEFAULT ''
+	id           TEXT PRIMARY KEY,
+	description  TEXT NOT NULL DEFAULT '',
+	created_by   TEXT NOT NULL DEFAULT '',
+	assigned_to  TEXT NOT NULL DEFAULT '',
+	assignees    TEXT NOT NULL DEFAULT '[]',
+	agent_results TEXT NOT NULL DEFAULT '{}',
+	project_id   TEXT NOT NULL DEFAULT '',
+	status       TEXT NOT NULL DEFAULT 'pending',
+	created_at   INTEGER NOT NULL DEFAULT 0,
+	updated_at   INTEGER NOT NULL DEFAULT 0,
+	result       TEXT NOT NULL DEFAULT '',
+	error        TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS projects (
+	id         TEXT PRIMARY KEY,
+	name       TEXT NOT NULL DEFAULT '',
+	created_by TEXT NOT NULL DEFAULT '',
+	task_ids   TEXT NOT NULL DEFAULT '[]',
+	status     TEXT NOT NULL DEFAULT 'active',
+	created_at INTEGER NOT NULL DEFAULT 0,
+	updated_at INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS agent_roles (
@@ -38,6 +53,13 @@ CREATE TABLE IF NOT EXISTS conversations (
 	content    TEXT    NOT NULL DEFAULT ''
 );
 `
+
+// migrations 处理旧数据库的 schema 升级（新列）
+var migrations = []string{
+	`ALTER TABLE tasks ADD COLUMN assignees TEXT NOT NULL DEFAULT '[]'`,
+	`ALTER TABLE tasks ADD COLUMN agent_results TEXT NOT NULL DEFAULT '{}'`,
+	`ALTER TABLE tasks ADD COLUMN project_id TEXT NOT NULL DEFAULT ''`,
+}
 
 // SQLiteStore 是 mailbox.Store 的 SQLite 实现
 type SQLiteStore struct {
@@ -57,25 +79,45 @@ func New(dsn string) (*SQLiteStore, error) {
 		db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
+
+	// 对旧数据库执行迁移（新列），忽略"已存在"错误
+	for _, m := range migrations {
+		if _, err := db.Exec(m); err != nil {
+			if !strings.Contains(err.Error(), "duplicate column name") {
+				db.Close()
+				return nil, fmt.Errorf("migration %q: %w", m, err)
+			}
+		}
+	}
+
 	return &SQLiteStore{db: db}, nil
 }
 
 // SaveTask 创建或更新一条任务记录（UPSERT）
 func (s *SQLiteStore) SaveTask(task mailbox.Task) error {
+	assigneesJSON, _ := json.Marshal(task.Assignees)
+	agentResultsJSON, _ := json.Marshal(task.AgentResults)
+
 	_, err := s.db.Exec(`
-		INSERT INTO tasks (id, description, created_by, assigned_to, status, created_at, updated_at, result, error)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO tasks (id, description, created_by, assigned_to, assignees, agent_results, project_id, status, created_at, updated_at, result, error)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
-			assigned_to = excluded.assigned_to,
-			status      = excluded.status,
-			updated_at  = excluded.updated_at,
-			result      = excluded.result,
-			error       = excluded.error
+			assigned_to   = excluded.assigned_to,
+			assignees     = excluded.assignees,
+			agent_results = excluded.agent_results,
+			project_id    = excluded.project_id,
+			status        = excluded.status,
+			updated_at    = excluded.updated_at,
+			result        = excluded.result,
+			error         = excluded.error
 	`,
 		task.ID,
 		task.Description,
 		task.CreatedBy,
 		task.AssignedTo,
+		string(assigneesJSON),
+		string(agentResultsJSON),
+		task.ProjectID,
 		string(task.Status),
 		task.CreatedAt.UnixNano(),
 		task.UpdatedAt.UnixNano(),
@@ -88,8 +130,8 @@ func (s *SQLiteStore) SaveTask(task mailbox.Task) error {
 // LoadTasks 加载所有任务
 func (s *SQLiteStore) LoadTasks() ([]mailbox.Task, error) {
 	rows, err := s.db.Query(`
-		SELECT id, description, created_by, assigned_to, status,
-		       created_at, updated_at, result, error
+		SELECT id, description, created_by, assigned_to, assignees, agent_results, project_id,
+		       status, created_at, updated_at, result, error
 		FROM tasks
 		ORDER BY created_at ASC
 	`)
@@ -101,21 +143,100 @@ func (s *SQLiteStore) LoadTasks() ([]mailbox.Task, error) {
 	var tasks []mailbox.Task
 	for rows.Next() {
 		var t mailbox.Task
-		var status string
+		var status, assigneesStr, agentResultsStr string
 		var createdNano, updatedNano int64
 
 		if err := rows.Scan(
-			&t.ID, &t.Description, &t.CreatedBy, &t.AssignedTo, &status,
-			&createdNano, &updatedNano, &t.Result, &t.Error,
+			&t.ID, &t.Description, &t.CreatedBy, &t.AssignedTo,
+			&assigneesStr, &agentResultsStr, &t.ProjectID,
+			&status, &createdNano, &updatedNano, &t.Result, &t.Error,
 		); err != nil {
 			return nil, err
 		}
 		t.Status = mailbox.TaskStatus(status)
 		t.CreatedAt = time.Unix(0, createdNano)
 		t.UpdatedAt = time.Unix(0, updatedNano)
+
+		_ = json.Unmarshal([]byte(assigneesStr), &t.Assignees)
+		if t.Assignees == nil {
+			t.Assignees = []string{}
+		}
+		_ = json.Unmarshal([]byte(agentResultsStr), &t.AgentResults)
+		if t.AgentResults == nil {
+			t.AgentResults = make(map[string]string)
+		}
+
+		// 向后兼容：旧记录 assignees 为空但 assigned_to 有值
+		if len(t.Assignees) == 0 && t.AssignedTo != "" {
+			t.Assignees = []string{t.AssignedTo}
+		}
+		if len(t.Assignees) > 0 && t.AssignedTo == "" {
+			t.AssignedTo = t.Assignees[0]
+		}
+
 		tasks = append(tasks, t)
 	}
 	return tasks, rows.Err()
+}
+
+// SaveProject 创建或更新一条项目记录（UPSERT）
+func (s *SQLiteStore) SaveProject(proj mailbox.Project) error {
+	taskIDsJSON, _ := json.Marshal(proj.TaskIDs)
+	_, err := s.db.Exec(`
+		INSERT INTO projects (id, name, created_by, task_ids, status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			name       = excluded.name,
+			task_ids   = excluded.task_ids,
+			status     = excluded.status,
+			updated_at = excluded.updated_at
+	`,
+		proj.ID,
+		proj.Name,
+		proj.CreatedBy,
+		string(taskIDsJSON),
+		proj.Status,
+		proj.CreatedAt.UnixNano(),
+		proj.UpdatedAt.UnixNano(),
+	)
+	return err
+}
+
+// LoadProjects 加载所有项目
+func (s *SQLiteStore) LoadProjects() ([]mailbox.Project, error) {
+	rows, err := s.db.Query(`
+		SELECT id, name, created_by, task_ids, status, created_at, updated_at
+		FROM projects
+		ORDER BY created_at ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var projects []mailbox.Project
+	for rows.Next() {
+		var p mailbox.Project
+		var taskIDsStr string
+		var createdNano, updatedNano int64
+
+		if err := rows.Scan(
+			&p.ID, &p.Name, &p.CreatedBy, &taskIDsStr, &p.Status,
+			&createdNano, &updatedNano,
+		); err != nil {
+			return nil, err
+		}
+		p.CreatedAt = time.Unix(0, createdNano)
+		p.UpdatedAt = time.Unix(0, updatedNano)
+
+		_ = json.Unmarshal([]byte(taskIDsStr), &p.TaskIDs)
+		if p.TaskIDs == nil {
+			p.TaskIDs = []string{}
+		}
+
+		projects = append(projects, p)
+	}
+	return projects, rows.Err()
 }
 
 // SaveAgentRole 持久化 agent 的角色（UPSERT）

@@ -11,8 +11,9 @@ import (
 )
 
 var (
-	ErrAgentNotFound = errors.New("agent not found")
-	ErrTaskNotFound  = errors.New("task not found")
+	ErrAgentNotFound   = errors.New("agent not found")
+	ErrTaskNotFound    = errors.New("task not found")
+	ErrProjectNotFound = errors.New("project not found")
 )
 
 // TaskStatus 表示任务的生命周期状态
@@ -29,36 +30,52 @@ const (
 type AgentInfo struct {
 	ID          string    `json:"id"`
 	Role        string    `json:"role"`
-	Status      string    `json:"status"`      // "idle" | "busy"
+	Status      string    `json:"status"`       // "idle" | "busy"
 	CurrentTask string    `json:"current_task"` // task ID，空表示空闲
 	LastSeen    time.Time `json:"last_seen"`
 }
 
-// Task 表示一个可追踪的工作单元
+// Project 表示一次多任务协作的集合（一次创作运行）
+type Project struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	CreatedBy string    `json:"created_by"`
+	TaskIDs   []string  `json:"task_ids"`
+	Status    string    `json:"status"` // "active" | "completed"
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// Task 表示一个可追踪的工作单元，支持多 Agent 并行执行
 type Task struct {
-	ID          string     `json:"id"`
-	Description string     `json:"description"`
-	CreatedBy   string     `json:"created_by"`
-	AssignedTo  string     `json:"assigned_to"`
-	Status      TaskStatus `json:"status"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
-	Result      string     `json:"result"`
-	Error       string     `json:"error"`
+	ID           string            `json:"id"`
+	ProjectID    string            `json:"project_id,omitempty"`
+	Description  string            `json:"description"`
+	CreatedBy    string            `json:"created_by"`
+	AssignedTo   string            `json:"assigned_to"`          // 向后兼容，= Assignees[0]
+	Assignees    []string          `json:"assignees"`            // 全部指派的 agent
+	Status       TaskStatus        `json:"status"`
+	CreatedAt    time.Time         `json:"created_at"`
+	UpdatedAt    time.Time         `json:"updated_at"`
+	Result       string            `json:"result"`
+	AgentResults map[string]string `json:"agent_results,omitempty"` // 每个 agent 的成果
+	Error        string            `json:"error"`
 }
 
 // Hub 管理所有 Agent 的注册状态和消息队列
 type Hub struct {
-	mu            sync.RWMutex
-	inboxes       map[string]chan string
-	lastSeen      map[string]time.Time
-	agentInfos    map[string]*AgentInfo
-	tasks         map[string]*Task
-	taskCounter   uint64
-	subscribers   []chan Event
-	store         Store
+	mu             sync.RWMutex
+	inboxes        map[string]chan string
+	lastSeen       map[string]time.Time
+	agentInfos     map[string]*AgentInfo
+	tasks          map[string]*Task
+	taskCounter    uint64
+	projects       map[string]*Project
+	projectCounter uint64
+	subscribers    []chan Event
+	store          Store
 	// knownRoles 缓存从 store 加载的角色，在 agent 注册时自动应用
-	knownRoles    map[string]string
+	knownRoles map[string]string
 	// conversations 按 task_id 存储对话记录
 	conversations map[string][]ConversationEntry
 }
@@ -77,6 +94,7 @@ func NewHub(opts ...HubOption) *Hub {
 		lastSeen:      make(map[string]time.Time),
 		agentInfos:    make(map[string]*AgentInfo),
 		tasks:         make(map[string]*Task),
+		projects:      make(map[string]*Project),
 		knownRoles:    make(map[string]string),
 		conversations: make(map[string][]ConversationEntry),
 		store:         noopStore{},
@@ -89,7 +107,7 @@ func NewHub(opts ...HubOption) *Hub {
 	return h
 }
 
-// loadFromStore 从持久化后端恢复任务和 agent 角色
+// loadFromStore 从持久化后端恢复任务、项目和 agent 角色
 func (h *Hub) loadFromStore() {
 	tasks, err := h.store.LoadTasks()
 	if err != nil {
@@ -106,6 +124,23 @@ func (h *Hub) loadFromStore() {
 		}
 		if len(tasks) > 0 {
 			log.Printf("[Hub] loaded %d tasks from store", len(tasks))
+		}
+	}
+
+	projects, err := h.store.LoadProjects()
+	if err != nil {
+		log.Printf("[Hub] load projects from store: %v", err)
+	} else {
+		for _, p := range projects {
+			pc := p
+			h.projects[p.ID] = &pc
+			var n uint64
+			if _, err := fmt.Sscanf(p.ID, "proj-%d", &n); err == nil && n > h.projectCounter {
+				h.projectCounter = n
+			}
+		}
+		if len(projects) > 0 {
+			log.Printf("[Hub] loaded %d projects from store", len(projects))
 		}
 	}
 
@@ -362,6 +397,80 @@ func (h *Hub) ListAgentInfos() []AgentInfo {
 	return result
 }
 
+// --- Project 管理 ---
+
+func (h *Hub) nextProjectID() string {
+	n := atomic.AddUint64(&h.projectCounter, 1)
+	return fmt.Sprintf("proj-%d", n)
+}
+
+// CreateProject 创建一个新项目，返回 project ID
+func (h *Hub) CreateProject(creatorID, name string) (string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if _, ok := h.agentInfos[creatorID]; !ok {
+		return "", ErrAgentNotFound
+	}
+	id := h.nextProjectID()
+	now := time.Now()
+	proj := &Project{
+		ID:        id,
+		Name:      name,
+		CreatedBy: creatorID,
+		TaskIDs:   []string{},
+		Status:    "active",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	h.projects[id] = proj
+	snapshot := *proj
+	h.publishLocked(Event{Type: EventTypeProjectCreated, ProjectID: id, Data: snapshot})
+	if err := h.store.SaveProject(snapshot); err != nil {
+		log.Printf("[Hub] SaveProject %s: %v", id, err)
+	}
+	return id, nil
+}
+
+// GetProject 返回项目快照
+func (h *Hub) GetProject(projectID string) (Project, error) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	proj, ok := h.projects[projectID]
+	if !ok {
+		return Project{}, ErrProjectNotFound
+	}
+	return *proj, nil
+}
+
+// CompleteProject 将项目标记为已完成
+func (h *Hub) CompleteProject(projectID string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	proj, ok := h.projects[projectID]
+	if !ok {
+		return ErrProjectNotFound
+	}
+	proj.Status = "completed"
+	proj.UpdatedAt = time.Now()
+	snapshot := *proj
+	h.publishLocked(Event{Type: EventTypeProjectUpdated, ProjectID: projectID, Data: snapshot})
+	if err := h.store.SaveProject(snapshot); err != nil {
+		log.Printf("[Hub] SaveProject %s (complete): %v", projectID, err)
+	}
+	return nil
+}
+
+// ListProjects 返回所有项目快照
+func (h *Hub) ListProjects() []Project {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	result := make([]Project, 0, len(h.projects))
+	for _, p := range h.projects {
+		result = append(result, *p)
+	}
+	return result
+}
+
 // --- Task 管理 ---
 
 func (h *Hub) nextTaskID() string {
@@ -369,24 +478,42 @@ func (h *Hub) nextTaskID() string {
 	return fmt.Sprintf("task-%d", n)
 }
 
-// CreateTask 创建一个新任务，返回 task ID
-func (h *Hub) CreateTask(creatorID, description string) (string, error) {
+// CreateTask 创建一个新任务，返回 task ID。可选传入 projectID 将任务归入项目。
+func (h *Hub) CreateTask(creatorID, description string, projectID ...string) (string, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if _, ok := h.agentInfos[creatorID]; !ok {
 		return "", ErrAgentNotFound
 	}
+	pid := ""
+	if len(projectID) > 0 {
+		pid = projectID[0]
+	}
 	id := h.nextTaskID()
 	now := time.Now()
 	task := &Task{
-		ID:          id,
-		Description: description,
-		CreatedBy:   creatorID,
-		Status:      TaskStatusPending,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:           id,
+		ProjectID:    pid,
+		Description:  description,
+		CreatedBy:    creatorID,
+		Assignees:    []string{},
+		AgentResults: make(map[string]string),
+		Status:       TaskStatusPending,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 	h.tasks[id] = task
+	// 将任务 ID 添加到所属项目
+	if pid != "" {
+		if proj, ok := h.projects[pid]; ok {
+			proj.TaskIDs = append(proj.TaskIDs, id)
+			proj.UpdatedAt = now
+			ps := *proj
+			if err := h.store.SaveProject(ps); err != nil {
+				log.Printf("[Hub] SaveProject %s (add task): %v", pid, err)
+			}
+		}
+	}
 	snapshot := *task
 	h.publishLocked(Event{Type: EventTypeTaskCreated, TaskID: id, Data: snapshot})
 	if err := h.store.SaveTask(snapshot); err != nil {
@@ -395,7 +522,7 @@ func (h *Hub) CreateTask(creatorID, description string) (string, error) {
 	return id, nil
 }
 
-// AssignTask 将任务分配给指定 Agent
+// AssignTask 将任务追加指派给指定 Agent（可多次调用以支持多执行者）
 func (h *Hub) AssignTask(taskID, agentID string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -406,7 +533,14 @@ func (h *Hub) AssignTask(taskID, agentID string) error {
 	if _, ok := h.agentInfos[agentID]; !ok {
 		return ErrAgentNotFound
 	}
-	task.AssignedTo = agentID
+	// 避免重复添加
+	for _, a := range task.Assignees {
+		if a == agentID {
+			return nil
+		}
+	}
+	task.Assignees = append(task.Assignees, agentID)
+	task.AssignedTo = task.Assignees[0] // 向后兼容：始终指向第一个 agent
 	task.UpdatedAt = time.Now()
 	snapshot := *task
 	h.publishLocked(Event{Type: EventTypeTaskUpdated, TaskID: taskID, Data: snapshot})
@@ -434,17 +568,32 @@ func (h *Hub) StartTask(taskID string) error {
 	return nil
 }
 
-// CompleteTask 将任务标记为已完成，记录结果
-func (h *Hub) CompleteTask(taskID, result string) error {
+// CompleteTask 记录某 agent 对任务的完成成果。
+// 当所有指派的 agent 均完成时（或 agentID 为空时），任务标记为 completed。
+func (h *Hub) CompleteTask(taskID, agentID, result string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	task, ok := h.tasks[taskID]
 	if !ok {
 		return ErrTaskNotFound
 	}
-	task.Status = TaskStatusCompleted
+	if task.AgentResults == nil {
+		task.AgentResults = make(map[string]string)
+	}
 	task.Result = result
 	task.UpdatedAt = time.Now()
+
+	if agentID != "" {
+		task.AgentResults[agentID] = result
+		// 所有指派 agent 均完成，或尚未指派 agent，才标记 completed
+		if len(task.Assignees) == 0 || len(task.AgentResults) >= len(task.Assignees) {
+			task.Status = TaskStatusCompleted
+		}
+	} else {
+		// 旧调用方式（无 agentID），立即完成
+		task.Status = TaskStatusCompleted
+	}
+
 	snapshot := *task
 	h.publishLocked(Event{Type: EventTypeTaskUpdated, TaskID: taskID, Data: snapshot})
 	if err := h.store.SaveTask(snapshot); err != nil {
@@ -483,13 +632,19 @@ func (h *Hub) GetTask(taskID string) (Task, error) {
 	return *task, nil
 }
 
-// ListTasks 返回所有任务快照
-func (h *Hub) ListTasks() []Task {
+// ListTasks 返回任务快照列表，可选按 projectID 过滤
+func (h *Hub) ListTasks(projectID ...string) []Task {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
+	pid := ""
+	if len(projectID) > 0 {
+		pid = projectID[0]
+	}
 	result := make([]Task, 0, len(h.tasks))
 	for _, t := range h.tasks {
-		result = append(result, *t)
+		if pid == "" || t.ProjectID == pid {
+			result = append(result, *t)
+		}
 	}
 	return result
 }

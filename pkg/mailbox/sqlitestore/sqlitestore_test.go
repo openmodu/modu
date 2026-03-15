@@ -223,7 +223,7 @@ func TestHubWithSQLiteStore(t *testing.T) {
 	taskID, _ := hub1.CreateTask("creator", "build feature X")
 	_ = hub1.AssignTask(taskID, "worker")
 	_ = hub1.StartTask(taskID)
-	_ = hub1.CompleteTask(taskID, "feature X shipped")
+	_ = hub1.CompleteTask(taskID, "", "feature X shipped")
 	store.Close()
 
 	// 第二次运行：验证数据恢复
