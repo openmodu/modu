@@ -74,7 +74,7 @@ func setupModel() *types.Model {
 
 // ── LLM 工具函数 ──────────────────────────────────────────────────────────────
 
-func newCodingSession(model *types.Model, systemPrompt, agentDir string) *coding_agent.CodingSession {
+func newCodingSession(model *types.Model, systemPrompt, agentDir string, tools []agent.AgentTool) *coding_agent.CodingSession {
 	// Use agentDir as Cwd too so that CodingSession doesn't pick up CLAUDE.md
 	// or other context files from the repo root and pollute the system prompt.
 	cs, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
@@ -82,7 +82,7 @@ func newCodingSession(model *types.Model, systemPrompt, agentDir string) *coding
 		AgentDir:           agentDir,
 		Model:              model,
 		CustomSystemPrompt: systemPrompt,
-		Tools:              []agent.AgentTool{}, // empty: no file tools, LLM must respond as text
+		Tools:              tools,
 	})
 	if err != nil {
 		log.Fatalf("[coding_agent] NewCodingSession: %v", err)
@@ -100,14 +100,6 @@ func llmCall(ctx context.Context, cs *coding_agent.CodingSession, prompt string)
 	return cs.GetLastAssistantText()
 }
 
-func sendChat(ctx context.Context, c *client.MailboxClient, to, taskID, text string) {
-	msg, _ := mailbox.NewChatMessage(c.AgentID(), taskID, text)
-	if err := c.Send(ctx, to, msg); err != nil {
-		log.Printf("[%s] send chat to %s: %v", c.AgentID(), to, err)
-		return
-	}
-	fmt.Printf("  [%s → %s] %s\n", c.AgentID(), to, text)
-}
 
 // ── 子命令：mailbox ───────────────────────────────────────────────────────────
 
@@ -171,7 +163,8 @@ func runWorker(agentID, role, systemPrompt string) {
 	fmt.Printf("[%s] registered → mailbox %s\n", agentID, addr)
 	fmt.Printf("[%s] workspace  → %s\n", agentID, workspaceRoot())
 
-	llm := newCodingSession(model, systemPrompt, ws.AgentDir(agentID))
+	mbTools := NewMailboxTools(c)
+	llm := newCodingSession(model, systemPrompt, ws.AgentDir(agentID), mbTools)
 
 	// 捕获 Ctrl+C 优雅退出
 	go func() {
@@ -182,8 +175,6 @@ func runWorker(agentID, role, systemPrompt string) {
 		ws.UpdateAgent(agentID, role, "offline")
 		cancel()
 	}()
-
-	var currentFrom string // 当前任务的发送方（用于 chat 回复路由）
 
 	for {
 		select {
@@ -207,55 +198,54 @@ func runWorker(agentID, role, systemPrompt string) {
 
 		case mailbox.MessageTypeTaskAssign:
 			payload, _ := mailbox.ParseTaskAssignPayload(parsed)
-			currentFrom = parsed.From
 			taskID := parsed.TaskID
+			from := parsed.From
 
-			fmt.Printf("\n[%s] ← task %s\n", agentID, taskID)
+			fmt.Printf("\n[%s] ← task %s from %s\n", agentID, taskID, from)
 			_ = c.StartTask(ctx, taskID)
 			_ = c.SetStatus(ctx, "busy", taskID)
 			ws.UpdateAgent(agentID, role, "busy")
 			ws.IncrTaskCount(agentID)
 
-			// 在任务讨论区发布开始通知
-			sendChat(ctx, c, currentFrom, taskID, "已收到任务，开始处理中...")
+			// Step 1: 读上下文 + 发确认（tool use，让 LLM 了解背景）
+			llmCall(ctx, llm, fmt.Sprintf(
+				"你收到了来自 %s 的任务（ID: %s）。\n任务内容：\n%s\n\n"+
+					"请：1) 用 mailbox_get_discussion 查看任务讨论上下文 2) 用 mailbox_post_message 向 %s 确认已收到，仅完成这两步。",
+				from, taskID, payload.Description, from,
+			))
 
-			// LLM 处理任务
-			taskPrompt := "请根据以下任务简报，立即输出完整内容。直接给出最终成果，不要说「正在处理」「稍后分享」等过渡语。\n\n" + payload.Description
-			result := llmCall(ctx, llm, taskPrompt)
+			// Step 2: 纯文本生成（不调 tool，直接输出完整成果）
+			result := llmCall(ctx, llm,
+				"现在根据任务要求，直接输出完整的任务成果。不要说「正在处理」，直接给出最终内容。")
 			if result == "" {
 				result = fmt.Sprintf("[%s] 完成（无 LLM 输出）", agentID)
 			}
 
+			// Step 3: Go 提交成果，LLM 发通知
 			ws.SaveDoc(agentID, taskID, fmt.Sprintf("%s 的任务产出", agentID), result)
-
-			// 完成前先在讨论区发布摘要，让 orchestrator 可以先看到
-			preview := result
-			if len([]rune(preview)) > 150 {
-				preview = string([]rune(preview)[:150]) + "..."
-			}
-			sendChat(ctx, c, currentFrom, taskID, "已完成，摘要：\n"+preview)
-
 			_ = c.CompleteTask(ctx, taskID, result)
+			llmCall(ctx, llm, fmt.Sprintf(
+				"任务已提交。用 mailbox_post_message 向 %s 发一条简短完成通知（不超过50字）。", from,
+			))
+
 			_ = c.SetStatus(ctx, "idle", "")
 			ws.UpdateAgent(agentID, role, "idle")
 			fmt.Printf("[%s] task %s done → workspace/docs/%s-%s.md\n", agentID, taskID, agentID, taskID)
-			currentFrom = ""
 
 		case mailbox.MessageTypeChat:
-			if currentFrom == "" {
-				continue
+			if parsed.From == agentID {
+				continue // 跳过自己发给自己的消息
 			}
 			chatPayload, _ := mailbox.ParseChatPayload(parsed)
 			fmt.Printf("[%s ← %s] %s\n", agentID, parsed.From, chatPayload.Text)
 
-			// 根据角色判断是否参与讨论
-			reply := llmCall(ctx, llm, fmt.Sprintf(
-				"任务讨论中，%s 发言：%s\n根据你的角色，判断是否需要回复。如需回复则直接输出内容，无需回复则输出「[skip]」。",
-				parsed.From, chatPayload.Text,
+			// LLM 通过工具读取完整讨论后，自行决定是否参与
+			llmCall(ctx, llm, fmt.Sprintf(
+				"%s 在任务 %s 讨论区发言：%s\n"+
+					"请用 mailbox_get_discussion 查看完整讨论，根据你的角色判断是否需要回复。"+
+					"如需回复，用 mailbox_post_message 发布。如无需回复，直接结束即可。",
+				parsed.From, parsed.TaskID, chatPayload.Text,
 			))
-			if reply != "" && reply != "[skip]" {
-				sendChat(ctx, c, parsed.From, parsed.TaskID, reply)
-			}
 		}
 	}
 }
@@ -278,12 +268,14 @@ func cmdEditor() {
 
 // ── 子命令：orchestrator ──────────────────────────────────────────────────────
 
-const orchestratorPrompt = `你是一名内容团队的 PMO（项目管理负责人）。
-你负责协调选题编辑（topic-selector）和内容编辑（editor）完成创作。
+const orchestratorPrompt = `你是一名内容团队的 PMO（项目管理负责人），负责确保最终成果达到高质量标准。
 你的职责：
-1. 将需求整理为清晰的选题任务
-2. 从选题结果中挑选最有潜力的方向，撰写创作简报
-3. 下发给内容编辑，收到成稿后写编辑寄语
+1. 为各成员制定清晰的任务简报
+2. 评审交付成果——不达标时明确指出问题并要求修改，达标时接受并推进
+3. 选取最优选题，指导内容创作方向
+4. 收到满意成稿后，写一段有温度的编辑寄语
+
+评审标准：内容深度、结构清晰、语言质量、与任务简报的契合度。
 中文回复，简洁专业。`
 
 func cmdOrchestrator(brief string) {
@@ -316,46 +308,35 @@ func cmdOrchestrator(brief string) {
 	fmt.Printf("[orchestrator] 创作主题：%s\n", brief)
 	fmt.Printf("[orchestrator] workspace  → %s\n\n", workspaceRoot())
 
-	llm := newCodingSession(model, orchestratorPrompt, ws.AgentDir("orchestrator"))
+	mbTools := NewMailboxTools(c)
+	llm := newCodingSession(model, orchestratorPrompt, ws.AgentDir("orchestrator"), mbTools)
 
-	// ── Phase 1: 生成选题任务 ─────────────────────────────────────────────
-	fmt.Println("[orchestrator] === Phase 1: 向选题编辑下发任务 ===")
+	// ── Phase 1: 选题 ────────────────────────────────────────────────────
+	fmt.Println("[orchestrator] === Phase 1: 选题 ===")
 	_ = c.SetStatus(ctx, "busy", "")
 
 	topicBrief := llmCall(ctx, llm,
 		fmt.Sprintf("创作需求：%s\n\n请为选题编辑写一段任务简报，要求他提供3个有深度的选题方向，每个附带切入思路。", brief))
 	fmt.Printf("[orchestrator] topic brief:\n%s\n\n", topicBrief)
 
-	taskID1, _ := c.CreateTask(ctx, topicBrief)
-	ws.SaveDoc("orchestrator", taskID1, "选题任务简报", topicBrief)
-	_ = c.AssignTask(ctx, taskID1, "topic-selector")
-	msg1, _ := mailbox.NewTaskAssignMessage("orchestrator", taskID1, topicBrief)
-	_ = c.Send(ctx, "topic-selector", msg1)
-	fmt.Printf("[orchestrator] task %s → topic-selector\n", taskID1)
-
-	topicResult := waitForTask(ctx, c, llm, taskID1, "topic-selector")
+	taskID1 := assignTask(ctx, c, ws, topicBrief, "topic-selector")
+	topicResult := waitForTaskWithReview(ctx, c, llm, ws, taskID1, "topic-selector", "选题方案", 2)
 	fmt.Printf("[orchestrator] 选题结果:\n%s\n\n", topicResult)
 
-	// ── Phase 2: 挑选选题，下发写作任务 ─────────────────────────────────
-	fmt.Println("[orchestrator] === Phase 2: 挑选选题，向编辑下发写作任务 ===")
+	// ── Phase 2: 写作 ────────────────────────────────────────────────────
+	fmt.Println("[orchestrator] === Phase 2: 写作 ===")
 
 	editBrief := llmCall(ctx, llm,
 		fmt.Sprintf("选题编辑提交了以下方案：\n%s\n\n请挑选最有潜力的一个，为内容编辑写详细创作简报：主题、切入角度、目标读者、结构建议、约500字。", topicResult))
 	fmt.Printf("[orchestrator] edit brief:\n%s\n\n", editBrief)
 
-	taskID2, _ := c.CreateTask(ctx, editBrief)
-	ws.SaveDoc("orchestrator", taskID2, "创作简报", editBrief)
-	_ = c.AssignTask(ctx, taskID2, "editor")
-	msg2, _ := mailbox.NewTaskAssignMessage("orchestrator", taskID2, editBrief)
-	_ = c.Send(ctx, "editor", msg2)
-	fmt.Printf("[orchestrator] task %s → editor\n", taskID2)
-
-	article := waitForTask(ctx, c, llm, taskID2, "editor")
+	taskID2 := assignTask(ctx, c, ws, editBrief, "editor")
+	article := waitForTaskWithReview(ctx, c, llm, ws, taskID2, "editor", "文章", 2)
 	fmt.Printf("[orchestrator] 成稿:\n%s\n\n", article)
 
 	// ── Phase 3: 编辑寄语 ────────────────────────────────────────────────
 	note := llmCall(ctx, llm,
-		fmt.Sprintf("编辑完成了这篇文章：\n%s\n\n请写一段编辑寄语（2-3句话）。", article))
+		fmt.Sprintf("以下文章已通过评审：\n%s\n\n请写一段有温度的编辑寄语（2-3句话）。", article))
 
 	finalPath := ws.SaveFinal(brief, article, note)
 	ws.UpdateAgent("orchestrator", "orchestrator", "idle")
@@ -395,9 +376,78 @@ func cmdOrchestrator(brief string) {
 	}
 }
 
+// assignTask 创建任务、保存到 workspace 并发给指定 worker，返回 taskID。
+func assignTask(ctx context.Context, c *client.MailboxClient, ws *Workspace, brief, workerID string) string {
+	taskID, _ := c.CreateTask(ctx, brief)
+	ws.SaveDoc("orchestrator", taskID, fmt.Sprintf("任务简报→%s", workerID), brief)
+	_ = c.AssignTask(ctx, taskID, workerID)
+	msg, _ := mailbox.NewTaskAssignMessage("orchestrator", taskID, brief)
+	_ = c.Send(ctx, workerID, msg)
+	fmt.Printf("[orchestrator] task %s → %s\n", taskID, workerID)
+	return taskID
+}
+
+// reviewResult 让 orchestrator LLM 评审成果。
+// 返回 (true, "") 表示接受；返回 (false, feedback) 表示退回，feedback 是具体修改意见。
+func reviewResult(ctx context.Context, llm *coding_agent.CodingSession, stage, result string) (bool, string) {
+	evaluation := llmCall(ctx, llm, fmt.Sprintf(
+		"请评审以下「%s」成果：\n\n%s\n\n"+
+			"评审标准：内容深度、结构清晰、语言质量、与任务简报的契合度。\n"+
+			"如果达标，仅输出「[accept]」；\n"+
+			"如果需要改进，输出「[revise]: 」后跟具体修改意见（说明问题和期望）。",
+		stage, result,
+	))
+	if strings.HasPrefix(strings.TrimSpace(evaluation), "[accept]") {
+		return true, ""
+	}
+	feedback := strings.TrimPrefix(strings.TrimSpace(evaluation), "[revise]:")
+	feedback = strings.TrimPrefix(feedback, "[revise]: ")
+	return false, strings.TrimSpace(feedback)
+}
+
+// waitForTaskWithReview 等待任务完成后由 orchestrator LLM 评审。
+// 不达标则退回修改（最多 maxRevisions 轮），达标后返回最终成果。
+func waitForTaskWithReview(
+	ctx context.Context,
+	c *client.MailboxClient,
+	llm *coding_agent.CodingSession,
+	ws *Workspace,
+	initialTaskID, workerID, stage string,
+	maxRevisions int,
+) string {
+	taskID := initialTaskID
+
+	for attempt := 0; attempt <= maxRevisions; attempt++ {
+		result := waitForTask(ctx, c, llm, taskID, workerID)
+		if result == "" || strings.HasPrefix(result, "任务失败") || strings.HasPrefix(result, "（等待超时）") {
+			return result
+		}
+
+		fmt.Printf("[orchestrator] 评审「%s」(第 %d/%d 次)\n", stage, attempt+1, maxRevisions+1)
+		accepted, feedback := reviewResult(ctx, llm, stage, result)
+
+		if accepted {
+			fmt.Printf("[orchestrator] ✓ 「%s」已接受\n", stage)
+			return result
+		}
+
+		if attempt == maxRevisions {
+			fmt.Printf("[orchestrator] 已达最大修改轮次，接受当前版本\n")
+			return result
+		}
+
+		fmt.Printf("[orchestrator] ✗ 退回「%s」，修改意见：%s\n", stage, feedback)
+		revisionBrief := fmt.Sprintf(
+			"你提交的成果需要修改，请根据以下反馈改进：\n\n**修改意见**：\n%s\n\n**原成果**：\n%s",
+			feedback, result,
+		)
+		taskID = assignTask(ctx, c, ws, revisionBrief, workerID)
+	}
+	return "（未能在规定轮次内完成）"
+}
+
 // waitForTask 等待任务完成。
-// 讨论区有新消息时，orchestrator LLM 根据 PMO 角色判断是否参与讨论。
-// 不使用定时器——一切由消息驱动。
+// 讨论区有新消息时，将完整讨论上下文交给 orchestrator LLM，由它通过 mailbox tools 决定是否参与。
 func waitForTask(
 	ctx context.Context,
 	c *client.MailboxClient,
@@ -423,7 +473,7 @@ func waitForTask(
 			}
 		}
 
-		// 处理讨论区消息：LLM 根据 PMO 角色判断是否参与
+		// 收到讨论区消息时，让 LLM 通过工具读取完整讨论，自行决定是否介入
 		for {
 			raw, _ := c.Recv(ctx)
 			if raw == "" {
@@ -436,13 +486,17 @@ func waitForTask(
 			p, _ := mailbox.ParseChatPayload(parsed)
 			fmt.Printf("[orchestrator ← %s] %s\n", parsed.From, p.Text)
 
-			reply := llmCall(ctx, llm, fmt.Sprintf(
-				"任务讨论区，%s 发言：%s\n作为 PMO，根据你的职责判断是否需要介入。如需回复则直接输出内容，无需则输出「[skip]」。",
-				parsed.From, p.Text,
+			// Step 1: 读完整讨论
+			llmCall(ctx, llm, fmt.Sprintf(
+				"%s 在任务 %s 讨论区发言：%s\n请用 mailbox_get_discussion 查看完整讨论历史，仅完成这一步。",
+				parsed.From, taskID, p.Text,
 			))
-			if reply != "" && reply != "[skip]" {
-				sendChat(ctx, c, workerID, taskID, reply)
-			}
+			// Step 2: 判断是否介入，如需则发消息
+			llmCall(ctx, llm, fmt.Sprintf(
+				"基于刚才读到的讨论，作为 PMO 判断是否需要向 %s 发消息介入。"+
+					"如需要，用 mailbox_post_message 发给 %s；如无需介入，直接结束。",
+				workerID, workerID,
+			))
 		}
 
 		time.Sleep(500 * time.Millisecond)
