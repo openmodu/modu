@@ -118,8 +118,10 @@ func (h *Hub) loadFromStore() {
 			h.tasks[t.ID] = &tc
 			// 修正 taskCounter，确保新 ID 不冲突
 			var n uint64
-			if _, err := fmt.Sscanf(t.ID, "task-%d", &n); err == nil && n > h.taskCounter {
-				h.taskCounter = n
+			if _, err := fmt.Sscanf(t.ID, "task-%d", &n); err == nil {
+				if n > atomic.LoadUint64(&h.taskCounter) {
+					atomic.StoreUint64(&h.taskCounter, n)
+				}
 			}
 		}
 		if len(tasks) > 0 {
@@ -135,8 +137,10 @@ func (h *Hub) loadFromStore() {
 			pc := p
 			h.projects[p.ID] = &pc
 			var n uint64
-			if _, err := fmt.Sscanf(p.ID, "proj-%d", &n); err == nil && n > h.projectCounter {
-				h.projectCounter = n
+			if _, err := fmt.Sscanf(p.ID, "proj-%d", &n); err == nil {
+				if n > atomic.LoadUint64(&h.projectCounter) {
+					atomic.StoreUint64(&h.projectCounter, n)
+				}
 			}
 		}
 		if len(projects) > 0 {
@@ -229,6 +233,10 @@ func (h *Hub) Heartbeat(agentID string) error {
 
 // Send 向指定 Agent 的信箱投递消息；若消息携带 task_id 则自动记录至对话日志
 func (h *Hub) Send(targetID, message string) error {
+	// 在锁外解析 JSON，避免持写锁期间做 CPU/内存密集操作
+	var msg Message
+	hasConv := json.Unmarshal([]byte(message), &msg) == nil && msg.TaskID != ""
+
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -243,9 +251,7 @@ func (h *Hub) Send(targetID, message string) error {
 		return errors.New("agent inbox is full")
 	}
 
-	// 尝试解析为结构化消息，有 task_id 则记录对话
-	var msg Message
-	if err := json.Unmarshal([]byte(message), &msg); err == nil && msg.TaskID != "" {
+	if hasConv {
 		h.appendConversationLocked(msg.From, targetID, msg)
 	}
 	return nil
@@ -569,7 +575,10 @@ func (h *Hub) StartTask(taskID string) error {
 }
 
 // CompleteTask 记录某 agent 对任务的完成成果。
-// 当所有指派的 agent 均完成时（或 agentID 为空时），任务标记为 completed。
+//
+// 当 agentID 非空时，记录该 agent 的成果；当所有指派的 agent 均完成时任务标记为 completed。
+// 当 agentID 为空时（向后兼容旧单 agent 调用方式），若任务有多个 assignee 则返回错误，
+// 否则立即将任务标记为 completed。
 func (h *Hub) CompleteTask(taskID, agentID, result string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -585,12 +594,15 @@ func (h *Hub) CompleteTask(taskID, agentID, result string) error {
 
 	if agentID != "" {
 		task.AgentResults[agentID] = result
-		// 所有指派 agent 均完成，或尚未指派 agent，才标记 completed
+		// 所有指派 agent 均完成，或尚未指派任何 agent，才标记 completed
 		if len(task.Assignees) == 0 || len(task.AgentResults) >= len(task.Assignees) {
 			task.Status = TaskStatusCompleted
 		}
 	} else {
-		// 旧调用方式（无 agentID），立即完成
+		// 旧调用方式（无 agentID）：多 assignee 任务必须用带 agentID 的新接口
+		if len(task.Assignees) > 1 {
+			return fmt.Errorf("task %s has %d assignees: use CompleteTask with agentID", taskID, len(task.Assignees))
+		}
 		task.Status = TaskStatusCompleted
 	}
 
