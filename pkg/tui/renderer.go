@@ -219,11 +219,18 @@ func (r *Renderer) processTextDelta(delta string) {
 			// Stream think content with dim styling, buffer only tail for tag detection.
 			idx := strings.Index(r.textBuf, "</think>")
 			if idx < 0 {
-				// Flush all but last 8 bytes (guards against partial </think> tag).
-				// Snap the cut to a valid UTF-8 rune boundary to avoid splitting
-				// multi-byte characters (e.g. 3-byte CJK chars).
-				if len(r.textBuf) > 8 {
-					cut := len(r.textBuf) - 8
+				// We don't have a full tag yet.
+				// Find if there's a partial "</think>" tag at the end of the buffer.
+				guard := 0
+				for i := 1; i < len("</think>") && i <= len(r.textBuf); i++ {
+					if strings.HasPrefix("</think>", r.textBuf[len(r.textBuf)-i:]) {
+						guard = i
+						break
+					}
+				}
+
+				if len(r.textBuf) > guard {
+					cut := len(r.textBuf) - guard
 					for cut > 0 && !utf8.RuneStart(r.textBuf[cut]) {
 						cut--
 					}
@@ -246,9 +253,17 @@ func (r *Renderer) processTextDelta(delta string) {
 			// Look for opening tag.
 			idx := strings.Index(r.textBuf, "<think>")
 			if idx < 0 {
-				// Flush all but the last 6 bytes (guards against partial "<think>" tags).
-				// Snap cut to valid UTF-8 rune boundary.
-				const guard = len("<think>") - 1
+				// We don't have a full tag yet.
+				// Find if there's a partial "<think>" tag at the end of the buffer.
+				// We only need to guard the characters if the buffer *ends* with a prefix of "<think>".
+				guard := 0
+				for i := 1; i < len("<think>") && i <= len(r.textBuf); i++ {
+					if strings.HasPrefix("<think>", r.textBuf[len(r.textBuf)-i:]) {
+						guard = i
+						break
+					}
+				}
+				
 				if len(r.textBuf) > guard {
 					cut := len(r.textBuf) - guard
 					for cut > 0 && !utf8.RuneStart(r.textBuf[cut]) {
@@ -272,6 +287,8 @@ func (r *Renderer) processTextDelta(delta string) {
 			r.thinkNeedIndent = true
 			r.inTextThink = true
 			r.textBuf = r.textBuf[idx+len("<think>"):]
+			// Process any remaining text in the buffer as thinking content immediately
+			continue
 		}
 	}
 }
