@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/crosszan/modu/pkg/agent"
 	"github.com/crosszan/modu/pkg/types"
@@ -23,7 +24,8 @@ type toolRecord struct {
 // Visual language:
 //
 //	● text response              ← green bullet, streamed inline
-//	⏺ thinking                  ← single collapsed line, content not streamed
+//	✧ Thinking…                  ← header text
+//	  ⎿  content                 ← text streamed with ⎿ indent
 //	⏺ ToolName("arg")           ← while tool is running
 //	⏺ ToolName("arg") → result  ← after tool completes (replaced in-place)
 //
@@ -57,9 +59,17 @@ type Renderer struct {
 	md *mdWriter
 
 	// Expand/collapse state for Ctrl+R tool output toggle.
-	toolExpanded       bool
-	expandMarkLines    int
-	expandMarkPending  string
+	toolExpanded      bool
+	expandMarkLines   int
+	expandMarkPending string
+
+	// Thinking content streaming state.
+	// thinkNeedIndent is true when the next non-newline character needs a
+	// leading indent ("  ") to align with the vertical bar prefix.
+	// thinkPendingNL defers writing \n until the next non-newline content
+	// arrives so trailing newlines are silently discarded at block end.
+	thinkNeedIndent bool
+	thinkPendingNL  bool
 }
 
 // NewRenderer creates a plain-mode Renderer writing to out.
@@ -104,6 +114,8 @@ func (r *Renderer) HandleEvent(event agent.AgentEvent) {
 		r.hadTool = false
 		r.inThink = false
 		r.inTextThink = false
+		r.thinkNeedIndent = false
+		r.thinkPendingNL = false
 		r.textBuf = ""
 		r.toolLines = 0
 		r.turnStart = time.Now()
@@ -118,18 +130,17 @@ func (r *Renderer) HandleEvent(event agent.AgentEvent) {
 		case types.EventThinkingStart:
 			r.flushTextBuf()
 			r.inThink = true
-			// Two-line thinking indicator matching Claude Code style.
-			line1 := styled(r.noColor, ansiBrightGreen, "⏺") + " " +
-				styled(r.noColor, ansiDim, "Thinking…")
-			line2 := styled(r.noColor, ansiDim, "  ⎿  (reasoning not shown)")
-			r.write("\n" + line1 + "\n" + line2 + "\n")
-			r.toolLines += 2
+			r.thinkNeedIndent = true
+			header := styled(r.noColor, ansiOrange, "✧ ") + styled(r.noColor, ansiDim, "Thinking…")
+			r.write("\n" + header + "\n")
+			r.toolLines++
 
 		case types.EventThinkingDelta:
-			// content deliberately not rendered
+			r.writeThinkContent(event.StreamEvent.Delta)
 
 		case types.EventThinkingEnd:
 			r.inThink = false
+			r.writeThinkClose()
 
 		case types.EventTextDelta:
 			r.processTextDelta(event.StreamEvent.Delta)
@@ -161,7 +172,7 @@ func (r *Renderer) HandleEvent(event agent.AgentEvent) {
 			isError: event.IsError,
 		})
 
-		// Replace line 2 (the ⎿ line) in-place.
+		// Replace the ⎿ placeholder with the result summary.
 		resultLine := r.toolResultLine(true, event.IsError, toolResult(event))
 		if r.screen != nil {
 			r.screen.CollapseToolHeader(resultLine)
@@ -171,6 +182,25 @@ func (r *Renderer) HandleEvent(event agent.AgentEvent) {
 			fmt.Fprint(r.out, ansiEraseLine)
 			fmt.Fprintln(r.out, resultLine)
 			r.toolLines = 0
+		}
+
+		// Show a preview of the output inline (Claude Code style).
+		if !event.IsError && full != "" {
+			const previewMax = 10
+			lines := strings.Split(strings.TrimRight(full, "\n"), "\n")
+			shown := lines
+			extra := 0
+			if len(lines) > previewMax {
+				shown = lines[:previewMax]
+				extra = len(lines) - previewMax
+			}
+			for _, l := range shown {
+				r.writeln(styled(r.noColor, ansiDim, "     "+l))
+			}
+			if extra > 0 {
+				r.writeln(styled(r.noColor, ansiBrightBlack,
+					fmt.Sprintf("     … (%d more lines, ctrl+r to expand)", extra)))
+			}
 		}
 
 	case agent.EventTypeAgentEnd:
@@ -188,27 +218,48 @@ func (r *Renderer) processTextDelta(delta string) {
 	r.textBuf += delta
 	for {
 		if r.inTextThink {
-			// Discard think content; wait for closing tag.
+			// Stream think content with dim styling, buffer only tail for tag detection.
 			idx := strings.Index(r.textBuf, "</think>")
 			if idx < 0 {
-				// Keep last 8 chars in case </think> spans deltas.
+				// Flush all but last 8 bytes (guards against partial </think> tag).
+				// Snap the cut to a valid UTF-8 rune boundary to avoid splitting
+				// multi-byte characters (e.g. 3-byte CJK chars).
 				if len(r.textBuf) > 8 {
-					r.textBuf = r.textBuf[len(r.textBuf)-8:]
+					cut := len(r.textBuf) - 8
+					for cut > 0 && !utf8.RuneStart(r.textBuf[cut]) {
+						cut--
+					}
+					if cut > 0 {
+						r.writeThinkContent(r.textBuf[:cut])
+						r.textBuf = r.textBuf[cut:]
+					}
 				}
 				return
 			}
+			// Flush content up to the closing tag.
+			if idx > 0 {
+				r.writeThinkContent(r.textBuf[:idx])
+			}
 			r.inTextThink = false
+			r.writeThinkClose()
 			// Skip leading newlines that models emit after </think>.
 			r.textBuf = strings.TrimLeft(r.textBuf[idx+len("</think>"):], "\n")
 		} else {
 			// Look for opening tag.
 			idx := strings.Index(r.textBuf, "<think>")
 			if idx < 0 {
-				// Flush all but the last 6 chars (guards against partial "<think>" tags).
+				// Flush all but the last 6 bytes (guards against partial "<think>" tags).
+				// Snap cut to valid UTF-8 rune boundary.
 				const guard = len("<think>") - 1
 				if len(r.textBuf) > guard {
-					r.emitText(r.textBuf[:len(r.textBuf)-guard])
-					r.textBuf = r.textBuf[len(r.textBuf)-guard:]
+					cut := len(r.textBuf) - guard
+					for cut > 0 && !utf8.RuneStart(r.textBuf[cut]) {
+						cut--
+					}
+					if cut > 0 {
+						r.emitText(r.textBuf[:cut])
+						r.textBuf = r.textBuf[cut:]
+					}
 				}
 				return
 			}
@@ -216,12 +267,11 @@ func (r *Renderer) processTextDelta(delta string) {
 			if idx > 0 {
 				r.emitText(r.textBuf[:idx])
 			}
-			// Show two-line thinking indicator immediately.
-			line1 := styled(r.noColor, ansiBrightGreen, "⏺") + " " +
-				styled(r.noColor, ansiDim, "Thinking…")
-			line2 := styled(r.noColor, ansiDim, "  ⎿  (reasoning not shown)")
-			r.write("\n" + line1 + "\n" + line2 + "\n")
-			r.toolLines += 2
+			// Show thinking header; content will stream below it.
+			header := styled(r.noColor, ansiOrange, "✧ ") + styled(r.noColor, ansiDim, "Thinking…")
+			r.write("\n" + header + "\n")
+			r.toolLines++
+			r.thinkNeedIndent = true
 			r.inTextThink = true
 			r.textBuf = r.textBuf[idx+len("<think>"):]
 		}
@@ -239,6 +289,59 @@ func (r *Renderer) emitText(text string) {
 		r.toolLines++
 	}
 	r.md.Feed(text)
+}
+
+// writeThinkContent writes a chunk of thinking content with dim/italic styling
+// and "  ⎿  " indentation at the start of each line.
+//
+// Newlines are deferred (lazy): a \n is only written when the next
+// non-newline character arrives.  This ensures trailing newlines in the
+// model's thinking output are silently discarded, so the closing ⎿  ──
+// line appears immediately after the last line of content with no blank gap.
+func (r *Renderer) writeThinkContent(text string) {
+	if text == "" {
+		return
+	}
+	var out strings.Builder
+	for _, ch := range text {
+		if ch == '\n' {
+			// Only queue a newline when not already at line-start; this
+			// collapses consecutive trailing newlines into nothing.
+			if !r.thinkNeedIndent {
+				r.thinkPendingNL = true
+				r.thinkNeedIndent = true
+			}
+			continue
+		}
+		// Flush the deferred newline + indent before real content.
+		if r.thinkPendingNL {
+			out.WriteByte('\n')
+			r.thinkPendingNL = false
+		}
+		if r.thinkNeedIndent {
+			out.WriteString("  ⎿  ")
+			r.thinkNeedIndent = false
+		}
+		out.WriteRune(ch)
+	}
+	if out.Len() > 0 {
+		r.write(styled(r.noColor, ansiDim+ansiItalic, out.String()))
+	}
+}
+
+// writeThinkClose writes a final newline if needed for a thinking block.
+// Discards any pending trailing newline and positions the line correctly
+// whether the last content ended with \n or not.
+func (r *Renderer) writeThinkClose() {
+	r.thinkPendingNL = false
+	// If thinkNeedIndent is true we're already at a fresh line (or no content
+	// was written at all); skip the leading \n to avoid a blank gap.
+	prefix := "\n"
+	if r.thinkNeedIndent {
+		prefix = ""
+	}
+	r.thinkNeedIndent = false
+	r.write(styled(r.noColor, ansiDim, prefix))
 }
 
 // flushTextBuf flushes any text held in the partial-tag detection buffer and
@@ -267,7 +370,7 @@ func (r *Renderer) toolCallLine(name string, args any) string {
 	nameStr := styled(r.noColor, ansiBold, name)
 	arg := primaryArg(name, args)
 	argStr := styled(r.noColor, ansiDim, "("+arg+")")
-	return fmt.Sprintf("%s %s%s", bullet, nameStr, argStr)
+	return fmt.Sprintf("%s  %s%s", bullet, nameStr, argStr)
 }
 
 // toolResultLine returns line 2: "  ⎿  summary" or "  ⎿  …" while running.

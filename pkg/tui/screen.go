@@ -32,8 +32,9 @@ type Screen struct {
 	// After WriteToolHeader, we track how many newlines have been printed
 	// into the scroll region so that CollapseToolHeader can cursor-up back
 	// to the header line and replace it in-place.
-	pendingTool  bool
-	toolNewlines int // newlines printed into the scroll region after the header
+	pendingTool     bool
+	toolNewlines    int // newlines printed into the scroll region after the header
+	toolHeaderLineIdx int // index into contentLines where the tool header is stored (-1 if none)
 
 	// Scroll buffer: all content lines written so far.
 	// contentLines holds complete lines (no \n); pendingLine holds the
@@ -57,10 +58,11 @@ func NewScreen(out *os.File) *Screen {
 		return nil // terminal too small
 	}
 	s := &Screen{
-		out:     out,
-		noColor: shouldDisableColor(out),
-		height:  h,
-		width:   w,
+		out:               out,
+		noColor:           shouldDisableColor(out),
+		height:            h,
+		width:             w,
+		toolHeaderLineIdx: -1,
 	}
 	s.enter()
 	return s
@@ -473,6 +475,9 @@ func (s *Screen) WriteToolHeader(text string) {
 	s.pendingTool = true
 	s.toolNewlines = 0
 	s.appendContent(text + "\n")
+	// Record the index of this header in contentLines so CollapseToolHeader
+	// can update the buffer entry and keep redrawContentArea consistent.
+	s.toolHeaderLineIdx = len(s.contentLines) - 1
 }
 
 // CollapseToolHeader replaces the previously written tool header with text.
@@ -494,6 +499,11 @@ func (s *Screen) CollapseToolHeader(text string) {
 	n := s.toolNewlines
 	maxUp := s.contentBottom() - 1 // max rows we can go up from contentBottom
 
+	// Always update the buffer entry so redrawContentArea shows the collapsed line.
+	if s.toolHeaderLineIdx >= 0 && s.toolHeaderLineIdx < len(s.contentLines) {
+		s.contentLines[s.toolHeaderLineIdx] = text
+	}
+
 	if n < maxUp {
 		// Header is still visible – go back and replace it.
 		o := s.out
@@ -512,6 +522,7 @@ func (s *Screen) CollapseToolHeader(text string) {
 
 	s.pendingTool = false
 	s.toolNewlines = 0
+	s.toolHeaderLineIdx = -1
 }
 
 // InitInputLine clears the input row, prints prompt, and leaves the cursor
