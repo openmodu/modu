@@ -280,7 +280,10 @@ func (r *Renderer) processTextDelta(delta string) {
 
 // emitText writes a text chunk, routing through the Markdown renderer.
 func (r *Renderer) emitText(text string) {
-	if text == "" {
+	if strings.TrimSpace(text) == "" && !r.hadText {
+		// Do not emit a bullet for pure whitespace if we haven't started text yet.
+		// We still feed it to MD so spacing is preserved if it's mid-stream.
+		r.md.Feed(text)
 		return
 	}
 	if !r.hadText {
