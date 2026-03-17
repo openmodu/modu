@@ -121,6 +121,27 @@ func (s *Screen) redrawHint() {
 	fmt.Fprint(s.out, line)
 }
 
+// ContentMark records the current end of the content buffer so it can be
+// restored later with TrimToMark.  Thread-safe.
+func (s *Screen) ContentMark() (lineCount int, pending string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.contentLines), s.pendingLine
+}
+
+// TrimToMark removes all content written after the given mark and redraws
+// the viewport.  Used to collapse an expanded tool output.  Thread-safe.
+func (s *Screen) TrimToMark(lineCount int, pending string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.active || lineCount > len(s.contentLines) {
+		return
+	}
+	s.contentLines = s.contentLines[:lineCount]
+	s.pendingLine = pending
+	s.redrawContentArea()
+}
+
 // EnableMouse turns on SGR mouse tracking (wheel events).
 // Call at the start of a scroll loop; paired with DisableMouse when done.
 func (s *Screen) EnableMouse() {

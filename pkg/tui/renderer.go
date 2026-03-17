@@ -55,6 +55,11 @@ type Renderer struct {
 
 	// Markdown renderer for AI text responses.
 	md *mdWriter
+
+	// Expand/collapse state for Ctrl+R tool output toggle.
+	toolExpanded       bool
+	expandMarkLines    int
+	expandMarkPending  string
 }
 
 // NewRenderer creates a plain-mode Renderer writing to out.
@@ -134,6 +139,7 @@ func (r *Renderer) HandleEvent(event agent.AgentEvent) {
 		r.flushTextBuf()
 		r.hadTool = true
 		r.toolLines = 0
+		r.toolExpanded = false // new tool call invalidates any previous expansion
 
 		// Line 1: ⏺ ToolName(arg)  — written as regular (permanent) content.
 		// Line 2:   ⎿  …           — written as the replaceable tool header.
@@ -280,13 +286,30 @@ func (r *Renderer) toolResultLine(done, isError bool, result string) string {
 	return prefix + styled(r.noColor, ansiDim, result) + hint
 }
 
-// ExpandLastTool prints the full args and result of the most recent tool call
-// into the scroll buffer.  Called on Ctrl+R.
+// ExpandLastTool toggles the full args+result of the most recent tool call.
+// First press expands; second press collapses back.  Called on Ctrl+R.
 func (r *Renderer) ExpandLastTool() {
 	if len(r.toolHistory) == 0 {
 		r.writeln(styled(r.noColor, ansiDim, "(no tool calls yet)"))
 		return
 	}
+
+	// ── collapse ─────────────────────────────────────────────────────────────
+	if r.toolExpanded {
+		if r.screen != nil {
+			r.screen.TrimToMark(r.expandMarkLines, r.expandMarkPending)
+		}
+		r.toolExpanded = false
+		return
+	}
+
+	// ── expand ────────────────────────────────────────────────────────────────
+	// Record the current buffer position so we can trim back on collapse.
+	if r.screen != nil {
+		r.expandMarkLines, r.expandMarkPending = r.screen.ContentMark()
+	}
+	r.toolExpanded = true
+
 	rec := r.toolHistory[len(r.toolHistory)-1]
 	w := termWidth()
 
