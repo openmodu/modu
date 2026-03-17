@@ -15,7 +15,7 @@ import (
 
 // MomEvent is a scheduled event file.
 type MomEvent struct {
-	Type     string `json:"type"`     // "immediate" | "one-shot" | "periodic"
+	Type     string `json:"type"` // "immediate" | "one-shot" | "periodic"
 	ChatID   int64  `json:"chatId"`
 	Text     string `json:"text"`
 	At       string `json:"at,omitempty"`       // ISO 8601 for one-shot

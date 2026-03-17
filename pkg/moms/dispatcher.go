@@ -150,27 +150,30 @@ func (d *Dispatcher) getOrCreateRunner(chatID int64) *Runner {
 // It just logs responses without sending anything to a real channel.
 
 type syntheticChannelContext struct {
-	chatID      int64
-	messageText string
-	messageTS   string
-	senderName  string
-	store       *Store
-	responded   bool
+	chatID       int64
+	messageText  string
+	messageTS    string
+	senderName   string
+	store        *Store
+	responded    bool
 	lastResponse string
 }
 
-func (c *syntheticChannelContext) ChatID() int64                         { return c.chatID }
-func (c *syntheticChannelContext) MessageText() string                   { return c.messageText }
-func (c *syntheticChannelContext) MessageTS() string                     { return c.messageTS }
-func (c *syntheticChannelContext) SenderName() string                    { return c.senderName }
-func (c *syntheticChannelContext) Images() []types.ImageContent          { return nil }
-func (c *syntheticChannelContext) RespondInThread(text string) error     { return c.Respond(text, true) }
-func (c *syntheticChannelContext) SendCard(text string) (int, error)     { _ = c.Respond(text, true); return 0, nil }
-func (c *syntheticChannelContext) EditCard(_ int, text string) error     { return c.Respond(text, false) }
-func (c *syntheticChannelContext) SetWorking(_ bool) error               { return nil }
-func (c *syntheticChannelContext) UploadFile(_, _ string) error          { return nil }
-func (c *syntheticChannelContext) DeleteMessage() error                  { return nil }
-func (c *syntheticChannelContext) ReplaceMessage(text string) error      { return c.Respond(text, false) }
+func (c *syntheticChannelContext) ChatID() int64                     { return c.chatID }
+func (c *syntheticChannelContext) MessageText() string               { return c.messageText }
+func (c *syntheticChannelContext) MessageTS() string                 { return c.messageTS }
+func (c *syntheticChannelContext) SenderName() string                { return c.senderName }
+func (c *syntheticChannelContext) Images() []types.ImageContent      { return nil }
+func (c *syntheticChannelContext) RespondInThread(text string) error { return c.Respond(text, true) }
+func (c *syntheticChannelContext) SendCard(text string) (int, error) {
+	_ = c.Respond(text, true)
+	return 0, nil
+}
+func (c *syntheticChannelContext) EditCard(_ int, text string) error { return c.Respond(text, false) }
+func (c *syntheticChannelContext) SetWorking(_ bool) error           { return nil }
+func (c *syntheticChannelContext) UploadFile(_, _ string) error      { return nil }
+func (c *syntheticChannelContext) DeleteMessage() error              { return nil }
+func (c *syntheticChannelContext) ReplaceMessage(text string) error  { return c.Respond(text, false) }
 
 func (c *syntheticChannelContext) Respond(text string, shouldLog bool) error {
 	c.responded = true

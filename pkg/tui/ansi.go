@@ -41,6 +41,10 @@ const (
 	ansiAltScreenOff  = "\033[?1049l"
 	ansiEraseLine     = "\033[2K"
 	ansiEraseDown     = "\033[J"
+
+	// Mouse tracking (SGR extended mode).
+	ansiMouseOn  = "\033[?1000h\033[?1006h"
+	ansiMouseOff = "\033[?1000l\033[?1006l"
 )
 
 // styled wraps text with ANSI codes. Returns plain text if noColor is true.

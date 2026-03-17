@@ -5,6 +5,8 @@ import (
 	"os"
 	"strings"
 	"sync"
+
+	"golang.org/x/text/width"
 )
 
 // Screen implements a split-terminal layout using ANSI scroll regions.
@@ -26,12 +28,28 @@ type Screen struct {
 	width   int
 	active  bool
 
+	// Content area cursor tracking.
+	// contentCol is the 0-based column position at the bottom of the scroll
+	// region.  appendContent uses this to continue writing mid-line instead
+	// of always jumping back to column 1 (which overwrites streaming text).
+	contentCol int
+
 	// Tool collapse tracking.
 	// After WriteToolHeader, we track how many newlines have been printed
 	// into the scroll region so that CollapseToolHeader can cursor-up back
 	// to the header line and replace it in-place.
-	pendingTool    bool
-	toolNewlines   int // newlines printed into the scroll region after the header
+	pendingTool  bool
+	toolNewlines int // newlines printed into the scroll region after the header
+
+	// Scroll buffer: all content lines written so far.
+	// contentLines holds complete lines (no \n); pendingLine holds the
+	// current in-progress line (not yet terminated by \n).
+	contentLines []string
+	pendingLine  string
+
+	// scrollOff is the number of visual rows from the live bottom that the
+	// viewport is currently showing.  0 means live (auto-scroll).
+	scrollOff int
 }
 
 // NewScreen creates and activates a Screen on out.
@@ -57,6 +75,10 @@ func NewScreen(out *os.File) *Screen {
 // contentBottom is the last row of the scroll region (rows 1..contentBottom).
 func (s *Screen) contentBottom() int { return s.height - 3 }
 
+// ContentBottom returns the height of the content viewport (number of rows).
+// Used by Input to compute a sensible page-scroll size.
+func (s *Screen) ContentBottom() int { return s.contentBottom() }
+
 // enter initialises the alternate screen and draws the static layout.
 func (s *Screen) enter() {
 	o := s.out
@@ -69,45 +91,345 @@ func (s *Screen) enter() {
 	fmt.Fprintf(o, "\033[1;%dr", s.contentBottom())
 	// Draw the separator at height-2.
 	s.redrawSeparator()
+	// Mouse tracking is NOT enabled here; it is enabled only during AI
+	// streaming (RunScrollLoop) so that normal input allows text selection.
 	// Position cursor at start of content area.
 	fmt.Fprint(o, "\033[1;1H")
 	fmt.Fprint(o, ansiShowCursor)
 	s.active = true
 }
 
+// EnableMouse turns on SGR mouse tracking (wheel events).
+// Call at the start of a scroll loop; paired with DisableMouse when done.
+func (s *Screen) EnableMouse() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active {
+		fmt.Fprint(s.out, ansiMouseOn)
+	}
+}
+
+// DisableMouse turns off mouse tracking, restoring normal terminal selection.
+func (s *Screen) DisableMouse() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active {
+		fmt.Fprint(s.out, ansiMouseOff)
+	}
+}
+
 // redrawSeparator redraws the static separator row.  Caller must hold mu.
+// When scrolled back, it shows a hint like "── ↑ scrolled (Page Down / scroll to return) ──".
 func (s *Screen) redrawSeparator() {
 	fmt.Fprintf(s.out, "\033[%d;1H", s.height-2)
 	fmt.Fprint(s.out, ansiEraseLine)
-	fmt.Fprint(s.out, separator(s.noColor, s.width))
+	if s.scrollOff > 0 {
+		hint := " ↑ scrolled "
+		hintLen := len([]rune(hint))
+		side := (s.width - hintLen) / 2
+		if side < 1 {
+			side = 1
+		}
+		line := strings.Repeat("─", side) + hint + strings.Repeat("─", s.width-side-hintLen)
+		fmt.Fprint(s.out, styled(s.noColor, ansiYellow, line))
+	} else {
+		fmt.Fprint(s.out, separator(s.noColor, s.width))
+	}
 }
 
-// Close restores the terminal to normal mode.
+// Close restores the terminal to normal mode and replays buffered content
+// to the normal screen so the conversation remains visible after exit.
 func (s *Screen) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.active {
 		return
 	}
-	fmt.Fprint(s.out, "\033[r")      // reset scroll region
-	fmt.Fprint(s.out, ansiAltScreenOff) // leave alternate screen
+	fmt.Fprint(s.out, ansiMouseOff)     // disable mouse tracking
+	fmt.Fprint(s.out, "\033[r")         // reset scroll region
+	fmt.Fprint(s.out, ansiAltScreenOff) // leave alternate screen (normal screen now visible)
+
+	// Replay buffered content onto the normal screen.
+	for _, line := range s.contentLines {
+		fmt.Fprintln(s.out, line)
+	}
+	if s.pendingLine != "" {
+		fmt.Fprintln(s.out, s.pendingLine)
+	}
+
 	s.active = false
+}
+
+// feedBuffer appends text to the line buffer, splitting on newlines.
+// Caller must hold s.mu.
+func (s *Screen) feedBuffer(text string) {
+	s.pendingLine += text
+	for {
+		idx := strings.IndexByte(s.pendingLine, '\n')
+		if idx < 0 {
+			break
+		}
+		s.contentLines = append(s.contentLines, s.pendingLine[:idx])
+		s.pendingLine = s.pendingLine[idx+1:]
+	}
+}
+
+// visualRowsForLine returns how many terminal rows a single line (no \n)
+// occupies at the given terminal width.
+func visualRowsForLine(line string, termW int) int {
+	if termW <= 0 {
+		termW = 80
+	}
+	vlen := visibleLen(line)
+	if vlen == 0 {
+		return 1
+	}
+	return (vlen + termW - 1) / termW
+}
+
+// totalVisualRows returns the total number of visual rows in the buffer.
+// Caller must hold s.mu.
+func (s *Screen) totalVisualRows() int {
+	total := 0
+	for _, line := range s.contentLines {
+		total += visualRowsForLine(line, s.width)
+	}
+	if s.pendingLine != "" {
+		total += visualRowsForLine(s.pendingLine, s.width)
+	}
+	return total
+}
+
+// maxScrollOff returns the maximum allowed scrollOff value.
+// Caller must hold s.mu.
+func (s *Screen) maxScrollOff() int {
+	total := s.totalVisualRows()
+	viewH := s.contentBottom()
+	if total <= viewH {
+		return 0
+	}
+	return total - viewH
+}
+
+// redrawContentArea clears the content scroll region and redraws it from
+// the buffer at the current scrollOff.  Caller must hold s.mu.
+func (s *Screen) redrawContentArea() {
+	viewH := s.contentBottom()
+	total := s.totalVisualRows()
+
+	// Visible window: virtual rows [startVRow, endVRow)
+	endVRow := total - s.scrollOff
+	if endVRow < 0 {
+		endVRow = 0
+	}
+	startVRow := endVRow - viewH
+	if startVRow < 0 {
+		startVRow = 0
+	}
+
+	// Build a flat list of (line, visualRows).
+	type entry struct {
+		text string
+		rows int
+	}
+	all := make([]entry, 0, len(s.contentLines)+1)
+	for _, line := range s.contentLines {
+		all = append(all, entry{line, visualRowsForLine(line, s.width)})
+	}
+	if s.pendingLine != "" {
+		all = append(all, entry{s.pendingLine, visualRowsForLine(s.pendingLine, s.width)})
+	}
+
+	o := s.out
+	fmt.Fprint(o, ansiSaveCursor)
+	// Reset scroll region so absolute cursor moves don't cause scrolling.
+	fmt.Fprint(o, "\033[r")
+	// Clear content area.
+	for row := 1; row <= viewH; row++ {
+		fmt.Fprintf(o, "\033[%d;1H\033[2K", row)
+	}
+
+	// Write visible lines.
+	cumVRow := 0
+	for _, e := range all {
+		entryEnd := cumVRow + e.rows
+		if entryEnd <= startVRow {
+			cumVRow = entryEnd
+			continue
+		}
+		if cumVRow >= endVRow {
+			break
+		}
+		termRow := 1 + (cumVRow - startVRow)
+		if termRow < 1 {
+			termRow = 1
+		}
+		if termRow > viewH {
+			break
+		}
+		fmt.Fprintf(o, "\033[%d;1H", termRow)
+		fmt.Fprint(o, e.text)
+		cumVRow = entryEnd
+	}
+
+	// Restore scroll region.
+	fmt.Fprintf(o, "\033[1;%dr", viewH)
+	// Update contentCol: it reflects the end of the pending line.
+	if s.width > 0 {
+		s.contentCol = visibleLen(s.pendingLine) % s.width
+	} else {
+		s.contentCol = 0
+	}
+	fmt.Fprint(o, ansiRestoreCursor)
+}
+
+// ScrollUp scrolls the viewport up by n visual rows.  Thread-safe.
+func (s *Screen) ScrollUp(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.active {
+		return
+	}
+	maxOff := s.maxScrollOff()
+	s.scrollOff += n
+	if s.scrollOff > maxOff {
+		s.scrollOff = maxOff
+	}
+	s.redrawContentArea()
+	s.redrawSeparator()
+}
+
+// ScrollDown scrolls the viewport down by n visual rows.  Thread-safe.
+func (s *Screen) ScrollDown(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.active {
+		return
+	}
+	s.scrollOff -= n
+	if s.scrollOff < 0 {
+		s.scrollOff = 0
+	}
+	s.redrawContentArea()
+	s.redrawSeparator()
+}
+
+// ScrollToBottom resets the viewport to live (scrollOff=0) and redraws.
+// Thread-safe.
+func (s *Screen) ScrollToBottom() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.active || s.scrollOff == 0 {
+		return
+	}
+	s.scrollOff = 0
+	s.redrawContentArea()
+	s.redrawSeparator()
 }
 
 // appendContent writes text into the scroll region.
 // Caller must hold s.mu.  Handles save/restore so the cursor stays on the
 // input line between calls.
 func (s *Screen) appendContent(text string) {
+	// Always update the line buffer.
+	s.feedBuffer(text)
+
+	// If the user has scrolled back, don't render to the live terminal.
+	if s.scrollOff > 0 {
+		return
+	}
+
 	o := s.out
 	fmt.Fprint(o, ansiSaveCursor)
-	// Move to the bottom row of the scroll region and print.
-	// A trailing newline here causes the region to scroll up automatically.
-	fmt.Fprintf(o, "\033[%d;1H", s.contentBottom())
+	// Position at the correct column on the bottom row of the scroll region.
+	// Always writing at column 1 would overwrite streamed text that hasn't
+	// ended with a newline yet.
+	if s.contentCol == 0 {
+		fmt.Fprintf(o, "\033[%d;1H", s.contentBottom())
+	} else {
+		fmt.Fprintf(o, "\033[%d;%dH", s.contentBottom(), s.contentCol+1)
+	}
 	fmt.Fprint(o, text)
+	s.updateContentCol(text)
 	if s.pendingTool {
-		s.toolNewlines += strings.Count(text, "\n")
+		s.toolNewlines += visualLines(text, s.width)
 	}
 	fmt.Fprint(o, ansiRestoreCursor)
+}
+
+// updateContentCol advances s.contentCol by the visual width of text,
+// resetting to 0 on newlines and on terminal-width wraps.
+func (s *Screen) updateContentCol(text string) {
+	inEsc := false
+	for _, r := range text {
+		if inEsc {
+			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+				inEsc = false
+			}
+			continue
+		}
+		if r == '\033' {
+			inEsc = true
+			continue
+		}
+		if r == '\n' || r == '\r' {
+			s.contentCol = 0
+			continue
+		}
+		var cw int
+		switch width.LookupRune(r).Kind() {
+		case width.EastAsianWide, width.EastAsianFullwidth:
+			cw = 2
+		default:
+			cw = 1
+		}
+		s.contentCol += cw
+		if s.width > 0 && s.contentCol >= s.width {
+			s.contentCol = 0 // wrapped to next line
+		}
+	}
+}
+
+// visualLines counts how many terminal rows text occupies, counting both
+// explicit newlines and line wraps at the given terminal width.
+// ANSI escape sequences are excluded from width accounting.
+func visualLines(text string, termW int) int {
+	if termW <= 0 {
+		termW = 80
+	}
+	lines := 0
+	col := 0
+	inEsc := false
+	for _, r := range text {
+		if inEsc {
+			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+				inEsc = false
+			}
+			continue
+		}
+		if r == '\033' {
+			inEsc = true
+			continue
+		}
+		if r == '\n' {
+			lines++
+			col = 0
+			continue
+		}
+		var cw int
+		switch width.LookupRune(r).Kind() {
+		case width.EastAsianWide, width.EastAsianFullwidth:
+			cw = 2
+		default:
+			cw = 1
+		}
+		col += cw
+		if col > termW {
+			lines++
+			col = cw
+		}
+	}
+	return lines
 }
 
 // Write appends text to the content area.  Thread-safe.
@@ -170,6 +492,7 @@ func (s *Screen) CollapseToolHeader(text string) {
 		// Move back to the bottom of the scroll region so subsequent writes
 		// continue from there.
 		fmt.Fprintf(o, "\033[%d;1H", s.contentBottom())
+		s.contentCol = 0
 		fmt.Fprint(o, ansiRestoreCursor)
 	} else {
 		// Header has scrolled off – just append the collapsed line.
@@ -198,6 +521,59 @@ func (s *Screen) InitInputLine(prompt string) {
 	fmt.Fprint(o, ansiEraseLine)
 	// Print prompt; cursor ends up after the prompt ready for user input.
 	fmt.Fprint(o, prompt)
+}
+
+// RedrawInputContent redraws the input line with prompt + buf and positions
+// the cursor at cursorPos (rune index into buf).  Called by the raw-mode
+// readline on every edit.  Thread-safe.
+func (s *Screen) RedrawInputContent(prompt, buf string, cursorPos int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.active {
+		return
+	}
+	o := s.out
+	// Move to input row, erase, reprint prompt + buffer.
+	fmt.Fprintf(o, "\033[%d;1H", s.height-1)
+	fmt.Fprint(o, ansiEraseLine)
+	fmt.Fprint(o, prompt)
+	fmt.Fprint(o, buf)
+
+	// Reposition cursor at the right rune offset.
+	// We need to count the visible columns used by the prompt and the
+	// portion of buf up to cursorPos.
+	promptCols := visibleLen(prompt)
+	bufRunes := []rune(buf)
+	bufBeforeCursor := string(bufRunes[:cursorPos])
+	col := promptCols + visibleLen(bufBeforeCursor) + 1 // 1-based
+	fmt.Fprintf(o, "\033[%d;%dH", s.height-1, col)
+}
+
+// visibleLen returns the number of terminal columns occupied by s,
+// ignoring ANSI escape sequences (which have zero width).
+// Full-width characters (CJK etc.) count as 2 columns.
+func visibleLen(s string) int {
+	n := 0
+	inEsc := false
+	for _, r := range s {
+		if inEsc {
+			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+				inEsc = false
+			}
+			continue
+		}
+		if r == '\033' {
+			inEsc = true
+			continue
+		}
+		switch width.LookupRune(r).Kind() {
+		case width.EastAsianWide, width.EastAsianFullwidth:
+			n += 2
+		default:
+			n++
+		}
+	}
+	return n
 }
 
 // AfterReadLine cleans up after a ReadLine call (clears the input row and the

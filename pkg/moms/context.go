@@ -106,8 +106,6 @@ func extractText(content any) string {
 	return fmt.Sprintf("%v", content)
 }
 
-var timestampPrefixReplacer = strings.NewReplacer()
-
 func normalizeMessageText(s string) string {
 	// Strip optional leading timestamp: "[YYYY-MM-DD HH:MM:SS+HH:MM] "
 	if len(s) > 0 && s[0] == '[' {

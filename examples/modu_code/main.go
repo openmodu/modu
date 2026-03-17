@@ -31,6 +31,8 @@ import (
 	"github.com/crosszan/modu/pkg/types"
 )
 
+var _ = fmt.Sprintf // suppress unused import if needed
+
 func main() {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -72,6 +74,8 @@ func main() {
 		input = tui.NewInput(os.Stdin, os.Stdout)
 	}
 
+	input.OnCtrlR = renderer.ExpandLastTool
+
 	renderer.PrintBanner(model.Name, cwd)
 
 	// Wire agent events to the renderer.
@@ -80,32 +84,41 @@ func main() {
 	})
 	defer unsub()
 
-	// SIGINT: abort current operation; if idle, exit.
+	// SIGINT: abort the current streaming operation.
+	// When using Screen/raw-mode, Ctrl+C during input is handled by ErrInterrupt
+	// below; this handler only fires when the AI is actually streaming.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT)
 	go func() {
 		for range sigCh {
 			if session.IsStreaming() {
-				renderer.PrintInfo("[interrupted — press Ctrl+C again to exit]")
 				session.Abort()
-			} else {
-				if screen != nil {
-					screen.Close()
-				}
-				os.Exit(0)
+				renderer.PrintInfo("[interrupted]")
 			}
+			// If not streaming, the signal is ignored here; idle Ctrl+C is
+			// handled via ErrInterrupt from ReadLine in the REPL loop below.
 		}
 	}()
+
+	exit := func() {
+		if screen != nil {
+			screen.Close()
+		}
+		os.Exit(0)
+	}
 
 	ctx := context.Background()
 
 	// REPL loop.
 	for {
 		line, err := input.ReadLine("❯ ")
+		if err == tui.ErrInterrupt {
+			// Ctrl+C while idle → exit.
+			exit()
+		}
 		if err != nil {
 			// EOF (Ctrl+D) — exit cleanly.
-			fmt.Fprintln(os.Stdout)
-			break
+			exit()
 		}
 
 		line = strings.TrimSpace(line)
@@ -123,8 +136,28 @@ func main() {
 
 		renderer.PrintUser(line)
 
-		if err := session.Prompt(ctx, line); err != nil {
-			renderer.PrintError(err)
+		// Run prompt in a goroutine so the main goroutine can handle
+		// scroll events (mouse wheel, Page Up/Down) during AI streaming.
+		// Use a cancellable context so Ctrl+C aborts the HTTP request.
+		promptCtx, promptCancel := context.WithCancel(ctx)
+		promptDone := make(chan struct{})
+		var promptErr error
+		go func() {
+			defer promptCancel()
+			promptErr = session.Prompt(promptCtx, line)
+			close(promptDone)
+		}()
+
+		input.RunScrollLoop(promptDone, func() {
+			promptCancel()
+			session.Abort()
+			renderer.PrintInfo("[interrupted]")
+		})
+
+		<-promptDone // wait for the goroutine to finish before reading promptErr
+
+		if promptErr != nil {
+			renderer.PrintError(promptErr)
 		}
 		session.WaitForIdle()
 
@@ -199,6 +232,7 @@ func printHelp(r *tui.Renderer) {
 		"",
 		"keyboard:",
 		"  Enter          — send message",
+		"  Ctrl+R         — expand last tool call output",
 		"  Ctrl+C         — abort current operation (or exit when idle)",
 		"  Ctrl+D         — exit",
 	}
@@ -309,7 +343,8 @@ func resolveProvider() (*types.Model, func(string) (string, error)) {
 
 	// 5. Default: LM Studio local server.
 	{
-		modelName := "zai-org/glm-4.7-flash"
+		// modelName := "zai-org/glm-4.7-flash"
+		modelName := "qwen/qwen3.5-35b-a3b"
 		baseURL := "http://192.168.5.149:1234/v1"
 		providerID := "lmstudio"
 

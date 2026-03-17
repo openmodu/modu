@@ -222,20 +222,14 @@ func (r *Runner) Run(parentCtx context.Context, chCtx channels.ChannelContext) R
 
 	// Persist context.
 	if msgs := a.GetState().Messages; len(msgs) > 0 {
-		var toSave []types.AgentMessage
-		for _, m := range msgs {
-			toSave = append(toSave, m)
-		}
+		toSave := make([]types.AgentMessage, len(msgs))
+		copy(toSave, msgs)
 
 		// Apply context compaction
 		if r.settings != nil && r.settings.Compaction != nil && r.settings.Compaction.Enabled {
 			compacted := CompactContext(toSave, r.settings.Compaction.KeepRecentTokens)
 			if len(compacted) < len(toSave) {
-				var newMsgs []agent.AgentMessage
-				for _, m := range compacted {
-					newMsgs = append(newMsgs, m)
-				}
-				a.ReplaceMessages(newMsgs)
+				a.ReplaceMessages(compacted)
 				toSave = compacted
 				fmt.Printf("[moms] chat %d: compacted context from %d to %d messages\n", r.chatID, len(msgs), len(compacted))
 			}

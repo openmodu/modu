@@ -204,7 +204,7 @@ func (t *WriteTool) Execute(_ context.Context, _ string, args map[string]any, _ 
 	if path == "" {
 		return errorToolResult("path is required"), nil
 	}
-	if err := os.MkdirAll(fmt.Sprintf("%s", getDirOf(path)), 0o755); err != nil {
+	if err := os.MkdirAll(getDirOf(path), 0o755); err != nil {
 		return errorToolResult(fmt.Sprintf("mkdir error: %v", err)), nil
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
