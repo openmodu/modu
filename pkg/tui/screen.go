@@ -83,14 +83,42 @@ func (s *Screen) enter() {
 	fmt.Fprint(o, "\033[2J")
 	// Set scroll region to rows 1..contentBottom.
 	fmt.Fprintf(o, "\033[1;%dr", s.contentBottom())
-	// Draw the separator at height-2.
+	// Draw the static chrome: separator then hint bar.
 	s.redrawSeparator()
+	s.redrawHint()
 	// Enable mouse wheel tracking (SGR extended mode).
 	fmt.Fprint(o, ansiMouseOn)
 	// Position cursor at start of content area.
 	fmt.Fprint(o, "\033[1;1H")
 	fmt.Fprint(o, ansiShowCursor)
 	s.active = true
+}
+
+// redrawHint draws the keyboard-shortcut hint bar on the bottom-most row.
+// Caller must hold mu (or be called before active is set).
+func (s *Screen) redrawHint() {
+	items := []struct{ key, desc string }{
+		{"ctrl+enter", "newline"},
+		{"ctrl+r", "expand tool"},
+		{"ctrl+c", "abort"},
+		{"ctrl+d", "exit"},
+		{"shift+drag", "copy text"},
+	}
+	var parts []string
+	for _, it := range items {
+		parts = append(parts,
+			styled(s.noColor, ansiBold+ansiBrightBlack, it.key)+
+				styled(s.noColor, ansiBrightBlack, " "+it.desc))
+	}
+	sep := styled(s.noColor, ansiBrightBlack, "  ·  ")
+	line := "  " + strings.Join(parts, sep)
+	// Truncate to terminal width.
+	if s.width > 0 && visibleLen(line) > s.width {
+		line = line[:s.width]
+	}
+	fmt.Fprintf(s.out, "\033[%d;1H", s.height)
+	fmt.Fprint(s.out, ansiEraseLine)
+	fmt.Fprint(s.out, line)
 }
 
 // EnableMouse turns on SGR mouse tracking (wheel events).
@@ -476,9 +504,9 @@ func (s *Screen) InitInputLine(prompt string) {
 		return
 	}
 	o := s.out
-	// Clear spacer and input rows.
-	fmt.Fprintf(o, "\033[%d;1H", s.height)
-	fmt.Fprint(o, ansiEraseLine)
+	// Draw hint bar on the bottom row.
+	s.redrawHint()
+	// Clear and repaint the input row.
 	fmt.Fprintf(o, "\033[%d;1H", s.height-1)
 	fmt.Fprint(o, ansiEraseLine)
 	// Print prompt; cursor ends up after the prompt ready for user input.
@@ -547,10 +575,13 @@ func (s *Screen) AfterReadLine() {
 		return
 	}
 	o := s.out
-	fmt.Fprintf(o, "\033[%d;1H", s.height)
-	fmt.Fprint(o, ansiEraseLine)
+	// Redraw the static chrome (separator + hint bar).
+	s.redrawSeparator()
+	s.redrawHint()
+	// Clear the input row.
 	fmt.Fprintf(o, "\033[%d;1H", s.height-1)
 	fmt.Fprint(o, ansiEraseLine)
-	// Redraw separator in case a terminal scroll disturbed it.
-	s.redrawSeparator()
+	// Park cursor at the input row so it doesn't blink on the separator line
+	// while the AI is streaming.
+	fmt.Fprintf(o, "\033[%d;1H", s.height-1)
 }

@@ -478,7 +478,15 @@ func (r *Renderer) PrintBanner(model, cwd string) {
 }
 
 // PrintSeparator renders a turn separator.
+// In Screen mode the static separator line at the bottom of the viewport
+// already provides visual separation, so we just add a blank line to the
+// scroll buffer (useful when scrolling back through history).
+// In plain mode a full horizontal rule is drawn.
 func (r *Renderer) PrintSeparator() {
+	if r.screen != nil {
+		r.writeln("")
+		return
+	}
 	w := termWidth()
 	r.writeln(styled(r.noColor, ansiBrightBlack, strings.Repeat("─", w)))
 }
