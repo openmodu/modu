@@ -28,12 +28,6 @@ type Screen struct {
 	width   int
 	active  bool
 
-	// Content area cursor tracking.
-	// contentCol is the 0-based column position at the bottom of the scroll
-	// region.  appendContent uses this to continue writing mid-line instead
-	// of always jumping back to column 1 (which overwrites streaming text).
-	contentCol int
-
 	// Tool collapse tracking.
 	// After WriteToolHeader, we track how many newlines have been printed
 	// into the scroll region so that CollapseToolHeader can cursor-up back
@@ -274,12 +268,6 @@ func (s *Screen) redrawContentArea() {
 
 	// Restore scroll region.
 	fmt.Fprintf(o, "\033[1;%dr", viewH)
-	// Update contentCol: it reflects the end of the pending line.
-	if s.width > 0 {
-		s.contentCol = visibleLen(s.pendingLine) % s.width
-	} else {
-		s.contentCol = 0
-	}
 	fmt.Fprint(o, ansiRestoreCursor)
 }
 
@@ -330,64 +318,42 @@ func (s *Screen) ScrollToBottom() {
 // appendContent writes text into the scroll region.
 // Caller must hold s.mu.  Handles save/restore so the cursor stays on the
 // input line between calls.
+//
+// Strategy: instead of tracking the exact column offset (which breaks for
+// East-Asian Ambiguous-width characters like ●/⏺/⎿ that the terminal renders
+// as 2 columns but the Unicode library classifies as 1), we always erase the
+// bottom line and rewrite the full pendingLine.  For text that contains
+// newlines (completed lines) we do a full redraw so the scroll region stays
+// consistent.
 func (s *Screen) appendContent(text string) {
-	// Always update the line buffer.
 	s.feedBuffer(text)
 
-	// If the user has scrolled back, don't render to the live terminal.
 	if s.scrollOff > 0 {
 		return
 	}
 
+	if strings.ContainsRune(text, '\n') {
+		// One or more lines completed: full redraw keeps everything in sync.
+		// redrawContentArea uses its own save/restore, so don't nest one here.
+		if s.pendingTool {
+			s.toolNewlines += visualLines(text, s.width)
+		}
+		s.redrawContentArea()
+		return
+	}
+
+	// No newline: erase the bottom line and rewrite the current pendingLine
+	// from column 1.  This is immune to any character-width miscalculation.
 	o := s.out
 	fmt.Fprint(o, ansiSaveCursor)
-	// Position at the correct column on the bottom row of the scroll region.
-	// Always writing at column 1 would overwrite streamed text that hasn't
-	// ended with a newline yet.
-	if s.contentCol == 0 {
-		fmt.Fprintf(o, "\033[%d;1H", s.contentBottom())
-	} else {
-		fmt.Fprintf(o, "\033[%d;%dH", s.contentBottom(), s.contentCol+1)
-	}
-	fmt.Fprint(o, text)
-	s.updateContentCol(text)
+	fmt.Fprint(o, "\033[r") // lift scroll region so absolute moves don't scroll
+	fmt.Fprintf(o, "\033[%d;1H\033[2K", s.contentBottom())
+	fmt.Fprint(o, s.pendingLine)
+	fmt.Fprintf(o, "\033[1;%dr", s.contentBottom()) // restore scroll region
 	if s.pendingTool {
 		s.toolNewlines += visualLines(text, s.width)
 	}
 	fmt.Fprint(o, ansiRestoreCursor)
-}
-
-// updateContentCol advances s.contentCol by the visual width of text,
-// resetting to 0 on newlines and on terminal-width wraps.
-func (s *Screen) updateContentCol(text string) {
-	inEsc := false
-	for _, r := range text {
-		if inEsc {
-			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
-				inEsc = false
-			}
-			continue
-		}
-		if r == '\033' {
-			inEsc = true
-			continue
-		}
-		if r == '\n' || r == '\r' {
-			s.contentCol = 0
-			continue
-		}
-		var cw int
-		switch width.LookupRune(r).Kind() {
-		case width.EastAsianWide, width.EastAsianFullwidth:
-			cw = 2
-		default:
-			cw = 1
-		}
-		s.contentCol += cw
-		if s.width > 0 && s.contentCol >= s.width {
-			s.contentCol = 0 // wrapped to next line
-		}
-	}
 }
 
 // visualLines counts how many terminal rows text occupies, counting both
@@ -489,10 +455,6 @@ func (s *Screen) CollapseToolHeader(text string) {
 		fmt.Fprintf(o, "\033[%dA", n+1)
 		fmt.Fprint(o, ansiEraseLine)
 		fmt.Fprint(o, text)
-		// Move back to the bottom of the scroll region so subsequent writes
-		// continue from there.
-		fmt.Fprintf(o, "\033[%d;1H", s.contentBottom())
-		s.contentCol = 0
 		fmt.Fprint(o, ansiRestoreCursor)
 	} else {
 		// Header has scrolled off – just append the collapsed line.

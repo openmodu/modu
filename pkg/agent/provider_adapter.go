@@ -174,8 +174,7 @@ func toolResultContent(blocks []types.ContentBlock) string {
 // --- Tool argument validation ---
 
 var (
-	schemaMu    sync.Mutex
-	schemaCache = map[string]*jsonschema.Schema{}
+	schemaCache sync.Map // map[string]*jsonschema.Schema
 )
 
 // ValidateToolArguments validates tool call arguments against the tool's JSON schema.
@@ -191,27 +190,40 @@ func ValidateToolArguments(tool types.ToolDefinition, toolCall types.ToolCallCon
 	}
 	schemaKey := string(schemaBytes)
 
-	schemaMu.Lock()
-	schema, ok := schemaCache[schemaKey]
-	schemaMu.Unlock()
+	// Fast path: check if already compiled
+	if cached, ok := schemaCache.Load(schemaKey); ok {
+		return validateAgainstSchema(cached.(*jsonschema.Schema), toolCall.Arguments, tool.Name)
+	}
 
+	// Slow path: compile and cache
+	compiled, err := compileSchema(schemaBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	// Double-check after acquiring write lock
+	if cached, ok := schemaCache.LoadOrStore(schemaKey, compiled); ok {
+		compiled = cached.(*jsonschema.Schema)
+	}
+
+	return validateAgainstSchema(compiled, toolCall.Arguments, tool.Name)
+}
+
+func compileSchema(schemaBytes []byte) (*jsonschema.Schema, error) {
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource("schema.json", bytes.NewReader(schemaBytes)); err != nil {
+		return nil, err
+	}
+	return compiler.Compile("schema.json")
+}
+
+func validateAgainstSchema(schema *jsonschema.Schema, args any, toolName string) (map[string]any, error) {
+	if err := schema.Validate(args); err != nil {
+		return nil, fmt.Errorf("validation failed for tool %q: %v", toolName, err)
+	}
+	result, ok := args.(map[string]any)
 	if !ok {
-		compiler := jsonschema.NewCompiler()
-		if err := compiler.AddResource("schema.json", bytes.NewReader(schemaBytes)); err != nil {
-			return nil, err
-		}
-		compiled, err := compiler.Compile("schema.json")
-		if err != nil {
-			return nil, err
-		}
-		schemaMu.Lock()
-		schemaCache[schemaKey] = compiled
-		schemaMu.Unlock()
-		schema = compiled
+		return nil, fmt.Errorf("invalid argument type for tool %q", toolName)
 	}
-
-	if err := schema.Validate(toolCall.Arguments); err != nil {
-		return nil, fmt.Errorf("validation failed for tool %q: %v", tool.Name, err)
-	}
-	return toolCall.Arguments, nil
+	return result, nil
 }

@@ -100,17 +100,16 @@ func runLoop(currentContext AgentContext, newMessages []AgentMessage, config Age
 			}
 			toolCalls := extractToolCalls(assistantMessage)
 			hasMoreToolCalls = len(toolCalls) > 0
-			toolResults := []types.ToolResultMessage{}
+		var execResults []types.ToolResultMessage
 			if hasMoreToolCalls {
 				execResults, steering := executeToolCalls(currentContext.Tools, toolCalls, ctx, stream, config)
-				toolResults = append(toolResults, execResults...)
 				steeringAfterTools = steering
-				for i := range toolResults {
-					currentContext.Messages = append(currentContext.Messages, toolResults[i])
-					newMessages = append(newMessages, toolResults[i])
+				for i := range execResults {
+					currentContext.Messages = append(currentContext.Messages, execResults[i])
+					newMessages = append(newMessages, execResults[i])
 				}
 			}
-			stream.Push(AgentEvent{Type: EventTypeTurnEnd, Message: assistantMessage, ToolResults: toolResults})
+			stream.Push(AgentEvent{Type: EventTypeTurnEnd, Message: assistantMessage, ToolResults: execResults})
 			if len(steeringAfterTools) > 0 {
 				pendingMessages = steeringAfterTools
 				steeringAfterTools = nil

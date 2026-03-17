@@ -479,11 +479,6 @@ func (a *Agent) runLoop(ctx context.Context, messages []AgentMessage, skipInitia
 			a.state.PendingToolCalls = s
 			a.mu.Unlock()
 		case EventTypeTurnEnd:
-			if msg, ok := event.Message.(types.AssistantMessage); ok && msg.ErrorMessage != "" {
-				a.mu.Lock()
-				a.state.Error = msg.ErrorMessage
-				a.mu.Unlock()
-			}
 			if msg, ok := event.Message.(*types.AssistantMessage); ok && msg.ErrorMessage != "" {
 				a.mu.Lock()
 				a.state.Error = msg.ErrorMessage
@@ -504,11 +499,7 @@ func (a *Agent) runLoop(ctx context.Context, messages []AgentMessage, skipInitia
 	}
 
 	if partial != nil {
-		if msg, ok := partial.(types.AssistantMessage); ok && hasNonEmptyContent(msg) {
-			a.mu.Lock()
-			a.state.Messages = append(a.state.Messages, partial)
-			a.mu.Unlock()
-		} else if msg, ok := partial.(*types.AssistantMessage); ok && hasNonEmptyContent(*msg) {
+		if msg, ok := partial.(*types.AssistantMessage); ok && hasNonEmptyContent(*msg) {
 			a.mu.Lock()
 			a.state.Messages = append(a.state.Messages, partial)
 			a.mu.Unlock()
