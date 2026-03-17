@@ -28,6 +28,14 @@ type Input struct {
 
 	// OnCtrlR is called when the user presses Ctrl+R (expand last tool).
 	OnCtrlR func()
+
+	// typeAhead holds characters the user typed during RunScrollLoop.
+	// rawReadLine picks them up as the initial buffer on the next call.
+	typeAhead []rune
+
+	// lastPrompt is the prompt string from the most recent ReadLine call,
+	// used to display typeahead feedback in the input line during streaming.
+	lastPrompt string
 }
 
 // NewInput creates an Input reading from in and writing the prompt to out.
@@ -145,6 +153,8 @@ func (ls *lineState) deleteForward() {
 
 // rawReadLine runs a full readline loop with the terminal in raw mode.
 func (i *Input) rawReadLine(prompt string) (string, error) {
+	i.lastPrompt = prompt
+
 	fd := int(i.in.Fd())
 	oldState, err := term.MakeRaw(fd)
 	if err != nil {
@@ -169,7 +179,14 @@ func (i *Input) rawReadLine(prompt string) (string, error) {
 
 	i.screen.InitInputLine(prompt)
 
+	// Pre-fill with any characters typed during the previous streaming phase.
 	ls := &lineState{}
+	if len(i.typeAhead) > 0 {
+		ls.buf = i.typeAhead
+		ls.cursor = len(ls.buf)
+		i.typeAhead = nil
+		i.screen.RedrawInputContent(prompt, string(ls.buf), ls.cursor)
+	}
 	histIdx := len(i.history) // points past end = current editing buffer
 	savedBuf := []rune{}      // snapshot of buf before history navigation
 
@@ -394,11 +411,6 @@ func (i *Input) RunScrollLoop(done <-chan struct{}, abortFn func()) {
 		return
 	}
 
-	// Enable mouse tracking only during streaming so that during normal
-	// input (ReadLine) the terminal allows text selection/copy.
-	i.screen.EnableMouse()
-	defer i.screen.DisableMouse()
-
 	fd := int(i.in.Fd())
 	oldState, err := term.MakeRaw(fd)
 	if err != nil {
@@ -466,9 +478,22 @@ func (i *Input) RunScrollLoop(done <-chan struct{}, abortFn func()) {
 		return b, nil
 	}
 
+	// typeahead buffer: characters typed while AI is streaming.
+	var ta []rune
+	// showTypeAhead redraws the input line so the user gets visual feedback.
+	showTypeAhead := func() {
+		if i.screen != nil && i.lastPrompt != "" {
+			i.screen.RedrawInputContent(i.lastPrompt, string(ta), len(ta))
+		}
+	}
+
 	for {
 		select {
 		case <-done:
+			// Persist buffered typeahead for rawReadLine to pick up.
+			if len(ta) > 0 {
+				i.typeAhead = ta
+			}
 			return
 		case b := <-byteCh:
 			switch b {
@@ -480,6 +505,11 @@ func (i *Input) RunScrollLoop(done <-chan struct{}, abortFn func()) {
 			case 18: // Ctrl+R – expand last tool call
 				if i.OnCtrlR != nil {
 					i.OnCtrlR()
+				}
+			case 127, 8: // Backspace – delete last typeahead character
+				if len(ta) > 0 {
+					ta = ta[:len(ta)-1]
+					showTypeAhead()
 				}
 			case 27: // ESC
 				seq1, ok := readByteTimeout(100)
@@ -506,6 +536,36 @@ func (i *Input) RunScrollLoop(done <-chan struct{}, abortFn func()) {
 				default:
 					if seq2 >= '0' && seq2 <= '9' {
 						readByteTimeout(100) // consume ~
+					}
+				}
+
+			default:
+				// Printable ASCII — buffer as typeahead and echo in input line.
+				if b >= 32 && b < 127 {
+					ta = append(ta, rune(b))
+					showTypeAhead()
+				} else if b >= 0x80 {
+					// Leading byte of a multi-byte UTF-8 sequence (e.g. CJK input).
+					n := utf8ByteLen(b)
+					if n > 1 {
+						seq := make([]byte, n)
+						seq[0] = b
+						ok := true
+						for k := 1; k < n; k++ {
+							cb, hasMore := readByteTimeout(50)
+							if !hasMore {
+								ok = false
+								break
+							}
+							seq[k] = cb
+						}
+						if ok {
+							r, _ := utf8.DecodeRune(seq)
+							if r != utf8.RuneError {
+								ta = append(ta, r)
+								showTypeAhead()
+							}
+						}
 					}
 				}
 			}

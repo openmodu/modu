@@ -85,8 +85,8 @@ func (s *Screen) enter() {
 	fmt.Fprintf(o, "\033[1;%dr", s.contentBottom())
 	// Draw the separator at height-2.
 	s.redrawSeparator()
-	// Mouse tracking is NOT enabled here; it is enabled only during AI
-	// streaming (RunScrollLoop) so that normal input allows text selection.
+	// Enable mouse wheel tracking (SGR extended mode).
+	fmt.Fprint(o, ansiMouseOn)
 	// Position cursor at start of content area.
 	fmt.Fprint(o, "\033[1;1H")
 	fmt.Fprint(o, ansiShowCursor)
