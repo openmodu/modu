@@ -23,7 +23,7 @@ type toolRecord struct {
 //
 // Visual language:
 //
-//	● text response              ← green bullet, streamed inline
+//	● text response              ← dim grey bullet, streamed inline
 //	✧ Thinking…                  ← header text
 //	  ⎿  content                 ← text streamed with ⎿ indent
 //	⏺ ToolName("arg")           ← while tool is running
@@ -101,8 +101,8 @@ func (r *Renderer) write(text string) {
 
 func (r *Renderer) writeln(text string) { r.write(text + "\n") }
 
-// bullet returns the styled ● marker.
-func (r *Renderer) bullet() string { return styled(r.noColor, ansiBrightGreen, "●") }
+// bullet returns the styled ● marker for text responses.
+func (r *Renderer) bullet() string { return styled(r.noColor, ansiDim, "●") }
 
 // ── event handler ────────────────────────────────────────────────────────────
 
