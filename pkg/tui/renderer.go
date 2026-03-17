@@ -371,7 +371,7 @@ func (r *Renderer) toolCallLine(name string, args any) string {
 	nameStr := styled(r.noColor, ansiBold, name)
 	arg := primaryArg(name, args)
 	argStr := styled(r.noColor, ansiDim, "("+arg+")")
-	return fmt.Sprintf("%s  %s%s", bullet, nameStr, argStr)
+	return fmt.Sprintf("%s %s%s", bullet, nameStr, argStr)
 }
 
 // toolResultLine returns line 2: "  ⎿  summary" or "  ⎿  …" while running.
