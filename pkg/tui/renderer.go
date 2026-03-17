@@ -52,16 +52,23 @@ type Renderer struct {
 	// <think>...</think> tag filtering for models that embed thinking in text stream.
 	inTextThink bool   // currently inside a <think> block in text
 	textBuf     string // partial text buffer for tag detection
+
+	// Markdown renderer for AI text responses.
+	md *mdWriter
 }
 
 // NewRenderer creates a plain-mode Renderer writing to out.
 func NewRenderer(out io.Writer) *Renderer {
-	return &Renderer{out: out, noColor: shouldDisableColor(out)}
+	r := &Renderer{out: out, noColor: shouldDisableColor(out)}
+	r.md = newMDWriter(r.noColor, func(text string) { fmt.Fprint(r.out, text) })
+	return r
 }
 
 // NewRendererWithScreen creates a Renderer backed by a viewport Screen.
 func NewRendererWithScreen(s *Screen) *Renderer {
-	return &Renderer{screen: s, noColor: s.noColor}
+	r := &Renderer{screen: s, noColor: s.noColor}
+	r.md = newMDWriter(r.noColor, func(text string) { s.Write(text) })
+	return r
 }
 
 // SetNoColor overrides automatic color detection.
@@ -95,6 +102,7 @@ func (r *Renderer) HandleEvent(event agent.AgentEvent) {
 		r.textBuf = ""
 		r.toolLines = 0
 		r.turnStart = time.Now()
+		r.md.Reset()
 
 	case agent.EventTypeMessageUpdate:
 		if event.StreamEvent == nil {
@@ -214,7 +222,7 @@ func (r *Renderer) processTextDelta(delta string) {
 	}
 }
 
-// emitText writes a text chunk, prefixing with the response bullet on first call.
+// emitText writes a text chunk, routing through the Markdown renderer.
 func (r *Renderer) emitText(text string) {
 	if text == "" {
 		return
@@ -224,20 +232,20 @@ func (r *Renderer) emitText(text string) {
 		r.hadText = true
 		r.toolLines++
 	}
-	r.write(text)
+	r.md.Feed(text)
 }
 
-// flushTextBuf flushes any text held in the partial-tag detection buffer.
-// Must be called at turn end or before a tool call / thinking block.
+// flushTextBuf flushes any text held in the partial-tag detection buffer and
+// the Markdown line buffer.  Must be called at turn end or before a tool call.
 func (r *Renderer) flushTextBuf() {
 	if r.inTextThink {
-		// Unclosed <think> block — show indicator anyway.
 		r.inTextThink = false
 	}
 	if r.textBuf != "" {
 		r.emitText(r.textBuf)
 		r.textBuf = ""
 	}
+	r.md.Flush()
 }
 
 // ── tool line formatting ─────────────────────────────────────────────────────
