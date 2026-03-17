@@ -21,13 +21,11 @@ type toolRecord struct {
 
 // Renderer renders agent events to the terminal in a Claude Code-inspired style.
 //
-// Visual language:
-//
 //	● text response              ← dim grey bullet, streamed inline
 //	✧ Thinking…                  ← header text
 //	  ⎿  content                 ← text streamed with ⎿ indent
-//	⏺ ToolName("arg")           ← while tool is running
-//	⏺ ToolName("arg") → result  ← after tool completes (replaced in-place)
+//	● ToolName("arg")           ← green bullet, while tool is running
+//	● ToolName("arg") → result  ← green bullet, after tool completes
 //
 // Two output modes:
 //   - Plain (screen == nil): writes directly to out; uses cursor-up to
@@ -152,7 +150,7 @@ func (r *Renderer) HandleEvent(event agent.AgentEvent) {
 		r.toolLines = 0
 		r.toolExpanded = false // new tool call invalidates any previous expansion
 
-		// Line 1: ⏺ ToolName(arg)  — written as regular (permanent) content.
+		// Line 1: ● ToolName(arg)  — written as regular (permanent) content.
 		// Line 2:   ⎿  …           — written as the replaceable tool header.
 		callLine := r.toolCallLine(event.ToolName, event.Args)
 		resultPlaceholder := r.toolResultLine(false, false, "")
@@ -364,12 +362,12 @@ func (r *Renderer) flushTextBuf() {
 //
 // Two-line format, mirroring Claude Code:
 //
-//	⏺ ToolName(arg)               ← line 1: permanent
+//	● ToolName(arg)               ← line 1: permanent
 //	  ⎿  summary (ctrl+r)         ← line 2: replaced in-place on completion
 
-// toolCallLine returns line 1: "⏺ ToolName(arg)".
+// toolCallLine returns line 1: "● ToolName(arg)".
 func (r *Renderer) toolCallLine(name string, args any) string {
-	bullet := styled(r.noColor, ansiBrightGreen, "⏺")
+	bullet := styled(r.noColor, ansiBrightGreen, "●")
 	nameStr := styled(r.noColor, ansiBold, name)
 	arg := primaryArg(name, args)
 	argStr := styled(r.noColor, ansiDim, "("+arg+")")
