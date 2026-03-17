@@ -231,7 +231,7 @@ func (r *Renderer) processTextDelta(delta string) {
 
 				if len(r.textBuf) > guard {
 					cut := len(r.textBuf) - guard
-					for cut > 0 && !utf8.RuneStart(r.textBuf[cut]) {
+					for cut > 0 && cut < len(r.textBuf) && !utf8.RuneStart(r.textBuf[cut]) {
 						cut--
 					}
 					if cut > 0 {
@@ -266,7 +266,7 @@ func (r *Renderer) processTextDelta(delta string) {
 				
 				if len(r.textBuf) > guard {
 					cut := len(r.textBuf) - guard
-					for cut > 0 && !utf8.RuneStart(r.textBuf[cut]) {
+					for cut > 0 && cut < len(r.textBuf) && !utf8.RuneStart(r.textBuf[cut]) {
 						cut--
 					}
 					if cut > 0 {
