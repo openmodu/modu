@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -56,8 +57,13 @@ type Renderer struct {
 	// Markdown renderer for AI text responses.
 	md *mdWriter
 
-	// Expand/collapse state for Ctrl+R tool output toggle.
-	toolExpanded      bool
+	// Ctrl+R expand state.
+	// expandIdx is the index into toolHistory currently displayed (-1 = none).
+	// Each Ctrl+R press cycles one step older; wraps around to most recent.
+	// expandShown is true in Screen mode when the expanded view is drawn and
+	// should be erased before the next expand.
+	expandIdx        int
+	expandShown      bool
 	expandMarkLines   int
 	expandMarkPending string
 
@@ -68,12 +74,20 @@ type Renderer struct {
 	// arrives so trailing newlines are silently discarded at block end.
 	thinkNeedIndent bool
 	thinkPendingNL  bool
+
+	// Inline-mode sticky-prompt state.
+	// When the user is typing (or waiting during streaming), promptText holds
+	// the text to keep painted at the bottom of the terminal.  write() erases
+	// it before any AI output and repaints it after each complete line.
+	promptMu    sync.Mutex
+	promptText  string // empty = no active prompt
+	promptShown bool   // true when promptText is currently drawn on screen
 }
 
 // NewRenderer creates a plain-mode Renderer writing to out.
 func NewRenderer(out io.Writer) *Renderer {
 	r := &Renderer{out: out, noColor: shouldDisableColor(out)}
-	r.md = newMDWriter(r.noColor, func(text string) { fmt.Fprint(r.out, text) })
+	r.md = newMDWriter(r.noColor, func(text string) { r.write(text) })
 	return r
 }
 
@@ -92,12 +106,50 @@ func (r *Renderer) SetNoColor(v bool) { r.noColor = v }
 func (r *Renderer) write(text string) {
 	if r.screen != nil {
 		r.screen.Write(text)
-	} else {
-		fmt.Fprint(r.out, text)
+		return
+	}
+	// In inline mode stdin is kept in raw mode during ReadLine and RunScrollLoop.
+	// Raw mode disables the tty's ONLCR flag, so a bare \n only moves the cursor
+	// down without resetting to column 1.  Always emit \r\n to be safe.
+	if strings.Contains(text, "\n") {
+		text = strings.ReplaceAll(text, "\r\n", "\n") // normalise existing CRLF
+		text = strings.ReplaceAll(text, "\n", "\r\n") // then expand all LF→CRLF
+	}
+	r.promptMu.Lock()
+	defer r.promptMu.Unlock()
+	// Erase the prompt before writing AI content.
+	if r.promptShown {
+		fmt.Fprint(r.out, "\r\033[2K")
+		r.promptShown = false
+	}
+	fmt.Fprint(r.out, text)
+	// Repaint the prompt after each complete line.
+	if r.promptText != "" && strings.HasSuffix(text, "\r\n") {
+		fmt.Fprintf(r.out, "\r\033[2K%s", r.promptText)
+		r.promptShown = true
 	}
 }
 
 func (r *Renderer) writeln(text string) { r.write(text + "\n") }
+
+// SetActivePrompt registers the prompt text that should stay painted at the
+// bottom of the terminal during AI streaming.  Call with empty string to
+// erase the prompt and deactivate.  Thread-safe.
+func (r *Renderer) SetActivePrompt(text string) {
+	r.promptMu.Lock()
+	defer r.promptMu.Unlock()
+	r.promptText = text
+	if text == "" {
+		if r.promptShown {
+			fmt.Fprint(r.out, "\r\033[2K")
+			r.promptShown = false
+		}
+		return
+	}
+	// Erase current line and draw the new prompt text.
+	fmt.Fprintf(r.out, "\r\033[2K%s", text)
+	r.promptShown = true
+}
 
 // bullet returns the styled ● marker for text responses.
 func (r *Renderer) bullet() string { return styled(r.noColor, ansiDim, "●") }
@@ -148,7 +200,9 @@ func (r *Renderer) HandleEvent(event agent.AgentEvent) {
 		r.flushTextBuf()
 		r.hadTool = true
 		r.toolLines = 0
-		r.toolExpanded = false // new tool call invalidates any previous expansion
+		// New tool: reset expand state so next Ctrl+R starts from this tool.
+		r.expandIdx = -1
+		r.expandShown = false
 
 		// Line 1: ● ToolName(arg)  — written as regular (permanent) content.
 		// Line 2:   ⎿  …           — written as the replaceable tool header.
@@ -407,35 +461,43 @@ func (r *Renderer) toolResultLine(done, isError bool, result string) string {
 	return prefix + styled(r.noColor, ansiDim, result) + hint
 }
 
-// ExpandLastTool toggles the full args+result of the most recent tool call.
-// First press expands; second press collapses back.  Called on Ctrl+R.
+// ExpandLastTool shows the full args+result of a tool call.  Called on Ctrl+R.
+//
+// Each press cycles one step older through the tool history (most-recent first,
+// wrapping back around).  In Screen mode the previous expand is erased before
+// drawing the next one.  In inline mode expands are append-only (content cannot
+// be deleted from the scroll buffer).
 func (r *Renderer) ExpandLastTool() {
-	if len(r.toolHistory) == 0 {
+	n := len(r.toolHistory)
+	if n == 0 {
 		r.writeln(styled(r.noColor, ansiDim, "(no tool calls yet)"))
 		return
 	}
 
-	// ── collapse ─────────────────────────────────────────────────────────────
-	if r.toolExpanded {
-		if r.screen != nil {
-			r.screen.TrimToMark(r.expandMarkLines, r.expandMarkPending)
-		}
-		r.toolExpanded = false
-		return
+	// Screen mode: erase any currently-visible expand before showing the next.
+	if r.screen != nil && r.expandShown {
+		r.screen.TrimToMark(r.expandMarkLines, r.expandMarkPending)
+		r.expandShown = false
 	}
 
-	// ── expand ────────────────────────────────────────────────────────────────
-	// Record the current buffer position so we can trim back on collapse.
+	// Advance index: first press → most recent; each subsequent press → one older.
+	if r.expandIdx < 0 {
+		r.expandIdx = n - 1
+	} else {
+		r.expandIdx = (r.expandIdx - 1 + n) % n
+	}
+
 	if r.screen != nil {
 		r.expandMarkLines, r.expandMarkPending = r.screen.ContentMark()
+		r.expandShown = true
 	}
-	r.toolExpanded = true
 
-	rec := r.toolHistory[len(r.toolHistory)-1]
+	rec := r.toolHistory[r.expandIdx]
+	pos := r.expandIdx + 1 // 1-based position
 	w := termWidth()
 
-	// Header.
-	header := fmt.Sprintf(" %s ", rec.name)
+	// Header: "─── bash (2/5) ─────"
+	header := fmt.Sprintf(" %s (%d/%d) ", rec.name, pos, n)
 	side := (w - len([]rune(header))) / 2
 	if side < 1 {
 		side = 1
@@ -465,7 +527,20 @@ func (r *Renderer) ExpandLastTool() {
 		}
 	}
 
-	r.writeln(styled(r.noColor, ansiBrightBlack, strings.Repeat("─", w)))
+	// Footer with navigation hint.
+	var hint string
+	if n == 1 {
+		hint = "ctrl+r to close"
+	} else {
+		next := (r.expandIdx - 1 + n) % n
+		hint = fmt.Sprintf("ctrl+r → %s (%d/%d)", r.toolHistory[next].name, next+1, n)
+	}
+	hintStyled := styled(r.noColor, ansiBrightBlack, hint)
+	dashCount := w - visibleLen(hintStyled) - 1
+	if dashCount < 1 {
+		dashCount = 1
+	}
+	r.writeln(styled(r.noColor, ansiBrightBlack, strings.Repeat("─", dashCount)) + " " + hintStyled)
 }
 
 // primaryArg returns the most informative single argument for display.
@@ -622,15 +697,7 @@ func (r *Renderer) PrintBanner(model, cwd string) {
 }
 
 // PrintSeparator renders a turn separator.
-// In Screen mode the static separator line at the bottom of the viewport
-// already provides visual separation, so we just add a blank line to the
-// scroll buffer (useful when scrolling back through history).
-// In plain mode a full horizontal rule is drawn.
 func (r *Renderer) PrintSeparator() {
-	if r.screen != nil {
-		r.writeln("")
-		return
-	}
 	w := termWidth()
 	r.writeln(styled(r.noColor, ansiBrightBlack, strings.Repeat("─", w)))
 }

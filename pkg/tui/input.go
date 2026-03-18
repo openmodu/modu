@@ -16,12 +16,17 @@ import (
 // ErrInterrupt is returned by ReadLine when the user presses Ctrl+C.
 var ErrInterrupt = fmt.Errorf("interrupt")
 
-// Input provides line-based terminal input with history and, when a Screen is
-// attached, full raw-mode editing (cursor movement, history navigation).
+// Input provides line-based terminal input with history and raw-mode editing
+// (cursor movement, history navigation, Ctrl+A/E/K/U).
+//
+// When stdin is a terminal it always operates in raw mode, drawing the prompt
+// and editing cursor directly via ANSI escape codes — no Screen required.
+// When stdin is not a terminal (pipes, tests) it falls back to a simple
+// cooked-mode read.
 type Input struct {
 	in      *os.File  // raw stdin for raw-mode reads
 	out     io.Writer // prompt output
-	screen  *Screen   // optional viewport; if set, raw mode is used
+	screen  *Screen   // optional viewport (legacy Screen mode, unused in inline mode)
 	history []string
 	maxHist int
 	noColor bool
@@ -29,16 +34,21 @@ type Input struct {
 	// OnCtrlR is called when the user presses Ctrl+R (expand last tool).
 	OnCtrlR func()
 
+	// OnPromptChange, if non-nil, is called whenever the inline prompt changes.
+	// text is the full prompt+buffer to display; empty string means "clear".
+	// Used to keep the prompt painted at the bottom during AI streaming.
+	OnPromptChange func(text string)
+
 	// typeAhead holds characters the user typed during RunScrollLoop.
 	// rawReadLine picks them up as the initial buffer on the next call.
 	typeAhead []rune
 
-	// lastPrompt is the prompt string from the most recent ReadLine call,
-	// used to display typeahead feedback in the input line during streaming.
+	// lastPrompt is the prompt string from the most recent ReadLine call.
 	lastPrompt string
 }
 
 // NewInput creates an Input reading from in and writing the prompt to out.
+// When in is a terminal, raw-mode line editing is used automatically.
 func NewInput(in io.Reader, out io.Writer) *Input {
 	f, _ := in.(*os.File)
 	return &Input{
@@ -49,8 +59,8 @@ func NewInput(in io.Reader, out io.Writer) *Input {
 	}
 }
 
-// NewInputWithScreen creates an Input that uses the Screen's input line and
-// enables raw-mode editing.
+// NewInputWithScreen creates an Input backed by a Screen viewport.
+// Kept for callers that want the Screen-based layout.
 func NewInputWithScreen(in io.Reader, s *Screen) *Input {
 	f, _ := in.(*os.File)
 	return &Input{
@@ -63,15 +73,16 @@ func NewInputWithScreen(in io.Reader, s *Screen) *Input {
 }
 
 // ReadLine displays prompt and returns the next line of input.
-// Returns ("", ErrInterrupt) on Ctrl+C and ("", io.EOF) on Ctrl+D.
+// Returns ("", ErrInterrupt) on Ctrl+C and ("", io.EOF) on Ctrl+D / EOF.
 func (i *Input) ReadLine(prompt string) (string, error) {
 	styledPrompt := styled(i.noColor, ansiBold+ansiGreen, prompt)
 
-	if i.screen != nil && i.in != nil {
+	// Use raw mode whenever stdin is an interactive terminal.
+	if i.in != nil && isTerminalFd(uintptr(i.in.Fd())) {
 		return i.rawReadLine(styledPrompt)
 	}
 
-	// Plain (cooked) mode fallback.
+	// Non-interactive fallback (pipe / test).
 	fmt.Fprint(i.out, styledPrompt)
 	var buf strings.Builder
 	raw := make([]byte, 1)
@@ -152,6 +163,9 @@ func (ls *lineState) deleteForward() {
 }
 
 // rawReadLine runs a full readline loop with the terminal in raw mode.
+// Works in two sub-modes:
+//   - Screen mode (i.screen != nil): delegates drawing to Screen methods.
+//   - Inline mode (i.screen == nil): draws directly with ANSI escape codes.
 func (i *Input) rawReadLine(prompt string) (string, error) {
 	i.lastPrompt = prompt
 
@@ -159,25 +173,25 @@ func (i *Input) rawReadLine(prompt string) (string, error) {
 	oldState, err := term.MakeRaw(fd)
 	if err != nil {
 		// Can't enter raw mode – fall back to cooked read.
-		i.screen.InitInputLine(prompt)
+		i.initLine(prompt)
 		var sb strings.Builder
 		buf := make([]byte, 1)
 		for {
-			n, err := i.in.Read(buf)
+			n, readErr := i.in.Read(buf)
 			if n > 0 && buf[0] != '\n' && buf[0] != '\r' {
 				sb.WriteByte(buf[0])
 			}
-			if (n > 0 && (buf[0] == '\n' || buf[0] == '\r')) || err != nil {
+			if (n > 0 && (buf[0] == '\n' || buf[0] == '\r')) || readErr != nil {
 				line := sb.String()
-				i.screen.AfterReadLine()
+				i.doneLine()
 				i.addHistory(line)
-				return line, err
+				return line, readErr
 			}
 		}
 	}
 	defer term.Restore(fd, oldState)
 
-	i.screen.InitInputLine(prompt)
+	i.initLine(prompt)
 
 	// Pre-fill with any characters typed during the previous streaming phase.
 	ls := &lineState{}
@@ -185,14 +199,12 @@ func (i *Input) rawReadLine(prompt string) (string, error) {
 		ls.buf = i.typeAhead
 		ls.cursor = len(ls.buf)
 		i.typeAhead = nil
-		i.screen.RedrawInputContent(prompt, string(ls.buf), ls.cursor)
+		i.redrawContent(prompt, ls)
 	}
 	histIdx := len(i.history) // points past end = current editing buffer
 	savedBuf := []rune{}      // snapshot of buf before history navigation
 
-	redraw := func() {
-		i.screen.RedrawInputContent(prompt, string(ls.buf), ls.cursor)
-	}
+	redraw := func() { i.redrawContent(prompt, ls) }
 
 	readByte := func() (byte, error) {
 		b := make([]byte, 1)
@@ -210,25 +222,25 @@ func (i *Input) rawReadLine(prompt string) (string, error) {
 	for {
 		b, err := readByte()
 		if err != nil {
-			i.screen.AfterReadLine()
+			i.doneLine()
 			return "", io.EOF
 		}
 
 		switch b {
 		case '\r', '\n': // Enter
-			i.screen.ScrollToBottom()
 			line := string(ls.buf)
-			i.screen.AfterReadLine()
+			i.scrollToBottom()
+			i.doneLine()
 			i.addHistory(line)
 			return line, nil
 
 		case 3: // Ctrl+C
-			i.screen.AfterReadLine()
+			i.doneLine()
 			return "", ErrInterrupt
 
 		case 4: // Ctrl+D – EOF if line is empty, else delete forward
 			if len(ls.buf) == 0 {
-				i.screen.AfterReadLine()
+				i.doneLine()
 				return "", io.EOF
 			}
 			ls.deleteForward()
@@ -252,7 +264,23 @@ func (i *Input) rawReadLine(prompt string) (string, error) {
 
 		case 18: // Ctrl+R – expand last tool call
 			if i.OnCtrlR != nil {
-				i.OnCtrlR()
+				if i.screen == nil {
+					// Inline mode: move past the current prompt line, run the
+					// handler, then reprint the prompt and current buffer.
+					// Use \r\n (not \n) because raw mode disables ONLCR.
+					fmt.Fprint(i.out, "\r\n")
+					i.OnCtrlR()
+					i.initLine(prompt)
+					if len(ls.buf) > 0 {
+						fmt.Fprint(i.out, string(ls.buf))
+						tailCols := visibleLen(string(ls.buf[ls.cursor:]))
+						if tailCols > 0 {
+							fmt.Fprintf(i.out, "\033[%dD", tailCols)
+						}
+					}
+				} else {
+					i.OnCtrlR()
+				}
 			}
 
 		case 21: // Ctrl+U – kill to start of line
@@ -273,7 +301,7 @@ func (i *Input) rawReadLine(prompt string) (string, error) {
 				continue
 			}
 			switch seq2 {
-			case '<': // SGR mouse event: ESC[<button;x;yM or ESC[<button;x;ym
+			case '<': // SGR mouse event: only handled in Screen mode
 				if i.screen != nil {
 					i.handleSGRMouse(readByte)
 				} else {
@@ -319,8 +347,7 @@ func (i *Input) rawReadLine(prompt string) (string, error) {
 					ls.cursor--
 					redraw()
 				}
-			case 'H', '1': // Home (some terminals send ESC[1~ or ESC[H)
-				// consume possible trailing ~ for ESC[1~
+			case 'H', '1': // Home
 				if seq2 == '1' {
 					readByte() // ~
 				}
@@ -336,7 +363,7 @@ func (i *Input) rawReadLine(prompt string) (string, error) {
 				readByte() // ~
 				ls.deleteForward()
 				redraw()
-				case '5': // Page Up (ESC[5~)
+			case '5': // Page Up (ESC[5~)
 				readByte() // ~
 				if i.screen != nil {
 					i.screen.ScrollUp(i.screen.ContentBottom() / 2)
@@ -347,24 +374,19 @@ func (i *Input) rawReadLine(prompt string) (string, error) {
 					i.screen.ScrollDown(i.screen.ContentBottom() / 2)
 				}
 			default:
-				// Consume trailing ~ for numeric sequences (ESC[N~)
-				// e.g. Insert (2~), etc.
 				if seq2 >= '0' && seq2 <= '9' {
-					readByte() // ~
+					readByte() // consume trailing ~
 				}
 			}
 
 		default:
 			// Printable character – may be multi-byte UTF-8.
-			// In raw mode we receive bytes one at a time; reconstruct runes.
 			if b < 0x80 {
-				// ASCII printable
 				if b >= 32 {
 					ls.insert(rune(b))
 					redraw()
 				}
 			} else {
-				// Multi-byte UTF-8: determine how many bytes to read.
 				n := utf8ByteLen(b)
 				if n < 1 {
 					continue
@@ -387,6 +409,51 @@ func (i *Input) rawReadLine(prompt string) (string, error) {
 	}
 }
 
+// ── drawing helpers ───────────────────────────────────────────────────────────
+
+// initLine sets up the input line before editing begins.
+func (i *Input) initLine(prompt string) {
+	if i.screen != nil {
+		i.screen.InitInputLine(prompt)
+	} else {
+		fmt.Fprint(i.out, prompt)
+	}
+}
+
+// doneLine is called when a line is committed (Enter / Ctrl+C / EOF).
+func (i *Input) doneLine() {
+	if i.screen != nil {
+		i.screen.AfterReadLine()
+	} else {
+		// In raw mode \n is a bare line-feed (no carriage return), so the
+		// cursor would stay in the middle of the line.  Use \r\n to go to
+		// the beginning of the next line.
+		fmt.Fprint(i.out, "\r\n")
+	}
+}
+
+// scrollToBottom is called before committing a line.
+func (i *Input) scrollToBottom() {
+	if i.screen != nil {
+		i.screen.ScrollToBottom()
+	}
+}
+
+// redrawContent redraws the current editing buffer.
+func (i *Input) redrawContent(prompt string, ls *lineState) {
+	if i.screen != nil {
+		i.screen.RedrawInputContent(prompt, string(ls.buf), ls.cursor)
+		return
+	}
+	// Inline mode: \r to column 1, erase line, reprint prompt + buffer.
+	fmt.Fprintf(i.out, "\r\033[K%s%s", prompt, string(ls.buf))
+	// Move cursor left to the correct position within the buffer.
+	tailCols := visibleLen(string(ls.buf[ls.cursor:]))
+	if tailCols > 0 {
+		fmt.Fprintf(i.out, "\033[%dD", tailCols)
+	}
+}
+
 // utf8ByteLen returns the total byte length of a UTF-8 sequence from its
 // leading byte, or -1 if invalid.
 func utf8ByteLen(b byte) int {
@@ -401,16 +468,20 @@ func utf8ByteLen(b byte) int {
 	return -1
 }
 
-// RunScrollLoop enters raw mode and handles scroll events (mouse wheel,
-// Page Up/Down) while the AI is streaming.  It blocks until done is closed.
-// Ctrl+C calls abortFn.  Call this on the main goroutine while session.Prompt
-// runs in a background goroutine.
+// ── scroll loop ───────────────────────────────────────────────────────────────
+
+// RunScrollLoop waits while the AI is streaming and handles abort (Ctrl+C).
+//
+// In Screen mode it also handles scroll events (mouse wheel, Page Up/Down)
+// and typeahead input.  In inline mode it simply blocks until done is closed;
+// Ctrl+C is handled by the SIGINT handler in the caller.
 func (i *Input) RunScrollLoop(done <-chan struct{}, abortFn func()) {
-	if i.screen == nil || i.in == nil {
-		<-done
+	if i.screen == nil {
+		i.runInlineScrollLoop(done, abortFn)
 		return
 	}
 
+	// ── Screen mode scroll loop (unchanged) ──────────────────────────────────
 	fd := int(i.in.Fd())
 	oldState, err := term.MakeRaw(fd)
 	if err != nil {
@@ -418,7 +489,6 @@ func (i *Input) RunScrollLoop(done <-chan struct{}, abortFn func()) {
 		return
 	}
 
-	// Set fd to non-blocking so the reader goroutine can be stopped cleanly.
 	syscall.SetNonblock(fd, true)
 
 	stop := make(chan struct{})
@@ -478,11 +548,9 @@ func (i *Input) RunScrollLoop(done <-chan struct{}, abortFn func()) {
 		return b, nil
 	}
 
-	// typeahead buffer: characters typed while AI is streaming.
 	var ta []rune
-	// showTypeAhead redraws the input line so the user gets visual feedback.
 	showTypeAhead := func() {
-		if i.screen != nil && i.lastPrompt != "" {
+		if i.lastPrompt != "" {
 			i.screen.RedrawInputContent(i.lastPrompt, string(ta), len(ta))
 		}
 	}
@@ -490,23 +558,22 @@ func (i *Input) RunScrollLoop(done <-chan struct{}, abortFn func()) {
 	for {
 		select {
 		case <-done:
-			// Persist buffered typeahead for rawReadLine to pick up.
 			if len(ta) > 0 {
 				i.typeAhead = ta
 			}
 			return
 		case b := <-byteCh:
 			switch b {
-			case 3: // Ctrl+C – abort and exit the scroll loop immediately.
+			case 3: // Ctrl+C
 				if abortFn != nil {
 					abortFn()
 				}
 				return
-			case 18: // Ctrl+R – expand last tool call
+			case 18: // Ctrl+R
 				if i.OnCtrlR != nil {
 					i.OnCtrlR()
 				}
-			case 127, 8: // Backspace – delete last typeahead character
+			case 127, 8: // Backspace
 				if len(ta) > 0 {
 					ta = ta[:len(ta)-1]
 					showTypeAhead()
@@ -523,29 +590,22 @@ func (i *Input) RunScrollLoop(done <-chan struct{}, abortFn func()) {
 				switch seq2 {
 				case '<': // SGR mouse event
 					i.handleSGRMouse(readByteErr)
-				case '5': // Page Up (ESC[5~)
-					readByteTimeout(100) // consume ~
-					if i.screen != nil {
-						i.screen.ScrollUp(i.screen.ContentBottom() / 2)
-					}
-				case '6': // Page Down (ESC[6~)
-					readByteTimeout(100) // consume ~
-					if i.screen != nil {
-						i.screen.ScrollDown(i.screen.ContentBottom() / 2)
-					}
+				case '5': // Page Up
+					readByteTimeout(100)
+					i.screen.ScrollUp(i.screen.ContentBottom() / 2)
+				case '6': // Page Down
+					readByteTimeout(100)
+					i.screen.ScrollDown(i.screen.ContentBottom() / 2)
 				default:
 					if seq2 >= '0' && seq2 <= '9' {
-						readByteTimeout(100) // consume ~
+						readByteTimeout(100)
 					}
 				}
-
 			default:
-				// Printable ASCII — buffer as typeahead and echo in input line.
 				if b >= 32 && b < 127 {
 					ta = append(ta, rune(b))
 					showTypeAhead()
 				} else if b >= 0x80 {
-					// Leading byte of a multi-byte UTF-8 sequence (e.g. CJK input).
 					n := utf8ByteLen(b)
 					if n > 1 {
 						seq := make([]byte, n)
@@ -573,11 +633,168 @@ func (i *Input) RunScrollLoop(done <-chan struct{}, abortFn func()) {
 	}
 }
 
-// handleSGRMouse parses and handles an SGR mouse event.
-// Format after "ESC[<": button;x;yM (press) or button;x;ym (release).
-// Button 64 = wheel up, 65 = wheel down.
+// runInlineScrollLoop is the inline-mode implementation of RunScrollLoop.
+// It puts stdin in raw mode, shows the prompt at the bottom (via OnPromptChange),
+// buffers keystrokes as typeahead, and handles Ctrl+C abort.
+func (i *Input) runInlineScrollLoop(done <-chan struct{}, abortFn func()) {
+	if i.in == nil {
+		<-done
+		return
+	}
+
+	fd := int(i.in.Fd())
+	oldState, err := term.MakeRaw(fd)
+	if err != nil {
+		<-done
+		return
+	}
+
+	syscall.SetNonblock(fd, true)
+
+	stop := make(chan struct{})
+	readerDone := make(chan struct{})
+	byteCh := make(chan byte, 256)
+
+	go func() {
+		defer close(readerDone)
+		buf := []byte{0}
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			n, err := syscall.Read(fd, buf)
+			if n > 0 {
+				select {
+				case byteCh <- buf[0]:
+				case <-stop:
+					return
+				}
+			}
+			if err == syscall.EAGAIN || err == syscall.EWOULDBLOCK {
+				time.Sleep(5 * time.Millisecond)
+				continue
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	defer func() {
+		close(stop)
+		<-readerDone
+		syscall.SetNonblock(fd, false)
+		term.Restore(fd, oldState)
+	}()
+
+	readByteTimeout := func(ms int) (byte, bool) {
+		select {
+		case b := <-byteCh:
+			return b, true
+		case <-time.After(time.Duration(ms) * time.Millisecond):
+			return 0, false
+		case <-done:
+			return 0, false
+		}
+	}
+
+	// Show prompt at the bottom (we're at line start after the previous doneLine).
+	var ta []rune
+	setPrompt := func() {
+		if i.OnPromptChange != nil {
+			i.OnPromptChange(i.lastPrompt + string(ta))
+		}
+	}
+	clearPrompt := func() {
+		if i.OnPromptChange != nil {
+			i.OnPromptChange("")
+		}
+	}
+	setPrompt()
+
+	for {
+		select {
+		case <-done:
+			clearPrompt()
+			if len(ta) > 0 {
+				i.typeAhead = ta
+			}
+			return
+
+		case b := <-byteCh:
+			switch b {
+			case 3: // Ctrl+C – abort streaming.
+				clearPrompt()
+				if abortFn != nil {
+					abortFn()
+				}
+				return
+
+			case 18: // Ctrl+R – expand last tool call.
+				if i.OnCtrlR != nil {
+					clearPrompt()
+					i.OnCtrlR()
+					setPrompt()
+				}
+
+			case 127, 8: // Backspace – delete last typeahead character.
+				if len(ta) > 0 {
+					ta = ta[:len(ta)-1]
+					setPrompt()
+				}
+
+			case 27: // ESC – consume escape sequences silently.
+				seq1, ok := readByteTimeout(100)
+				if !ok || seq1 != '[' {
+					continue
+				}
+				seq2, ok := readByteTimeout(100)
+				if !ok {
+					continue
+				}
+				// Consume trailing ~ for numeric sequences (e.g. Page Up/Down).
+				if seq2 >= '0' && seq2 <= '9' {
+					readByteTimeout(100)
+				}
+
+			default:
+				// Printable ASCII.
+				if b >= 32 && b < 127 {
+					ta = append(ta, rune(b))
+					setPrompt()
+				} else if b >= 0x80 {
+					// Multi-byte UTF-8 (e.g. CJK input).
+					n := utf8ByteLen(b)
+					if n > 1 {
+						seq := make([]byte, n)
+						seq[0] = b
+						ok := true
+						for k := 1; k < n; k++ {
+							cb, hasMore := readByteTimeout(50)
+							if !hasMore {
+								ok = false
+								break
+							}
+							seq[k] = cb
+						}
+						if ok {
+							r, _ := utf8.DecodeRune(seq)
+							if r != utf8.RuneError {
+								ta = append(ta, r)
+								setPrompt()
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// handleSGRMouse parses and handles an SGR mouse event (Screen mode only).
 func (i *Input) handleSGRMouse(readByte func() (byte, error)) {
-	// Read until 'M' or 'm', collecting the numeric parameters.
 	var buf strings.Builder
 	var terminator byte
 	for {
@@ -591,7 +808,7 @@ func (i *Input) handleSGRMouse(readByte func() (byte, error)) {
 		}
 		buf.WriteByte(c)
 	}
-	_ = terminator // We only care about button presses for wheel events.
+	_ = terminator
 
 	parts := strings.SplitN(buf.String(), ";", 3)
 	if len(parts) < 1 {
@@ -604,9 +821,9 @@ func (i *Input) handleSGRMouse(readByte func() (byte, error)) {
 
 	const scrollLines = 3
 	switch button {
-	case 64: // Wheel up
+	case 64:
 		i.screen.ScrollUp(scrollLines)
-	case 65: // Wheel down
+	case 65:
 		i.screen.ScrollDown(scrollLines)
 	}
 }

@@ -60,21 +60,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Use viewport Screen when running in a real terminal.
-	screen := tui.NewScreen(os.Stdout)
-
-	var renderer *tui.Renderer
-	var input *tui.Input
-	if screen != nil {
-		defer screen.Close()
-		renderer = tui.NewRendererWithScreen(screen)
-		input = tui.NewInputWithScreen(os.Stdin, screen)
-	} else {
-		renderer = tui.NewRenderer(os.Stdout)
-		input = tui.NewInput(os.Stdin, os.Stdout)
-	}
-
+	renderer := tui.NewRenderer(os.Stdout)
+	input := tui.NewInput(os.Stdin, os.Stdout)
 	input.OnCtrlR = renderer.ExpandLastTool
+	input.OnPromptChange = renderer.SetActivePrompt
 
 	renderer.PrintBanner(model.Name, cwd)
 
@@ -85,8 +74,7 @@ func main() {
 	defer unsub()
 
 	// SIGINT: abort the current streaming operation.
-	// When using Screen/raw-mode, Ctrl+C during input is handled by ErrInterrupt
-	// below; this handler only fires when the AI is actually streaming.
+	// Ctrl+C during input is handled via ErrInterrupt from ReadLine below.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT)
 	go func() {
@@ -95,17 +83,10 @@ func main() {
 				session.Abort()
 				renderer.PrintInfo("[interrupted]")
 			}
-			// If not streaming, the signal is ignored here; idle Ctrl+C is
-			// handled via ErrInterrupt from ReadLine in the REPL loop below.
 		}
 	}()
 
-	exit := func() {
-		if screen != nil {
-			screen.Close()
-		}
-		os.Exit(0)
-	}
+	exit := func() { os.Exit(0) }
 
 	ctx := context.Background()
 
