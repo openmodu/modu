@@ -111,8 +111,8 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		cfg.ThinkingLevel = opts.ThinkingLevel
 	}
 
-	// Initialize memory store
-	memoryStore := NewMemoryStore(opts.Cwd)
+	// Initialize memory store (global ~/.coding_agent/memory + project <cwd>/memory)
+	memoryStore := NewMemoryStore(agentDir, opts.Cwd)
 
 	// Set up tools
 	activeTools := opts.Tools

@@ -8,139 +8,163 @@ import (
 	"time"
 )
 
-// MemoryStore manages persistent memory for the coding agent.
-// - Long-term memory: memory/MEMORY.md
-// - Daily notes: memory/YYYYMM/YYYYMMDD.md
+// MemoryStore manages persistent memory for the coding agent at two scopes:
+//
+//   - Global (~/.coding_agent/memory/): shared across all projects.
+//   - Project (<cwd>/memory/):          specific to the current project.
+//
+// Both scopes store a MEMORY.md for long-term facts and
+// daily notes under YYYYMM/YYYYMMDD.md.
 type MemoryStore struct {
-	workspace  string
-	memoryDir  string
-	memoryFile string
+	globalDir  string // e.g. ~/.coding_agent/memory
+	projectDir string // e.g. <cwd>/memory
 }
 
-// NewMemoryStore creates a new MemoryStore under the given workspace path (.modu/memory).
-// It ensures the memory directory exists.
-func NewMemoryStore(workspace string) *MemoryStore {
-	memoryDir := filepath.Join(workspace, "memory")
-	memoryFile := filepath.Join(memoryDir, "MEMORY.md")
-
-	// Ensure memory directory exists
-	os.MkdirAll(memoryDir, 0o755)
-
+// NewMemoryStore creates a MemoryStore backed by two directories.
+// agentDir is the global config dir (e.g. ~/.coding_agent/);
+// cwd is the current project directory.
+func NewMemoryStore(agentDir, cwd string) *MemoryStore {
+	globalDir := filepath.Join(agentDir, "memory")
+	projectDir := filepath.Join(cwd, ".modu_code", "memory")
+	os.MkdirAll(globalDir, 0o755)
+	os.MkdirAll(projectDir, 0o755)
 	return &MemoryStore{
-		workspace:  workspace,
-		memoryDir:  memoryDir,
-		memoryFile: memoryFile,
+		globalDir:  globalDir,
+		projectDir: projectDir,
 	}
 }
 
-// getTodayFile returns the path to today's daily note file (memory/YYYYMM/YYYYMMDD.md).
-func (ms *MemoryStore) getTodayFile() string {
-	today := time.Now().Format("20060102") // YYYYMMDD
-	monthDir := today[:6]                  // YYYYMM
-	filePath := filepath.Join(ms.memoryDir, monthDir, today+".md")
-	return filePath
-}
+// ── read ──────────────────────────────────────────────────────────────────────
 
-// ReadLongTerm reads the long-term memory (MEMORY.md).
-// Returns empty string if the file doesn't exist.
+// ReadLongTerm reads the project-scoped MEMORY.md (default scope for tools).
 func (ms *MemoryStore) ReadLongTerm() string {
-	if data, err := os.ReadFile(ms.memoryFile); err == nil {
-		return string(data)
-	}
-	return ""
+	return ms.ReadProjectLongTerm()
 }
 
-// WriteLongTerm writes content to the long-term memory file (MEMORY.md).
+// ReadProjectLongTerm reads <cwd>/memory/MEMORY.md.
+func (ms *MemoryStore) ReadProjectLongTerm() string {
+	data, err := os.ReadFile(filepath.Join(ms.projectDir, "MEMORY.md"))
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// ReadGlobalLongTerm reads ~/.coding_agent/memory/MEMORY.md.
+func (ms *MemoryStore) ReadGlobalLongTerm() string {
+	data, err := os.ReadFile(filepath.Join(ms.globalDir, "MEMORY.md"))
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// ── write ─────────────────────────────────────────────────────────────────────
+
+// WriteLongTerm writes to the project-scoped MEMORY.md (default scope for tools).
 func (ms *MemoryStore) WriteLongTerm(content string) error {
-	return os.WriteFile(ms.memoryFile, []byte(content), 0o600)
+	return ms.WriteProjectLongTerm(content)
 }
 
-// ReadToday reads today's daily note.
-// Returns empty string if the file doesn't exist.
-func (ms *MemoryStore) ReadToday() string {
-	todayFile := ms.getTodayFile()
-	if data, err := os.ReadFile(todayFile); err == nil {
-		return string(data)
-	}
-	return ""
+// WriteProjectLongTerm overwrites <cwd>/memory/MEMORY.md.
+func (ms *MemoryStore) WriteProjectLongTerm(content string) error {
+	return os.WriteFile(filepath.Join(ms.projectDir, "MEMORY.md"), []byte(content), 0o600)
 }
 
-// AppendToday appends content to today's daily note.
-// If the file doesn't exist, it creates a new file with a date header.
+// WriteGlobalLongTerm overwrites ~/.coding_agent/memory/MEMORY.md.
+func (ms *MemoryStore) WriteGlobalLongTerm(content string) error {
+	return os.WriteFile(filepath.Join(ms.globalDir, "MEMORY.md"), []byte(content), 0o600)
+}
+
+// ── daily notes ───────────────────────────────────────────────────────────────
+
+// AppendToday appends content to today's project-scoped daily note.
 func (ms *MemoryStore) AppendToday(content string) error {
-	todayFile := ms.getTodayFile()
+	return ms.appendTodayToDir(ms.projectDir, content)
+}
 
-	// Ensure month directory exists
-	monthDir := filepath.Dir(todayFile)
-	if err := os.MkdirAll(monthDir, 0o755); err != nil {
+func (ms *MemoryStore) appendTodayToDir(dir, content string) error {
+	today := time.Now().Format("20060102")
+	monthDir := today[:6]
+	filePath := filepath.Join(dir, monthDir, today+".md")
+
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
 		return err
 	}
 
-	var existingContent string
-	if data, err := os.ReadFile(todayFile); err == nil {
-		existingContent = string(data)
+	var existing string
+	if data, err := os.ReadFile(filePath); err == nil {
+		existing = string(data)
 	}
 
 	var newContent string
-	if existingContent == "" {
-		// Add header for new day
-		header := fmt.Sprintf("# %s\n\n", time.Now().Format("2006-01-02"))
-		newContent = header + content
+	if existing == "" {
+		newContent = fmt.Sprintf("# %s\n\n", time.Now().Format("2006-01-02")) + content
 	} else {
-		// Append to existing content
-		newContent = existingContent + "\n" + content
+		newContent = existing + "\n" + content
 	}
-
-	return os.WriteFile(todayFile, []byte(newContent), 0o600)
+	return os.WriteFile(filePath, []byte(newContent), 0o600)
 }
 
-// GetRecentDailyNotes returns daily notes from the last N days.
-// Contents are joined with "---" separator.
+// GetRecentDailyNotes returns daily notes from the last N days (project scope).
 func (ms *MemoryStore) GetRecentDailyNotes(days int) string {
+	return ms.recentDailyNotesFromDir(ms.projectDir, days)
+}
+
+func (ms *MemoryStore) recentDailyNotesFromDir(dir string, days int) string {
 	var sb strings.Builder
 	first := true
-
 	for i := 0; i < days; i++ {
 		date := time.Now().AddDate(0, 0, -i)
-		dateStr := date.Format("20060102") // YYYYMMDD
-		monthDir := dateStr[:6]            // YYYYMM
-		filePath := filepath.Join(ms.memoryDir, monthDir, dateStr+".md")
-
-		if data, err := os.ReadFile(filePath); err == nil {
-			if !first {
-				sb.WriteString("\n\n---\n\n")
-			}
-			sb.Write(data)
-			first = false
+		dateStr := date.Format("20060102")
+		filePath := filepath.Join(dir, dateStr[:6], dateStr+".md")
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			continue
 		}
+		if !first {
+			sb.WriteString("\n\n---\n\n")
+		}
+		sb.Write(data)
+		first = false
 	}
-
 	return sb.String()
 }
 
-// GetMemoryContext returns formatted memory context for the agent prompt.
-// Includes long-term memory and recent daily notes.
-func (ms *MemoryStore) GetMemoryContext() string {
-	longTerm := ms.ReadLongTerm()
-	recentNotes := ms.GetRecentDailyNotes(3)
+// ── context for system prompt ─────────────────────────────────────────────────
 
-	if longTerm == "" && recentNotes == "" {
+// GetMemoryContext returns merged memory from both scopes for the system prompt.
+// Global memory appears first; project memory is labelled separately.
+func (ms *MemoryStore) GetMemoryContext() string {
+	global := ms.ReadGlobalLongTerm()
+	project := ms.ReadProjectLongTerm()
+	recent := ms.GetRecentDailyNotes(3)
+
+	if global == "" && project == "" && recent == "" {
 		return ""
 	}
 
 	var sb strings.Builder
 
-	if longTerm != "" {
-		sb.WriteString("## Long-term Memory\n\n")
-		sb.WriteString(longTerm)
+	if global != "" {
+		sb.WriteString("## Global Memory\n\n")
+		sb.WriteString(global)
 	}
 
-	if recentNotes != "" {
-		if longTerm != "" {
+	if project != "" {
+		if sb.Len() > 0 {
+			sb.WriteString("\n\n---\n\n")
+		}
+		sb.WriteString("## Project Memory\n\n")
+		sb.WriteString(project)
+	}
+
+	if recent != "" {
+		if sb.Len() > 0 {
 			sb.WriteString("\n\n---\n\n")
 		}
 		sb.WriteString("## Recent Daily Notes\n\n")
-		sb.WriteString(recentNotes)
+		sb.WriteString(recent)
 	}
 
 	return sb.String()

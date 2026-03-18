@@ -16,6 +16,8 @@ func init() {
 type MemoryStore interface {
 	ReadLongTerm() string
 	WriteLongTerm(content string) error
+	ReadGlobalLongTerm() string
+	WriteGlobalLongTerm(content string) error
 	AppendToday(content string) error
 }
 
@@ -43,8 +45,8 @@ Use this tool proactively to record architectural choices, project rules, or rec
 so that you can remember them across server restarts and context compactions.
 
 Operations:
-- 'record_long_term': Overwrites or appends critical project facts to MEMORY.md.
-- 'record_daily': Appends a scratchpad note or daily log to today's date.`
+- 'record_long_term': Appends critical facts to MEMORY.md. Use scope 'global' for cross-project facts (user preferences, personal rules) or 'project' (default) for project-specific facts.
+- 'record_daily': Appends a scratchpad note or daily log to today's date (project scope).`
 }
 
 func (t *MemoryTool) Parameters() any {
@@ -61,6 +63,11 @@ func (t *MemoryTool) Parameters() any {
 				"description": "The specific markdown content, notes, or facts to remember.",
 			},
 		},
+		"scope": map[string]any{
+				"type":        "string",
+				"description": "Storage scope for 'record_long_term': 'project' (default, current project only) or 'global' (shared across all projects, e.g. user preferences).",
+				"enum":        []string{"project", "global"},
+			},
 		"required": []string{"operation", "content"},
 	}
 }
@@ -72,6 +79,10 @@ func (t *MemoryTool) Execute(ctx context.Context, toolCallID string, args map[st
 
 	operation, _ := args["operation"].(string)
 	content, _ := args["content"].(string)
+	scope, _ := args["scope"].(string)
+	if scope == "" {
+		scope = "project"
+	}
 
 	if content == "" {
 		return textResult("Error: content cannot be empty"), nil
@@ -79,21 +90,30 @@ func (t *MemoryTool) Execute(ctx context.Context, toolCallID string, args map[st
 
 	switch operation {
 	case "record_long_term":
-		// Prevent accidental full overwrite by appending unless it explicitly requests overwrite.
-		// For simplicity, we just append to the existing MEMORY.md contents here.
-		existing := t.store.ReadLongTerm()
+		var (
+			existing string
+			writeErr error
+		)
+		if scope == "global" {
+			existing = t.store.ReadGlobalLongTerm()
+		} else {
+			existing = t.store.ReadLongTerm()
+		}
 		var newContent string
 		if existing == "" {
 			newContent = content
 		} else {
 			newContent = existing + "\n\n" + content
 		}
-
-		err := t.store.WriteLongTerm(newContent)
-		if err != nil {
-			return textResult(fmt.Sprintf("Failed to write to long-term memory: %v", err)), nil
+		if scope == "global" {
+			writeErr = t.store.WriteGlobalLongTerm(newContent)
+		} else {
+			writeErr = t.store.WriteLongTerm(newContent)
 		}
-		return textResult("Successfully recorded to long-term memory."), nil
+		if writeErr != nil {
+			return textResult(fmt.Sprintf("Failed to write to long-term memory: %v", writeErr)), nil
+		}
+		return textResult(fmt.Sprintf("Successfully recorded to %s long-term memory.", scope)), nil
 
 	case "record_daily":
 		err := t.store.AppendToday(content)
