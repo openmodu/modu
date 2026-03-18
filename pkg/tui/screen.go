@@ -88,6 +88,8 @@ func (s *Screen) enter() {
 	// Draw the static chrome: separator then hint bar.
 	s.redrawSeparator()
 	s.redrawHint()
+	// Enable mouse wheel tracking (SGR extended mode).
+	fmt.Fprint(o, ansiMouseOn)
 	// Position cursor at start of content area.
 	fmt.Fprint(o, "\033[1;1H")
 	fmt.Fprint(o, ansiShowCursor)
@@ -102,6 +104,7 @@ func (s *Screen) redrawHint() {
 		{"ctrl+r", "expand tool"},
 		{"ctrl+c", "abort"},
 		{"ctrl+d", "exit"},
+		{"shift+drag", "copy text"},
 	}
 	var parts []string
 	for _, it := range items {
@@ -144,12 +147,20 @@ func (s *Screen) TrimToMark(lineCount int, pending string) {
 // EnableMouse turns on SGR mouse tracking (wheel events).
 // Call at the start of a scroll loop; paired with DisableMouse when done.
 func (s *Screen) EnableMouse() {
-	// Disabled to allow native terminal text selection without shift.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active {
+		fmt.Fprint(s.out, ansiMouseOn)
+	}
 }
 
 // DisableMouse turns off mouse tracking, restoring normal terminal selection.
 func (s *Screen) DisableMouse() {
-	// Disabled to allow native terminal text selection without shift.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active {
+		fmt.Fprint(s.out, ansiMouseOff)
+	}
 }
 
 // redrawSeparator redraws the static separator row.  Caller must hold mu.
@@ -179,6 +190,7 @@ func (s *Screen) Close() {
 	if !s.active {
 		return
 	}
+	fmt.Fprint(s.out, ansiMouseOff)     // disable mouse tracking
 	fmt.Fprint(s.out, "\033[r")         // reset scroll region
 	fmt.Fprint(s.out, ansiAltScreenOff) // leave alternate screen (normal screen now visible)
 
