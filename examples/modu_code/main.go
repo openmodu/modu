@@ -17,6 +17,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -25,15 +26,20 @@ import (
 
 	"github.com/crosszan/modu/pkg/agent"
 	coding_agent "github.com/crosszan/modu/pkg/coding_agent"
+	"github.com/crosszan/modu/pkg/coding_agent/modes"
 	"github.com/crosszan/modu/pkg/providers"
 	"github.com/crosszan/modu/pkg/providers/openai"
 	"github.com/crosszan/modu/pkg/tui"
 	"github.com/crosszan/modu/pkg/types"
 )
 
-var _ = fmt.Sprintf // suppress unused import if needed
-
 func main() {
+	var (
+		printPrompt = flag.String("p", "", "run in print mode: send prompt and output result to stdout")
+		printJSON   = flag.Bool("json", false, "with -p: output NDJSON event stream instead of plain text")
+	)
+	flag.Parse()
+
 	cwd, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to get cwd: %v\n", err)
@@ -58,6 +64,24 @@ func main() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create session: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Print mode: non-interactive, output result then exit.
+	if *printPrompt != "" {
+		printMode := modes.PrintModeText
+		if *printJSON {
+			printMode = modes.PrintModeJSON
+		}
+		if err := modes.RunPrint(context.Background(), modes.PrintOptions{
+			Mode:     printMode,
+			Messages: []string{*printPrompt},
+			Session:  session,
+			Output:   os.Stdout,
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	renderer := tui.NewRenderer(os.Stdout)

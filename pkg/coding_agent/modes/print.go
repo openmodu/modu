@@ -96,11 +96,12 @@ func runPrintJSON(ctx context.Context, opts PrintOptions) error {
 		return err
 	}
 
-	// Subscribe to stream all events as JSON lines
+	// Subscribe to stream all events as JSON lines.
+	// For message_update events the Partial field (cumulative text) is stripped
+	// so each line is truly incremental — only the delta is included.
 	unsub := opts.Session.Subscribe(func(event agent.AgentEvent) {
-		line := map[string]any{
-			"type": string(event.Type),
-		}
+		line := map[string]any{"type": string(event.Type)}
+
 		if event.ToolName != "" {
 			line["toolName"] = event.ToolName
 		}
@@ -110,9 +111,32 @@ func runPrintJSON(ctx context.Context, opts PrintOptions) error {
 		if event.IsError {
 			line["isError"] = true
 		}
-		if event.Message != nil {
+		if event.Args != nil {
+			line["args"] = event.Args
+		}
+		if event.Result != nil {
+			line["result"] = event.Result
+		}
+
+		if se := event.StreamEvent; se != nil {
+			// Omit Partial (ever-growing cumulative message) — redundant noise.
+			line["streamEvent"] = struct {
+				Type         string `json:"Type"`
+				ContentIndex int    `json:"ContentIndex,omitempty"`
+				Delta        string `json:"Delta"`
+			}{
+				Type:         string(se.Type),
+				ContentIndex: se.ContentIndex,
+				Delta:        se.Delta,
+			}
+			// message: only the delta text, not the cumulative partial.
+			if event.Type == agent.EventTypeMessageUpdate && se.Delta != "" {
+				line["message"] = se.Delta
+			}
+		} else if event.Message != nil {
 			line["message"] = event.Message
 		}
+
 		_ = enc.Encode(line)
 	})
 	defer unsub()
