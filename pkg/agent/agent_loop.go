@@ -273,7 +273,7 @@ func executeToolCalls(tools []AgentTool, toolCalls []types.ToolCallContent, ctx 
 				}
 			}
 		}
-		stream.Push(AgentEvent{Type: EventTypeToolExecutionEnd, ToolCallID: toolCall.ID, ToolName: toolCall.Name, Result: result, IsError: isError})
+		stream.Push(AgentEvent{Type: EventTypeToolExecutionEnd, ToolCallID: toolCall.ID, ToolName: toolCall.Name, Args: toolCall.Arguments, Result: result, IsError: isError})
 		toolResult := types.ToolResultMessage{
 			Role:       "toolResult",
 			ToolCallID: toolCall.ID,

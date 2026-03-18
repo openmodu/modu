@@ -243,8 +243,26 @@ func (r *Renderer) HandleEvent(event agent.AgentEvent) {
 				shown = lines[:previewMax]
 				extra = len(lines) - previewMax
 			}
-			for _, l := range shown {
-				r.writeln(styled(r.noColor, ansiDim, "     "+l))
+
+			// Per-tool display: syntax highlight for read, diff colours for edit.
+			var highlighted []string
+			switch event.ToolName {
+			case "read":
+				var filePath string
+				if m, ok := event.Args.(map[string]any); ok {
+					filePath, _ = m["path"].(string)
+				}
+				highlighted = buildHighlightedPreview(shown, filePath, r.noColor)
+			case "edit":
+				highlighted = buildDiffPreview(shown, r.noColor)
+			}
+
+			for i, l := range shown {
+				if highlighted != nil {
+					r.writeln(highlighted[i])
+				} else {
+					r.writeln(styled(r.noColor, ansiDim, "     "+l))
+				}
 			}
 			if extra > 0 {
 				r.writeln(styled(r.noColor, ansiBrightBlack,

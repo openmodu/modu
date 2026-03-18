@@ -3,6 +3,7 @@ module github.com/crosszan/modu
 go 1.25.0
 
 require (
+	github.com/alecthomas/chroma/v2 v2.23.1
 	github.com/go-telegram-bot-api/telegram-bot-api/v5 v5.5.1
 	github.com/larksuite/oapi-sdk-go/v3 v3.5.3
 	github.com/playwright-community/playwright-go v0.5200.1
@@ -20,6 +21,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/deckarep/golang-set/v2 v2.7.0 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
+	github.com/dlclark/regexp2 v1.11.5 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/go-jose/go-jose/v3 v3.0.4 // indirect
 	github.com/go-stack/stack v1.8.1 // indirect
