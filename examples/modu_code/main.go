@@ -27,6 +27,7 @@ import (
 	"github.com/crosszan/modu/pkg/agent"
 	coding_agent "github.com/crosszan/modu/pkg/coding_agent"
 	"github.com/crosszan/modu/pkg/coding_agent/modes"
+	"github.com/crosszan/modu/pkg/coding_agent/modes/rpc"
 	"github.com/crosszan/modu/pkg/providers"
 	"github.com/crosszan/modu/pkg/providers/openai"
 	"github.com/crosszan/modu/pkg/tui"
@@ -37,6 +38,7 @@ func main() {
 	var (
 		printPrompt = flag.String("p", "", "run in print mode: send prompt and output result to stdout")
 		printJSON   = flag.Bool("json", false, "with -p: output NDJSON event stream instead of plain text")
+		rpcMode     = flag.Bool("rpc", false, "run in RPC mode: JSON-line protocol over stdin/stdout")
 	)
 	flag.Parse()
 
@@ -79,6 +81,22 @@ func main() {
 			Output:   os.Stdout,
 		}); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// RPC mode: long-lived process, JSON-line protocol over stdin/stdout.
+	if *rpcMode {
+		ctx, cancel := context.WithCancel(context.Background())
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		go func() {
+			<-sigCh
+			cancel()
+		}()
+		if err := rpc.NewRpcMode(session).Run(ctx); err != nil && err != context.Canceled {
+			fmt.Fprintf(os.Stderr, "rpc error: %v\n", err)
 			os.Exit(1)
 		}
 		return
