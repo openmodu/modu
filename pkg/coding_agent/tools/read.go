@@ -173,7 +173,7 @@ func (t *ReadTool) readText(path string, info os.FileInfo, args map[string]any) 
 	var sb strings.Builder
 	startLine := offset + 1
 	for i, line := range lines {
-		fmt.Fprintf(&sb, "%6d\t%s\n", startLine+i, line)
+		fmt.Fprintf(&sb, "%d  %s\n", startLine+i, line)
 	}
 
 	result := sb.String()

@@ -596,7 +596,7 @@ func fullResultText(event agent.AgentEvent) string {
 	if event.IsError {
 		return errorText(event)
 	}
-	return strings.TrimSpace(extractResultText(event))
+	return strings.Trim(extractResultText(event), "\n")
 }
 
 // extractResultText pulls plain text content from a tool result.
