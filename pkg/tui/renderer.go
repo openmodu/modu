@@ -212,7 +212,7 @@ func (r *Renderer) HandleEvent(event agent.AgentEvent) {
 			r.write("\n" + callLine + "\n")
 			r.screen.WriteToolHeader(resultPlaceholder)
 		} else {
-			fmt.Fprintf(r.out, "\n%s\n%s\n", callLine, resultPlaceholder)
+			r.write("\n" + callLine + "\n")
 		}
 
 	case agent.EventTypeToolExecutionEnd:
@@ -229,10 +229,7 @@ func (r *Renderer) HandleEvent(event agent.AgentEvent) {
 		if r.screen != nil {
 			r.screen.CollapseToolHeader(resultLine)
 		} else {
-			upLines := r.toolLines + 1
-			fmt.Fprintf(r.out, "\033[%dA", upLines)
-			fmt.Fprint(r.out, ansiEraseLine)
-			fmt.Fprintln(r.out, resultLine)
+			r.write(resultLine + "\n")
 			r.toolLines = 0
 		}
 
