@@ -1,356 +1,344 @@
 # Mailbox
 
-A channel-based hub for managing communication between goroutines in concurrent applications.
+A multi-agent message coordination hub providing agent registration, point-to-point messaging, task/project lifecycle management, and conversation logging.
 
-## Overview
+## Architecture
 
-`mailbox` provides a centralized message routing system inspired by the actor model. It allows multiple senders to communicate with multiple receivers through named channels, making it ideal for building event-driven architectures and concurrent systems.
+```
+┌─────────────────────────────────────────────┐
+│                    Hub                       │
+│                                             │
+│  agentID → inbox (chan string, cap=100)     │
+│  tasks   → Task{Assignees, Status, Result}  │
+│  projects → Project{TaskIDs, Status}        │
+│  conversations → []ConversationEntry        │
+│                                             │
+│  Event bus: hub.Subscribe() <-chan Event    │
+└─────────────────────────────────────────────┘
+         │ Store interface
+         ▼
+  SQLiteStore / noopStore (default)
+```
 
-### Core Concepts
+Each agent registers with the Hub and receives a buffered inbox (capacity 100). Messages are JSON strings routed by agent ID. The Hub handles heartbeat tracking and evicts agents inactive for more than 30 seconds.
 
-- **Hub**: Central message router that manages all mailbox instances
-- **Mailbox**: Named channel within a hub, managed automatically when created
-- **SendEvent**: Send a message to a specific mailbox by name
-- **SubscribesTo**: Register for automatic mailbox creation and subscription
-- **Unsubscribe**: Remove from a mailbox's subscriber list
+## Quick Start
 
-### Key Benefits
+### Embedded Mode (in-process)
 
-1. **No manual channel management**: Mailboxes are created automatically when first subscribed
-2. **Thread-safe**: All operations are safe to call from multiple goroutines concurrently
-3. **Decoupled communication**: Senders and receivers don't need direct references to each other
-4. **Automatic cleanup**: Unused mailboxes are cleaned up after a period of inactivity
+```go
+import "github.com/openmodu/modu/pkg/mailbox"
+
+hub := mailbox.NewHub()
+
+hub.Register("director")
+hub.Register("writer")
+
+hub.SetAgentRole("director", "director")
+hub.SetAgentRole("writer", "copywriter")
+
+// Build and send a message
+msg, _ := mailbox.NewTaskAssignMessage("director", "task-1", "Write product copy")
+hub.Send("writer", msg)
+
+// Non-blocking receive
+raw, ok := hub.Recv("writer")
+if ok {
+    m, _ := mailbox.ParseMessage(raw)
+    p, _ := mailbox.ParseTaskAssignPayload(m)
+    fmt.Println(p.Description) // "Write product copy"
+}
+```
+
+### Distributed Mode (Redis-backed server)
+
+When agents run in separate processes or machines, use `client.MailboxClient`, which communicates with the server via Redis custom commands:
+
+```go
+import "github.com/openmodu/modu/pkg/mailbox/client"
+
+c := client.NewMailboxClient("writer", "localhost:6379")
+ctx := context.Background()
+
+c.Register(ctx)   // registers and starts a background keepalive (PING every 10s)
+c.SetRole(ctx, "copywriter")
+
+taskID, _ := c.CreateTask(ctx, "Write product copy")
+c.AssignTask(ctx, taskID, "writer")
+c.StartTask(ctx, taskID)
+
+// ... do work ...
+
+c.CompleteTask(ctx, taskID, "Copy done: concise and compelling.")
+```
 
 ## API Reference
 
-### Hub Operations
+### Hub
 
 ```go
-// Create a new hub instance
+// Default hub — no persistence, data is lost on restart
 hub := mailbox.NewHub()
 
-// Start the hub (required before using SendEvent or SubscribesTo)
-hub.Start()
-
-// Stop and close all mailboxes
-hub.Close()
+// With a persistent store
+store, _ := sqlitestore.New("./mailbox.db")
+hub := mailbox.NewHub(mailbox.WithStore(store))
 ```
 
-### Sending Messages
+#### Agent Management
 
 ```go
-// Send an event to a specific mailbox by name
-mailbox.SendEvent(hub, "channel-name", myMessage)
+hub.Register(agentID string)
+hub.Heartbeat(agentID string) error
+hub.SetAgentRole(agentID, role string) error
+hub.SetAgentStatus(agentID, status, taskID string) error  // status: "idle" | "busy"
+hub.GetAgentInfo(agentID string) (AgentInfo, error)
+hub.ListAgents() []string
+hub.ListAgentInfos() []AgentInfo
+```
 
-// Example with typed message
-type UserCreated struct {
-    UserID string
-    Email  string
+#### Messaging
+
+```go
+hub.Send(targetID, message string) error  // returns error if inbox is full
+hub.Recv(agentID string) (string, bool)   // non-blocking
+hub.Broadcast(message string)             // deliver to all registered agents
+```
+
+#### Task Management
+
+```go
+// Create a task, optionally scoped to a project
+hub.CreateTask(creatorID, description string, projectID ...string) (string, error)
+
+// Assign to one or more agents (callable multiple times)
+hub.AssignTask(taskID, agentID string) error
+
+hub.StartTask(taskID string) error
+
+// Record an agent's result. Task becomes "completed" once all assignees submit.
+hub.CompleteTask(taskID, agentID, result string) error
+
+hub.FailTask(taskID, errMsg string) error
+hub.GetTask(taskID string) (Task, error)
+hub.ListTasks(projectID ...string) []Task  // optional project filter
+```
+
+#### Project Management
+
+```go
+hub.CreateProject(creatorID, name string) (string, error)
+hub.GetProject(projectID string) (Project, error)
+hub.CompleteProject(projectID string) error
+hub.ListProjects() []Project
+```
+
+#### Event Subscription
+
+```go
+events := hub.Subscribe()   // returns <-chan Event (buffered 256)
+defer hub.Unsubscribe(events)
+
+for e := range events {
+    switch e.Type {
+    case mailbox.EventTypeAgentRegistered:
+    case mailbox.EventTypeAgentEvicted:
+    case mailbox.EventTypeAgentUpdated:
+    case mailbox.EventTypeTaskCreated:
+    case mailbox.EventTypeTaskUpdated:
+    case mailbox.EventTypeProjectCreated:
+    case mailbox.EventTypeProjectUpdated:
+    case mailbox.EventTypeConversationAdded:
+    }
 }
-
-mailbox.SendEvent(hub, "users", UserCreated{UserID: "123", Email: "user@example.com"})
 ```
 
-### Subscribing to Mailboxes
+#### Conversation Log
+
+Messages that carry a `task_id` are automatically appended to the conversation log:
 
 ```go
-// Register a type for automatic mailbox creation and subscription
-type MySubscriber struct {
-    hub   *mailbox.Hub
-    items chan Item
+hub.GetConversation(taskID string) []ConversationEntry
+```
+
+### Message Helpers
+
+```go
+// Constructors
+mailbox.NewTaskAssignMessage(from, taskID, description string) (string, error)
+mailbox.NewTaskResultMessage(from, taskID, result, errMsg string) (string, error)
+mailbox.NewChatMessage(from, taskID, text string) (string, error)
+
+// Parsing
+msg, err := mailbox.ParseMessage(raw)
+switch msg.Type {
+case mailbox.MessageTypeTaskAssign:
+    p, _ := mailbox.ParseTaskAssignPayload(msg)
+case mailbox.MessageTypeTaskResult:
+    p, _ := mailbox.ParseTaskResultPayload(msg)
+case mailbox.MessageTypeChat:
+    p, _ := mailbox.ParseChatPayload(msg)
 }
-
-func (s *MySubscriber) SubscribesTo() []string {
-    return []string{"items-channel"}
-}
-
-func (s *MySubscriber) OnHubStarted(h *mailbox.Hub) {
-    // Called after hub starts - subscribe and create mailbox
-    s.items = make(chan Item, 10)
-    h.Subscribe("items-channel", s)
-}
 ```
 
-### Manual Subscription
-
-```go
-// Create a new mailbox manually
-type MyMessage struct {
-    Data string
-}
-
-mailbox := hub.NewMailbox[MyMessage]("my-channel")
-
-// Subscribe to an existing mailbox
-var subscriber MySubscriber
-hub.Subscribe("my-channel", &subscriber)
-
-// Unsubscribe from a mailbox
-hub.Unsubscribe(&subscriber)
-```
-
-### Task Management
-
-```go
-// Create and start a task with automatic cleanup
-task := hub.NewTask(func() error {
-    // Task logic here
-    return nil
-})
-
-task.Start()
-task.Stop()  // Graceful shutdown
-task.Close() // Force close immediately
-```
-
-### Project Management
-
-```go
-// Create a project with optional cleanup hook
-project := hub.NewProject("my-project", func() {
-    // Cleanup logic when all tasks complete
-    fmt.Println("All tasks completed")
-})
-
-// Add task to project
-project.AddTask(task)
-```
-
-### Event Subscription
-
-```go
-// Subscribe to hub-level events
-hub.On(mailbox.HubStarted, func(h *mailbox.Hub) {
-    fmt.Println("Hub started!")
-})
-hub.On(mailbox.HubClosed, func(h *mailbox.Hub) {
-    fmt.Println("Hub closed!")
-})
-
-// Subscribe to mailbox events
-hub.On(mailbox.MailboxCreated, func(m *mailbox.Mailbox[any]) {
-    fmt.Printf("Mailbox created: %s\n", m.Name())
-})
-hub.On(mailbox.MailboxDeleted, func(m *mailbox.Mailbox[any]) {
-    fmt.Printf("Mailbox deleted: %s\n", m.Name())
-})
-```
-
-## Store Interface
-
-The `Store` interface provides persistence for mailbox metadata:
+### Store Interface
 
 ```go
 type Store interface {
-    // Get retrieves a mailbox by name, or nil if not found
-    Get(name string) *MailboxEntry
-    
-    // Put stores a mailbox entry (created/updated)
-    Put(entry *MailboxEntry)
-    
-    // Delete removes a mailbox entry
-    Delete(name string)
-    
-    // List returns all mailbox entries
-    List() []*MailboxEntry
+    SaveTask(task Task) error
+    LoadTasks() ([]Task, error)
+    SaveProject(project Project) error
+    LoadProjects() ([]Project, error)
+    SaveAgentRole(agentID, role string) error
+    LoadAgentRoles() (map[string]string, error)
+    SaveConversation(entry ConversationEntry) error
+    LoadConversations() (map[string][]ConversationEntry, error)
+    Close() error
 }
 ```
 
-### In-Memory Store (Default)
+| Implementation | Package | Notes |
+|---|---|---|
+| `noopStore` | `mailbox` (internal default) | No persistence |
+| `SQLiteStore` | `mailbox/sqlitestore` | Pure Go, no CGO, uses `modernc.org/sqlite` |
 
 ```go
-type MemoryStore struct {
-    mu     sync.RWMutex
-    items  map[string]*MailboxEntry
-}
+import "github.com/openmodu/modu/pkg/mailbox/sqlitestore"
 
-func NewMemoryStore() *MemoryStore {
-    return &MemoryStore{items: make(map[string]*MailboxEntry)}
-}
+store, err := sqlitestore.New("./mailbox.db")
+defer store.Close()
+
+hub := mailbox.NewHub(mailbox.WithStore(store))
 ```
 
-### Redis Store (Example)
+## Example: Creative Team Collaboration
 
-```go
-type RedisStore struct {
-    client *redis.Client
-    prefix string
-}
-
-func NewRedisStore(client *redis.Client, prefix string) *RedisStore {
-    return &RedisStore{client: client, prefix: prefix}
-}
-```
-
-## Usage Examples
-
-### Simple Event Broadcasting
+A director agent creates a project, breaks it into parallel tasks, and dispatches them to a copywriter, visual designer, and composer. Each agent works concurrently and reports back when done.
 
 ```go
 package main
 
 import (
     "fmt"
-    "time"
+    "sync"
+
     "github.com/openmodu/modu/pkg/mailbox"
 )
 
-type Message struct {
-    Content string
-}
-
 func main() {
     hub := mailbox.NewHub()
-    hub.Start()
-    defer hub.Close()
-    
-    // Subscriber 1
-    ch1 := make(chan Message, 10)
-    hub.Subscribe("messages", &struct {
-        items chan Message
-    }{items: ch1})
-    
-    // Subscriber 2
-    ch2 := make(chan Message, 10)
-    hub.Subscribe("messages", &struct {
-        items chan Message
-    }{items: ch2})
-    
-    // Send message - both subscribers receive it
-    go func() {
-        time.Sleep(100 * time.Millisecond)
-        mailbox.SendEvent(hub, "messages", Message{Content: "Hello!"})
-    }()
-    
-    // Receive messages
-    for i := 0; i < 2; i++ {
-        select {
-        case msg := <-ch1:
-            fmt.Printf("Subscriber 1 received: %s\n", msg.Content)
-        case msg := <-ch2:
-            fmt.Printf("Subscriber 2 received: %s\n", msg.Content)
+
+    // Register the creative team
+    members := map[string]string{
+        "director": "director",
+        "writer":   "copywriter",
+        "designer": "visual-designer",
+        "composer": "music-composer",
+    }
+    for id, role := range members {
+        hub.Register(id)
+        hub.SetAgentRole(id, role)
+    }
+
+    // Director creates the project
+    projID, _ := hub.CreateProject("director", "Spring Campaign")
+
+    // Break into three parallel tasks
+    type job struct {
+        desc     string
+        assignee string
+    }
+    jobs := []job{
+        {"Write a 30-second ad script with a warm spring vibe", "writer"},
+        {"Design the key visual poster: fresh tones, product-centered", "designer"},
+        {"Compose a 30-second upbeat background track", "composer"},
+    }
+
+    taskIDs := make([]string, len(jobs))
+    for i, j := range jobs {
+        taskID, _ := hub.CreateTask("director", j.desc, projID)
+        hub.AssignTask(taskID, j.assignee)
+        taskIDs[i] = taskID
+
+        msg, _ := mailbox.NewTaskAssignMessage("director", taskID, j.desc)
+        hub.Send(j.assignee, msg)
+    }
+
+    // Each agent processes its task concurrently
+    var wg sync.WaitGroup
+    mockResults := map[string]string{
+        "writer":   `Script: "Spring doesn't wait — neither should you."`,
+        "designer": "Key visual: cherry blossoms, product center-frame, warm gold palette",
+        "composer": "BGM: C major, piano + strings, BPM=90, 30s",
+    }
+
+    for _, agentID := range []string{"writer", "designer", "composer"} {
+        wg.Add(1)
+        go func(id string) {
+            defer wg.Done()
+
+            raw, _ := hub.Recv(id)
+            msg, _ := mailbox.ParseMessage(raw)
+
+            hub.StartTask(msg.TaskID)
+            hub.SetAgentStatus(id, "busy", msg.TaskID)
+
+            result := mockResults[id]
+            hub.CompleteTask(msg.TaskID, id, result)
+            hub.SetAgentStatus(id, "idle", "")
+
+            reply, _ := mailbox.NewTaskResultMessage(id, msg.TaskID, result, "")
+            hub.Send("director", reply)
+        }(agentID)
+    }
+
+    wg.Wait()
+
+    // Director reviews all results
+    fmt.Println("=== Creative Team Deliverables ===")
+    for i, taskID := range taskIDs {
+        task, _ := hub.GetTask(taskID)
+        fmt.Printf("[Task %d] %s\n  → %s\n", i+1, task.Description, task.Result)
+    }
+
+    hub.CompleteProject(projID)
+    proj, _ := hub.GetProject(projID)
+    fmt.Printf("\nProject %q status: %s\n", proj.Name, proj.Status)
+
+    // Inspect the conversation log
+    fmt.Println("\n=== Conversation Log ===")
+    for _, taskID := range taskIDs {
+        for _, entry := range hub.GetConversation(taskID) {
+            fmt.Printf("[%s] %s → %s: %s\n",
+                entry.MsgType, entry.From, entry.To, entry.Content)
         }
     }
 }
 ```
 
-### Task-Based Processing
+**Sample output:**
 
-```go
-package main
+```
+=== Creative Team Deliverables ===
+[Task 1] Write a 30-second ad script with a warm spring vibe
+  → Script: "Spring doesn't wait — neither should you."
+[Task 2] Design the key visual poster: fresh tones, product-centered
+  → Key visual: cherry blossoms, product center-frame, warm gold palette
+[Task 3] Compose a 30-second upbeat background track
+  → BGM: C major, piano + strings, BPM=90, 30s
 
-import (
-    "fmt"
-    "time"
-    "github.com/openmodu/modu/pkg/mailbox"
-)
+Project "Spring Campaign" status: completed
 
-type WorkItem struct {
-    ID   int
-    Data string
-}
-
-func main() {
-    hub := mailbox.NewHub()
-    hub.Start()
-    defer hub.Close()
-    
-    // Create processor task
-    itemCh := make(chan WorkItem, 10)
-    
-    processor := hub.NewTask(func() error {
-        for item := range itemCh {
-            fmt.Printf("Processing item %d: %s\n", item.ID, item.Data)
-            time.Sleep(500 * time.Millisecond)
-        }
-        return nil
-    })
-    
-    // Start processor and subscribe to work items
-    processor.Start()
-    hub.Subscribe("work", &struct {
-        items chan WorkItem
-    }{items: itemCh})
-    
-    // Send work items
-    go func() {
-        for i := 1; i <= 3; i++ {
-            mailbox.SendEvent(hub, "work", WorkItem{ID: i, Data: fmt.Sprintf("task-%d", i)})
-            time.Sleep(200 * time.Millisecond)
-        }
-    }()
-    
-    // Wait for completion
-    time.Sleep(2 * time.Second)
-}
+=== Conversation Log ===
+[task_assign] director → writer: Write a 30-second ad script with a warm spring vibe
+[task_result] writer → director: Script: "Spring doesn't wait — neither should you."
+...
 ```
 
-### Project with Cleanup Hook
+## Notes
 
-```go
-package main
-
-import (
-    "fmt"
-    "time"
-    "github.com/openmodu/modu/pkg/mailbox"
-)
-
-type Event struct {
-    Type string
-}
-
-func main() {
-    hub := mailbox.NewHub()
-    hub.Start()
-    defer hub.Close()
-    
-    // Create project with cleanup callback
-    project := hub.NewProject("event-processor", func() {
-        fmt.Println("All events processed!")
-    })
-    
-    eventCh := make(chan Event, 10)
-    
-    processor := hub.NewTask(func() error {
-        for event := range eventCh {
-            fmt.Printf("Handling %s event\n", event.Type)
-            time.Sleep(300 * time.Millisecond)
-        }
-        return nil
-    })
-    
-    project.AddTask(processor)
-    processor.Start()
-    hub.Subscribe("events", &struct {
-        events chan Event
-    }{events: eventCh})
-    
-    // Send some events
-    go func() {
-        for _, t := range []string{"start", "update", "end"} {
-            mailbox.SendEvent(hub, "events", Event{Type: t})
-            time.Sleep(100 * time.Millisecond)
-        }
-    }()
-    
-    // Wait for project to complete
-    time.Sleep(2 * time.Second)
-}
-```
-
-## Thread Safety
-
-All Hub, Mailbox, and Task operations are thread-safe. You can safely:
-- Send events from multiple goroutines to the same mailbox
-- Subscribe/unsubscribe mailboxes concurrently
-- Start/stop tasks while sending events
-
-## Best Practices
-
-1. **Always call `hub.Start()`** before using any Hub methods
-2. **Use buffered channels** for high-throughput scenarios
-3. **Subscribe early** - subscribe as soon as possible after hub creation
-4. **Unsubscribe when done** - prevent memory leaks by unsubscribing unused handlers
-5. **Handle errors in tasks** - ensure task functions return appropriate error values
-6. **Use projects for related tasks** - group related tasks into projects for lifecycle management
+- **Heartbeat**: Agents inactive for more than 30 seconds are evicted and their inbox is closed. `MailboxClient` sends a PING every 10 seconds automatically.
+- **Inbox capacity**: Each agent inbox holds 100 messages. `Send` returns an error when full — callers are responsible for backpressure handling.
+- **Multi-assignee tasks**: A task only transitions to `completed` once every assigned agent calls `CompleteTask` with their own `agentID`.
+- **Event delivery**: Events are delivered non-blocking. Slow subscribers will drop events beyond the 256-entry buffer without blocking the Hub.
+- **Thread safety**: All Hub methods are safe for concurrent use.
