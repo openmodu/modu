@@ -9,6 +9,8 @@ import (
 	"strings"
 	"syscall"
 	"unsafe"
+
+	"golang.org/x/term"
 )
 
 // ANSI escape code constants.
@@ -75,9 +77,7 @@ func shouldDisableColor(w io.Writer) bool {
 
 // isTerminalFd returns true if fd is a terminal.
 func isTerminalFd(fd uintptr) bool {
-	var termios syscall.Termios
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TCGETS, uintptr(unsafe.Pointer(&termios)))
-	return errno == 0
+	return term.IsTerminal(int(fd))
 }
 
 // winsize holds the terminal dimensions from TIOCGWINSZ.

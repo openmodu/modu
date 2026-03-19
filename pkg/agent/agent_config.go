@@ -23,6 +23,11 @@ type AgentConfig struct {
 	ThinkingBudgets     *types.ThinkingBudgets
 	MaxRetryDelayMs     int
 
+	// ApproveTool is called before each tool execution. If set, it must return
+	// a ToolApprovalDecision. A nil callback means all tools are auto-approved.
+	// The callback may block until the user responds.
+	ApproveTool func(toolName, toolCallID string, args map[string]any) (ToolApprovalDecision, error)
+
 	// Moved from former AgentOptions
 	InitialState *AgentState
 	SteeringMode ExecutionMode

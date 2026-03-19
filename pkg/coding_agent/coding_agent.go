@@ -77,6 +77,9 @@ type CodingSession struct {
 	bashCancel     context.CancelFunc
 	bashMu         sync.Mutex
 	sessionStarted int64
+
+	// approvalManager handles tool execution approval.
+	approvalManager *ApprovalManager
 }
 
 // NewCodingSession creates and initializes a new coding session.
@@ -190,9 +193,13 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		}
 	}
 
+	// Create approval manager
+	approvalMgr := NewApprovalManager()
+
 	// Create the underlying agent
 	ag := agent.NewAgent(agent.AgentConfig{
-		GetAPIKey: getAPIKey,
+		GetAPIKey:   getAPIKey,
+		ApproveTool: approvalMgr.Approve,
 		InitialState: &agent.AgentState{
 			SystemPrompt:  systemPrompt,
 			Model:         opts.Model,
@@ -220,9 +227,10 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		streamFn:       streamFn,
 		retryManager:   NewRetryManager(cfg.RetrySettings, cfg.AutoRetry),
 		eventBus:       eventbus.NewEventBus(),
-		scopedModels:   cfg.ScopedModels,
-		thinkingLevel:  cfg.ThinkingLevel,
-		sessionStarted: time.Now().UnixMilli(),
+		scopedModels:    cfg.ScopedModels,
+		thinkingLevel:   cfg.ThinkingLevel,
+		sessionStarted:  time.Now().UnixMilli(),
+		approvalManager: approvalMgr,
 	}
 
 	// Subscribe to events for token usage tracking (auto-compaction)

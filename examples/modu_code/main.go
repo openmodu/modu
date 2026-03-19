@@ -39,6 +39,7 @@ func main() {
 		printPrompt = flag.String("p", "", "run in print mode: send prompt and output result to stdout")
 		printJSON   = flag.Bool("json", false, "with -p: output NDJSON event stream instead of plain text")
 		rpcMode     = flag.Bool("rpc", false, "run in RPC mode: JSON-line protocol over stdin/stdout")
+		noApprove   = flag.Bool("no-approve", false, "skip user approval for tool executions (auto-allow all)")
 	)
 	flag.Parse()
 
@@ -106,6 +107,23 @@ func main() {
 	input := tui.NewInput(os.Stdin, os.Stdout)
 	input.OnCtrlR = renderer.ExpandLastTool
 	input.OnPromptChange = renderer.SetActivePrompt
+
+	// Wire tool approval (default on; disabled with --no-approve).
+	if !*noApprove {
+		approvalCh := make(chan tui.ApprovalRequest, 1)
+		input.ApprovalRequests = approvalCh
+		session.SetToolApprovalCallback(func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
+			respCh := make(chan string, 1)
+			approvalCh <- tui.ApprovalRequest{
+				ToolName:   toolName,
+				ToolCallID: toolCallID,
+				Args:       args,
+				Response:   respCh,
+			}
+			decision := <-respCh
+			return agent.ToolApprovalDecision(decision), nil
+		})
+	}
 
 	renderer.PrintBanner(model.Name, cwd)
 
@@ -258,6 +276,12 @@ func printHelp(r *tui.Renderer) {
 		"  Ctrl+R         — expand last tool call output",
 		"  Ctrl+C         — abort current operation (or exit when idle)",
 		"  Ctrl+D         — exit",
+		"",
+		"tool approval (when prompted):",
+		"  y              — allow once",
+		"  a              — always allow this tool",
+		"  n / ESC        — deny once",
+		"  d              — always deny this tool",
 	}
 	for _, l := range lines {
 		r.PrintInfo(l)

@@ -13,20 +13,30 @@ import (
 	coding_agent "github.com/crosszan/modu/pkg/coding_agent"
 )
 
+// pendingApproval holds a channel waiting for the client's approval decision.
+type pendingApproval struct {
+	ch chan agent.ToolApprovalDecision
+}
+
 // RpcMode implements a JSON-line based RPC protocol over stdin/stdout.
 type RpcMode struct {
 	session *coding_agent.CodingSession
 	input   io.Reader
 	output  io.Writer
 	mu      sync.Mutex
+
+	// pendingApprovals maps toolCallID → channel awaiting client decision.
+	pendingApprovalsMu sync.Mutex
+	pendingApprovals   map[string]*pendingApproval
 }
 
 // NewRpcMode creates a new RPC mode handler.
 func NewRpcMode(session *coding_agent.CodingSession) *RpcMode {
 	return &RpcMode{
-		session: session,
-		input:   os.Stdin,
-		output:  os.Stdout,
+		session:          session,
+		input:            os.Stdin,
+		output:           os.Stdout,
+		pendingApprovals: make(map[string]*pendingApproval),
 	}
 }
 
@@ -38,6 +48,33 @@ func (r *RpcMode) SetIO(input io.Reader, output io.Writer) {
 
 // Run starts the RPC mode main loop.
 func (r *RpcMode) Run(ctx context.Context) error {
+	// Register interactive approval callback: block until client responds.
+	r.session.SetToolApprovalCallback(func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
+		ch := make(chan agent.ToolApprovalDecision, 1)
+		r.pendingApprovalsMu.Lock()
+		r.pendingApprovals[toolCallID] = &pendingApproval{ch: ch}
+		r.pendingApprovalsMu.Unlock()
+
+		defer func() {
+			r.pendingApprovalsMu.Lock()
+			delete(r.pendingApprovals, toolCallID)
+			r.pendingApprovalsMu.Unlock()
+		}()
+
+		r.writeEvent("tool_approval_request", map[string]any{
+			"toolCallId": toolCallID,
+			"toolName":   toolName,
+			"args":       args,
+		})
+
+		select {
+		case decision := <-ch:
+			return decision, nil
+		case <-ctx.Done():
+			return agent.ToolApprovalDeny, ctx.Err()
+		}
+	})
+
 	// Subscribe to agent events and forward full event data
 	unsubAgent := r.session.Subscribe(func(event agent.AgentEvent) {
 		data := map[string]any{"eventType": string(event.Type)}
@@ -380,6 +417,22 @@ func (r *RpcMode) handleCommand(ctx context.Context, cmd RpcCommand) RpcResponse
 			return resp
 		}
 		r.session.SetSessionName(data.Name)
+		resp.Success = true
+
+	case RpcCmdToolApprovalResponse:
+		var data ToolApprovalResponseData
+		if err := json.Unmarshal(cmd.Data, &data); err != nil {
+			resp.Error = fmt.Sprintf("invalid tool_approval_response data: %v", err)
+			return resp
+		}
+		r.pendingApprovalsMu.Lock()
+		pending, ok := r.pendingApprovals[data.ToolCallID]
+		r.pendingApprovalsMu.Unlock()
+		if !ok {
+			resp.Error = fmt.Sprintf("no pending approval for toolCallId: %s", data.ToolCallID)
+			return resp
+		}
+		pending.ch <- agent.ToolApprovalDecision(data.Decision)
 		resp.Success = true
 
 	default:

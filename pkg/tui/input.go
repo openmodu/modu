@@ -45,6 +45,19 @@ type Input struct {
 
 	// lastPrompt is the prompt string from the most recent ReadLine call.
 	lastPrompt string
+
+	// ApprovalRequests, if non-nil, receives tool approval requests during streaming.
+	// The caller must send a decision string back on the Response channel.
+	ApprovalRequests chan ApprovalRequest
+}
+
+// ApprovalRequest is sent on Input.ApprovalRequests when a tool needs user approval.
+type ApprovalRequest struct {
+	ToolName   string
+	ToolCallID string
+	Args       map[string]any
+	// Response must receive exactly one decision: "allow", "allow_always", "deny", "deny_always".
+	Response chan<- string
 }
 
 // NewInput creates an Input reading from in and writing the prompt to out.
@@ -715,6 +728,10 @@ func (i *Input) runInlineScrollLoop(done <-chan struct{}, abortFn func()) {
 	setPrompt()
 
 	for {
+		var approvalCh <-chan ApprovalRequest
+		if i.ApprovalRequests != nil {
+			approvalCh = i.ApprovalRequests
+		}
 		select {
 		case <-done:
 			clearPrompt()
@@ -722,6 +739,11 @@ func (i *Input) runInlineScrollLoop(done <-chan struct{}, abortFn func()) {
 				i.typeAhead = ta
 			}
 			return
+
+		case req := <-approvalCh:
+			clearPrompt()
+			i.printApproval(req, byteCh, done)
+			setPrompt()
 
 		case b := <-byteCh:
 			switch b {
@@ -825,5 +847,60 @@ func (i *Input) handleSGRMouse(readByte func() (byte, error)) {
 		i.screen.ScrollUp(scrollLines)
 	case 65:
 		i.screen.ScrollDown(scrollLines)
+	}
+}
+
+// printApproval shows an approval prompt and waits for the user to press a key.
+// It reads from byteCh (already in raw mode) and sends the decision to req.Response.
+func (i *Input) printApproval(req ApprovalRequest, byteCh <-chan byte, done <-chan struct{}) {
+	noColor := i.noColor
+	bold := func(s string) string { return styled(noColor, ansiBold, s) }
+	yellow := func(s string) string { return styled(noColor, ansiYellow, s) }
+	green := func(s string) string { return styled(noColor, ansiGreen, s) }
+	red := func(s string) string { return styled(noColor, ansiRed, s) }
+	dim := func(s string) string { return styled(noColor, ansiDim, s) }
+
+	fmt.Fprintf(i.out, "\r\n%s %s\r\n",
+		yellow("▶ Tool:"), bold(req.ToolName))
+	fmt.Fprintf(i.out, "%s %s\r\n",
+		dim("  Approve?"),
+		dim("[y] yes  [a] always  [n] no  [d] deny-always"))
+
+	decision := "deny"
+	for {
+		var b byte
+		select {
+		case b = <-byteCh:
+		case <-done:
+			req.Response <- decision
+			return
+		}
+		switch b {
+		case 'y', 'Y':
+			decision = "allow"
+			fmt.Fprintf(i.out, "\r%s\r\n", green("✓ Allowed"))
+			req.Response <- decision
+			return
+		case 'a', 'A':
+			decision = "allow_always"
+			fmt.Fprintf(i.out, "\r%s\r\n", green("✓ Always allowed"))
+			req.Response <- decision
+			return
+		case 'n', 'N', 27: // n or ESC
+			decision = "deny"
+			fmt.Fprintf(i.out, "\r%s\r\n", red("✗ Denied"))
+			req.Response <- decision
+			return
+		case 'd', 'D':
+			decision = "deny_always"
+			fmt.Fprintf(i.out, "\r%s\r\n", red("✗ Always denied"))
+			req.Response <- decision
+			return
+		case 3: // Ctrl+C → deny
+			decision = "deny"
+			fmt.Fprintf(i.out, "\r%s\r\n", red("✗ Denied"))
+			req.Response <- decision
+			return
+		}
 	}
 }

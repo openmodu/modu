@@ -14,6 +14,19 @@ import (
 	"github.com/crosszan/modu/pkg/types"
 )
 
+// backgroundResult returns a success result for a background process.
+func backgroundResult(pid int) agent.AgentToolResult {
+	return agent.AgentToolResult{
+		Content: []types.ContentBlock{
+			&types.TextContent{
+				Type: "text",
+				Text: fmt.Sprintf("Process started in background (pid %d).", pid),
+			},
+		},
+		Details: map[string]any{"pid": pid, "background": true},
+	}
+}
+
 const (
 	defaultBashTimeout = 120 // seconds
 	maxBashTimeout     = 600 // seconds
@@ -31,7 +44,9 @@ func NewBashTool(cwd string) *BashTool {
 func (t *BashTool) Name() string  { return "bash" }
 func (t *BashTool) Label() string { return "Bash Command" }
 func (t *BashTool) Description() string {
-	return `Execute a bash command and return its output. The command runs in the working directory. Use timeout parameter to set execution timeout in seconds (default 120, max 600).`
+	return `Execute a bash command and return its output. The command runs in the working directory.
+- Use timeout to set execution timeout in seconds (default 120, max 600).
+- Use background=true for long-running servers or daemons that should not block (e.g. starting a server process). The command will be started in a detached process group and the tool returns immediately with the PID.`
 }
 
 func (t *BashTool) Parameters() any {
@@ -45,6 +60,10 @@ func (t *BashTool) Parameters() any {
 			"timeout": map[string]any{
 				"type":        "integer",
 				"description": "Timeout in seconds (default 120, max 600)",
+			},
+			"background": map[string]any{
+				"type":        "boolean",
+				"description": "Run the command in the background and return immediately with the PID. Use this for long-running servers or daemons.",
 			},
 		},
 		"required": []string{"command"},
@@ -66,6 +85,25 @@ func (t *BashTool) Execute(ctx context.Context, toolCallID string, args map[stri
 		if timeout > maxBashTimeout {
 			timeout = maxBashTimeout
 		}
+	}
+
+	// Background mode: start and detach immediately.
+	background, _ := args["background"].(bool)
+	if background {
+		cmd := exec.Command("bash", "-c", command)
+		cmd.Dir = t.cwd
+		cmd.Env = os.Environ()
+		// Detach from parent's stdout/stderr so cmd.Run doesn't block.
+		cmd.Stdout = nil
+		cmd.Stderr = nil
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := cmd.Start(); err != nil {
+			return errorResult(fmt.Sprintf("failed to start background command: %v", err)), nil
+		}
+		pid := cmd.Process.Pid
+		// Reap the process asynchronously to avoid zombies.
+		go func() { _ = cmd.Wait() }()
+		return backgroundResult(pid), nil
 	}
 
 	// Create context with timeout

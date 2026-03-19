@@ -260,16 +260,33 @@ func executeToolCalls(tools []AgentTool, toolCalls []types.ToolCallContent, ctx 
 				isError = true
 			} else {
 				_ = args
-				r, err := tool.Execute(ctx, toolCall.ID, parsed, func(partial AgentToolResult) {
-					stream.Push(AgentEvent{Type: EventTypeToolExecutionUpdate, ToolCallID: toolCall.ID, ToolName: toolCall.Name, Args: toolCall.Arguments, Partial: partial})
-				})
-				result = r
-				if err != nil {
-					result = AgentToolResult{
-						Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: err.Error()}},
-						Details: map[string]any{},
+				// Check approval before executing
+				if config.ApproveTool != nil {
+					decision, approveErr := config.ApproveTool(toolCall.Name, toolCall.ID, parsed)
+					if approveErr != nil || !decision.IsAllow() {
+						msg := "Tool execution denied by user."
+						if approveErr != nil {
+							msg = fmt.Sprintf("Tool approval error: %v", approveErr)
+						}
+						result = AgentToolResult{
+							Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: msg}},
+							Details: map[string]any{"denied": true},
+						}
+						isError = true
 					}
-					isError = true
+				}
+				if !isError {
+					r, err := tool.Execute(ctx, toolCall.ID, parsed, func(partial AgentToolResult) {
+						stream.Push(AgentEvent{Type: EventTypeToolExecutionUpdate, ToolCallID: toolCall.ID, ToolName: toolCall.Name, Args: toolCall.Arguments, Partial: partial})
+					})
+					result = r
+					if err != nil {
+						result = AgentToolResult{
+							Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: err.Error()}},
+							Details: map[string]any{},
+						}
+						isError = true
+					}
 				}
 			}
 		}

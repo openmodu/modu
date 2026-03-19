@@ -34,8 +34,9 @@ const (
 	RpcCmdSwitchSession        RpcCommandType = "switch_session"
 	RpcCmdFork                 RpcCommandType = "fork"
 	RpcCmdGetForkMessages      RpcCommandType = "get_fork_messages"
-	RpcCmdGetLastAssistantText RpcCommandType = "get_last_assistant_text"
-	RpcCmdSetSessionName       RpcCommandType = "set_session_name"
+	RpcCmdGetLastAssistantText  RpcCommandType = "get_last_assistant_text"
+	RpcCmdSetSessionName        RpcCommandType = "set_session_name"
+	RpcCmdToolApprovalResponse  RpcCommandType = "tool_approval_response"
 )
 
 // RpcCommand is an incoming RPC command.
@@ -153,4 +154,11 @@ type RpcSlashCommand struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	Source      string `json:"source,omitempty"`
+}
+
+// ToolApprovalResponseData is the data payload for the tool_approval_response command.
+type ToolApprovalResponseData struct {
+	ToolCallID string `json:"toolCallId"`
+	// Decision is one of: "allow", "allow_always", "deny", "deny_always"
+	Decision string `json:"decision"`
 }
