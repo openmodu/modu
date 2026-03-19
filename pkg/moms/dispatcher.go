@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crosszan/modu/pkg/channels"
-	"github.com/crosszan/modu/pkg/skills"
-	"github.com/crosszan/modu/pkg/types"
+	"github.com/openmodu/modu/pkg/channels"
+	"github.com/openmodu/modu/pkg/skills"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // Dispatcher manages per-chat Runners and implements channels.MessageHandler / channels.AbortHandler.

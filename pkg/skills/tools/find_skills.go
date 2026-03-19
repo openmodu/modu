@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/crosszan/modu/pkg/agent"
-	"github.com/crosszan/modu/pkg/skills"
-	"github.com/crosszan/modu/pkg/types"
+	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/skills"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // FindSkillsTool allows the LLM agent to search for installable skills from registries.

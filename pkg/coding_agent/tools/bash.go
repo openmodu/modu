@@ -10,8 +10,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/crosszan/modu/pkg/agent"
-	"github.com/crosszan/modu/pkg/types"
+	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // backgroundResult returns a success result for a background process.

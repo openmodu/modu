@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crosszan/modu/repos/notebooklm/rpc"
-	vo "github.com/crosszan/modu/vo/notebooklm_vo"
+	"github.com/openmodu/modu/repos/notebooklm/rpc"
+	vo "github.com/openmodu/modu/vo/notebooklm_vo"
 )
 
 // ========== Source Operations ==========

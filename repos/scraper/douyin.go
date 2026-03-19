@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crosszan/modu/pkg/playwright"
+	"github.com/openmodu/modu/pkg/playwright"
 	pw "github.com/playwright-community/playwright-go"
 )
 

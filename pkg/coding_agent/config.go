@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/crosszan/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/agent"
 )
 
 // Config holds coding agent configuration from global and project-level settings.

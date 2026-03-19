@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/crosszan/modu/repos/notebooklm"
-	vo "github.com/crosszan/modu/vo/notebooklm_vo"
+	"github.com/openmodu/modu/repos/notebooklm"
+	vo "github.com/openmodu/modu/vo/notebooklm_vo"
 )
 
 const usage = `NotebookLM CLI - Unofficial Google NotebookLM client

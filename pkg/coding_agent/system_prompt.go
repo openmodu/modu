@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crosszan/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/agent"
 )
 
 const defaultSystemPrompt = `You are an expert software engineer operating as an autonomous coding agent. You have tools to read, write, and edit files, run shell commands, and search code. You work in the user's working directory and can make changes directly.

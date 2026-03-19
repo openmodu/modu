@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/crosszan/modu/pkg/providers"
-	"github.com/crosszan/modu/pkg/types"
+	"github.com/openmodu/modu/pkg/providers"
+	"github.com/openmodu/modu/pkg/types"
 	"github.com/santhosh-tekuri/jsonschema/v5"
 )
 

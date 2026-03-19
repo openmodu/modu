@@ -3,7 +3,7 @@ package channels
 import (
 	"context"
 
-	"github.com/crosszan/modu/pkg/types"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // ChannelContext is the interface the runner uses to communicate back to a

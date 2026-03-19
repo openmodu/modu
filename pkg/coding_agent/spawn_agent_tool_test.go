@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
-	coding_agent "github.com/crosszan/modu/pkg/coding_agent"
-	"github.com/crosszan/modu/pkg/agent"
-	"github.com/crosszan/modu/pkg/mailbox"
-	"github.com/crosszan/modu/pkg/mailbox/client"
-	"github.com/crosszan/modu/pkg/mailbox/server"
+	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
+	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/mailbox"
+	"github.com/openmodu/modu/pkg/mailbox/client"
+	"github.com/openmodu/modu/pkg/mailbox/server"
 )
 
 func startTestMailboxServer(t *testing.T) (string, *mailbox.Hub) {

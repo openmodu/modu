@@ -5,8 +5,8 @@ package deepseek
 import (
 	"os"
 
-	"github.com/crosszan/modu/pkg/providers"
-	"github.com/crosszan/modu/pkg/providers/openai"
+	"github.com/openmodu/modu/pkg/providers"
+	"github.com/openmodu/modu/pkg/providers/openai"
 )
 
 const baseURL = "https://api.deepseek.com/v1"

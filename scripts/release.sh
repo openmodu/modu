@@ -51,4 +51,4 @@ git tag "$NEW_TAG"
 echo "→ git push origin main $NEW_TAG"
 git push origin main "$NEW_TAG"
 
-echo "✓ 发布成功: github.com/crosszan/modu@$NEW_TAG"
+echo "✓ 发布成功: github.com/openmodu/modu@$NEW_TAG"

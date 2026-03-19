@@ -3,7 +3,7 @@ package session
 import (
 	"time"
 
-	"github.com/crosszan/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/agent"
 )
 
 // EntryType represents the type of session entry.

@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crosszan/modu/pkg/mailbox"
-	"github.com/crosszan/modu/pkg/mailbox/dashboard"
+	"github.com/openmodu/modu/pkg/mailbox"
+	"github.com/openmodu/modu/pkg/mailbox/dashboard"
 )
 
 func startDashboard(t *testing.T) (string, *mailbox.Hub) {

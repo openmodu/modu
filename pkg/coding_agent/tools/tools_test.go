@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crosszan/modu/pkg/types"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 func TestTruncateHead(t *testing.T) {

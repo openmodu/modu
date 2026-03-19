@@ -1,7 +1,7 @@
 package agent
 
 import (
-	msgstream "github.com/crosszan/modu/pkg/stream"
+	msgstream "github.com/openmodu/modu/pkg/stream"
 )
 
 type EventStream struct {

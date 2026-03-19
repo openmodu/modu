@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net/url"
 
-	vo "github.com/crosszan/modu/vo/notebooklm_vo"
+	vo "github.com/openmodu/modu/vo/notebooklm_vo"
 )
 
 // EncodeRPCRequest builds the triple-nested array structure for batchexecute

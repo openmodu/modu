@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/crosszan/modu/pkg/types"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // stubProvider is a minimal Provider implementation for testing.

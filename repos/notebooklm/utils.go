@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 
-	vo "github.com/crosszan/modu/vo/notebooklm_vo"
+	vo "github.com/openmodu/modu/vo/notebooklm_vo"
 )
 
 // ========== Utility Functions ==========

@@ -17,8 +17,8 @@ import (
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 	larkws "github.com/larksuite/oapi-sdk-go/v3/ws"
 
-	"github.com/crosszan/modu/pkg/channels"
-	"github.com/crosszan/modu/pkg/types"
+	"github.com/openmodu/modu/pkg/channels"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // Bot is the Feishu (Lark) bot that receives messages via WebSocket long connection.

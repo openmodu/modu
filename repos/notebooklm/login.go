@@ -6,8 +6,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/crosszan/modu/pkg/playwright"
-	"github.com/crosszan/modu/repos/notebooklm/rpc"
+	"github.com/openmodu/modu/pkg/playwright"
+	"github.com/openmodu/modu/repos/notebooklm/rpc"
 	pw "github.com/playwright-community/playwright-go"
 )
 

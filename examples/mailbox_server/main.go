@@ -3,7 +3,7 @@ package main
 import (
 	"log"
 
-	"github.com/crosszan/modu/pkg/mailbox/server"
+	"github.com/openmodu/modu/pkg/mailbox/server"
 )
 
 func main() {

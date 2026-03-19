@@ -1,8 +1,8 @@
 package genimagerepo
 
 import (
-	"github.com/crosszan/modu/pkg/utils"
-	genimagevo "github.com/crosszan/modu/vo/gen_image_vo"
+	"github.com/openmodu/modu/pkg/utils"
+	genimagevo "github.com/openmodu/modu/vo/gen_image_vo"
 )
 
 func SaveImage(img *genimagevo.Image, filename ...string) (string, error) {

@@ -11,16 +11,16 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crosszan/modu/pkg/agent"
-	"github.com/crosszan/modu/pkg/coding_agent/compaction"
-	"github.com/crosszan/modu/pkg/coding_agent/eventbus"
-	"github.com/crosszan/modu/pkg/coding_agent/extension"
-	"github.com/crosszan/modu/pkg/coding_agent/resource"
-	"github.com/crosszan/modu/pkg/coding_agent/session"
-	"github.com/crosszan/modu/pkg/coding_agent/skills"
-	"github.com/crosszan/modu/pkg/coding_agent/tools"
-	"github.com/crosszan/modu/pkg/providers"
-	"github.com/crosszan/modu/pkg/types"
+	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/coding_agent/compaction"
+	"github.com/openmodu/modu/pkg/coding_agent/eventbus"
+	"github.com/openmodu/modu/pkg/coding_agent/extension"
+	"github.com/openmodu/modu/pkg/coding_agent/resource"
+	"github.com/openmodu/modu/pkg/coding_agent/session"
+	"github.com/openmodu/modu/pkg/coding_agent/skills"
+	"github.com/openmodu/modu/pkg/coding_agent/tools"
+	"github.com/openmodu/modu/pkg/providers"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // CodingSessionOptions configures a new CodingSession.

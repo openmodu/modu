@@ -1,7 +1,7 @@
 package tools
 
 import (
-	"github.com/crosszan/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/agent"
 )
 
 // CodingTools returns the core coding tools: read, bash, edit, write.

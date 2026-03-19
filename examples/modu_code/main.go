@@ -24,14 +24,14 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/crosszan/modu/pkg/agent"
-	coding_agent "github.com/crosszan/modu/pkg/coding_agent"
-	"github.com/crosszan/modu/pkg/coding_agent/modes"
-	"github.com/crosszan/modu/pkg/coding_agent/modes/rpc"
-	"github.com/crosszan/modu/pkg/providers"
-	"github.com/crosszan/modu/pkg/providers/openai"
-	"github.com/crosszan/modu/pkg/tui"
-	"github.com/crosszan/modu/pkg/types"
+	"github.com/openmodu/modu/pkg/agent"
+	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
+	"github.com/openmodu/modu/pkg/coding_agent/modes"
+	"github.com/openmodu/modu/pkg/coding_agent/modes/rpc"
+	"github.com/openmodu/modu/pkg/providers"
+	"github.com/openmodu/modu/pkg/providers/openai"
+	"github.com/openmodu/modu/pkg/tui"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 func main() {

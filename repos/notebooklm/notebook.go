@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	vo "github.com/crosszan/modu/vo/notebooklm_vo"
+	vo "github.com/openmodu/modu/vo/notebooklm_vo"
 )
 
 // ========== Notebook Operations ==========

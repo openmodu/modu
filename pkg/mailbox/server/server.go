@@ -5,7 +5,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/crosszan/modu/pkg/mailbox"
+	"github.com/openmodu/modu/pkg/mailbox"
 	"github.com/tidwall/redcon"
 )
 

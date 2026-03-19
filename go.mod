@@ -1,4 +1,4 @@
-module github.com/crosszan/modu
+module github.com/openmodu/modu
 
 go 1.25.0
 

@@ -3,7 +3,7 @@ package coding_agent
 import (
 	"sync"
 
-	"github.com/crosszan/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/agent"
 )
 
 // ApprovalManager manages tool execution permissions.

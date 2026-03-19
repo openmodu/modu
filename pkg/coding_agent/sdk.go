@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"os"
 
-	"github.com/crosszan/modu/pkg/agent"
-	"github.com/crosszan/modu/pkg/coding_agent/extension"
-	"github.com/crosszan/modu/pkg/providers"
-	"github.com/crosszan/modu/pkg/types"
+	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/coding_agent/extension"
+	"github.com/openmodu/modu/pkg/providers"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // CreateSessionOptions configures session creation via the SDK factory.

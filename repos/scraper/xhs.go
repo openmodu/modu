@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crosszan/modu/pkg/playwright"
+	"github.com/openmodu/modu/pkg/playwright"
 )
 
 // XHS cookie 文件默认路径

@@ -3,7 +3,7 @@ package genimagerepo
 import (
 	"context"
 
-	genimagevo "github.com/crosszan/modu/vo/gen_image_vo"
+	genimagevo "github.com/openmodu/modu/vo/gen_image_vo"
 )
 
 type ImageGenRepo interface {

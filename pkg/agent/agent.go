@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crosszan/modu/pkg/types"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 type Agent struct {

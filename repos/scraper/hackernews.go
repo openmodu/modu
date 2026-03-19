@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/crosszan/modu/pkg/playwright"
+	"github.com/openmodu/modu/pkg/playwright"
 )
 
 // ScrapeHN scrapes Hacker News front page

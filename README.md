@@ -17,7 +17,7 @@
 ## 📦 安装
 
 ```bash
-go get github.com/crosszan/modu
+go get github.com/openmodu/modu
 ```
 
 ## 🗂 项目结构
@@ -76,9 +76,9 @@ Dashboard (HTTP, :8080) ── SSE real-time push ── embedded HTML dashboard
 
 ```go
 import (
-    "github.com/crosszan/modu/pkg/mailbox/server"
-    "github.com/crosszan/modu/pkg/mailbox/client"
-    "github.com/crosszan/modu/pkg/mailbox/dashboard"
+    "github.com/openmodu/modu/pkg/mailbox/server"
+    "github.com/openmodu/modu/pkg/mailbox/client"
+    "github.com/openmodu/modu/pkg/mailbox/dashboard"
 )
 
 // 启动 Mailbox Server
@@ -116,8 +116,8 @@ worker.CompleteTask(ctx, parsed.TaskID, "result")
 
 ```go
 import (
-    coding_agent "github.com/crosszan/modu/pkg/coding_agent"
-    "github.com/crosszan/modu/pkg/mailbox/client"
+    coding_agent "github.com/openmodu/modu/pkg/coding_agent"
+    "github.com/openmodu/modu/pkg/mailbox/client"
 )
 
 mc := client.NewMailboxClient("orchestrator", "localhost:6380")
@@ -178,9 +178,9 @@ Generic, stateful Agent core with tool calling and event streaming.
 
 ```go
 import (
-    "github.com/crosszan/modu/pkg/agent"
-    "github.com/crosszan/modu/pkg/providers"
-    "github.com/crosszan/modu/pkg/types"
+    "github.com/openmodu/modu/pkg/agent"
+    "github.com/openmodu/modu/pkg/providers"
+    "github.com/openmodu/modu/pkg/types"
 )
 
 providers.Register(providers.NewOpenAIChatCompletionsProvider("anthropic",
@@ -219,10 +219,10 @@ Builds on pkg/agent with session management, skill loading, context compression.
 
 ```go
 import (
-    coding_agent "github.com/crosszan/modu/pkg/coding_agent"
-    "github.com/crosszan/modu/pkg/coding_agent/tools"
-    "github.com/crosszan/modu/pkg/providers"
-    "github.com/crosszan/modu/pkg/types"
+    coding_agent "github.com/openmodu/modu/pkg/coding_agent"
+    "github.com/openmodu/modu/pkg/coding_agent/tools"
+    "github.com/openmodu/modu/pkg/providers"
+    "github.com/openmodu/modu/pkg/types"
 )
 
 providers.Register(providers.NewOpenAIChatCompletionsProvider("ollama",
@@ -254,7 +254,7 @@ Telegram bot based on pkg/agent, a Go/Telegram port of the pi-mono mom Slack bot
 # Quick Run
 export MOMS_TG_TOKEN="<token>"
 export ANTHROPIC_API_KEY="<key>"
-go run github.com/crosszan/modu/examples/moms --sandbox=host /tmp/moms-data
+go run github.com/openmodu/modu/examples/moms --sandbox=host /tmp/moms-data
 ```
 
 📖 [详细文档](pkg/moms/README.md) | 📦 [示例代码](examples/moms/main.go)
@@ -267,8 +267,8 @@ Unified multi-provider streaming LLM interface. Register providers with provider
 
 ```go
 import (
-    "github.com/crosszan/modu/pkg/providers"
-    "github.com/crosszan/modu/pkg/types"
+    "github.com/openmodu/modu/pkg/providers"
+    "github.com/openmodu/modu/pkg/types"
 )
 
 // Register provider (call once at startup)
@@ -307,7 +307,7 @@ for ev := range stream.Events() {
 ### pkg/env — Environment Loader
 
 ```go
-import "github.com/crosszan/modu/pkg/env"
+import "github.com/openmodu/modu/pkg/env"
 
 env.Load()                              // 加载 .env
 env.Load(env.WithFile(".env.local"))    // 加载指定文件

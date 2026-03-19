@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/crosszan/modu/pkg/agent"
-	"github.com/crosszan/modu/pkg/coding_agent/tools"
-	"github.com/crosszan/modu/pkg/types"
+	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/coding_agent/tools"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // BashSandboxTool is the bash tool that executes commands in the sandbox.

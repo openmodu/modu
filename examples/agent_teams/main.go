@@ -19,11 +19,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/crosszan/modu/pkg/mailbox"
-	"github.com/crosszan/modu/pkg/mailbox/client"
-	"github.com/crosszan/modu/pkg/mailbox/dashboard"
-	"github.com/crosszan/modu/pkg/mailbox/server"
-	"github.com/crosszan/modu/pkg/mailbox/sqlitestore"
+	"github.com/openmodu/modu/pkg/mailbox"
+	"github.com/openmodu/modu/pkg/mailbox/client"
+	"github.com/openmodu/modu/pkg/mailbox/dashboard"
+	"github.com/openmodu/modu/pkg/mailbox/server"
+	"github.com/openmodu/modu/pkg/mailbox/sqlitestore"
 )
 
 const (

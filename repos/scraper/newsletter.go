@@ -5,7 +5,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/crosszan/modu/pkg/playwright"
+	"github.com/openmodu/modu/pkg/playwright"
 )
 
 // ScrapeNewsletter scrapes a newsletter archive with configurable selectors

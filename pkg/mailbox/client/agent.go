@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crosszan/modu/pkg/mailbox"
+	"github.com/openmodu/modu/pkg/mailbox"
 	"github.com/redis/go-redis/v9"
 )
 

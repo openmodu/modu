@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crosszan/modu/pkg/mailbox"
-	"github.com/crosszan/modu/pkg/mailbox/sqlitestore"
+	"github.com/openmodu/modu/pkg/mailbox"
+	"github.com/openmodu/modu/pkg/mailbox/sqlitestore"
 )
 
 func newTempStore(t *testing.T) *sqlitestore.SQLiteStore {

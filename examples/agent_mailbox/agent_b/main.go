@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	sdk "github.com/crosszan/modu/pkg/mailbox/client"
+	sdk "github.com/openmodu/modu/pkg/mailbox/client"
 )
 
 func main() {

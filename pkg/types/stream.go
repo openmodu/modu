@@ -1,7 +1,7 @@
 package types
 
 import (
-	"github.com/crosszan/modu/pkg/stream"
+	"github.com/openmodu/modu/pkg/stream"
 )
 
 // StreamEventType defines the type of a stream event.

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crosszan/modu/pkg/mailbox"
+	"github.com/openmodu/modu/pkg/mailbox"
 	_ "modernc.org/sqlite"
 )
 

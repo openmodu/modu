@@ -29,16 +29,16 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/crosszan/modu/pkg/agent"
-	coding_agent "github.com/crosszan/modu/pkg/coding_agent"
-	"github.com/crosszan/modu/pkg/mailbox"
-	"github.com/crosszan/modu/pkg/mailbox/client"
-	"github.com/crosszan/modu/pkg/mailbox/dashboard"
-	"github.com/crosszan/modu/pkg/mailbox/server"
-	"github.com/crosszan/modu/pkg/mailbox/sqlitestore"
-	"github.com/crosszan/modu/pkg/providers"
-	"github.com/crosszan/modu/pkg/providers/openai"
-	"github.com/crosszan/modu/pkg/types"
+	"github.com/openmodu/modu/pkg/agent"
+	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
+	"github.com/openmodu/modu/pkg/mailbox"
+	"github.com/openmodu/modu/pkg/mailbox/client"
+	"github.com/openmodu/modu/pkg/mailbox/dashboard"
+	"github.com/openmodu/modu/pkg/mailbox/server"
+	"github.com/openmodu/modu/pkg/mailbox/sqlitestore"
+	"github.com/openmodu/modu/pkg/providers"
+	"github.com/openmodu/modu/pkg/providers/openai"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // ── 配置 ──────────────────────────────────────────────────────────────────────

@@ -11,12 +11,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crosszan/modu/pkg/agent"
-	"github.com/crosszan/modu/pkg/channels"
-	"github.com/crosszan/modu/pkg/coding_agent/tools"
-	"github.com/crosszan/modu/pkg/skills"
-	skillstools "github.com/crosszan/modu/pkg/skills/tools"
-	"github.com/crosszan/modu/pkg/types"
+	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/channels"
+	"github.com/openmodu/modu/pkg/coding_agent/tools"
+	"github.com/openmodu/modu/pkg/skills"
+	skillstools "github.com/openmodu/modu/pkg/skills/tools"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // RunResult holds what happened after a run.

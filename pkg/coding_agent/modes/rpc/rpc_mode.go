@@ -9,8 +9,8 @@ import (
 	"os"
 	"sync"
 
-	"github.com/crosszan/modu/pkg/agent"
-	coding_agent "github.com/crosszan/modu/pkg/coding_agent"
+	"github.com/openmodu/modu/pkg/agent"
+	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 )
 
 // pendingApproval holds a channel waiting for the client's approval decision.

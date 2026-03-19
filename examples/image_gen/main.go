@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	genimagerepo "github.com/crosszan/modu/repos/gen_image_repo"
-	genimagevo "github.com/crosszan/modu/vo/gen_image_vo"
+	genimagerepo "github.com/openmodu/modu/repos/gen_image_repo"
+	genimagevo "github.com/openmodu/modu/vo/gen_image_vo"
 )
 
 const (

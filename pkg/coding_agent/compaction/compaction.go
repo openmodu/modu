@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/crosszan/modu/pkg/agent"
-	"github.com/crosszan/modu/pkg/types"
+	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // Options configures the compaction process.

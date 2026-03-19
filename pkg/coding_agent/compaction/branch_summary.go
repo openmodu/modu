@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/crosszan/modu/pkg/agent"
-	"github.com/crosszan/modu/pkg/types"
+	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 const branchSummaryPrompt = `You are generating a context summary for a branch navigation event. The user is jumping from one point in the conversation to another. Summarize what was happening at the target point so the assistant can smoothly continue from there.

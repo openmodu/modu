@@ -7,13 +7,13 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/crosszan/modu/pkg/agent"
-	coding_agent "github.com/crosszan/modu/pkg/coding_agent"
-	"github.com/crosszan/modu/pkg/coding_agent/extension"
-	"github.com/crosszan/modu/pkg/coding_agent/tools"
-	"github.com/crosszan/modu/pkg/providers"
-	"github.com/crosszan/modu/pkg/providers/openai"
-	"github.com/crosszan/modu/pkg/types"
+	"github.com/openmodu/modu/pkg/agent"
+	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
+	"github.com/openmodu/modu/pkg/coding_agent/extension"
+	"github.com/openmodu/modu/pkg/coding_agent/tools"
+	"github.com/openmodu/modu/pkg/providers"
+	"github.com/openmodu/modu/pkg/providers/openai"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // --- Hook Extension Demo ---

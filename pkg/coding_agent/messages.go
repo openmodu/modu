@@ -3,7 +3,7 @@ package coding_agent
 import (
 	"time"
 
-	"github.com/crosszan/modu/pkg/types"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // BashExecutionMessage represents a `!command` inline execution result.

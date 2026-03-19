@@ -10,8 +10,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/crosszan/modu/consts/provider"
-	genimagevo "github.com/crosszan/modu/vo/gen_image_vo"
+	"github.com/openmodu/modu/consts/provider"
+	genimagevo "github.com/openmodu/modu/vo/gen_image_vo"
 )
 
 type geminiImageImpl struct {

@@ -233,10 +233,10 @@ import (
     "context"
     "fmt"
 
-    coding_agent "github.com/crosszan/modu/pkg/coding_agent"
-    "github.com/crosszan/modu/pkg/coding_agent/tools"
-    "github.com/crosszan/modu/pkg/providers"
-    "github.com/crosszan/modu/pkg/types"
+    coding_agent "github.com/openmodu/modu/pkg/coding_agent"
+    "github.com/openmodu/modu/pkg/coding_agent/tools"
+    "github.com/openmodu/modu/pkg/providers"
+    "github.com/openmodu/modu/pkg/types"
 )
 
 func main() {

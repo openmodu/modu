@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crosszan/modu/pkg/agent"
-	"github.com/crosszan/modu/pkg/mailbox"
-	"github.com/crosszan/modu/pkg/mailbox/client"
-	"github.com/crosszan/modu/pkg/types"
+	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/mailbox"
+	"github.com/openmodu/modu/pkg/mailbox/client"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // NewMailboxTools returns the mailbox tools for a given client.

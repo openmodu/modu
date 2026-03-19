@@ -16,7 +16,7 @@ export ANTHROPIC_API_KEY="<Anthropic Key>"
 # 可选：覆盖默认模型
 export MOMS_MODEL="claude-sonnet-4-5"
 
-go run github.com/crosszan/modu/examples/moms --sandbox=host /tmp/moms-data
+go run github.com/openmodu/modu/examples/moms --sandbox=host /tmp/moms-data
 ```
 
 ## 环境变量

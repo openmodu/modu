@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crosszan/modu/pkg/providers"
-	"github.com/crosszan/modu/pkg/types"
+	"github.com/openmodu/modu/pkg/providers"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 const (

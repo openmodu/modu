@@ -1,6 +1,6 @@
 package agent
 
-import "github.com/crosszan/modu/pkg/types"
+import "github.com/openmodu/modu/pkg/types"
 
 type AgentState struct {
 	SystemPrompt     string

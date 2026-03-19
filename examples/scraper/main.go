@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/crosszan/modu/repos/scraper"
+	"github.com/openmodu/modu/repos/scraper"
 )
 
 func main() {

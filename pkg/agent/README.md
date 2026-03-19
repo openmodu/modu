@@ -5,7 +5,7 @@ Stateful agent with tool execution and event streaming.
 ## Installation
 
 ```bash
-go get github.com/crosszan/modu/pkg/agent
+go get github.com/openmodu/modu/pkg/agent
 ```
 
 ## Quick Start
@@ -17,9 +17,9 @@ import (
         "context"
         "fmt"
 
-        "github.com/crosszan/modu/pkg/agent"
-        "github.com/crosszan/modu/pkg/providers"
-        "github.com/crosszan/modu/pkg/types"
+        "github.com/openmodu/modu/pkg/agent"
+        "github.com/openmodu/modu/pkg/providers"
+        "github.com/openmodu/modu/pkg/types"
 )
 
 func main() {

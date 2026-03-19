@@ -3,7 +3,7 @@ package providers
 import (
 	"context"
 
-	"github.com/crosszan/modu/pkg/types"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // Provider is the interface that all LLM providers must implement.

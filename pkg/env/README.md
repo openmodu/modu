@@ -5,7 +5,7 @@
 ## 安装
 
 ```go
-import "github.com/crosszan/modu/pkg/env"
+import "github.com/openmodu/modu/pkg/env"
 ```
 
 ## 快速开始

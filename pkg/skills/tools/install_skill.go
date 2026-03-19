@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crosszan/modu/pkg/agent"
-	"github.com/crosszan/modu/pkg/skills"
+	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/skills"
 )
 
 // InstallSkillTool allows the LLM agent to install skills from registries.

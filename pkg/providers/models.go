@@ -3,7 +3,7 @@ package providers
 import (
 	"strings"
 
-	"github.com/crosszan/modu/pkg/types"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // Models is the global model registry, keyed by provider name → model ID.

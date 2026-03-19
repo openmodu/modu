@@ -3,7 +3,7 @@ package extension
 import (
 	"context"
 
-	"github.com/crosszan/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/agent"
 )
 
 // WrappedTool wraps an AgentTool with extension hooks.

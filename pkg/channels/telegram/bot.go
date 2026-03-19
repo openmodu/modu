@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/crosszan/modu/pkg/channels"
-	"github.com/crosszan/modu/pkg/types"
+	"github.com/openmodu/modu/pkg/channels"
+	"github.com/openmodu/modu/pkg/types"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 

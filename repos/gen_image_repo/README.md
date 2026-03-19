@@ -5,7 +5,7 @@
 ## 安装
 
 ```go
-import genimagerepo "github.com/crosszan/modu/repos/gen_image_repo"
+import genimagerepo "github.com/openmodu/modu/repos/gen_image_repo"
 ```
 
 ## 快速开始

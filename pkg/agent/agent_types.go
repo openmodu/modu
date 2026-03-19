@@ -3,7 +3,7 @@ package agent
 import (
 	"context"
 
-	"github.com/crosszan/modu/pkg/types"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // --- Enums & Basic Types ---

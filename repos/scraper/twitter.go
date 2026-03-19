@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/crosszan/modu/pkg/playwright"
+	"github.com/openmodu/modu/pkg/playwright"
 )
 
 // TwitterScraper handles Twitter/X scraping with authentication

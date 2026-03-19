@@ -5,7 +5,7 @@
 ## 安装
 
 ```go
-import "github.com/crosszan/modu/repos/scraper"
+import "github.com/openmodu/modu/repos/scraper"
 ```
 
 ## 支持的数据源
@@ -166,7 +166,7 @@ import (
     "fmt"
     "log"
 
-    "github.com/crosszan/modu/repos/scraper"
+    "github.com/openmodu/modu/repos/scraper"
 )
 
 func main() {

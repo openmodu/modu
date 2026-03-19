@@ -13,10 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crosszan/modu/pkg/agent"
-	"github.com/crosszan/modu/pkg/providers"
-	"github.com/crosszan/modu/pkg/providers/deepseek"
-	"github.com/crosszan/modu/pkg/types"
+	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/providers"
+	"github.com/openmodu/modu/pkg/providers/deepseek"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // --- Tool: Calculator ---

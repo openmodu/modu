@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/crosszan/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/agent"
 )
 
 // Runner manages the lifecycle of extensions and provides the ExtensionAPI.

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/crosszan/modu/repos/scraper"
+	"github.com/openmodu/modu/repos/scraper"
 )
 
 func TestScrapeTwitterTrending(t *testing.T) {

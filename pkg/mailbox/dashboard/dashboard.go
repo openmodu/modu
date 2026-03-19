@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/crosszan/modu/pkg/mailbox"
+	"github.com/openmodu/modu/pkg/mailbox"
 )
 
 // Dashboard 订阅 Hub 事件，通过 HTTP 对外暴露 agents/tasks 状态和 SSE 流

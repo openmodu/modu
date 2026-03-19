@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crosszan/modu/pkg/mailbox"
-	"github.com/crosszan/modu/pkg/mailbox/client"
-	"github.com/crosszan/modu/pkg/mailbox/server"
+	"github.com/openmodu/modu/pkg/mailbox"
+	"github.com/openmodu/modu/pkg/mailbox/client"
+	"github.com/openmodu/modu/pkg/mailbox/server"
 )
 
 func startTestMailbox(t *testing.T) string {

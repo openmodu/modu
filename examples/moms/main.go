@@ -8,13 +8,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/crosszan/modu/pkg/channels/feishu"
-	"github.com/crosszan/modu/pkg/channels/telegram"
-	"github.com/crosszan/modu/pkg/moms"
-	"github.com/crosszan/modu/pkg/providers"
-	"github.com/crosszan/modu/pkg/providers/openai"
-	"github.com/crosszan/modu/pkg/skills"
-	"github.com/crosszan/modu/pkg/types"
+	"github.com/openmodu/modu/pkg/channels/feishu"
+	"github.com/openmodu/modu/pkg/channels/telegram"
+	"github.com/openmodu/modu/pkg/moms"
+	"github.com/openmodu/modu/pkg/providers"
+	"github.com/openmodu/modu/pkg/providers/openai"
+	"github.com/openmodu/modu/pkg/skills"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 func main() {

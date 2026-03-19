@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/crosszan/modu/repos/scraper"
+	"github.com/openmodu/modu/repos/scraper"
 )
 
 // TestAllSources 测试所有数据源并汇总输出
