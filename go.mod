@@ -11,8 +11,8 @@ require (
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
 	github.com/tidwall/redcon v1.6.2
-	golang.org/x/net v0.33.0
-	golang.org/x/term v0.27.0
+	golang.org/x/net v0.38.0
+	golang.org/x/term v0.30.0
 	golang.org/x/text v0.34.0
 	modernc.org/sqlite v1.46.1
 )
