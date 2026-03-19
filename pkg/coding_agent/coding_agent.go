@@ -210,23 +210,23 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	})
 
 	cs := &CodingSession{
-		agent:          ag,
-		sessionManager: sessionMgr,
-		sessionTree:    session.NewTree(sessionMgr),
-		config:         cfg,
-		extensions:     extRunner,
-		skillManager:   skillMgr,
-		templateMgr:    templateMgr,
-		resources:      loader,
-		cwd:            opts.Cwd,
-		agentDir:       agentDir,
-		model:          opts.Model,
-		activeTools:    activeTools,
-		slashCommands:  make(map[string]SlashCommand),
-		getAPIKey:      getAPIKey,
-		streamFn:       streamFn,
-		retryManager:   NewRetryManager(cfg.RetrySettings, cfg.AutoRetry),
-		eventBus:       eventbus.NewEventBus(),
+		agent:           ag,
+		sessionManager:  sessionMgr,
+		sessionTree:     session.NewTree(sessionMgr),
+		config:          cfg,
+		extensions:      extRunner,
+		skillManager:    skillMgr,
+		templateMgr:     templateMgr,
+		resources:       loader,
+		cwd:             opts.Cwd,
+		agentDir:        agentDir,
+		model:           opts.Model,
+		activeTools:     activeTools,
+		slashCommands:   make(map[string]SlashCommand),
+		getAPIKey:       getAPIKey,
+		streamFn:        streamFn,
+		retryManager:    NewRetryManager(cfg.RetrySettings, cfg.AutoRetry),
+		eventBus:        eventbus.NewEventBus(),
 		scopedModels:    cfg.ScopedModels,
 		thinkingLevel:   cfg.ThinkingLevel,
 		sessionStarted:  time.Now().UnixMilli(),
@@ -382,6 +382,26 @@ func (s *CodingSession) SetActiveTools(names []string) {
 	}
 
 	s.agent.SetTools(active)
+}
+
+// SkillInfo is a minimal view of a skill for display purposes.
+type SkillInfo struct {
+	Name        string
+	Description string
+	Source      string // "user" or "project"
+}
+
+// GetSkills returns all discovered skills.
+func (s *CodingSession) GetSkills() []SkillInfo {
+	if s.skillManager == nil {
+		return nil
+	}
+	list := s.skillManager.List()
+	out := make([]SkillInfo, len(list))
+	for i, sk := range list {
+		out[i] = SkillInfo{Name: sk.Name, Description: sk.Description, Source: sk.Source}
+	}
+	return out
 }
 
 // GetActiveToolNames returns the names of currently active tools.
@@ -678,7 +698,7 @@ func (s *CodingSession) GetForkMessages() []ForkMessage {
 		data, ok := entry.Data.(session.MessageData)
 		if !ok {
 			// Try map-based extraction (from JSON deserialization)
-			if m, ok := entry.Data.(map[string]interface{}); ok {
+			if m, ok := entry.Data.(map[string]any); ok {
 				role, _ := m["role"].(string)
 				if role != string(agent.RoleUser) {
 					continue

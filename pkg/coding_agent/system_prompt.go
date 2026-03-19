@@ -163,8 +163,8 @@ func (b *SystemPromptBuilder) Build() string {
 	}
 
 	// 5. Append prompts
-	for _, p := range b.appendPrompts {
-		parts = append(parts, p)
+	if len(b.appendPrompts) > 0 {
+		parts = append(parts, b.appendPrompts...)
 	}
 
 	// 6. Memory Context

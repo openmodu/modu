@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -111,7 +112,9 @@ func (m *Manager) FormatForPrompt() string {
 	lines = append(lines, "")
 	lines = append(lines, "The following skills provide specialized instructions for specific tasks.")
 	lines = append(lines, "Use the read tool to load a skill's file when the task matches its description.")
-	lines = append(lines, "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.")
+	lines = append(lines, "IMPORTANT: Each skill has a <base_dir>. ALL relative paths inside a skill file must be")
+	lines = append(lines, "resolved against that <base_dir>. Always use the resulting absolute path in tool calls.")
+	lines = append(lines, "Never search for skill scripts with find/glob from the project cwd.")
 	lines = append(lines, "")
 	lines = append(lines, "<available_skills>")
 	for _, s := range visible {
@@ -119,6 +122,7 @@ func (m *Manager) FormatForPrompt() string {
 		lines = append(lines, fmt.Sprintf("    <name>%s</name>", escapeXML(s.Name)))
 		lines = append(lines, fmt.Sprintf("    <description>%s</description>", escapeXML(s.Description)))
 		lines = append(lines, fmt.Sprintf("    <location>%s</location>", escapeXML(s.FilePath)))
+		lines = append(lines, fmt.Sprintf("    <base_dir>%s</base_dir>", escapeXML(s.BaseDir)))
 		lines = append(lines, "  </skill>")
 	}
 	lines = append(lines, "</available_skills>")
@@ -254,6 +258,10 @@ func (m *Manager) loadSkillFile(path, source string) (*Skill, error) {
 		}
 	}
 
+	// Replace relative paths that exist on disk with absolute paths,
+	// so the LLM never needs to resolve them manually.
+	skill.Content = resolveRelativePaths(skill.Content, skillDir)
+
 	// Skills without description are not loaded (per Agent Skills spec)
 	if skill.Description == "" {
 		// Still allow loading for backward compat with flat .md files
@@ -295,6 +303,27 @@ func escapeXML(s string) string {
 	s = strings.ReplaceAll(s, "<", "&lt;")
 	s = strings.ReplaceAll(s, ">", "&gt;")
 	return s
+}
+
+// relativePathRe matches relative path-like tokens: optional "./" prefix,
+// at least one path component, and a file extension.
+// Examples: scripts/node_1.sh  ./config/settings.json  src/main.go
+var relativePathRe = regexp.MustCompile(`(?:\.\/|[a-zA-Z0-9_])[a-zA-Z0-9_./-]*\.[a-zA-Z0-9]+`)
+
+// resolveRelativePaths replaces relative path tokens in content with
+// their absolute equivalents when the path exists under baseDir.
+func resolveRelativePaths(content, baseDir string) string {
+	return relativePathRe.ReplaceAllStringFunc(content, func(token string) string {
+		// Already absolute.
+		if filepath.IsAbs(token) {
+			return token
+		}
+		abs := filepath.Join(baseDir, token)
+		if _, err := os.Stat(abs); err == nil {
+			return abs
+		}
+		return token
+	})
 }
 
 func parseFrontmatter(fm string, skill *Skill) {

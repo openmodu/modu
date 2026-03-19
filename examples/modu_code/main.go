@@ -254,6 +254,25 @@ func handleSlash(ctx context.Context, line string, session *coding_agent.CodingS
 		r.PrintInfo("active tools: " + strings.Join(names, ", "))
 		return true, false
 
+	case "skills":
+		skills := session.GetSkills()
+		if len(skills) == 0 {
+			r.PrintInfo("no skills found")
+			return true, false
+		}
+		r.PrintInfo(fmt.Sprintf("available skills (%d):", len(skills)))
+		for _, s := range skills {
+			line := "  /" + s.Name
+			if s.Description != "" {
+				line += " — " + s.Description
+			}
+			if s.Source != "" {
+				line += " [" + s.Source + "]"
+			}
+			r.PrintInfo(line)
+		}
+		return true, false
+
 	default:
 		// Let the session handle unknown slash commands (skills, etc.).
 		return false, false
@@ -270,6 +289,7 @@ func printHelp(r *tui.Renderer) {
 		"  /compact       — compact the conversation context",
 		"  /tokens        — show total token usage",
 		"  /tools         — list active tools",
+		"  /skills        — list available skills",
 		"",
 		"keyboard:",
 		"  Enter          — send message",
