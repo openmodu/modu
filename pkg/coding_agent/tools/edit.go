@@ -127,7 +127,7 @@ func (t *EditTool) Execute(ctx context.Context, toolCallID string, args map[stri
 	}
 
 	// Generate a simple diff summary
-	diff := generateDiff(normalOld, normalNew, pathArg)
+	diff := generateDiff(normalOld, normalNew, normalContent, pathArg)
 
 	replacements := 1
 	if replaceAll {
@@ -154,20 +154,53 @@ func normalizeWhitespace(s string) string {
 	return strings.Join(fields, " ")
 }
 
-// generateDiff generates a unified diff-like output.
-func generateDiff(oldText, newText, path string) string {
+// generateDiff generates a unified diff with per-line numbers and context.
+// Format: "  N  code" for context, "- N  code" for removed, "+ N  code" for added.
+func generateDiff(oldText, newText, fileContent, path string) string {
+	const context = 3
+
+	allLines := strings.Split(fileContent, "\n")
 	oldLines := strings.Split(oldText, "\n")
 	newLines := strings.Split(newText, "\n")
+
+	// Find 1-based starting line of oldText in the file.
+	startLine := 1
+	if idx := strings.Index(fileContent, oldText); idx >= 0 {
+		startLine = strings.Count(fileContent[:idx], "\n") + 1
+	}
+	endLine := startLine + len(oldLines) - 1 // last removed line (1-based)
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "--- %s\n", path)
 	fmt.Fprintf(&sb, "+++ %s\n", path)
+	fmt.Fprintf(&sb, "@@ -%d,%d +%d,%d @@\n", startLine, len(oldLines), startLine, len(newLines))
 
-	for _, line := range oldLines {
-		fmt.Fprintf(&sb, "- %s\n", line)
+	// Context before.
+	ctxStart := startLine - 1 - context
+	if ctxStart < 0 {
+		ctxStart = 0
 	}
-	for _, line := range newLines {
-		fmt.Fprintf(&sb, "+ %s\n", line)
+	for i := ctxStart; i < startLine-1 && i < len(allLines); i++ {
+		fmt.Fprintf(&sb, "  %d  %s\n", i+1, allLines[i])
+	}
+
+	// Removed lines.
+	for i, line := range oldLines {
+		fmt.Fprintf(&sb, "- %d  %s\n", startLine+i, line)
+	}
+
+	// Added lines (same start line number since they replace the removed block).
+	for i, line := range newLines {
+		fmt.Fprintf(&sb, "+ %d  %s\n", startLine+i, line)
+	}
+
+	// Context after.
+	ctxEnd := endLine + context
+	if ctxEnd > len(allLines) {
+		ctxEnd = len(allLines)
+	}
+	for i := endLine; i < ctxEnd; i++ {
+		fmt.Fprintf(&sb, "  %d  %s\n", i+1, allLines[i])
 	}
 
 	return sb.String()

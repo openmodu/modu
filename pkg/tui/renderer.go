@@ -239,7 +239,8 @@ func (r *Renderer) HandleEvent(event agent.AgentEvent) {
 			lines := strings.Split(strings.TrimRight(full, "\n"), "\n")
 			shown := lines
 			extra := 0
-			if len(lines) > previewMax {
+			// Edit diffs always show in full; other tools truncate.
+			if event.ToolName != "edit" && len(lines) > previewMax {
 				shown = lines[:previewMax]
 				extra = len(lines) - previewMax
 			}
@@ -261,6 +262,12 @@ func (r *Renderer) HandleEvent(event agent.AgentEvent) {
 				if highlighted != nil {
 					r.writeln(highlighted[i])
 				} else {
+					// Strip "N  " line number prefix for read tool output.
+					if event.ToolName == "read" {
+						if idx := strings.Index(l, "  "); idx > 0 && idx < 10 {
+							l = l[idx+2:]
+						}
+					}
 					r.writeln(styled(r.noColor, ansiDim, "     "+l))
 				}
 			}

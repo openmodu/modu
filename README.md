@@ -2,10 +2,14 @@
   <img src="logo.png" alt="Modu Logo" width="200">
 </p>
 
-<h1 align="center">modu，中文名"毛肚"</h1>
+<h1 align="center">Modu（毛肚）</h1>
 
 <p align="center">
   <strong>🚀 快捷高效搭建 Agent 应用的 Go 基础设施工具库</strong>
+</p>
+
+<p align="center">
+  <em>模块化、事件驱动的多 Agent 协作框架</em>
 </p>
 
 ---
@@ -20,55 +24,55 @@ go get github.com/crosszan/modu
 
 ```
 modu/
-├── pkg/                    # 核心工具包
-│   ├── agent/              # 通用 Agent 引擎（事件驱动、工具调用）
-│   ├── coding_agent/       # 高级编程 Agent（技能、会话、压缩）
-│   ├── mailbox/            # Agent Teams 通信基础设施
-│   │   ├── hub.go          # 内存消息中心（AgentInfo + Task 注册表）
-│   │   ├── event.go        # Hub 事件订阅机制
-│   │   ├── message.go      # 结构化消息协议（task_assign / task_result）
-│   │   ├── server/         # Redis 协议 Mailbox Server
-│   │   ├── client/         # Mailbox 客户端 SDK
-│   │   └── dashboard/      # HTTP 看板（REST API + SSE + 内嵌 HTML）
-│   ├── moms/               # Telegram 智能机器人（mom 的 Go/TG 移植）
-│   ├── providers/          # 多 Provider LLM 流式调用抽象
-│   ├── types/              # 共享类型定义（Model、消息、内容块等）
-│   ├── env/                # 环境变量加载（.env 支持）
-│   ├── playwright/         # Playwright 浏览器自动化封装
-│   └── utils/              # 通用工具函数
-├── repos/                  # 业务仓库层
-│   ├── gen_image_repo/     # 图片生成（Gemini 等）
-│   ├── notebooklm/         # Google NotebookLM 非官方 SDK
-│   └── scraper/            # 网页爬虫
-├── vo/                     # 值对象
-├── consts/                 # 常量定义
-└── examples/               # 使用示例
-    ├── agent_teams/        # Agent Teams 完整示例（orchestrator + 2 workers）
-    ├── agent_mailbox/      # Mailbox 消息传递示例
-    ├── coding_agent/       # CodingAgent 使用示例
-    ├── moms/               # Telegram 机器人示例
+├── pkg/                    # Core toolkits
+│   ├── agent/              # Generic Agent engine (event-driven, tools)
+│   ├── coding_agent/       # Advanced programming Agent (sessions, skills, compression)
+│   ├── mailbox/            # Agent Teams communication infrastructure
+│   │   ├── hub.go          # In-memory message center (AgentInfo + Task registry)
+│   │   ├── event.go        # Hub event subscription mechanism
+│   │   ├── message.go      # Structured messaging protocol (task_assign / task_result)
+│   │   ├── server/         # Redis-protocol Mailbox Server
+│   │   ├── client/         # Mailbox Client SDK
+│   │   └── dashboard/      # HTTP Dashboard (REST API + SSE + embedded HTML)
+│   ├── moms/               # Telegram smart bot (Go/TG port of mom)
+│   ├── providers/          # Multi-provider LLM streaming interface abstraction
+│   ├── types/              # Shared type definitions (Model, messages, content blocks)
+│   ├── env/                # Environment variable loader (.env support)
+│   ├── playwright/         # Playwright browser automation wrapper
+│   └── utils/              # General utility functions
+├── repos/                  # Business repository layer
+│   ├── gen_image_repo/     # Image generation (Gemini, etc.)
+│   ├── notebooklm/         # Google NotebookLM unofficial SDK
+│   └── scraper/            # Web scraper
+├── vo/                     # Value objects
+├── consts/                 # Constant definitions
+└── examples/               # Usage examples
+    ├── agent_teams/        # Agent Teams full example (orchestrator + 2 workers)
+    ├── agent_mailbox/      # Mailbox messaging example
+    ├── coding_agent/       # CodingAgent usage example
+    ├── moms/               # Telegram bot example
     └── ...
 ```
 
-## 📚 核心模块
+## 📚 Core Modules
 
-### pkg/mailbox — Agent Teams 通信基础设施
+### pkg/mailbox — Agent Teams Communication Infrastructure
 
-多 agent 协作所需的完整通信层：消息传递、任务注册表、状态追踪、实时看板。
+Complete communication layer for multi-agent collaboration: message passing, task registry, status tracking, and real-time dashboard.
 
-#### 架构
+#### Architecture
 
 ```
-MailboxServer (Redis 协议, :6380)
+MailboxServer (Redis protocol, :6380)
      │
-     Hub ── AgentInfo 表（角色/状态/当前任务）
-     │    ── Task 注册表（pending→running→completed/failed）
-     │    ── 事件订阅（agent.registered / task.created 等）
+     Hub ── AgentInfo table (role/status/current task)
+     │    ── Task registry (pending→running→completed/failed)
+     │    ── Event subscriptions (agent.registered / task.created, etc.)
      │
-Dashboard (HTTP, :8080) ── SSE 实时推送 ── 内嵌 HTML 看板
+Dashboard (HTTP, :8080) ── SSE real-time push ── embedded HTML dashboard
 ```
 
-#### 快速开始
+#### Quick Start
 
 ```go
 import (
@@ -125,12 +129,12 @@ tool := coding_agent.NewSpawnAgentTool(mc,
 )
 
 // 加入 agent 工具列表后，agent 可以调用 spawn_agent 工具
-// 参数：target_agent_id, task_description
+// Parameters: target_agent_id, task_description
 ```
 
-#### 服务端命令参考
+#### Server Commands Reference
 
-| 命令 | 说明 |
+| 命令 | Description |
 |------|------|
 | `AGENT.REG <id>` | 注册 agent |
 | `AGENT.PING <id>` | 心跳保活 |
@@ -151,15 +155,15 @@ tool := coding_agent.NewSpawnAgentTool(mc,
 
 #### Dashboard API
 
-| 接口 | 说明 |
+| 接口 | Description |
 |------|------|
-| `GET /` | HTML 看板（agents grid + tasks list，SSE 实时刷新） |
+| `GET /` | HTML dashboard with agents grid and tasks list, SSE real-time refresh |
 | `GET /api/agents` | 所有 agent 信息 (JSON) |
 | `GET /api/tasks` | 所有任务列表 (JSON) |
 | `GET /api/tasks/:id` | 任务详情 (JSON) |
-| `GET /events` | SSE 事件流（实时推送状态变更） |
+| `GET /events` | SSE 事件流（real-time push状态变更） |
 
-运行完整示例：
+Run full example：
 
 ```bash
 go run ./examples/agent_teams
@@ -168,9 +172,9 @@ go run ./examples/agent_teams
 
 ---
 
-### pkg/agent — Agent 引擎
+### pkg/agent — Agent Engine
 
-通用、有状态的 Agent 核心，支持工具调用和事件流。
+Generic, stateful Agent core with tool calling and event streaming.
 
 ```go
 import (
@@ -185,7 +189,7 @@ providers.Register(providers.NewOpenAIChatCompletionsProvider("anthropic",
 
 a := agent.NewAgent(agent.AgentOptions{
     InitialState: &agent.AgentState{
-        SystemPrompt: "你是一个助手",
+        SystemPrompt: "You are an assistant",
         Model: &types.Model{
             ID:         "claude-sonnet-4-5",
             ProviderID: "anthropic",
@@ -201,7 +205,7 @@ a.Subscribe(func(e agent.AgentEvent) {
     }
 })
 
-_ = a.Prompt(ctx, "帮我列出当前目录的文件")
+_ = a.Prompt(ctx, "List files in current directory")
 a.WaitForIdle()
 ```
 
@@ -209,9 +213,9 @@ a.WaitForIdle()
 
 ---
 
-### pkg/coding_agent — 编程 Agent
+### pkg/coding_agent — Programming Agent
 
-在 `pkg/agent` 之上，提供会话管理、技能加载、上下文压缩等高级功能。内置工具：`bash`、`read`、`write`、`edit`、`grep`、`find`、`ls`。
+Builds on pkg/agent with session management, skill loading, context compression. Built-in tools: bash, read, write, edit, grep, find, ls.
 
 ```go
 import (
@@ -234,7 +238,7 @@ session, _ := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
     GetAPIKey: func(provider string) (string, error) { return "", nil },
 })
 
-_ = session.Prompt(ctx, "读取 go.mod 告诉我这个项目是做什么的")
+_ = session.Prompt(ctx, "Read go.mod and tell me what this project does")
 session.WaitForIdle()
 ```
 
@@ -242,12 +246,12 @@ session.WaitForIdle()
 
 ---
 
-### pkg/moms — Telegram 智能机器人
+### pkg/moms — Telegram Bot
 
-基于 `pkg/agent` 的 Telegram 机器人，是 [pi-mono mom](https://github.com/mariozechner/pi-mono) Slack 机器人的 Go/Telegram 移植版。支持 bash 执行、文件操作、技能系统、定时事件和跨会话记忆。
+Telegram bot based on pkg/agent, a Go/Telegram port of the pi-mono mom Slack bot. Supports bash execution, file operations, skills, scheduled events, and cross-session memory.
 
 ```bash
-# 快速运行
+# Quick Run
 export MOMS_TG_TOKEN="<token>"
 export ANTHROPIC_API_KEY="<key>"
 go run github.com/crosszan/modu/examples/moms --sandbox=host /tmp/moms-data
@@ -257,9 +261,9 @@ go run github.com/crosszan/modu/examples/moms --sandbox=host /tmp/moms-data
 
 ---
 
-### pkg/providers — LLM Provider 层
+### pkg/providers — LLM Provider Layer
 
-统一的多 Provider 流式 LLM 调用接口。用 `providers.Register` 注册 Provider，用 `providers.StreamDefault` 调用。
+Unified multi-provider streaming LLM interface. Register providers with providers.Register, call with providers.StreamDefault.
 
 ```go
 import (
@@ -267,7 +271,7 @@ import (
     "github.com/crosszan/modu/pkg/types"
 )
 
-// 注册 Provider（程序启动时调用一次）
+// Register provider (call once at startup)
 providers.Register(providers.NewOpenAIChatCompletionsProvider("anthropic",
     providers.WithBaseURL("https://api.anthropic.com"),
     providers.WithAPIKey(os.Getenv("ANTHROPIC_API_KEY")),
@@ -287,8 +291,8 @@ model := &types.Model{
 }
 
 stream, _ := providers.StreamDefault(ctx, model, &types.LLMContext{
-    SystemPrompt: "你是助手",
-    Messages:     []types.AgentMessage{types.UserMessage{Role: "user", Content: "你好"}},
+    SystemPrompt: "You are an assistant",
+    Messages: []types.AgentMessage{types.UserMessage{Role: "user", Content: "Hello"}},
 }, &types.SimpleStreamOptions{})
 
 for ev := range stream.Events() {
@@ -300,7 +304,7 @@ for ev := range stream.Events() {
 
 ---
 
-### pkg/env — 环境变量加载
+### pkg/env — Environment Loader
 
 ```go
 import "github.com/crosszan/modu/pkg/env"
@@ -314,26 +318,26 @@ apiKey := env.GetDefault("API_KEY", "default")
 
 ---
 
-### repos/ — 业务仓库层
+### repos/ — Business Repositories
 
 | 模块 | 描述 |
 |------|------|
-| [`repos/notebooklm`](repos/notebooklm/README.md) | Google NotebookLM 非官方 SDK，支持 Notebook/Source/Chat/音频生成 |
-| [`repos/gen_image_repo`](repos/gen_image_repo/README.md) | 图片生成抽象层，支持 Gemini 等 Provider |
-| `repos/scraper` | 网页爬虫，支持 Hacker News 等 |
+| [`repos/notebooklm`](repos/notebooklm/README.md) | Google NotebookLM unofficial SDK supporting Notebooks, Sources, Chat, and Audio generation |
+| [`repos/gen_image_repo`](repos/gen_image_repo/README.md) | Image generation abstraction layer supporting Gemini and other providers |
+| `repos/scraper` | Web scraper supporting Hacker News and more |
 
-## 🔧 已支持的 LLM Providers
+## 🔧 Supported LLM Providers
 
-通过 `providers.NewOpenAIChatCompletionsProvider` 或专用构造器注册：
+Registered via providers.NewOpenAIChatCompletionsProvider or dedicated constructors.
 
-| Provider | 注册方式 |
+| Provider | Register Method |
 |----------|----------|
 | Anthropic (Claude) | `providers.NewOpenAIChatCompletionsProvider("anthropic", providers.WithBaseURL("https://api.anthropic.com"))` |
 | OpenAI (GPT / o-series) | `providers.NewOpenAIChatCompletionsProvider("openai", providers.WithBaseURL("https://api.openai.com/v1"))` |
 | DeepSeek | `providers.NewDeepSeekProvider(apiKey)` |
 | Ollama（本地） | `providers.NewOpenAIChatCompletionsProvider("ollama", providers.WithBaseURL("http://localhost:11434/v1"))` |
 | LM Studio（本地） | `providers.NewOpenAIChatCompletionsProvider("lmstudio", providers.WithBaseURL("http://localhost:1234/v1"))` |
-| 任意 OpenAI 兼容接口 | `providers.NewOpenAIChatCompletionsProvider(id, providers.WithBaseURL(url))` |
+| Any OpenAI-compatible interface | `providers.NewOpenAIChatCompletionsProvider(id, providers.WithBaseURL(url))` |
 
 ## 📄 License
 

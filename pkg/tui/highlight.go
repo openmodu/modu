@@ -25,6 +25,8 @@ func buildDiffPreview(lines []string, noColor bool) []string {
 		switch {
 		case strings.HasPrefix(l, "--- ") || strings.HasPrefix(l, "+++ "):
 			line = ansiDim + "     " + l + ansiReset
+		case strings.HasPrefix(l, "@@ "):
+			line = ansiBrightBlack + "     " + l + ansiReset
 		case strings.HasPrefix(l, "-"):
 			line = ansiRed + "     " + l + ansiReset
 		case strings.HasPrefix(l, "+"):
@@ -75,9 +77,8 @@ func highlightCode(code, filePath string) []string {
 }
 
 // buildHighlightedPreview takes the numbered lines produced by the read tool
-// (format: "N  <code>") and returns ready-to-print strings with:
-//   - dim ANSI styling on the "     N  " prefix
-//   - syntax-highlighted code content
+// (format: "N  <code>") and returns ready-to-print strings with
+// syntax-highlighted code content (line numbers are stripped from display).
 //
 // Returns nil when noColor is true or the language cannot be detected.
 func buildHighlightedPreview(numberedLines []string, filePath string, noColor bool) []string {
@@ -85,15 +86,12 @@ func buildHighlightedPreview(numberedLines []string, filePath string, noColor bo
 		return nil
 	}
 
-	prefixes := make([]string, len(numberedLines))
 	codes := make([]string, len(numberedLines))
 	for i, l := range numberedLines {
 		idx := strings.Index(l, "  ")
 		if idx > 0 && idx < 10 {
-			prefixes[i] = l[:idx+2] // "N  "
-			codes[i] = l[idx+2:]    // actual code
+			codes[i] = l[idx+2:] // strip "N  " prefix, keep actual code
 		} else {
-			prefixes[i] = ""
 			codes[i] = l
 		}
 	}
@@ -109,8 +107,7 @@ func buildHighlightedPreview(numberedLines []string, filePath string, noColor bo
 		if i < len(hlines) {
 			content = hlines[i] + ansiReset
 		}
-		// Dim prefix, then syntax-coloured content.
-		result[i] = ansiDim + "     " + prefixes[i] + ansiReset + content
+		result[i] = "     " + content
 	}
 	return result
 }
