@@ -4,12 +4,13 @@ package coding_agent
 type SessionEventType string
 
 const (
-	SessionEventAutoRetryStart SessionEventType = "auto_retry_start"
-	SessionEventAutoRetryEnd   SessionEventType = "auto_retry_end"
-	SessionEventModelChange    SessionEventType = "model_change"
-	SessionEventThinkingChange SessionEventType = "thinking_change"
-	SessionEventCompactionDone SessionEventType = "compaction_done"
-	SessionEventSessionSwitch  SessionEventType = "session_switch"
+	SessionEventAutoRetryStart  SessionEventType = "auto_retry_start"
+	SessionEventAutoRetryEnd    SessionEventType = "auto_retry_end"
+	SessionEventModelChange     SessionEventType = "model_change"
+	SessionEventThinkingChange  SessionEventType = "thinking_change"
+	SessionEventCompactionStart SessionEventType = "compaction_start"
+	SessionEventCompactionDone  SessionEventType = "compaction_done"
+	SessionEventSessionSwitch   SessionEventType = "session_switch"
 )
 
 // SessionEvent represents a session-level event emitted via the EventBus.

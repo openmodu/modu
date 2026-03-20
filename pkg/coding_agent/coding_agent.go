@@ -469,6 +469,8 @@ func (s *CodingSession) Compact(ctx context.Context) error {
 		NewCount:      result.NewCount,
 	}))
 
+	s.eventBus.Emit(sessionEventChannel, SessionEvent{Type: SessionEventCompactionDone})
+
 	return nil
 }
 
@@ -492,6 +494,7 @@ func (s *CodingSession) maybeAutoCompact(ctx context.Context) {
 
 	usagePercent := float64(s.totalTokens) / float64(defaultContextWindow) * 100.0
 	if usagePercent >= threshold {
+		s.eventBus.Emit(sessionEventChannel, SessionEvent{Type: SessionEventCompactionStart})
 		_ = s.Compact(ctx)
 	}
 }

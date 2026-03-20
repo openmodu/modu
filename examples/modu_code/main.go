@@ -133,6 +133,17 @@ func main() {
 	})
 	defer unsub()
 
+	// Wire session events (compaction, model changes, etc.) to the renderer.
+	unsubSession := session.SubscribeSession(func(ev coding_agent.SessionEvent) {
+		switch ev.Type {
+		case coding_agent.SessionEventCompactionStart:
+			renderer.PrintInfo("compacting context…")
+		case coding_agent.SessionEventCompactionDone:
+			renderer.PrintInfo("context compacted")
+		}
+	})
+	defer unsubSession()
+
 	// SIGINT: abort the current streaming operation.
 	// Ctrl+C during input is handled via ErrInterrupt from ReadLine below.
 	sigCh := make(chan os.Signal, 1)
