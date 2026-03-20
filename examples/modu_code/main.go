@@ -36,10 +36,10 @@ import (
 
 func main() {
 	var (
-		printPrompt = flag.String("p", "", "run in print mode: send prompt and output result to stdout")
-		printJSON   = flag.Bool("json", false, "with -p: output NDJSON event stream instead of plain text")
-		rpcMode     = flag.Bool("rpc", false, "run in RPC mode: JSON-line protocol over stdin/stdout")
-		noApprove   = flag.Bool("no-approve", false, "skip user approval for tool executions (auto-allow all)")
+		printPrompt   = flag.String("p", "", "run in print mode: send prompt and output result to stdout")
+		printJSON     = flag.Bool("json", false, "with -p: output NDJSON event stream instead of plain text")
+		rpcMode       = flag.Bool("rpc", false, "run in RPC mode: JSON-line protocol over stdin/stdout")
+		noApprove = flag.Bool("no-approve", false, "skip user approval for tool executions (auto-allow all)")
 	)
 	flag.Parse()
 

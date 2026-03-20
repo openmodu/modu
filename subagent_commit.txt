@@ -1,0 +1,9 @@
+feat: add subagent system for task delegation
+
+- Add pkg/coding_agent/subagent package with definition, loader, and runner
+- Add spawn_subagent tool to allow agents to delegate tasks to specialized subagents
+- Subagents can be defined as markdown files with YAML frontmatter in:
+  - {agentDir}/agents/ (global)
+  - {cwd}/.coding_agent/agents/ (project-specific, overrides global)
+- Subagent definitions support: name, description, tools whitelist, model override
+- Main agent discovers and lists available subagents in system prompt

@@ -18,6 +18,7 @@ import (
 	"github.com/openmodu/modu/pkg/coding_agent/resource"
 	"github.com/openmodu/modu/pkg/coding_agent/session"
 	"github.com/openmodu/modu/pkg/coding_agent/skills"
+	"github.com/openmodu/modu/pkg/coding_agent/subagent"
 	"github.com/openmodu/modu/pkg/coding_agent/tools"
 	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/types"
@@ -171,8 +172,6 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		promptBuilder.SetSkillsPrompt(skillsPrompt)
 	}
 
-	systemPrompt := promptBuilder.Build()
-
 	// Determine stream function
 	streamFn := opts.StreamFn
 	if streamFn == nil {
@@ -192,6 +191,18 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 			return "", fmt.Errorf("no API key found for provider: %s", provider)
 		}
 	}
+
+	// Discover subagents and register spawn_subagent tool if any are found.
+	subagentLoader := subagent.NewLoader()
+	subagentLoader.Discover(agentDir, opts.Cwd)
+	if subagentLoader.Count() > 0 {
+		activeTools = append(activeTools, tools.NewSpawnSubagentTool(subagentLoader, activeTools, opts.Model, getAPIKey))
+		if subagentsPrompt := formatSubagentsForPrompt(subagentLoader.List()); subagentsPrompt != "" {
+			promptBuilder.AppendPrompt(subagentsPrompt)
+		}
+	}
+
+	systemPrompt := promptBuilder.Build()
 
 	// Create approval manager
 	approvalMgr := NewApprovalManager()
@@ -873,4 +884,24 @@ func (s *CodingSession) SwitchSession(sessionFile string) error {
 
 	s.agent.ReplaceMessages(messages)
 	return nil
+}
+
+// formatSubagentsForPrompt returns an XML block listing available subagents,
+// suitable for injection into the system prompt.
+func formatSubagentsForPrompt(defs []*subagent.SubagentDefinition) string {
+	if len(defs) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("\nThe following subagents are available via the spawn_subagent tool.\n")
+	sb.WriteString("Use spawn_subagent when a task is well-scoped and can be delegated to a specialist.\n\n")
+	sb.WriteString("<available_subagents>\n")
+	for _, def := range defs {
+		sb.WriteString("  <subagent>\n")
+		sb.WriteString("    <name>" + def.Name + "</name>\n")
+		sb.WriteString("    <description>" + def.Description + "</description>\n")
+		sb.WriteString("  </subagent>\n")
+	}
+	sb.WriteString("</available_subagents>")
+	return sb.String()
 }
