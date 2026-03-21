@@ -60,9 +60,15 @@ func main() {
 
 	// Telegram mode: each chat gets its own CodingSession; no TUI needed.
 	if *telegramMode {
+		// Token priority: dotfile > MOMS_TG_TOKEN env var.
 		token := os.Getenv("MOMS_TG_TOKEN")
+		if tgCfg, err := loadTelegramConfig(); err == nil && tgCfg.Token != "" {
+			token = tgCfg.Token
+		}
 		if token == "" {
-			fmt.Fprintln(os.Stderr, "MOMS_TG_TOKEN env var is required for --telegram mode")
+			fmt.Fprintln(os.Stderr, "no Telegram token configured")
+			fmt.Fprintln(os.Stderr, "set it with: /telegram token <token>")
+			fmt.Fprintln(os.Stderr, "or set MOMS_TG_TOKEN env var")
 			os.Exit(1)
 		}
 		attachDir := os.TempDir() + "/modu_code_tg"
@@ -301,23 +307,80 @@ func handleSlash(ctx context.Context, line string, session *coding_agent.CodingS
 		}
 		return true, false
 
+	case "telegram":
+		arg := ""
+		if len(parts) > 1 {
+			arg = strings.TrimSpace(parts[1])
+		}
+		handleTelegramCommand(arg, r)
+		return true, false
+
 	default:
 		// Let the session handle unknown slash commands (skills, etc.).
 		return false, false
 	}
 }
 
+// handleTelegramCommand processes /telegram [subcommand].
+func handleTelegramCommand(arg string, r *tui.Renderer) {
+	configPath := telegramConfigPath()
+
+	// /telegram token <token>  — set bot token
+	if strings.HasPrefix(arg, "token ") {
+		token := strings.TrimSpace(strings.TrimPrefix(arg, "token "))
+		if token == "" {
+			r.PrintInfo("usage: /telegram token <bot_token>")
+			return
+		}
+		cfg, err := loadTelegramConfig()
+		if err != nil {
+			cfg = &TelegramConfig{}
+		}
+		cfg.Token = token
+		if err := saveTelegramConfig(cfg); err != nil {
+			r.PrintError(fmt.Errorf("save telegram config: %w", err))
+			return
+		}
+		r.PrintInfo("Telegram token saved to " + configPath)
+		r.PrintInfo("Run with --telegram to start the bot.")
+		return
+	}
+
+	// /telegram  — show status
+	cfg, err := loadTelegramConfig()
+	if err != nil {
+		r.PrintInfo("telegram config: " + configPath)
+		r.PrintError(fmt.Errorf("read config: %w", err))
+		return
+	}
+
+	r.PrintInfo("telegram config: " + configPath)
+	if cfg.Token != "" {
+		masked := cfg.Token
+		if len(masked) > 8 {
+			masked = masked[:4] + strings.Repeat("*", len(masked)-8) + masked[len(masked)-4:]
+		}
+		r.PrintInfo("  token: " + masked + "  (set)")
+	} else {
+		r.PrintInfo("  token: (not set)")
+		r.PrintInfo("  set with: /telegram token <bot_token>")
+	}
+	r.PrintInfo("  start with: modu_code --telegram")
+}
+
 func printHelp(r *tui.Renderer) {
 	lines := []string{
 		"built-in commands:",
-		"  /help, /h      — show this help",
-		"  /quit, /exit   — exit",
-		"  /clear         — clear the screen",
-		"  /model         — show current model",
-		"  /compact       — compact the conversation context",
-		"  /tokens        — show total token usage",
-		"  /tools         — list active tools",
-		"  /skills        — list available skills",
+		"  /help, /h           — show this help",
+		"  /quit, /exit        — exit",
+		"  /clear              — clear the screen",
+		"  /model              — show current model",
+		"  /compact            — compact the conversation context",
+		"  /tokens             — show total token usage",
+		"  /tools              — list active tools",
+		"  /skills             — list available skills",
+		"  /telegram           — show Telegram bot config",
+		"  /telegram token <t> — set Telegram bot token",
 		"",
 		"keyboard:",
 		"  Enter          — send message",
