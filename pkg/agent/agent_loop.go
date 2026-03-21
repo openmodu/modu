@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/openmodu/modu/pkg/types"
@@ -235,86 +236,155 @@ func streamAssistantResponse(context AgentContext, config AgentConfig, ctx conte
 }
 
 func executeToolCalls(tools []AgentTool, toolCalls []types.ToolCallContent, ctx context.Context, stream *EventStream, config AgentConfig) ([]types.ToolResultMessage, []AgentMessage) {
-	results := []types.ToolResultMessage{}
+	n := len(toolCalls)
+	allResults := make([]types.ToolResultMessage, n)
 	var steeringMessages []AgentMessage
-	for index, toolCall := range toolCalls {
-		stream.Push(AgentEvent{Type: EventTypeToolExecutionStart, ToolCallID: toolCall.ID, ToolName: toolCall.Name, Args: toolCall.Arguments})
-		var result AgentToolResult
-		isError := false
-		tool := findTool(tools, toolCall.Name)
-		if tool == nil {
-			result = AgentToolResult{
-				Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "Tool not found"}},
-				Details: map[string]any{},
+
+	i := 0
+	for i < n {
+		// Determine batch boundaries: consecutive parallel-capable calls form one batch.
+		batchEnd := i + 1
+		if isParallelCapable(tools, toolCalls[i]) {
+			for batchEnd < n && isParallelCapable(tools, toolCalls[batchEnd]) {
+				batchEnd++
 			}
-			isError = true
-		} else {
-			args := toolCall.Arguments
+		}
+		batch := toolCalls[i:batchEnd]
+		inParallel := len(batch) > 1
+
+		// Approval phase — always serial (may block on user input).
+		type prepared struct {
+			parsed  map[string]any
+			denied  bool
+			denyMsg string
+		}
+		preps := make([]prepared, len(batch))
+		for j, tc := range batch {
+			tool := findTool(tools, tc.Name)
+			if tool == nil {
+				preps[j] = prepared{denied: true, denyMsg: "Tool not found"}
+				continue
+			}
 			toolDef := types.ToolDefinition{Name: tool.Name(), Description: tool.Description(), Parameters: tool.Parameters()}
-			parsed, err := ValidateToolArguments(toolDef, toolCall)
+			parsed, err := ValidateToolArguments(toolDef, tc)
 			if err != nil {
-				result = AgentToolResult{
+				preps[j] = prepared{denied: true, denyMsg: err.Error()}
+				continue
+			}
+			if config.ApproveTool != nil {
+				decision, approveErr := config.ApproveTool(tc.Name, tc.ID, parsed)
+				if approveErr != nil || !decision.IsAllow() {
+					msg := "Tool execution denied by user."
+					if approveErr != nil {
+						msg = fmt.Sprintf("Tool approval error: %v", approveErr)
+					}
+					preps[j] = prepared{denied: true, denyMsg: msg}
+					continue
+				}
+			}
+			preps[j] = prepared{parsed: parsed}
+		}
+
+		// Emit ToolExecutionStart for every call in the batch.
+		for j, tc := range batch {
+			stream.Push(AgentEvent{Type: EventTypeToolExecutionStart, ToolCallID: tc.ID, ToolName: tc.Name, Args: tc.Arguments, Parallel: inParallel})
+			_ = preps[j] // keep compiler happy with j in scope
+		}
+
+		// Execution phase — concurrent for parallel batches, serial for single calls.
+		type execOutcome struct {
+			result  AgentToolResult
+			isError bool
+		}
+		outcomes := make([]execOutcome, len(batch))
+
+		runOne := func(j int, tc types.ToolCallContent) {
+			if preps[j].denied {
+				outcomes[j] = execOutcome{
+					result: AgentToolResult{
+						Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: preps[j].denyMsg}},
+						Details: map[string]any{"denied": true},
+					},
+					isError: true,
+				}
+				stream.Push(AgentEvent{Type: EventTypeToolExecutionEnd, ToolCallID: tc.ID, ToolName: tc.Name, Args: tc.Arguments, Result: outcomes[j].result, IsError: true, Parallel: inParallel})
+				return
+			}
+			tool := findTool(tools, tc.Name)
+			r, err := tool.Execute(ctx, tc.ID, preps[j].parsed, func(partial AgentToolResult) {
+				stream.Push(AgentEvent{Type: EventTypeToolExecutionUpdate, ToolCallID: tc.ID, ToolName: tc.Name, Args: tc.Arguments, Partial: partial, Parallel: inParallel})
+			})
+			if err != nil {
+				r = AgentToolResult{
 					Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: err.Error()}},
 					Details: map[string]any{},
 				}
-				isError = true
+				outcomes[j] = execOutcome{result: r, isError: true}
 			} else {
-				_ = args
-				// Check approval before executing
-				if config.ApproveTool != nil {
-					decision, approveErr := config.ApproveTool(toolCall.Name, toolCall.ID, parsed)
-					if approveErr != nil || !decision.IsAllow() {
-						msg := "Tool execution denied by user."
-						if approveErr != nil {
-							msg = fmt.Sprintf("Tool approval error: %v", approveErr)
-						}
-						result = AgentToolResult{
-							Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: msg}},
-							Details: map[string]any{"denied": true},
-						}
-						isError = true
-					}
-				}
-				if !isError {
-					r, err := tool.Execute(ctx, toolCall.ID, parsed, func(partial AgentToolResult) {
-						stream.Push(AgentEvent{Type: EventTypeToolExecutionUpdate, ToolCallID: toolCall.ID, ToolName: toolCall.Name, Args: toolCall.Arguments, Partial: partial})
-					})
-					result = r
-					if err != nil {
-						result = AgentToolResult{
-							Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: err.Error()}},
-							Details: map[string]any{},
-						}
-						isError = true
-					}
-				}
+				outcomes[j] = execOutcome{result: r, isError: false}
 			}
+			stream.Push(AgentEvent{Type: EventTypeToolExecutionEnd, ToolCallID: tc.ID, ToolName: tc.Name, Args: tc.Arguments, Result: outcomes[j].result, IsError: outcomes[j].isError, Parallel: inParallel})
 		}
-		stream.Push(AgentEvent{Type: EventTypeToolExecutionEnd, ToolCallID: toolCall.ID, ToolName: toolCall.Name, Args: toolCall.Arguments, Result: result, IsError: isError})
-		toolResult := types.ToolResultMessage{
-			Role:       "toolResult",
-			ToolCallID: toolCall.ID,
-			ToolName:   toolCall.Name,
-			Content:    result.Content,
-			Details:    result.Details,
-			IsError:    isError,
-			Timestamp:  time.Now().UnixMilli(),
+
+		if inParallel {
+			var wg sync.WaitGroup
+			for j, tc := range batch {
+				wg.Add(1)
+				go func(j int, tc types.ToolCallContent) {
+					defer wg.Done()
+					runOne(j, tc)
+				}(j, tc)
+			}
+			wg.Wait()
+		} else {
+			runOne(0, batch[0])
 		}
-		results = append(results, toolResult)
-		stream.Push(AgentEvent{Type: EventTypeMessageStart, Message: toolResult})
-		stream.Push(AgentEvent{Type: EventTypeMessageEnd, Message: toolResult})
+
+		// Emit MessageStart/End in order after all executions in the batch complete.
+		for j, tc := range batch {
+			toolResult := types.ToolResultMessage{
+				Role:       "toolResult",
+				ToolCallID: tc.ID,
+				ToolName:   tc.Name,
+				Content:    outcomes[j].result.Content,
+				Details:    outcomes[j].result.Details,
+				IsError:    outcomes[j].isError,
+				Timestamp:  time.Now().UnixMilli(),
+			}
+			allResults[i+j] = toolResult
+			stream.Push(AgentEvent{Type: EventTypeMessageStart, Message: toolResult})
+			stream.Push(AgentEvent{Type: EventTypeMessageEnd, Message: toolResult})
+		}
+
+		// Check for steering messages after each batch.
 		if config.GetSteeringMessages != nil {
 			steering, err := config.GetSteeringMessages()
 			if err == nil && len(steering) > 0 {
 				steeringMessages = steering
-				for _, skipped := range toolCalls[index+1:] {
-					results = append(results, skipToolCall(skipped, stream))
+				for k := batchEnd; k < n; k++ {
+					allResults[k] = skipToolCall(toolCalls[k], stream)
 				}
 				break
 			}
 		}
+
+		i = batchEnd
 	}
-	return results, steeringMessages
+
+	return allResults, steeringMessages
+}
+
+// isParallelCapable reports whether the tool for tc implements ParallelTool
+// and returns true from Parallel().
+func isParallelCapable(tools []AgentTool, tc types.ToolCallContent) bool {
+	tool := findTool(tools, tc.Name)
+	if tool == nil {
+		return false
+	}
+	if pt, ok := tool.(ParallelTool); ok {
+		return pt.Parallel()
+	}
+	return false
 }
 
 func skipToolCall(toolCall types.ToolCallContent, stream *EventStream) types.ToolResultMessage {

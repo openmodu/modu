@@ -204,15 +204,21 @@ func (r *Renderer) HandleEvent(event agent.AgentEvent) {
 		r.expandIdx = -1
 		r.expandShown = false
 
-		// Line 1: ● ToolName(arg)  — written as regular (permanent) content.
-		// Line 2:   ⎿  …           — written as the replaceable tool header.
 		callLine := r.toolCallLine(event.ToolName, event.Args)
-		resultPlaceholder := r.toolResultLine(false, false, "")
-		if r.screen != nil {
+		if event.Parallel {
+			// Parallel tools: write call line only — no collapsible placeholder,
+			// because multiple tools run concurrently and share the Screen slot.
+			// Result lines will be appended by each tool as it finishes.
 			r.write("\n" + callLine + "\n")
-			r.screen.WriteToolHeader(resultPlaceholder)
 		} else {
-			r.write("\n" + callLine + "\n")
+			// Serial tool: Line 1 = call, Line 2 = replaceable ⎿ placeholder.
+			resultPlaceholder := r.toolResultLine(false, false, "")
+			if r.screen != nil {
+				r.write("\n" + callLine + "\n")
+				r.screen.WriteToolHeader(resultPlaceholder)
+			} else {
+				r.write("\n" + callLine + "\n")
+			}
 		}
 
 	case agent.EventTypeToolExecutionEnd:
@@ -224,9 +230,13 @@ func (r *Renderer) HandleEvent(event agent.AgentEvent) {
 			isError: event.IsError,
 		})
 
-		// Replace the ⎿ placeholder with the result summary.
 		resultLine := r.toolResultLine(true, event.IsError, toolResult(event))
-		if r.screen != nil {
+		if event.Parallel {
+			// Parallel: always append the result line (no cursor-up replacement).
+			r.write(resultLine + "\n")
+			r.toolLines = 0
+		} else if r.screen != nil {
+			// Serial + screen: replace the ⎿ placeholder in-place.
 			r.screen.CollapseToolHeader(resultLine)
 		} else {
 			r.write(resultLine + "\n")

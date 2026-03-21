@@ -27,11 +27,14 @@ type AgentEvent struct {
 	ToolResults []types.ToolResultMessage
 
 	// Tool Execution specific
-	ToolCallID  string
-	ToolName    string
-	Args        any
-	Result      interface{}
-	IsError     bool
-	Partial     interface{}
+	ToolCallID string
+	ToolName   string
+	Args       any
+	Result     interface{}
+	IsError    bool
+	Partial    interface{}
+	// Parallel is true when this tool is executing concurrently with others.
+	// Renderers should skip cursor-up / placeholder-collapse for parallel tools.
+	Parallel    bool
 	StreamEvent *types.StreamEvent
 }

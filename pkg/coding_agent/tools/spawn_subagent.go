@@ -34,8 +34,9 @@ func NewSpawnSubagentTool(
 	}
 }
 
-func (t *SpawnSubagentTool) Name() string  { return "spawn_subagent" }
-func (t *SpawnSubagentTool) Label() string { return "Spawn Subagent" }
+func (t *SpawnSubagentTool) Name() string     { return "spawn_subagent" }
+func (t *SpawnSubagentTool) Label() string    { return "Spawn Subagent" }
+func (t *SpawnSubagentTool) Parallel() bool  { return true }
 func (t *SpawnSubagentTool) Description() string {
 	return `Delegate a task to a named subagent. The subagent runs with its own LLM
 context and tool set, then returns its final response.`
