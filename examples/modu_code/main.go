@@ -13,6 +13,7 @@
 //
 //	OPENAI_BASE_URL    → custom base URL for an OpenAI-compat provider
 //	THINKING_LEVEL     → off | low | medium | high (default: off)
+//	MOMS_TG_TOKEN      → Telegram bot token (required for --telegram mode)
 package main
 
 import (
@@ -36,10 +37,11 @@ import (
 
 func main() {
 	var (
-		printPrompt   = flag.String("p", "", "run in print mode: send prompt and output result to stdout")
-		printJSON     = flag.Bool("json", false, "with -p: output NDJSON event stream instead of plain text")
-		rpcMode       = flag.Bool("rpc", false, "run in RPC mode: JSON-line protocol over stdin/stdout")
-		noApprove = flag.Bool("no-approve", false, "skip user approval for tool executions (auto-allow all)")
+		printPrompt  = flag.String("p", "", "run in print mode: send prompt and output result to stdout")
+		printJSON    = flag.Bool("json", false, "with -p: output NDJSON event stream instead of plain text")
+		rpcMode      = flag.Bool("rpc", false, "run in RPC mode: JSON-line protocol over stdin/stdout")
+		telegramMode = flag.Bool("telegram", false, "run as Telegram bot (requires MOMS_TG_TOKEN env var)")
+		noApprove    = flag.Bool("no-approve", false, "skip user approval for tool executions (auto-allow all)")
 	)
 	flag.Parse()
 
@@ -54,6 +56,21 @@ func main() {
 		fmt.Fprintln(os.Stderr, "no provider configured")
 		fmt.Fprintln(os.Stderr, "set one of: ANTHROPIC_API_KEY, OPENAI_API_KEY, DEEPSEEK_API_KEY, OLLAMA_HOST+OLLAMA_MODEL")
 		os.Exit(1)
+	}
+
+	// Telegram mode: each chat gets its own CodingSession; no TUI needed.
+	if *telegramMode {
+		token := os.Getenv("MOMS_TG_TOKEN")
+		if token == "" {
+			fmt.Fprintln(os.Stderr, "MOMS_TG_TOKEN env var is required for --telegram mode")
+			os.Exit(1)
+		}
+		attachDir := os.TempDir() + "/modu_code_tg"
+		if err := runTelegram(token, attachDir, model, getAPIKey, cwd); err != nil && err != context.Canceled {
+			fmt.Fprintf(os.Stderr, "telegram error: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	thinkingLevel := resolveThinkingLevel()
