@@ -32,8 +32,11 @@ func startTelegramBackground(
 		sender := chCtx.SenderName()
 		text := chCtx.MessageText()
 
-		// Show the incoming message in the TUI so the local user is aware.
-		renderer.PrintInfo(fmt.Sprintf("[Telegram @%s] %s", sender, text))
+		// Show the incoming message in the TUI as a user turn so the local
+		// user is aware. ClearLine erases the ❯ prompt if rawReadLine is
+		// currently active, preventing the text from appearing after the prompt.
+		renderer.ClearLine()
+		renderer.PrintUser(fmt.Sprintf("[Telegram @%s] %s", sender, text))
 
 		_ = chCtx.SetWorking(true)
 

@@ -709,6 +709,16 @@ func (r *Renderer) PrintInfo(msg string) {
 	r.writeln(styled(r.noColor, ansiDim, msg))
 }
 
+// ClearLine erases the current terminal line (\r\033[2K). Call this before
+// writing external content when a raw readline prompt may be on screen,
+// to prevent output from appearing after the ❯ prompt on the same line.
+func (r *Renderer) ClearLine() {
+	r.promptMu.Lock()
+	defer r.promptMu.Unlock()
+	fmt.Fprint(r.out, "\r\033[2K")
+	r.promptShown = false
+}
+
 // PrintError renders a red error line.
 func (r *Renderer) PrintError(err error) {
 	r.writeln(styled(r.noColor, ansiRed, "error: "+err.Error()))
