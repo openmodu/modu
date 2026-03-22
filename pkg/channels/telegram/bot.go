@@ -24,6 +24,13 @@ type Bot struct {
 	attachDir  string // directory to save downloaded attachments
 	onMessage  channels.MessageHandler
 	onAbort    channels.AbortHandler
+
+	// approvalMu guards approvalCh.
+	approvalMu sync.Mutex
+	// approvalCh maps chatID → a one-shot channel waiting for the user's
+	// next text message as a tool-approval response.  handleUpdate delivers
+	// the text and removes the entry before calling onMessage.
+	approvalCh map[int64]chan string
 }
 
 // NewBot creates a new Telegram bot.
@@ -41,10 +48,11 @@ func NewBot(token, attachDir string, onMessage channels.MessageHandler, onAbort 
 	}
 
 	return &Bot{
-		api:       api,
-		attachDir: attachDir,
-		onMessage: onMessage,
-		onAbort:   onAbort,
+		api:        api,
+		attachDir:  attachDir,
+		onMessage:  onMessage,
+		onAbort:    onAbort,
+		approvalCh: make(map[int64]chan string),
 	}, nil
 }
 
@@ -72,6 +80,23 @@ func (b *Bot) Run(ctx context.Context) error {
 
 // handleUpdate dispatches one Telegram update.
 func (b *Bot) handleUpdate(ctx context.Context, update tgbotapi.Update) {
+	// Inline-keyboard button press: deliver to the approval channel for that chat.
+	if update.CallbackQuery != nil {
+		cq := update.CallbackQuery
+		// Acknowledge the callback so Telegram removes the loading spinner.
+		_, _ = b.api.Request(tgbotapi.NewCallback(cq.ID, ""))
+		chatID := cq.Message.Chat.ID
+		b.approvalMu.Lock()
+		if ch, ok := b.approvalCh[chatID]; ok {
+			delete(b.approvalCh, chatID)
+			b.approvalMu.Unlock()
+			ch <- cq.Data
+		} else {
+			b.approvalMu.Unlock()
+		}
+		return
+	}
+
 	msg := update.Message
 	if msg == nil {
 		return
@@ -83,6 +108,17 @@ func (b *Bot) handleUpdate(ctx context.Context, update tgbotapi.Update) {
 
 	chatID := msg.Chat.ID
 	ts := fmt.Sprintf("%d", msg.MessageID)
+
+	// If a tool-approval callback is waiting for this chat's next message,
+	// deliver it and skip normal message handling.
+	b.approvalMu.Lock()
+	if ch, ok := b.approvalCh[chatID]; ok {
+		delete(b.approvalCh, chatID)
+		b.approvalMu.Unlock()
+		ch <- msg.Text
+		return
+	}
+	b.approvalMu.Unlock()
 
 	// Stop command.
 	if strings.EqualFold(strings.TrimSpace(msg.Text), "stop") {
@@ -136,8 +172,59 @@ func (b *Bot) handleUpdate(ctx context.Context, update tgbotapi.Update) {
 		attachments: attachmentPaths,
 	}
 
-	b.onMessage(ctx, tgCtx)
-	close(typingStop)
+	// Run the handler in a goroutine so the bot's Run loop can continue
+	// processing other updates (e.g. inline-keyboard callback queries for
+	// tool-approval) while the message is being handled.
+	go func() {
+		b.onMessage(ctx, tgCtx)
+		close(typingStop)
+	}()
+}
+
+// AwaitApproval registers a one-shot channel that will receive the next text
+// message sent to chatID.  The message is intercepted before onMessage, so it
+// is treated as an approval response rather than a new prompt.
+// Call CancelApproval to remove the registration if the context is cancelled.
+func (b *Bot) AwaitApproval(chatID int64) <-chan string {
+	ch := make(chan string, 1)
+	b.approvalMu.Lock()
+	b.approvalCh[chatID] = ch
+	b.approvalMu.Unlock()
+	return ch
+}
+
+// CancelApproval removes any pending approval wait for chatID.
+func (b *Bot) CancelApproval(chatID int64) {
+	b.approvalMu.Lock()
+	delete(b.approvalCh, chatID)
+	b.approvalMu.Unlock()
+}
+
+// SendText exposes sendText for use by the application layer (e.g. approval prompts).
+func (b *Bot) SendText(chatID int64, text string) error {
+	_, err := b.sendText(chatID, text, "")
+	return err
+}
+
+// SendApprovalKeyboard sends a tool-approval prompt with four inline buttons
+// (Allow / Always Allow / Deny / Always Deny). The button callback data is
+// the short key consumed by the approval handler: y, a, n, d.
+func (b *Bot) SendApprovalKeyboard(chatID int64, toolName string) error {
+	text := fmt.Sprintf("▶ Tool: %s\n\nApprove execution?", toolName)
+	keyboard := tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("✅ Allow", "y"),
+			tgbotapi.NewInlineKeyboardButtonData("✅✅ Always Allow", "a"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("❌ Deny", "n"),
+			tgbotapi.NewInlineKeyboardButtonData("❌❌ Always Deny", "d"),
+		),
+	)
+	m := tgbotapi.NewMessage(chatID, text)
+	m.ReplyMarkup = keyboard
+	_, err := b.api.Send(m)
+	return err
 }
 
 // sendText sends a plain or MarkdownV2 message to a chat.

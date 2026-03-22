@@ -112,10 +112,12 @@ func main() {
 	input.OnPromptChange = renderer.SetActivePrompt
 
 	// Wire tool approval (default on; disabled with --no-approve).
+	// tuiApprovalFn is saved so it can be restored after a Telegram prompt.
+	var tuiApprovalFn ApprovalFn
 	if !*noApprove {
 		approvalCh := make(chan tui.ApprovalRequest, 1)
 		input.ApprovalRequests = approvalCh
-		session.SetToolApprovalCallback(func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
+		tuiApprovalFn = func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
 			respCh := make(chan string, 1)
 			approvalCh <- tui.ApprovalRequest{
 				ToolName:   toolName,
@@ -125,7 +127,8 @@ func main() {
 			}
 			decision := <-respCh
 			return agent.ToolApprovalDecision(decision), nil
-		})
+		}
+		session.SetToolApprovalCallback(tuiApprovalFn)
 	}
 
 	renderer.PrintBanner(model.Name, cwd)
@@ -178,7 +181,7 @@ func main() {
 			renderer.PrintInfo("[telegram] no token configured — use /telegram token <t> or set MOMS_TG_TOKEN")
 		} else {
 			attachDir := os.TempDir() + "/modu_code_tg"
-			if err := startTelegramBackground(ctx, token, attachDir, session, renderer, &promptMu); err != nil {
+			if err := startTelegramBackground(ctx, token, attachDir, session, renderer, &promptMu, tuiApprovalFn); err != nil {
 				renderer.PrintInfo(fmt.Sprintf("[telegram] failed to start: %v", err))
 			}
 		}
