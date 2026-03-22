@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/openmodu/modu/pkg/agent"
@@ -40,7 +41,7 @@ func main() {
 		printPrompt  = flag.String("p", "", "run in print mode: send prompt and output result to stdout")
 		printJSON    = flag.Bool("json", false, "with -p: output NDJSON event stream instead of plain text")
 		rpcMode      = flag.Bool("rpc", false, "run in RPC mode: JSON-line protocol over stdin/stdout")
-		telegramMode = flag.Bool("telegram", false, "run as Telegram bot (requires MOMS_TG_TOKEN env var)")
+		telegramMode = flag.Bool("telegram", false, "start Telegram bot in background alongside the TUI")
 		noApprove    = flag.Bool("no-approve", false, "skip user approval for tool executions (auto-allow all)")
 	)
 	flag.Parse()
@@ -56,27 +57,6 @@ func main() {
 		fmt.Fprintln(os.Stderr, "no provider configured")
 		fmt.Fprintln(os.Stderr, "set one of: ANTHROPIC_API_KEY, OPENAI_API_KEY, DEEPSEEK_API_KEY, OLLAMA_HOST+OLLAMA_MODEL")
 		os.Exit(1)
-	}
-
-	// Telegram mode: each chat gets its own CodingSession; no TUI needed.
-	if *telegramMode {
-		// Token priority: dotfile > MOMS_TG_TOKEN env var.
-		token := os.Getenv("MOMS_TG_TOKEN")
-		if tgCfg, err := loadTelegramConfig(); err == nil && tgCfg.Token != "" {
-			token = tgCfg.Token
-		}
-		if token == "" {
-			fmt.Fprintln(os.Stderr, "no Telegram token configured")
-			fmt.Fprintln(os.Stderr, "set it with: /telegram token <token>")
-			fmt.Fprintln(os.Stderr, "or set MOMS_TG_TOKEN env var")
-			os.Exit(1)
-		}
-		attachDir := os.TempDir() + "/modu_code_tg"
-		if err := runTelegram(token, attachDir, model, getAPIKey, cwd); err != nil && err != context.Canceled {
-			fmt.Fprintf(os.Stderr, "telegram error: %v\n", err)
-			os.Exit(1)
-		}
-		return
 	}
 
 	thinkingLevel := resolveThinkingLevel()
@@ -156,6 +136,10 @@ func main() {
 	})
 	defer unsub()
 
+	// promptMu serializes session.Prompt() calls between the TUI and the
+	// Telegram background goroutine so they never run concurrently.
+	var promptMu sync.Mutex
+
 	// Wire session events (compaction, model changes, etc.) to the renderer.
 	unsubSession := session.SubscribeSession(func(ev coding_agent.SessionEvent) {
 		switch ev.Type {
@@ -180,9 +164,25 @@ func main() {
 		}
 	}()
 
-	exit := func() { os.Exit(0) }
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	exit := func() { cancelCtx(); os.Exit(0) }
 
-	ctx := context.Background()
+	// Start Telegram bot in background if --telegram flag is set.
+	// The bot shares this session and renderer; messages appear in the TUI.
+	if *telegramMode {
+		token := os.Getenv("MOMS_TG_TOKEN")
+		if tgCfg, err := loadTelegramConfig(); err == nil && tgCfg.Token != "" {
+			token = tgCfg.Token
+		}
+		if token == "" {
+			renderer.PrintInfo("[telegram] no token configured — use /telegram token <t> or set MOMS_TG_TOKEN")
+		} else {
+			attachDir := os.TempDir() + "/modu_code_tg"
+			if err := startTelegramBackground(ctx, token, attachDir, session, renderer, &promptMu); err != nil {
+				renderer.PrintInfo(fmt.Sprintf("[telegram] failed to start: %v", err))
+			}
+		}
+	}
 
 	// REPL loop.
 	for {
@@ -219,6 +219,8 @@ func main() {
 		var promptErr error
 		go func() {
 			defer promptCancel()
+			promptMu.Lock()
+			defer promptMu.Unlock()
 			promptErr = session.Prompt(promptCtx, line)
 			close(promptDone)
 		}()

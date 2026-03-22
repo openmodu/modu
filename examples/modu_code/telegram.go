@@ -3,89 +3,46 @@ package main
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/signal"
 	"strings"
 	"sync"
-	"syscall"
 
 	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/channels"
 	"github.com/openmodu/modu/pkg/channels/telegram"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
+	"github.com/openmodu/modu/pkg/tui"
 	"github.com/openmodu/modu/pkg/types"
 )
 
-// chatEntry holds the CodingSession and a per-chat mutex that serializes
-// concurrent incoming messages for the same chat.
-type chatEntry struct {
-	mu      sync.Mutex
-	session *coding_agent.CodingSession
-}
+// startTelegramBackground launches the Telegram bot as a background goroutine
+// that shares the same CodingSession as the TUI. promptMu must be held by the
+// caller whenever session.Prompt() is called, preventing concurrent execution.
+//
+// Incoming Telegram messages are shown in the TUI, processed through the shared
+// session, and each assistant text turn is forwarded back to Telegram.
+func startTelegramBackground(
+	ctx context.Context,
+	token string,
+	attachDir string,
+	session *coding_agent.CodingSession,
+	renderer *tui.Renderer,
+	promptMu *sync.Mutex,
+) error {
+	handler := func(hCtx context.Context, chCtx channels.ChannelContext) {
+		sender := chCtx.SenderName()
+		text := chCtx.MessageText()
 
-// tgManager manages one CodingSession per Telegram chat.
-type tgManager struct {
-	mu        sync.Mutex
-	chats     map[int64]*chatEntry
-	model     *types.Model
-	getAPIKey func(string) (string, error)
-	cwd       string
-}
-
-func newTGManager(model *types.Model, getAPIKey func(string) (string, error), cwd string) *tgManager {
-	return &tgManager{
-		chats:     make(map[int64]*chatEntry),
-		model:     model,
-		getAPIKey: getAPIKey,
-		cwd:       cwd,
-	}
-}
-
-func (m *tgManager) get(chatID int64) *chatEntry {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if ce, ok := m.chats[chatID]; ok {
-		return ce
-	}
-	ce := &chatEntry{}
-	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
-		Cwd:       m.cwd,
-		Model:     m.model,
-		GetAPIKey: m.getAPIKey,
-	})
-	if err != nil {
-		fmt.Printf("[telegram] failed to create session for chat %d: %v\n", chatID, err)
-	} else {
-		ce.session = session
-	}
-	m.chats[chatID] = ce
-	return ce
-}
-
-// runTelegram starts the bot in Telegram mode. Each chat gets an independent
-// CodingSession. Messages for the same chat are serialized; different chats
-// run concurrently.
-func runTelegram(token, attachDir string, model *types.Model, getAPIKey func(string) (string, error), cwd string) error {
-	mgr := newTGManager(model, getAPIKey, cwd)
-
-	handler := func(ctx context.Context, chCtx channels.ChannelContext) {
-		ce := mgr.get(chCtx.ChatID())
-		if ce.session == nil {
-			_ = chCtx.Respond("Session initialization failed.", true)
-			return
-		}
-
-		// Serialize messages for this chat.
-		ce.mu.Lock()
-		defer ce.mu.Unlock()
+		// Show the incoming message in the TUI so the local user is aware.
+		renderer.PrintInfo(fmt.Sprintf("[Telegram @%s] %s", sender, text))
 
 		_ = chCtx.SetWorking(true)
 
-		// Subscribe to agent events and forward each assistant text turn to Telegram.
-		// Prompt() blocks until the full agent loop completes, but the subscriber
-		// fires on every intermediate MessageEnd (between tool calls), giving the
-		// user incremental updates.
-		unsub := ce.session.Subscribe(func(ev agent.AgentEvent) {
+		// Serialize with TUI prompts: wait until the session is free.
+		promptMu.Lock()
+		defer promptMu.Unlock()
+
+		// Forward each assistant turn back to Telegram as it arrives.
+		unsub := session.Subscribe(func(ev agent.AgentEvent) {
 			if ev.Type != agent.EventTypeMessageEnd {
 				return
 			}
@@ -115,34 +72,26 @@ func runTelegram(token, attachDir string, model *types.Model, getAPIKey func(str
 		})
 		defer unsub()
 
-		if err := ce.session.Prompt(ctx, chCtx.MessageText()); err != nil && ctx.Err() == nil {
+		if err := session.Prompt(hCtx, text); err != nil && hCtx.Err() == nil {
 			_ = chCtx.Respond(fmt.Sprintf("Error: %v", err), true)
 		}
 	}
 
-	abort := func(chatID int64) {
-		mgr.mu.Lock()
-		ce, ok := mgr.chats[chatID]
-		mgr.mu.Unlock()
-		if ok && ce.session != nil {
-			ce.session.Abort()
-		}
+	abort := func(_ int64) {
+		session.Abort()
 	}
 
 	bot, err := telegram.NewBot(token, attachDir, handler, abort)
 	if err != nil {
-		return fmt.Errorf("create bot: %w", err)
+		return fmt.Errorf("create telegram bot: %w", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		<-sigCh
-		fmt.Println("\n[telegram] shutting down…")
-		cancel()
+		if err := bot.Run(ctx); err != nil && ctx.Err() == nil {
+			renderer.PrintInfo(fmt.Sprintf("[telegram] bot stopped: %v", err))
+		}
 	}()
 
-	fmt.Printf("[telegram] bot started  cwd=%s  model=%s\n", cwd, model.Name)
-	return bot.Run(ctx)
+	renderer.PrintInfo("[telegram] bot running in background")
+	return nil
 }

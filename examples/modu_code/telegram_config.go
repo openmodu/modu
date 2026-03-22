@@ -8,18 +8,17 @@ import (
 	"github.com/openmodu/modu/pkg/coding_agent/resource"
 )
 
-// TelegramConfig holds Telegram bot settings stored in the agent dotfile.
+// TelegramConfig holds Telegram bot settings.
+// Stored at ~/.coding_agent/channels/telegram/config.json (0600).
 type TelegramConfig struct {
 	Token string `json:"token"`
 }
 
-// telegramConfigPath returns the path to ~/.coding_agent/telegram.json.
+// telegramConfigPath returns ~/.coding_agent/channels/telegram/config.json.
 func telegramConfigPath() string {
-	return filepath.Join(resource.DefaultAgentDir(), "telegram.json")
+	return filepath.Join(resource.DefaultAgentDir(), "channels", "telegram", "config.json")
 }
 
-// loadTelegramConfig reads TelegramConfig from the dotfile.
-// Returns an empty config (not an error) if the file does not exist yet.
 func loadTelegramConfig() (*TelegramConfig, error) {
 	data, err := os.ReadFile(telegramConfigPath())
 	if err != nil {
@@ -35,8 +34,6 @@ func loadTelegramConfig() (*TelegramConfig, error) {
 	return &cfg, nil
 }
 
-// saveTelegramConfig writes cfg to the dotfile with 0600 permissions
-// so the bot token is not world-readable.
 func saveTelegramConfig(cfg *TelegramConfig) error {
 	path := telegramConfigPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
