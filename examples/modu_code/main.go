@@ -196,6 +196,13 @@ func main() {
 		}
 	}
 
+	// Restore previous session for this working directory (like Claude Code).
+	if n, err := session.RestoreMessages(); err != nil {
+		renderer.PrintInfo(fmt.Sprintf("(failed to restore session: %v)", err))
+	} else if n > 0 {
+		renderer.PrintInfo(fmt.Sprintf("(restored previous session — %d messages)", n))
+	}
+
 	renderer.PrintBanner(model.Name, cwd, tgUsername)
 
 	// REPL loop.
@@ -258,6 +265,11 @@ func main() {
 		}
 		session.WaitForIdle()
 
+		// Persist the conversation so the next startup can resume.
+		if err := session.SaveMessages(); err != nil {
+			renderer.PrintInfo(fmt.Sprintf("(warning: failed to save session: %v)", err))
+		}
+
 		stats := session.GetSessionStats()
 		renderer.PrintUsage(stats.TotalTokens)
 		renderer.PrintSeparator()
@@ -283,6 +295,12 @@ func handleSlash(ctx context.Context, line string, session *coding_agent.CodingS
 		return true, false
 
 	case "clear":
+		// Clear the screen AND wipe the saved session so next startup is fresh.
+		if err := session.ClearSavedMessages(); err != nil {
+			r.PrintError(fmt.Errorf("clear session: %w", err))
+		} else {
+			r.PrintInfo("session cleared")
+		}
 		fmt.Print("\033[2J\033[H")
 		return true, false
 
