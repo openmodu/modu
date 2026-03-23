@@ -61,6 +61,11 @@ func (s *CodingSession) RestoreMessages() (int, error) {
 	return len(msgs), nil
 }
 
+// InputHistoryFile returns the path of the per-project input history file.
+func (s *CodingSession) InputHistoryFile() string {
+	return filepath.Join(filepath.Dir(s.messagesFilePath()), "input_history")
+}
+
 // ClearSavedMessages deletes the messages snapshot for this project.
 func (s *CodingSession) ClearSavedMessages() error {
 	err := os.Remove(s.messagesFilePath())

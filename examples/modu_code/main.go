@@ -110,6 +110,12 @@ func main() {
 	input.OnCtrlR = renderer.ExpandLastTool
 	input.OnPromptChange = renderer.SetActivePrompt
 
+	// Load persisted input history for this project.
+	histFile := session.InputHistoryFile()
+	if err := input.LoadHistoryFile(histFile); err != nil {
+		renderer.PrintInfo(fmt.Sprintf("(warning: failed to load input history: %v)", err))
+	}
+
 	// Wire tool approval (default on; disabled with --no-approve).
 	var tuiApprovalCh chan tui.ApprovalRequest
 	if !*noApprove {
@@ -268,6 +274,10 @@ func main() {
 		// Persist the conversation so the next startup can resume.
 		if err := session.SaveMessages(); err != nil {
 			renderer.PrintInfo(fmt.Sprintf("(warning: failed to save session: %v)", err))
+		}
+		// Persist input history so up-arrow works across restarts.
+		if err := input.SaveHistoryFile(histFile); err != nil {
+			renderer.PrintInfo(fmt.Sprintf("(warning: failed to save input history: %v)", err))
 		}
 
 		stats := session.GetSessionStats()
