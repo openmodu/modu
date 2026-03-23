@@ -165,13 +165,13 @@ func startTelegramBackground(
 				}
 			}
 			if len(parts) > 0 {
-				_ = chCtx.Respond(strings.Join(parts, "\n"), true)
+				_ = chCtx.RespondInThread(strings.Join(parts, "\n"))
 			}
 		})
 		defer unsub()
 
 		if err := session.Prompt(hCtx, text); err != nil && hCtx.Err() == nil {
-			_ = chCtx.Respond(fmt.Sprintf("Error: %v", err), true)
+			_ = chCtx.RespondInThread(fmt.Sprintf("Error: %v", err))
 		}
 	}
 
