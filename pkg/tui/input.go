@@ -537,10 +537,30 @@ func (i *Input) initLine(prompt string) {
 		return
 	}
 	w := termWidth()
-	sep := styled(i.noColor, ansiBrightBlack, strings.Repeat("─", w))
-	hint := styled(i.noColor, ansiDim, "  /help for commands · ctrl+c to interrupt")
-	// Print prompt line, then separator, then hint; cursor ends at start of hint line.
-	// Use \033[2A to jump back up two lines, then \033[NC to position after the prompt.
+	// Reserve one column so the separator never occupies exactly the full
+	// terminal width. An exactly-full-width line wraps on some terminals,
+	// which would shift the hint row down and break the \033[2A cursor-up.
+	sepW := w - 1
+	if sepW < 1 {
+		sepW = 1
+	}
+	sep := styled(i.noColor, ansiBrightBlack, strings.Repeat("─", sepW))
+
+	// Truncate the hint to fit in w columns so it never wraps either.
+	hintText := "  /help for commands · ctrl+c to interrupt"
+	if visibleLen(hintText) >= w {
+		// Keep as many runes as fit, leaving room for at least 1 column margin.
+		runes := []rune(hintText)
+		for visibleLen(string(runes)) >= w && len(runes) > 0 {
+			runes = runes[:len(runes)-1]
+		}
+		hintText = string(runes)
+	}
+	hint := styled(i.noColor, ansiDim, hintText)
+
+	// Print prompt line, separator, hint; then jump back up to the prompt row.
+	// Both sep and hint are guaranteed to fit in one terminal row (no wrapping),
+	// so \033[2A reliably moves back exactly 2 physical rows.
 	fmt.Fprintf(i.out, "%s\r\n%s\r\n%s\033[2A\r\033[%dC",
 		prompt, sep, hint, visibleLen(prompt))
 	i.boxDrawn = true
