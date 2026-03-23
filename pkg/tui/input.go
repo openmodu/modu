@@ -50,6 +50,11 @@ type Input struct {
 	// The caller must send a decision string back on the Response channel.
 	ApprovalRequests chan ApprovalRequest
 
+	// ResizeCh, if non-nil, receives a signal when the terminal has been resized.
+	// The readline and scroll loops redraw themselves in response.
+	// Callers should send to this channel from a SIGWINCH handler.
+	ResizeCh <-chan struct{}
+
 	// boxDrawn tracks whether the 3-line input box (prompt / separator / hint)
 	// has been drawn and not yet cleared.  Inline mode only.
 	boxDrawn bool
@@ -279,6 +284,19 @@ func (i *Input) rawReadLine(prompt string) (string, error) {
 		}
 	}
 
+	// redrawBox redraws the input box with the current buffer and repositions
+	// the cursor.  Used after approval prompts and terminal resizes.
+	redrawBox := func() {
+		i.initLine(prompt)
+		if len(ls.buf) > 0 {
+			fmt.Fprint(i.out, string(ls.buf))
+			tailCols := visibleLen(string(ls.buf[ls.cursor:]))
+			if tailCols > 0 {
+				fmt.Fprintf(i.out, "\033[%dD", tailCols)
+			}
+		}
+	}
+
 	for {
 		// Check for background approval requests (e.g. from a Telegram prompt)
 		// before blocking on keyboard input.
@@ -298,13 +316,21 @@ func (i *Input) rawReadLine(prompt string) (string, error) {
 				fmt.Fprint(i.out, "\r\n")
 			}
 			i.printApproval(req, byteCh, stop)
-			i.initLine(prompt)
-			if len(ls.buf) > 0 {
-				fmt.Fprint(i.out, string(ls.buf))
-				tailCols := visibleLen(string(ls.buf[ls.cursor:]))
-				if tailCols > 0 {
-					fmt.Fprintf(i.out, "\033[%dD", tailCols)
-				}
+			redrawBox()
+			continue
+
+		case <-i.ResizeCh:
+			// Terminal was resized.  Redraw the input box at the new width.
+			// We cannot rely on clearBox() here because relative cursor moves
+			// break after a resize (the terminal may have reflowed lines).
+			// Instead, erase from the start of the current line to the end of
+			// the screen (\r\033[J), then redraw the whole box fresh.
+			if i.screen != nil {
+				i.screen.RedrawInputContent(prompt, string(ls.buf), ls.cursor)
+			} else {
+				fmt.Fprint(i.out, "\r\033[J") // CR + erase to end of screen
+				i.boxDrawn = false
+				redrawBox()
 			}
 			continue
 
@@ -844,6 +870,10 @@ func (i *Input) runInlineScrollLoop(done <-chan struct{}, abortFn func()) {
 		case req := <-approvalCh:
 			clearPrompt()
 			i.printApproval(req, byteCh, done)
+			setPrompt()
+
+		case <-i.ResizeCh:
+			// Terminal resized: repaint the prompt on the current line.
 			setPrompt()
 
 		case b := <-byteCh:

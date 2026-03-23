@@ -182,6 +182,32 @@ func (s *Screen) redrawSeparator() {
 	}
 }
 
+// Resize updates the terminal dimensions and redraws the full layout.
+// Call this when SIGWINCH is received.  Thread-safe.
+func (s *Screen) Resize() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.active {
+		return
+	}
+	w, h := termSize()
+	if h < 6 {
+		return
+	}
+	s.width = w
+	s.height = h
+	o := s.out
+	fmt.Fprint(o, "\033[r")                        // clear scroll region constraint
+	fmt.Fprint(o, "\033[2J")                        // clear entire screen
+	fmt.Fprint(o, "\033[1;1H")                      // cursor to top-left
+	fmt.Fprintf(o, "\033[1;%dr", s.contentBottom()) // set new scroll region
+	s.redrawSeparator()
+	s.redrawHint()
+	s.redrawContentArea()
+	// Park cursor at input row so callers can repaint the prompt there.
+	fmt.Fprintf(o, "\033[%d;1H", s.height-1)
+}
+
 // Close restores the terminal to normal mode and replays buffered content
 // to the normal screen so the conversation remains visible after exit.
 func (s *Screen) Close() {

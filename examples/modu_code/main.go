@@ -161,6 +161,20 @@ func main() {
 		}
 	}()
 
+	// SIGWINCH: terminal resize — notify the input loop to redraw itself.
+	resizeCh := make(chan struct{}, 1)
+	input.ResizeCh = resizeCh
+	sigwinchCh := make(chan os.Signal, 1)
+	signal.Notify(sigwinchCh, syscall.SIGWINCH)
+	go func() {
+		for range sigwinchCh {
+			select {
+			case resizeCh <- struct{}{}:
+			default: // drop if already pending
+			}
+		}
+	}()
+
 	ctx, cancelCtx := context.WithCancel(context.Background())
 	exit := func() { cancelCtx(); os.Exit(0) }
 
