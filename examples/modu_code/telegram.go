@@ -14,9 +14,6 @@ import (
 	"github.com/openmodu/modu/pkg/types"
 )
 
-// ApprovalFn is the signature for tool-approval callbacks.
-type ApprovalFn func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error)
-
 // startTelegramBackground launches the Telegram bot as a background goroutine
 // that shares the same CodingSession as the TUI. promptMu must be held by the
 // caller whenever session.Prompt() is called, preventing concurrent execution.
@@ -24,10 +21,9 @@ type ApprovalFn func(toolName, toolCallID string, args map[string]any) (agent.To
 // Incoming Telegram messages are shown in the TUI, processed through the shared
 // session, and each assistant text turn is forwarded back to Telegram.
 //
-// restoreApproval is the approval callback to reinstall after each Telegram
-// prompt completes (typically the TUI approval function, or nil for --no-approve).
-// During a Telegram prompt a Telegram-native approval handler is active that
-// sends an inline prompt to the user and waits for their reply.
+// When a tool needs approval during a Telegram-triggered session, both the TUI
+// prompt (y/a/n/d keys) and a Telegram inline keyboard (4 buttons) are shown
+// simultaneously. Whichever side responds first wins; the other is dismissed.
 func startTelegramBackground(
 	ctx context.Context,
 	token string,
@@ -35,15 +31,15 @@ func startTelegramBackground(
 	session *coding_agent.CodingSession,
 	renderer *tui.Renderer,
 	promptMu *sync.Mutex,
-	restoreApproval ApprovalFn,
-) error {
-	// bot is captured by the handler closure after NewBot returns.
+	approvalCh chan tui.ApprovalRequest,
+) (string, error) {
+	// bot is assigned after NewBot returns. The handler closure captures the
+	// variable by reference, so bot is valid by the time any message arrives.
 	var bot *telegram.Bot
 
 	handler := func(hCtx context.Context, chCtx channels.ChannelContext) {
 		sender := chCtx.SenderName()
 		text := chCtx.MessageText()
-		chatID := chCtx.ChatID()
 
 		// Show the incoming message in the TUI as a user turn so the local
 		// user is aware. ClearLine erases the ❯ prompt if rawReadLine is
@@ -57,38 +53,93 @@ func startTelegramBackground(
 		promptMu.Lock()
 		defer promptMu.Unlock()
 
-		// While this Telegram prompt is active, replace the approval callback
-		// with one that asks the user via Telegram and waits for their reply.
-		// This prevents the deadlock that occurs when the TUI approval handler
-		// waits on ApprovalRequests which nobody reads during Telegram processing.
-		session.SetToolApprovalCallback(func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
-			_ = bot.SendApprovalKeyboard(chatID, toolName)
-			renderer.PrintInfo(fmt.Sprintf("[telegram] waiting for tool approval: %s", toolName))
+		// For Telegram-triggered sessions, override the approval callback so
+		// that both the TUI prompt and a Telegram inline keyboard are shown.
+		// Whichever side responds first wins; the other is dismissed.
+		if approvalCh != nil && bot != nil {
+			chatID := chCtx.ChatID()
 
-			respCh := bot.AwaitApproval(chatID)
-			select {
-			case resp := <-respCh:
-				resp = strings.ToLower(strings.TrimSpace(resp))
-				renderer.PrintInfo(fmt.Sprintf("[telegram] approval response: %q", resp))
-				switch resp {
-				case "y", "yes":
-					return agent.ToolApprovalAllow, nil
-				case "a", "always":
-					return agent.ToolApprovalAllowAlways, nil
-				case "d", "deny":
-					return agent.ToolApprovalDenyAlways, nil
-				default: // "n", "no", or anything else → deny once
-					return agent.ToolApprovalDeny, nil
+			// Build a plain TUI-only approval fn for restoring on exit.
+			tuiApprovalFn := func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
+				respCh := make(chan string, 1)
+				approvalCh <- tui.ApprovalRequest{
+					ToolName:   toolName,
+					ToolCallID: toolCallID,
+					Args:       args,
+					Response:   respCh,
 				}
-			case <-hCtx.Done():
-				bot.CancelApproval(chatID)
-				return agent.ToolApprovalDeny, hCtx.Err()
+				return agent.ToolApprovalDecision(<-respCh), nil
 			}
-		})
-		// Restore the previous (TUI) approval callback when done.
-		defer session.SetToolApprovalCallback(restoreApproval)
 
-		// Forward each assistant turn back to Telegram as it arrives.
+			session.SetToolApprovalCallback(func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
+				// cancelCh is closed to dismiss the TUI prompt when Telegram wins.
+				cancelCh := make(chan struct{})
+				respCh := make(chan string, 1)
+
+				// Show TUI approval prompt.
+				approvalCh <- tui.ApprovalRequest{
+					ToolName:   toolName,
+					ToolCallID: toolCallID,
+					Args:       args,
+					Response:   respCh,
+					Cancel:     cancelCh,
+				}
+
+				// Show Telegram inline keyboard.
+				kbd, kbdErr := bot.SendApprovalKeyboard(chatID, toolName)
+				var tgCh <-chan string
+				if kbdErr == nil {
+					tgCh = bot.AwaitApproval(chatID)
+				}
+
+				var decision string
+				select {
+				case decision = <-respCh:
+					// TUI won — clean up Telegram keyboard.
+					bot.CancelApproval(chatID)
+					if kbdErr == nil {
+						bot.RemoveKeyboard(chatID, kbd.MessageID)
+					}
+				case decision = <-tgCh:
+					// Telegram won — dismiss TUI prompt.
+					close(cancelCh)
+					// Map Telegram button short-codes to full decision strings.
+					switch decision {
+					case "y":
+						decision = "allow"
+					case "a":
+						decision = "allow_always"
+					case "n":
+						decision = "deny"
+					case "d":
+						decision = "deny_always"
+					}
+				}
+
+				d := agent.ToolApprovalDecision(decision)
+
+				// Send result back to Telegram chat.
+				var result string
+				switch d {
+				case agent.ToolApprovalAllow:
+					result = fmt.Sprintf("✅ `%s` allowed", toolName)
+				case agent.ToolApprovalAllowAlways:
+					result = fmt.Sprintf("✅ `%s` always allowed", toolName)
+				case agent.ToolApprovalDeny:
+					result = fmt.Sprintf("❌ `%s` denied", toolName)
+				case agent.ToolApprovalDenyAlways:
+					result = fmt.Sprintf("❌ `%s` always denied", toolName)
+				}
+				if result != "" {
+					_ = chCtx.RespondInThread(result)
+				}
+
+				return d, nil
+			})
+			defer session.SetToolApprovalCallback(tuiApprovalFn)
+		}
+
+		// Forward each assistant text turn back to Telegram as it arrives.
 		unsub := session.Subscribe(func(ev agent.AgentEvent) {
 			if ev.Type != agent.EventTypeMessageEnd {
 				return
@@ -131,7 +182,7 @@ func startTelegramBackground(
 	var err error
 	bot, err = telegram.NewBot(token, attachDir, handler, abort)
 	if err != nil {
-		return fmt.Errorf("create telegram bot: %w", err)
+		return "", fmt.Errorf("create telegram bot: %w", err)
 	}
 
 	go func() {
@@ -140,6 +191,5 @@ func startTelegramBackground(
 		}
 	}()
 
-	renderer.PrintInfo("[telegram] bot running in background")
-	return nil
+	return bot.Username(), nil
 }

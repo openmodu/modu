@@ -56,10 +56,22 @@ func NewBot(token, attachDir string, onMessage channels.MessageHandler, onAbort 
 	}, nil
 }
 
+// Username returns the bot's Telegram username (without @).
+func (b *Bot) Username() string { return b.api.Self.UserName }
+
 // Run starts receiving updates and blocks until ctx is cancelled.
 func (b *Bot) Run(ctx context.Context) error {
+	// Remove any previously configured webhook so that getUpdates works.
+	// When a webhook is set, Telegram sends updates (including callback
+	// queries) to the webhook URL and does NOT return them via getUpdates,
+	// which breaks the long-polling approval flow.
+	if _, err := b.api.Request(tgbotapi.DeleteWebhookConfig{DropPendingUpdates: false}); err != nil {
+		fmt.Printf("[telegram] warning: failed to delete webhook: %v\n", err)
+	}
+
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
+	u.AllowedUpdates = []string{"message", "callback_query"}
 	updates := b.api.GetUpdatesChan(u)
 
 	fmt.Println("[telegram] listening for messages...")
@@ -85,13 +97,19 @@ func (b *Bot) handleUpdate(ctx context.Context, update tgbotapi.Update) {
 		cq := update.CallbackQuery
 		// Acknowledge the callback so Telegram removes the loading spinner.
 		_, _ = b.api.Request(tgbotapi.NewCallback(cq.ID, ""))
+		if cq.Message == nil {
+			// Inline-mode callbacks have no attached message; skip.
+			return
+		}
 		chatID := cq.Message.Chat.ID
+		fmt.Printf("[telegram] callback query: chatID=%d data=%q\n", chatID, cq.Data)
 		b.approvalMu.Lock()
 		if ch, ok := b.approvalCh[chatID]; ok {
 			delete(b.approvalCh, chatID)
 			b.approvalMu.Unlock()
 			ch <- cq.Data
 		} else {
+			fmt.Printf("[telegram] no pending approval for chatID=%d (data=%q dropped)\n", chatID, cq.Data)
 			b.approvalMu.Unlock()
 		}
 		return
@@ -209,7 +227,9 @@ func (b *Bot) SendText(chatID int64, text string) error {
 // SendApprovalKeyboard sends a tool-approval prompt with four inline buttons
 // (Allow / Always Allow / Deny / Always Deny). The button callback data is
 // the short key consumed by the approval handler: y, a, n, d.
-func (b *Bot) SendApprovalKeyboard(chatID int64, toolName string) error {
+// Returns the sent message so the caller can remove the keyboard after the
+// user responds (via RemoveKeyboard).
+func (b *Bot) SendApprovalKeyboard(chatID int64, toolName string) (tgbotapi.Message, error) {
 	text := fmt.Sprintf("▶ Tool: %s\n\nApprove execution?", toolName)
 	keyboard := tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
@@ -223,8 +243,16 @@ func (b *Bot) SendApprovalKeyboard(chatID int64, toolName string) error {
 	)
 	m := tgbotapi.NewMessage(chatID, text)
 	m.ReplyMarkup = keyboard
-	_, err := b.api.Send(m)
-	return err
+	return b.api.Send(m)
+}
+
+// RemoveKeyboard removes the inline keyboard from a previously sent message,
+// preventing stale approval buttons from interfering with future approvals.
+func (b *Bot) RemoveKeyboard(chatID int64, messageID int) {
+	edit := tgbotapi.NewEditMessageReplyMarkup(chatID, messageID,
+		tgbotapi.InlineKeyboardMarkup{InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{}},
+	)
+	_, _ = b.api.Request(edit)
 }
 
 // sendText sends a plain or MarkdownV2 message to a chat.

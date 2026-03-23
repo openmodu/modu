@@ -58,6 +58,10 @@ type ApprovalRequest struct {
 	Args       map[string]any
 	// Response must receive exactly one decision: "allow", "allow_always", "deny", "deny_always".
 	Response chan<- string
+	// Cancel, if non-nil, is closed by the caller when the decision has already
+	// been made externally (e.g. via Telegram). printApproval will dismiss the
+	// prompt and return without sending to Response.
+	Cancel <-chan struct{}
 }
 
 // NewInput creates an Input reading from in and writing the prompt to out.
@@ -204,6 +208,47 @@ func (i *Input) rawReadLine(prompt string) (string, error) {
 	}
 	defer term.Restore(fd, oldState)
 
+	// Switch stdin to non-blocking so the main select can also watch
+	// background channels such as ApprovalRequests (tool approval from Telegram).
+	syscall.SetNonblock(fd, true)
+
+	stop := make(chan struct{})
+	readerDone := make(chan struct{})
+	byteCh := make(chan byte, 256)
+
+	go func() {
+		defer close(readerDone)
+		buf := []byte{0}
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			n, err := syscall.Read(fd, buf)
+			if n > 0 {
+				select {
+				case byteCh <- buf[0]:
+				case <-stop:
+					return
+				}
+			}
+			if err == syscall.EAGAIN || err == syscall.EWOULDBLOCK {
+				time.Sleep(5 * time.Millisecond)
+				continue
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	defer func() {
+		close(stop)
+		<-readerDone
+		syscall.SetNonblock(fd, false)
+	}()
+
 	i.initLine(prompt)
 
 	// Pre-fill with any characters typed during the previous streaming phase.
@@ -219,24 +264,47 @@ func (i *Input) rawReadLine(prompt string) (string, error) {
 
 	redraw := func() { i.redrawContent(prompt, ls) }
 
+	// readByte reads the next byte from the async byte channel.
+	// Used for escape sequences where we need multiple bytes sequentially.
 	readByte := func() (byte, error) {
-		b := make([]byte, 1)
-		for {
-			n, err := i.in.Read(b)
-			if n > 0 {
-				return b[0], nil
-			}
-			if err != nil {
-				return 0, err
-			}
+		select {
+		case b := <-byteCh:
+			return b, nil
+		case <-stop:
+			return 0, io.EOF
 		}
 	}
 
 	for {
-		b, err := readByte()
-		if err != nil {
-			i.doneLine()
-			return "", io.EOF
+		// Check for background approval requests (e.g. from a Telegram prompt)
+		// before blocking on keyboard input.
+		var approvalCh <-chan ApprovalRequest
+		if i.ApprovalRequests != nil {
+			approvalCh = i.ApprovalRequests
+		}
+
+		var b byte
+		select {
+		case req := <-approvalCh:
+			// A tool-approval request arrived while the user was idle at the
+			// prompt. Clear the prompt line, show the approval UI, then
+			// re-draw the prompt and whatever the user had typed so far.
+			if i.screen == nil {
+				fmt.Fprint(i.out, "\r\n")
+			}
+			i.printApproval(req, byteCh, stop)
+			i.initLine(prompt)
+			if len(ls.buf) > 0 {
+				fmt.Fprint(i.out, string(ls.buf))
+				tailCols := visibleLen(string(ls.buf[ls.cursor:]))
+				if tailCols > 0 {
+					fmt.Fprintf(i.out, "\033[%dD", tailCols)
+				}
+			}
+			continue
+
+		case nextByte := <-byteCh:
+			b = nextByte
 		}
 
 		switch b {
@@ -866,6 +934,11 @@ func (i *Input) printApproval(req ApprovalRequest, byteCh <-chan byte, done <-ch
 		dim("  Approve?"),
 		dim("[y] yes  [a] always  [n] no  [d] deny-always"))
 
+	var cancelCh <-chan struct{}
+	if req.Cancel != nil {
+		cancelCh = req.Cancel
+	}
+
 	decision := "deny"
 	for {
 		var b byte
@@ -873,6 +946,10 @@ func (i *Input) printApproval(req ApprovalRequest, byteCh <-chan byte, done <-ch
 		case b = <-byteCh:
 		case <-done:
 			req.Response <- decision
+			return
+		case <-cancelCh:
+			// Decision was made remotely (e.g. via Telegram); dismiss the prompt.
+			fmt.Fprintf(i.out, "\r%s\r\n", dim("  → decided remotely"))
 			return
 		}
 		switch b {

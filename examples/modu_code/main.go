@@ -38,11 +38,10 @@ import (
 
 func main() {
 	var (
-		printPrompt  = flag.String("p", "", "run in print mode: send prompt and output result to stdout")
-		printJSON    = flag.Bool("json", false, "with -p: output NDJSON event stream instead of plain text")
-		rpcMode      = flag.Bool("rpc", false, "run in RPC mode: JSON-line protocol over stdin/stdout")
-		telegramMode = flag.Bool("telegram", false, "start Telegram bot in background alongside the TUI")
-		noApprove    = flag.Bool("no-approve", false, "skip user approval for tool executions (auto-allow all)")
+		printPrompt = flag.String("p", "", "run in print mode: send prompt and output result to stdout")
+		printJSON   = flag.Bool("json", false, "with -p: output NDJSON event stream instead of plain text")
+		rpcMode     = flag.Bool("rpc", false, "run in RPC mode: JSON-line protocol over stdin/stdout")
+		noApprove   = flag.Bool("no-approve", false, "skip user approval for tool executions (auto-allow all)")
 	)
 	flag.Parse()
 
@@ -112,26 +111,21 @@ func main() {
 	input.OnPromptChange = renderer.SetActivePrompt
 
 	// Wire tool approval (default on; disabled with --no-approve).
-	// tuiApprovalFn is saved so it can be restored after a Telegram prompt.
-	var tuiApprovalFn ApprovalFn
+	var tuiApprovalCh chan tui.ApprovalRequest
 	if !*noApprove {
-		approvalCh := make(chan tui.ApprovalRequest, 1)
-		input.ApprovalRequests = approvalCh
-		tuiApprovalFn = func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
+		tuiApprovalCh = make(chan tui.ApprovalRequest, 1)
+		input.ApprovalRequests = tuiApprovalCh
+		session.SetToolApprovalCallback(func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
 			respCh := make(chan string, 1)
-			approvalCh <- tui.ApprovalRequest{
+			tuiApprovalCh <- tui.ApprovalRequest{
 				ToolName:   toolName,
 				ToolCallID: toolCallID,
 				Args:       args,
 				Response:   respCh,
 			}
-			decision := <-respCh
-			return agent.ToolApprovalDecision(decision), nil
-		}
-		session.SetToolApprovalCallback(tuiApprovalFn)
+			return agent.ToolApprovalDecision(<-respCh), nil
+		})
 	}
-
-	renderer.PrintBanner(model.Name, cwd)
 
 	// Wire agent events to the renderer.
 	unsub := session.Subscribe(func(ev agent.AgentEvent) {
@@ -170,22 +164,25 @@ func main() {
 	ctx, cancelCtx := context.WithCancel(context.Background())
 	exit := func() { cancelCtx(); os.Exit(0) }
 
-	// Start Telegram bot in background if --telegram flag is set.
-	// The bot shares this session and renderer; messages appear in the TUI.
-	if *telegramMode {
+	// Auto-start Telegram bot in background if a token is configured.
+	// Resolve the bot username before printing the banner so it appears inline.
+	var tgUsername string
+	{
 		token := os.Getenv("MOMS_TG_TOKEN")
 		if tgCfg, err := loadTelegramConfig(); err == nil && tgCfg.Token != "" {
 			token = tgCfg.Token
 		}
-		if token == "" {
-			renderer.PrintInfo("[telegram] no token configured — use /telegram token <t> or set MOMS_TG_TOKEN")
-		} else {
+		if token != "" {
 			attachDir := os.TempDir() + "/modu_code_tg"
-			if err := startTelegramBackground(ctx, token, attachDir, session, renderer, &promptMu, tuiApprovalFn); err != nil {
-				renderer.PrintInfo(fmt.Sprintf("[telegram] failed to start: %v", err))
+			if username, err := startTelegramBackground(ctx, token, attachDir, session, renderer, &promptMu, tuiApprovalCh); err != nil {
+				fmt.Fprintf(os.Stderr, "[telegram] failed to start: %v\n", err)
+			} else {
+				tgUsername = username
 			}
 		}
 	}
+
+	renderer.PrintBanner(model.Name, cwd, tgUsername)
 
 	// REPL loop.
 	for {
@@ -222,7 +219,13 @@ func main() {
 		var promptErr error
 		go func() {
 			defer promptCancel()
-			promptMu.Lock()
+			// TryLock: if the session is busy (e.g. a Telegram prompt is
+			// running), reject immediately instead of deadlocking the TUI.
+			if !promptMu.TryLock() {
+				renderer.PrintInfo("[busy] session is processing a Telegram message, please wait…")
+				close(promptDone)
+				return
+			}
 			defer promptMu.Unlock()
 			promptErr = session.Prompt(promptCtx, line)
 			close(promptDone)

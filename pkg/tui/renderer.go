@@ -725,13 +725,16 @@ func (r *Renderer) PrintError(err error) {
 }
 
 // PrintBanner renders the startup banner.
-func (r *Renderer) PrintBanner(model, cwd string) {
+func (r *Renderer) PrintBanner(model, cwd, tgUsername string) {
 	w := termWidth()
 	bar := styled(r.noColor, ansiBrightGreen, strings.Repeat("─", w))
 	r.writeln(bar)
 	r.writeln(styled(r.noColor, ansiBold, "  modu code"))
 	r.writeln(styled(r.noColor, ansiDim, fmt.Sprintf("  model: %s", model)))
 	r.writeln(styled(r.noColor, ansiDim, fmt.Sprintf("  cwd:   %s", cwd)))
+	if tgUsername != "" {
+		r.writeln(styled(r.noColor, ansiDim, fmt.Sprintf("  telegram: @%s", tgUsername)))
+	}
 	r.writeln(bar)
 	r.writeln("")
 	r.writeln(styled(r.noColor, ansiDim, "Type your message and press Enter. /help for commands, Ctrl+C to abort."))
