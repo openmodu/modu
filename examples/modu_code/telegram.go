@@ -45,7 +45,7 @@ func startTelegramBackground(
 		// user is aware. ClearLine erases the ❯ prompt if rawReadLine is
 		// currently active, preventing the text from appearing after the prompt.
 		renderer.ClearLine()
-		renderer.PrintUser(fmt.Sprintf("[Telegram @%s] %s", sender, text))
+		renderer.PrintUser(fmt.Sprintf("← telegram · %s: %s", sender, text))
 
 		_ = chCtx.SetWorking(true)
 

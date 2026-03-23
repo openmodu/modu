@@ -199,6 +199,7 @@ func (r *Renderer) HandleEvent(event agent.AgentEvent) {
 	case agent.EventTypeToolExecutionStart:
 		r.flushTextBuf()
 		r.hadTool = true
+		r.hadText = false // reset so text after this tool gets a fresh ● bullet
 		r.toolLines = 0
 		// New tool: reset expand state so next Ctrl+R starts from this tool.
 		r.expandIdx = -1
@@ -470,7 +471,7 @@ func (r *Renderer) flushTextBuf() {
 
 // toolCallLine returns line 1: "● ToolName(arg)".
 func (r *Renderer) toolCallLine(name string, args any) string {
-	bullet := styled(r.noColor, ansiBrightGreen, "●")
+	bullet := styled(r.noColor, ansiBrightGreen, "⏺")
 	nameStr := styled(r.noColor, ansiBold, name)
 	arg := primaryArg(name, args)
 	argStr := styled(r.noColor, ansiDim, "("+arg+")")

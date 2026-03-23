@@ -49,6 +49,10 @@ type Input struct {
 	// ApprovalRequests, if non-nil, receives tool approval requests during streaming.
 	// The caller must send a decision string back on the Response channel.
 	ApprovalRequests chan ApprovalRequest
+
+	// boxDrawn tracks whether the 3-line input box (prompt / separator / hint)
+	// has been drawn and not yet cleared.  Inline mode only.
+	boxDrawn bool
 }
 
 // ApprovalRequest is sent on Input.ApprovalRequests when a tool needs user approval.
@@ -287,9 +291,10 @@ func (i *Input) rawReadLine(prompt string) (string, error) {
 		select {
 		case req := <-approvalCh:
 			// A tool-approval request arrived while the user was idle at the
-			// prompt. Clear the prompt line, show the approval UI, then
-			// re-draw the prompt and whatever the user had typed so far.
+			// prompt. Clear the box, show the approval UI, then re-draw the
+			// box with whatever the user had typed so far.
 			if i.screen == nil {
+				i.clearBox()
 				fmt.Fprint(i.out, "\r\n")
 			}
 			i.printApproval(req, byteCh, stop)
@@ -346,9 +351,9 @@ func (i *Input) rawReadLine(prompt string) (string, error) {
 		case 18: // Ctrl+R – expand last tool call
 			if i.OnCtrlR != nil {
 				if i.screen == nil {
-					// Inline mode: move past the current prompt line, run the
-					// handler, then reprint the prompt and current buffer.
-					// Use \r\n (not \n) because raw mode disables ONLCR.
+					// Inline mode: clear the box, run the handler, then
+					// redraw the box with the current buffer.
+					i.clearBox()
 					fmt.Fprint(i.out, "\r\n")
 					i.OnCtrlR()
 					i.initLine(prompt)
@@ -493,24 +498,52 @@ func (i *Input) rawReadLine(prompt string) (string, error) {
 // ── drawing helpers ───────────────────────────────────────────────────────────
 
 // initLine sets up the input line before editing begins.
+// In inline mode it draws a 3-line Claude Code-style box:
+//
+//	❯ [input]
+//	──────────────────────
+//	  /help · ctrl+c
+//
+// and then moves the cursor back to the prompt line.
 func (i *Input) initLine(prompt string) {
 	if i.screen != nil {
 		i.screen.InitInputLine(prompt)
-	} else {
-		fmt.Fprint(i.out, prompt)
+		return
 	}
+	w := termWidth()
+	sep := styled(i.noColor, ansiBrightBlack, strings.Repeat("─", w))
+	hint := styled(i.noColor, ansiDim, "  /help for commands · ctrl+c to interrupt")
+	// Print prompt line, then separator, then hint; cursor ends at start of hint line.
+	// Use \033[2A to jump back up two lines, then \033[NC to position after the prompt.
+	fmt.Fprintf(i.out, "%s\r\n%s\r\n%s\033[2A\r\033[%dC",
+		prompt, sep, hint, visibleLen(prompt))
+	i.boxDrawn = true
+}
+
+// clearBox erases the separator and hint lines below the prompt line, leaving
+// the cursor on the prompt line.  No-op if the box is not currently drawn.
+func (i *Input) clearBox() {
+	if !i.boxDrawn {
+		return
+	}
+	// Move down to separator line, clear it; move down to hint line, clear it;
+	// then return up two lines to the prompt line.
+	fmt.Fprint(i.out, "\033[1B\r\033[2K\033[1B\r\033[2K\033[2A")
+	i.boxDrawn = false
 }
 
 // doneLine is called when a line is committed (Enter / Ctrl+C / EOF).
 func (i *Input) doneLine() {
 	if i.screen != nil {
 		i.screen.AfterReadLine()
-	} else {
-		// In raw mode \n is a bare line-feed (no carriage return), so the
-		// cursor would stay in the middle of the line.  Use \r\n to go to
-		// the beginning of the next line.
-		fmt.Fprint(i.out, "\r\n")
+		return
 	}
+	// In raw mode \n is a bare line-feed (no carriage return), so the
+	// cursor would stay in the middle of the line.  Use \r\n to go to
+	// the beginning of the next line.  Clear the box first so the
+	// separator and hint lines are removed.
+	i.clearBox()
+	fmt.Fprint(i.out, "\r\n")
 }
 
 // scrollToBottom is called before committing a line.

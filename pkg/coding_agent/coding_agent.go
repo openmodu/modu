@@ -247,10 +247,17 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	// Subscribe to events for token usage tracking (auto-compaction)
 	ag.Subscribe(func(event agent.AgentEvent) {
 		if event.Type == agent.EventTypeMessageEnd {
+			addUsage := func(u types.AgentUsage) {
+				t := u.TotalTokens
+				if t == 0 {
+					t = u.Input + u.Output
+				}
+				cs.totalTokens += t
+			}
 			if msg, ok := event.Message.(types.AssistantMessage); ok {
-				cs.totalTokens += msg.Usage.TotalTokens
+				addUsage(msg.Usage)
 			} else if msg, ok := event.Message.(*types.AssistantMessage); ok {
-				cs.totalTokens += msg.Usage.TotalTokens
+				addUsage(msg.Usage)
 			}
 		}
 	})

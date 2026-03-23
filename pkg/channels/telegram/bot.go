@@ -41,7 +41,6 @@ func NewBot(token, attachDir string, onMessage channels.MessageHandler, onAbort 
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Telegram bot: %w", err)
 	}
-	fmt.Printf("[telegram] authorized as @%s\n", api.Self.UserName)
 
 	if err := os.MkdirAll(attachDir, 0o755); err != nil {
 		return nil, fmt.Errorf("failed to create attach dir: %w", err)
@@ -74,7 +73,6 @@ func (b *Bot) Run(ctx context.Context) error {
 	u.AllowedUpdates = []string{"message", "callback_query"}
 	updates := b.api.GetUpdatesChan(u)
 
-	fmt.Println("[telegram] listening for messages...")
 
 	for {
 		select {
