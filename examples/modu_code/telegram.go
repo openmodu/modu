@@ -53,6 +53,62 @@ func startTelegramBackground(
 		promptMu.Lock()
 		defer promptMu.Unlock()
 
+		// thinkCh carries the thinking/text from an EventTypeMessageEnd that also
+		// contains tool calls. wrappedFn reads it before sending the keyboard so
+		// that "thinking" always appears before the approval prompt in Telegram.
+		// Buffer of 4 handles bursts of multi-tool turns without blocking.
+		thinkCh := make(chan string, 4)
+
+		// Forward each assistant text turn back to Telegram as it arrives.
+		unsub := session.Subscribe(func(ev agent.AgentEvent) {
+			if ev.Type != agent.EventTypeMessageEnd {
+				return
+			}
+			var msg types.AssistantMessage
+			switch m := ev.Message.(type) {
+			case types.AssistantMessage:
+				msg = m
+			case *types.AssistantMessage:
+				if m == nil {
+					return
+				}
+				msg = *m
+			default:
+				return
+			}
+			var parts []string
+			hasTool := false
+			for _, block := range msg.Content {
+				if tc, ok := block.(*types.TextContent); ok && tc != nil {
+					if t := strings.TrimSpace(tc.Text); t != "" {
+						parts = append(parts, t)
+					}
+				}
+				if _, ok := block.(*types.ToolCallContent); ok {
+					hasTool = true
+				}
+			}
+			body := ""
+			if len(parts) > 0 {
+				body = strings.Join(parts, "\n")
+				if msg.Usage.TotalTokens > 0 {
+					body += fmt.Sprintf("\n\n_%d tokens_", msg.Usage.TotalTokens)
+				}
+			}
+			if hasTool {
+				// Tool approval follows: hand the text off to wrappedFn so it
+				// can send thinking → keyboard in the correct order.
+				select {
+				case thinkCh <- body:
+				default:
+				}
+			} else if body != "" {
+				// Final response: send directly (no keyboard follows).
+				_ = chCtx.RespondInThread(body)
+			}
+		})
+		defer unsub()
+
 		// For Telegram-triggered sessions, override the approval callback so
 		// that both the TUI prompt and a Telegram inline keyboard are shown.
 		// Whichever side responds first wins; the other is dismissed.
@@ -72,6 +128,17 @@ func startTelegramBackground(
 			}
 
 			session.SetToolApprovalCallback(func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
+				// Send thinking text first (from the preceding EventTypeMessageEnd),
+				// then keyboard — all in this goroutine to guarantee ordering.
+				var think string
+				select {
+				case think = <-thinkCh:
+				default:
+				}
+				if think != "" {
+					_ = chCtx.RespondInThread(think)
+				}
+
 				// cancelCh is closed to dismiss the TUI prompt when Telegram wins.
 				cancelCh := make(chan struct{})
 				respCh := make(chan string, 1)
@@ -138,37 +205,6 @@ func startTelegramBackground(
 			})
 			defer session.SetToolApprovalCallback(tuiApprovalFn)
 		}
-
-		// Forward each assistant text turn back to Telegram as it arrives.
-		unsub := session.Subscribe(func(ev agent.AgentEvent) {
-			if ev.Type != agent.EventTypeMessageEnd {
-				return
-			}
-			var msg types.AssistantMessage
-			switch m := ev.Message.(type) {
-			case types.AssistantMessage:
-				msg = m
-			case *types.AssistantMessage:
-				if m == nil {
-					return
-				}
-				msg = *m
-			default:
-				return
-			}
-			var parts []string
-			for _, block := range msg.Content {
-				if tc, ok := block.(*types.TextContent); ok && tc != nil {
-					if t := strings.TrimSpace(tc.Text); t != "" {
-						parts = append(parts, t)
-					}
-				}
-			}
-			if len(parts) > 0 {
-				_ = chCtx.RespondInThread(strings.Join(parts, "\n"))
-			}
-		})
-		defer unsub()
 
 		if err := session.Prompt(hCtx, text); err != nil && hCtx.Err() == nil {
 			_ = chCtx.RespondInThread(fmt.Sprintf("Error: %v", err))
