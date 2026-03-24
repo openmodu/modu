@@ -1,8 +1,8 @@
 # Playwright
 
-Playwright Go 封装库，简化浏览器自动化操作。
+A Playwright Go wrapper library to simplify browser automation operations.
 
-## 安装
+## Installation
 
 ```go
 import "github.com/openmodu/modu/pkg/playwright"
@@ -10,117 +10,117 @@ import "github.com/openmodu/modu/pkg/playwright"
 go run github.com/playwright-community/playwright-go/cmd/playwright@latest install --with-deps chromium
 ```
 
-## 功能
+## Features
 
-- 浏览器管理（Chromium/Firefox/WebKit）
-- 反检测脚本自动注入
-- Cookie 持久化
-- 简化的 Page 操作 API
+- Browser management (Chromium/Firefox/WebKit)
+- Automatic anti-detection script injection
+- Cookie persistence
+- Simplified Page operation API
 
-## 使用
+## Usage
 
-### 基础用法
+### Basic Usage
 
 ```go
-// 创建浏览器
+// Create a browser
 browser, err := playwright.New()
 if err != nil {
     log.Fatal(err)
 }
 defer browser.Close()
 
-// 创建页面
+// Create a page
 page, err := browser.NewPage()
 if err != nil {
     log.Fatal(err)
 }
 defer page.Close()
 
-// 导航
+// Navigation
 page.Goto("https://example.com")
 
-// 获取内容
+// Get content
 html, _ := page.Content()
 title, _ := page.Title()
 ```
 
-### 配置选项
+### Configuration Options
 
 ```go
-// 浏览器选项
+// Browser options
 browser, _ := playwright.New(
-    playwright.WithHeadless(false),        // 显示浏览器窗口
-    playwright.WithBrowserType("firefox"), // 使用 Firefox
-    playwright.WithSlowMo(100),            // 慢动作模式
+    playwright.WithHeadless(false),        // Show browser window
+    playwright.WithBrowserType("firefox"), // Use Firefox
+    playwright.WithSlowMo(100),            // Slow-motion mode
 )
 
-// Context 选项
+// Context options
 page, _ := browser.NewPage(
     playwright.WithUserAgent("Custom UA"),
     playwright.WithViewport(1920, 1080),
-    playwright.WithLocale("zh-CN"),
-    playwright.WithTimezone("Asia/Shanghai"),
-    playwright.WithAntiDetect(true),       // 反检测（默认开启）
+    playwright.WithLocale("en-US"),
+    playwright.WithTimezone("UTC"),
+    playwright.WithAntiDetect(true),       // Anti-detection (enabled by default)
 )
 ```
 
-### 页面操作
+### Page Operations
 
 ```go
-// 导航
+// Navigation
 page.Goto("https://example.com", playwright.WithWaitUntil("networkidle"))
 
-// 等待元素
+// Wait for selector
 page.WaitForSelector(".loaded", 10000)
 
-// 交互
+// Interaction
 page.Click("#button")
 page.Fill("#input", "value")
-page.Type("#search", "query", 50) // 带延迟输入
+page.Type("#search", "query", 50) // Type with delay
 page.Press("#input", "Enter")
 
-// 滚动
+// Scrolling
 page.Scroll(0, 500)
 page.ScrollToBottom()
 page.ScrollToTop()
 
-// 获取内容
+// Get content
 text, _ := page.InnerText(".content")
 html, _ := page.InnerHTML(".content")
 attr, _ := page.GetAttribute("a", "href")
 
-// 截图
+// Screenshot
 page.Screenshot("screenshot.png", true) // fullPage=true
 
-// 执行 JavaScript
+// Execute JavaScript
 result, _ := page.Evaluate(`() => document.title`)
 ```
 
-### Cookie 持久化
+### Cookie Persistence
 
 ```go
-// 创建 Cookie Store
+// Create a Cookie Store
 store := playwright.NewCookieStore("~/.myapp/cookies.json")
 
-// 保存 Cookie
+// Save Cookies
 ctx, _ := browser.NewContext()
-// ... 登录操作 ...
+// ... login operations ...
 store.Save(ctx)
 
-// 加载 Cookie
+// Load Cookies
 ctx2, _ := browser.NewContext()
 store.Load(ctx2)
 
-// 检查是否存在
+// Check if exists
 if store.Exists() {
     // ...
 }
 ```
 
-### 访问原始对象
+### Access Raw Objects
 
 ```go
-// 获取原始 playwright-go 对象
+// Get the raw playwright-go objects
 rawBrowser := browser.Raw()
 rawContext := ctx.Raw()
 rawPage := page.Raw()
@@ -130,36 +130,36 @@ rawPage := page.Raw()
 
 ### Browser
 
-| 方法 | 说明 |
+| Method | Description |
 |------|------|
-| `New(opts...)` | 创建浏览器实例 |
-| `Close()` | 关闭浏览器 |
-| `NewContext(opts...)` | 创建新 Context |
-| `NewPage(opts...)` | 创建新页面（使用默认 Context） |
-| `Raw()` | 获取原始 playwright.Browser |
+| `New(opts...)` | Create a browser instance |
+| `Close()` | Close the browser |
+| `NewContext(opts...)` | Create a new Context |
+| `NewPage(opts...)` | Create a new page (using default Context) |
+| `Raw()` | Get the raw `playwright.Browser` |
 
 ### Page
 
-| 方法 | 说明 |
+| Method | Description |
 |------|------|
-| `Goto(url, opts...)` | 导航到 URL |
-| `WaitForSelector(selector, timeout)` | 等待元素出现 |
-| `Wait(duration)` | 等待指定时间 |
-| `Click(selector)` | 点击元素 |
-| `Fill(selector, value)` | 填充输入框 |
-| `Type(selector, text, delay)` | 输入文本 |
-| `Content()` | 获取页面 HTML |
-| `Evaluate(js, args)` | 执行 JavaScript |
-| `Screenshot(path, fullPage)` | 截图 |
-| `Scroll(x, y)` | 滚动页面 |
-| `Close()` | 关闭页面 |
+| `Goto(url, opts...)` | Navigate to a URL |
+| `WaitForSelector(selector, timeout)` | Wait for an element to appear |
+| `Wait(duration)` | Wait for a specific duration |
+| `Click(selector)` | Click an element |
+| `Fill(selector, value)` | Fill an input field |
+| `Type(selector, text, delay)` | Type text |
+| `Content()` | Get page HTML content |
+| `Evaluate(js, args)` | Execute JavaScript |
+| `Screenshot(path, fullPage)` | Take a screenshot |
+| `Scroll(x, y)` | Scroll the page |
+| `Close()` | Close the page |
 
 ### CookieStore
 
-| 方法 | 说明 |
+| Method | Description |
 |------|------|
-| `NewCookieStore(path)` | 创建 Cookie Store |
-| `Save(ctx)` | 保存 Cookie 到文件 |
-| `Load(ctx)` | 从文件加载 Cookie |
-| `Exists()` | 检查文件是否存在 |
-| `Delete()` | 删除 Cookie 文件 |
+| `NewCookieStore(path)` | Create a Cookie Store |
+| `Save(ctx)` | Save cookies from a context to a file |
+| `Load(ctx)` | Load cookies from a file into a context |
+| `Exists()` | Check if the cookie file exists |
+| `Delete()` | Delete the cookie file |

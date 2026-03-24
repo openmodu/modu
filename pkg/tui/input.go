@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -140,6 +141,37 @@ func (i *Input) History() []string {
 	out := make([]string, len(i.history))
 	copy(out, i.history)
 	return out
+}
+
+// LoadHistoryFile reads newline-separated history entries from path.
+// Missing file is silently ignored.
+func (i *Input) LoadHistoryFile(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+		if strings.TrimSpace(line) != "" {
+			i.addHistory(line)
+		}
+	}
+	return nil
+}
+
+// SaveHistoryFile writes the current history to path (newline-separated).
+func (i *Input) SaveHistoryFile(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	var sb strings.Builder
+	for _, line := range i.history {
+		sb.WriteString(line)
+		sb.WriteByte('\n')
+	}
+	return os.WriteFile(path, []byte(sb.String()), 0o600)
 }
 
 func (i *Input) addHistory(line string) {

@@ -1,42 +1,42 @@
 # gen_image_repo
 
-图像生成服务抽象层，提供统一的图像生成接口，支持多个 Provider。
+An abstraction layer for image generation services, providing a unified interface that supports multiple providers.
 
-## 安装
+## Installation
 
 ```go
 import genimagerepo "github.com/openmodu/modu/repos/gen_image_repo"
 ```
 
-## 快速开始
+## Quick Start
 
 ```go
-// 创建 Gemini 图像生成器
+// Create a Gemini image generator
 generator := genimagerepo.NewGeminiImageImpl(
     "https://generativelanguage.googleapis.com",
     "your-api-key",
 )
 
-// 生成图像
+// Generate an image
 resp, err := generator.Generate(ctx, &genimagevo.GenImageRequest{
-    UserPrompt:   "一只可爱的猫咪在阳光下睡觉",
-    SystemPrompt: "生成高质量的图片",  // 可选
+    UserPrompt:   "A cute cat sleeping in the sun",
+    SystemPrompt: "Generate a high-quality image",  // Optional
 })
 if err != nil {
     log.Fatal(err)
 }
 
-// 处理结果
+// Process the result
 for _, img := range resp.Images {
-    // img.Data    - 图像二进制数据
-    // img.MimeType - 图像类型 (如 "image/png")
+    // img.Data    - Binary image data
+    // img.MimeType - MIME type (e.g., "image/png")
 }
 
-// 保存到文件
+// Save to a file
 genimagerepo.SaveImageToFile(resp.Images[0], "./output.png")
 ```
 
-## 接口定义
+## Interface Definition
 
 ```go
 type ImageGenRepo interface {
@@ -45,51 +45,50 @@ type ImageGenRepo interface {
 }
 ```
 
-## 支持的 Provider
+## Supported Providers
 
-| Provider | 构造函数 |
+| Provider | Constructor |
 |----------|----------|
 | Gemini | `NewGeminiImageImpl(baseURL, apiKey)` |
 
-## 请求参数
+## Request Parameters
 
 ```go
 type GenImageRequest struct {
-    UserPrompt   string  // 用户提示词（必填）
-    SystemPrompt string  // 系统提示词（可选）
+    UserPrompt   string  // User prompt (required)
+    SystemPrompt string  // System prompt (optional)
 }
 ```
 
-## 响应结构
+## Response Structure
 
 ```go
 type GenImageResponse struct {
-    Images       []*Image      // 生成的图像列表
-    Model        string        // 使用的模型
-    ProviderName string        // Provider 名称
-    Usage        *UsageInfo    // Token 使用量
-    RawResponse  any           // 原始响应
+    Images       []*Image      // List of generated images
+    Model        string        // Model used
+    ProviderName string        // Provider name
+    Usage        *UsageInfo    // Token usage info
+    RawResponse  any           // Raw response object
 }
 
 type Image struct {
-    Data     []byte  // 图像二进制数据
-    MimeType string  // MIME 类型
+    Data     []byte  // Binary image data
+    MimeType string  // MIME type
 }
 ```
 
-## 工具函数
+## Utility Functions
 
 ```go
-// 保存图像到文件
+// Save an image to a file
 genimagerepo.SaveImageToFile(image *genimagevo.Image, path string) error
 ```
 
-## 文件结构
+## File Structure
 
 ```
 gen_image_repo/
-├── image_repo.go           # 接口定义
-├── nano_banana_provider.go # Gemini Provider 实现
-└── utils.go                # 工具函数
+├── image_repo.go           # Interface definition
+├── nano_banana_provider.go # Gemini (Nano Banana) Provider implementation
+└── utils.go                # Utility functions
 ```
-

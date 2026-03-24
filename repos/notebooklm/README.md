@@ -1,170 +1,169 @@
 # notebooklm
 
-Google NotebookLM 非官方 Go SDK，支持 Notebook、Source、Artifact 管理以及 Chat 功能。
+An unofficial Google NotebookLM Go SDK, supporting Notebook, Source, and Artifact management, as well as Chat functionality.
 
-## 安装
+## Installation
 
 ```go
 import "github.com/openmodu/modu/repos/notebooklm"
 ```
 
-## 快速开始
+## Quick Start
 
 ```go
-// 登录（会打开浏览器）
+// Log in (will open a browser)
 notebooklm.Login()
 
-// 从存储的认证信息创建客户端
+// Create a client from stored authentication info
 client, err := notebooklm.NewClientFromStorage("")
 if err != nil {
     log.Fatal(err)
 }
 
-// 列出所有 Notebook
+// List all Notebooks
 notebooks, err := client.ListNotebooks(ctx)
 
-// 创建新 Notebook
+// Create a new Notebook
 notebook, err := client.CreateNotebook(ctx, "My Notebook")
 
-// 添加 URL 源
+// Add a URL as a source
 source, err := client.AddSourceURL(ctx, notebook.ID, "https://example.com/article")
 
-// 生成音频播客
+// Generate an audio podcast
 status, err := client.GenerateAudio(ctx, notebook.ID, vo.AudioFormatDeepDive, vo.AudioLengthDefault)
 
-// 提问
-result, err := client.Ask(ctx, notebook.ID, "总结这些内容", nil)
+// Ask a question
+result, err := client.Ask(ctx, notebook.ID, "Summarize this content", nil)
 fmt.Println(result.Answer)
 ```
 
-## 认证
+## Authentication
 
-首次使用需要通过浏览器登录：
+The first use requires logging in via a browser:
 
 ```go
-// 登录并自动保存认证信息
+// Log in and automatically save authentication info
 if err := notebooklm.Login(); err != nil {
     log.Fatal(err)
 }
 
-// 后续使用：从存储加载
+// Subsequent use: Load from storage
 client, err := notebooklm.NewClientFromStorage("")
 
-// 检查存储是否存在
+// Check if storage exists
 if notebooklm.StorageExists() {
-    // 已登录
+    // Already logged in
 }
 
-// 获取存储路径
+// Get the storage path
 path := notebooklm.GetStoragePath()
 ```
 
-## API 概览
+## API Overview
 
-### Notebook 操作
+### Notebook Operations
 
 ```go
-// 列出所有 Notebook
+// List all Notebooks
 notebooks, _ := client.ListNotebooks(ctx)
 
-// 创建 Notebook
-notebook, _ := client.CreateNotebook(ctx, "标题")
+// Create a Notebook
+notebook, _ := client.CreateNotebook(ctx, "Title")
 
-// 获取 Notebook
+// Get a Notebook
 notebook, _ := client.GetNotebook(ctx, notebookID)
 
-// 重命名 Notebook
-client.RenameNotebook(ctx, notebookID, "新标题")
+// Rename a Notebook
+client.RenameNotebook(ctx, notebookID, "New Title")
 
-// 删除 Notebook
+// Delete a Notebook
 client.DeleteNotebook(ctx, notebookID)
 ```
 
-### Source 操作
+### Source Operations
 
 ```go
-// 列出所有 Source
+// List all Sources
 sources, _ := client.ListSources(ctx, notebookID)
 
-// 添加 URL（自动识别 YouTube）
+// Add a URL (automatically recognizes YouTube)
 source, _ := client.AddSourceURL(ctx, notebookID, "https://...")
 
-// 添加本地文件
+// Add a local file
 source, _ := client.AddSourceFile(ctx, notebookID, "/path/to/file.pdf")
 
-// 添加文本
-source, _ := client.AddSourceText(ctx, notebookID, "标题", "内容...")
+// Add text
+source, _ := client.AddSourceText(ctx, notebookID, "Title", "Content...")
 
-// 删除 Source
+// Delete a Source
 client.DeleteSource(ctx, notebookID, sourceID)
 ```
 
-### Artifact 操作
+### Artifact Operations
 
 ```go
-// 生成音频播客
+// Generate an audio podcast
 status, _ := client.GenerateAudio(ctx, notebookID, vo.AudioFormatDeepDive, vo.AudioLengthDefault)
 
-// 生成视频
+// Generate a video
 status, _ := client.GenerateVideo(ctx, notebookID, vo.VideoFormatBriefing, vo.VideoStyleClassroom)
 
-// 轮询生成状态
+// Poll generation status
 status, _ := client.PollGeneration(ctx, notebookID, status.TaskID)
 
-// 列出所有 Artifact
+// List all Artifacts
 artifacts, _ := client.ListArtifacts(ctx, notebookID)
 
-// 下载音频
+// Download audio
 client.DownloadAudio(ctx, notebookID, "./output.m4a", "")
 
-// 下载视频
+// Download video
 client.DownloadVideo(ctx, notebookID, "./output.mp4", "")
 ```
 
-### Chat 操作
+### Chat Operations
 
 ```go
-// 向 Notebook 提问（使用所有 Source）
-result, _ := client.Ask(ctx, notebookID, "问题内容", nil)
+// Ask a question to the Notebook (uses all sources)
+result, _ := client.Ask(ctx, notebookID, "Question content", nil)
 fmt.Println(result.Answer)
 
-// 指定特定 Source 提问
-result, _ := client.Ask(ctx, notebookID, "问题", []string{sourceID1, sourceID2})
+// Ask with specific sources
+result, _ := client.Ask(ctx, notebookID, "Question", []string{sourceID1, sourceID2})
 ```
 
-## 音频/视频格式选项
+## Audio/Video Format Options
 
 ```go
-// 音频格式
-vo.AudioFormatDeepDive      // 深度对话
-vo.AudioFormatConversation  // 对话形式
+// Audio formats
+vo.AudioFormatDeepDive      // Deep dive conversation
+vo.AudioFormatConversation  // Conversation format
 
-// 音频长度
-vo.AudioLengthDefault       // 默认
-vo.AudioLengthShort         // 短
-vo.AudioLengthMedium        // 中
-vo.AudioLengthLong          // 长
+// Audio length
+vo.AudioLengthDefault       // Default
+vo.AudioLengthShort         // Short
+vo.AudioLengthMedium        // Medium
+vo.AudioLengthLong          // Long
 
-// 视频格式
-vo.VideoFormatBriefing      // 简报
+// Video formats
+vo.VideoFormatBriefing      // Briefing
 
-// 视频风格
-vo.VideoStyleClassroom      // 课堂风格
+// Video styles
+vo.VideoStyleClassroom      // Classroom style
 ```
 
-## 文件结构
+## File Structure
 
 ```
 notebooklm/
-├── client.go      # 核心 Client 和 RPC 调用
+├── client.go      # Core Client and RPC calls
 ├── notebook.go    # Notebook CRUD
-├── source.go      # Source 管理
-├── artifact.go    # Artifact 生成/下载
-├── chat.go        # Chat 功能
-├── utils.go       # 工具函数
-├── auth.go        # 认证管理
-├── login.go       # 浏览器登录
-├── parser.go      # 响应解析
-└── rpc/           # RPC 编解码
+├── source.go      # Source management
+├── artifact.go    # Artifact generation/download
+├── chat.go        # Chat functionality
+├── utils.go       # Utility functions
+├── auth.go        # Authentication management
+├── login.go       # Browser login
+├── parser.go      # Response parsing
+└── rpc/           # RPC encoding/decoding
 ```
-

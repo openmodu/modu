@@ -1,26 +1,26 @@
 # Scraper
 
-A collection of Playwright-based web scrapers supporting multiple data sources.
+基于 Playwright 的网页爬虫集合，支持多种数据源。
 
-## Installation
+## 安装
 
 ```go
 import "github.com/openmodu/modu/repos/scraper"
 ```
 
-## Supported Data Sources
+## 支持的数据源
 
-| Source | Function | Description |
-|--------|----------|-------------|
-| Hacker News | `ScrapeHN` | Scrape the HN homepage |
-| Product Hunt | `ScrapePH` | Scrape the PH homepage |
-| Newsletter | `ScrapeNewsletter` | Generic newsletter scraper |
-| Substack | `ScrapeSubstack` | Substack subscriptions |
+| 数据源 | 函数 | 说明 |
+|--------|------|------|
+| Hacker News | `ScrapeHN` | 爬取 HN 首页 |
+| Product Hunt | `ScrapePH` | 爬取 PH 首页 |
+| Newsletter | `ScrapeNewsletter` | 通用 Newsletter 爬虫 |
+| Substack | `ScrapeSubstack` | Substack 订阅 |
 | TLDR | `ScrapeTLDR` | TLDR Newsletter |
-| Twitter Trending | `ScrapeTwitterTrending` | Twitter/X trending topics |
-| Twitter User | `ScrapeTwitterUser` | Twitter/X user timeline |
+| Twitter Trending | `ScrapeTwitterTrending` | Twitter/X 热门话题 |
+| Twitter User | `ScrapeTwitterUser` | Twitter/X 用户时间线 |
 
-## Usage
+## 使用
 
 ### Hacker News
 
@@ -55,10 +55,10 @@ for _, item := range items {
 ### Newsletter
 
 ```go
-// Generic Newsletter
+// 通用 Newsletter
 items, err := scraper.ScrapeNewsletter("https://example.com/archive", nil, 20)
 
-// Custom Selectors
+// 自定义选择器
 selectors := &scraper.Selectors{
     Container: ".post-item",
     Title:     "h2",
@@ -71,14 +71,14 @@ items, err := scraper.ScrapeNewsletter("https://example.com/archive", selectors,
 ### Substack
 
 ```go
-// Scrape a Substack subscription
+// 爬取 Substack 订阅
 items, err := scraper.ScrapeSubstack("stratechery", 20)
 ```
 
 ### TLDR Newsletter
 
 ```go
-// Supported categories: tech, ai, webdev, crypto, devops, founders
+// 支持的类别: tech, ai, webdev, crypto, devops, founders
 items, err := scraper.ScrapeTLDR("tech", 20)
 items, err := scraper.ScrapeTLDR("ai", 20)
 ```
@@ -86,47 +86,47 @@ items, err := scraper.ScrapeTLDR("ai", 20)
 ### Twitter/X
 
 ```go
-// Trending topics
+// 热门话题
 items, err := scraper.ScrapeTwitterTrending(20)
 
-// User timeline
+// 用户时间线
 items, err := scraper.ScrapeTwitterUser("elonmusk", 20)
 ```
 
-**Note**: The first time you run the Twitter scraper, a browser window will open for manual login. After logging in, cookies will be saved to `~/.modu-scraper/twitter-cookies.json`, so you won't need to log in again for subsequent runs.
+**注意**: 首次运行 Twitter 爬虫时会打开浏览器窗口，需要手动登录。登录后 Cookie 会保存到 `~/.modu-scraper/twitter-cookies.json`，后续运行无需再次登录。
 
-### Using TwitterScraper Instance
+### 使用 TwitterScraper 实例
 
 ```go
-// Create an instance (reusable)
+// 创建实例（可复用）
 ts, err := scraper.NewTwitterScraper()
 if err != nil {
     log.Fatal(err)
 }
 defer ts.Close()
 
-// Multiple scrapes
+// 多次爬取
 trending, _ := ts.ScrapeTrending(20)
 user1, _ := ts.ScrapeUser("elonmusk", 10)
 user2, _ := ts.ScrapeUser("sama", 10)
 ```
 
-## Output Formatting
+## 输出格式化
 
 ```go
 items, _ := scraper.ScrapeHN(20)
 
-// JSON format
+// JSON 格式
 json, _ := scraper.FormatOutput(items, scraper.FormatJSON)
 
-// Markdown format
+// Markdown 格式
 md, _ := scraper.FormatOutput(items, scraper.FormatMarkdown)
 
-// Plain text format
+// 纯文本格式
 text, _ := scraper.FormatOutput(items, scraper.FormatText)
 ```
 
-## Data Structures
+## 数据结构
 
 ### NewsItem
 
@@ -147,17 +147,17 @@ type NewsItem struct {
 
 ```go
 type Selectors struct {
-    Container string // Selector for the article container
-    Title     string // Selector for the title
-    Link      string // Selector for the link
-    Date      string // Selector for the date
+    Container string // 文章容器选择器
+    Title     string // 标题选择器
+    Link      string // 链接选择器
+    Date      string // 日期选择器
 }
 
-// Default selectors
+// 默认选择器
 scraper.DefaultSelectors()
 ```
 
-## Example: Full Scraper Program
+## 示例：完整爬虫程序
 
 ```go
 package main
@@ -170,7 +170,7 @@ import (
 )
 
 func main() {
-    // Scrape multiple sources
+    // 爬取多个数据源
     var allItems []scraper.NewsItem
 
     // HN
@@ -183,7 +183,7 @@ func main() {
         allItems = append(allItems, items...)
     }
 
-    // Format output
+    // 格式化输出
     output, _ := scraper.FormatOutput(allItems, scraper.FormatMarkdown)
     fmt.Println(output)
 }
