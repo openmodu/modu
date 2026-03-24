@@ -1,3 +1,5 @@
+[English](README.md) | [中文](README_zh.md)
+
 # Modu Agent Core (Go)
 
 Stateful agent with tool execution and event streaming.
@@ -16,6 +18,7 @@ package main
 import (
         "context"
         "fmt"
+        "os"
 
         "github.com/openmodu/modu/pkg/agent"
         "github.com/openmodu/modu/pkg/providers"
@@ -237,7 +240,6 @@ func (t *MyTool) Execute(ctx context.Context, id string, args map[string]any, on
     }, nil
 }
 ```
-
 
 ## License
 

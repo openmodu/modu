@@ -1,46 +1,46 @@
 # env
 
-轻量级环境变量加载库，支持从 `.env` 文件读取配置。采用 Functional Options 模式，使用简洁灵活。
+A lightweight environment variable loading library that supports reading configuration from `.env` files. It uses the Functional Options pattern for a concise and flexible API.
 
-## 安装
+## Installation
 
 ```go
 import "github.com/openmodu/modu/pkg/env"
 ```
 
-## 快速开始
+## Quick Start
 
 ```go
-// 加载当前目录的 .env 文件
+// Load .env file from the current directory
 env.Load()
 
-// 获取环境变量
+// Get environment variables
 apiKey := env.Get("API_KEY")
 port := env.GetDefault("PORT", "8080")
 ```
 
-## 使用示例
+## Usage Examples
 
-### 基础用法
+### Basic Usage
 
 ```go
-// 默认加载 .env（不覆盖已有变量）
+// Default: Load .env (does not override existing variables)
 env.Load()
 
-// 加载指定文件
+// Load a specific file
 env.Load(env.WithFile(".env.local"))
 
-// 从指定目录加载
+// Load from a specific directory
 env.Load(env.WithDir("/etc/myapp"))
 
-// 覆盖已有环境变量
+// Override existing environment variables
 env.Load(env.WithOverride())
 
-// 文件必须存在
+// Require the file to exist
 env.Load(env.WithRequired())
 ```
 
-### 组合选项
+### Combined Options
 
 ```go
 env.Load(
@@ -51,62 +51,61 @@ env.Load(
 )
 ```
 
-### 获取变量
+### Retrieving Variables
 
 ```go
-// 获取，不存在返回空字符串
+// Get, returns an empty string if it doesn't exist
 value := env.Get("KEY")
 
-// 带默认值
+// Get with a default value
 port := env.GetDefault("PORT", "8080")
 
-// 必须存在，否则返回 error
+// Must exist, otherwise returns an error
 secret, err := env.GetRequired("SECRET")
 
-// 必须存在，否则 panic
+// Must exist, otherwise panic
 token := env.MustGet("TOKEN")
 ```
 
-### Panic 版本
+### Panic Versions
 
 ```go
-// 加载失败则 panic
+// Panic if loading fails (e.g., file not found with WithRequired)
 env.MustLoad(env.WithRequired())
 ```
 
-## 选项列表
+## Options List
 
-| 选项 | 说明 |
+| Option | Description |
 |------|------|
-| `WithFile(name)` | 指定文件名（默认 `.env`）|
-| `WithDir(dir)` | 指定目录 |
-| `WithOverride()` | 覆盖已有环境变量 |
-| `WithRequired()` | 文件必须存在，否则报错 |
+| `WithFile(name)` | Specify the filename (default: `.env`) |
+| `WithDir(dir)` | Specify the directory |
+| `WithOverride()` | Override existing environment variables |
+| `WithRequired()` | The file must exist, otherwise an error is returned |
 
-## .env 文件格式
+## .env File Format
 
 ```env
-# 注释
+# Comment
 API_KEY=your-api-key
 export DB_URL=postgres://localhost/db
 
-# 支持引号
+# Quoted values
 MESSAGE="Hello World"
 NAME='Single Quotes'
 
-# 支持转义
+# Escaped characters
 MULTILINE="Line1\nLine2"
 ```
 
 ## API
 
-| 函数 | 说明 |
+| Function | Description |
 |------|------|
-| `Load(opts...)` | 加载环境变量 |
-| `MustLoad(opts...)` | 加载，失败 panic |
-| `Get(key)` | 获取变量 |
-| `GetDefault(key, def)` | 带默认值获取 |
-| `GetRequired(key)` | 必须存在 |
-| `MustGet(key)` | 必须存在，否则 panic |
-| `Set(key, value)` | 设置变量 |
-
+| `Load(opts...)` | Load environment variables |
+| `MustLoad(opts...)` | Load, panic on failure |
+| `Get(key)` | Get variable |
+| `GetDefault(key, def)` | Get with default value |
+| `GetRequired(key)` | Must exist, returns error if not |
+| `MustGet(key)` | Must exist, panic if not |
+| `Set(key, value)` | Set variable |
