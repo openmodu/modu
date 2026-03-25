@@ -87,5 +87,15 @@ func GenerateBranchSummary(ctx context.Context, messages []types.AgentMessage, o
 		}
 	}
 
-	return summary.String(), nil
+	readFiles, modifiedFiles := ExtractFileOperations(messages)
+	var parts []string
+	parts = append(parts, strings.TrimSpace(summary.String()))
+	if len(readFiles) > 0 {
+		parts = append(parts, fmt.Sprintf("<read-files>\n%s\n</read-files>", strings.Join(readFiles, "\n")))
+	}
+	if len(modifiedFiles) > 0 {
+		parts = append(parts, fmt.Sprintf("<modified-files>\n%s\n</modified-files>", strings.Join(modifiedFiles, "\n")))
+	}
+
+	return strings.Join(parts, "\n\n"), nil
 }

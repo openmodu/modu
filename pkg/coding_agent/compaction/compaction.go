@@ -3,10 +3,17 @@ package compaction
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/types"
+)
+
+var (
+	readFilesRegex     = regexp.MustCompile(`(?s)<read-files>\n(.*?)\n</read-files>`)
+	modifiedFilesRegex = regexp.MustCompile(`(?s)<modified-files>\n(.*?)\n</modified-files>`)
 )
 
 // Options configures the compaction process.
@@ -40,6 +47,103 @@ const compactionPrompt = `You are summarizing a conversation between a user and 
 Be specific about technical details. The summary will be used to continue the conversation, so include enough context for the assistant to pick up where it left off.
 
 Format as a structured summary with clear sections.`
+
+// ExtractFileOperations inspects messages to find which files were read or modified
+// using tools, and recursively extracts these from past summary blocks.
+func ExtractFileOperations(messages []types.AgentMessage) ([]string, []string) {
+	readSet := make(map[string]bool)
+	modifiedSet := make(map[string]bool)
+
+	for _, msg := range messages {
+		switch m := msg.(type) {
+		case types.AssistantMessage:
+			for _, block := range m.Content {
+				if tc, ok := block.(*types.ToolCallContent); ok {
+					if pathRaw, has := tc.Arguments["path"]; has {
+						if pathStr, ok := pathRaw.(string); ok {
+							switch tc.Name {
+							case "read":
+								readSet[pathStr] = true
+							case "write", "edit":
+								modifiedSet[pathStr] = true
+							}
+						}
+					}
+				}
+			}
+		case *types.AssistantMessage:
+			for _, block := range m.Content {
+				if tc, ok := block.(*types.ToolCallContent); ok {
+					if pathRaw, has := tc.Arguments["path"]; has {
+						if pathStr, ok := pathRaw.(string); ok {
+							switch tc.Name {
+							case "read":
+								readSet[pathStr] = true
+							case "write", "edit":
+								modifiedSet[pathStr] = true
+							}
+						}
+					}
+				}
+			}
+		case types.UserMessage:
+			if blocks, ok := m.Content.([]types.ContentBlock); ok {
+				for _, block := range blocks {
+					if tc, ok := block.(*types.TextContent); ok {
+						parseUserMessageText(&readSet, &modifiedSet, tc.Text)
+					}
+				}
+			} else if str, ok := m.Content.(string); ok {
+				parseUserMessageText(&readSet, &modifiedSet, str)
+			}
+		case *types.UserMessage:
+			if blocks, ok := m.Content.([]types.ContentBlock); ok {
+				for _, block := range blocks {
+					if tc, ok := block.(*types.TextContent); ok {
+						parseUserMessageText(&readSet, &modifiedSet, tc.Text)
+					}
+				}
+			} else if str, ok := m.Content.(string); ok {
+				parseUserMessageText(&readSet, &modifiedSet, str)
+			}
+		}
+	}
+
+	var readFiles, modifiedFiles []string
+	for k := range readSet {
+		readFiles = append(readFiles, k)
+	}
+	for k := range modifiedSet {
+		modifiedFiles = append(modifiedFiles, k)
+	}
+
+	sort.Strings(readFiles)
+	sort.Strings(modifiedFiles)
+
+	return readFiles, modifiedFiles
+}
+
+func parseUserMessageText(readSet, modifiedSet *map[string]bool, text string) {
+	if !strings.HasPrefix(text, "[Previous Conversation Summary]") {
+		return
+	}
+	if matches := readFilesRegex.FindStringSubmatch(text); len(matches) > 1 {
+		for _, f := range strings.Split(matches[1], "\n") {
+			f = strings.TrimSpace(f)
+			if f != "" {
+				(*readSet)[f] = true
+			}
+		}
+	}
+	if matches := modifiedFilesRegex.FindStringSubmatch(text); len(matches) > 1 {
+		for _, f := range strings.Split(matches[1], "\n") {
+			f = strings.TrimSpace(f)
+			if f != "" {
+				(*modifiedSet)[f] = true
+			}
+		}
+	}
+}
 
 // Compact compresses older messages into a summary while preserving recent messages.
 func Compact(ctx context.Context, messages []types.AgentMessage, opts Options) (*Result, error) {
@@ -77,13 +181,26 @@ func Compact(ctx context.Context, messages []types.AgentMessage, opts Options) (
 		return nil, fmt.Errorf("failed to generate compaction summary: %w", err)
 	}
 
+	// Extract tracked files
+	readFiles, modifiedFiles := ExtractFileOperations(toCompact)
+
+	// Combine summary with tracked files
+	var parts []string
+	parts = append(parts, "[Previous Conversation Summary]\n\n"+summary)
+	if len(readFiles) > 0 {
+		parts = append(parts, fmt.Sprintf("<read-files>\n%s\n</read-files>", strings.Join(readFiles, "\n")))
+	}
+	if len(modifiedFiles) > 0 {
+		parts = append(parts, fmt.Sprintf("<modified-files>\n%s\n</modified-files>", strings.Join(modifiedFiles, "\n")))
+	}
+
 	// Build new message list: summary + preserved messages
 	summaryMsg := types.UserMessage{
 		Role: "user",
 		Content: []types.ContentBlock{
 			&types.TextContent{
 				Type: "text",
-				Text: "[Previous Conversation Summary]\n\n" + summary,
+				Text: strings.Join(parts, "\n\n"),
 			},
 		},
 	}
@@ -154,7 +271,7 @@ func generateSummary(ctx context.Context, conversationText string, opts Options)
 		}
 	}
 
-	return summary.String(), nil
+	return strings.TrimSpace(summary.String()), nil
 }
 
 func formatMessageForSummary(msg types.AgentMessage) string {
