@@ -98,6 +98,15 @@ func NewRendererWithScreen(s *Screen) *Renderer {
 	return r
 }
 
+// NewRendererForcedColor creates a plain-mode Renderer that always emits ANSI
+// colour codes, regardless of whether out is a real TTY.  Use this when out
+// is an intermediary (e.g. a channel writer) rather than the raw terminal.
+func NewRendererForcedColor(out io.Writer) *Renderer {
+	r := &Renderer{out: out, noColor: false}
+	r.md = newMDWriter(false, func(text string) { r.write(text) })
+	return r
+}
+
 // SetNoColor overrides automatic color detection.
 func (r *Renderer) SetNoColor(v bool) { r.noColor = v }
 
