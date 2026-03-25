@@ -64,10 +64,10 @@ func (t *MemoryTool) Parameters() any {
 			},
 		},
 		"scope": map[string]any{
-				"type":        "string",
-				"description": "Storage scope for 'record_long_term': 'project' (default, current project only) or 'global' (shared across all projects, e.g. user preferences).",
-				"enum":        []string{"project", "global"},
-			},
+			"type":        "string",
+			"description": "Storage scope for 'record_long_term': 'project' (default, current project only) or 'global' (shared across all projects, e.g. user preferences).",
+			"enum":        []string{"project", "global"},
+		},
 		"required": []string{"operation", "content"},
 	}
 }

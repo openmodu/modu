@@ -65,6 +65,7 @@ type CodingSession struct {
 	slashCommands  map[string]SlashCommand
 	getAPIKey      func(provider string) (string, error)
 	streamFn       agent.StreamFn
+	lastSavedIndex int
 	// totalTokens tracks accumulated token usage for auto-compaction.
 	totalTokens   int
 	retryManager  *RetryManager

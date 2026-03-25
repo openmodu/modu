@@ -8,6 +8,7 @@ import (
 
 	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/types"
+	"golang.org/x/text/unicode/norm"
 )
 
 // EditTool implements the precise text replacement tool.
@@ -22,7 +23,7 @@ func NewEditTool(cwd string) *EditTool {
 func (t *EditTool) Name() string  { return "edit" }
 func (t *EditTool) Label() string { return "Edit File" }
 func (t *EditTool) Description() string {
-	return `Perform exact string replacements in files. The old_text must match exactly (including whitespace and indentation). If old_text appears multiple times, the edit will be rejected as ambiguous. Use replace_all=true to replace all occurrences.`
+	return `Perform exact string replacements in files. The old_text must match exactly (including whitespace and indentation). If exact match fails, it will attempt a fuzzy match by normalizing whitespace and Unicode characters. If old_text appears multiple times, the edit will be rejected as ambiguous. Use replace_all=true to replace all occurrences.`
 }
 
 func (t *EditTool) Parameters() any {
@@ -95,14 +96,27 @@ func (t *EditTool) Execute(ctx context.Context, toolCallID string, args map[stri
 	// Count occurrences
 	count := strings.Count(normalContent, normalOld)
 
+	usedFuzzy := false
+	contentForReplacement := normalContent
+	oldForReplacement := normalOld
+
 	if count == 0 {
-		// Try fuzzy match (normalize whitespace)
-		fuzzyContent := normalizeWhitespace(normalContent)
-		fuzzyOld := normalizeWhitespace(normalOld)
-		if strings.Contains(fuzzyContent, fuzzyOld) {
-			return errorResult(fmt.Sprintf("old_text not found with exact match in %s, but a fuzzy match was found. Please ensure whitespace and indentation match exactly.", pathArg)), nil
+		// Try advanced fuzzy match
+		fuzzyContent := normalizeForFuzzyMatch(normalContent)
+		fuzzyOld := normalizeForFuzzyMatch(normalOld)
+		count = strings.Count(fuzzyContent, fuzzyOld)
+
+		if count == 0 {
+			// fallback check with basic normalizeWhitespace (just in case)
+			if strings.Contains(normalizeWhitespace(normalContent), normalizeWhitespace(normalOld)) {
+				return errorResult(fmt.Sprintf("old_text not found with exact match in %s, but a fuzzy match was found. Please ensure whitespace and indentation match exactly.", pathArg)), nil
+			}
+			return errorResult(fmt.Sprintf("old_text not found in %s. Make sure the text matches exactly.", pathArg)), nil
 		}
-		return errorResult(fmt.Sprintf("old_text not found in %s. Make sure the text matches exactly.", pathArg)), nil
+
+		usedFuzzy = true
+		contentForReplacement = fuzzyContent
+		oldForReplacement = fuzzyOld
 	}
 
 	if count > 1 && !replaceAll {
@@ -112,9 +126,9 @@ func (t *EditTool) Execute(ctx context.Context, toolCallID string, args map[stri
 	// Perform replacement
 	var newContent string
 	if replaceAll {
-		newContent = strings.ReplaceAll(normalContent, normalOld, normalNew)
+		newContent = strings.ReplaceAll(contentForReplacement, oldForReplacement, normalNew)
 	} else {
-		newContent = strings.Replace(normalContent, normalOld, normalNew, 1)
+		newContent = strings.Replace(contentForReplacement, oldForReplacement, normalNew, 1)
 	}
 
 	// Restore original line ending style
@@ -127,18 +141,23 @@ func (t *EditTool) Execute(ctx context.Context, toolCallID string, args map[stri
 	}
 
 	// Generate a simple diff summary
-	diff := generateDiff(normalOld, normalNew, normalContent, pathArg)
+	diff := generateDiff(oldForReplacement, normalNew, contentForReplacement, pathArg)
 
 	replacements := 1
 	if replaceAll {
 		replacements = count
 	}
 
+	msgText := fmt.Sprintf("Successfully edited %s (%d replacement(s))\n\n%s", pathArg, replacements, diff)
+	if usedFuzzy {
+		msgText = fmt.Sprintf("Successfully edited %s (%d replacement(s) using fuzzy match)\n\n%s", pathArg, replacements, diff)
+	}
+
 	return agent.AgentToolResult{
 		Content: []types.ContentBlock{
 			&types.TextContent{
 				Type: "text",
-				Text: fmt.Sprintf("Successfully edited %s (%d replacement(s))\n\n%s", pathArg, replacements, diff),
+				Text: msgText,
 			},
 		},
 		Details: map[string]any{
@@ -146,6 +165,47 @@ func (t *EditTool) Execute(ctx context.Context, toolCallID string, args map[stri
 			"replacements": replacements,
 		},
 	}, nil
+}
+
+// normalizeForFuzzyMatch applies progressive transformations for fuzzy matching:
+// - Normalize to NFKC
+// - Strip trailing whitespace from each line
+// - Normalize smart quotes to ASCII equivalents
+// - Normalize Unicode dashes/hyphens to ASCII hyphen
+// - Normalize special Unicode spaces to regular space
+func normalizeForFuzzyMatch(text string) string {
+	// Normalize to NFKC
+	text = norm.NFKC.String(text)
+
+	// Strip trailing whitespace per line
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimRight(line, " \t\r")
+	}
+	text = strings.Join(lines, "\n")
+
+	// Smart single quotes -> '
+	for _, q := range []string{"\u2018", "\u2019", "\u201A", "\u201B"} {
+		text = strings.ReplaceAll(text, q, "'")
+	}
+	// Smart double quotes -> "
+	for _, q := range []string{"\u201C", "\u201D", "\u201E", "\u201F"} {
+		text = strings.ReplaceAll(text, q, "\"")
+	}
+	// Various dashes/hyphens -> -
+	// U+2010 hyphen, U+2011 non-breaking hyphen, U+2012 figure dash,
+	// U+2013 en-dash, U+2014 em-dash, U+2015 horizontal bar, U+2212 minus
+	for _, d := range []string{"\u2010", "\u2011", "\u2012", "\u2013", "\u2014", "\u2015", "\u2212"} {
+		text = strings.ReplaceAll(text, d, "-")
+	}
+	// Special spaces -> regular space
+	// U+00A0 NBSP, U+2002-U+200A various spaces, U+202F narrow NBSP,
+	// U+205F medium math space, U+3000 ideographic space
+	for _, s := range []string{"\u00A0", "\u2002", "\u2003", "\u2004", "\u2005", "\u2006", "\u2007", "\u2008", "\u2009", "\u200A", "\u202F", "\u205F", "\u3000"} {
+		text = strings.ReplaceAll(text, s, " ")
+	}
+
+	return text
 }
 
 // normalizeWhitespace collapses all whitespace sequences to a single space.
