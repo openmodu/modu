@@ -29,7 +29,7 @@ func startTelegramBackground(
 	token string,
 	attachDir string,
 	session *coding_agent.CodingSession,
-	renderer *tui.BTRenderer,
+	renderer *tui.Renderer,
 	promptMu *sync.Mutex,
 	approvalCh chan tui.ApprovalRequest,
 ) (string, error) {

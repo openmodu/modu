@@ -26,9 +26,6 @@ import (
 	"sync"
 	"syscall"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"golang.org/x/term"
-
 	"github.com/openmodu/modu/pkg/agent"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/coding_agent/modes"
@@ -108,36 +105,22 @@ func main() {
 		return
 	}
 
-	// ── bubbletea REPL ────────────────────────────────────────────────────────
+	renderer := tui.NewRenderer(os.Stdout)
+	input := tui.NewInput(os.Stdin, os.Stdout)
+	input.OnCtrlR = renderer.ExpandLastTool
+	input.OnPromptChange = renderer.SetActivePrompt
 
-	// contentCh receives rendered text from BTRenderer and feeds the viewport.
-	contentCh := make(chan string, 4096)
-	renderer := tui.NewBTRenderer(termWidthOrDefault(), func(text string) {
-		select {
-		case contentCh <- text:
-		default: // drop if buffer full (shouldn't happen at 4096)
-		}
-	})
-
-	// promptMu serializes session.Prompt() calls between the TUI and any
-	// background goroutine (e.g. Telegram) so they never run concurrently.
-	var promptMu sync.Mutex
-
-	// Wire session events (compaction, etc.) to the renderer.
-	unsubSession := session.SubscribeSession(func(ev coding_agent.SessionEvent) {
-		switch ev.Type {
-		case coding_agent.SessionEventCompactionStart:
-			renderer.PrintInfo("compacting context…")
-		case coding_agent.SessionEventCompactionDone:
-			renderer.PrintInfo("context compacted")
-		}
-	})
-	defer unsubSession()
+	// Load persisted input history for this project.
+	histFile := session.InputHistoryFile()
+	if err := input.LoadHistoryFile(histFile); err != nil {
+		renderer.PrintInfo(fmt.Sprintf("(warning: failed to load input history: %v)", err))
+	}
 
 	// Wire tool approval (default on; disabled with --no-approve).
 	var tuiApprovalCh chan tui.ApprovalRequest
 	if !*noApprove {
 		tuiApprovalCh = make(chan tui.ApprovalRequest, 1)
+		input.ApprovalRequests = tuiApprovalCh
 		session.SetToolApprovalCallback(func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
 			respCh := make(chan string, 1)
 			tuiApprovalCh <- tui.ApprovalRequest{
@@ -150,18 +133,59 @@ func main() {
 		})
 	}
 
-	ctx, cancelCtx := context.WithCancel(context.Background())
-	defer cancelCtx()
+	// Wire agent events to the renderer.
+	unsub := session.Subscribe(func(ev agent.AgentEvent) {
+		renderer.HandleEvent(ev)
+	})
+	defer unsub()
 
-	// SIGTERM: clean shutdown.
+	// promptMu serializes session.Prompt() calls between the TUI and the
+	// Telegram background goroutine so they never run concurrently.
+	var promptMu sync.Mutex
+
+	// Wire session events (compaction, model changes, etc.) to the renderer.
+	unsubSession := session.SubscribeSession(func(ev coding_agent.SessionEvent) {
+		switch ev.Type {
+		case coding_agent.SessionEventCompactionStart:
+			renderer.PrintInfo("compacting context…")
+		case coding_agent.SessionEventCompactionDone:
+			renderer.PrintInfo("context compacted")
+		}
+	})
+	defer unsubSession()
+
+	// SIGINT: abort the current streaming operation.
+	// Ctrl+C during input is handled via ErrInterrupt from ReadLine below.
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT)
 	go func() {
-		<-sigCh
-		cancelCtx()
+		for range sigCh {
+			if session.IsStreaming() {
+				session.Abort()
+				renderer.PrintInfo("[interrupted]")
+			}
+		}
 	}()
 
+	// SIGWINCH: terminal resize — notify the input loop to redraw itself.
+	resizeCh := make(chan struct{}, 1)
+	input.ResizeCh = resizeCh
+	sigwinchCh := make(chan os.Signal, 1)
+	signal.Notify(sigwinchCh, syscall.SIGWINCH)
+	go func() {
+		for range sigwinchCh {
+			select {
+			case resizeCh <- struct{}{}:
+			default: // drop if already pending
+			}
+		}
+	}()
+
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	exit := func() { cancelCtx(); os.Exit(0) }
+
 	// Auto-start Telegram bot in background if a token is configured.
+	// Resolve the bot username before printing the banner so it appears inline.
 	var tgUsername string
 	{
 		token := os.Getenv("MOMS_TG_TOKEN")
@@ -178,38 +202,177 @@ func main() {
 		}
 	}
 
-	// Restore previous session and write banner into the content channel
-	// before launching bubbletea so the viewport shows it on first render.
+	// Restore previous session for this working directory (like Claude Code).
 	if n, err := session.RestoreMessages(); err != nil {
 		renderer.PrintInfo(fmt.Sprintf("(failed to restore session: %v)", err))
 	} else if n > 0 {
 		renderer.PrintInfo(fmt.Sprintf("(restored previous session — %d messages)", n))
 	}
+
 	renderer.PrintBanner(model.Name, cwd, tgUsername)
 
-	// Load persisted input history.
-	histFile := session.InputHistoryFile()
-	history := loadHistoryLines(histFile)
+	// REPL loop.
+	for {
+		line, err := input.ReadLine("❯ ")
+		if err == tui.ErrInterrupt {
+			// Ctrl+C while idle → exit.
+			exit()
+		}
+		if err != nil {
+			// EOF (Ctrl+D) — exit cleanly.
+			exit()
+		}
 
-	// Create and run the bubbletea program.
-	btm := newReplModel(session, renderer, contentCh, tuiApprovalCh,
-		model, cwd, history, &promptMu, ctx)
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
 
-	p := tea.NewProgram(btm)
-	finalModel, err := p.Run()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		// Built-in slash commands handled before forwarding to the session.
+		if handled, exit := handleSlash(ctx, line, session, renderer, model); handled {
+			if exit {
+				break
+			}
+			continue
+		}
+
+		renderer.PrintUser(line)
+
+		// Run prompt in a goroutine so the main goroutine can handle
+		// scroll events (mouse wheel, Page Up/Down) during AI streaming.
+		// Use a cancellable context so Ctrl+C aborts the HTTP request.
+		promptCtx, promptCancel := context.WithCancel(ctx)
+		promptDone := make(chan struct{})
+		var promptErr error
+		go func() {
+			defer promptCancel()
+			// TryLock: if the session is busy (e.g. a Telegram prompt is
+			// running), reject immediately instead of deadlocking the TUI.
+			if !promptMu.TryLock() {
+				renderer.PrintInfo("[busy] session is processing a Telegram message, please wait…")
+				close(promptDone)
+				return
+			}
+			defer promptMu.Unlock()
+			promptErr = session.Prompt(promptCtx, line)
+			close(promptDone)
+		}()
+
+		input.RunScrollLoop(promptDone, func() {
+			promptCancel()
+			session.Abort()
+			renderer.PrintInfo("[interrupted]")
+		})
+
+		<-promptDone // wait for the goroutine to finish before reading promptErr
+
+		if promptErr != nil {
+			renderer.PrintError(promptErr)
+		}
+		session.WaitForIdle()
+
+		// Persist the conversation so the next startup can resume.
+		if err := session.SaveMessages(); err != nil {
+			renderer.PrintInfo(fmt.Sprintf("(warning: failed to save session: %v)", err))
+		}
+		// Persist input history so up-arrow works across restarts.
+		if err := input.SaveHistoryFile(histFile); err != nil {
+			renderer.PrintInfo(fmt.Sprintf("(warning: failed to save input history: %v)", err))
+		}
+
+		stats := session.GetSessionStats()
+		renderer.PrintUsage(stats.TotalTokens)
+		renderer.PrintSeparator()
+	}
+}
+
+// handleSlash processes built-in /commands. Returns (handled, shouldExit).
+func handleSlash(ctx context.Context, line string, session *coding_agent.CodingSession, r *tui.Renderer, model *types.Model) (bool, bool) {
+	if !strings.HasPrefix(line, "/") {
+		return false, false
 	}
 
-	// Save input history on exit.
-	if fm, ok := finalModel.(replModel); ok {
-		_ = saveHistoryLines(histFile, fm.history)
+	parts := strings.SplitN(line[1:], " ", 2)
+	cmd := strings.ToLower(parts[0])
+
+	switch cmd {
+	case "quit", "exit", "q":
+		r.PrintInfo("bye!")
+		return true, true
+
+	case "help", "h":
+		printHelp(r)
+		return true, false
+
+	case "clear":
+		// Clear the screen AND wipe the saved session so next startup is fresh.
+		if err := session.ClearSavedMessages(); err != nil {
+			r.PrintError(fmt.Errorf("clear session: %w", err))
+		} else {
+			r.PrintInfo("session cleared")
+		}
+		fmt.Print("\033[2J\033[H")
+		return true, false
+
+	case "model":
+		r.PrintInfo(fmt.Sprintf("current model: %s (%s / %s)", model.Name, model.ProviderID, model.ID))
+		r.PrintInfo("restart with a different env var to switch models")
+		return true, false
+
+	case "compact":
+		r.PrintInfo("compacting context…")
+		if err := session.Compact(ctx); err != nil {
+			r.PrintError(err)
+		} else {
+			r.PrintInfo("context compacted")
+		}
+		return true, false
+
+	case "tokens":
+		stats := session.GetSessionStats()
+		r.PrintInfo(fmt.Sprintf("tokens used this session: %d", stats.TotalTokens))
+		return true, false
+
+	case "tools":
+		names := session.GetActiveToolNames()
+		r.PrintInfo("active tools: " + strings.Join(names, ", "))
+		return true, false
+
+	case "skills":
+		skills := session.GetSkills()
+		if len(skills) == 0 {
+			r.PrintInfo("no skills found")
+			return true, false
+		}
+		r.PrintInfo(fmt.Sprintf("available skills (%d):", len(skills)))
+		for _, s := range skills {
+			line := "  /" + s.Name
+			if s.Description != "" {
+				line += " — " + s.Description
+			}
+			if s.Source != "" {
+				line += " [" + s.Source + "]"
+			}
+			r.PrintInfo(line)
+		}
+		return true, false
+
+	case "telegram":
+		arg := ""
+		if len(parts) > 1 {
+			arg = strings.TrimSpace(parts[1])
+		}
+		handleTelegramCommand(arg, r)
+		return true, false
+
+	default:
+		// Let the session handle unknown slash commands (skills, etc.).
+		return false, false
 	}
 }
 
 // handleTelegramCommand processes /telegram [subcommand].
-func handleTelegramCommand(arg string, r *tui.BTRenderer) {
+func handleTelegramCommand(arg string, r *tui.Renderer) {
 	configPath := telegramConfigPath()
 
 	// /telegram token <token>  — set bot token
@@ -255,15 +418,7 @@ func handleTelegramCommand(arg string, r *tui.BTRenderer) {
 	r.PrintInfo("  start with: modu_code --telegram")
 }
 
-func termWidthOrDefault() int {
-	w, _, err := term.GetSize(int(os.Stdout.Fd()))
-	if err != nil || w <= 0 {
-		return 80
-	}
-	return w
-}
-
-func printHelp(r *tui.BTRenderer) {
+func printHelp(r *tui.Renderer) {
 	lines := []string{
 		"built-in commands:",
 		"  /help, /h           — show this help",
@@ -280,9 +435,7 @@ func printHelp(r *tui.BTRenderer) {
 		"keyboard:",
 		"  Enter          — send message",
 		"  Ctrl+R         — expand last tool call output",
-		"  Ctrl+Y         — copy all content to clipboard",
-		"  Esc            — abort current operation",
-		"  Ctrl+C         — exit (when idle)",
+		"  Ctrl+C         — abort current operation (or exit when idle)",
 		"  Ctrl+D         — exit",
 		"",
 		"tool approval (when prompted):",
