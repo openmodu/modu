@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" type="image/svg+xml" href="/logo.png" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description"
+    content="Modu - A Fast and Efficient Go Infrastructure Toolkit for Building Agent Applications" />
+  <title>Modu - Agent Build Toolkit</title>
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Fira+Code:wght@400;500&display=swap"
+    rel="stylesheet">
+
+  <link rel="stylesheet" href="/style.css">
+</head>
+
+<body>
+  <!-- Background Elements -->
+  <div class="glow-bg glow-bg-1"></div>
+  <div class="glow-bg glow-bg-2"></div>
+  <div class="grid-overlay"></div>
+
+  <!-- Navigation -->
+  <nav class="navbar">
+    <div class="nav-content">
+      <a href="#" class="logo-container">
+        <img src="/logo.png" alt="Modu Logo" class="logo">
+        <span class="logo-text">Modu</span>
+      </a>
+      <div class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#teams">Teams</a>
+        <a href="#providers">Providers</a>
+        <a href="https://github.com/openmodu/modu" target="_blank" class="github-btn">
+          <!-- Github Icon -->
+          <svg height="20" width="20" viewBox="0 0 16 16" fill="currentColor">
+            <path
+              d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z" />
+          </svg>
+          Star on GitHub
+        </a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero Section -->
+  <header class="hero">
+    <div class="hero-content">
+      <div class="badge fade-up"><span class="pulse-dot"></span> v1.0 Released</div>
+      <h1 class="hero-title fade-up delay-1">
+        Building Agent Applications,<br>
+        <span class="gradient-text">Fast and Efficient.</span>
+      </h1>
+      <p class="hero-subtitle fade-up delay-2">
+        Modular, Event-Driven Multi-Agent Collaboration Framework written in Go. Design complex business logic with
+        highly concurrent and unified abstraction layers.
+      </p>
+
+      <div class="install-card fade-up delay-3">
+        <div class="install-header">
+          <span class="dot red"></span>
+          <span class="dot yellow"></span>
+          <span class="dot green"></span>
+          <span class="terminal-title">bash</span>
+        </div>
+        <div class="install-body">
+          <code id="code-block">go get github.com/openmodu/modu</code>
+          <button class="copy-btn" id="copy-btn" title="Copy to clipboard">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="hero-cta fade-up delay-4">
+        <a href="https://github.com/openmodu/modu/tree/main/examples" class="btn primary-btn" target="_blank">View
+          Examples</a>
+        <a href="#features" class="btn secondary-btn">Explore Features</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Features Section -->
+  <section id="features" class="features-section">
+    <h2 class="section-title fade-up">Core Infrastructure</h2>
+    <p class="section-subtitle fade-up">Everything you need to orchestrate complex agent behaviors and integrations.</p>
+
+    <div class="features-grid">
+      <div class="feature-card fade-up">
+        <div class="feature-icon glow-blue">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+            <polyline points="2 17 12 22 22 17"></polyline>
+            <polyline points="2 12 12 17 22 12"></polyline>
+          </svg>
+        </div>
+        <h3>Agent Engine</h3>
+        <p>Generic, stateful Agent core with powerful tool calling and event streaming capabilities.</p>
+      </div>
+
+      <div class="feature-card fade-up delay-1">
+        <div class="feature-icon glow-purple">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 11a9 9 0 0 1 9 9"></path>
+            <path d="M4 4a16 16 0 0 1 16 16"></path>
+            <circle cx="5" cy="19" r="1"></circle>
+          </svg>
+        </div>
+        <h3>Mailbox Teams</h3>
+        <p>Complete communication layer for multi-agent collaboration: message passing, task registry and status
+          tracking.</p>
+      </div>
+
+      <div class="feature-card fade-up delay-2">
+        <div class="feature-icon glow-cyan">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="16 18 22 12 16 6"></polyline>
+            <polyline points="8 6 2 12 8 18"></polyline>
+          </svg>
+        </div>
+        <h3>Coding Agent</h3>
+        <p>Advanced programming Agent building on core with session management, skill loading, and context compression.
+        </p>
+      </div>
+
+      <div class="feature-card fade-up">
+        <div class="feature-icon glow-pink">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="11" width="18" height="10" rx="2"></rect>
+            <circle cx="12" cy="5" r="2"></circle>
+            <path d="M12 7v4"></path>
+            <line x1="8" y1="16" x2="8" y2="16"></line>
+            <line x1="16" y1="16" x2="16" y2="16"></line>
+          </svg>
+        </div>
+        <h3>Moms Telegram Bot</h3>
+        <p>Go/Telegram port of the pi-mono mom Slack bot. Supports bash execution, file operations, and cross-session
+          memory.</p>
+      </div>
+
+      <div class="feature-card fade-up delay-1">
+        <div class="feature-icon glow-orange">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
+          </svg>
+        </div>
+        <h3>Unified Providers</h3>
+        <p>Multi-provider streaming LLM interface abstracting away the differences between OpenAI, Anthropic, DeepSeek,
+          etc.</p>
+      </div>
+
+      <div class="feature-card fade-up delay-2">
+        <div class="feature-icon glow-green">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"></path>
+            <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"></path>
+          </svg>
+        </div>
+        <h3>Business Repos</h3>
+        <p>Includes NotebookLM unofficial SDK, Gen Image Repos, and a powerful Web Scraper out of the box.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Providers Section -->
+  <section id="providers" class="providers-section">
+    <div class="providers-container fade-up">
+      <h2 class="section-title">One Interface. Unlimited Models.</h2>
+      <p class="section-subtitle">Switch seamlessly across ecosystem leaders with zero codebase changes.</p>
+
+      <div class="providers-logos">
+        <div class="brand-tag">Anthropic (Claude)</div>
+        <div class="brand-tag">OpenAI (GPT / o-series)</div>
+        <div class="brand-tag">DeepSeek</div>
+        <div class="brand-tag">Ollama (Local)</div>
+        <div class="brand-tag">LM Studio</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="footer-content">
+      <div class="footer-brand">
+        <img src="/logo.png" alt="Modu Logo" class="footer-logo">
+        <span>Modu</span>
+      </div>
+      <p class="copyright">© 2026 OpenModu. MIT Licensed. A Fast and Efficient Go Agent Kit.</p>
+    </div>
+  </footer>
+
+  <script type="module" src="/main.js"></script>
+</body>
+
+</html>
