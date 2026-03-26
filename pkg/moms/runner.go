@@ -144,6 +144,10 @@ func (r *Runner) Run(parentCtx context.Context, chCtx channels.ChannelContext) R
 			argsSummary := toolArgsSummary(toolName, args)
 			fmt.Printf("[tool/start] chat=%d id=%s tool=%s args=%q\n",
 				r.chatID, callID, toolName, argsSummary)
+			line := fmt.Sprintf("⏺ %s(%s)", toolName, argsSummary)
+			enqueue(func() error {
+				return chCtx.Respond(line, false)
+			})
 
 		case agent.EventTypeToolExecutionEnd:
 			callID := ev.ToolCallID
@@ -155,6 +159,10 @@ func (r *Runner) Run(parentCtx context.Context, chCtx channels.ChannelContext) R
 			}
 			fmt.Printf("[tool/end] chat=%d id=%s tool=%s isError=%v result_len=%d\n",
 				r.chatID, callID, toolName, isError, len(result))
+			summary := toolResultSummary(isError, result)
+			enqueue(func() error {
+				return chCtx.Respond("  ⎿  "+summary, false)
+			})
 
 		case agent.EventTypeMessageEnd:
 			if ev.Message == nil {
@@ -490,4 +498,20 @@ func toolArgsSummary(name string, args map[string]any) string {
 		return ""
 	}
 	return TruncateStr(string(b), 120)
+}
+
+// toolResultSummary returns a short one-line summary of a tool result for Telegram.
+func toolResultSummary(isError bool, result string) string {
+	if isError {
+		return "✗ " + TruncateStr(strings.TrimSpace(result), 80)
+	}
+	result = strings.TrimSpace(result)
+	if result == "" {
+		return "done"
+	}
+	lines := strings.Count(result, "\n") + 1
+	if lines > 1 {
+		return fmt.Sprintf("%d lines", lines)
+	}
+	return TruncateStr(result, 80)
 }

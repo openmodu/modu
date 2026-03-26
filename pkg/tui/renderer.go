@@ -392,6 +392,8 @@ func (r *Renderer) emitText(text string) {
 		r.write("\n" + r.bullet() + " ")
 		r.hadText = true
 		r.toolLines++
+		// "● " is 2 visible columns; indent continuation lines to match.
+		r.md.SetIndent("  ", true)
 	}
 	r.md.Feed(text)
 }
