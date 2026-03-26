@@ -552,7 +552,8 @@ func resolveProvider() (*types.Model, func(string) (string, error)) {
 	// 5. Default: LM Studio local server.
 	{
 		// modelName := "zai-org/glm-4.7-flash"
-		modelName := "qwen/qwen3.5-35b-a3b"
+		// modelName := "qwen/qwen3.5-35b-a3b"
+		modelName := "omnicoder-9b"
 		baseURL := "http://192.168.5.149:1234/v1"
 		providerID := "lmstudio"
 

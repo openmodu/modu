@@ -26,9 +26,11 @@ type mdWriter struct {
 	noColor  bool
 	out      func(string) // write already-rendered ANSI text
 
-	lineBuf  string // current in-progress (incomplete) line
-	inCode   bool   // inside a fenced code block
-	codeLang string
+	lineBuf        string // current in-progress (incomplete) line
+	inCode         bool   // inside a fenced code block
+	codeLang       string
+	indent         string // prefix prepended to every output line
+	skipNextIndent bool   // skip indent on the very next line (first line flows after a bullet)
 }
 
 func newMDWriter(noColor bool, out func(string)) *mdWriter {
@@ -64,9 +66,30 @@ func (m *mdWriter) Reset() {
 	m.lineBuf = ""
 	m.inCode = false
 	m.codeLang = ""
+	m.indent = ""
+	m.skipNextIndent = false
+}
+
+// SetIndent sets a prefix to prepend to every output line.
+// skipFirst skips the indent on the very next line (for text that flows
+// inline after a bullet that was already written directly).
+func (m *mdWriter) SetIndent(indent string, skipFirst bool) {
+	m.indent = indent
+	m.skipNextIndent = skipFirst
 }
 
 // ── line-level rendering ──────────────────────────────────────────────────────
+
+// emit writes a rendered line, prepending the indent prefix unless this is
+// the first line after a bullet (skipNextIndent).
+func (m *mdWriter) emit(s string) {
+	if m.skipNextIndent {
+		m.skipNextIndent = false
+		m.out(s)
+		return
+	}
+	m.out(m.indent + s)
+}
 
 func (m *mdWriter) renderLine(line string) {
 	// ── fenced code block ───────────────────────────────────────────────────
@@ -79,7 +102,7 @@ func (m *mdWriter) renderLine(line string) {
 			if w < 4 {
 				w = 4
 			}
-			m.out(styled(m.noColor, ansiBrightBlack, "  └"+strings.Repeat("─", w)) + "\n")
+			m.emit(styled(m.noColor, ansiBrightBlack, "  └"+strings.Repeat("─", w)) + "\n")
 		} else {
 			// Opening fence: draw a top rule with optional language label.
 			m.inCode = true
@@ -94,23 +117,23 @@ func (m *mdWriter) renderLine(line string) {
 				if dashes < 0 {
 					dashes = 0
 				}
-				m.out(styled(m.noColor, ansiBrightBlack, "  ┌"+label+strings.Repeat("─", dashes)) + "\n")
+				m.emit(styled(m.noColor, ansiBrightBlack, "  ┌"+label+strings.Repeat("─", dashes)) + "\n")
 			} else {
-				m.out(styled(m.noColor, ansiBrightBlack, "  ┌"+strings.Repeat("─", w)) + "\n")
+				m.emit(styled(m.noColor, ansiBrightBlack, "  ┌"+strings.Repeat("─", w)) + "\n")
 			}
 		}
 		return
 	}
 
 	if m.inCode {
-		m.out(m.codeLine(line) + "\n")
+		m.emit(m.codeLine(line) + "\n")
 		return
 	}
 
 	// ── horizontal rule ─────────────────────────────────────────────────────
 	if isHorizontalRule(line) {
 		w := termWidth()
-		m.out(styled(m.noColor, ansiBrightBlack, strings.Repeat("─", w)) + "\n")
+		m.emit(styled(m.noColor, ansiBrightBlack, strings.Repeat("─", w)) + "\n")
 		return
 	}
 
@@ -128,13 +151,13 @@ func (m *mdWriter) renderLine(line string) {
 			content := m.renderInline(strings.TrimSpace(line[level+1:]))
 			switch level {
 			case 1:
-				m.out(styled(m.noColor, ansiBold+ansiBrightGreen, content) + "\n")
+				m.emit(styled(m.noColor, ansiBold+ansiBrightGreen, content) + "\n")
 			case 2:
-				m.out(styled(m.noColor, ansiBold+ansiBrightWhite, content) + "\n")
+				m.emit(styled(m.noColor, ansiBold+ansiBrightWhite, content) + "\n")
 			case 3:
-				m.out(styled(m.noColor, ansiBold, content) + "\n")
+				m.emit(styled(m.noColor, ansiBold, content) + "\n")
 			default:
-				m.out(styled(m.noColor, ansiDim+ansiBold, content) + "\n")
+				m.emit(styled(m.noColor, ansiDim+ansiBold, content) + "\n")
 			}
 			return
 		}
@@ -143,31 +166,31 @@ func (m *mdWriter) renderLine(line string) {
 	// ── blockquote ──────────────────────────────────────────────────────────
 	if strings.HasPrefix(line, "> ") {
 		inner := m.renderInline(line[2:])
-		m.out(styled(m.noColor, ansiDim, "│ "+inner) + "\n")
+		m.emit(styled(m.noColor, ansiDim, "│ "+inner) + "\n")
 		return
 	}
 
 	// ── unordered list ──────────────────────────────────────────────────────
 	if len(line) >= 2 && (line[0] == '-' || line[0] == '*' || line[0] == '+') && line[1] == ' ' {
 		bullet := styled(m.noColor, ansiBrightGreen, "•")
-		m.out(bullet + " " + m.renderInline(line[2:]) + "\n")
+		m.emit(bullet + " " + m.renderInline(line[2:]) + "\n")
 		return
 	}
 	if len(line) >= 4 && line[:2] == "  " && (line[2] == '-' || line[2] == '*' || line[2] == '+') && line[3] == ' ' {
 		bullet := styled(m.noColor, ansiGreen, "  •")
-		m.out(bullet + " " + m.renderInline(line[4:]) + "\n")
+		m.emit(bullet + " " + m.renderInline(line[4:]) + "\n")
 		return
 	}
 
 	// ── ordered list ────────────────────────────────────────────────────────
 	if num, rest, ok := parseOrderedList(line); ok {
 		numStr := styled(m.noColor, ansiBrightGreen, fmt.Sprintf("%d.", num))
-		m.out(numStr + " " + m.renderInline(rest) + "\n")
+		m.emit(numStr + " " + m.renderInline(rest) + "\n")
 		return
 	}
 
 	// ── normal paragraph line ────────────────────────────────────────────────
-	m.out(m.renderInline(line) + "\n")
+	m.emit(m.renderInline(line) + "\n")
 }
 
 // codeLine returns a code line styled for inside a fenced code block.
