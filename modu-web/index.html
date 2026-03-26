@@ -51,7 +51,7 @@
   <!-- Hero Section -->
   <header class="hero">
     <div class="hero-content">
-      <div class="badge fade-up"><span class="pulse-dot"></span> v1.0 Released</div>
+
       <h1 class="hero-title fade-up delay-1">
         Building Agent Applications,<br>
         <span class="gradient-text">Fast and Efficient.</span>
@@ -172,6 +172,148 @@
         </div>
         <h3>Business Repos</h3>
         <p>Includes NotebookLM unofficial SDK, Gen Image Repos, and a powerful Web Scraper out of the box.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Agent Teams Section -->
+  <section id="teams" class="solo-section">
+    <h2 class="section-title fade-up">Agent Teams</h2>
+    <p class="section-subtitle fade-up">Hub-and-spoke multi-agent coordination with asynchronous mailboxes, task registries, and real-time dashboards.</p>
+
+    <div class="arch-diagram fade-up">
+      <!-- Architecture SVG -->
+      <svg class="arch-svg" viewBox="0 0 780 390" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="rgba(139,92,246,0.7)"/>
+          </marker>
+          <filter id="glow-filter">
+            <feGaussianBlur stdDeviation="3" result="blur"/>
+            <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+        </defs>
+
+        <!-- Hub center (center of diagram) -->
+        <rect x="285" y="135" width="210" height="110" rx="16" fill="rgba(139,92,246,0.12)" stroke="rgba(139,92,246,0.5)" stroke-width="1.5"/>
+        <text x="390" y="177" text-anchor="middle" fill="#C4B5FD" font-size="13" font-weight="700" font-family="Inter,sans-serif">Mailbox Hub</text>
+        <text x="390" y="198" text-anchor="middle" fill="rgba(196,181,253,0.6)" font-size="11" font-family="Fira Code,monospace">Task Registry · Event Bus</text>
+        <text x="390" y="216" text-anchor="middle" fill="rgba(52,211,153,0.55)" font-size="10" font-family="Fira Code,monospace">SQLite Store</text>
+
+        <!-- Planner Agent (top) -->
+        <rect x="310" y="20" width="160" height="60" rx="12" fill="rgba(59,130,246,0.1)" stroke="rgba(59,130,246,0.4)" stroke-width="1.5"/>
+        <text x="390" y="46" text-anchor="middle" fill="#93C5FD" font-size="12" font-weight="600" font-family="Inter,sans-serif">Planner Agent</text>
+        <text x="390" y="63" text-anchor="middle" fill="rgba(147,197,253,0.55)" font-size="10" font-family="Fira Code,monospace">inbox / outbox</text>
+        <line x1="390" y1="80" x2="390" y2="133" stroke="rgba(139,92,246,0.6)" stroke-width="1.5" marker-end="url(#arr)" stroke-dasharray="5,3"/>
+
+        <!-- Worker Agent (bottom) -->
+        <rect x="310" y="300" width="160" height="60" rx="12" fill="rgba(59,130,246,0.1)" stroke="rgba(59,130,246,0.4)" stroke-width="1.5"/>
+        <text x="390" y="327" text-anchor="middle" fill="#93C5FD" font-size="12" font-weight="600" font-family="Inter,sans-serif">Worker Agent</text>
+        <text x="390" y="344" text-anchor="middle" fill="rgba(147,197,253,0.55)" font-size="10" font-family="Fira Code,monospace">inbox / outbox</text>
+        <line x1="390" y1="247" x2="390" y2="298" stroke="rgba(139,92,246,0.6)" stroke-width="1.5" marker-end="url(#arr)" stroke-dasharray="5,3"/>
+
+        <!-- Coding Agent (left) -->
+        <rect x="55" y="155" width="165" height="60" rx="12" fill="rgba(59,130,246,0.1)" stroke="rgba(59,130,246,0.4)" stroke-width="1.5"/>
+        <text x="137" y="181" text-anchor="middle" fill="#93C5FD" font-size="12" font-weight="600" font-family="Inter,sans-serif">Coding Agent</text>
+        <text x="137" y="198" text-anchor="middle" fill="rgba(147,197,253,0.55)" font-size="10" font-family="Fira Code,monospace">inbox / outbox</text>
+        <line x1="222" y1="185" x2="283" y2="185" stroke="rgba(139,92,246,0.6)" stroke-width="1.5" marker-end="url(#arr)" stroke-dasharray="5,3"/>
+
+        <!-- Reviewer Agent (right) -->
+        <rect x="560" y="155" width="165" height="60" rx="12" fill="rgba(59,130,246,0.1)" stroke="rgba(59,130,246,0.4)" stroke-width="1.5"/>
+        <text x="643" y="181" text-anchor="middle" fill="#93C5FD" font-size="12" font-weight="600" font-family="Inter,sans-serif">Reviewer Agent</text>
+        <text x="643" y="198" text-anchor="middle" fill="rgba(147,197,253,0.55)" font-size="10" font-family="Fira Code,monospace">inbox / outbox</text>
+        <line x1="497" y1="185" x2="558" y2="185" stroke="rgba(139,92,246,0.6)" stroke-width="1.5" marker-end="url(#arr)" stroke-dasharray="5,3"/>
+      </svg>
+
+      <div class="arch-legend">
+        <div class="legend-item">
+          <span class="legend-dot" style="background:rgba(59,130,246,0.6)"></span>
+          <span>Independent Agents with typed Mailboxes</span>
+        </div>
+        <div class="legend-item">
+          <span class="legend-dot" style="background:rgba(139,92,246,0.7)"></span>
+          <span>Hub routes messages, tracks tasks &amp; events</span>
+        </div>
+        <div class="legend-item">
+          <span class="legend-dot" style="background:rgba(16,185,129,0.7)"></span>
+          <span>SQLite-backed persistence, zero external dependencies</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Coding Agent Section -->
+  <section id="coding-agent" class="solo-section">
+    <h2 class="section-title fade-up">Coding Agent</h2>
+    <p class="section-subtitle fade-up">AI-native tools designed around how LLMs think — not wrappers around CLI commands.</p>
+
+    <div class="ca-layout fade-up">
+      <div class="ca-intro">
+        <div class="ca-badge">pkg/coding_agent</div>
+        <p>Every tool is designed around how a large language model thinks and reads: structured context windows, LLM-friendly output truncation, and semantic memory — not raw shell output.</p>
+        <ul class="team-features" style="margin-top:1.5rem">
+          <li>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            Persistent sessions with context compaction
+          </li>
+          <li>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            Dynamic skill injection from SKILL.md files
+          </li>
+          <li>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            Spawn sub-agents for parallel task decomposition
+          </li>
+          <li>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            Human-in-the-loop approval &amp; slash commands
+          </li>
+        </ul>
+      </div>
+
+      <div class="ca-tools-grid">
+        <div class="ca-tool-card">
+          <div class="ca-tool-icon" style="color:#60A5FA">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          </div>
+          <div class="ca-tool-name">read_file</div>
+          <div class="ca-tool-desc">Chunked reads with line numbers — LLM sees exactly what it needs</div>
+        </div>
+        <div class="ca-tool-card">
+          <div class="ca-tool-icon" style="color:#A78BFA">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+          </div>
+          <div class="ca-tool-name">edit_file</div>
+          <div class="ca-tool-desc">Surgical line-range edits — no full rewrites, preserves token budget</div>
+        </div>
+        <div class="ca-tool-card">
+          <div class="ca-tool-icon" style="color:#22D3EE">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          </div>
+          <div class="ca-tool-name">grep_search</div>
+          <div class="ca-tool-desc">Ripgrep-powered semantic search returning structured JSON results</div>
+        </div>
+        <div class="ca-tool-card">
+          <div class="ca-tool-icon" style="color:#34D399">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9h6M9 12h6M9 15h4"/></svg>
+          </div>
+          <div class="ca-tool-name">memory_write</div>
+          <div class="ca-tool-desc">Typed key-value memory store persisted across sessions</div>
+        </div>
+        <div class="ca-tool-card">
+          <div class="ca-tool-icon" style="color:#FB923C">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+          </div>
+          <div class="ca-tool-name">bash</div>
+          <div class="ca-tool-desc">Sandboxed execution with smart output truncation built-in</div>
+        </div>
+        <div class="ca-tool-card">
+          <div class="ca-tool-icon" style="color:#F472B6">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
+          </div>
+          <div class="ca-tool-name">spawn_subagent</div>
+          <div class="ca-tool-desc">Delegate subtasks to child agents — parallel, isolated, composable</div>
+        </div>
       </div>
     </div>
   </section>
