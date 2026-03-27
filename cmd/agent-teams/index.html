@@ -1,0 +1,874 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Modu · Agent Teams</title>
+<style>
+:root {
+  --bg:       #080810;
+  --bg-p:     #111120;
+  --bg-c:     #181826;
+  --bd:       #252535;
+  --bd-l:     #353548;
+  --txt:      #ededf5;
+  --muted:    #7878a0;
+  --accent:   #7070ff;
+  --acc-h:    #5858ee;
+  --green:    #4ade80;
+  --orange:   #fb923c;
+  --red:      #f87171;
+  --k-p: #1e293b; --k-r: #1e3a8a; --k-c: #14532d; --k-f: #7f1d1d;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--bg); color: var(--txt);
+  display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+header { height: 58px; background: var(--bg-p); border-bottom: 1px solid var(--bd);
+  display: flex; align-items: center; padding: 0 20px; flex-shrink: 0; gap: 24px; }
+.logo { font-size: 17px; font-weight: 700; color: #fff; white-space: nowrap; }
+.tabs { display: flex; gap: 4px; height: 100%; }
+.tab { cursor: pointer; display: flex; align-items: center; padding: 0 12px;
+  color: var(--muted); font-size: 14px; font-weight: 500;
+  border-bottom: 2px solid transparent; transition: all .15s; }
+.tab:hover { color: var(--txt); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.hdr-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+.conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); }
+.conn-dot.ok { background: var(--green); }
+.conn-label { font-size: 12px; color: var(--muted); }
+
+/* ── Buttons ─────────────────────────────────────────────────────────────── */
+.btn { background: var(--accent); color: #fff; border: none;
+  padding: 7px 14px; border-radius: 6px; cursor: pointer;
+  font-size: 13px; font-weight: 500; transition: background .15s; }
+.btn:hover:not(:disabled) { background: var(--acc-h); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn-ghost { background: transparent; border: 1px solid var(--bd-l); color: var(--muted);
+  padding: 7px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+.btn-ghost:hover { color: var(--txt); border-color: var(--muted); }
+.btn-danger { background: #7f1d1d; }
+.btn-danger:hover { background: #991b1b; }
+.btn-demo { background: linear-gradient(135deg, #7070ff, #a855f7);
+  font-weight: 600; padding: 7px 16px; }
+.btn-demo:hover:not(:disabled) { background: linear-gradient(135deg, #5858ee, #9333ea); }
+
+/* ── Views ───────────────────────────────────────────────────────────────── */
+main { flex: 1; overflow: hidden; position: relative; }
+.view { display: none; padding: 24px; height: 100%; overflow-y: auto; }
+.view.active { display: block; }
+#view-forum.active { display: flex; padding: 0; overflow: hidden; }
+.view-hdr { display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 20px; }
+.view-hdr h2 { font-size: 18px; font-weight: 600; }
+
+/* ── Grid / Cards ────────────────────────────────────────────────────────── */
+.grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.card { background: var(--bg-c); border: 1px solid var(--bd);
+  border-radius: 10px; padding: 16px; }
+.card:hover { border-color: var(--bd-l); }
+
+/* ── Agent card ──────────────────────────────────────────────────────────── */
+.agent-card { display: flex; align-items: flex-start; gap: 12px; }
+.avatar { width: 40px; height: 40px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 14px; flex-shrink: 0; }
+.agent-info { flex: 1; min-width: 0; }
+.agent-name { font-weight: 600; font-size: 15px; }
+.agent-role { color: var(--muted); font-size: 12px; margin-top: 2px; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+.agent-footer { display: flex; justify-content: space-between; align-items: center;
+  margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--bd); }
+.status-chip { display: flex; align-items: center; gap: 5px; font-size: 12px; }
+.dot { width: 7px; height: 7px; border-radius: 50%; }
+.dot.idle { background: var(--green); }
+.dot.busy { background: var(--orange); animation: pulse 1s infinite alternate; }
+@keyframes pulse { from { opacity: 1; } to { opacity: .4; } }
+.task-link { font-size: 11px; color: var(--accent); }
+
+/* ── Project card ────────────────────────────────────────────────────────── */
+.proj-status { font-size: 11px; padding: 2px 8px; border-radius: 20px; font-weight: 500; }
+.proj-status.active { background: rgba(74,222,128,.15); color: var(--green); }
+.proj-status.completed { background: rgba(107,107,255,.15); color: var(--accent); }
+
+/* ── Kanban ──────────────────────────────────────────────────────────────── */
+.board { display: flex; gap: 16px; height: calc(100% - 56px); overflow-x: auto; }
+.k-col { flex: 1; min-width: 280px; background: rgba(255,255,255,.02);
+  border-radius: 10px; border: 1px solid var(--bd);
+  display: flex; flex-direction: column; }
+.k-hdr { padding: 10px 14px; font-size: 13px; font-weight: 600;
+  border-bottom: 1px solid var(--bd); display: flex; justify-content: space-between; }
+.k-cnt { background: rgba(255,255,255,.1); border-radius: 20px;
+  padding: 1px 7px; font-size: 11px; }
+.k-body { padding: 10px; flex: 1; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 10px; }
+.task-card { background: var(--bg-c); border: 1px solid var(--bd);
+  border-radius: 8px; padding: 11px 12px; cursor: pointer; }
+.task-card:hover { border-color: var(--accent); }
+.task-tid { font-size: 11px; color: var(--accent); margin-bottom: 5px; }
+.task-desc { font-size: 13px; line-height: 1.45; color: #ddd; margin-bottom: 10px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.task-meta { display: flex; justify-content: space-between; align-items: center; }
+.assignee-chips { display: flex; gap: 4px; flex-wrap: wrap; }
+.chip { display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 6px;
+  font-size: 10px; font-weight: 700; color: #fff; }
+.by-label { font-size: 11px; color: var(--muted); }
+
+/* ── Forum ───────────────────────────────────────────────────────────────── */
+.f-sidebar { width: 280px; border-right: 1px solid var(--bd);
+  background: var(--bg-p); display: flex; flex-direction: column; overflow: hidden; }
+.f-sidebar-hdr { padding: 14px 16px; font-size: 13px; font-weight: 600;
+  border-bottom: 1px solid var(--bd); color: var(--muted); flex-shrink: 0; }
+.f-list { flex: 1; overflow-y: auto; }
+.f-item { padding: 12px 16px; border-bottom: 1px solid var(--bd);
+  cursor: pointer; transition: background .15s; }
+.f-item:hover { background: var(--bg-c); }
+.f-item.active { background: rgba(112,112,255,.08); border-left: 3px solid var(--accent); }
+.f-item-id { font-size: 11px; color: var(--accent); margin-bottom: 3px; }
+.f-item-desc { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.f-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.f-chat { flex: 1; overflow-y: auto; padding: 20px 24px;
+  display: flex; flex-direction: column; gap: 16px; }
+.f-empty { display: flex; align-items: center; justify-content: center;
+  height: 100%; color: var(--muted); font-size: 14px; }
+.f-input-row { padding: 12px 20px; border-top: 1px solid var(--bd);
+  background: var(--bg-p); display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+.f-input-row select, .f-input-row input {
+  background: var(--bg-c); border: 1px solid var(--bd); color: var(--txt);
+  padding: 7px 10px; border-radius: 6px; font-size: 13px; outline: none; }
+.f-input-row select:focus, .f-input-row input:focus { border-color: var(--accent); }
+.f-input-row input { flex: 1; }
+.msg { display: flex; gap: 12px; }
+.msg-av { width: 32px; height: 32px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700; color: #fff; flex-shrink: 0; }
+.msg-body { flex: 1; }
+.msg-meta { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.msg-meta strong { color: var(--txt); font-weight: 500; margin-right: 6px; }
+.msg-type-tag { font-size: 10px; color: var(--accent);
+  border: 1px solid rgba(112,112,255,.4); border-radius: 3px;
+  padding: 0 4px; margin-right: 6px; vertical-align: middle; }
+.msg-bubble { background: var(--bg-c); border: 1px solid var(--bd);
+  border-radius: 8px; padding: 10px 14px; font-size: 13px; line-height: 1.5;
+  display: inline-block; max-width: 92%; white-space: pre-wrap; word-break: break-word; }
+.msg.system .msg-bubble { background: rgba(112,112,255,.08);
+  border-color: rgba(112,112,255,.25); }
+
+/* ── Task detail panel ───────────────────────────────────────────────────── */
+.task-panel { position: fixed; right: -500px; top: 58px; bottom: 0; width: 460px;
+  background: var(--bg-p); border-left: 1px solid var(--bd);
+  z-index: 40; transition: right .28s ease;
+  display: flex; flex-direction: column; overflow: hidden; }
+.task-panel.open { right: 0; }
+.tp-bar { padding: 14px 16px; border-bottom: 1px solid var(--bd);
+  display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
+.tp-tid { font-size: 13px; color: var(--accent); font-weight: 600; }
+.status-badge { display: inline-block; font-size: 11px; padding: 2px 8px;
+  border-radius: 20px; font-weight: 600; margin-left: 8px; }
+.badge-pending  { background: rgba(30,41,59,.8);  color: #93c5fd; }
+.badge-running  { background: rgba(30,58,138,.8); color: #60a5fa; }
+.badge-completed{ background: rgba(20,83,45,.8);  color: var(--green); }
+.badge-failed   { background: rgba(127,29,29,.8); color: var(--red); }
+.icon-btn { background: none; border: none; color: var(--muted); cursor: pointer;
+  font-size: 16px; padding: 4px 8px; border-radius: 4px; }
+.icon-btn:hover { color: var(--txt); background: rgba(255,255,255,.06); }
+.tp-scroll { flex: 1; overflow-y: auto; }
+.tp-sec { padding: 14px 16px; border-bottom: 1px solid var(--bd); }
+.tp-label { font-size: 11px; color: var(--muted); font-weight: 600;
+  text-transform: uppercase; letter-spacing: .04em; margin-bottom: 8px; }
+.tp-desc-text { font-size: 14px; line-height: 1.55; color: var(--txt); }
+.tp-result-box { font-size: 12px; background: var(--bg-c); border: 1px solid var(--bd);
+  border-radius: 6px; padding: 10px 12px; white-space: pre-wrap; word-break: break-word;
+  line-height: 1.5; color: var(--green); max-height: 200px; overflow-y: auto; }
+.tp-error-box { font-size: 13px; color: var(--red); padding: 8px 10px;
+  background: rgba(127,29,29,.2); border-radius: 6px; }
+.tp-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.tp-chip { display: inline-flex; align-items: center; gap: 6px;
+  background: var(--bg-c); border: 1px solid var(--bd);
+  border-radius: 6px; padding: 4px 8px; font-size: 12px; }
+.tp-conv { display: flex; flex-direction: column; gap: 12px; }
+.tp-action-form { display: flex; flex-direction: column; gap: 10px; }
+.tp-action-form select, .tp-action-form input, .tp-action-form textarea {
+  background: var(--bg); border: 1px solid var(--bd-l); color: var(--txt);
+  padding: 8px 10px; border-radius: 6px; font-size: 13px; outline: none; width: 100%; }
+.tp-action-form select:focus, .tp-action-form input:focus,
+.tp-action-form textarea:focus { border-color: var(--accent); }
+.tp-action-form textarea { resize: vertical; min-height: 70px; }
+.tp-action-row { display: flex; gap: 8px; }
+
+/* ── Modal ───────────────────────────────────────────────────────────────── */
+.overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6);
+  display: none; justify-content: center; align-items: center;
+  z-index: 100; backdrop-filter: blur(2px); }
+.overlay.active { display: flex; }
+.modal { background: var(--bg-p); border: 1px solid var(--bd); border-radius: 12px;
+  width: 380px; max-width: 92%; padding: 22px;
+  box-shadow: 0 12px 32px rgba(0,0,0,.5); }
+.modal h3 { margin-bottom: 18px; font-size: 16px; }
+.fg { margin-bottom: 14px; display: flex; flex-direction: column; gap: 5px; }
+.fg label { font-size: 12px; color: var(--muted); }
+.fg input, .fg select { background: var(--bg); border: 1px solid var(--bd-l);
+  color: var(--txt); padding: 9px 10px; border-radius: 6px; font-size: 13px; outline: none; }
+.fg input:focus, .fg select:focus { border-color: var(--accent); }
+.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+
+/* ── Toasts ──────────────────────────────────────────────────────────────── */
+#toasts { position: fixed; bottom: 20px; right: 20px; z-index: 200;
+  display: flex; flex-direction: column-reverse; gap: 8px; }
+.toast { background: var(--bg-p); border: 1px solid var(--bd); border-radius: 8px;
+  padding: 10px 14px; font-size: 13px; max-width: 300px;
+  opacity: 0; transform: translateY(8px); transition: all .2s;
+  box-shadow: 0 4px 12px rgba(0,0,0,.4); }
+.toast.show { opacity: 1; transform: translateY(0); }
+.toast.info  { border-left: 3px solid var(--accent); }
+.toast.ok    { border-left: 3px solid var(--green); }
+.toast.err   { border-left: 3px solid var(--red); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Agent Teams</div>
+  <div class="tabs">
+    <div class="tab active" data-view="view-agents">Agents</div>
+    <div class="tab" data-view="view-projects">Projects</div>
+    <div class="tab" data-view="view-board">Board</div>
+    <div class="tab" data-view="view-forum">Forum</div>
+  </div>
+  <div class="hdr-right">
+    <button class="btn" style="background:#16a34a;font-size:13px;padding:7px 14px" id="btn-article" onclick="openArticlePanel()">✍ 发起文章</button>
+    <button class="btn btn-demo" id="btn-demo" onclick="runDemo()">▶ Run Demo</button>
+    <button class="btn" style="font-size:12px;padding:6px 12px" onclick="openModal('m-agent')">+ Agent</button>
+    <div style="display:flex;align-items:center;gap:6px">
+      <div class="conn-dot" id="conn-dot"></div>
+      <span class="conn-label" id="conn-label">Connecting</span>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div id="view-agents" class="view active">
+    <div class="view-hdr">
+      <h2>Agents</h2>
+    </div>
+    <div class="grid" id="agents-grid"></div>
+  </div>
+
+  <div id="view-projects" class="view">
+    <div class="view-hdr">
+      <h2>Projects</h2>
+      <button class="btn" onclick="openModal('m-proj')">+ New Project</button>
+    </div>
+    <div class="grid" id="projs-grid"></div>
+  </div>
+
+  <div id="view-board" class="view">
+    <div class="view-hdr">
+      <h2>Task Board</h2>
+      <div style="display:flex;gap:10px;align-items:center">
+        <select id="proj-filter" style="background:var(--bg-c);border:1px solid var(--bd-l);color:var(--txt);padding:6px 10px;border-radius:6px;font-size:13px" onchange="renderBoard()">
+          <option value="">All Projects</option>
+        </select>
+        <button class="btn" onclick="openModal('m-task')">+ New Task</button>
+      </div>
+    </div>
+    <div class="board">
+      <div class="k-col">
+        <div class="k-hdr" style="border-top:3px solid var(--k-p)">Pending<span class="k-cnt" id="cnt-pending">0</span></div>
+        <div class="k-body" id="col-pending"></div>
+      </div>
+      <div class="k-col">
+        <div class="k-hdr" style="border-top:3px solid var(--k-r)">Running<span class="k-cnt" id="cnt-running">0</span></div>
+        <div class="k-body" id="col-running"></div>
+      </div>
+      <div class="k-col">
+        <div class="k-hdr" style="border-top:3px solid var(--k-c)">Completed<span class="k-cnt" id="cnt-completed">0</span></div>
+        <div class="k-body" id="col-completed"></div>
+      </div>
+      <div class="k-col">
+        <div class="k-hdr" style="border-top:3px solid var(--k-f)">Failed<span class="k-cnt" id="cnt-failed">0</span></div>
+        <div class="k-body" id="col-failed"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="view-forum" class="view">
+    <div class="f-sidebar">
+      <div class="f-sidebar-hdr">Threads</div>
+      <div class="f-list" id="forum-list"></div>
+    </div>
+    <div class="f-main">
+      <div class="f-chat" id="forum-chat"><div class="f-empty">Select a task thread</div></div>
+      <div id="forum-input" style="display:none" class="f-input-row">
+        <select id="f-from" title="From"></select>
+        <select id="f-to" title="To"></select>
+        <input type="text" id="f-msg" placeholder="Type a message…" onkeypress="if(event.key==='Enter')sendChat()">
+        <button class="btn" onclick="sendChat()">Send</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<!-- Task detail panel -->
+<div id="task-panel" class="task-panel">
+  <div class="tp-bar">
+    <div>
+      <span class="tp-tid" id="tp-id"></span>
+      <span class="status-badge" id="tp-badge"></span>
+    </div>
+    <button class="icon-btn" onclick="closePanel()">✕</button>
+  </div>
+  <div class="tp-scroll">
+    <div class="tp-sec">
+      <div class="tp-label">Description</div>
+      <div class="tp-desc-text" id="tp-desc"></div>
+    </div>
+    <div class="tp-sec" id="tp-proj-sec" style="display:none">
+      <div class="tp-label">Project</div>
+      <div id="tp-proj"></div>
+    </div>
+    <div class="tp-sec">
+      <div class="tp-label">Assignees</div>
+      <div class="tp-chips" id="tp-assignees"></div>
+    </div>
+    <div class="tp-sec" id="tp-result-sec" style="display:none">
+      <div class="tp-label">Result</div>
+      <pre class="tp-result-box" id="tp-result"></pre>
+    </div>
+    <div class="tp-sec" id="tp-error-sec" style="display:none">
+      <div class="tp-label">Error</div>
+      <div class="tp-error-box" id="tp-error"></div>
+    </div>
+    <div class="tp-sec" id="tp-action-sec">
+      <div class="tp-label">Actions</div>
+      <div id="tp-actions"></div>
+    </div>
+    <div class="tp-sec">
+      <div class="tp-label">Conversation</div>
+      <div class="tp-conv" id="tp-conv"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Modals -->
+<div class="overlay" id="m-agent">
+  <div class="modal">
+    <h3>New Agent</h3>
+    <div class="fg"><label>Agent ID</label><input id="ma-id" placeholder="e.g. researcher"></div>
+    <div class="fg"><label>Role</label><input id="ma-role" placeholder="e.g. Lead Researcher"></div>
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeModals()">Cancel</button>
+      <button class="btn" onclick="createAgent()">Create</button>
+    </div>
+  </div>
+</div>
+<div class="overlay" id="m-proj">
+  <div class="modal">
+    <h3>New Project</h3>
+    <div class="fg"><label>Name</label><input id="mp-name"></div>
+    <div class="fg"><label>Created By</label><select id="mp-by"></select></div>
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeModals()">Cancel</button>
+      <button class="btn" onclick="createProj()">Create</button>
+    </div>
+  </div>
+</div>
+<div class="overlay" id="m-task">
+  <div class="modal">
+    <h3>New Task</h3>
+    <div class="fg"><label>Description</label><input id="mt-desc"></div>
+    <div class="fg"><label>Project (optional)</label><select id="mt-proj"><option value="">None</option></select></div>
+    <div class="fg"><label>Created By</label><select id="mt-by"></select></div>
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeModals()">Cancel</button>
+      <button class="btn" onclick="createTask()">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- Article creation panel -->
+<div class="overlay" id="m-article">
+  <div class="modal" style="width:460px;max-width:95%">
+    <h3 style="margin-bottom:6px">✍ 发起文章创作</h3>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:18px">4个 AI Agent 协作完成：调研 → 选题 → 写稿 → 审稿 → 编者按</p>
+    <div class="fg">
+      <label>指定主题（可选）</label>
+      <input id="art-topic" placeholder="例：AI时代创意工作者的焦虑与突破">
+    </div>
+    <div class="fg">
+      <label>创作方向（无主题时必填）</label>
+      <input id="art-niche" placeholder="例：AI创业、职场效率、科技与人文…">
+    </div>
+    <div class="fg" style="flex-direction:row;align-items:center;gap:10px">
+      <input type="checkbox" id="art-auto" style="width:16px;height:16px;accent-color:var(--accent)">
+      <label for="art-auto" style="font-size:13px;color:var(--txt);cursor:pointer">自动抓取今日热点（TopHub）</label>
+    </div>
+    <div style="background:rgba(112,112,255,.08);border:1px solid rgba(112,112,255,.2);border-radius:8px;padding:12px;font-size:12px;color:var(--muted);margin-bottom:16px">
+      <div style="color:var(--accent);font-weight:600;margin-bottom:6px">需要先启动内容团队</div>
+      运行：<code style="color:var(--txt)">go run . -wechat</code><br>
+      设置模型：<code style="color:var(--txt)">CONTENT_MODEL=qwen2.5 CONTENT_API_URL=http://localhost:1234/v1</code>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeModals()">取消</button>
+      <button class="btn" style="background:#16a34a" id="btn-start-article" onclick="startArticle()">开始创作</button>
+    </div>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+<script>
+// ── State ────────────────────────────────────────────────────────────────────
+let agents = {}, projects = {}, tasks = {}, convs = {}, activeThread = null;
+
+// ── Tabs ─────────────────────────────────────────────────────────────────────
+document.querySelectorAll('.tab').forEach(t => {
+  t.onclick = () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+    document.querySelectorAll('.view').forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    document.getElementById(t.dataset.view).classList.add('active');
+  };
+});
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const AV_COLORS = ['#6b6bff','#ff6b6b','#6bffb8','#ffb86b','#b86bff','#6bb8ff','#ff6bcc'];
+function avColor(id) {
+  let h = 0; for (const c of id) h = (h * 31 + c.charCodeAt(0)) & 0xffff;
+  return AV_COLORS[h % AV_COLORS.length];
+}
+function av(id) {
+  return `<div class="chip" style="background:${avColor(id)}">${id.slice(0,2).toUpperCase()}</div>`;
+}
+function badge(status) {
+  return `<span class="status-badge badge-${status}">${status}</span>`;
+}
+function timeStr(t) {
+  return t ? new Date(t).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '';
+}
+function projName(id) {
+  return id && projects[id] ? projects[id].name : id;
+}
+
+// ── Toasts ────────────────────────────────────────────────────────────────────
+function toast(msg, type = 'info') {
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.textContent = msg;
+  document.getElementById('toasts').appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
+  setTimeout(() => {
+    el.classList.remove('show');
+    setTimeout(() => el.remove(), 220);
+  }, 3500);
+}
+
+// ── Renders ───────────────────────────────────────────────────────────────────
+function renderAgents() {
+  document.getElementById('agents-grid').innerHTML =
+    Object.values(agents).map(a => `
+      <div class="card">
+        <div class="agent-card">
+          <div class="avatar" style="background:${avColor(a.id)}">${a.id.slice(0,2).toUpperCase()}</div>
+          <div class="agent-info">
+            <div class="agent-name">${a.id}</div>
+            <div class="agent-role">${a.role || '—'}</div>
+          </div>
+        </div>
+        <div class="agent-footer">
+          <div class="status-chip">
+            <div class="dot ${a.status === 'busy' ? 'busy' : 'idle'}"></div>
+            ${a.status}
+          </div>
+          ${a.current_task ? `<span class="task-link" onclick="openPanel('${a.current_task}')">${a.current_task}</span>` : ''}
+        </div>
+      </div>`).join('');
+  syncSelects();
+}
+
+function renderProjects() {
+  const tasksByProj = {};
+  Object.values(tasks).forEach(t => {
+    if (t.project_id) tasksByProj[t.project_id] = (tasksByProj[t.project_id] || 0) + 1;
+  });
+  document.getElementById('projs-grid').innerHTML =
+    Object.values(projects).map(p => `
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
+          <div>
+            <div style="font-weight:600;font-size:15px">${p.name}</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:2px">${p.id} · by ${p.created_by}</div>
+          </div>
+          <span class="proj-status ${p.status}">${p.status}</span>
+        </div>
+        <div style="font-size:12px;color:var(--muted)">${tasksByProj[p.id] || 0} task(s)</div>
+        ${p.status !== 'completed' ? `<button class="btn" style="margin-top:10px;font-size:12px;padding:5px 10px" onclick="completeProj('${p.id}')">Mark Completed</button>` : ''}
+      </div>`).join('');
+  syncSelects();
+}
+
+function renderBoard() {
+  const filter = document.getElementById('proj-filter').value;
+  const cols = { pending: [], running: [], completed: [], failed: [] };
+  Object.values(tasks).forEach(t => {
+    if (filter && t.project_id !== filter) return;
+    if (cols[t.status]) cols[t.status].push(t);
+  });
+  ['pending','running','completed','failed'].forEach(s => {
+    document.getElementById(`cnt-${s}`).textContent = cols[s].length;
+    document.getElementById(`col-${s}`).innerHTML = cols[s].map(t => `
+      <div class="task-card" onclick="openPanel('${t.id}')">
+        <div class="task-tid">${t.id}${t.project_id ? ` · ${projName(t.project_id)}` : ''}</div>
+        <div class="task-desc">${t.description}</div>
+        <div class="task-meta">
+          <div class="assignee-chips">${(t.assignees||[]).map(a=>av(a)).join('') || '<span style="color:var(--muted);font-size:11px">Unassigned</span>'}</div>
+          <span class="by-label">by ${t.created_by}</span>
+        </div>
+      </div>`).join('');
+  });
+  renderForumList();
+}
+
+// ── Forum ─────────────────────────────────────────────────────────────────────
+function renderForumList() {
+  document.getElementById('forum-list').innerHTML =
+    Object.values(tasks).sort((a,b) => b.created_at > a.created_at ? 1 : -1).map(t => `
+      <div class="f-item ${activeThread === t.id ? 'active' : ''}" onclick="selectThread('${t.id}')">
+        <div class="f-item-id">${t.id} ${badge(t.status)}</div>
+        <div class="f-item-desc">${t.description}</div>
+      </div>`).join('');
+}
+
+function selectThread(tid) {
+  activeThread = tid;
+  renderForumList();
+  if (!convs[tid]) {
+    fetch('/api/conversations/' + tid).then(r => r.json()).then(d => {
+      convs[tid] = d || [];
+      renderForumChat();
+    });
+  } else {
+    renderForumChat();
+  }
+}
+
+function renderForumChat() {
+  const chat = document.getElementById('forum-chat');
+  const inp = document.getElementById('forum-input');
+  if (!activeThread) {
+    chat.innerHTML = '<div class="f-empty">Select a task thread</div>';
+    inp.style.display = 'none';
+    return;
+  }
+  const entries = convs[activeThread] || [];
+  if (!entries.length) {
+    chat.innerHTML = '<div class="f-empty">No messages yet</div>';
+  } else {
+    chat.innerHTML = entries.map(e => `
+      <div class="msg ${e.from === 'system' ? 'system' : ''}">
+        <div class="msg-av" style="background:${avColor(e.from)}">${e.from.slice(0,2).toUpperCase()}</div>
+        <div class="msg-body">
+          <div class="msg-meta">
+            <strong>${e.from}</strong>
+            <span>→ ${e.to}</span>
+            <span class="msg-type-tag">${e.msg_type}</span>
+            <span style="float:right;font-size:11px">${timeStr(e.at)}</span>
+          </div>
+          <div class="msg-bubble">${e.content}</div>
+        </div>
+      </div>`).join('');
+    setTimeout(() => chat.scrollTop = chat.scrollHeight, 50);
+  }
+  const agOpts = Object.keys(agents).map(id => `<option value="${id}">${id}</option>`).join('');
+  document.getElementById('f-from').innerHTML = agOpts;
+  document.getElementById('f-to').innerHTML = agOpts;
+  inp.style.display = 'flex';
+}
+
+function sendChat() {
+  const text = document.getElementById('f-msg').value.trim();
+  if (!text || !activeThread) return;
+  apiReq('/api/messages', 'POST', {
+    from: document.getElementById('f-from').value,
+    to: document.getElementById('f-to').value,
+    task_id: activeThread,
+    type: 'chat',
+    text,
+  }).then(() => { document.getElementById('f-msg').value = ''; });
+}
+
+// ── Task detail panel ─────────────────────────────────────────────────────────
+function openPanel(tid) {
+  const t = tasks[tid];
+  if (!t) return;
+  document.getElementById('tp-id').textContent = tid;
+  document.getElementById('tp-badge').className = `status-badge badge-${t.status}`;
+  document.getElementById('tp-badge').textContent = t.status;
+  document.getElementById('tp-desc').textContent = t.description;
+
+  const projSec = document.getElementById('tp-proj-sec');
+  if (t.project_id && projects[t.project_id]) {
+    projSec.style.display = '';
+    document.getElementById('tp-proj').textContent = `${t.project_id} · ${projects[t.project_id].name}`;
+  } else { projSec.style.display = 'none'; }
+
+  document.getElementById('tp-assignees').innerHTML =
+    (t.assignees || []).length
+      ? t.assignees.map(a => `<div class="tp-chip">${av(a)}<span>${a}</span></div>`).join('')
+      : '<span style="color:var(--muted);font-size:13px">Unassigned</span>';
+
+  const resSec = document.getElementById('tp-result-sec');
+  const errSec = document.getElementById('tp-error-sec');
+  resSec.style.display = t.result ? '' : 'none';
+  errSec.style.display = t.error ? '' : 'none';
+  if (t.result) document.getElementById('tp-result').textContent = t.result;
+  if (t.error)  document.getElementById('tp-error').textContent = t.error;
+
+  renderPanelActions(t);
+  renderPanelConv(tid);
+
+  document.getElementById('task-panel').classList.add('open');
+}
+
+function closePanel() {
+  document.getElementById('task-panel').classList.remove('open');
+}
+
+function renderPanelActions(t) {
+  const agOpts = () => Object.values(agents).map(a =>
+    `<option value="${a.id}">${a.id} (${a.role || 'no role'})</option>`).join('');
+  const sec = document.getElementById('tp-action-sec');
+  const div = document.getElementById('tp-actions');
+
+  if (t.status === 'pending') {
+    div.innerHTML = `
+      <div class="tp-action-form">
+        <select id="pa-agent">${agOpts()}</select>
+        <div class="tp-action-row">
+          <button class="btn" onclick="paAssign('${t.id}')">Assign & Start</button>
+        </div>
+      </div>`;
+    sec.style.display = '';
+  } else if (t.status === 'running') {
+    div.innerHTML = `
+      <div class="tp-action-form">
+        <select id="pa-comp-agent">${agOpts()}</select>
+        <textarea id="pa-result" placeholder="Result…"></textarea>
+        <div class="tp-action-row">
+          <button class="btn" onclick="paComplete('${t.id}')">Complete</button>
+          <button class="btn btn-danger" onclick="paFail('${t.id}')">Fail</button>
+        </div>
+        <input id="pa-err" placeholder="Error message (for Fail)" style="background:var(--bg);border:1px solid var(--bd-l);color:var(--txt);padding:8px 10px;border-radius:6px;font-size:13px;outline:none;width:100%">
+      </div>`;
+    sec.style.display = '';
+  } else {
+    div.innerHTML = '';
+    sec.style.display = 'none';
+  }
+}
+
+function renderPanelConv(tid) {
+  const loadAndRender = data => {
+    convs[tid] = data || [];
+    const entries = convs[tid];
+    document.getElementById('tp-conv').innerHTML = entries.length
+      ? entries.map(e => `
+        <div class="msg">
+          <div class="msg-av" style="background:${avColor(e.from)}">${e.from.slice(0,2).toUpperCase()}</div>
+          <div class="msg-body">
+            <div class="msg-meta">
+              <strong>${e.from}</strong>→ ${e.to}
+              <span class="msg-type-tag">${e.msg_type}</span>
+              <span style="float:right;font-size:11px">${timeStr(e.at)}</span>
+            </div>
+            <div class="msg-bubble">${e.content}</div>
+          </div>
+        </div>`).join('')
+      : '<div style="color:var(--muted);font-size:13px">No messages yet</div>';
+  };
+  if (convs[tid]) { loadAndRender(convs[tid]); return; }
+  fetch('/api/conversations/' + tid).then(r => r.json()).then(loadAndRender);
+}
+
+async function paAssign(tid) {
+  const agent = document.getElementById('pa-agent').value;
+  await apiReq(`/api/tasks/${tid}/assign`, 'POST', { agent_id: agent });
+  await apiReq(`/api/tasks/${tid}/start`, 'POST', {});
+}
+async function paComplete(tid) {
+  const agent = document.getElementById('pa-comp-agent').value;
+  const result = document.getElementById('pa-result').value;
+  await apiReq(`/api/tasks/${tid}/complete`, 'POST', { agent_id: agent, result });
+}
+async function paFail(tid) {
+  const err = document.getElementById('pa-err').value;
+  await apiReq(`/api/tasks/${tid}/fail`, 'POST', { error: err });
+}
+
+// ── Modals ────────────────────────────────────────────────────────────────────
+function openModal(id) { syncSelects(); document.getElementById(id).classList.add('active'); }
+function closeModals() { document.querySelectorAll('.overlay').forEach(e => e.classList.remove('active')); }
+document.querySelectorAll('.overlay').forEach(o => o.onclick = e => { if (e.target === o) closeModals(); });
+
+function syncSelects() {
+  const agOpts = Object.values(agents).map(a => `<option value="${a.id}">${a.id} (${a.role || '—'})</option>`).join('');
+  const projOpts = Object.values(projects).map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+  ['mp-by','mt-by'].forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = agOpts; });
+  const mt = document.getElementById('mt-proj');
+  if (mt) mt.innerHTML = '<option value="">None</option>' + projOpts;
+  const pf = document.getElementById('proj-filter');
+  if (pf) { const v = pf.value; pf.innerHTML = '<option value="">All Projects</option>' + projOpts; pf.value = v; }
+}
+
+// ── API helpers ───────────────────────────────────────────────────────────────
+async function apiReq(path, method, body) {
+  const res = await fetch(path, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    const txt = await res.text();
+    toast('Error: ' + txt, 'err');
+    throw new Error(txt);
+  }
+  closeModals();
+  return res.json();
+}
+
+async function createAgent() {
+  const id = document.getElementById('ma-id').value.trim();
+  const role = document.getElementById('ma-role').value.trim();
+  if (!id) { toast('Agent ID required', 'err'); return; }
+  await apiReq('/api/agents', 'POST', { id, role });
+  document.getElementById('ma-id').value = '';
+  document.getElementById('ma-role').value = '';
+}
+async function createProj() {
+  const name = document.getElementById('mp-name').value.trim();
+  const creator_id = document.getElementById('mp-by').value;
+  if (!name) { toast('Project name required', 'err'); return; }
+  await apiReq('/api/projects', 'POST', { name, creator_id });
+  document.getElementById('mp-name').value = '';
+}
+async function createTask() {
+  const description = document.getElementById('mt-desc').value.trim();
+  const creator_id = document.getElementById('mt-by').value;
+  const project_id = document.getElementById('mt-proj').value;
+  if (!description) { toast('Description required', 'err'); return; }
+  await apiReq('/api/tasks', 'POST', { description, creator_id, project_id });
+  document.getElementById('mt-desc').value = '';
+}
+async function completeProj(id) {
+  await apiReq(`/api/projects/${id}/complete`, 'PATCH');
+}
+function openArticlePanel() { openModal('m-article'); }
+
+async function startArticle() {
+  const topic = document.getElementById('art-topic').value.trim();
+  const niche = document.getElementById('art-niche').value.trim();
+  const auto  = document.getElementById('art-auto').checked;
+  if (!topic && !niche) { toast('请输入主题或创作方向', 'err'); return; }
+  const btn = document.getElementById('btn-start-article');
+  btn.disabled = true; btn.textContent = '创作中…';
+  toast('文章创作流程已启动，可在 Board 和 Forum 实时查看进度', 'ok');
+  try {
+    await apiReq('/api/article/run', 'POST', { topic, niche, auto_discover: auto });
+    document.getElementById('art-topic').value = '';
+    document.getElementById('art-niche').value = '';
+  } catch(_) {}
+  setTimeout(() => { btn.disabled = false; btn.textContent = '开始创作'; }, 3000);
+}
+
+async function runDemo() {
+  const btn = document.getElementById('btn-demo');
+  btn.disabled = true;
+  btn.textContent = '⏳ Running…';
+  toast('Demo simulation started!', 'info');
+  try {
+    await apiReq('/api/demo/run', 'POST', {});
+  } catch(_) {}
+  setTimeout(() => { btn.disabled = false; btn.textContent = '▶ Run Demo'; }, 32000);
+}
+
+// ── SSE ───────────────────────────────────────────────────────────────────────
+const sse = new EventSource('/events');
+sse.onopen = () => {
+  document.getElementById('conn-dot').classList.add('ok');
+  document.getElementById('conn-label').textContent = 'Connected';
+};
+sse.onerror = () => {
+  document.getElementById('conn-dot').classList.remove('ok');
+  document.getElementById('conn-label').textContent = 'Disconnected';
+};
+
+function handleSSE(type, raw) {
+  let d;
+  try { d = JSON.parse(raw); } catch { return; }
+  switch (type) {
+    case 'snapshot.agents':   d.forEach(a => agents[a.id] = a);   renderAgents(); break;
+    case 'snapshot.tasks':    d.forEach(t => tasks[t.id] = t);    renderBoard(); break;
+    case 'snapshot.projects': d.forEach(p => projects[p.id] = p); renderProjects(); break;
+
+    case 'agent.registered':
+    case 'agent.updated':
+      agents[d.agent_id] = d.data;
+      renderAgents();
+      if (type === 'agent.updated' && d.data) {
+        const a = d.data;
+        if (a.status === 'busy' && a.current_task) toast(`${a.id} started ${a.current_task}`, 'info');
+        if (a.status === 'idle' && a.current_task === '') toast(`${a.id} is now idle`, 'ok');
+      }
+      break;
+    case 'agent.evicted':
+      delete agents[d.agent_id];
+      renderAgents();
+      break;
+
+    case 'project.created':
+    case 'project.updated':
+      projects[d.project_id] = d.data;
+      renderProjects(); renderBoard();
+      if (type === 'project.created') toast(`Project created: ${d.data.name}`, 'ok');
+      if (type === 'project.updated' && d.data.status === 'completed') toast(`Project ${d.data.name} completed ✓`, 'ok');
+      break;
+
+    case 'task.created':
+    case 'task.updated':
+      tasks[d.task_id] = d.data;
+      renderBoard();
+      if (type === 'task.created') toast(`New task: ${d.task_id}`, 'info');
+      if (type === 'task.updated' && d.data.status === 'completed') toast(`${d.task_id} completed ✓`, 'ok');
+      if (type === 'task.updated' && d.data.status === 'failed')    toast(`${d.task_id} failed`, 'err');
+      // refresh open panel if it's this task
+      if (document.getElementById('task-panel').classList.contains('open') &&
+          document.getElementById('tp-id').textContent === d.task_id) {
+        openPanel(d.task_id);
+      }
+      break;
+
+    case 'conversation.added':
+      if (!convs[d.task_id]) convs[d.task_id] = [];
+      convs[d.task_id].push(d.data);
+      if (activeThread === d.task_id) renderForumChat();
+      // update panel conv if open
+      if (document.getElementById('task-panel').classList.contains('open') &&
+          document.getElementById('tp-id').textContent === d.task_id) {
+        renderPanelConv(d.task_id);
+      }
+      toast(`💬 ${d.data.from} → ${d.data.to}`, 'info');
+      break;
+  }
+}
+
+['snapshot.agents','snapshot.tasks','snapshot.projects',
+ 'agent.registered','agent.updated','agent.evicted',
+ 'project.created','project.updated',
+ 'task.created','task.updated','conversation.added'].forEach(et =>
+  sse.addEventListener(et, e => handleSSE(et, e.data)));
+</script>
+</body>
+</html>
