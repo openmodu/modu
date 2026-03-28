@@ -11,7 +11,8 @@ type MessageType string
 const (
 	MessageTypeTaskAssign MessageType = "task_assign"
 	MessageTypeTaskResult MessageType = "task_result"
-	MessageTypeChat       MessageType = "chat"  // agent 间自由对话（关联 task_id）
+	MessageTypeChat       MessageType = "chat"     // agent 间自由对话（关联 task_id）
+	MessageTypeDelegate   MessageType = "delegate" // peer-to-peer 委托（在同一任务内）
 	MessageTypeQuery      MessageType = "query"
 	MessageTypeInfo       MessageType = "info"
 )
@@ -129,6 +130,40 @@ func ParseChatPayload(msg Message) (ChatPayload, error) {
 	var p ChatPayload
 	if err := json.Unmarshal(msg.Payload, &p); err != nil {
 		return ChatPayload{}, fmt.Errorf("parse chat payload: %w", err)
+	}
+	return p, nil
+}
+
+// DelegatePayload 是 delegate 消息的 Payload，用于 peer-to-peer 任务委托
+type DelegatePayload struct {
+	Description string `json:"description"`
+	DelegatorID string `json:"delegator_id"` // 发起委托的 agent，结果需回传给它
+}
+
+// NewDelegateMessage 构造一条委托消息（在同一任务内委托其他 agent 完成子工作）
+func NewDelegateMessage(from, taskID, description string) (string, error) {
+	payload, err := json.Marshal(DelegatePayload{Description: description, DelegatorID: from})
+	if err != nil {
+		return "", fmt.Errorf("marshal payload: %w", err)
+	}
+	msg := Message{
+		Type:    MessageTypeDelegate,
+		From:    from,
+		TaskID:  taskID,
+		Payload: payload,
+	}
+	b, err := json.Marshal(msg)
+	if err != nil {
+		return "", fmt.Errorf("marshal message: %w", err)
+	}
+	return string(b), nil
+}
+
+// ParseDelegatePayload 解析 delegate 消息的 Payload
+func ParseDelegatePayload(msg Message) (DelegatePayload, error) {
+	var p DelegatePayload
+	if err := json.Unmarshal(msg.Payload, &p); err != nil {
+		return DelegatePayload{}, fmt.Errorf("parse delegate payload: %w", err)
 	}
 	return p, nil
 }

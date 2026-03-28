@@ -14,16 +14,17 @@ import (
 )
 
 func main() {
-	port   := flag.Int("port", 8080, "HTTP port to listen on")
-	dbPath := flag.String("db", "./data/mailbox.db", "SQLite database path")
-	wechat := flag.Bool("wechat", false, "Start the WeChat content team (requires LM Studio)")
+	port      := flag.Int("port", 8080, "HTTP port to listen on")
+	workspace := flag.String("workspace", "./workspace", "Root directory for all runtime data (db, agent files, articles)")
+	wechat    := flag.Bool("wechat", false, "Start the WeChat content team (requires LM Studio)")
 	flag.Parse()
 
-	if err := os.MkdirAll("./data", 0o755); err != nil {
-		log.Fatalf("create data dir: %v", err)
+	if err := os.MkdirAll(*workspace, 0o755); err != nil {
+		log.Fatalf("create workspace dir: %v", err)
 	}
+	dbPath := *workspace + "/mailbox.db"
 
-	store, err := sqlitestore.New(*dbPath)
+	store, err := sqlitestore.New(dbPath)
 	if err != nil {
 		log.Fatalf("open store: %v", err)
 	}
@@ -33,6 +34,7 @@ func main() {
 	seedDemoTeam(hub)
 
 	cfg := defaultContentConfig()
+	cfg.WorkDir = *workspace
 	addr := fmt.Sprintf(":%d", *port)
 	srv := NewAgentTeamsServer(hub, cfg)
 

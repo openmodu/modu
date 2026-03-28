@@ -20,161 +20,86 @@ type ArticleRequest struct {
 	AutoDiscover bool   `json:"auto_discover"` // scrape trending topics first
 }
 
-// ArticleResult contains all intermediate outputs and the final file path.
+// ArticleResult contains the task ID, file path, and final content.
 type ArticleResult struct {
-	ProjectID string `json:"project_id"`
-	Research  string `json:"research"`
-	Brief     string `json:"brief"`
-	Article   string `json:"article"`
-	Review    string `json:"review"`
-	Note      string `json:"note"`
-	FilePath  string `json:"file_path"`
+	TaskID   string `json:"task_id"`
+	FilePath string `json:"file_path"`
+	Content  string `json:"content"`
 }
 
-// runArticleWorkflow drives the full 6-phase 公众号 content pipeline:
+// runArticleWorkflow creates a single task for the full article requirement and assigns
+// it to the editor (coordinator). The editor's CodingSession drives the entire workflow
+// by delegating to researcher, copywriter, and reviewer via mailbox_delegate.
 //
-//  1. Build topic context (optional trending topic discovery)
-//  2. Create project
-//  3. Research → wc-researcher
-//  4. Topic selection + creative brief → wc-editor
-//  5. Article writing → wc-copywriter
-//  6. Review (up to 2 rounds) → wc-reviewer → wc-copywriter (if REVISE)
-//  7. Editorial note → wc-editor
-//  8. Save final file + complete project
+// This function blocks until the task completes or times out (30 minutes).
 func (s *AgentTeamsServer) runArticleWorkflow(ctx context.Context, req ArticleRequest, cfg ContentConfig) (*ArticleResult, error) {
 	hub := s.hub
-	ar := &ArticleResult{}
 
 	topicCtx := buildTopicContext(req)
-	log.Printf("[article] topic context: %s", topicCtx[:min(80, len(topicCtx))])
+	log.Printf("[article] brief: %s", topicCtx[:min(80, len(topicCtx))])
 
-	// ── Phase 1: project ──────────────────────────────────────────────────────
-	projName := req.Topic
-	if projName == "" {
-		projName = req.Niche + " 内容项目"
-	}
-	projID, err := hub.CreateProject("wc-editor", projName)
+	// One task for the full article requirement.
+	taskDesc := buildArticleTaskDesc(req, topicCtx)
+	taskID, err := hub.CreateTask("wc-editor", taskDesc)
 	if err != nil {
-		return nil, fmt.Errorf("create project: %w", err)
+		return nil, fmt.Errorf("create task: %w", err)
 	}
-	ar.ProjectID = projID
-	log.Printf("[article] project %s", projID)
+	if err := hub.AssignTask(taskID, "wc-editor"); err != nil {
+		return nil, fmt.Errorf("assign task: %w", err)
+	}
 
-	// ── Phase 2: research ────────────────────────────────────────────────────
-	log.Println("[article] ── research ──")
-	ar.Research, err = dispatchTask(ctx, hub, "wc-editor", "wc-researcher",
-		"请针对以下创作方向进行选题调研，输出3个有爆款潜力的选题方向：\n\n"+topicCtx,
-		projID, 6*time.Minute)
+	// Kick off the editor with a task_assign message.
+	msg, err := mailbox.NewTaskAssignMessage("system", taskID, taskDesc)
 	if err != nil {
-		return nil, fmt.Errorf("research: %w", err)
+		return nil, fmt.Errorf("build msg: %w", err)
+	}
+	if err := hub.Send("wc-editor", msg); err != nil {
+		return nil, fmt.Errorf("send to editor: %w", err)
 	}
 
-	// ── Phase 3: topic selection + creative brief (editor) ───────────────────
-	log.Println("[article] ── topic selection ──")
-	ar.Brief, err = dispatchTask(ctx, hub, "wc-editor", "wc-editor",
-		"研究员提交了以下选题调研报告：\n\n"+ar.Research+
-			"\n\n请完成两件事：\n1. 选出最优选题并说明理由\n2. 为主笔写出详细的创作简报",
-		projID, 4*time.Minute)
-	if err != nil {
-		return nil, fmt.Errorf("topic selection: %w", err)
-	}
+	log.Printf("[article] task %s started → wc-editor", taskID)
 
-	// ── Phase 4: writing ─────────────────────────────────────────────────────
-	log.Println("[article] ── writing ──")
-	ar.Article, err = dispatchTask(ctx, hub, "wc-editor", "wc-copywriter",
-		"请按照以下创作简报写出完整的公众号文章：\n\n"+ar.Brief,
-		projID, 8*time.Minute)
-	if err != nil {
-		return nil, fmt.Errorf("writing: %w", err)
-	}
-
-	// ── Phase 5: review (max 2 rounds) ───────────────────────────────────────
-	log.Println("[article] ── review ──")
-	current := ar.Article
-	for round := 1; round <= 2; round++ {
-		log.Printf("[article] review round %d", round)
-		ar.Review, err = dispatchTask(ctx, hub, "wc-editor", "wc-reviewer",
-			fmt.Sprintf("请评审以下公众号文章（第%d轮）：\n\n%s", round, current),
-			projID, 5*time.Minute)
-		if err != nil {
-			return nil, fmt.Errorf("review r%d: %w", round, err)
-		}
-
-		if strings.Contains(ar.Review, "[ACCEPT]") {
-			log.Printf("[article] ✓ accepted (round %d)", round)
-			ar.Article = current
-			break
-		}
-		if round == 2 {
-			// Force accept after 2 rounds to avoid infinite loop
-			log.Printf("[article] max rounds reached, accepting as-is")
-			ar.Article = current
-			break
-		}
-
-		log.Printf("[article] ✗ revision requested")
-		current, err = dispatchTask(ctx, hub, "wc-editor", "wc-copywriter",
-			"审稿编辑提出了修改意见，请修改文章：\n\n**审稿意见**：\n"+ar.Review+"\n\n**原文**：\n"+current,
-			projID, 8*time.Minute)
-		if err != nil {
-			return nil, fmt.Errorf("revision: %w", err)
-		}
-	}
-
-	// ── Phase 6: editorial note ──────────────────────────────────────────────
-	log.Println("[article] ── editorial note ──")
-	ar.Note, _ = dispatchTask(ctx, hub, "wc-editor", "wc-editor",
-		"文章已通过审核，请写一段编者按（50-80字）：\n\n"+ar.Article,
-		projID, 3*time.Minute)
-
-	// ── Save + complete ───────────────────────────────────────────────────────
-	ar.FilePath = saveArticleFile(req, ar, cfg.WorkDir)
-	_ = hub.CompleteProject(projID)
-	log.Printf("[article] ✓ saved → %s", ar.FilePath)
-	return ar, nil
-}
-
-// dispatchTask creates a task, assigns it to the target agent, sends the task_assign
-// message, and blocks until the task completes (or times out).
-func dispatchTask(ctx context.Context, hub *mailbox.Hub, from, to, brief, projID string, timeout time.Duration) (string, error) {
-	taskID, err := hub.CreateTask(from, brief, projID)
-	if err != nil {
-		return "", err
-	}
-	if err := hub.AssignTask(taskID, to); err != nil {
-		return "", err
-	}
-	msg, err := mailbox.NewTaskAssignMessage(from, taskID, brief)
-	if err != nil {
-		return "", err
-	}
-	if err := hub.Send(to, msg); err != nil {
-		return "", err
-	}
-
+	// Wait for the editor to complete the task (up to 30 minutes).
+	const timeout = 30 * time.Minute
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return nil, ctx.Err()
 		default:
 		}
+
 		task, err := hub.GetTask(taskID)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		switch task.Status {
 		case mailbox.TaskStatusCompleted:
-			if r, ok := task.AgentResults[to]; ok && r != "" {
-				return r, nil
-			}
-			return task.Result, nil
+			content := task.Result
+			filePath := saveArticleFile(req, taskID, content, cfg.WorkDir)
+			log.Printf("[article] ✓ task %s done → %s", taskID, filePath)
+			return &ArticleResult{TaskID: taskID, FilePath: filePath, Content: content}, nil
 		case mailbox.TaskStatusFailed:
-			return "", fmt.Errorf("task %s failed: %s", taskID, task.Error)
+			return nil, fmt.Errorf("task %s failed: %s", taskID, task.Error)
 		}
-		time.Sleep(300 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 	}
-	return "", fmt.Errorf("timeout (%v) waiting for %s", timeout, taskID)
+	return nil, fmt.Errorf("timeout (%v) waiting for task %s", timeout, taskID)
+}
+
+// buildArticleTaskDesc constructs the full task description for the editor.
+func buildArticleTaskDesc(req ArticleRequest, topicCtx string) string {
+	var sb strings.Builder
+	sb.WriteString("请为以下方向创作一篇高质量微信公众号文章，完整流程包括：\n")
+	sb.WriteString("1. 委托研究员调研选题方向（wc-researcher）\n")
+	sb.WriteString("2. 基于调研选出最优选题，制定创作简报\n")
+	sb.WriteString("3. 委托主笔按简报写作（wc-copywriter）\n")
+	sb.WriteString("4. 委托审稿编辑审核（wc-reviewer），如需修改则让主笔修改（最多2轮）\n")
+	sb.WriteString("5. 写编者按，将完整文章（含编者按）写入文件，调用 mailbox_complete 提交\n\n")
+	sb.WriteString("---\n\n")
+	sb.WriteString("**创作方向：**\n")
+	sb.WriteString(topicCtx)
+	return sb.String()
 }
 
 // buildTopicContext returns a context string describing what to write about.
@@ -202,13 +127,13 @@ func fetchTrendingTopics() string {
 	}
 	var sb strings.Builder
 	for i, item := range items {
-		sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, item.Title))
+		fmt.Fprintf(&sb, "%d. %s\n", i+1, item.Title)
 	}
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-// saveArticleFile writes the complete article + all phase outputs to disk as Markdown.
-func saveArticleFile(req ArticleRequest, ar *ArticleResult, workDir string) string {
+// saveArticleFile writes the article content to workspace/articles/{ts}-{topic}.md.
+func saveArticleFile(req ArticleRequest, taskID, content, workDir string) string {
 	dir := filepath.Join(workDir, "articles")
 	_ = os.MkdirAll(dir, 0o755)
 
@@ -216,61 +141,15 @@ func saveArticleFile(req ArticleRequest, ar *ArticleResult, workDir string) stri
 	if topic == "" {
 		topic = req.Niche
 	}
+	if topic == "" {
+		topic = taskID
+	}
+	_ = taskID // used in fallback above
 	ts := time.Now().Format("20060102-150405")
 	safe := strings.NewReplacer(" ", "_", "/", "-", ":", "-").Replace(topic)
 	path := filepath.Join(dir, ts+"-"+safe+".md")
 
-	content := fmt.Sprintf(`# %s
-
-**生成时间**：%s
-**项目**：%s
-
----
-
-## 调研报告
-
-%s
-
----
-
-## 创作简报
-
-%s
-
----
-
-## 文章正文
-
-%s
-
----
-
-## 审稿意见
-
-%s
-
----
-
-## 编者按
-
-%s
-`,
-		topic,
-		time.Now().Format("2006-01-02 15:04:05"),
-		ar.ProjectID,
-		ar.Research,
-		ar.Brief,
-		ar.Article,
-		ar.Review,
-		ar.Note,
-	)
 	_ = os.WriteFile(path, []byte(content), 0o644)
 	return path
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
