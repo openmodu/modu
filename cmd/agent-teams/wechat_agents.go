@@ -107,7 +107,7 @@ func runContentAgent(ctx context.Context, hub *mailbox.Hub, agentID, systemPromp
 			_ = hub.StartTask(taskID)
 			_ = hub.SetAgentStatus(agentID, "busy", taskID)
 
-			if err := runCodingSession(ctx, hub, agentID, taskID, payload.Description,
+			if _, err := runCodingSession(ctx, hub, agentID, taskID, payload.Description,
 				systemPrompt, coordinatorInstructions, cfg, agentWorkDir); err != nil {
 				log.Printf("[%s] task %s error: %v", agentID, taskID, err)
 				_ = hub.FailTask(taskID, err.Error())
@@ -126,21 +126,28 @@ func runContentAgent(ctx context.Context, hub *mailbox.Hub, agentID, systemPromp
 			hub.PostForumMessage(agentID, taskID,
 				fmt.Sprintf("👷 %s 开始处理委托工作…", agentID))
 
-			if err := runCodingSession(ctx, hub, agentID, taskID, payload.Description,
-				systemPrompt, workerInstructions(delegatorID), cfg, agentWorkDir); err != nil {
+			lastText, err := runCodingSession(ctx, hub, agentID, taskID, payload.Description,
+				systemPrompt, workerInstructions(delegatorID), cfg, agentWorkDir)
+			if err != nil {
 				log.Printf("[%s] delegate error: %v", agentID, err)
-				// Reply with error so delegator doesn't hang
 				hub.PostDelegateResult(taskID, agentID, delegatorID,
 					fmt.Sprintf("工作失败：%v", err))
-				_ = hub.SetAgentStatus(agentID, "idle", "")
+			} else {
+				// Safety net: if the LLM forgot to call mailbox_reply, unblock the delegator
+				// with whatever text the agent produced. PostDelegateResult is a no-op if
+				// mailbox_reply already sent the result.
+				if hub.PostDelegateResult(taskID, agentID, delegatorID, lastText) {
+					log.Printf("[%s] safety-net: unblocked %s (mailbox_reply was not called)", agentID, delegatorID)
+				}
 			}
-			// On success, mailbox_reply unblocks the delegator and sets agent idle.
+			_ = hub.SetAgentStatus(agentID, "idle", "")
 		}
 	}
 }
 
 // runCodingSession creates a fresh CodingSession for the given work and runs it to completion.
 // instrFn returns role-specific instructions to append to the system prompt.
+// Returns the last assistant text produced by the session alongside any error.
 func runCodingSession(
 	ctx context.Context,
 	hub *mailbox.Hub,
@@ -148,7 +155,7 @@ func runCodingSession(
 	instrFn func(agentID, taskID, outputFile string) string,
 	cfg ContentConfig,
 	agentWorkDir string,
-) error {
+) (string, error) {
 	absWorkDir, err := filepath.Abs(agentWorkDir)
 	if err != nil {
 		absWorkDir = agentWorkDir
@@ -177,7 +184,7 @@ func runCodingSession(
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("create session: %w", err)
+		return "", fmt.Errorf("create session: %w", err)
 	}
 	log.Printf("[%s] CodingSession ready, sending prompt to LLM", agentID)
 
@@ -197,30 +204,11 @@ func runCodingSession(
 		"任务ID：%s\n\n%s\n\n请直接开始工作，不要以「好的」「以下是」等废话开头。",
 		taskID, description)
 
-	// Heartbeat: post a "still working" message every 30s so the forum doesn't look frozen.
-	done := make(chan struct{})
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				hub.PostForumMessage(agentID, taskID, "⏳ 仍在处理中…")
-			}
-		}
-	}()
-
 	if err := cs.Prompt(ctx, userPrompt); err != nil {
-		close(done)
-		return fmt.Errorf("prompt: %w", err)
+		return "", fmt.Errorf("prompt: %w", err)
 	}
 	cs.WaitForIdle()
-	close(done)
-	return nil
+	return cs.GetLastAssistantText(), nil
 }
 
 // coordinatorInstructions returns the workflow instructions for a coordinator agent.
@@ -247,8 +235,10 @@ func coordinatorInstructions(agentID, taskID, outputFile string) string {
 
 **委托对象参考：**
 - wc-researcher：热点调研、选题分析
-- wc-copywriter：文章撰写、修改
-- wc-reviewer：审稿、质量把关
+- wc-copywriter：文章撰写、修改（在 request 中附上完整创作简报）
+- wc-reviewer：审稿、质量把关（在 request 中附上完整文章内容，不要只给文件路径）
+
+**重要：委托审稿时，必须将完整文章内容直接写入 request 字段，因为审稿人无法访问主笔的工作目录。**
 `, taskID, outputFile)
 }
 
@@ -261,17 +251,20 @@ func workerInstructions(delegatorID string) func(agentID, taskID, outputFile str
 ## 工作流程（执行者模式）
 
 你正在响应 %s 的委托，完成一项子工作。
+**委托内容已经包含在上方的任务描述中，不要去搜索文件，直接使用描述里的内容开始工作。**
 
-**执行规则：**
-1. 全力完成所委托的工作，输出完整内容
-2. 使用 Write 工具将完整成果写入文件：
+**必须严格按以下顺序执行，缺少任何一步整个流程都会卡死：**
+
+第一步：完成工作，产出完整内容
+第二步：用 Write 工具将成果写入文件：
    路径：%s
-3. 调用 mailbox_reply 回传成果：
+第三步：【⚠️ 这步是强制的，不能省略】调用 mailbox_reply 回传成果：
    - to: %s
    - task_id: %s
    - file_path: %s
 
-**禁止跳过以上步骤**，否则委托方将无限等待。
-`, delegatorID, outputFile, delegatorID, taskID, outputFile)
+如果你不调用 mailbox_reply，委托方 %s 将永久阻塞等待，整个任务流程无法继续。
+完成 mailbox_reply 后即可结束。
+`, delegatorID, outputFile, delegatorID, taskID, outputFile, delegatorID)
 	}
 }
