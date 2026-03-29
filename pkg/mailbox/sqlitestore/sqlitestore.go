@@ -17,15 +17,21 @@ CREATE TABLE IF NOT EXISTS tasks (
 	id           TEXT PRIMARY KEY,
 	description  TEXT NOT NULL DEFAULT '',
 	created_by   TEXT NOT NULL DEFAULT '',
+	owner_id     TEXT NOT NULL DEFAULT '',
 	assigned_to  TEXT NOT NULL DEFAULT '',
 	assignees    TEXT NOT NULL DEFAULT '[]',
+	collaborators TEXT NOT NULL DEFAULT '[]',
 	agent_results TEXT NOT NULL DEFAULT '{}',
 	project_id   TEXT NOT NULL DEFAULT '',
 	status       TEXT NOT NULL DEFAULT 'pending',
 	created_at   INTEGER NOT NULL DEFAULT 0,
 	updated_at   INTEGER NOT NULL DEFAULT 0,
+	summary      TEXT NOT NULL DEFAULT '',
+	resolution   TEXT NOT NULL DEFAULT '',
+	artifact_path TEXT NOT NULL DEFAULT '',
 	result       TEXT NOT NULL DEFAULT '',
-	error        TEXT NOT NULL DEFAULT ''
+	error        TEXT NOT NULL DEFAULT '',
+	discussion_closed_at INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS projects (
@@ -50,7 +56,9 @@ CREATE TABLE IF NOT EXISTS conversations (
 	to_agent   TEXT    NOT NULL DEFAULT '',
 	task_id    TEXT    NOT NULL DEFAULT '',
 	msg_type   TEXT    NOT NULL DEFAULT '',
-	content    TEXT    NOT NULL DEFAULT ''
+	kind       TEXT    NOT NULL DEFAULT '',
+	content    TEXT    NOT NULL DEFAULT '',
+	pinned     INTEGER NOT NULL DEFAULT 0
 );
 `
 
@@ -59,6 +67,14 @@ var migrations = []string{
 	`ALTER TABLE tasks ADD COLUMN assignees TEXT NOT NULL DEFAULT '[]'`,
 	`ALTER TABLE tasks ADD COLUMN agent_results TEXT NOT NULL DEFAULT '{}'`,
 	`ALTER TABLE tasks ADD COLUMN project_id TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE tasks ADD COLUMN owner_id TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE tasks ADD COLUMN collaborators TEXT NOT NULL DEFAULT '[]'`,
+	`ALTER TABLE tasks ADD COLUMN summary TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE tasks ADD COLUMN resolution TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE tasks ADD COLUMN artifact_path TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE tasks ADD COLUMN discussion_closed_at INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE conversations ADD COLUMN kind TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0`,
 }
 
 // SQLiteStore 是 mailbox.Store 的 SQLite 实现
@@ -96,33 +112,50 @@ func New(dsn string) (*SQLiteStore, error) {
 // SaveTask 创建或更新一条任务记录（UPSERT）
 func (s *SQLiteStore) SaveTask(task mailbox.Task) error {
 	assigneesJSON, _ := json.Marshal(task.Assignees)
+	collaboratorsJSON, _ := json.Marshal(task.Collaborators)
 	agentResultsJSON, _ := json.Marshal(task.AgentResults)
+	closedAt := int64(0)
+	if task.DiscussionClosedAt != nil {
+		closedAt = task.DiscussionClosedAt.UnixNano()
+	}
 
 	_, err := s.db.Exec(`
-		INSERT INTO tasks (id, description, created_by, assigned_to, assignees, agent_results, project_id, status, created_at, updated_at, result, error)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO tasks (id, description, created_by, owner_id, assigned_to, assignees, collaborators, agent_results, project_id, status, created_at, updated_at, summary, resolution, artifact_path, result, error, discussion_closed_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
+			owner_id      = excluded.owner_id,
 			assigned_to   = excluded.assigned_to,
 			assignees     = excluded.assignees,
+			collaborators = excluded.collaborators,
 			agent_results = excluded.agent_results,
 			project_id    = excluded.project_id,
 			status        = excluded.status,
 			updated_at    = excluded.updated_at,
+			summary       = excluded.summary,
+			resolution    = excluded.resolution,
+			artifact_path = excluded.artifact_path,
 			result        = excluded.result,
-			error         = excluded.error
+			error         = excluded.error,
+			discussion_closed_at = excluded.discussion_closed_at
 	`,
 		task.ID,
 		task.Description,
 		task.CreatedBy,
+		task.OwnerID,
 		task.AssignedTo,
 		string(assigneesJSON),
+		string(collaboratorsJSON),
 		string(agentResultsJSON),
 		task.ProjectID,
 		string(task.Status),
 		task.CreatedAt.UnixNano(),
 		task.UpdatedAt.UnixNano(),
+		task.Summary,
+		task.Resolution,
+		task.ArtifactPath,
 		task.Result,
 		task.Error,
+		closedAt,
 	)
 	return err
 }
@@ -130,8 +163,8 @@ func (s *SQLiteStore) SaveTask(task mailbox.Task) error {
 // LoadTasks 加载所有任务
 func (s *SQLiteStore) LoadTasks() ([]mailbox.Task, error) {
 	rows, err := s.db.Query(`
-		SELECT id, description, created_by, assigned_to, assignees, agent_results, project_id,
-		       status, created_at, updated_at, result, error
+		SELECT id, description, created_by, owner_id, assigned_to, assignees, collaborators, agent_results, project_id,
+		       status, created_at, updated_at, summary, resolution, artifact_path, result, error, discussion_closed_at
 		FROM tasks
 		ORDER BY created_at ASC
 	`)
@@ -143,13 +176,13 @@ func (s *SQLiteStore) LoadTasks() ([]mailbox.Task, error) {
 	var tasks []mailbox.Task
 	for rows.Next() {
 		var t mailbox.Task
-		var status, assigneesStr, agentResultsStr string
-		var createdNano, updatedNano int64
+		var status, assigneesStr, collaboratorsStr, agentResultsStr string
+		var createdNano, updatedNano, closedNano int64
 
 		if err := rows.Scan(
-			&t.ID, &t.Description, &t.CreatedBy, &t.AssignedTo,
-			&assigneesStr, &agentResultsStr, &t.ProjectID,
-			&status, &createdNano, &updatedNano, &t.Result, &t.Error,
+			&t.ID, &t.Description, &t.CreatedBy, &t.OwnerID, &t.AssignedTo,
+			&assigneesStr, &collaboratorsStr, &agentResultsStr, &t.ProjectID,
+			&status, &createdNano, &updatedNano, &t.Summary, &t.Resolution, &t.ArtifactPath, &t.Result, &t.Error, &closedNano,
 		); err != nil {
 			return nil, err
 		}
@@ -161,6 +194,10 @@ func (s *SQLiteStore) LoadTasks() ([]mailbox.Task, error) {
 		if t.Assignees == nil {
 			t.Assignees = []string{}
 		}
+		_ = json.Unmarshal([]byte(collaboratorsStr), &t.Collaborators)
+		if t.Collaborators == nil {
+			t.Collaborators = []string{}
+		}
 		_ = json.Unmarshal([]byte(agentResultsStr), &t.AgentResults)
 		if t.AgentResults == nil {
 			t.AgentResults = make(map[string]string)
@@ -170,8 +207,22 @@ func (s *SQLiteStore) LoadTasks() ([]mailbox.Task, error) {
 		if len(t.Assignees) == 0 && t.AssignedTo != "" {
 			t.Assignees = []string{t.AssignedTo}
 		}
+		if t.OwnerID == "" && t.AssignedTo != "" {
+			t.OwnerID = t.AssignedTo
+		}
+		if len(t.Collaborators) == 0 && len(t.Assignees) > 1 {
+			for _, a := range t.Assignees {
+				if a != t.OwnerID {
+					t.Collaborators = append(t.Collaborators, a)
+				}
+			}
+		}
 		if len(t.Assignees) > 0 && t.AssignedTo == "" {
 			t.AssignedTo = t.Assignees[0]
+		}
+		if closedNano > 0 {
+			ts := time.Unix(0, closedNano)
+			t.DiscussionClosedAt = &ts
 		}
 
 		tasks = append(tasks, t)
@@ -270,16 +321,16 @@ func (s *SQLiteStore) LoadAgentRoles() (map[string]string, error) {
 // SaveConversation 追加一条对话记录
 func (s *SQLiteStore) SaveConversation(e mailbox.ConversationEntry) error {
 	_, err := s.db.Exec(`
-		INSERT INTO conversations (at, from_agent, to_agent, task_id, msg_type, content)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`, e.At.UnixNano(), e.From, e.To, e.TaskID, string(e.MsgType), e.Content)
+		INSERT INTO conversations (at, from_agent, to_agent, task_id, msg_type, kind, content, pinned)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, e.At.UnixNano(), e.From, e.To, e.TaskID, string(e.MsgType), string(e.Kind), e.Content, boolToInt(e.Pinned))
 	return err
 }
 
 // LoadConversations 加载所有对话记录，按 task_id 分组，按时间升序
 func (s *SQLiteStore) LoadConversations() (map[string][]mailbox.ConversationEntry, error) {
 	rows, err := s.db.Query(`
-		SELECT at, from_agent, to_agent, task_id, msg_type, content
+		SELECT at, from_agent, to_agent, task_id, msg_type, kind, content, pinned
 		FROM conversations ORDER BY at ASC
 	`)
 	if err != nil {
@@ -291,15 +342,25 @@ func (s *SQLiteStore) LoadConversations() (map[string][]mailbox.ConversationEntr
 	for rows.Next() {
 		var e mailbox.ConversationEntry
 		var atNano int64
-		var msgType string
-		if err := rows.Scan(&atNano, &e.From, &e.To, &e.TaskID, &msgType, &e.Content); err != nil {
+		var msgType, kind string
+		var pinned int
+		if err := rows.Scan(&atNano, &e.From, &e.To, &e.TaskID, &msgType, &kind, &e.Content, &pinned); err != nil {
 			return nil, err
 		}
 		e.At = time.Unix(0, atNano)
 		e.MsgType = mailbox.MessageType(msgType)
+		e.Kind = mailbox.ConversationKind(kind)
+		e.Pinned = pinned != 0
 		result[e.TaskID] = append(result[e.TaskID], e)
 	}
 	return result, rows.Err()
+}
+
+func boolToInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
 }
 
 // Close 关闭数据库连接

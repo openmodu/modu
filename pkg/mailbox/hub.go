@@ -48,18 +48,24 @@ type Project struct {
 
 // Task 表示一个可追踪的工作单元，支持多 Agent 并行执行
 type Task struct {
-	ID           string            `json:"id"`
-	ProjectID    string            `json:"project_id,omitempty"`
-	Description  string            `json:"description"`
-	CreatedBy    string            `json:"created_by"`
-	AssignedTo   string            `json:"assigned_to"`          // 向后兼容，= Assignees[0]
-	Assignees    []string          `json:"assignees"`            // 全部指派的 agent
-	Status       TaskStatus        `json:"status"`
-	CreatedAt    time.Time         `json:"created_at"`
-	UpdatedAt    time.Time         `json:"updated_at"`
-	Result       string            `json:"result"`
-	AgentResults map[string]string `json:"agent_results,omitempty"` // 每个 agent 的成果
-	Error        string            `json:"error"`
+	ID                 string            `json:"id"`
+	ProjectID          string            `json:"project_id,omitempty"`
+	Description        string            `json:"description"`
+	CreatedBy          string            `json:"created_by"`
+	OwnerID            string            `json:"owner_id"`
+	AssignedTo         string            `json:"assigned_to"` // 向后兼容，= Assignees[0]
+	Assignees          []string          `json:"assignees"`   // 全部参与该任务的 agent（owner + collaborators）
+	Collaborators      []string          `json:"collaborators,omitempty"`
+	Status             TaskStatus        `json:"status"`
+	CreatedAt          time.Time         `json:"created_at"`
+	UpdatedAt          time.Time         `json:"updated_at"`
+	Summary            string            `json:"summary,omitempty"`
+	Resolution         string            `json:"resolution,omitempty"`
+	ArtifactPath       string            `json:"artifact_path,omitempty"`
+	Result             string            `json:"result"`
+	AgentResults       map[string]string `json:"agent_results,omitempty"` // 每个 agent 的成果
+	Error              string            `json:"error"`
+	DiscussionClosedAt *time.Time        `json:"discussion_closed_at,omitempty"`
 }
 
 // Hub 管理所有 Agent 的注册状态和消息队列
@@ -78,6 +84,10 @@ type Hub struct {
 	knownRoles map[string]string
 	// conversations 按 task_id 存储对话记录
 	conversations map[string][]ConversationEntry
+	// delegateWaiters 支持 peer-to-peer 委托的结果回传
+	// key: "taskID::workerID::delegatorID"
+	delegateWaiters map[string]chan string
+	delegateMu      sync.Mutex
 }
 
 // HubOption 是 NewHub 的函数式选项
@@ -90,14 +100,15 @@ func WithStore(s Store) HubOption {
 
 func NewHub(opts ...HubOption) *Hub {
 	h := &Hub{
-		inboxes:       make(map[string]chan string),
-		lastSeen:      make(map[string]time.Time),
-		agentInfos:    make(map[string]*AgentInfo),
-		tasks:         make(map[string]*Task),
-		projects:      make(map[string]*Project),
-		knownRoles:    make(map[string]string),
-		conversations: make(map[string][]ConversationEntry),
-		store:         noopStore{},
+		inboxes:         make(map[string]chan string),
+		lastSeen:        make(map[string]time.Time),
+		agentInfos:      make(map[string]*AgentInfo),
+		tasks:           make(map[string]*Task),
+		projects:        make(map[string]*Project),
+		knownRoles:      make(map[string]string),
+		conversations:   make(map[string][]ConversationEntry),
+		delegateWaiters: make(map[string]chan string),
+		store:           noopStore{},
 	}
 	for _, opt := range opts {
 		opt(h)
@@ -235,7 +246,10 @@ func (h *Hub) Heartbeat(agentID string) error {
 func (h *Hub) Send(targetID, message string) error {
 	// 在锁外解析 JSON，避免持写锁期间做 CPU/内存密集操作
 	var msg Message
-	hasConv := json.Unmarshal([]byte(message), &msg) == nil && msg.TaskID != ""
+	// delegate 消息由 PostForumMessage 以可读形式单独记录，不在此重复记录原始 payload
+	hasConv := json.Unmarshal([]byte(message), &msg) == nil &&
+		msg.TaskID != "" &&
+		msg.Type != MessageTypeDelegate
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -260,6 +274,7 @@ func (h *Hub) Send(targetID, message string) error {
 // appendConversationLocked 追加一条对话记录（调用方持有写锁）
 func (h *Hub) appendConversationLocked(from, to string, msg Message) {
 	content := string(msg.Payload)
+	kind := ConversationKindGeneral
 	// 对常见类型提取可读文本
 	switch msg.Type {
 	case MessageTypeTaskAssign:
@@ -267,13 +282,16 @@ func (h *Hub) appendConversationLocked(from, to string, msg Message) {
 		if json.Unmarshal(msg.Payload, &p) == nil {
 			content = p.Description
 		}
+		kind = ConversationKindDecision
 	case MessageTypeTaskResult:
 		var p TaskResultPayload
 		if json.Unmarshal(msg.Payload, &p) == nil {
 			if p.Error != "" {
 				content = "error: " + p.Error
+				kind = ConversationKindRisk
 			} else {
 				content = p.Result
+				kind = ConversationKindDeliverable
 			}
 		}
 	case MessageTypeChat:
@@ -281,6 +299,7 @@ func (h *Hub) appendConversationLocked(from, to string, msg Message) {
 		if json.Unmarshal(msg.Payload, &p) == nil {
 			content = p.Text
 		}
+		kind = ConversationKindGeneral
 	}
 	entry := ConversationEntry{
 		At:      time.Now(),
@@ -288,6 +307,7 @@ func (h *Hub) appendConversationLocked(from, to string, msg Message) {
 		To:      to,
 		TaskID:  msg.TaskID,
 		MsgType: msg.Type,
+		Kind:    kind,
 		Content: content,
 	}
 	h.conversations[msg.TaskID] = append(h.conversations[msg.TaskID], entry)
@@ -546,7 +566,13 @@ func (h *Hub) AssignTask(taskID, agentID string) error {
 		}
 	}
 	task.Assignees = append(task.Assignees, agentID)
-	task.AssignedTo = task.Assignees[0] // 向后兼容：始终指向第一个 agent
+	if task.OwnerID == "" {
+		task.OwnerID = agentID
+		task.AssignedTo = agentID // 向后兼容：始终指向 owner
+	} else {
+		task.Collaborators = append(task.Collaborators, agentID)
+		task.AssignedTo = task.OwnerID
+	}
 	task.UpdatedAt = time.Now()
 	snapshot := *task
 	h.publishLocked(Event{Type: EventTypeTaskUpdated, TaskID: taskID, Data: snapshot})
@@ -574,11 +600,12 @@ func (h *Hub) StartTask(taskID string) error {
 	return nil
 }
 
-// CompleteTask 记录某 agent 对任务的完成成果。
+// CompleteTask 记录任务完成成果。
 //
-// 当 agentID 非空时，记录该 agent 的成果；当所有指派的 agent 均完成时任务标记为 completed。
-// 当 agentID 为空时（向后兼容旧单 agent 调用方式），若任务有多个 assignee 则返回错误，
-// 否则立即将任务标记为 completed。
+// 在当前“单任务、多协作者”模型下，任务由 owner 统一完成：
+//   - 当 agentID 为 ownerID（或兼容旧数据时等于 AssignedTo）时，立即完成整个任务
+//   - 协作者可以通过 mailbox_reply 提交工作，但不会直接驱动 task 状态完成
+//   - 当 agentID 为空时（向后兼容旧单 agent 调用方式），若任务有多个 assignee 则返回错误
 func (h *Hub) CompleteTask(taskID, agentID, result string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -590,13 +617,19 @@ func (h *Hub) CompleteTask(taskID, agentID, result string) error {
 		task.AgentResults = make(map[string]string)
 	}
 	task.Result = result
+	task.Resolution = result
 	task.UpdatedAt = time.Now()
 
 	if agentID != "" {
 		task.AgentResults[agentID] = result
-		// 所有指派 agent 均完成，或尚未指派任何 agent，才标记 completed
-		if len(task.Assignees) == 0 || len(task.AgentResults) >= len(task.Assignees) {
+		isOwner := task.OwnerID != "" && agentID == task.OwnerID
+		isLegacyOwner := task.OwnerID == "" && task.AssignedTo != "" && agentID == task.AssignedTo
+		if isOwner || isLegacyOwner || len(task.Assignees) == 0 {
 			task.Status = TaskStatusCompleted
+			now := time.Now()
+			task.DiscussionClosedAt = &now
+		} else {
+			return fmt.Errorf("task %s can only be completed by owner %s", taskID, task.OwnerID)
 		}
 	} else {
 		// 旧调用方式（无 agentID）：多 assignee 任务必须用带 agentID 的新接口
@@ -604,6 +637,8 @@ func (h *Hub) CompleteTask(taskID, agentID, result string) error {
 			return fmt.Errorf("task %s has %d assignees: use CompleteTask with agentID", taskID, len(task.Assignees))
 		}
 		task.Status = TaskStatusCompleted
+		now := time.Now()
+		task.DiscussionClosedAt = &now
 	}
 
 	snapshot := *task
@@ -625,6 +660,8 @@ func (h *Hub) FailTask(taskID, errMsg string) error {
 	task.Status = TaskStatusFailed
 	task.Error = errMsg
 	task.UpdatedAt = time.Now()
+	now := time.Now()
+	task.DiscussionClosedAt = &now
 	snapshot := *task
 	h.publishLocked(Event{Type: EventTypeTaskUpdated, TaskID: taskID, Data: snapshot})
 	if err := h.store.SaveTask(snapshot); err != nil {
@@ -669,4 +706,143 @@ func (h *Hub) GetConversation(taskID string) []ConversationEntry {
 	result := make([]ConversationEntry, len(src))
 	copy(result, src)
 	return result
+}
+
+// UpdateTaskSummary updates the pinned summary for a task while it is still open.
+func (h *Hub) UpdateTaskSummary(taskID, summary string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	task, ok := h.tasks[taskID]
+	if !ok {
+		return ErrTaskNotFound
+	}
+	if !taskDiscussionOpen(task) {
+		return fmt.Errorf("task %s discussion is closed", taskID)
+	}
+	task.Summary = summary
+	task.UpdatedAt = time.Now()
+	snapshot := *task
+	h.publishLocked(Event{Type: EventTypeTaskUpdated, TaskID: taskID, Data: snapshot})
+	if err := h.store.SaveTask(snapshot); err != nil {
+		log.Printf("[Hub] SaveTask %s (summary): %v", taskID, err)
+	}
+	return nil
+}
+
+// UpdateTaskArtifact records the final artifact path for a task.
+func (h *Hub) UpdateTaskArtifact(taskID, artifactPath string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	task, ok := h.tasks[taskID]
+	if !ok {
+		return ErrTaskNotFound
+	}
+	task.ArtifactPath = artifactPath
+	task.UpdatedAt = time.Now()
+	snapshot := *task
+	h.publishLocked(Event{Type: EventTypeTaskUpdated, TaskID: taskID, Data: snapshot})
+	if err := h.store.SaveTask(snapshot); err != nil {
+		log.Printf("[Hub] SaveTask %s (artifact): %v", taskID, err)
+	}
+	return nil
+}
+
+func taskDiscussionOpen(task *Task) bool {
+	return task.Status != TaskStatusCompleted && task.Status != TaskStatusFailed
+}
+
+// EnsureTaskOpen returns an error when the task is already completed or failed.
+func (h *Hub) EnsureTaskOpen(taskID string) error {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	task, ok := h.tasks[taskID]
+	if !ok {
+		return ErrTaskNotFound
+	}
+	if !taskDiscussionOpen(task) {
+		return fmt.Errorf("task %s discussion is closed", taskID)
+	}
+	return nil
+}
+
+// ── Delegate 信令 ─────────────────────────────────────────────────────────────
+
+// delegateKey 生成委托等待的唯一键
+func delegateKey(taskID, workerID, delegatorID string) string {
+	return taskID + "::" + workerID + "::" + delegatorID
+}
+
+// RegisterDelegate 为一次委托注册结果等待通道，返回供调用方阻塞读取的 channel。
+// workerID 是被委托方，delegatorID 是发起委托方。
+func (h *Hub) RegisterDelegate(taskID, workerID, delegatorID string) chan string {
+	ch := make(chan string, 1)
+	h.delegateMu.Lock()
+	h.delegateWaiters[delegateKey(taskID, workerID, delegatorID)] = ch
+	h.delegateMu.Unlock()
+	return ch
+}
+
+// PostDelegateResult 将委托结果写入等待通道，唤醒 RegisterDelegate 的调用方。
+// 返回 true 表示找到了等待的调用方；false 表示无人等待（已超时或键不存在）。
+func (h *Hub) PostDelegateResult(taskID, workerID, delegatorID, result string) bool {
+	key := delegateKey(taskID, workerID, delegatorID)
+	h.delegateMu.Lock()
+	ch, ok := h.delegateWaiters[key]
+	if ok {
+		delete(h.delegateWaiters, key)
+	}
+	h.delegateMu.Unlock()
+	if !ok {
+		return false
+	}
+	select {
+	case ch <- result:
+	default:
+	}
+	return true
+}
+
+// PostForumMessage 向指定任务的论坛发布一条消息（不发往任何 agent 信箱，仅记录在对话日志）。
+// 用于系统通知、阶段分隔线等不需要路由给任何 agent 的内容。
+func (h *Hub) PostForumMessage(fromID, taskID, text string) {
+	h.PostForumMessageKind(fromID, taskID, ConversationKindGeneral, text)
+}
+
+// PostForumMessageKind appends a categorized forum message to a task thread.
+func (h *Hub) PostForumMessageKind(fromID, taskID string, kind ConversationKind, text string) {
+	h.postForumMessageKind(fromID, taskID, kind, text, false)
+}
+
+// ForcePostForumMessageKind appends a forum message even after discussion closes.
+// It should only be used for final delivery/system tail messages.
+func (h *Hub) ForcePostForumMessageKind(fromID, taskID string, kind ConversationKind, text string) {
+	h.postForumMessageKind(fromID, taskID, kind, text, true)
+}
+
+func (h *Hub) postForumMessageKind(fromID, taskID string, kind ConversationKind, text string, allowClosed bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	task, ok := h.tasks[taskID]
+	if !ok || (!allowClosed && !taskDiscussionOpen(task)) {
+		return
+	}
+	if kind == "" {
+		kind = ConversationKindGeneral
+	}
+	entry := ConversationEntry{
+		At:      time.Now(),
+		From:    fromID,
+		To:      "",
+		TaskID:  taskID,
+		MsgType: MessageTypeChat,
+		Kind:    kind,
+		Content: text,
+	}
+	h.conversations[taskID] = append(h.conversations[taskID], entry)
+	h.publishLocked(Event{
+		Type:   EventTypeConversationAdded,
+		TaskID: taskID,
+		Data:   entry,
+	})
+	_ = h.store.SaveConversation(entry)
 }

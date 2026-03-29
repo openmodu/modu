@@ -1,0 +1,895 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Modu · 微信文章创作团队</title>
+<style>
+:root {
+  --bg:     #080810;
+  --bg-p:   #111120;
+  --bg-c:   #181826;
+  --bd:     #252535;
+  --bd-l:   #353548;
+  --txt:    #ededf5;
+  --muted:  #7878a0;
+  --accent: #7070ff;
+  --acc-h:  #5858ee;
+  --green:  #4ade80;
+  --orange: #fb923c;
+  --yellow: #fbbf24;
+  --red:    #f87171;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--bg); color: var(--txt);
+  display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+/* ── Header ──────────────────────────────────────────────────────────────── */
+header { height: 54px; background: var(--bg-p); border-bottom: 1px solid var(--bd);
+  display: flex; align-items: center; padding: 0 18px; flex-shrink: 0; gap: 20px; }
+.logo { font-size: 15px; font-weight: 700; color: #fff; white-space: nowrap; letter-spacing: .01em; }
+.logo span { color: var(--accent); }
+.tabs { display: flex; gap: 2px; height: 100%; }
+.tab { cursor: pointer; display: flex; align-items: center; padding: 0 14px;
+  color: var(--muted); font-size: 13px; font-weight: 500;
+  border-bottom: 2px solid transparent; transition: all .15s; }
+.tab:hover { color: var(--txt); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.hdr-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.conn-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--red); }
+.conn-dot.ok { background: var(--green); }
+.conn-label { font-size: 11px; color: var(--muted); }
+
+/* ── Buttons ──────────────────────────────────────────────────────────────── */
+.btn { background: var(--accent); color: #fff; border: none;
+  padding: 6px 13px; border-radius: 6px; cursor: pointer;
+  font-size: 13px; font-weight: 500; transition: background .15s; white-space: nowrap; }
+.btn:hover:not(:disabled) { background: var(--acc-h); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn-ghost { background: transparent; border: 1px solid var(--bd-l); color: var(--muted);
+  padding: 6px 13px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+.btn-ghost:hover { color: var(--txt); border-color: var(--muted); }
+.btn-green { background: #16a34a; }
+.btn-green:hover:not(:disabled) { background: #15803d; }
+
+/* ── Views ────────────────────────────────────────────────────────────────── */
+main { flex: 1; overflow: hidden; position: relative; }
+.view { display: none; height: 100%; overflow-y: auto; }
+.view.active { display: block; }
+#view-forum.active { display: flex; overflow: hidden; }
+#view-board.active { display: flex; flex-direction: column; }
+
+/* ── Forum layout ─────────────────────────────────────────────────────────── */
+.f-sidebar { width: 260px; border-right: 1px solid var(--bd);
+  background: var(--bg-p); display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; }
+.f-sidebar-hdr { padding: 12px 14px; font-size: 12px; font-weight: 600;
+  border-bottom: 1px solid var(--bd); color: var(--muted); text-transform: uppercase;
+  letter-spacing: .05em; flex-shrink: 0; display: flex; justify-content: space-between; align-items: center; }
+.f-list { flex: 1; overflow-y: auto; }
+.f-item { padding: 11px 14px; border-bottom: 1px solid var(--bd);
+  cursor: pointer; transition: background .12s; }
+.f-item:hover { background: var(--bg-c); }
+.f-item.active { background: rgba(112,112,255,.08); border-left: 3px solid var(--accent); padding-left: 11px; }
+.f-item-id { font-size: 10px; color: var(--accent); margin-bottom: 3px; display: flex; align-items: center; gap: 5px; }
+.f-item-desc { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--txt); }
+.f-item-meta { font-size: 10px; color: var(--muted); margin-top: 3px; }
+
+.f-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+.f-main-hdr { padding: 10px 18px; border-bottom: 1px solid var(--bd);
+  background: var(--bg-p); flex-shrink: 0; display: flex; align-items: center; gap: 10px; }
+.f-main-title { font-size: 13px; font-weight: 600; }
+.f-main-sub { font-size: 11px; color: var(--muted); flex: 1; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+
+.f-chat { flex: 1; overflow-y: auto; padding: 16px 20px;
+  display: flex; flex-direction: column; gap: 10px; }
+.f-empty { display: flex; align-items: center; justify-content: center;
+  height: 100%; color: var(--muted); font-size: 14px; flex-direction: column; gap: 8px; }
+.summary-box { margin: 12px 20px 0; padding: 12px 14px; border: 1px solid rgba(112,112,255,.22);
+  background: rgba(112,112,255,.08); border-radius: 10px; }
+.summary-label { font-size: 10px; color: var(--accent); font-weight: 700; letter-spacing: .05em; text-transform: uppercase; margin-bottom: 6px; }
+.summary-text { font-size: 13px; line-height: 1.6; color: var(--txt); white-space: pre-wrap; word-break: break-word; }
+
+/* ── Messages ─────────────────────────────────────────────────────────────── */
+.msg { display: flex; gap: 10px; }
+.msg-av { width: 30px; height: 30px; border-radius: 7px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 700; color: #fff; }
+.msg-body { flex: 1; min-width: 0; }
+.msg-meta { font-size: 11px; color: var(--muted); margin-bottom: 4px;
+  display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.msg-meta strong { color: var(--txt); font-weight: 500; }
+.msg-time { margin-left: auto; font-size: 10px; color: var(--muted); }
+.msg-type { font-size: 10px; padding: 1px 5px; border-radius: 3px; font-weight: 600; }
+.type-delegate { background: rgba(251,191,36,.15); color: var(--yellow); border: 1px solid rgba(251,191,36,.3); }
+.type-reply    { background: rgba(74,222,128,.12); color: var(--green);  border: 1px solid rgba(74,222,128,.3); }
+.type-assign   { background: rgba(112,112,255,.12); color: var(--accent); border: 1px solid rgba(112,112,255,.3); }
+.type-complete { background: rgba(74,222,128,.15); color: var(--green);  border: 1px solid rgba(74,222,128,.4); }
+.type-chat     { background: rgba(255,255,255,.05); color: var(--muted); border: 1px solid var(--bd); }
+.kind-progress { color: #93c5fd; border-color: rgba(147,197,253,.3); background: rgba(147,197,253,.1); }
+.kind-idea { color: #fbbf24; border-color: rgba(251,191,36,.3); background: rgba(251,191,36,.1); }
+.kind-decision { color: #a78bfa; border-color: rgba(167,139,250,.3); background: rgba(167,139,250,.1); }
+.kind-risk { color: #f87171; border-color: rgba(248,113,113,.3); background: rgba(248,113,113,.1); }
+.kind-deliverable { color: #4ade80; border-color: rgba(74,222,128,.3); background: rgba(74,222,128,.1); }
+.kind-system { color: #cbd5e1; border-color: rgba(203,213,225,.25); background: rgba(203,213,225,.08); }
+.msg-bubble { background: var(--bg-c); border: 1px solid var(--bd);
+  border-radius: 8px; padding: 9px 13px; font-size: 13px; line-height: 1.55;
+  white-space: pre-wrap; word-break: break-word; max-width: 100%; }
+.msg-bubble.delegate { border-left: 3px solid var(--yellow); }
+.msg-bubble.reply    { border-left: 3px solid var(--green); }
+.msg-bubble.assign   { border-left: 3px solid var(--accent); }
+.msg-bubble.complete { border-left: 3px solid var(--green); background: rgba(74,222,128,.05); }
+.msg-bubble.forum    { background: rgba(112,112,255,.05); border-color: rgba(112,112,255,.2); }
+
+/* ── Board ────────────────────────────────────────────────────────────────── */
+.board-hdr { padding: 14px 20px; border-bottom: 1px solid var(--bd); flex-shrink: 0;
+  display: flex; align-items: center; justify-content: space-between; }
+.board-hdr h2 { font-size: 16px; font-weight: 600; }
+.board-cols { flex: 1; display: flex; gap: 14px; padding: 14px 20px; overflow-x: auto; min-height: 0; }
+.k-col { flex: 1; min-width: 240px; background: rgba(255,255,255,.02);
+  border-radius: 10px; border: 1px solid var(--bd);
+  display: flex; flex-direction: column; max-height: 100%; }
+.k-hdr { padding: 10px 12px; font-size: 12px; font-weight: 600;
+  border-bottom: 1px solid var(--bd); display: flex; justify-content: space-between;
+  align-items: center; flex-shrink: 0; }
+.k-cnt { background: rgba(255,255,255,.1); border-radius: 20px; padding: 1px 6px; font-size: 11px; }
+.k-body { padding: 8px; flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.task-card { background: var(--bg-c); border: 1px solid var(--bd);
+  border-radius: 8px; padding: 10px 11px; cursor: pointer; transition: border-color .15s; }
+.task-card:hover { border-color: var(--accent); }
+.task-tid { font-size: 10px; color: var(--accent); margin-bottom: 4px; }
+.task-desc { font-size: 12px; line-height: 1.4; color: #ddd; margin-bottom: 8px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.task-meta { display: flex; justify-content: space-between; align-items: center; }
+.assignee-chips { display: flex; gap: 3px; flex-wrap: wrap; }
+.chip { display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 5px; font-size: 9px; font-weight: 700; color: #fff; }
+.by-label { font-size: 10px; color: var(--muted); }
+
+/* ── Agents ───────────────────────────────────────────────────────────────── */
+.agents-grid { display: grid; gap: 14px; padding: 20px;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); align-content: start; }
+.agent-card { background: var(--bg-c); border: 1px solid var(--bd);
+  border-radius: 10px; padding: 14px; }
+.agent-card:hover { border-color: var(--bd-l); }
+.ac-top { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 12px; }
+.avatar { width: 38px; height: 38px; border-radius: 9px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; color: #fff; }
+.ac-info { flex: 1; min-width: 0; }
+.ac-name { font-weight: 600; font-size: 14px; }
+.ac-role { color: var(--muted); font-size: 11px; margin-top: 2px; }
+.ac-footer { display: flex; justify-content: space-between; align-items: center;
+  padding-top: 10px; border-top: 1px solid var(--bd); }
+.status-chip { display: flex; align-items: center; gap: 5px; font-size: 12px; }
+.dot { width: 6px; height: 6px; border-radius: 50%; }
+.dot.idle { background: var(--green); }
+.dot.busy { background: var(--orange); animation: pulse 1s infinite alternate; }
+@keyframes pulse { from { opacity: 1; } to { opacity: .4; } }
+.task-link { font-size: 11px; color: var(--accent); cursor: pointer; }
+.task-link:hover { text-decoration: underline; }
+.ac-workdir { font-size: 10px; color: var(--muted); margin-top: 6px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Status badges ────────────────────────────────────────────────────────── */
+.sbadge { display: inline-block; font-size: 10px; padding: 1px 6px;
+  border-radius: 20px; font-weight: 600; }
+.sbadge-pending   { background: rgba(30,41,59,.8);  color: #93c5fd; }
+.sbadge-running   { background: rgba(30,58,138,.8); color: #60a5fa; }
+.sbadge-completed { background: rgba(20,83,45,.8);  color: var(--green); }
+.sbadge-failed    { background: rgba(127,29,29,.8); color: var(--red); }
+
+/* ── Task detail panel ────────────────────────────────────────────────────── */
+.task-panel { position: fixed; right: -480px; top: 54px; bottom: 0; width: 440px;
+  background: var(--bg-p); border-left: 1px solid var(--bd);
+  z-index: 40; transition: right .25s ease; display: flex; flex-direction: column; }
+.task-panel.open { right: 0; }
+.tp-bar { padding: 12px 14px; border-bottom: 1px solid var(--bd);
+  display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
+.tp-tid { font-size: 13px; color: var(--accent); font-weight: 600; }
+.icon-btn { background: none; border: none; color: var(--muted); cursor: pointer;
+  font-size: 15px; padding: 4px 7px; border-radius: 4px; }
+.icon-btn:hover { color: var(--txt); background: rgba(255,255,255,.06); }
+.tp-scroll { flex: 1; overflow-y: auto; }
+.tp-sec { padding: 12px 14px; border-bottom: 1px solid var(--bd); }
+.tp-label { font-size: 10px; color: var(--muted); font-weight: 600;
+  text-transform: uppercase; letter-spacing: .04em; margin-bottom: 7px; }
+.tp-desc-text { font-size: 13px; line-height: 1.55; }
+.tp-result-box { font-size: 12px; background: var(--bg-c); border: 1px solid var(--bd);
+  border-radius: 6px; padding: 9px 11px; white-space: pre-wrap; word-break: break-word;
+  line-height: 1.5; color: var(--green); max-height: 180px; overflow-y: auto; }
+.artifact-link { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); text-decoration: none; font-size: 12px; }
+.artifact-link:hover { text-decoration: underline; }
+.tp-chips { display: flex; gap: 5px; flex-wrap: wrap; }
+.tp-chip { display: inline-flex; align-items: center; gap: 5px;
+  background: var(--bg-c); border: 1px solid var(--bd);
+  border-radius: 6px; padding: 3px 7px; font-size: 12px; }
+.tp-conv { display: flex; flex-direction: column; gap: 10px; }
+.tp-action-form { display: flex; flex-direction: column; gap: 8px; }
+.tp-action-form select, .tp-action-form input, .tp-action-form textarea {
+  background: var(--bg); border: 1px solid var(--bd-l); color: var(--txt);
+  padding: 7px 9px; border-radius: 6px; font-size: 13px; outline: none; width: 100%; }
+.tp-action-form textarea { resize: vertical; min-height: 60px; }
+.tp-action-row { display: flex; gap: 7px; }
+.btn-danger { background: #7f1d1d; }
+.btn-danger:hover { background: #991b1b; }
+
+/* ── Modal ────────────────────────────────────────────────────────────────── */
+.overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6);
+  display: none; justify-content: center; align-items: center;
+  z-index: 100; backdrop-filter: blur(2px); }
+.overlay.active { display: flex; }
+.modal { background: var(--bg-p); border: 1px solid var(--bd); border-radius: 12px;
+  width: 420px; max-width: 94%; padding: 20px;
+  box-shadow: 0 12px 32px rgba(0,0,0,.5); }
+.modal h3 { margin-bottom: 16px; font-size: 15px; }
+.fg { margin-bottom: 12px; display: flex; flex-direction: column; gap: 5px; }
+.fg label { font-size: 11px; color: var(--muted); }
+.fg input, .fg select, .fg textarea {
+  background: var(--bg); border: 1px solid var(--bd-l);
+  color: var(--txt); padding: 8px 10px; border-radius: 6px; font-size: 13px; outline: none; }
+.fg input:focus, .fg select:focus, .fg textarea:focus { border-color: var(--accent); }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
+/* ── Toasts ───────────────────────────────────────────────────────────────── */
+#toasts { position: fixed; bottom: 18px; right: 18px; z-index: 200;
+  display: flex; flex-direction: column-reverse; gap: 7px; }
+.toast { background: var(--bg-p); border: 1px solid var(--bd); border-radius: 8px;
+  padding: 9px 13px; font-size: 12px; max-width: 280px;
+  opacity: 0; transform: translateY(6px); transition: all .18s;
+  box-shadow: 0 4px 12px rgba(0,0,0,.4); }
+.toast.show { opacity: 1; transform: translateY(0); }
+.toast.info { border-left: 3px solid var(--accent); }
+.toast.ok   { border-left: 3px solid var(--green); }
+.toast.err  { border-left: 3px solid var(--red); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">Modu <span>·</span> 微信文章创作团队</div>
+  <div class="tabs">
+    <div class="tab active" data-view="view-forum">论坛</div>
+    <div class="tab" data-view="view-board">任务</div>
+    <div class="tab" data-view="view-agents">员工</div>
+  </div>
+  <div class="hdr-right">
+    <button class="btn btn-green" onclick="openModal('m-article')">✍ 发起文章需求</button>
+    <div style="display:flex;align-items:center;gap:5px">
+      <div class="conn-dot" id="conn-dot"></div>
+      <span class="conn-label" id="conn-label">连接中</span>
+    </div>
+  </div>
+</header>
+
+<main>
+
+  <!-- ── 论坛 ───────────────────────────────────────────────────────────────── -->
+  <div id="view-forum" class="view active">
+    <div class="f-sidebar">
+      <div class="f-sidebar-hdr">
+        <span>文章任务讨论</span>
+        <span id="f-thread-cnt" style="font-size:11px;color:var(--accent)">0</span>
+      </div>
+      <div class="f-list" id="forum-list"></div>
+    </div>
+    <div class="f-main">
+      <div class="f-main-hdr" id="f-main-hdr" style="display:none">
+        <div>
+          <span id="f-hdr-tid" style="font-size:11px;color:var(--accent);font-weight:600"></span>
+          <span id="f-hdr-badge"></span>
+        </div>
+        <div class="f-main-sub" id="f-hdr-desc"></div>
+        <button class="icon-btn" onclick="openPanel(activeThread)" title="详情">⊞</button>
+      </div>
+      <div id="forum-summary" class="summary-box" style="display:none">
+        <div class="summary-label">任务摘要</div>
+        <div class="summary-text" id="forum-summary-text"></div>
+      </div>
+      <div class="f-chat" id="forum-chat">
+        <div class="f-empty">
+          <span style="font-size:28px">💬</span>
+          <span>选择一个任务查看讨论</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 任务 Board ──────────────────────────────────────────────────────────── -->
+  <div id="view-board" class="view">
+    <div class="board-hdr">
+      <h2>文章任务看板</h2>
+    </div>
+    <div class="board-cols">
+      <div class="k-col">
+        <div class="k-hdr" style="border-top:3px solid #1e3a8a">待处理<span class="k-cnt" id="cnt-pending">0</span></div>
+        <div class="k-body" id="col-pending"></div>
+      </div>
+      <div class="k-col">
+        <div class="k-hdr" style="border-top:3px solid #7070ff">进行中<span class="k-cnt" id="cnt-running">0</span></div>
+        <div class="k-body" id="col-running"></div>
+      </div>
+      <div class="k-col">
+        <div class="k-hdr" style="border-top:3px solid #16a34a">已完成<span class="k-cnt" id="cnt-completed">0</span></div>
+        <div class="k-body" id="col-completed"></div>
+      </div>
+      <div class="k-col">
+        <div class="k-hdr" style="border-top:3px solid #7f1d1d">失败<span class="k-cnt" id="cnt-failed">0</span></div>
+        <div class="k-body" id="col-failed"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 员工 ───────────────────────────────────────────────────────────────── -->
+  <div id="view-agents" class="view">
+    <div class="agents-grid" id="agents-grid"></div>
+  </div>
+
+</main>
+
+<!-- Task detail panel -->
+<div id="task-panel" class="task-panel">
+  <div class="tp-bar">
+    <div style="display:flex;align-items:center;gap:8px">
+      <span class="tp-tid" id="tp-id"></span>
+      <span id="tp-badge"></span>
+    </div>
+    <div style="display:flex;gap:4px">
+      <button class="icon-btn" onclick="goToForum()" title="在论坛中查看">💬</button>
+      <button class="icon-btn" onclick="closePanel()">✕</button>
+    </div>
+  </div>
+  <div class="tp-scroll">
+    <div class="tp-sec">
+      <div class="tp-label">描述</div>
+      <div class="tp-desc-text" id="tp-desc"></div>
+    </div>
+    <div class="tp-sec" id="tp-summary-sec" style="display:none">
+      <div class="tp-label">当前摘要</div>
+      <div class="tp-desc-text" id="tp-summary"></div>
+    </div>
+    <div class="tp-sec">
+      <div class="tp-label">参与员工</div>
+      <div class="tp-chips" id="tp-assignees"></div>
+    </div>
+    <div class="tp-sec" id="tp-result-sec" style="display:none">
+      <div class="tp-label">成果</div>
+      <pre class="tp-result-box" id="tp-result"></pre>
+    </div>
+    <div class="tp-sec" id="tp-artifact-sec" style="display:none">
+      <div class="tp-label">最终文件</div>
+      <a class="artifact-link" id="tp-artifact-link" target="_blank" rel="noreferrer">查看文章文件</a>
+    </div>
+    <div class="tp-sec" id="tp-error-sec" style="display:none">
+      <div class="tp-label">错误</div>
+      <div style="font-size:13px;color:var(--red);padding:7px 9px;background:rgba(127,29,29,.2);border-radius:6px" id="tp-error"></div>
+    </div>
+    <div class="tp-sec" id="tp-action-sec">
+      <div class="tp-label">操作</div>
+      <div id="tp-actions"></div>
+    </div>
+    <div class="tp-sec">
+      <div class="tp-label">讨论</div>
+      <div class="tp-conv" id="tp-conv"></div>
+    </div>
+  </div>
+</div>
+
+<!-- 注册员工 -->
+<div class="overlay" id="m-agent">
+  <div class="modal">
+    <h3>注册员工</h3>
+    <div class="fg"><label>ID</label><input id="ma-id" placeholder="e.g. wc-editor"></div>
+    <div class="fg"><label>角色</label><input id="ma-role" placeholder="e.g. 主编"></div>
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeModals()">取消</button>
+      <button class="btn" onclick="createAgent()">注册</button>
+    </div>
+  </div>
+</div>
+
+<!-- 发起公众号文章需求 -->
+<div class="overlay" id="m-article">
+  <div class="modal" style="width:460px;max-width:95%">
+    <h3>✍ 发起公众号文章</h3>
+    <p style="font-size:12px;color:var(--muted);margin-bottom:16px">
+      由主编协调团队完成：调研 → 选题 → 写稿 → 审稿 → 编者按
+    </p>
+    <div class="fg">
+      <label>指定主题（可选）</label>
+      <input id="art-topic" placeholder="例：AI时代创意工作者的焦虑与突破">
+    </div>
+    <div class="fg">
+      <label>创作方向（无主题时必填）</label>
+      <input id="art-niche" placeholder="例：AI创业、职场效率、科技与人文…">
+    </div>
+    <div class="fg" style="flex-direction:row;align-items:center;gap:8px">
+      <input type="checkbox" id="art-auto" style="width:14px;height:14px;accent-color:var(--accent)">
+      <label for="art-auto" style="font-size:13px;color:var(--txt);cursor:pointer">自动抓取今日热点（TopHub）</label>
+    </div>
+    <div style="background:rgba(112,112,255,.07);border:1px solid rgba(112,112,255,.2);
+      border-radius:8px;padding:10px 12px;font-size:12px;color:var(--muted);margin-bottom:14px">
+      <div style="color:var(--accent);font-weight:600;margin-bottom:4px">启动命令</div>
+      <code style="color:var(--txt)">go run ./cmd/agent-teams</code><br>
+      <code style="color:var(--txt);font-size:11px">CONTENT_MODEL=qwen/qwen3.5-35b-a3b CONTENT_API_URL=http://localhost:1234/v1</code>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-ghost" onclick="closeModals()">取消</button>
+      <button class="btn btn-green" id="btn-start-article" onclick="startArticle()">开始创作</button>
+    </div>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+let agents = {}, tasks = {}, convs = {}, activeThread = null;
+
+// ── Config (workspace path via server) ────────────────────────────────────────
+const WORKSPACE = './workspace'; // used for workdir display
+
+// ── Tabs ──────────────────────────────────────────────────────────────────────
+document.querySelectorAll('.tab').forEach(t => {
+  t.onclick = () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+    document.querySelectorAll('.view').forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    document.getElementById(t.dataset.view).classList.add('active');
+  };
+});
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const AV_COLORS = ['#6b6bff','#ff6b6b','#6bffb8','#ffb86b','#b86bff','#6bb8ff','#ff6bcc','#a0c4ff'];
+function avColor(id) {
+  let h = 0; for (const c of id) h = (h * 31 + c.charCodeAt(0)) & 0xffff;
+  return AV_COLORS[h % AV_COLORS.length];
+}
+function av(id, size = 20) {
+  return `<div class="chip" style="background:${avColor(id)};width:${size}px;height:${size}px;border-radius:${Math.round(size*.25)}px;font-size:${Math.round(size*.45)}px">${id.slice(0,2).toUpperCase()}</div>`;
+}
+function sbadge(status) {
+  return `<span class="sbadge sbadge-${status}">${status}</span>`;
+}
+function timeStr(t) {
+  return t ? new Date(t).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '';
+}
+
+// ── Toasts ────────────────────────────────────────────────────────────────────
+function toast(msg, type = 'info') {
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.textContent = msg;
+  document.getElementById('toasts').appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
+  setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 220); }, 3500);
+}
+
+// ── Renders ───────────────────────────────────────────────────────────────────
+function renderAgents() {
+  document.getElementById('agents-grid').innerHTML =
+    Object.values(agents).map(a => {
+      const workdir = `workspace/agents/${a.id}`;
+      return `
+      <div class="agent-card">
+        <div class="ac-top">
+          <div class="avatar" style="background:${avColor(a.id)}">${a.id.slice(0,2).toUpperCase()}</div>
+          <div class="ac-info">
+            <div class="ac-name">${a.id}</div>
+            <div class="ac-role">${a.role || '—'}</div>
+            <div class="ac-workdir" title="${workdir}">📁 ${workdir}</div>
+          </div>
+        </div>
+        <div class="ac-footer">
+          <div class="status-chip">
+            <div class="dot ${a.status === 'busy' ? 'busy' : 'idle'}"></div>
+            <span>${a.status === 'busy' ? '工作中' : '空闲'}</span>
+          </div>
+          ${a.current_task
+            ? `<span class="task-link" onclick="openPanel('${a.current_task}')">${a.current_task}</span>`
+            : ''}
+        </div>
+      </div>`;
+    }).join('');
+  syncSelects();
+}
+
+function renderBoard() {
+  const cols = { pending: [], running: [], completed: [], failed: [] };
+  Object.values(tasks).sort((a, b) => (b.updated_at||b.created_at) > (a.updated_at||a.created_at) ? 1 : -1)
+    .forEach(t => { if (cols[t.status]) cols[t.status].push(t); });
+  ['pending','running','completed','failed'].forEach(s => {
+    document.getElementById(`cnt-${s}`).textContent = cols[s].length;
+    document.getElementById(`col-${s}`).innerHTML = cols[s].map(t => `
+      <div class="task-card" onclick="openPanel('${t.id}')">
+        <div class="task-tid">${t.id}</div>
+        <div class="task-desc">${t.description}</div>
+        <div class="task-meta">
+          <div class="assignee-chips">${(t.assignees||[]).map(a => av(a)).join('') || '<span style="color:var(--muted);font-size:10px">未分配</span>'}</div>
+          <span class="by-label">by ${t.created_by}</span>
+        </div>
+      </div>`).join('');
+  });
+  renderForumList();
+}
+
+// ── Forum ─────────────────────────────────────────────────────────────────────
+function renderForumList() {
+  const list = Object.values(tasks).sort((a, b) =>
+    (b.updated_at||b.created_at) > (a.updated_at||a.created_at) ? 1 : -1);
+  document.getElementById('f-thread-cnt').textContent = list.length;
+  document.getElementById('forum-list').innerHTML = list.map(t => {
+    const cnt = (convs[t.id] || []).length;
+    return `
+    <div class="f-item ${activeThread === t.id ? 'active' : ''}" onclick="selectThread('${t.id}')">
+      <div class="f-item-id">${t.id} ${sbadge(t.status)}</div>
+      <div class="f-item-desc">${t.description}</div>
+      <div class="f-item-meta">${cnt ? cnt + ' 条消息' : '暂无消息'} · owner ${t.owner_id || '—'}</div>
+    </div>`;
+  }).join('');
+}
+
+function selectThread(tid) {
+  activeThread = tid;
+  renderForumList();
+  if (!convs[tid]) {
+    fetch('/api/conversations/' + tid).then(r => r.json()).then(d => {
+      convs[tid] = d || [];
+      renderForumChat();
+    });
+  } else {
+    renderForumChat();
+  }
+}
+
+// Map message type to display info
+function msgTypeInfo(msgType) {
+  switch (msgType) {
+    case 'delegate':    return { label: '委托', cls: 'type-delegate', bubble: 'delegate' };
+    case 'task_assign': return { label: '任务', cls: 'type-assign',   bubble: 'assign' };
+    case 'task_result': return { label: '结果', cls: 'type-reply',    bubble: 'reply' };
+    case 'chat':        return { label: '讨论', cls: 'type-chat',     bubble: 'forum' };
+    default:
+      if (msgType && msgType.includes('complete')) return { label: '完成', cls: 'type-complete', bubble: 'complete' };
+      return { label: msgType || '消息', cls: 'type-chat', bubble: '' };
+  }
+}
+
+function kindInfo(kind) {
+  switch (kind) {
+    case 'progress': return { label: '进展', cls: 'kind-progress' };
+    case 'idea': return { label: '想法', cls: 'kind-idea' };
+    case 'decision': return { label: '结论', cls: 'kind-decision' };
+    case 'risk': return { label: '风险', cls: 'kind-risk' };
+    case 'deliverable': return { label: '交付', cls: 'kind-deliverable' };
+    case 'system': return { label: '系统', cls: 'kind-system' };
+    default: return { label: '讨论', cls: '' };
+  }
+}
+
+function renderMsg(e) {
+  const ti = msgTypeInfo(e.msg_type);
+  const ki = kindInfo(e.kind);
+  const toStr = e.to ? `<span style="color:var(--muted)">→ ${e.to}</span>` : '';
+  const content = escHtml(e.content).replace(/(\/api\/tasks\/[^ ]+\/artifact)/g, '<a class="artifact-link" href="$1" target="_blank" rel="noreferrer">查看产物</a>');
+  return `
+  <div class="msg">
+    <div class="msg-av" style="background:${avColor(e.from)}">${e.from.slice(0,2).toUpperCase()}</div>
+    <div class="msg-body">
+      <div class="msg-meta">
+        <strong>${e.from}</strong>${toStr}
+        <span class="msg-type ${ti.cls}">${ti.label}</span>
+        <span class="msg-type ${ki.cls}">${ki.label}</span>
+        <span class="msg-time">${timeStr(e.at)}</span>
+      </div>
+      <div class="msg-bubble ${ti.bubble}">${content}</div>
+    </div>
+  </div>`;
+}
+
+function escHtml(s) {
+  return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function renderForumChat() {
+  const chat = document.getElementById('forum-chat');
+  const hdr = document.getElementById('f-main-hdr');
+  const summary = document.getElementById('forum-summary');
+  if (!activeThread) {
+    chat.innerHTML = '<div class="f-empty"><span style="font-size:28px">💬</span><span>选择一个任务查看讨论</span></div>';
+    hdr.style.display = 'none';
+    summary.style.display = 'none';
+    return;
+  }
+  const task = tasks[activeThread];
+  if (task) {
+    hdr.style.display = 'flex';
+    document.getElementById('f-hdr-tid').textContent = activeThread;
+    document.getElementById('f-hdr-badge').innerHTML = sbadge(task.status);
+    document.getElementById('f-hdr-desc').textContent = task.description;
+    if (task.summary) {
+      summary.style.display = '';
+      document.getElementById('forum-summary-text').textContent = task.summary;
+    } else {
+      summary.style.display = 'none';
+    }
+  }
+  const entries = convs[activeThread] || [];
+  chat.innerHTML = entries.length
+    ? entries.map(renderMsg).join('')
+    : '<div class="f-empty" style="height:auto;padding:30px 0"><span>暂无讨论消息</span></div>';
+  setTimeout(() => chat.scrollTop = chat.scrollHeight, 50);
+}
+
+// ── Task panel ────────────────────────────────────────────────────────────────
+function openPanel(tid) {
+  const t = tasks[tid];
+  if (!t) return;
+  document.getElementById('tp-id').textContent = tid;
+  document.getElementById('tp-badge').innerHTML = sbadge(t.status);
+  document.getElementById('tp-desc').textContent = t.description;
+  document.getElementById('tp-summary-sec').style.display = t.summary ? '' : 'none';
+  document.getElementById('tp-summary').textContent = t.summary || '';
+  document.getElementById('tp-assignees').innerHTML =
+    (t.assignees||[]).length
+      ? t.assignees.map(a => `<div class="tp-chip">${av(a,22)}<span>${a}${a === t.owner_id ? ' · owner' : ''}</span></div>`).join('')
+      : '<span style="color:var(--muted);font-size:12px">未分配</span>';
+
+  const resSec = document.getElementById('tp-result-sec');
+  const errSec = document.getElementById('tp-error-sec');
+  const artifactSec = document.getElementById('tp-artifact-sec');
+  resSec.style.display = t.result ? '' : 'none';
+  errSec.style.display = t.error  ? '' : 'none';
+  artifactSec.style.display = t.artifact_path ? '' : 'none';
+  if (t.result) document.getElementById('tp-result').textContent = t.result;
+  if (t.error)  document.getElementById('tp-error').textContent  = t.error;
+  if (t.artifact_path) {
+    const link = document.getElementById('tp-artifact-link');
+    link.href = `/api/tasks/${tid}/artifact`;
+    link.textContent = t.artifact_path;
+  }
+
+  renderPanelActions(t);
+  renderPanelConv(tid);
+  document.getElementById('task-panel').classList.add('open');
+}
+
+function closePanel() {
+  document.getElementById('task-panel').classList.remove('open');
+}
+
+function goToForum() {
+  if (!activeThread && document.getElementById('tp-id').textContent) {
+    activeThread = document.getElementById('tp-id').textContent;
+  }
+  closePanel();
+  document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+  document.querySelectorAll('.view').forEach(x => x.classList.remove('active'));
+  document.querySelector('[data-view="view-forum"]').classList.add('active');
+  document.getElementById('view-forum').classList.add('active');
+  if (activeThread) selectThread(activeThread);
+}
+
+function renderPanelActions(t) {
+  const agOpts = () => Object.values(agents).map(a =>
+    `<option value="${a.id}">${a.id} (${a.role || '无角色'})</option>`).join('');
+  const sec = document.getElementById('tp-action-sec');
+  const div = document.getElementById('tp-actions');
+  if (t.status === 'pending') {
+    div.innerHTML = `
+      <div class="tp-action-form">
+        <textarea id="pa-summary" placeholder="更新当前摘要…">${escHtml(t.summary || '')}</textarea>
+        <div class="tp-action-row">
+          <button class="btn-ghost" onclick="paSummary('${t.id}')">更新摘要</button>
+        </div>
+        <select id="pa-agent">${agOpts()}</select>
+        <div class="tp-action-row">
+          <button class="btn" onclick="paAssign('${t.id}')">分配并启动</button>
+        </div>
+      </div>`;
+    sec.style.display = '';
+  } else if (t.status === 'running') {
+    div.innerHTML = `
+      <div class="tp-action-form">
+        <textarea id="pa-summary" placeholder="更新当前摘要…">${escHtml(t.summary || '')}</textarea>
+        <div class="tp-action-row">
+          <button class="btn-ghost" onclick="paSummary('${t.id}')">更新摘要</button>
+        </div>
+        <select id="pa-comp-agent">${agOpts()}</select>
+        <textarea id="pa-result" placeholder="成果内容…"></textarea>
+        <input id="pa-err" placeholder="错误信息（Fail 时填写）"
+          style="background:var(--bg);border:1px solid var(--bd-l);color:var(--txt);padding:7px 9px;border-radius:6px;font-size:13px;outline:none;width:100%">
+        <div class="tp-action-row">
+          <button class="btn" onclick="paComplete('${t.id}')">完成</button>
+          <button class="btn btn-danger" onclick="paFail('${t.id}')">失败</button>
+        </div>
+      </div>`;
+    sec.style.display = '';
+  } else {
+    div.innerHTML = '';
+    sec.style.display = 'none';
+  }
+}
+
+function renderPanelConv(tid) {
+  const render = data => {
+    convs[tid] = data || [];
+    document.getElementById('tp-conv').innerHTML = convs[tid].length
+      ? convs[tid].map(renderMsg).join('')
+      : '<div style="color:var(--muted);font-size:12px">暂无消息</div>';
+  };
+  if (convs[tid]) { render(convs[tid]); return; }
+  fetch('/api/conversations/' + tid).then(r => r.json()).then(render);
+}
+
+async function paAssign(tid) {
+  const agent = document.getElementById('pa-agent').value;
+  await apiReq(`/api/tasks/${tid}/assign`, 'POST', { agent_id: agent });
+  await apiReq(`/api/tasks/${tid}/start`, 'POST', {});
+}
+async function paSummary(tid) {
+  const summary = document.getElementById('pa-summary').value.trim();
+  if (!summary) { toast('摘要不能为空', 'err'); return; }
+  await apiReq(`/api/tasks/${tid}/summary`, 'POST', { summary });
+}
+async function paComplete(tid) {
+  const agent = document.getElementById('pa-comp-agent').value;
+  const result = document.getElementById('pa-result').value;
+  await apiReq(`/api/tasks/${tid}/complete`, 'POST', { agent_id: agent, result });
+}
+async function paFail(tid) {
+  const err = document.getElementById('pa-err').value;
+  await apiReq(`/api/tasks/${tid}/fail`, 'POST', { error: err });
+}
+
+// ── Modals ────────────────────────────────────────────────────────────────────
+function openModal(id) { syncSelects(); document.getElementById(id).classList.add('active'); }
+function closeModals() { document.querySelectorAll('.overlay').forEach(e => e.classList.remove('active')); }
+document.querySelectorAll('.overlay').forEach(o => o.onclick = e => { if (e.target === o) closeModals(); });
+
+function syncSelects() {
+  Object.values(agents).map(a => `<option value="${a.id}">${a.id} (${a.role || '—'})</option>`).join('');
+}
+
+// ── API ───────────────────────────────────────────────────────────────────────
+async function apiReq(path, method, body) {
+  const res = await fetch(path, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    const txt = await res.text();
+    toast('错误: ' + txt, 'err');
+    throw new Error(txt);
+  }
+  closeModals();
+  return res.json();
+}
+
+async function createAgent() {
+  const id   = document.getElementById('ma-id').value.trim();
+  const role = document.getElementById('ma-role').value.trim();
+  if (!id) { toast('Agent ID 必填', 'err'); return; }
+  await apiReq('/api/agents', 'POST', { id, role });
+  document.getElementById('ma-id').value = '';
+  document.getElementById('ma-role').value = '';
+}
+
+async function startArticle() {
+  const topic = document.getElementById('art-topic').value.trim();
+  const niche = document.getElementById('art-niche').value.trim();
+  const auto  = document.getElementById('art-auto').checked;
+  if (!topic && !niche) { toast('请输入主题或创作方向', 'err'); return; }
+  const btn = document.getElementById('btn-start-article');
+  btn.disabled = true; btn.textContent = '创作中…';
+  toast('文章创作已启动，可在论坛实时查看协作进度', 'ok');
+  try {
+    await apiReq('/api/article/run', 'POST', { topic, niche, auto_discover: auto });
+    document.getElementById('art-topic').value = '';
+    document.getElementById('art-niche').value = '';
+    // Switch to forum tab
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+    document.querySelectorAll('.view').forEach(x => x.classList.remove('active'));
+    document.querySelector('[data-view="view-forum"]').classList.add('active');
+    document.getElementById('view-forum').classList.add('active');
+  } catch(_) {}
+  setTimeout(() => { btn.disabled = false; btn.textContent = '开始创作'; }, 3000);
+}
+
+// ── SSE ───────────────────────────────────────────────────────────────────────
+const sse = new EventSource('/events');
+sse.onopen = () => {
+  document.getElementById('conn-dot').classList.add('ok');
+  document.getElementById('conn-label').textContent = '已连接';
+};
+sse.onerror = () => {
+  document.getElementById('conn-dot').classList.remove('ok');
+  document.getElementById('conn-label').textContent = '断开';
+};
+
+function handleSSE(type, raw) {
+  let d;
+  try { d = JSON.parse(raw); } catch { return; }
+  switch (type) {
+    case 'snapshot.agents':
+      d.forEach(a => agents[a.id] = a);
+      renderAgents();
+      break;
+    case 'snapshot.tasks':
+      d.forEach(t => tasks[t.id] = t);
+      renderBoard();
+      break;
+    case 'snapshot.projects':
+      // ignore
+      break;
+
+    case 'agent.registered':
+    case 'agent.updated':
+      if (d.data) agents[d.agent_id || d.data.id] = d.data;
+      renderAgents();
+      if (type === 'agent.updated' && d.data) {
+        const a = d.data;
+        if (a.status === 'busy' && a.current_task)
+          toast(`${a.id} 开始处理 ${a.current_task}`, 'info');
+        if (a.status === 'idle')
+          toast(`${a.id} 已空闲`, 'ok');
+      }
+      break;
+    case 'agent.evicted':
+      delete agents[d.agent_id];
+      renderAgents();
+      break;
+
+    case 'task.created':
+    case 'task.updated':
+      tasks[d.task_id] = d.data;
+      renderBoard();
+      if (type === 'task.created') toast(`新任务：${d.task_id}`, 'info');
+      if (type === 'task.updated' && d.data.status === 'completed') toast(`${d.task_id} ✓ 已完成`, 'ok');
+      if (type === 'task.updated' && d.data.status === 'failed')    toast(`${d.task_id} 失败`, 'err');
+      if (document.getElementById('task-panel').classList.contains('open') &&
+          document.getElementById('tp-id').textContent === d.task_id) {
+        openPanel(d.task_id);
+      }
+      break;
+
+    case 'conversation.added': {
+      if (!convs[d.task_id]) convs[d.task_id] = [];
+      convs[d.task_id].push(d.data);
+      // Update forum sidebar count
+      renderForumList();
+      // If this thread is open, append message
+      if (activeThread === d.task_id) {
+        const chat = document.getElementById('forum-chat');
+        const msgEl = document.createElement('div');
+        msgEl.innerHTML = renderMsg(d.data);
+        // Remove empty state if present
+        const empty = chat.querySelector('.f-empty');
+        if (empty) empty.remove();
+        chat.appendChild(msgEl.firstElementChild);
+        chat.scrollTop = chat.scrollHeight;
+      }
+      // Update panel if open on this task
+      if (document.getElementById('task-panel').classList.contains('open') &&
+          document.getElementById('tp-id').textContent === d.task_id) {
+        renderPanelConv(d.task_id);
+      }
+      // Toast only for delegate/reply/complete, not every forum post
+      const ti = msgTypeInfo(d.data.msg_type);
+      if (['委托','完成'].includes(ti.label)) {
+        const toStr = d.data.to ? ` → ${d.data.to}` : '';
+        toast(`${d.data.from}${toStr}：${ti.label}`, 'info');
+      }
+      break;
+    }
+  }
+}
+
+['snapshot.agents','snapshot.tasks','snapshot.projects',
+ 'agent.registered','agent.updated','agent.evicted',
+ 'task.created','task.updated','conversation.added'].forEach(et =>
+  sse.addEventListener(et, e => handleSSE(et, e.data)));
+</script>
+</body>
+</html>
