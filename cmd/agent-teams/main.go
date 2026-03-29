@@ -14,9 +14,8 @@ import (
 )
 
 func main() {
-	port      := flag.Int("port", 8080, "HTTP port to listen on")
+	port := flag.Int("port", 8080, "HTTP port to listen on")
 	workspace := flag.String("workspace", "./workspace", "Root directory for all runtime data (db, agent files, articles)")
-	wechat    := flag.Bool("wechat", false, "Start the WeChat content team (requires LM Studio)")
 	flag.Parse()
 
 	if err := os.MkdirAll(*workspace, 0o755); err != nil {
@@ -31,7 +30,6 @@ func main() {
 	defer store.Close()
 
 	hub := mailbox.NewHub(mailbox.WithStore(store))
-	seedDemoTeam(hub)
 
 	cfg := defaultContentConfig()
 	cfg.WorkDir = *workspace
@@ -41,26 +39,11 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	if *wechat {
-		startWechatTeam(ctx, hub, cfg)
-		log.Printf("[wechat] content team active (model=%s api=%s)", cfg.ModelID, cfg.APIURL)
-	}
+	startWechatTeam(ctx, hub, cfg)
+	log.Printf("[wechat] content team active (model=%s api=%s)", cfg.ModelID, cfg.APIURL)
 
-	log.Printf("Agent Teams on http://localhost%s  (wechat=%v)", addr, *wechat)
+	log.Printf("Wechat Article Team on http://localhost%s", addr)
 	if err := srv.Start(ctx, addr); err != nil {
 		log.Fatalf("server: %v", err)
-	}
-}
-
-func seedDemoTeam(hub *mailbox.Hub) {
-	demo := map[string]string{
-		"planner":  "Planner",
-		"writer":   "Copywriter",
-		"designer": "Visual Designer",
-		"reviewer": "Reviewer",
-	}
-	for id, role := range demo {
-		hub.Register(id)
-		_ = hub.SetAgentRole(id, role)
 	}
 }

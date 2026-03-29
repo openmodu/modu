@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Modu · 数字员工</title>
+<title>Modu · 微信文章创作团队</title>
 <style>
 :root {
   --bg:     #080810;
@@ -86,13 +86,10 @@ main { flex: 1; overflow: hidden; position: relative; }
   display: flex; flex-direction: column; gap: 10px; }
 .f-empty { display: flex; align-items: center; justify-content: center;
   height: 100%; color: var(--muted); font-size: 14px; flex-direction: column; gap: 8px; }
-.f-compose { padding: 10px 16px; border-top: 1px solid var(--bd);
-  background: var(--bg-p); display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
-.f-compose input { flex: 1; background: var(--bg-c); border: 1px solid var(--bd);
-  color: var(--txt); padding: 7px 10px; border-radius: 6px; font-size: 13px; outline: none; }
-.f-compose input:focus { border-color: var(--accent); }
-.f-compose select { background: var(--bg-c); border: 1px solid var(--bd);
-  color: var(--txt); padding: 7px 8px; border-radius: 6px; font-size: 12px; outline: none; }
+.summary-box { margin: 12px 20px 0; padding: 12px 14px; border: 1px solid rgba(112,112,255,.22);
+  background: rgba(112,112,255,.08); border-radius: 10px; }
+.summary-label { font-size: 10px; color: var(--accent); font-weight: 700; letter-spacing: .05em; text-transform: uppercase; margin-bottom: 6px; }
+.summary-text { font-size: 13px; line-height: 1.6; color: var(--txt); white-space: pre-wrap; word-break: break-word; }
 
 /* ── Messages ─────────────────────────────────────────────────────────────── */
 .msg { display: flex; gap: 10px; }
@@ -110,6 +107,12 @@ main { flex: 1; overflow: hidden; position: relative; }
 .type-assign   { background: rgba(112,112,255,.12); color: var(--accent); border: 1px solid rgba(112,112,255,.3); }
 .type-complete { background: rgba(74,222,128,.15); color: var(--green);  border: 1px solid rgba(74,222,128,.4); }
 .type-chat     { background: rgba(255,255,255,.05); color: var(--muted); border: 1px solid var(--bd); }
+.kind-progress { color: #93c5fd; border-color: rgba(147,197,253,.3); background: rgba(147,197,253,.1); }
+.kind-idea { color: #fbbf24; border-color: rgba(251,191,36,.3); background: rgba(251,191,36,.1); }
+.kind-decision { color: #a78bfa; border-color: rgba(167,139,250,.3); background: rgba(167,139,250,.1); }
+.kind-risk { color: #f87171; border-color: rgba(248,113,113,.3); background: rgba(248,113,113,.1); }
+.kind-deliverable { color: #4ade80; border-color: rgba(74,222,128,.3); background: rgba(74,222,128,.1); }
+.kind-system { color: #cbd5e1; border-color: rgba(203,213,225,.25); background: rgba(203,213,225,.08); }
 .msg-bubble { background: var(--bg-c); border: 1px solid var(--bd);
   border-radius: 8px; padding: 9px 13px; font-size: 13px; line-height: 1.55;
   white-space: pre-wrap; word-break: break-word; max-width: 100%; }
@@ -195,6 +198,8 @@ main { flex: 1; overflow: hidden; position: relative; }
 .tp-result-box { font-size: 12px; background: var(--bg-c); border: 1px solid var(--bd);
   border-radius: 6px; padding: 9px 11px; white-space: pre-wrap; word-break: break-word;
   line-height: 1.5; color: var(--green); max-height: 180px; overflow-y: auto; }
+.artifact-link { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); text-decoration: none; font-size: 12px; }
+.artifact-link:hover { text-decoration: underline; }
 .tp-chips { display: flex; gap: 5px; flex-wrap: wrap; }
 .tp-chip { display: inline-flex; align-items: center; gap: 5px;
   background: var(--bg-c); border: 1px solid var(--bd);
@@ -242,15 +247,14 @@ main { flex: 1; overflow: hidden; position: relative; }
 <body>
 
 <header>
-  <div class="logo">Modu <span>·</span> 数字员工</div>
+  <div class="logo">Modu <span>·</span> 微信文章创作团队</div>
   <div class="tabs">
     <div class="tab active" data-view="view-forum">论坛</div>
     <div class="tab" data-view="view-board">任务</div>
     <div class="tab" data-view="view-agents">员工</div>
   </div>
   <div class="hdr-right">
-    <button class="btn btn-green" onclick="openModal('m-article')">✍ 发起需求</button>
-    <button class="btn" style="font-size:12px;padding:5px 11px" onclick="openModal('m-task')">+ 任务</button>
+    <button class="btn btn-green" onclick="openModal('m-article')">✍ 发起文章需求</button>
     <div style="display:flex;align-items:center;gap:5px">
       <div class="conn-dot" id="conn-dot"></div>
       <span class="conn-label" id="conn-label">连接中</span>
@@ -264,7 +268,7 @@ main { flex: 1; overflow: hidden; position: relative; }
   <div id="view-forum" class="view active">
     <div class="f-sidebar">
       <div class="f-sidebar-hdr">
-        <span>任务讨论</span>
+        <span>文章任务讨论</span>
         <span id="f-thread-cnt" style="font-size:11px;color:var(--accent)">0</span>
       </div>
       <div class="f-list" id="forum-list"></div>
@@ -278,16 +282,15 @@ main { flex: 1; overflow: hidden; position: relative; }
         <div class="f-main-sub" id="f-hdr-desc"></div>
         <button class="icon-btn" onclick="openPanel(activeThread)" title="详情">⊞</button>
       </div>
+      <div id="forum-summary" class="summary-box" style="display:none">
+        <div class="summary-label">任务摘要</div>
+        <div class="summary-text" id="forum-summary-text"></div>
+      </div>
       <div class="f-chat" id="forum-chat">
         <div class="f-empty">
           <span style="font-size:28px">💬</span>
           <span>选择一个任务查看讨论</span>
         </div>
-      </div>
-      <div id="forum-compose" style="display:none" class="f-compose">
-        <select id="f-from" title="以谁的身份发送" style="width:130px"></select>
-        <input type="text" id="f-msg" placeholder="在论坛发表消息…" onkeypress="if(event.key==='Enter')sendChat()">
-        <button class="btn" onclick="sendChat()">发送</button>
       </div>
     </div>
   </div>
@@ -295,8 +298,7 @@ main { flex: 1; overflow: hidden; position: relative; }
   <!-- ── 任务 Board ──────────────────────────────────────────────────────────── -->
   <div id="view-board" class="view">
     <div class="board-hdr">
-      <h2>任务看板</h2>
-      <button class="btn" onclick="openModal('m-task')">+ 新建任务</button>
+      <h2>文章任务看板</h2>
     </div>
     <div class="board-cols">
       <div class="k-col">
@@ -342,13 +344,21 @@ main { flex: 1; overflow: hidden; position: relative; }
       <div class="tp-label">描述</div>
       <div class="tp-desc-text" id="tp-desc"></div>
     </div>
+    <div class="tp-sec" id="tp-summary-sec" style="display:none">
+      <div class="tp-label">当前摘要</div>
+      <div class="tp-desc-text" id="tp-summary"></div>
+    </div>
     <div class="tp-sec">
-      <div class="tp-label">负责人</div>
+      <div class="tp-label">参与员工</div>
       <div class="tp-chips" id="tp-assignees"></div>
     </div>
     <div class="tp-sec" id="tp-result-sec" style="display:none">
       <div class="tp-label">成果</div>
       <pre class="tp-result-box" id="tp-result"></pre>
+    </div>
+    <div class="tp-sec" id="tp-artifact-sec" style="display:none">
+      <div class="tp-label">最终文件</div>
+      <a class="artifact-link" id="tp-artifact-link" target="_blank" rel="noreferrer">查看文章文件</a>
     </div>
     <div class="tp-sec" id="tp-error-sec" style="display:none">
       <div class="tp-label">错误</div>
@@ -361,19 +371,6 @@ main { flex: 1; overflow: hidden; position: relative; }
     <div class="tp-sec">
       <div class="tp-label">讨论</div>
       <div class="tp-conv" id="tp-conv"></div>
-    </div>
-  </div>
-</div>
-
-<!-- 新建任务 -->
-<div class="overlay" id="m-task">
-  <div class="modal">
-    <h3>新建任务</h3>
-    <div class="fg"><label>描述</label><textarea id="mt-desc" rows="3" placeholder="任务描述…"></textarea></div>
-    <div class="fg"><label>创建人</label><select id="mt-by"></select></div>
-    <div class="modal-actions">
-      <button class="btn-ghost" onclick="closeModals()">取消</button>
-      <button class="btn" onclick="createTask()">创建</button>
     </div>
   </div>
 </div>
@@ -412,9 +409,9 @@ main { flex: 1; overflow: hidden; position: relative; }
     </div>
     <div style="background:rgba(112,112,255,.07);border:1px solid rgba(112,112,255,.2);
       border-radius:8px;padding:10px 12px;font-size:12px;color:var(--muted);margin-bottom:14px">
-      <div style="color:var(--accent);font-weight:600;margin-bottom:4px">需先启动内容团队</div>
-      <code style="color:var(--txt)">go run . -wechat</code><br>
-      <code style="color:var(--txt);font-size:11px">CONTENT_MODEL=qwen2.5 CONTENT_API_URL=http://localhost:1234/v1</code>
+      <div style="color:var(--accent);font-weight:600;margin-bottom:4px">启动命令</div>
+      <code style="color:var(--txt)">go run ./cmd/agent-teams</code><br>
+      <code style="color:var(--txt);font-size:11px">CONTENT_MODEL=qwen/qwen3.5-35b-a3b CONTENT_API_URL=http://localhost:1234/v1</code>
     </div>
     <div class="modal-actions">
       <button class="btn-ghost" onclick="closeModals()">取消</button>
@@ -527,7 +524,7 @@ function renderForumList() {
     <div class="f-item ${activeThread === t.id ? 'active' : ''}" onclick="selectThread('${t.id}')">
       <div class="f-item-id">${t.id} ${sbadge(t.status)}</div>
       <div class="f-item-desc">${t.description}</div>
-      <div class="f-item-meta">${cnt ? cnt + ' 条消息' : '暂无消息'} · by ${t.created_by}</div>
+      <div class="f-item-meta">${cnt ? cnt + ' 条消息' : '暂无消息'} · owner ${t.owner_id || '—'}</div>
     </div>`;
   }).join('');
 }
@@ -558,9 +555,23 @@ function msgTypeInfo(msgType) {
   }
 }
 
+function kindInfo(kind) {
+  switch (kind) {
+    case 'progress': return { label: '进展', cls: 'kind-progress' };
+    case 'idea': return { label: '想法', cls: 'kind-idea' };
+    case 'decision': return { label: '结论', cls: 'kind-decision' };
+    case 'risk': return { label: '风险', cls: 'kind-risk' };
+    case 'deliverable': return { label: '交付', cls: 'kind-deliverable' };
+    case 'system': return { label: '系统', cls: 'kind-system' };
+    default: return { label: '讨论', cls: '' };
+  }
+}
+
 function renderMsg(e) {
   const ti = msgTypeInfo(e.msg_type);
+  const ki = kindInfo(e.kind);
   const toStr = e.to ? `<span style="color:var(--muted)">→ ${e.to}</span>` : '';
+  const content = escHtml(e.content).replace(/(\/api\/tasks\/[^ ]+\/artifact)/g, '<a class="artifact-link" href="$1" target="_blank" rel="noreferrer">查看产物</a>');
   return `
   <div class="msg">
     <div class="msg-av" style="background:${avColor(e.from)}">${e.from.slice(0,2).toUpperCase()}</div>
@@ -568,9 +579,10 @@ function renderMsg(e) {
       <div class="msg-meta">
         <strong>${e.from}</strong>${toStr}
         <span class="msg-type ${ti.cls}">${ti.label}</span>
+        <span class="msg-type ${ki.cls}">${ki.label}</span>
         <span class="msg-time">${timeStr(e.at)}</span>
       </div>
-      <div class="msg-bubble ${ti.bubble}">${escHtml(e.content)}</div>
+      <div class="msg-bubble ${ti.bubble}">${content}</div>
     </div>
   </div>`;
 }
@@ -581,12 +593,12 @@ function escHtml(s) {
 
 function renderForumChat() {
   const chat = document.getElementById('forum-chat');
-  const compose = document.getElementById('forum-compose');
   const hdr = document.getElementById('f-main-hdr');
+  const summary = document.getElementById('forum-summary');
   if (!activeThread) {
     chat.innerHTML = '<div class="f-empty"><span style="font-size:28px">💬</span><span>选择一个任务查看讨论</span></div>';
-    compose.style.display = 'none';
     hdr.style.display = 'none';
+    summary.style.display = 'none';
     return;
   }
   const task = tasks[activeThread];
@@ -595,28 +607,18 @@ function renderForumChat() {
     document.getElementById('f-hdr-tid').textContent = activeThread;
     document.getElementById('f-hdr-badge').innerHTML = sbadge(task.status);
     document.getElementById('f-hdr-desc').textContent = task.description;
+    if (task.summary) {
+      summary.style.display = '';
+      document.getElementById('forum-summary-text').textContent = task.summary;
+    } else {
+      summary.style.display = 'none';
+    }
   }
   const entries = convs[activeThread] || [];
   chat.innerHTML = entries.length
     ? entries.map(renderMsg).join('')
     : '<div class="f-empty" style="height:auto;padding:30px 0"><span>暂无讨论消息</span></div>';
   setTimeout(() => chat.scrollTop = chat.scrollHeight, 50);
-
-  const agOpts = Object.keys(agents).map(id => `<option value="${id}">${id}</option>`).join('');
-  document.getElementById('f-from').innerHTML = agOpts;
-  compose.style.display = 'flex';
-}
-
-function sendChat() {
-  const text = document.getElementById('f-msg').value.trim();
-  if (!text || !activeThread) return;
-  apiReq('/api/messages', 'POST', {
-    from: document.getElementById('f-from').value,
-    to: document.getElementById('f-from').value, // forum broadcast: to = from (hub records it)
-    task_id: activeThread,
-    type: 'chat',
-    text,
-  }).then(() => { document.getElementById('f-msg').value = ''; });
 }
 
 // ── Task panel ────────────────────────────────────────────────────────────────
@@ -626,17 +628,26 @@ function openPanel(tid) {
   document.getElementById('tp-id').textContent = tid;
   document.getElementById('tp-badge').innerHTML = sbadge(t.status);
   document.getElementById('tp-desc').textContent = t.description;
+  document.getElementById('tp-summary-sec').style.display = t.summary ? '' : 'none';
+  document.getElementById('tp-summary').textContent = t.summary || '';
   document.getElementById('tp-assignees').innerHTML =
     (t.assignees||[]).length
-      ? t.assignees.map(a => `<div class="tp-chip">${av(a,22)}<span>${a}</span></div>`).join('')
+      ? t.assignees.map(a => `<div class="tp-chip">${av(a,22)}<span>${a}${a === t.owner_id ? ' · owner' : ''}</span></div>`).join('')
       : '<span style="color:var(--muted);font-size:12px">未分配</span>';
 
   const resSec = document.getElementById('tp-result-sec');
   const errSec = document.getElementById('tp-error-sec');
+  const artifactSec = document.getElementById('tp-artifact-sec');
   resSec.style.display = t.result ? '' : 'none';
   errSec.style.display = t.error  ? '' : 'none';
+  artifactSec.style.display = t.artifact_path ? '' : 'none';
   if (t.result) document.getElementById('tp-result').textContent = t.result;
   if (t.error)  document.getElementById('tp-error').textContent  = t.error;
+  if (t.artifact_path) {
+    const link = document.getElementById('tp-artifact-link');
+    link.href = `/api/tasks/${tid}/artifact`;
+    link.textContent = t.artifact_path;
+  }
 
   renderPanelActions(t);
   renderPanelConv(tid);
@@ -667,6 +678,10 @@ function renderPanelActions(t) {
   if (t.status === 'pending') {
     div.innerHTML = `
       <div class="tp-action-form">
+        <textarea id="pa-summary" placeholder="更新当前摘要…">${escHtml(t.summary || '')}</textarea>
+        <div class="tp-action-row">
+          <button class="btn-ghost" onclick="paSummary('${t.id}')">更新摘要</button>
+        </div>
         <select id="pa-agent">${agOpts()}</select>
         <div class="tp-action-row">
           <button class="btn" onclick="paAssign('${t.id}')">分配并启动</button>
@@ -676,6 +691,10 @@ function renderPanelActions(t) {
   } else if (t.status === 'running') {
     div.innerHTML = `
       <div class="tp-action-form">
+        <textarea id="pa-summary" placeholder="更新当前摘要…">${escHtml(t.summary || '')}</textarea>
+        <div class="tp-action-row">
+          <button class="btn-ghost" onclick="paSummary('${t.id}')">更新摘要</button>
+        </div>
         <select id="pa-comp-agent">${agOpts()}</select>
         <textarea id="pa-result" placeholder="成果内容…"></textarea>
         <input id="pa-err" placeholder="错误信息（Fail 时填写）"
@@ -708,6 +727,11 @@ async function paAssign(tid) {
   await apiReq(`/api/tasks/${tid}/assign`, 'POST', { agent_id: agent });
   await apiReq(`/api/tasks/${tid}/start`, 'POST', {});
 }
+async function paSummary(tid) {
+  const summary = document.getElementById('pa-summary').value.trim();
+  if (!summary) { toast('摘要不能为空', 'err'); return; }
+  await apiReq(`/api/tasks/${tid}/summary`, 'POST', { summary });
+}
 async function paComplete(tid) {
   const agent = document.getElementById('pa-comp-agent').value;
   const result = document.getElementById('pa-result').value;
@@ -724,9 +748,7 @@ function closeModals() { document.querySelectorAll('.overlay').forEach(e => e.cl
 document.querySelectorAll('.overlay').forEach(o => o.onclick = e => { if (e.target === o) closeModals(); });
 
 function syncSelects() {
-  const agOpts = Object.values(agents).map(a => `<option value="${a.id}">${a.id} (${a.role || '—'})</option>`).join('');
-  ['mt-by','ma-role'].forEach(id => {});
-  const mtBy = document.getElementById('mt-by'); if (mtBy) mtBy.innerHTML = agOpts;
+  Object.values(agents).map(a => `<option value="${a.id}">${a.id} (${a.role || '—'})</option>`).join('');
 }
 
 // ── API ───────────────────────────────────────────────────────────────────────
@@ -752,14 +774,6 @@ async function createAgent() {
   await apiReq('/api/agents', 'POST', { id, role });
   document.getElementById('ma-id').value = '';
   document.getElementById('ma-role').value = '';
-}
-
-async function createTask() {
-  const description = document.getElementById('mt-desc').value.trim();
-  const creator_id  = document.getElementById('mt-by').value;
-  if (!description) { toast('描述不能为空', 'err'); return; }
-  await apiReq('/api/tasks', 'POST', { description, creator_id });
-  document.getElementById('mt-desc').value = '';
 }
 
 async function startArticle() {

@@ -92,6 +92,9 @@ func TestTaskLifecycle(t *testing.T) {
 	if task.AssignedTo != "worker" {
 		t.Errorf("expected assigned to worker, got %s", task.AssignedTo)
 	}
+	if task.OwnerID != "worker" {
+		t.Errorf("expected owner=worker, got %s", task.OwnerID)
+	}
 
 	// StartTask
 	if err := h.StartTask(taskID); err != nil {
@@ -110,6 +113,62 @@ func TestTaskLifecycle(t *testing.T) {
 	if task.Status != TaskStatusCompleted || task.Result != "result data" {
 		t.Errorf("unexpected completed state: status=%s result=%s", task.Status, task.Result)
 	}
+	if task.DiscussionClosedAt == nil {
+		t.Error("expected discussion to be closed after completion")
+	}
+}
+
+func TestTaskCollaborationUsesSingleTaskParticipants(t *testing.T) {
+	h := NewHub()
+	h.Register("creator")
+	h.Register("owner")
+	h.Register("reviewer")
+
+	taskID, err := h.CreateTask("creator", "one requirement")
+	if err != nil {
+		t.Fatalf("CreateTask failed: %v", err)
+	}
+	if err := h.AssignTask(taskID, "owner"); err != nil {
+		t.Fatalf("AssignTask owner failed: %v", err)
+	}
+	if err := h.AssignTask(taskID, "reviewer"); err != nil {
+		t.Fatalf("AssignTask reviewer failed: %v", err)
+	}
+
+	task, _ := h.GetTask(taskID)
+	if task.OwnerID != "owner" {
+		t.Fatalf("expected owner=owner, got %s", task.OwnerID)
+	}
+	if len(task.Assignees) != 2 {
+		t.Fatalf("expected 2 participants, got %d", len(task.Assignees))
+	}
+	if len(task.Collaborators) != 1 || task.Collaborators[0] != "reviewer" {
+		t.Fatalf("unexpected collaborators: %#v", task.Collaborators)
+	}
+}
+
+func TestOnlyOwnerCanCompleteCollaborativeTask(t *testing.T) {
+	h := NewHub()
+	h.Register("creator")
+	h.Register("owner")
+	h.Register("reviewer")
+
+	taskID, _ := h.CreateTask("creator", "one requirement")
+	_ = h.AssignTask(taskID, "owner")
+	_ = h.AssignTask(taskID, "reviewer")
+	_ = h.StartTask(taskID)
+
+	if err := h.CompleteTask(taskID, "reviewer", "review done"); err == nil {
+		t.Fatal("expected non-owner completion to fail")
+	}
+
+	if err := h.CompleteTask(taskID, "owner", "final result"); err != nil {
+		t.Fatalf("owner completion failed: %v", err)
+	}
+	task, _ := h.GetTask(taskID)
+	if task.Status != TaskStatusCompleted {
+		t.Fatalf("expected completed, got %s", task.Status)
+	}
 }
 
 func TestTaskFail(t *testing.T) {
@@ -124,6 +183,9 @@ func TestTaskFail(t *testing.T) {
 	task, _ := h.GetTask(taskID)
 	if task.Status != TaskStatusFailed || task.Error != "something went wrong" {
 		t.Errorf("unexpected failed state: status=%s error=%s", task.Status, task.Error)
+	}
+	if task.DiscussionClosedAt == nil {
+		t.Error("expected discussion to be closed after failure")
 	}
 }
 
@@ -201,5 +263,34 @@ func TestUpdatedAtChanges(t *testing.T) {
 
 	if !task2.UpdatedAt.After(task1.UpdatedAt) {
 		t.Error("UpdatedAt should advance after StartTask")
+	}
+}
+
+func TestEnsureTaskOpen(t *testing.T) {
+	h := NewHub()
+	h.Register("creator")
+	h.Register("owner")
+
+	taskID, _ := h.CreateTask("creator", "t")
+	_ = h.AssignTask(taskID, "owner")
+	if err := h.EnsureTaskOpen(taskID); err != nil {
+		t.Fatalf("task should still be open: %v", err)
+	}
+	_ = h.CompleteTask(taskID, "owner", "done")
+	if err := h.EnsureTaskOpen(taskID); err == nil {
+		t.Fatal("expected closed-task error")
+	}
+}
+
+func TestUpdateTaskSummary(t *testing.T) {
+	h := NewHub()
+	h.Register("creator")
+	taskID, _ := h.CreateTask("creator", "t")
+	if err := h.UpdateTaskSummary(taskID, "current consensus"); err != nil {
+		t.Fatalf("UpdateTaskSummary failed: %v", err)
+	}
+	task, _ := h.GetTask(taskID)
+	if task.Summary != "current consensus" {
+		t.Fatalf("unexpected summary: %q", task.Summary)
 	}
 }

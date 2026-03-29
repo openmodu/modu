@@ -77,6 +77,9 @@ func (s *AgentTeamsServer) runArticleWorkflow(ctx context.Context, req ArticleRe
 		case mailbox.TaskStatusCompleted:
 			content := task.Result
 			filePath := saveArticleFile(req, taskID, content, cfg.WorkDir)
+			_ = hub.UpdateTaskArtifact(taskID, filePath)
+			hub.ForcePostForumMessageKind("system", taskID, mailbox.ConversationKindDeliverable,
+				fmt.Sprintf("📄 最终文章已落盘：/api/tasks/%s/artifact", taskID))
 			log.Printf("[article] ✓ task %s done → %s", taskID, filePath)
 			return &ArticleResult{TaskID: taskID, FilePath: filePath, Content: content}, nil
 		case mailbox.TaskStatusFailed:
@@ -152,4 +155,3 @@ func saveArticleFile(req ArticleRequest, taskID, content, workDir string) string
 	_ = os.WriteFile(path, []byte(content), 0o644)
 	return path
 }
-

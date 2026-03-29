@@ -74,7 +74,7 @@ func startWechatTeam(ctx context.Context, hub *mailbox.Hub, cfg ContentConfig) {
 // runContentAgent is the main loop for one content agent.
 // It handles two message types:
 //   - task_assign: coordinator role — the agent owns the task end-to-end
-//   - delegate:    worker role — the agent performs sub-work and replies back
+//   - delegate:    collaborator role — the agent contributes work inside the same task
 func runContentAgent(ctx context.Context, hub *mailbox.Hub, agentID, systemPrompt string, cfg ContentConfig) {
 	agentWorkDir := filepath.Join(cfg.WorkDir, "agents", agentID)
 	_ = os.MkdirAll(agentWorkDir, 0o755)
@@ -116,15 +116,12 @@ func runContentAgent(ctx context.Context, hub *mailbox.Hub, agentID, systemPromp
 			// On success, mailbox_complete marks the task done and sets agent idle.
 
 		case mailbox.MessageTypeDelegate:
-			// Worker mode: perform delegated sub-work and reply to the delegator.
+			// Collaborator mode: contribute sub-work inside the same task and reply to the delegator.
 			payload, _ := mailbox.ParseDelegatePayload(parsed)
 			taskID := parsed.TaskID
 			delegatorID := payload.DelegatorID
 			log.Printf("[%s] ← delegate from %s (task %s)", agentID, delegatorID, taskID)
 			_ = hub.SetAgentStatus(agentID, "busy", taskID)
-
-			hub.PostForumMessage(agentID, taskID,
-				fmt.Sprintf("👷 %s 开始处理委托工作…", agentID))
 
 			lastText, err := runCodingSession(ctx, hub, agentID, taskID, payload.Description,
 				systemPrompt, workerInstructions(delegatorID), cfg, agentWorkDir)
@@ -137,6 +134,8 @@ func runContentAgent(ctx context.Context, hub *mailbox.Hub, agentID, systemPromp
 				// with whatever text the agent produced. PostDelegateResult is a no-op if
 				// mailbox_reply already sent the result.
 				if hub.PostDelegateResult(taskID, agentID, delegatorID, lastText) {
+					hub.PostForumMessageKind(agentID, taskID, mailbox.ConversationKindDeliverable,
+						fmt.Sprintf("⚠️ 未显式调用 mailbox_reply，系统已按最后输出回传摘要：%s", previewAgentText(lastText, 120)))
 					log.Printf("[%s] safety-net: unblocked %s (mailbox_reply was not called)", agentID, delegatorID)
 				}
 			}
@@ -211,6 +210,14 @@ func runCodingSession(
 	return cs.GetLastAssistantText(), nil
 }
 
+func previewAgentText(s string, limit int) string {
+	runes := []rune(s)
+	if len(runes) <= limit {
+		return s
+	}
+	return string(runes[:limit]) + "..."
+}
+
 // coordinatorInstructions returns the workflow instructions for a coordinator agent.
 // The coordinator owns the task end-to-end: delegates to peers, compiles results, completes the task.
 func coordinatorInstructions(agentID, taskID, outputFile string) string {
@@ -222,16 +229,23 @@ func coordinatorInstructions(agentID, taskID, outputFile string) string {
 你是本次任务的负责人，负责协调整个工作流程。
 
 **可用的 mailbox 工具：**
-- mailbox_delegate(to, task_id, request)：委托其他 agent 完成子工作，**阻塞等待其回复**
-- mailbox_post(task_id, text)：向任务论坛发布消息（进展、想法、讨论）
-- mailbox_complete(task_id, file_path)：提交最终成果，标记任务完成（仅在一切就绪后调用）
+- mailbox_delegate(to, task_id, request)：邀请其他 agent 参与当前任务，**阻塞等待其回复**
+- mailbox_post(task_id, text, kind)：向任务论坛发布消息，kind 可用 progress / idea / decision / risk / deliverable
+- mailbox_pin(task_id, summary)：更新任务顶部摘要，沉淀当前共识与下一步
+- mailbox_complete(task_id, file_path, summary)：提交最终成果并结束任务
 
 **执行规则：**
-1. 通过 mailbox_delegate 委托各方工作，等待其结果后再推进下一步
-2. 关键进展用 mailbox_post 发到论坛（让所有人知道进度）
-3. 最终成果写入文件后调用 mailbox_complete：
+1. 始终围绕同一个 task 推进，通过 mailbox_delegate 邀请协作者参与，不要新建平行任务
+2. 关键进展和想法用 mailbox_post 发到论坛，并带上合适的 kind
+3. 在阶段结论明确后，用 mailbox_pin 更新“当前共识”
+4. 最终成果写入文件后调用 mailbox_complete：
    - task_id: %s
    - file_path: %s
+
+**论坛约束：**
+- 论坛只发摘要，不要把完整创作简报、整篇文章、整段审稿意见原样贴到论坛
+- 给协作者的完整材料放在 mailbox_delegate 的 request 里，论坛里只同步一句阶段结论
+- 如果需要同步交付，只写“已完成什么 + 下一步是什么”
 
 **委托对象参考：**
 - wc-researcher：热点调研、选题分析
@@ -250,7 +264,7 @@ func workerInstructions(delegatorID string) func(agentID, taskID, outputFile str
 ---
 ## 工作流程（执行者模式）
 
-你正在响应 %s 的委托，完成一项子工作。
+你正在响应 %s 的协作请求，在同一个任务里补充一部分工作。
 **委托内容已经包含在上方的任务描述中，不要去搜索文件，直接使用描述里的内容开始工作。**
 
 **必须严格按以下顺序执行，缺少任何一步整个流程都会卡死：**

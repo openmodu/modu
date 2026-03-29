@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -83,12 +84,6 @@ func (s *AgentTeamsServer) Start(ctx context.Context, addr string) error {
 
 	// Conversations
 	mux.HandleFunc("/api/conversations/", s.handleConversation)
-
-	// Messages (mailbox send)
-	mux.HandleFunc("/api/messages", s.handleMessages)
-
-	// Demo simulation
-	mux.HandleFunc("/api/demo/run", s.handleDemoRun)
 
 	// WeChat content article workflow
 	mux.HandleFunc("/api/article/run", s.handleArticleRun)
@@ -371,7 +366,7 @@ func (s *AgentTeamsServer) handleTasks(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// /api/tasks/:id[/assign|/start|/complete|/fail]
+// /api/tasks/:id[/assign|/start|/summary|/complete|/fail|/artifact]
 func (s *AgentTeamsServer) handleTask(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/tasks/")
 	parts := strings.SplitN(path, "/", 2)
@@ -389,6 +384,24 @@ func (s *AgentTeamsServer) handleTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, t)
+
+	case r.Method == http.MethodGet && sub == "artifact":
+		t, err := s.hub.GetTask(taskID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		if t.ArtifactPath == "" {
+			http.Error(w, "artifact not found", http.StatusNotFound)
+			return
+		}
+		if _, err := os.Stat(t.ArtifactPath); err != nil {
+			http.Error(w, "artifact not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", filepathBase(t.ArtifactPath)))
+		http.ServeFile(w, r, t.ArtifactPath)
+		return
 
 	case r.Method == http.MethodPost && sub == "assign":
 		var body struct {
@@ -413,6 +426,21 @@ func (s *AgentTeamsServer) handleTask(w http.ResponseWriter, r *http.Request) {
 
 	case r.Method == http.MethodPost && sub == "start":
 		if err := s.hub.StartTask(taskID); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		t, _ := s.hub.GetTask(taskID)
+		writeJSON(w, t)
+
+	case r.Method == http.MethodPost && sub == "summary":
+		var body struct {
+			Summary string `json:"summary"`
+		}
+		if err := decodeJSON(r, &body); err != nil || body.Summary == "" {
+			http.Error(w, "summary required", http.StatusBadRequest)
+			return
+		}
+		if err := s.hub.UpdateTaskSummary(taskID, body.Summary); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -475,48 +503,6 @@ func (s *AgentTeamsServer) handleConversation(w http.ResponseWriter, r *http.Req
 	writeJSON(w, s.hub.GetConversation(taskID))
 }
 
-// ── Messages (mailbox send) ──────────────────────────────────────────────────
-
-func (s *AgentTeamsServer) handleMessages(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var body struct {
-		From   string `json:"from"`
-		To     string `json:"to"`
-		TaskID string `json:"task_id"`
-		Type   string `json:"type"` // "chat" | "task_assign" | "task_result"
-		Text   string `json:"text"`
-	}
-	if err := decodeJSON(r, &body); err != nil || body.From == "" || body.To == "" {
-		http.Error(w, "from and to required", http.StatusBadRequest)
-		return
-	}
-
-	var msg string
-	var err error
-	switch body.Type {
-	case "task_assign":
-		msg, err = mailbox.NewTaskAssignMessage(body.From, body.TaskID, body.Text)
-	case "task_result":
-		msg, err = mailbox.NewTaskResultMessage(body.From, body.TaskID, body.Text, "")
-	default:
-		msg, err = mailbox.NewChatMessage(body.From, body.TaskID, body.Text)
-	}
-	if err != nil {
-		log.Printf("build message: %v", err)
-		http.Error(w, "failed to build message", http.StatusInternalServerError)
-		return
-	}
-
-	if err := s.hub.Send(body.To, msg); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	writeJSON(w, map[string]string{"ok": "true"})
-}
-
 // ── SPA ─────────────────────────────────────────────────────────────────────
 
 func (s *AgentTeamsServer) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -533,6 +519,14 @@ func writeJSON(w http.ResponseWriter, v any) {
 
 func decodeJSON(r *http.Request, v any) error {
 	return json.NewDecoder(r.Body).Decode(v)
+}
+
+func filepathBase(path string) string {
+	idx := strings.LastIndex(path, "/")
+	if idx < 0 {
+		return path
+	}
+	return path[idx+1:]
 }
 
 // ── Article run ──────────────────────────────────────────────────────────────

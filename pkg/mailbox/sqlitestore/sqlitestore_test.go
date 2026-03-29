@@ -32,13 +32,18 @@ func TestSaveAndLoadTask(t *testing.T) {
 
 	now := time.Now().Truncate(time.Nanosecond)
 	task := mailbox.Task{
-		ID:          "task-1",
-		Description: "do something",
-		CreatedBy:   "orchestrator",
-		AssignedTo:  "worker-1",
-		Status:      mailbox.TaskStatusPending,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:            "task-1",
+		Description:   "do something",
+		CreatedBy:     "orchestrator",
+		OwnerID:       "worker-1",
+		AssignedTo:    "worker-1",
+		Assignees:     []string{"worker-1", "reviewer-1"},
+		Collaborators: []string{"reviewer-1"},
+		Status:        mailbox.TaskStatusPending,
+		Summary:       "current summary",
+		ArtifactPath:  "/tmp/article.md",
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}
 
 	if err := s.SaveTask(task); err != nil {
@@ -59,6 +64,15 @@ func TestSaveAndLoadTask(t *testing.T) {
 	if got.Status != mailbox.TaskStatusPending {
 		t.Errorf("expected Pending, got %s", got.Status)
 	}
+	if got.OwnerID != "worker-1" || got.Summary != "current summary" {
+		t.Errorf("unexpected owner/summary: %+v", got)
+	}
+	if got.ArtifactPath != "/tmp/article.md" {
+		t.Errorf("unexpected artifact path: %s", got.ArtifactPath)
+	}
+	if len(got.Collaborators) != 1 || got.Collaborators[0] != "reviewer-1" {
+		t.Errorf("unexpected collaborators: %+v", got.Collaborators)
+	}
 }
 
 func TestUpdateTask(t *testing.T) {
@@ -77,7 +91,9 @@ func TestUpdateTask(t *testing.T) {
 	// 更新为 completed
 	task.Status = mailbox.TaskStatusCompleted
 	task.Result = "done!"
+	task.Resolution = "done!"
 	task.AssignedTo = "worker"
+	task.OwnerID = "worker"
 	task.UpdatedAt = now.Add(time.Second)
 	if err := s.SaveTask(task); err != nil {
 		t.Fatalf("SaveTask (update): %v", err)
@@ -95,6 +111,9 @@ func TestUpdateTask(t *testing.T) {
 	}
 	if tasks[0].AssignedTo != "worker" {
 		t.Errorf("expected assigned_to=worker, got %s", tasks[0].AssignedTo)
+	}
+	if tasks[0].OwnerID != "worker" {
+		t.Errorf("expected owner_id=worker, got %s", tasks[0].OwnerID)
 	}
 }
 
