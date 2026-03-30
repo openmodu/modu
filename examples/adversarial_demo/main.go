@@ -169,12 +169,12 @@ func runWorker(ctx context.Context, agentID, addr string) {
 			} else {
 				log.Printf("[%s] ↪  submitted %s for validation → %s", agentID, task.ID, validateTaskID)
 			}
-			// Status is reset to idle by the Hub automatically.
+			// Hub resets agent status to idle inside SubmitForValidation.
 		} else {
 			if err := c.CompleteTask(ctx, task.ID, result); err != nil {
 				log.Printf("[%s] CompleteTask %s: %v", agentID, task.ID, err)
 			}
-			_ = c.SetStatus(ctx, "idle", "")
+			// Hub resets agent status to idle inside CompleteTask.
 		}
 	}
 }
@@ -258,7 +258,7 @@ func runValidator(ctx context.Context, agentID, addr string) {
 			}
 			log.Printf("[%s] %s score=%.2f (%s) %s → %q", agentID, symbol, score, verdict, task.ID, feedback)
 		}
-		_ = c.SetStatus(ctx, "idle", "")
+		// Hub resets validator status to idle inside SubmitValidation.
 	}
 }
 

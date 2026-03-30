@@ -80,6 +80,7 @@ type Task struct {
 	AgentResults       map[string]string `json:"agent_results,omitempty"` // 每个 agent 的成果
 	Error              string            `json:"error"`
 	DiscussionClosedAt *time.Time        `json:"discussion_closed_at,omitempty"`
+	SwarmOrigin         bool               `json:"swarm_origin,omitempty"`          // true when created via PublishTask / PublishValidatedTask
 	RequiredCaps        []string           `json:"required_caps,omitempty"`         // swarm: capabilities an agent must have to claim this task
 	// Adversarial validation fields
 	ValidationRequired  bool               `json:"validation_required,omitempty"`
@@ -194,9 +195,11 @@ func (h *Hub) loadFromStore() {
 		h.knownRoles = roles
 	}
 
-	// Rebuild the swarm queue: restore all pending tasks that have no assignee.
+	// Rebuild the swarm queue: only restore tasks that were originally published via
+	// PublishTask / PublishValidatedTask (SwarmOrigin=true).  Regular CreateTask tasks
+	// must not be silently promoted to swarm tasks across a restart.
 	for _, t := range h.tasks {
-		if t.Status == TaskStatusPending && len(t.Assignees) == 0 {
+		if t.SwarmOrigin && t.Status == TaskStatusPending && len(t.Assignees) == 0 {
 			h.swarmQueue = append(h.swarmQueue, t.ID)
 		}
 	}
@@ -617,6 +620,25 @@ func (h *Hub) AssignTask(taskID, agentID string) error {
 	return nil
 }
 
+// releaseOwnerLocked resets the task owner's agent status to idle when that agent is
+// still recorded as handling this specific task. Must be called with h.mu held.
+func (h *Hub) releaseOwnerLocked(task *Task) {
+	ownerID := task.OwnerID
+	if ownerID == "" {
+		ownerID = task.AssignedTo
+	}
+	if ownerID == "" {
+		return
+	}
+	info, ok := h.agentInfos[ownerID]
+	if !ok || info.CurrentTask != task.ID {
+		return
+	}
+	info.Status = "idle"
+	info.CurrentTask = ""
+	h.publishLocked(Event{Type: EventTypeAgentUpdated, AgentID: ownerID, Data: *info})
+}
+
 // StartTask 将任务状态设为 running
 func (h *Hub) StartTask(taskID string) error {
 	h.mu.Lock()
@@ -676,6 +698,9 @@ func (h *Hub) CompleteTask(taskID, agentID, result string) error {
 		task.DiscussionClosedAt = &now
 	}
 
+	if task.Status == TaskStatusCompleted {
+		h.releaseOwnerLocked(task)
+	}
 	snapshot := *task
 	h.publishLocked(Event{Type: EventTypeTaskUpdated, TaskID: taskID, Data: snapshot})
 	if err := h.store.SaveTask(snapshot); err != nil {
@@ -697,6 +722,7 @@ func (h *Hub) FailTask(taskID, errMsg string) error {
 	task.UpdatedAt = time.Now()
 	now := time.Now()
 	task.DiscussionClosedAt = &now
+	h.releaseOwnerLocked(task)
 	snapshot := *task
 	h.publishLocked(Event{Type: EventTypeTaskUpdated, TaskID: taskID, Data: snapshot})
 	if err := h.store.SaveTask(snapshot); err != nil {
@@ -885,6 +911,7 @@ func (h *Hub) PublishTask(creatorID, description string, requiredCaps ...string)
 		Assignees:    []string{},
 		AgentResults: make(map[string]string),
 		Status:       TaskStatusPending,
+		SwarmOrigin:  true,
 		RequiredCaps: requiredCaps,
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -924,6 +951,10 @@ func (h *Hub) ClaimTask(agentID string) (Task, bool) {
 	defer h.mu.Unlock()
 	info, ok := h.agentInfos[agentID]
 	if !ok {
+		return Task{}, false
+	}
+	// Reject claim attempts from agents that are already handling a task.
+	if info.Status == "busy" {
 		return Task{}, false
 	}
 	agentCaps := info.Capabilities
@@ -1025,6 +1056,7 @@ func (h *Hub) PublishValidatedTask(creatorID, description string, maxRetries int
 		Assignees:           []string{},
 		AgentResults:        make(map[string]string),
 		Status:              TaskStatusPending,
+		SwarmOrigin:         true,
 		RequiredCaps:        requiredCaps,
 		ValidationRequired:  true,
 		MaxRetries:          maxRetries,
@@ -1161,12 +1193,13 @@ func (h *Hub) SubmitValidation(validateTaskID, validatorID string, score float64
 	sourceTask.ValidationFeedback = feedback
 	sourceTask.UpdatedAt = now
 
-	// Mark the validate task as done.
+	// Mark the validate task as done and release the validator agent.
 	validateTask.Status = TaskStatusCompleted
 	validateTask.Result = fmt.Sprintf("score=%.2f feedback=%q", score, feedback)
 	validateTask.UpdatedAt = now
 	closedAt := now
 	validateTask.DiscussionClosedAt = &closedAt
+	h.releaseOwnerLocked(validateTask)
 
 	threshold := sourceTask.PassThreshold
 	if threshold <= 0 {

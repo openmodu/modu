@@ -204,13 +204,12 @@ func runSwarmAgent(ctx context.Context, agentID, addr string, caps []string) {
 			return
 		}
 
-		// 提交结果
+		// Submit result — Hub resets agent status to idle automatically.
 		if err := c.CompleteTask(ctx, task.ID, result); err != nil {
 			log.Printf("[%s] 完成任务 %s 失败: %v", agentID, task.ID, err)
 		} else {
 			log.Printf("[%s] ✔ 完成 %s", agentID, task.ID)
 		}
-		_ = c.SetStatus(ctx, "idle", "")
 	}
 }
 
