@@ -610,13 +610,14 @@ function applyEvent(type, data) {
     if (data.data) { agents[data.agent_id] = data.data; renderAgents(); }
   } else if (type === 'agent.evicted') {
     delete agents[data.agent_id]; renderAgents();
-  } else if (type === 'task.created') {
+  } else if (type === 'task.created' || type === 'swarm.task.published') {
     if (data.data) {
       tasks[data.task_id] = data.data;
       renderTaskList();
       if (!selectedTaskID) selectTask(data.task_id);
     }
-  } else if (type === 'task.updated') {
+  } else if (type === 'task.updated' || type === 'swarm.task.claimed' ||
+             type === 'task.validation.passed' || type === 'task.validation.failed' || type === 'task.retried') {
     if (!data.data) return;
     tasks[data.task_id] = data.data;
     renderTaskList();
@@ -672,7 +673,9 @@ function connect() {
   ['snapshot.agents','snapshot.tasks','snapshot.projects',
    'agent.registered','agent.updated','agent.evicted',
    'task.created','task.updated','conversation.added',
-   'project.created','project.updated'].forEach(evt => {
+   'project.created','project.updated',
+   'swarm.task.published','swarm.task.claimed',
+   'task.validation.passed','task.validation.failed','task.retried'].forEach(evt => {
     es.addEventListener(evt, e => {
       try { applyEvent(evt, JSON.parse(e.data)); } catch(err) { console.error(err); }
     });

@@ -12,6 +12,11 @@ const (
 	EventTypeConversationAdded    EventType = "conversation.added"
 	EventTypeProjectCreated       EventType = "project.created"
 	EventTypeProjectUpdated       EventType = "project.updated"
+	EventTypeSwarmTaskPublished   EventType = "swarm.task.published"   // task published to swarm queue
+	EventTypeSwarmTaskClaimed     EventType = "swarm.task.claimed"     // agent claimed a swarm task
+	EventTypeTaskValidationPassed EventType = "task.validation.passed" // adversarial validator accepted the result
+	EventTypeTaskValidationFailed EventType = "task.validation.failed" // all retry attempts exhausted
+	EventTypeTaskRetried          EventType = "task.retried"           // validator rejected; task re-queued for retry
 )
 
 // Event 是 Hub 向订阅者推送的状态变更通知
