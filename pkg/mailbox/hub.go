@@ -809,7 +809,12 @@ func (h *Hub) UpdateTaskArtifact(taskID, artifactPath string) error {
 }
 
 func taskDiscussionOpen(task *Task) bool {
-	return task.Status != TaskStatusCompleted && task.Status != TaskStatusFailed
+	switch task.Status {
+	case TaskStatusCompleted, TaskStatusFailed, TaskStatusValidated:
+		return false
+	default:
+		return true
+	}
 }
 
 // EnsureTaskOpen returns an error when the task is already completed or failed.
@@ -1131,6 +1136,7 @@ func (h *Hub) SubmitForValidation(taskID, agentID, result string) (string, error
 		Assignees:    []string{},
 		AgentResults: make(map[string]string),
 		Status:       TaskStatusPending,
+		SwarmOrigin:  true,
 		RequiredCaps: []string{"validate"},
 		SourceTaskID: taskID,
 		CreatedAt:    now,
@@ -1167,6 +1173,14 @@ func (h *Hub) SubmitValidation(validateTaskID, validatorID string, score float64
 	}
 	if validateTask.SourceTaskID == "" {
 		return fmt.Errorf("task %s is not a validation task", validateTaskID)
+	}
+	// Guard: only accept a judgment while the validate task is still running.
+	if validateTask.Status != TaskStatusRunning {
+		return fmt.Errorf("validate task %s is not running (status: %s)", validateTaskID, validateTask.Status)
+	}
+	// Guard: only the agent that claimed the task may submit the result.
+	if validateTask.OwnerID != validatorID {
+		return fmt.Errorf("agent %s did not claim validate task %s (owner: %s)", validatorID, validateTaskID, validateTask.OwnerID)
 	}
 	sourceTask, ok := h.tasks[validateTask.SourceTaskID]
 	if !ok {
