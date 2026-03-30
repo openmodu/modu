@@ -1,6 +1,6 @@
 # Mailbox
 
-A multi-agent message coordination hub providing agent registration, point-to-point messaging, task/project lifecycle management, and conversation logging.
+A multi-agent coordination hub providing agent registration, point-to-point messaging, task/project lifecycle management, swarm queue execution, adversarial validation, and conversation logging.
 
 ## Architecture
 
@@ -72,6 +72,16 @@ c.StartTask(ctx, taskID)
 c.CompleteTask(ctx, taskID, "Copy done: concise and compelling.")
 ```
 
+## Collaboration Modes
+
+Mailbox now supports three execution styles:
+
+| Mode | Primary APIs | Notes |
+|---|---|---|
+| Agent Teams | `CreateTask`, `AssignTask`, `CompleteTask` | Explicit assignment by an orchestrator |
+| Agent Swarm | `SetCapabilities`, `PublishTask`, `ClaimTask` | Shared queue, capability matching, no fixed orchestrator |
+| Adversarial Validation | `PublishValidatedTask`, `SubmitForValidation`, `SubmitValidation` | Separate validator agent reviews and can re-queue failed work |
+
 ## API Reference
 
 ### Hub
@@ -124,6 +134,47 @@ hub.GetTask(taskID string) (Task, error)
 hub.ListTasks(projectID ...string) []Task  // optional project filter
 ```
 
+Task statuses used by the current state machine:
+
+| Status | Meaning |
+|---|---|
+| `pending` | created but not started yet |
+| `running` | currently owned by a worker |
+| `validating` | worker submitted a result and a validator task has been created |
+| `validated` | validation passed; terminal success state |
+| `completed` | terminal success state for non-validated tasks |
+| `failed` | terminal failure state |
+
+#### Swarm Queue
+
+```go
+hub.SetCapabilities(agentID string, caps []string) error
+hub.PublishTask(creatorID, description string, requiredCaps ...string) (string, error)
+hub.ClaimTask(agentID string) (Task, bool)
+hub.SwarmQueueLen() int
+hub.ListSwarmQueue() []Task
+```
+
+Swarm tasks are not pre-assigned. An agent must first declare its capabilities, then `ClaimTask` will atomically return the first queue entry whose `RequiredCaps` are satisfied by that agent.
+
+#### Adversarial Validation
+
+```go
+hub.PublishValidatedTask(creatorID, description string, maxRetries int, passThreshold float64, requiredCaps ...string) (string, error)
+hub.SubmitForValidation(taskID, agentID, result string) (string, error)
+hub.SubmitValidation(validateTaskID, validatorID string, score float64, feedback string) error
+```
+
+Validated tasks follow this flow:
+
+1. A publisher creates a swarm task with `PublishValidatedTask`.
+2. A worker claims it and performs the work.
+3. The worker calls `SubmitForValidation`, which stores the result and creates a new `[VALIDATE]` task requiring the `validate` capability.
+4. A different validator agent claims that validation task and calls `SubmitValidation`.
+5. If `score >= passThreshold`, the original task becomes `validated`.
+6. If the score is lower and retries remain, the original task is re-queued with validator feedback appended to the description.
+7. If retries are exhausted, the original task becomes `failed`.
+
 #### Project Management
 
 ```go
@@ -149,6 +200,11 @@ for e := range events {
     case mailbox.EventTypeProjectCreated:
     case mailbox.EventTypeProjectUpdated:
     case mailbox.EventTypeConversationAdded:
+    case mailbox.EventTypeSwarmTaskPublished:
+    case mailbox.EventTypeSwarmTaskClaimed:
+    case mailbox.EventTypeTaskValidationPassed:
+    case mailbox.EventTypeTaskValidationFailed:
+    case mailbox.EventTypeTaskRetried:
     }
 }
 ```
@@ -315,6 +371,40 @@ func main() {
     }
 }
 ```
+
+## Example: Validated Swarm Workflow
+
+This pattern is useful when you want queue-based execution plus a second-pass reviewer.
+
+```go
+worker := client.NewMailboxClient("worker-1", "localhost:6379")
+validator := client.NewMailboxClient("validator-1", "localhost:6379")
+publisher := client.NewMailboxClient("publisher", "localhost:6379")
+
+_ = worker.Register(ctx)
+_ = validator.Register(ctx)
+_ = worker.SetCapabilities(ctx, "text-processing")
+_ = validator.SetCapabilities(ctx, "validate")
+
+taskID, _ := publisher.PublishValidatedTask(ctx,
+    "Write a concise explanation of TCP vs UDP",
+    2,   // max retries
+    0.7, // pass threshold
+    "text-processing",
+)
+
+task, _ := worker.ClaimTask(ctx)
+validateTaskID, _ := worker.SubmitForValidation(ctx, task.ID, "TCP is reliable; UDP is lower-latency.")
+
+validateTask, _ := validator.ClaimTask(ctx)
+_ = validator.SubmitValidation(ctx, validateTask.ID, 0.9, "Accurate and concise.")
+
+finalTask, _ := publisher.GetTask(ctx, taskID)
+fmt.Println(finalTask.Status) // "validated"
+fmt.Println(validateTaskID == validateTask.ID)
+```
+
+Validation metadata is persisted on the source task via fields such as `ValidationRequired`, `ValidationScore`, `ValidationFeedback`, `ValidationHistory`, `RetryCount`, and `PassThreshold`.
 
 **Sample output:**
 

@@ -30,6 +30,7 @@ modu/
 │   ├── agent/              # Generic Agent engine (event-driven, tools)
 │   ├── coding_agent/       # Advanced programming Agent (sessions, skills, compression)
 │   ├── mailbox/            # Agent Teams communication infrastructure
+│   ├── swarm/              # Decentralised task queue with auto-scaling workers
 │   ├── moms/               # Telegram smart bot (Go/TG port of mom)
 │   ├── channels/           # Messaging channel interfaces (Telegram, Feishu)
 │   ├── providers/          # Multi-provider LLM streaming interface abstraction
@@ -48,11 +49,34 @@ modu/
 
 ## 📚 Core Modules
 
+## 🤝 Collaboration Patterns
+
+Modu currently supports three distinct multi-agent execution patterns on top of the same mailbox/task model:
+
+| Pattern | Best for | Core idea |
+|------|------|------|
+| Agent Teams | Role-based collaboration with a clear coordinator | One orchestrator assigns work to named agents and aggregates results |
+| Agent Swarm | Elastic worker pools and queue-driven execution | Tasks are published to a shared queue and matching agents claim them competitively |
+| Adversarial Validation | Quality control for swarm-style execution | A worker submits a result, then a separate validator agent scores it and can trigger retries |
+
+Related examples:
+
+- `go run ./examples/agent_teams`
+- `go run ./examples/swarm_demo/`
+
 ### pkg/mailbox — Agent Teams Communication Infrastructure
 
-Complete communication layer for multi-agent collaboration: message passing, task registry, status tracking, and real-time dashboard.
+Complete communication layer for multi-agent collaboration: agent registration, point-to-point messaging, task/project lifecycle, swarm queue operations, adversarial validation, and real-time dashboard.
 
 📖 [Detailed Documentation](pkg/mailbox/README.md)
+
+---
+
+### pkg/swarm — Auto-scaling Agent Swarm
+
+Decentralised task execution built on `pkg/mailbox`: no fixed orchestrator, capability-based claiming, and automatic worker scaling based on queue pressure.
+
+📖 [Detailed Documentation](pkg/swarm/README.md)
 
 ---
 

@@ -1,6 +1,6 @@
 # Mailbox
 
-一个多 Agent 消息协调中心，提供 Agent 注册、点对点消息传递、任务/项目生命周期管理以及对话日志功能。
+一个多 Agent 协调中心，提供 Agent 注册、点对点消息传递、任务/项目生命周期管理、swarm 队列执行、对抗式验证以及对话日志功能。
 
 ## 架构
 
@@ -72,6 +72,16 @@ c.StartTask(ctx, taskID)
 c.CompleteTask(ctx, taskID, "文案已完成：简洁且引人入胜。")
 ```
 
+## 协作模式
+
+Mailbox 现在支持三种执行方式：
+
+| 模式 | 主要 API | 说明 |
+|---|---|---|
+| Agent Teams | `CreateTask`、`AssignTask`、`CompleteTask` | 由 orchestrator 显式分配任务 |
+| Agent Swarm | `SetCapabilities`、`PublishTask`、`ClaimTask` | 共享队列、能力匹配、无固定调度者 |
+| Adversarial Validation | `PublishValidatedTask`、`SubmitForValidation`、`SubmitValidation` | 独立 validator 复核结果，并可触发重试 |
+
 ## API 参考
 
 ### Hub
@@ -124,6 +134,47 @@ hub.GetTask(taskID string) (Task, error)
 hub.ListTasks(projectID ...string) []Task  // 可选按项目过滤
 ```
 
+当前状态机里会用到这些任务状态：
+
+| 状态 | 含义 |
+|---|---|
+| `pending` | 已创建但尚未开始 |
+| `running` | 当前已被某个 worker 持有 |
+| `validating` | worker 已提交结果，系统已创建 validator 任务 |
+| `validated` | 验证通过，终态成功 |
+| `completed` | 非验证任务的终态成功 |
+| `failed` | 终态失败 |
+
+#### Swarm 队列
+
+```go
+hub.SetCapabilities(agentID string, caps []string) error
+hub.PublishTask(creatorID, description string, requiredCaps ...string) (string, error)
+hub.ClaimTask(agentID string) (Task, bool)
+hub.SwarmQueueLen() int
+hub.ListSwarmQueue() []Task
+```
+
+Swarm 任务不会预先分配给某个 Agent。Agent 需要先声明能力，然后 `ClaimTask` 会原子地返回队列中第一个满足 `RequiredCaps` 要求的任务。
+
+#### 对抗式验证
+
+```go
+hub.PublishValidatedTask(creatorID, description string, maxRetries int, passThreshold float64, requiredCaps ...string) (string, error)
+hub.SubmitForValidation(taskID, agentID, result string) (string, error)
+hub.SubmitValidation(validateTaskID, validatorID string, score float64, feedback string) error
+```
+
+验证型任务的流程如下：
+
+1. 发布方通过 `PublishValidatedTask` 创建一个需要验证的 swarm 任务。
+2. worker 认领任务并完成处理。
+3. worker 调用 `SubmitForValidation`，系统会保存结果，并自动生成一个需要 `validate` 能力的 `[VALIDATE]` 任务。
+4. 另一个 validator agent 认领该验证任务并调用 `SubmitValidation`。
+5. 如果 `score >= passThreshold`，原任务状态变为 `validated`。
+6. 如果分数不够且还有重试次数，原任务会携带 validator 反馈重新入队。
+7. 如果重试耗尽，原任务状态变为 `failed`。
+
 #### 项目管理
 
 ```go
@@ -149,6 +200,11 @@ for e := range events {
     case mailbox.EventTypeProjectCreated:
     case mailbox.EventTypeProjectUpdated:
     case mailbox.EventTypeConversationAdded:
+    case mailbox.EventTypeSwarmTaskPublished:
+    case mailbox.EventTypeSwarmTaskClaimed:
+    case mailbox.EventTypeTaskValidationPassed:
+    case mailbox.EventTypeTaskValidationFailed:
+    case mailbox.EventTypeTaskRetried:
     }
 }
 ```
@@ -315,6 +371,40 @@ func main() {
     }
 }
 ```
+
+## 示例：带验证的 Swarm 流程
+
+这个模式适合“队列执行 + 二次复核”的场景。
+
+```go
+worker := client.NewMailboxClient("worker-1", "localhost:6379")
+validator := client.NewMailboxClient("validator-1", "localhost:6379")
+publisher := client.NewMailboxClient("publisher", "localhost:6379")
+
+_ = worker.Register(ctx)
+_ = validator.Register(ctx)
+_ = worker.SetCapabilities(ctx, "text-processing")
+_ = validator.SetCapabilities(ctx, "validate")
+
+taskID, _ := publisher.PublishValidatedTask(ctx,
+    "简要说明 TCP 和 UDP 的区别",
+    2,   // 最大重试次数
+    0.7, // 通过阈值
+    "text-processing",
+)
+
+task, _ := worker.ClaimTask(ctx)
+validateTaskID, _ := worker.SubmitForValidation(ctx, task.ID, "TCP 更可靠；UDP 延迟更低。")
+
+validateTask, _ := validator.ClaimTask(ctx)
+_ = validator.SubmitValidation(ctx, validateTask.ID, 0.9, "准确且简洁。")
+
+finalTask, _ := publisher.GetTask(ctx, taskID)
+fmt.Println(finalTask.Status) // "validated"
+fmt.Println(validateTaskID == validateTask.ID)
+```
+
+原任务上会保留验证相关元数据，例如 `ValidationRequired`、`ValidationScore`、`ValidationFeedback`、`ValidationHistory`、`RetryCount` 和 `PassThreshold`。
 
 **示例输出：**
 

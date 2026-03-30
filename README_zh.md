@@ -30,6 +30,7 @@ modu/
 │   ├── agent/              # 通用 Agent 引擎（事件驱动、工具）
 │   ├── coding_agent/       # 高级编程 Agent（会话、技能、压缩）
 │   ├── mailbox/            # Agent Teams 通信基础设施
+│   ├── swarm/              # 去中心化任务队列与自动伸缩 worker
 │   ├── moms/               # Telegram 智能机器人（mom 的 Go/TG 移植版）
 │   ├── channels/           # 消息通道接口（Telegram、飞书）
 │   ├── providers/          # 多提供商 LLM 流式接口抽象
@@ -48,11 +49,34 @@ modu/
 
 ## 📚 核心模块
 
+## 🤝 协作模式
+
+Modu 现在基于同一套 mailbox/task 模型支持三种多 Agent 执行模式：
+
+| 模式 | 适用场景 | 核心机制 |
+|------|------|------|
+| Agent Teams | 有明确协调者的角色化协作 | 由 orchestrator 向指定 agent 分派任务并汇总结果 |
+| Agent Swarm | 需要弹性 worker 池的队列型执行 | 任务发布到共享队列，满足能力要求的 agent 竞争认领 |
+| Adversarial Validation | 对 swarm 结果增加质量把关 | worker 先提交结果，再由独立 validator 打分并决定通过或重试 |
+
+相关示例：
+
+- `go run ./examples/agent_teams`
+- `go run ./examples/swarm_demo/`
+
 ### pkg/mailbox — Agent Teams 通信基础设施
 
-用于多 Agent 协作的完整通信层：消息传递、任务注册、状态跟踪和实时仪表盘。
+用于多 Agent 协作的完整通信层：Agent 注册、点对点消息、任务/项目生命周期、swarm 队列操作、对抗式验证以及实时仪表盘。
 
 📖 [详细文档](pkg/mailbox/README_zh.md)
+
+---
+
+### pkg/swarm — 自动伸缩 Agent Swarm
+
+基于 `pkg/mailbox` 的去中心化任务执行层：没有固定 orchestrator，支持能力匹配认领，并根据队列压力自动扩缩 worker。
+
+📖 [详细文档](pkg/swarm/README_zh.md)
 
 ---
 

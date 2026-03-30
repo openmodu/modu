@@ -102,6 +102,30 @@ func runAgent(ctx context.Context, agentID, addr string, caps []string) {
 }
 ```
 
+## Swarm with Adversarial Validation
+
+If you want queue-based execution with a second-pass reviewer, publish tasks through `PublishValidatedTask` instead of `PublishTask`.
+
+```go
+taskID, _ := publisher.PublishValidatedTask(ctx,
+    "Write a short product summary",
+    2,   // max retries
+    0.7, // pass threshold
+    "text-processing",
+)
+
+task, _ := worker.ClaimTask(ctx)
+validateTaskID, _ := worker.SubmitForValidation(ctx, task.ID, "Draft result")
+
+validateTask, _ := validator.ClaimTask(ctx)
+_ = validator.SubmitValidation(ctx, validateTask.ID, 0.85, "Looks good")
+
+_ = taskID
+_ = validateTaskID
+```
+
+This creates a separate validation task that requires the `validate` capability. If validation fails, the original swarm task is re-queued with feedback context until `MaxRetries` is exhausted. For the full state machine and task fields, see [pkg/mailbox](../mailbox/README.md).
+
 ## Mailbox Protocol
 
 Three new server commands support swarm mode:
