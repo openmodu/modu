@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"strings"
 
@@ -210,6 +211,56 @@ func (s *MailboxServer) ListenAndServe(addr string) error {
 					return
 				}
 				conn.WriteBulkString(string(b))
+
+			// --- Adversarial validation commands ---
+
+			case "TASK.PUBLISH_VALIDATED": // TASK.PUBLISH_VALIDATED <creator_id> <description> <max_retries> <pass_threshold> [cap...]
+				if len(cmd.Args) < 5 {
+					conn.WriteError("ERR wrong number of arguments for 'TASK.PUBLISH_VALIDATED' command")
+					return
+				}
+				var maxRetries int
+				fmt.Sscanf(string(cmd.Args[3]), "%d", &maxRetries)
+				var passThreshold float64
+				fmt.Sscanf(string(cmd.Args[4]), "%f", &passThreshold)
+				caps := make([]string, 0, len(cmd.Args)-5)
+				for _, a := range cmd.Args[5:] {
+					caps = append(caps, string(a))
+				}
+				taskID, err := s.hub.PublishValidatedTask(string(cmd.Args[1]), string(cmd.Args[2]), maxRetries, passThreshold, caps...)
+				if err != nil {
+					conn.WriteError("ERR " + err.Error())
+				} else {
+					conn.WriteBulkString(taskID)
+				}
+
+			case "TASK.SUBMIT": // TASK.SUBMIT <task_id> <agent_id> <result>  → validate_task_id
+				if len(cmd.Args) != 4 {
+					conn.WriteError("ERR wrong number of arguments for 'TASK.SUBMIT' command")
+					return
+				}
+				validateTaskID, err := s.hub.SubmitForValidation(string(cmd.Args[1]), string(cmd.Args[2]), string(cmd.Args[3]))
+				if err != nil {
+					conn.WriteError("ERR " + err.Error())
+				} else {
+					conn.WriteBulkString(validateTaskID)
+				}
+
+			case "TASK.VALIDATE": // TASK.VALIDATE <validate_task_id> <validator_id> <score> <feedback>
+				if len(cmd.Args) != 5 {
+					conn.WriteError("ERR wrong number of arguments for 'TASK.VALIDATE' command")
+					return
+				}
+				var score float64
+				if _, err := fmt.Sscanf(string(cmd.Args[3]), "%f", &score); err != nil {
+					conn.WriteError("ERR invalid score: must be a float between 0.0 and 1.0")
+					return
+				}
+				if err := s.hub.SubmitValidation(string(cmd.Args[1]), string(cmd.Args[2]), score, string(cmd.Args[4])); err != nil {
+					conn.WriteError("ERR " + err.Error())
+				} else {
+					conn.WriteString("OK")
+				}
 
 			case "TASK.CREATE": // TASK.CREATE <creator_id> <description> [project_id]
 				if len(cmd.Args) < 3 || len(cmd.Args) > 4 {

@@ -371,6 +371,51 @@ func (c *MailboxClient) ListSwarmQueue(ctx context.Context) ([]mailbox.Task, err
 	return tasks, nil
 }
 
+// --- Adversarial validation methods ---
+
+// PublishValidatedTask publishes a task that requires adversarial validation before
+// it is considered done. A validator agent must score the result; scores below
+// passThreshold cause the task to be re-queued (up to maxRetries times).
+func (c *MailboxClient) PublishValidatedTask(ctx context.Context, description string, maxRetries int, passThreshold float64, caps ...string) (string, error) {
+	args := make([]interface{}, 0, 5+len(caps))
+	args = append(args, "TASK.PUBLISH_VALIDATED", c.agentID, description,
+		fmt.Sprintf("%d", maxRetries),
+		fmt.Sprintf("%.2f", passThreshold),
+	)
+	for _, cap := range caps {
+		args = append(args, cap)
+	}
+	res, err := c.rdb.Do(ctx, args...).Result()
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s", res), nil
+}
+
+// SubmitForValidation records the agent's result and enqueues a validator task.
+// Returns the validate task ID. The agent's status is automatically set back to idle.
+func (c *MailboxClient) SubmitForValidation(ctx context.Context, taskID, result string) (string, error) {
+	res, err := c.rdb.Do(ctx, "TASK.SUBMIT", taskID, c.agentID, result).Result()
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s", res), nil
+}
+
+// SubmitValidation sends the validator's score and feedback for a validate task.
+// score must be between 0.0 (reject) and 1.0 (perfect).
+func (c *MailboxClient) SubmitValidation(ctx context.Context, validateTaskID string, score float64, feedback string) error {
+	res, err := c.rdb.Do(ctx, "TASK.VALIDATE", validateTaskID, c.agentID,
+		fmt.Sprintf("%.4f", score), feedback).Result()
+	if err != nil {
+		return err
+	}
+	if res != "OK" {
+		return fmt.Errorf("TASK.VALIDATE unexpected response: %v", res)
+	}
+	return nil
+}
+
 // startKeepAlive 启动一个后台协程，定期发送 PING 维持 Agent 在线状态
 func (c *MailboxClient) startKeepAlive(ctx context.Context) {
 	go func() {
