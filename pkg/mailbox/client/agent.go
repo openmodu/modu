@@ -305,6 +305,72 @@ func (c *MailboxClient) GetConversation(ctx context.Context, taskID string) ([]m
 	return entries, nil
 }
 
+// --- Swarm methods ---
+
+// SetCapabilities declares the capability list for the current agent (used for swarm task matching).
+func (c *MailboxClient) SetCapabilities(ctx context.Context, caps ...string) error {
+	args := make([]interface{}, 0, 2+len(caps))
+	args = append(args, "AGENT.SETCAPS", c.agentID)
+	for _, cap := range caps {
+		args = append(args, cap)
+	}
+	res, err := c.rdb.Do(ctx, args...).Result()
+	if err != nil {
+		return err
+	}
+	if res != "OK" {
+		return fmt.Errorf("AGENT.SETCAPS unexpected response: %v", res)
+	}
+	return nil
+}
+
+// PublishTask adds a task to the shared swarm queue with optional required capabilities.
+// Returns the task ID. The caller does not need to be a registered agent.
+func (c *MailboxClient) PublishTask(ctx context.Context, description string, caps ...string) (string, error) {
+	args := make([]interface{}, 0, 3+len(caps))
+	args = append(args, "TASK.PUBLISH", c.agentID, description)
+	for _, cap := range caps {
+		args = append(args, cap)
+	}
+	res, err := c.rdb.Do(ctx, args...).Result()
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s", res), nil
+}
+
+// ClaimTask atomically claims a task from the swarm queue that matches the agent's capabilities.
+// Returns nil when no matching task is available.
+func (c *MailboxClient) ClaimTask(ctx context.Context) (*mailbox.Task, error) {
+	raw, err := c.rdb.Do(ctx, "TASK.CLAIM", c.agentID).Result()
+	if err == redis.Nil {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	if raw == nil {
+		return nil, nil
+	}
+	var task mailbox.Task
+	if err := json.Unmarshal([]byte(fmt.Sprintf("%s", raw)), &task); err != nil {
+		return nil, fmt.Errorf("unmarshal task: %w", err)
+	}
+	return &task, nil
+}
+
+// ListSwarmQueue returns all tasks currently waiting in the swarm queue.
+func (c *MailboxClient) ListSwarmQueue(ctx context.Context) ([]mailbox.Task, error) {
+	raw, err := c.rdb.Do(ctx, "TASK.QUEUE").Result()
+	if err != nil {
+		return nil, err
+	}
+	var tasks []mailbox.Task
+	if err := json.Unmarshal([]byte(fmt.Sprintf("%s", raw)), &tasks); err != nil {
+		return nil, fmt.Errorf("unmarshal swarm queue: %w", err)
+	}
+	return tasks, nil
+}
+
 // startKeepAlive 启动一个后台协程，定期发送 PING 维持 Agent 在线状态
 func (c *MailboxClient) startKeepAlive(ctx context.Context) {
 	go func() {

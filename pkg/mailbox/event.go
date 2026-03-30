@@ -12,6 +12,8 @@ const (
 	EventTypeConversationAdded    EventType = "conversation.added"
 	EventTypeProjectCreated       EventType = "project.created"
 	EventTypeProjectUpdated       EventType = "project.updated"
+	EventTypeSwarmTaskPublished   EventType = "swarm.task.published" // 任务发布到 swarm 队列
+	EventTypeSwarmTaskClaimed     EventType = "swarm.task.claimed"   // agent 认领了 swarm 任务
 )
 
 // Event 是 Hub 向订阅者推送的状态变更通知

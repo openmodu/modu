@@ -96,6 +96,21 @@ func (s *MailboxServer) ListenAndServe(addr string) error {
 					conn.WriteString("OK")
 				}
 
+			case "AGENT.SETCAPS": // AGENT.SETCAPS <agent_id> <cap1> [cap2 ...]
+				if len(cmd.Args) < 3 {
+					conn.WriteError("ERR wrong number of arguments for 'AGENT.SETCAPS' command")
+					return
+				}
+				caps := make([]string, 0, len(cmd.Args)-2)
+				for _, a := range cmd.Args[2:] {
+					caps = append(caps, string(a))
+				}
+				if err := s.hub.SetCapabilities(string(cmd.Args[1]), caps); err != nil {
+					conn.WriteError("ERR " + err.Error())
+				} else {
+					conn.WriteString("OK")
+				}
+
 			case "AGENT.INFO": // AGENT.INFO <agent_id>
 				if len(cmd.Args) != 2 {
 					conn.WriteError("ERR wrong number of arguments for 'AGENT.INFO' command")
@@ -147,6 +162,54 @@ func (s *MailboxServer) ListenAndServe(addr string) error {
 				conn.WriteString("OK")
 
 			// --- Task 命令 ---
+
+			// --- Swarm 命令 ---
+
+			case "TASK.PUBLISH": // TASK.PUBLISH <creator_id> <description> [cap1 cap2 ...]
+				if len(cmd.Args) < 3 {
+					conn.WriteError("ERR wrong number of arguments for 'TASK.PUBLISH' command")
+					return
+				}
+				caps := make([]string, 0, len(cmd.Args)-3)
+				for _, a := range cmd.Args[3:] {
+					caps = append(caps, string(a))
+				}
+				taskID, err := s.hub.PublishTask(string(cmd.Args[1]), string(cmd.Args[2]), caps...)
+				if err != nil {
+					conn.WriteError("ERR " + err.Error())
+				} else {
+					conn.WriteBulkString(taskID)
+				}
+
+			case "TASK.CLAIM": // TASK.CLAIM <agent_id>
+				if len(cmd.Args) != 2 {
+					conn.WriteError("ERR wrong number of arguments for 'TASK.CLAIM' command")
+					return
+				}
+				task, ok := s.hub.ClaimTask(string(cmd.Args[1]))
+				if !ok {
+					conn.WriteNull()
+					return
+				}
+				b, err := json.Marshal(task)
+				if err != nil {
+					conn.WriteError("ERR failed to serialize task")
+					return
+				}
+				conn.WriteBulkString(string(b))
+
+			case "TASK.QUEUE": // TASK.QUEUE
+				if len(cmd.Args) != 1 {
+					conn.WriteError("ERR wrong number of arguments for 'TASK.QUEUE' command")
+					return
+				}
+				tasks := s.hub.ListSwarmQueue()
+				b, err := json.Marshal(tasks)
+				if err != nil {
+					conn.WriteError("ERR failed to serialize swarm queue")
+					return
+				}
+				conn.WriteBulkString(string(b))
 
 			case "TASK.CREATE": // TASK.CREATE <creator_id> <description> [project_id]
 				if len(cmd.Args) < 3 || len(cmd.Args) > 4 {
