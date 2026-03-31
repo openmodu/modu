@@ -1,7 +1,9 @@
 package mailbox
 
 import (
+	"fmt"
 	"log"
+	"sync/atomic"
 	"time"
 )
 
@@ -140,6 +142,100 @@ func (h *Hub) ListSwarmQueue() []Task {
 		if task, ok := h.tasks[id]; ok {
 			result = append(result, *task)
 		}
+	}
+	return result
+}
+
+// ── Pipeline ──────────────────────────────────────────────────────────────────
+
+func (h *Hub) nextPipelineID() string {
+	n := atomic.AddUint64(&h.pipelineCounter, 1)
+	return fmt.Sprintf("pipe-%d", n)
+}
+
+// PublishPipeline creates a Pipeline from the given steps and enqueues the first
+// step as a swarm task. Each step's DescriptionTemplate may reference
+// {{.PrevResult}} which is replaced at runtime with the preceding step's result.
+// Requires at least 2 steps.
+func (h *Hub) PublishPipeline(creatorID string, steps []PipelineStep) (string, error) {
+	if len(steps) < 2 {
+		return "", fmt.Errorf("pipeline requires at least 2 steps, got %d", len(steps))
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	pipelineID := h.nextPipelineID()
+	now := time.Now()
+
+	pipeline := &Pipeline{
+		ID:        pipelineID,
+		CreatorID: creatorID,
+		Steps:     steps,
+		Status:    "running",
+		Results:   []string{},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	h.pipelines[pipelineID] = pipeline
+
+	// Build the first task.
+	taskID := h.nextTaskID()
+	var nextTemplate string
+	var nextCaps []string
+	if len(steps) > 1 {
+		nextTemplate = steps[1].DescriptionTemplate
+		nextCaps = steps[1].RequiredCaps
+	}
+	task := &Task{
+		ID:               taskID,
+		Description:      steps[0].DescriptionTemplate,
+		CreatedBy:        pipelineID,
+		Assignees:        []string{},
+		AgentResults:     make(map[string]string),
+		Status:           TaskStatusPending,
+		SwarmOrigin:      true,
+		RequiredCaps:     steps[0].RequiredCaps,
+		PipelineID:       pipelineID,
+		PipelineStepIdx:  0,
+		NextStepTemplate: nextTemplate,
+		NextStepCaps:     nextCaps,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+	h.tasks[taskID] = task
+	h.swarmQueue = append(h.swarmQueue, taskID)
+
+	h.publishLocked(Event{
+		Type:       EventTypePipelineStarted,
+		PipelineID: pipelineID,
+		TaskID:     taskID,
+		Data:       *pipeline,
+	})
+	if err := h.store.SaveTask(*task); err != nil {
+		log.Printf("[Hub] SaveTask %s (pipeline step 0): %v", taskID, err)
+	}
+	log.Printf("[Hub] Pipeline %s started (%d steps), first task %s enqueued", pipelineID, len(steps), taskID)
+	return pipelineID, nil
+}
+
+// GetPipeline returns a snapshot of the Pipeline with the given ID.
+func (h *Hub) GetPipeline(pipelineID string) (Pipeline, bool) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	p, ok := h.pipelines[pipelineID]
+	if !ok {
+		return Pipeline{}, false
+	}
+	return *p, true
+}
+
+// ListPipelines returns a snapshot of all known pipelines.
+func (h *Hub) ListPipelines() []Pipeline {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	result := make([]Pipeline, 0, len(h.pipelines))
+	for _, p := range h.pipelines {
+		result = append(result, *p)
 	}
 	return result
 }

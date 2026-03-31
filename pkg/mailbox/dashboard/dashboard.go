@@ -60,6 +60,8 @@ func (d *Dashboard) Start(ctx context.Context, addr string) error {
 	mux.HandleFunc("/api/tasks/", d.handleTaskByID)
 	mux.HandleFunc("/api/projects", d.handleProjects)
 	mux.HandleFunc("/api/conversations/", d.handleConversation)
+	mux.HandleFunc("/api/pipelines", d.handlePipelines)
+	mux.HandleFunc("/api/pipelines/", d.handlePipelineByID)
 	mux.HandleFunc("/events", d.handleSSE)
 
 	srv := &http.Server{Addr: addr, Handler: mux}
@@ -133,6 +135,32 @@ func (d *Dashboard) handleTaskByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, task)
+}
+
+func (d *Dashboard) handlePipelines(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, d.hub.ListPipelines())
+}
+
+func (d *Dashboard) handlePipelineByID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/pipelines/")
+	if id == "" {
+		http.Error(w, "pipeline id required", http.StatusBadRequest)
+		return
+	}
+	pipeline, ok := d.hub.GetPipeline(id)
+	if !ok {
+		http.Error(w, "pipeline not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, pipeline)
 }
 
 func (d *Dashboard) handleSSE(w http.ResponseWriter, r *http.Request) {
