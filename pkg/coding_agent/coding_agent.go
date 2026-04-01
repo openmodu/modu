@@ -20,6 +20,7 @@ import (
 	"github.com/openmodu/modu/pkg/coding_agent/skills"
 	"github.com/openmodu/modu/pkg/coding_agent/subagent"
 	"github.com/openmodu/modu/pkg/coding_agent/tools"
+	"github.com/openmodu/modu/pkg/mailbox/client"
 	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/types"
 )
@@ -46,6 +47,8 @@ type CodingSessionOptions struct {
 	GetAPIKey func(provider string) (string, error)
 	// StreamFn overrides the default stream function.
 	StreamFn agent.StreamFn
+	// MailboxClient enables the spawn_agent tool when provided.
+	MailboxClient *client.MailboxClient
 }
 
 // CodingSession is the main entry point for the coding agent system.
@@ -58,6 +61,8 @@ type CodingSession struct {
 	skillManager   *skills.Manager
 	templateMgr    *skills.TemplateManager
 	resources      *resource.Loader
+	memoryStore    *MemoryStore
+	subagentLoader *subagent.Loader
 	cwd            string
 	agentDir       string
 	model          *types.Model
@@ -65,6 +70,7 @@ type CodingSession struct {
 	slashCommands  map[string]SlashCommand
 	getAPIKey      func(provider string) (string, error)
 	streamFn       agent.StreamFn
+	mailboxClient  *client.MailboxClient
 	lastSavedIndex int
 	// totalTokens tracks accumulated token usage for auto-compaction.
 	totalTokens   int
@@ -79,6 +85,14 @@ type CodingSession struct {
 	bashCancel     context.CancelFunc
 	bashMu         sync.Mutex
 	sessionStarted int64
+	todoMu         sync.RWMutex
+	todos          []TodoItem
+	taskManager    *backgroundTaskManager
+	planMode       bool
+	planMu         sync.RWMutex
+	worktreeMu     sync.Mutex
+	originalCwd    string
+	worktreePath   string
 
 	// approvalManager handles tool execution approval.
 	approvalManager *ApprovalManager
@@ -130,6 +144,12 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 
 	// Always include the memory tool
 	activeTools = append(activeTools, tools.NewMemoryTool(memoryStore))
+	activeTools = append(activeTools, tools.NewTodoWriteTool(todoStoreAdapter{session: nil}))
+	activeTools = append(activeTools, tools.NewTaskOutputTool(taskStoreAdapter{manager: nil}))
+	activeTools = append(activeTools, tools.NewEnterPlanModeTool(planModeAdapter{session: nil}))
+	activeTools = append(activeTools, tools.NewExitPlanModeTool(planModeAdapter{session: nil}))
+	activeTools = append(activeTools, tools.NewEnterWorktreeTool(worktreeAdapter{session: nil}))
+	activeTools = append(activeTools, tools.NewExitWorktreeTool(worktreeAdapter{session: nil}))
 
 	// Create session manager
 	sessionMgr, err := session.NewManager(agentDir, opts.Cwd)
@@ -157,6 +177,9 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	promptBuilder := NewSystemPromptBuilder(opts.Cwd)
 	promptBuilder.SetMemoryStore(memoryStore)
 	promptBuilder.SetTools(activeTools)
+	for _, ctxFile := range loader.LoadContextFiles() {
+		promptBuilder.AddContextFile(ctxFile.Path)
+	}
 
 	if opts.CustomSystemPrompt != "" {
 		promptBuilder.SetCustomPrompt(opts.CustomSystemPrompt)
@@ -196,11 +219,18 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	// Discover subagents and register spawn_subagent tool if any are found.
 	subagentLoader := subagent.NewLoader()
 	subagentLoader.Discover(agentDir, opts.Cwd)
+	taskMgr := newBackgroundTaskManager()
 	if subagentLoader.Count() > 0 {
-		activeTools = append(activeTools, tools.NewSpawnSubagentTool(subagentLoader, activeTools, opts.Model, getAPIKey))
+		activeTools = append(activeTools, tools.NewSpawnSubagentTool(opts.Cwd, agentDir, subagentLoader, activeTools, opts.Model, getAPIKey, streamFn, func(def *subagent.SubagentDefinition) *subagent.SubagentDefinition {
+			return prepareSubagentDefinition(def, skillMgr, memoryStore)
+		}, taskStoreAdapter{manager: taskMgr}))
 		if subagentsPrompt := formatSubagentsForPrompt(subagentLoader.List()); subagentsPrompt != "" {
 			promptBuilder.AppendPrompt(subagentsPrompt)
 		}
+	}
+	if opts.MailboxClient != nil {
+		activeTools = append(activeTools, NewSpawnAgentTool(opts.MailboxClient))
+		promptBuilder.AppendPrompt("\nThe spawn_agent tool is available for delegating work to mailbox-registered agents.")
 	}
 
 	systemPrompt := promptBuilder.Build()
@@ -230,6 +260,8 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		skillManager:    skillMgr,
 		templateMgr:     templateMgr,
 		resources:       loader,
+		memoryStore:     memoryStore,
+		subagentLoader:  subagentLoader,
 		cwd:             opts.Cwd,
 		agentDir:        agentDir,
 		model:           opts.Model,
@@ -237,13 +269,19 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		slashCommands:   make(map[string]SlashCommand),
 		getAPIKey:       getAPIKey,
 		streamFn:        streamFn,
+		mailboxClient:   opts.MailboxClient,
 		retryManager:    NewRetryManager(cfg.RetrySettings, cfg.AutoRetry),
 		eventBus:        eventbus.NewEventBus(),
 		scopedModels:    cfg.ScopedModels,
 		thinkingLevel:   cfg.ThinkingLevel,
 		sessionStarted:  time.Now().UnixMilli(),
+		taskManager:     taskMgr,
 		approvalManager: approvalMgr,
 	}
+	cs.replaceTodoTool()
+	cs.replaceTaskOutputTool()
+	cs.replacePlanTools()
+	cs.replaceWorktreeTools()
 
 	// Subscribe to events for token usage tracking (auto-compaction)
 	ag.Subscribe(func(event agent.AgentEvent) {
@@ -260,6 +298,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 			} else if msg, ok := event.Message.(*types.AssistantMessage); ok {
 				addUsage(msg.Usage)
 			}
+			cs.handleMessageEnd(event.Message)
 		}
 	})
 
@@ -339,10 +378,7 @@ func (s *CodingSession) Prompt(ctx context.Context, text string) error {
 
 		// Check skills
 		if skill, ok := s.skillManager.Get(cmdName); ok {
-			text = skill.Content
-			if cmdArgs != "" {
-				text = text + "\n\n" + cmdArgs
-			}
+			return s.executeSkill(ctx, text, skill, cmdArgs)
 		}
 	}
 
@@ -606,6 +642,9 @@ func (s *CodingSession) CycleThinkingLevel() agent.ThinkingLevel {
 func (s *CodingSession) SetThinkingLevel(level agent.ThinkingLevel) {
 	s.thinkingLevel = level
 	s.agent.SetThinkingLevel(level)
+	_ = s.sessionManager.Append(session.NewEntry(session.EntryTypeThinkingChange, "", session.ThinkingChangeData{
+		Level: level,
+	}))
 	s.eventBus.Emit(sessionEventChannel, SessionEvent{
 		Type:  SessionEventThinkingChange,
 		Level: string(level),
@@ -912,4 +951,130 @@ func formatSubagentsForPrompt(defs []*subagent.SubagentDefinition) string {
 	}
 	sb.WriteString("</available_subagents>")
 	return sb.String()
+}
+
+func prepareSubagentDefinition(def *subagent.SubagentDefinition, skillMgr *skills.Manager, memoryStore *MemoryStore) *subagent.SubagentDefinition {
+	if def == nil {
+		return nil
+	}
+
+	clone := *def
+	var parts []string
+	if clone.SystemPrompt != "" {
+		parts = append(parts, clone.SystemPrompt)
+	}
+
+	if skillMgr != nil && len(clone.Skills) > 0 {
+		var skillBlocks []string
+		for _, name := range clone.Skills {
+			skill, ok := skillMgr.Get(strings.TrimSpace(name))
+			if !ok {
+				continue
+			}
+			skillBlocks = append(skillBlocks, fmt.Sprintf("## Skill: %s\n\n%s", skill.Name, skill.Content))
+		}
+		if len(skillBlocks) > 0 {
+			parts = append(parts, strings.Join(skillBlocks, "\n\n---\n\n"))
+		}
+	}
+
+	if memoryStore != nil {
+		if mem := memoryContextForScope(memoryStore, clone.MemoryScope); mem != "" {
+			parts = append(parts, mem)
+		}
+	}
+
+	clone.SystemPrompt = strings.Join(parts, "\n\n---\n\n")
+	return &clone
+}
+
+func memoryContextForScope(store *MemoryStore, scope string) string {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "", "none":
+		return ""
+	case "user", "global":
+		if v := strings.TrimSpace(store.ReadGlobalLongTerm()); v != "" {
+			return "## Global Memory\n\n" + v
+		}
+	case "project", "local":
+		if v := strings.TrimSpace(store.ReadProjectLongTerm()); v != "" {
+			return "## Project Memory\n\n" + v
+		}
+	case "both", "all":
+		return store.GetMemoryContext()
+	}
+	return ""
+}
+
+func (s *CodingSession) executeSkill(ctx context.Context, originalInput string, skill *skills.Skill, args string) error {
+	task := strings.TrimSpace(args)
+	if task == "" {
+		task = "Execute this skill for the user and provide the best possible result."
+	}
+
+	_ = s.sessionManager.Append(session.NewEntry(session.EntryTypeMessage, "", session.MessageData{
+		Role:    agent.RoleUser,
+		Content: originalInput,
+	}))
+
+	result, err := subagent.Run(ctx, &subagent.SubagentDefinition{
+		Name:         skill.Name,
+		Description:  skill.Description,
+		SystemPrompt: skill.Content,
+	}, task, s.agent.GetState().Tools, s.model, s.getAPIKey, s.streamFn)
+	if err != nil {
+		return err
+	}
+
+	assistant := types.AssistantMessage{
+		Role:       "assistant",
+		ProviderID: s.model.ProviderID,
+		Model:      s.model.ID,
+		Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: result}},
+		Timestamp:  time.Now().UnixMilli(),
+	}
+	s.agent.AppendMessage(assistant)
+	s.handleMessageEnd(assistant)
+
+	return nil
+}
+
+func (s *CodingSession) handleMessageEnd(msg agent.AgentMessage) {
+	if msg == nil {
+		return
+	}
+
+	role, content, ok := sessionMessageData(msg)
+	if !ok {
+		return
+	}
+	if role == agent.RoleUser {
+		_ = s.SaveMessages()
+		return
+	}
+
+	_ = s.sessionManager.Append(session.NewEntry(session.EntryTypeMessage, "", session.MessageData{
+		Role:    role,
+		Content: content,
+	}))
+	_ = s.SaveMessages()
+}
+
+func sessionMessageData(msg agent.AgentMessage) (agent.MessageRole, any, bool) {
+	switch m := msg.(type) {
+	case types.UserMessage:
+		return agent.RoleUser, m.Content, true
+	case *types.UserMessage:
+		return agent.RoleUser, m.Content, true
+	case types.AssistantMessage:
+		return agent.RoleAssistant, m, true
+	case *types.AssistantMessage:
+		return agent.RoleAssistant, *m, true
+	case types.ToolResultMessage:
+		return agent.RoleToolResult, m, true
+	case *types.ToolResultMessage:
+		return agent.RoleToolResult, *m, true
+	default:
+		return "", nil, false
+	}
 }
