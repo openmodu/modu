@@ -416,6 +416,44 @@ func (c *MailboxClient) SubmitValidation(ctx context.Context, validateTaskID str
 	return nil
 }
 
+// PublishPipeline creates a pipeline on the server and enqueues its first step.
+func (c *MailboxClient) PublishPipeline(ctx context.Context, creatorID string, steps []mailbox.PipelineStep) (string, error) {
+	stepsJSON, err := json.Marshal(steps)
+	if err != nil {
+		return "", fmt.Errorf("marshal steps: %w", err)
+	}
+	raw, err := c.rdb.Do(ctx, "PIPELINE.PUBLISH", creatorID, string(stepsJSON)).Result()
+	if err != nil {
+		return "", err
+	}
+	id, ok := raw.(string)
+	if !ok {
+		return "", fmt.Errorf("unexpected response: %v", raw)
+	}
+	return id, nil
+}
+
+// GetPipeline fetches the current snapshot of a pipeline by ID.
+// Returns nil if the pipeline does not exist.
+func (c *MailboxClient) GetPipeline(ctx context.Context, pipelineID string) (*mailbox.Pipeline, error) {
+	raw, err := c.rdb.Do(ctx, "PIPELINE.GET", pipelineID).Result()
+	if err != nil {
+		return nil, err
+	}
+	if raw == nil {
+		return nil, nil
+	}
+	str, ok := raw.(string)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type: %T", raw)
+	}
+	var p mailbox.Pipeline
+	if err := json.Unmarshal([]byte(str), &p); err != nil {
+		return nil, fmt.Errorf("unmarshal pipeline: %w", err)
+	}
+	return &p, nil
+}
+
 // startKeepAlive 启动一个后台协程，定期发送 PING 维持 Agent 在线状态
 func (c *MailboxClient) startKeepAlive(ctx context.Context) {
 	go func() {

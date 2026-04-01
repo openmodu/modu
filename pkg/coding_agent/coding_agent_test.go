@@ -3,14 +3,41 @@ package coding_agent
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/extension"
+	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/session"
+	"github.com/openmodu/modu/pkg/coding_agent/skills"
+	"github.com/openmodu/modu/pkg/coding_agent/subagent"
+	"github.com/openmodu/modu/pkg/mailbox/client"
 	"github.com/openmodu/modu/pkg/types"
 )
+
+type testEchoTool struct{}
+
+func (t *testEchoTool) Name() string        { return "echo" }
+func (t *testEchoTool) Label() string       { return "Echo" }
+func (t *testEchoTool) Description() string { return "Echo test tool" }
+func (t *testEchoTool) Parameters() any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"value": map[string]any{"type": "string"},
+		},
+		"required": []string{"value"},
+	}
+}
+func (t *testEchoTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+	value, _ := args["value"].(string)
+	return agent.AgentToolResult{
+		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "echoed: " + value}},
+	}, nil
+}
 
 func TestNewCodingSession(t *testing.T) {
 	dir := t.TempDir()
@@ -47,6 +74,345 @@ func TestNewCodingSession(t *testing.T) {
 	cfg := session.GetConfig()
 	if cfg == nil {
 		t.Fatal("config should not be nil")
+	}
+}
+
+func TestNewCodingSessionRegistersSpawnAgentToolWhenMailboxConfigured(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:           dir,
+		AgentDir:      agentDir,
+		Model:         newTestModel(),
+		MailboxClient: client.NewMailboxClient("orchestrator", "127.0.0.1:9999"),
+		GetAPIKey:     func(provider string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !containsTool(session.GetActiveToolNames(), "spawn_agent") {
+		t.Fatalf("expected spawn_agent in active tools, got %v", session.GetActiveToolNames())
+	}
+}
+
+func TestNewCodingSessionRegistersTodoWriteTool(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  agentDir,
+		Model:     newTestModel(),
+		GetAPIKey: func(provider string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !containsTool(session.GetActiveToolNames(), "todo_write") {
+		t.Fatalf("expected todo_write in active tools, got %v", session.GetActiveToolNames())
+	}
+
+	var todoTool agent.AgentTool
+	for _, tool := range session.GetAgent().GetState().Tools {
+		if tool.Name() == "todo_write" {
+			todoTool = tool
+			break
+		}
+	}
+	if todoTool == nil {
+		t.Fatal("todo_write tool not found in agent state")
+	}
+
+	_, err = todoTool.Execute(context.Background(), "todo-1", map[string]any{
+		"todos": []any{
+			map[string]any{"content": "inspect package", "status": "completed"},
+			map[string]any{"content": "patch code", "status": "in_progress"},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	todos := session.GetTodos()
+	if len(todos) != 2 {
+		t.Fatalf("expected 2 todos, got %d", len(todos))
+	}
+	if todos[1].Content != "patch code" || todos[1].Status != "in_progress" {
+		t.Fatalf("unexpected todos: %#v", todos)
+	}
+}
+
+func TestSpawnSubagentBackgroundAndTaskOutput(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+
+	agentsDir := filepath.Join(agentDir, "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agentDef := `---
+description: background helper
+background: true
+---
+Return a short completion message.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "helper.md"), []byte(agentDef), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	model := newTestModel()
+	streamFn := func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+		stream := types.NewEventStream()
+		go func() {
+			last := llmCtx.Messages[len(llmCtx.Messages)-1]
+			userText := ""
+			if msg, ok := last.(types.UserMessage); ok {
+				userText, _ = msg.Content.(string)
+			}
+			msg := &types.AssistantMessage{
+				Role:       "assistant",
+				ProviderID: model.ProviderID,
+				Model:      model.ID,
+				StopReason: "stop",
+				Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "bg-result: " + userText}},
+				Timestamp:  time.Now().UnixMilli(),
+			}
+			stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+			stream.Resolve(msg, nil)
+			stream.Close()
+		}()
+		return stream, nil
+	}
+
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  agentDir,
+		Model:     model,
+		GetAPIKey: func(provider string) (string, error) { return "", nil },
+		StreamFn:  streamFn,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var spawnTool, outputTool agent.AgentTool
+	for _, tool := range session.GetAgent().GetState().Tools {
+		switch tool.Name() {
+		case "spawn_subagent":
+			spawnTool = tool
+		case "task_output":
+			outputTool = tool
+		}
+	}
+	if spawnTool == nil || outputTool == nil {
+		t.Fatalf("expected spawn_subagent and task_output tools, got %v", session.GetActiveToolNames())
+	}
+
+	result, err := spawnTool.Execute(context.Background(), "bg-1", map[string]any{
+		"name": "helper",
+		"task": "hello",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	details, _ := result.Details.(map[string]string)
+	taskID, _ := details["task_id"]
+	if taskID == "" {
+		t.Fatalf("expected background task id in details, got %#v", result.Details)
+	}
+
+	var output string
+	for i := 0; i < 20; i++ {
+		res, err := outputTool.Execute(context.Background(), "out-1", map[string]any{
+			"task_id": taskID,
+		}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		output = extractTextBlocks(res.Content)
+		if strings.Contains(output, "bg-result: hello") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(output, "bg-result: hello") {
+		t.Fatalf("expected background task output, got %q", output)
+	}
+}
+
+func TestPlanModeTools(t *testing.T) {
+	session := newTestSession(t, newTestModel())
+	var enterTool, exitTool agent.AgentTool
+	for _, tool := range session.GetAgent().GetState().Tools {
+		switch tool.Name() {
+		case "enter_plan_mode":
+			enterTool = tool
+		case "exit_plan_mode":
+			exitTool = tool
+		}
+	}
+	if enterTool == nil || exitTool == nil {
+		t.Fatalf("expected plan mode tools, got %v", session.GetActiveToolNames())
+	}
+
+	_, err := enterTool.Execute(context.Background(), "plan-1", map[string]any{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !session.planMode {
+		t.Fatal("expected plan mode enabled")
+	}
+
+	_, err = exitTool.Execute(context.Background(), "plan-2", map[string]any{"plan": "do work"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.planMode {
+		t.Fatal("expected plan mode disabled")
+	}
+}
+
+func TestEnterAndExitWorktree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+
+	agentDir := filepath.Join(dir, ".coding_agent")
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  agentDir,
+		Model:     newTestModel(),
+		GetAPIKey: func(provider string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	original := session.cwd
+	path, err := session.EnterWorktree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path == "" || session.cwd == original {
+		t.Fatalf("expected worktree cwd change, got cwd=%s path=%s", session.cwd, path)
+	}
+	if _, err := os.Stat(filepath.Join(path, "README.md")); err != nil {
+		t.Fatalf("expected repo file in worktree: %v", err)
+	}
+
+	if err := session.ExitWorktree(); err != nil {
+		t.Fatal(err)
+	}
+	if session.cwd != original {
+		t.Fatalf("expected cwd restored to %s, got %s", original, session.cwd)
+	}
+}
+
+func TestSpawnSubagentIsolationWorktree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	agentDir := filepath.Join(dir, ".coding_agent")
+	agentsDir := filepath.Join(agentDir, "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agentDef := `---
+description: isolated helper
+tools: bash
+isolation: worktree
+---
+Run pwd in bash and return the tool output.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "isolated.md"), []byte(agentDef), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	model := newTestModel()
+	callCount := 0
+	streamFn := func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+		callCount++
+		stream := types.NewEventStream()
+		go func() {
+			if callCount == 1 {
+				msg := &types.AssistantMessage{
+					Role:       "assistant",
+					ProviderID: model.ProviderID,
+					Model:      model.ID,
+					StopReason: "toolUse",
+					Content: []types.ContentBlock{
+						&types.ToolCallContent{Type: "toolCall", ID: "tool-1", Name: "bash", Arguments: map[string]any{"command": "pwd"}},
+					},
+					Timestamp: time.Now().UnixMilli(),
+				}
+				stream.Push(types.StreamEvent{Type: "done", Reason: "toolUse", Message: msg})
+				stream.Resolve(msg, nil)
+			} else {
+				last := llmCtx.Messages[len(llmCtx.Messages)-1]
+				text := ""
+				if toolResult, ok := last.(types.ToolResultMessage); ok {
+					for _, block := range toolResult.Content {
+						if tc, ok := block.(*types.TextContent); ok {
+							text = tc.Text
+						}
+					}
+				}
+				msg := &types.AssistantMessage{
+					Role:       "assistant",
+					ProviderID: model.ProviderID,
+					Model:      model.ID,
+					StopReason: "stop",
+					Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: text}},
+					Timestamp:  time.Now().UnixMilli(),
+				}
+				stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+				stream.Resolve(msg, nil)
+			}
+			stream.Close()
+		}()
+		return stream, nil
+	}
+
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  agentDir,
+		Model:     model,
+		GetAPIKey: func(provider string) (string, error) { return "", nil },
+		StreamFn:  streamFn,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var spawnTool agent.AgentTool
+	for _, tool := range session.GetAgent().GetState().Tools {
+		if tool.Name() == "spawn_subagent" {
+			spawnTool = tool
+			break
+		}
+	}
+	if spawnTool == nil {
+		t.Fatalf("expected spawn_subagent, got %v", session.GetActiveToolNames())
+	}
+
+	res, err := spawnTool.Execute(context.Background(), "iso-1", map[string]any{
+		"name": "isolated",
+		"task": "show cwd",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := extractTextBlocks(res.Content)
+	if !strings.Contains(output, filepath.Join(agentDir, "worktrees")) {
+		t.Fatalf("expected isolated worktree path, got %q", output)
+	}
+	if strings.Contains(output, dir) && !strings.Contains(output, filepath.Join(agentDir, "worktrees")) {
+		t.Fatalf("expected worktree path instead of repo root, got %q", output)
 	}
 }
 
@@ -470,6 +836,202 @@ func TestGetMessages(t *testing.T) {
 	}
 }
 
+func TestPromptPersistsAssistantAndToolMessages(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	model := newTestModel()
+	tool := &testEchoTool{}
+	callIndex := 0
+
+	streamFn := func(ctx context.Context, _ *types.Model, _ *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+		stream := types.NewEventStream()
+		go func() {
+			if callIndex == 0 {
+				msg := &types.AssistantMessage{
+					Role:       "assistant",
+					ProviderID: model.ProviderID,
+					Model:      model.ID,
+					StopReason: "toolUse",
+					Content: []types.ContentBlock{
+						&types.ToolCallContent{Type: "toolCall", ID: "tool-1", Name: "echo", Arguments: map[string]any{"value": "hello"}},
+					},
+					Timestamp: time.Now().UnixMilli(),
+				}
+				stream.Push(types.StreamEvent{Type: "done", Reason: "toolUse", Message: msg})
+				stream.Resolve(msg, nil)
+			} else {
+				msg := &types.AssistantMessage{
+					Role:       "assistant",
+					ProviderID: model.ProviderID,
+					Model:      model.ID,
+					StopReason: "stop",
+					Content: []types.ContentBlock{
+						&types.TextContent{Type: "text", Text: "done"},
+					},
+					Timestamp: time.Now().UnixMilli(),
+				}
+				stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+				stream.Resolve(msg, nil)
+			}
+			callIndex++
+			stream.Close()
+		}()
+		return stream, nil
+	}
+
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  agentDir,
+		Model:     model,
+		Tools:     []agent.AgentTool{tool},
+		GetAPIKey: func(p string) (string, error) { return "", nil },
+		StreamFn:  streamFn,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := session.Prompt(context.Background(), "run echo"); err != nil {
+		t.Fatal(err)
+	}
+
+	var roles []agent.MessageRole
+	for _, entry := range session.sessionManager.Load() {
+		if entry.Type != sessionpkg.EntryTypeMessage {
+			continue
+		}
+		if data, ok := entry.Data.(sessionpkg.MessageData); ok {
+			roles = append(roles, data.Role)
+			continue
+		}
+		if data, ok := entry.Data.(map[string]any); ok {
+			if role, ok := data["role"].(string); ok {
+				roles = append(roles, agent.MessageRole(role))
+			}
+		}
+	}
+
+	if !containsRole(roles, agent.RoleUser) {
+		t.Fatalf("expected user message to be persisted, got roles=%v", roles)
+	}
+	if !containsRole(roles, agent.RoleAssistant) {
+		t.Fatalf("expected assistant message to be persisted, got roles=%v", roles)
+	}
+	if !containsRole(roles, agent.RoleToolResult) {
+		t.Fatalf("expected tool result message to be persisted, got roles=%v", roles)
+	}
+
+	if _, err := os.Stat(session.messagesFilePath()); err != nil {
+		t.Fatalf("expected messages snapshot to exist: %v", err)
+	}
+}
+
+func TestPromptSlashSkillRunsInIsolatedAgent(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+
+	skillDir := filepath.Join(agentDir, "skills", "summarize")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skillContent := `---
+description: summarize content
+---
+You are a summarizer. Reply with a concise summary of the user's request.`
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(skillContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	model := newTestModel()
+	streamFn := func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+		stream := types.NewEventStream()
+		go func() {
+			last := llmCtx.Messages[len(llmCtx.Messages)-1]
+			userText := ""
+			if msg, ok := last.(types.UserMessage); ok {
+				userText, _ = msg.Content.(string)
+			}
+			msg := &types.AssistantMessage{
+				Role:       "assistant",
+				ProviderID: model.ProviderID,
+				Model:      model.ID,
+				StopReason: "stop",
+				Content: []types.ContentBlock{
+					&types.TextContent{Type: "text", Text: "skill-result: " + userText},
+				},
+				Timestamp: time.Now().UnixMilli(),
+			}
+			stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+			stream.Resolve(msg, nil)
+			stream.Close()
+		}()
+		return stream, nil
+	}
+
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  agentDir,
+		Model:     model,
+		GetAPIKey: func(p string) (string, error) { return "", nil },
+		StreamFn:  streamFn,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := session.Prompt(context.Background(), "/summarize hello world"); err != nil {
+		t.Fatal(err)
+	}
+
+	got := session.GetLastAssistantText()
+	if got != "skill-result: hello world" {
+		t.Fatalf("expected isolated skill result, got %q", got)
+	}
+}
+
+func TestPrepareSubagentDefinitionInjectsSkillsAndMemory(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+
+	skillDir := filepath.Join(agentDir, "skills", "helper")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\ndescription: helper skill\n---\nUse helper instructions."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	skillMgr := skills.NewManager(agentDir, dir)
+	if err := skillMgr.Discover(); err != nil {
+		t.Fatal(err)
+	}
+
+	mem := NewMemoryStore(agentDir, dir)
+	if err := mem.WriteGlobalLongTerm("global note"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mem.WriteProjectLongTerm("project note"); err != nil {
+		t.Fatal(err)
+	}
+
+	def := prepareSubagentDefinition(&subagent.SubagentDefinition{
+		Name:         "worker",
+		SystemPrompt: "Base prompt.",
+		Skills:       []string{"helper"},
+		MemoryScope:  "both",
+	}, skillMgr, mem)
+
+	if !strings.Contains(def.SystemPrompt, "Base prompt.") {
+		t.Fatalf("expected base prompt in %q", def.SystemPrompt)
+	}
+	if !strings.Contains(def.SystemPrompt, "Use helper instructions.") {
+		t.Fatalf("expected skill content in %q", def.SystemPrompt)
+	}
+	if !strings.Contains(def.SystemPrompt, "global note") || !strings.Contains(def.SystemPrompt, "project note") {
+		t.Fatalf("expected memory context in %q", def.SystemPrompt)
+	}
+}
+
 // --- New method tests ---
 
 func TestGetLastAssistantText(t *testing.T) {
@@ -504,6 +1066,54 @@ func TestGetLastAssistantText(t *testing.T) {
 	if text != "second response" {
 		t.Fatalf("expected 'second response', got %s", text)
 	}
+}
+
+func containsRole(roles []agent.MessageRole, want agent.MessageRole) bool {
+	for _, role := range roles {
+		if role == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsTool(names []string, want string) bool {
+	for _, name := range names {
+		if name == want {
+			return true
+		}
+	}
+	return false
+}
+
+func extractTextBlocks(content []types.ContentBlock) string {
+	var parts []string
+	for _, block := range content {
+		if tc, ok := block.(*types.TextContent); ok {
+			parts = append(parts, tc.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func initGitRepo(t *testing.T, dir string) {
+	t.Helper()
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+		}
+	}
+	run("init")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "README.md")
+	run("commit", "-m", "init")
 }
 
 func TestSessionName(t *testing.T) {

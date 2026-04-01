@@ -79,6 +79,7 @@ func (l *Loader) EnsureAgentDir() error {
 		l.agentDir,
 		filepath.Join(l.agentDir, "sessions"),
 		filepath.Join(l.agentDir, "skills"),
+		filepath.Join(l.agentDir, "agents"),
 		filepath.Join(l.agentDir, "prompts"),
 	}
 

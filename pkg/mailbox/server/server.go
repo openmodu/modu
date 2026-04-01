@@ -439,6 +439,55 @@ func (s *MailboxServer) ListenAndServe(addr string) error {
 					return
 				}
 				conn.WriteBulkString(string(b))
+
+			// --- Pipeline 命令 ---
+
+			case "PIPELINE.PUBLISH": // PIPELINE.PUBLISH <creator_id> <json_steps>
+				if len(cmd.Args) != 3 {
+					conn.WriteError("ERR wrong number of arguments for 'PIPELINE.PUBLISH' command")
+					return
+				}
+				var steps []mailbox.PipelineStep
+				if err := json.Unmarshal(cmd.Args[2], &steps); err != nil {
+					conn.WriteError("ERR invalid steps JSON: " + err.Error())
+					return
+				}
+				pipelineID, err := s.hub.PublishPipeline(string(cmd.Args[1]), steps)
+				if err != nil {
+					conn.WriteError("ERR " + err.Error())
+				} else {
+					conn.WriteBulkString(pipelineID)
+				}
+
+			case "PIPELINE.GET": // PIPELINE.GET <pipeline_id>
+				if len(cmd.Args) != 2 {
+					conn.WriteError("ERR wrong number of arguments for 'PIPELINE.GET' command")
+					return
+				}
+				pipeline, ok := s.hub.GetPipeline(string(cmd.Args[1]))
+				if !ok {
+					conn.WriteNull()
+					return
+				}
+				b, err := json.Marshal(pipeline)
+				if err != nil {
+					conn.WriteError("ERR failed to serialize pipeline")
+					return
+				}
+				conn.WriteBulkString(string(b))
+
+			case "PIPELINE.LIST": // PIPELINE.LIST
+				if len(cmd.Args) != 1 {
+					conn.WriteError("ERR wrong number of arguments for 'PIPELINE.LIST' command")
+					return
+				}
+				pipelines := s.hub.ListPipelines()
+				b, err := json.Marshal(pipelines)
+				if err != nil {
+					conn.WriteError("ERR failed to serialize pipelines")
+					return
+				}
+				conn.WriteBulkString(string(b))
 			}
 		},
 		func(conn redcon.Conn) bool { return true },

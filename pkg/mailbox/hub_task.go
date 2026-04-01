@@ -3,6 +3,7 @@ package mailbox
 import (
 	"fmt"
 	"log"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -185,7 +186,7 @@ func (h *Hub) releaseOwnerLocked(task *Task) {
 	h.publishLocked(Event{Type: EventTypeAgentUpdated, AgentID: ownerID, Data: *info})
 }
 
-// StartTask 将任务状态设为 running
+// StartTask 将任务状态设为 running，并将 owner agent 的状态更新为 busy
 func (h *Hub) StartTask(taskID string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -195,6 +196,18 @@ func (h *Hub) StartTask(taskID string) error {
 	}
 	task.Status = TaskStatusRunning
 	task.UpdatedAt = time.Now()
+	// Track which task the owner agent is working on so that eviction can
+	// recover or fail the task if the agent goes offline.
+	ownerID := task.OwnerID
+	if ownerID == "" {
+		ownerID = task.AssignedTo
+	}
+	if ownerID != "" {
+		if info, ok := h.agentInfos[ownerID]; ok {
+			info.Status = "busy"
+			info.CurrentTask = taskID
+		}
+	}
 	snapshot := *task
 	h.publishLocked(Event{Type: EventTypeTaskUpdated, TaskID: taskID, Data: snapshot})
 	if err := h.store.SaveTask(snapshot); err != nil {
@@ -244,15 +257,91 @@ func (h *Hub) CompleteTask(taskID, agentID, result string) error {
 		task.DiscussionClosedAt = &now
 	}
 
-	if task.Status == TaskStatusCompleted {
-		h.releaseOwnerLocked(task)
-	}
 	snapshot := *task
 	h.publishLocked(Event{Type: EventTypeTaskUpdated, TaskID: taskID, Data: snapshot})
+	if task.Status == TaskStatusCompleted {
+		h.releaseOwnerLocked(task)
+		h.advancePipelineLocked(task, result)
+	}
 	if err := h.store.SaveTask(snapshot); err != nil {
 		log.Printf("[Hub] SaveTask %s (complete): %v", taskID, err)
 	}
 	return nil
+}
+
+// advancePipelineLocked is called after a task completes. If the task belongs
+// to a Pipeline it either enqueues the next step or marks the pipeline complete.
+// Caller must hold h.mu write lock.
+func (h *Hub) advancePipelineLocked(task *Task, result string) {
+	if task.PipelineID == "" {
+		return
+	}
+	pipeline, ok := h.pipelines[task.PipelineID]
+	if !ok {
+		return
+	}
+	now := time.Now()
+	pipeline.Results = append(pipeline.Results, result)
+	pipeline.UpdatedAt = now
+
+	if task.NextStepTemplate == "" {
+		// This was the last step.
+		pipeline.Status = "completed"
+		h.publishLocked(Event{
+			Type:       EventTypePipelineCompleted,
+			PipelineID: task.PipelineID,
+			StepIdx:    task.PipelineStepIdx,
+			Data:       *pipeline,
+		})
+		log.Printf("[Hub] Pipeline %s completed (%d steps)", task.PipelineID, len(pipeline.Steps))
+		return
+	}
+
+	// Render the next step's description by injecting the current result.
+	nextDesc := strings.ReplaceAll(task.NextStepTemplate, "{{.PrevResult}}", result)
+	nextStepIdx := task.PipelineStepIdx + 1
+
+	// Determine the step after next (if any).
+	var nextNextTemplate string
+	var nextNextCaps []string
+	if nextStepIdx+1 < len(pipeline.Steps) {
+		nextNextTemplate = pipeline.Steps[nextStepIdx+1].DescriptionTemplate
+		nextNextCaps = pipeline.Steps[nextStepIdx+1].RequiredCaps
+	}
+
+	nextTaskID := h.nextTaskID()
+	nextTask := &Task{
+		ID:               nextTaskID,
+		Description:      nextDesc,
+		CreatedBy:        task.PipelineID,
+		Assignees:        []string{},
+		AgentResults:     make(map[string]string),
+		Status:           TaskStatusPending,
+		SwarmOrigin:      true,
+		RequiredCaps:     task.NextStepCaps,
+		PipelineID:       task.PipelineID,
+		PipelineStepIdx:  nextStepIdx,
+		NextStepTemplate: nextNextTemplate,
+		NextStepCaps:     nextNextCaps,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+	h.tasks[nextTaskID] = nextTask
+	h.swarmQueue = append(h.swarmQueue, nextTaskID)
+	pipeline.CurrentStep = nextStepIdx
+
+	h.publishLocked(Event{
+		Type:       EventTypePipelineStepCompleted,
+		PipelineID: task.PipelineID,
+		TaskID:     nextTaskID,
+		StepIdx:    task.PipelineStepIdx,
+		Data:       *pipeline,
+	})
+	if err := h.store.SaveTask(*nextTask); err != nil {
+		log.Printf("[Hub] SaveTask %s (pipeline step %d): %v", nextTaskID, nextStepIdx, err)
+	}
+	log.Printf("[Hub] Pipeline %s step %d completed; step %d task %s enqueued",
+		task.PipelineID, task.PipelineStepIdx, nextStepIdx, nextTaskID)
 }
 
 // FailTask 将任务标记为失败，记录错误信息
@@ -268,9 +357,9 @@ func (h *Hub) FailTask(taskID, errMsg string) error {
 	task.UpdatedAt = time.Now()
 	now := time.Now()
 	task.DiscussionClosedAt = &now
-	h.releaseOwnerLocked(task)
 	snapshot := *task
 	h.publishLocked(Event{Type: EventTypeTaskUpdated, TaskID: taskID, Data: snapshot})
+	h.releaseOwnerLocked(task)
 	if err := h.store.SaveTask(snapshot); err != nil {
 		log.Printf("[Hub] SaveTask %s (fail): %v", taskID, err)
 	}

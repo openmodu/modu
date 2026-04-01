@@ -14,10 +14,11 @@ type Hub struct {
 	inboxes        map[string]chan string
 	lastSeen       map[string]time.Time
 	agentInfos     map[string]*AgentInfo
-	tasks          map[string]*Task
-	taskCounter    uint64
-	projects       map[string]*Project
-	projectCounter uint64
+	tasks            map[string]*Task
+	taskCounter      uint64
+	projects         map[string]*Project
+	projectCounter   uint64
+	pipelineCounter  uint64
 	subscribers    []chan Event
 	store          Store
 	// knownRoles 缓存从 store 加载的角色，在 agent 注册时自动应用
@@ -30,6 +31,11 @@ type Hub struct {
 	delegateMu      sync.Mutex
 	// swarmQueue holds task IDs waiting to be claimed by an agent (FIFO).
 	swarmQueue []string
+	// maxTaskRecoveries is the maximum number of times a swarm task will be
+	// automatically re-queued after its owning agent is evicted (default 3).
+	maxTaskRecoveries int
+	// pipelines tracks active and completed Pipeline chains by ID.
+	pipelines map[string]*Pipeline
 }
 
 // HubOption 是 NewHub 的函数式选项
@@ -40,17 +46,25 @@ func WithStore(s Store) HubOption {
 	return func(h *Hub) { h.store = s }
 }
 
+// WithMaxTaskRecoveries sets the maximum number of times a swarm task will be
+// automatically re-queued after its owning agent is evicted (default 3).
+func WithMaxTaskRecoveries(n int) HubOption {
+	return func(h *Hub) { h.maxTaskRecoveries = n }
+}
+
 func NewHub(opts ...HubOption) *Hub {
 	h := &Hub{
-		inboxes:         make(map[string]chan string),
-		lastSeen:        make(map[string]time.Time),
-		agentInfos:      make(map[string]*AgentInfo),
-		tasks:           make(map[string]*Task),
-		projects:        make(map[string]*Project),
-		knownRoles:      make(map[string]string),
-		conversations:   make(map[string][]ConversationEntry),
-		delegateWaiters: make(map[string]chan string),
-		store:           noopStore{},
+		inboxes:           make(map[string]chan string),
+		lastSeen:          make(map[string]time.Time),
+		agentInfos:        make(map[string]*AgentInfo),
+		tasks:             make(map[string]*Task),
+		projects:          make(map[string]*Project),
+		knownRoles:        make(map[string]string),
+		conversations:     make(map[string][]ConversationEntry),
+		delegateWaiters:   make(map[string]chan string),
+		store:             noopStore{},
+		maxTaskRecoveries: 3,
+		pipelines:         make(map[string]*Pipeline),
 	}
 	for _, opt := range opts {
 		opt(h)
@@ -146,6 +160,10 @@ func (h *Hub) evictOfflineAgents() {
 	now := time.Now()
 	for id, last := range h.lastSeen {
 		if now.Sub(last) > 30*time.Second {
+			// Recover any running task before removing the agent.
+			if info, ok := h.agentInfos[id]; ok && info.CurrentTask != "" {
+				h.recoverTaskLocked(info.CurrentTask, id)
+			}
 			if ch, ok := h.inboxes[id]; ok {
 				close(ch)
 			}
@@ -154,6 +172,79 @@ func (h *Hub) evictOfflineAgents() {
 			delete(h.agentInfos, id)
 			log.Printf("[Hub] Agent %s evicted due to timeout", id)
 			h.publishLocked(Event{Type: EventTypeAgentEvicted, AgentID: id})
+		}
+	}
+}
+
+// recoverTaskLocked handles a running task whose owner agent was just evicted.
+// Caller must hold h.mu write lock.
+func (h *Hub) recoverTaskLocked(taskID, evictedAgentID string) {
+	task, ok := h.tasks[taskID]
+	if !ok {
+		return
+	}
+	if task.Status != TaskStatusRunning {
+		return // already completed or otherwise settled; nothing to do
+	}
+
+	now := time.Now()
+
+	// Clear assignment fields so the task can be re-assigned.
+	task.OwnerID = ""
+	task.AssignedTo = ""
+	task.Assignees = nil
+
+	if task.SwarmOrigin && task.RecoveryCount < h.maxTaskRecoveries {
+		task.RecoveryCount++
+		task.Status = TaskStatusPending
+		task.UpdatedAt = now
+		h.swarmQueue = append(h.swarmQueue, taskID)
+		h.tasks[taskID] = task
+		if err := h.store.SaveTask(*task); err != nil {
+			log.Printf("[Hub] recoverTask: save task %s: %v", taskID, err)
+		}
+		h.publishLocked(Event{
+			Type:    EventTypeTaskRecovered,
+			TaskID:  taskID,
+			AgentID: evictedAgentID,
+			Data: map[string]int{
+				"recovery_count": task.RecoveryCount,
+				"max_recoveries": h.maxTaskRecoveries,
+			},
+		})
+		log.Printf("[Hub] Task %s recovered after agent %s evicted (attempt %d/%d)",
+			taskID, evictedAgentID, task.RecoveryCount, h.maxTaskRecoveries)
+	} else {
+		reason := "agent evicted"
+		if task.SwarmOrigin {
+			reason = "max recoveries exceeded"
+		}
+		task.Status = TaskStatusFailed
+		task.Error = fmt.Sprintf("task failed: %s (agent: %s)", reason, evictedAgentID)
+		task.UpdatedAt = now
+		h.tasks[taskID] = task
+		if err := h.store.SaveTask(*task); err != nil {
+			log.Printf("[Hub] recoverTask: save task %s: %v", taskID, err)
+		}
+		h.publishLocked(Event{Type: EventTypeTaskUpdated, TaskID: taskID})
+		log.Printf("[Hub] Task %s failed: %s", taskID, reason)
+
+		// If this task belongs to a pipeline, mark the pipeline failed too so
+		// callers polling GetPipeline don't wait forever.
+		if task.PipelineID != "" {
+			if pipeline, ok := h.pipelines[task.PipelineID]; ok && pipeline.Status == "running" {
+				pipeline.Status = "failed"
+				pipeline.UpdatedAt = now
+				h.publishLocked(Event{
+					Type:       EventTypePipelineFailed,
+					PipelineID: task.PipelineID,
+					TaskID:     taskID,
+					StepIdx:    task.PipelineStepIdx,
+					Data:       *pipeline,
+				})
+				log.Printf("[Hub] Pipeline %s failed: step %d task %s could not be recovered",
+					task.PipelineID, task.PipelineStepIdx, taskID)
+			}
 		}
 	}
 }

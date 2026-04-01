@@ -17,15 +17,22 @@ const (
 	EventTypeTaskValidationPassed EventType = "task.validation.passed" // adversarial validator accepted the result
 	EventTypeTaskValidationFailed EventType = "task.validation.failed" // all retry attempts exhausted
 	EventTypeTaskRetried          EventType = "task.retried"           // validator rejected; task re-queued for retry
+	EventTypeTaskRecovered        EventType = "task.recovered"         // agent evicted; swarm task re-queued for another agent
+	EventTypePipelineStarted      EventType = "pipeline.started"       // PublishPipeline called; first step enqueued
+	EventTypePipelineStepCompleted EventType = "pipeline.step.completed" // one step finished; next step enqueued
+	EventTypePipelineCompleted    EventType = "pipeline.completed"     // all steps finished successfully
+	EventTypePipelineFailed       EventType = "pipeline.failed"        // pipeline could not complete
 )
 
 // Event 是 Hub 向订阅者推送的状态变更通知
 type Event struct {
-	Type      EventType `json:"type"`
-	AgentID   string    `json:"agent_id,omitempty"`
-	TaskID    string    `json:"task_id,omitempty"`
-	ProjectID string    `json:"project_id,omitempty"`
-	Data      any       `json:"data,omitempty"`
+	Type       EventType `json:"type"`
+	AgentID    string    `json:"agent_id,omitempty"`
+	TaskID     string    `json:"task_id,omitempty"`
+	ProjectID  string    `json:"project_id,omitempty"`
+	PipelineID string    `json:"pipeline_id,omitempty"`
+	StepIdx    int       `json:"step_idx,omitempty"`
+	Data       any       `json:"data,omitempty"`
 }
 
 // Subscribe 返回一个只读事件 channel，Hub 状态变更时会向其推送事件。

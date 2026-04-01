@@ -31,7 +31,12 @@ CREATE TABLE IF NOT EXISTS tasks (
 	artifact_path TEXT NOT NULL DEFAULT '',
 	result       TEXT NOT NULL DEFAULT '',
 	error        TEXT NOT NULL DEFAULT '',
-	discussion_closed_at INTEGER NOT NULL DEFAULT 0
+	discussion_closed_at INTEGER NOT NULL DEFAULT 0,
+	recovery_count       INTEGER NOT NULL DEFAULT 0,
+	pipeline_id          TEXT    NOT NULL DEFAULT '',
+	pipeline_step_idx    INTEGER NOT NULL DEFAULT 0,
+	next_step_template   TEXT    NOT NULL DEFAULT '',
+	next_step_caps       TEXT    NOT NULL DEFAULT '[]'
 );
 
 CREATE TABLE IF NOT EXISTS projects (
@@ -75,6 +80,11 @@ var migrations = []string{
 	`ALTER TABLE tasks ADD COLUMN discussion_closed_at INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE conversations ADD COLUMN kind TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE tasks ADD COLUMN recovery_count INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE tasks ADD COLUMN pipeline_id TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE tasks ADD COLUMN pipeline_step_idx INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE tasks ADD COLUMN next_step_template TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE tasks ADD COLUMN next_step_caps TEXT NOT NULL DEFAULT '[]'`,
 }
 
 // SQLiteStore 是 mailbox.Store 的 SQLite 实现
@@ -114,14 +124,15 @@ func (s *SQLiteStore) SaveTask(task mailbox.Task) error {
 	assigneesJSON, _ := json.Marshal(task.Assignees)
 	collaboratorsJSON, _ := json.Marshal(task.Collaborators)
 	agentResultsJSON, _ := json.Marshal(task.AgentResults)
+	nextStepCapsJSON, _ := json.Marshal(task.NextStepCaps)
 	closedAt := int64(0)
 	if task.DiscussionClosedAt != nil {
 		closedAt = task.DiscussionClosedAt.UnixNano()
 	}
 
 	_, err := s.db.Exec(`
-		INSERT INTO tasks (id, description, created_by, owner_id, assigned_to, assignees, collaborators, agent_results, project_id, status, created_at, updated_at, summary, resolution, artifact_path, result, error, discussion_closed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO tasks (id, description, created_by, owner_id, assigned_to, assignees, collaborators, agent_results, project_id, status, created_at, updated_at, summary, resolution, artifact_path, result, error, discussion_closed_at, recovery_count, pipeline_id, pipeline_step_idx, next_step_template, next_step_caps)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			owner_id      = excluded.owner_id,
 			assigned_to   = excluded.assigned_to,
@@ -136,7 +147,12 @@ func (s *SQLiteStore) SaveTask(task mailbox.Task) error {
 			artifact_path = excluded.artifact_path,
 			result        = excluded.result,
 			error         = excluded.error,
-			discussion_closed_at = excluded.discussion_closed_at
+			discussion_closed_at  = excluded.discussion_closed_at,
+			recovery_count        = excluded.recovery_count,
+			pipeline_id           = excluded.pipeline_id,
+			pipeline_step_idx     = excluded.pipeline_step_idx,
+			next_step_template    = excluded.next_step_template,
+			next_step_caps        = excluded.next_step_caps
 	`,
 		task.ID,
 		task.Description,
@@ -156,6 +172,11 @@ func (s *SQLiteStore) SaveTask(task mailbox.Task) error {
 		task.Result,
 		task.Error,
 		closedAt,
+		task.RecoveryCount,
+		task.PipelineID,
+		task.PipelineStepIdx,
+		task.NextStepTemplate,
+		string(nextStepCapsJSON),
 	)
 	return err
 }
@@ -164,7 +185,8 @@ func (s *SQLiteStore) SaveTask(task mailbox.Task) error {
 func (s *SQLiteStore) LoadTasks() ([]mailbox.Task, error) {
 	rows, err := s.db.Query(`
 		SELECT id, description, created_by, owner_id, assigned_to, assignees, collaborators, agent_results, project_id,
-		       status, created_at, updated_at, summary, resolution, artifact_path, result, error, discussion_closed_at
+		       status, created_at, updated_at, summary, resolution, artifact_path, result, error, discussion_closed_at,
+		       recovery_count, pipeline_id, pipeline_step_idx, next_step_template, next_step_caps
 		FROM tasks
 		ORDER BY created_at ASC
 	`)
@@ -176,16 +198,18 @@ func (s *SQLiteStore) LoadTasks() ([]mailbox.Task, error) {
 	var tasks []mailbox.Task
 	for rows.Next() {
 		var t mailbox.Task
-		var status, assigneesStr, collaboratorsStr, agentResultsStr string
+		var status, assigneesStr, collaboratorsStr, agentResultsStr, nextStepCapsStr string
 		var createdNano, updatedNano, closedNano int64
 
 		if err := rows.Scan(
 			&t.ID, &t.Description, &t.CreatedBy, &t.OwnerID, &t.AssignedTo,
 			&assigneesStr, &collaboratorsStr, &agentResultsStr, &t.ProjectID,
 			&status, &createdNano, &updatedNano, &t.Summary, &t.Resolution, &t.ArtifactPath, &t.Result, &t.Error, &closedNano,
+			&t.RecoveryCount, &t.PipelineID, &t.PipelineStepIdx, &t.NextStepTemplate, &nextStepCapsStr,
 		); err != nil {
 			return nil, err
 		}
+		_ = json.Unmarshal([]byte(nextStepCapsStr), &t.NextStepCaps)
 		t.Status = mailbox.TaskStatus(status)
 		t.CreatedAt = time.Unix(0, createdNano)
 		t.UpdatedAt = time.Unix(0, updatedNano)

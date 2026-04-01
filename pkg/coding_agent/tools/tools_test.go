@@ -354,6 +354,64 @@ func TestFindTool(t *testing.T) {
 	}
 }
 
+type testTodoStore struct {
+	todos []TodoItem
+}
+
+func (s *testTodoStore) GetTodos() []TodoItem {
+	out := make([]TodoItem, len(s.todos))
+	copy(out, s.todos)
+	return out
+}
+
+func (s *testTodoStore) SetTodos(items []TodoItem) {
+	s.todos = make([]TodoItem, len(items))
+	copy(s.todos, items)
+}
+
+func TestTodoWriteTool(t *testing.T) {
+	store := &testTodoStore{}
+	tool := NewTodoWriteTool(store)
+
+	result, err := tool.Execute(context.Background(), "todo-1", map[string]any{
+		"todos": []any{
+			map[string]any{"content": "read files", "status": "completed"},
+			map[string]any{"content": "implement fix", "status": "in_progress"},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	text := extractText(result.Content)
+	if !strings.Contains(text, "updated todo list") {
+		t.Fatalf("unexpected result: %s", text)
+	}
+	if len(store.todos) != 2 {
+		t.Fatalf("expected 2 todos, got %d", len(store.todos))
+	}
+}
+
+func TestTodoWriteToolRejectsMultipleInProgress(t *testing.T) {
+	store := &testTodoStore{}
+	tool := NewTodoWriteTool(store)
+
+	result, err := tool.Execute(context.Background(), "todo-2", map[string]any{
+		"todos": []any{
+			map[string]any{"content": "one", "status": "in_progress"},
+			map[string]any{"content": "two", "status": "in_progress"},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	text := extractText(result.Content)
+	if !strings.Contains(text, "at most one todo may be in_progress") {
+		t.Fatalf("unexpected result: %s", text)
+	}
+}
+
 func TestAllToolsCreation(t *testing.T) {
 	allTools := AllTools("/tmp")
 	if len(allTools) != 7 {

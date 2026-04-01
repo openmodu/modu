@@ -5,6 +5,27 @@ import (
 	"time"
 )
 
+// PipelineStep defines one step in a Pipeline.
+// DescriptionTemplate may contain {{.PrevResult}} which will be replaced with
+// the output of the preceding step at runtime.
+type PipelineStep struct {
+	DescriptionTemplate string   `json:"description_template"`
+	RequiredCaps        []string `json:"required_caps,omitempty"`
+}
+
+// Pipeline represents an ordered chain of tasks where each step's result is
+// automatically injected into the next step's description.
+type Pipeline struct {
+	ID          string         `json:"id"`
+	CreatorID   string         `json:"creator_id"`
+	Steps       []PipelineStep `json:"steps"`
+	CurrentStep int            `json:"current_step"` // 0-based index of the currently executing step
+	Status      string         `json:"status"`       // "running" | "completed" | "failed"
+	Results     []string       `json:"results,omitempty"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+}
+
 var (
 	ErrAgentNotFound   = errors.New("agent not found")
 	ErrTaskNotFound    = errors.New("task not found")
@@ -88,4 +109,10 @@ type Task struct {
 	RetryCount          int                `json:"retry_count,omitempty"`
 	MaxRetries          int                `json:"max_retries,omitempty"`
 	PassThreshold       float64            `json:"pass_threshold,omitempty"` // default 0.7
+	RecoveryCount       int                `json:"recovery_count,omitempty"` // number of times this task has been automatically re-queued after an agent eviction
+	// Pipeline fields — set when this task is part of a Pipeline
+	PipelineID       string   `json:"pipeline_id,omitempty"`        // owning pipeline ID
+	PipelineStepIdx  int      `json:"pipeline_step_idx,omitempty"`  // 0-based index within the pipeline
+	NextStepTemplate string   `json:"next_step_template,omitempty"` // description template for the next step (empty = this is the last step)
+	NextStepCaps     []string `json:"next_step_caps,omitempty"`     // required capabilities for the next step
 }
