@@ -683,32 +683,29 @@ func resolveProvider() (*types.Model, func(string) (string, error)) {
 		return model, func(provider string) (string, error) { return "", nil }
 	}
 
-	// 5. Default: LM Studio local server.
-	{
-		// modelName := "zai-org/glm-4.7-flash"
-		modelName := "qwen/qwen3.5-35b-a3b"
-		// modelName := "omnicoder-9b"
-		baseURL := "http://192.168.5.149:1234/v1"
-		providerID := "lmstudio"
-
-		if m := os.Getenv("LMSTUDIO_MODEL"); m != "" {
-			modelName = m
+	// 5. LM Studio local server (opt-in: requires LMSTUDIO_MODEL or LMSTUDIO_BASE_URL).
+	if lmModel, lmURL := os.Getenv("LMSTUDIO_MODEL"), os.Getenv("LMSTUDIO_BASE_URL"); lmModel != "" || lmURL != "" {
+		modelName := lmModel
+		if modelName == "" {
+			modelName = "qwen/qwen3.5-35b-a3b"
 		}
-		if u := os.Getenv("LMSTUDIO_BASE_URL"); u != "" {
-			baseURL = u
+		baseURL := lmURL
+		if baseURL == "" {
+			baseURL = "http://localhost:1234/v1"
 		}
-
 		providers.Register(openai.New(
-			providerID,
+			"lmstudio",
 			openai.WithBaseURL(baseURL),
 		))
 		model := &types.Model{
 			ID:         modelName,
 			Name:       modelName + " (LM Studio)",
-			ProviderID: providerID,
+			ProviderID: "lmstudio",
 		}
 		return model, func(provider string) (string, error) { return "", nil }
 	}
+
+	return nil, nil
 }
 
 // resolveThinkingLevel maps the THINKING_LEVEL env var to an agent.ThinkingLevel.

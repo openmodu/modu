@@ -21,9 +21,11 @@ func (a planModeAdapter) EnterPlanMode() {
 	if a.session == nil {
 		return
 	}
-	a.session.planMu.Lock()
-	a.session.planMode = true
-	a.session.planMu.Unlock()
+	func() {
+		a.session.planMu.Lock()
+		defer a.session.planMu.Unlock()
+		a.session.planMode = true
+	}()
 	a.session.refreshDynamicSystemPrompt()
 }
 
@@ -31,9 +33,11 @@ func (a planModeAdapter) ExitPlanMode(plan string) {
 	if a.session == nil {
 		return
 	}
-	a.session.planMu.Lock()
-	a.session.planMode = false
-	a.session.planMu.Unlock()
+	func() {
+		a.session.planMu.Lock()
+		defer a.session.planMu.Unlock()
+		a.session.planMode = false
+	}()
 	a.session.refreshDynamicSystemPrompt()
 	_ = plan
 }
@@ -175,6 +179,8 @@ func (s *CodingSession) ExitWorktree() error {
 
 func (s *CodingSession) refreshDynamicSystemPrompt() {
 	var parts []string
+	// baseSystemPrompt is set once in NewCodingSession and never modified after
+	// initialization, so it is safe to read without a lock here.
 	parts = append(parts, s.baseSystemPrompt)
 
 	s.planMu.RLock()
