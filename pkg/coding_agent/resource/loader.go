@@ -4,14 +4,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
+	"sync"
 )
 
 // Loader handles unified loading of extensions, skills, prompts, and context files.
 type Loader struct {
-	agentDir string
-	cwd      string
+	agentDir        string
+	cwd             string
+	projectRootOnce sync.Once
+	projectRoot     string
 }
 
 // NewLoader creates a new resource loader.
@@ -141,33 +143,35 @@ func buildPathChain(root, target string) []string {
 }
 
 func (l *Loader) findProjectRoot() string {
-	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
-	cmd.Dir = l.cwd
-	out, err := cmd.Output()
-	if err == nil {
-		root := strings.TrimSpace(string(out))
-		if root != "" {
-			return root
+	l.projectRootOnce.Do(func() {
+		cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+		cmd.Dir = l.cwd
+		out, err := cmd.Output()
+		if err == nil {
+			root := strings.TrimSpace(string(out))
+			if root != "" {
+				l.projectRoot = root
+				return
+			}
 		}
-	}
 
-	current := l.cwd
-	var candidates []string
-	for {
-		candidates = append(candidates, current)
-		parent := filepath.Dir(current)
-		if parent == current {
-			break
+		// Walk upward looking for a .git directory. candidates are already
+		// in deepest-first order so no sort is needed.
+		current := l.cwd
+		for {
+			if info, err := os.Stat(filepath.Join(current, ".git")); err == nil && info != nil {
+				l.projectRoot = current
+				return
+			}
+			parent := filepath.Dir(current)
+			if parent == current {
+				break
+			}
+			current = parent
 		}
-		current = parent
-	}
-	sort.Slice(candidates, func(i, j int) bool { return len(candidates[i]) > len(candidates[j]) })
-	for _, dir := range candidates {
-		if info, err := os.Stat(filepath.Join(dir, ".git")); err == nil && info != nil {
-			return dir
-		}
-	}
-	return l.cwd
+		l.projectRoot = l.cwd
+	})
+	return l.projectRoot
 }
 
 func relativeContextName(base, path string) string {

@@ -559,16 +559,9 @@ func extractToolPaths(event agent.AgentEvent) []string {
 		paths = append(paths, path)
 	}
 
-	switch result := event.Result.(type) {
-	case agent.AgentToolResult:
+	if result, ok := event.Result.(agent.AgentToolResult); ok {
 		if details, ok := result.Details.(map[string]any); ok {
 			collectToolPathsFromDetails(details, add)
-		}
-	case *agent.AgentToolResult:
-		if result != nil {
-			if details, ok := result.Details.(map[string]any); ok {
-				collectToolPathsFromDetails(details, add)
-			}
 		}
 	}
 	if args, ok := event.Args.(map[string]any); ok {
@@ -599,19 +592,24 @@ func (s *CodingSession) collectNewContextFiles(paths []string) []resource.Contex
 	if len(paths) == 0 {
 		return nil
 	}
+
+	// Load context files outside the lock: this involves filesystem I/O and
+	// a git subprocess, both of which are expensive to hold a mutex across.
+	var candidates []resource.ContextFile
+	for _, path := range paths {
+		candidates = append(candidates, s.resources.LoadContextFilesForPath(path)...)
+	}
+
 	s.contextMu.Lock()
 	defer s.contextMu.Unlock()
 
 	var out []resource.ContextFile
-	for _, path := range paths {
-		files := s.resources.LoadContextFilesForPath(path)
-		for _, file := range files {
-			if _, seen := s.loadedContexts[file.Path]; seen {
-				continue
-			}
-			s.loadedContexts[file.Path] = struct{}{}
-			out = append(out, file)
+	for _, file := range candidates {
+		if _, seen := s.loadedContexts[file.Path]; seen {
+			continue
 		}
+		s.loadedContexts[file.Path] = struct{}{}
+		out = append(out, file)
 	}
 	return out
 }
@@ -641,11 +639,9 @@ func formatDynamicContextMessage(targetPaths []string, files []resource.ContextF
 		if content == "" {
 			continue
 		}
-		if len(content) > maxFileBytes {
-			content = truncateWithNotice(content, maxFileBytes, file.Name)
-		}
-		if len(content) > remaining {
-			content = truncateWithNotice(content, remaining, file.Name)
+		limit := min(maxFileBytes, remaining)
+		if len(content) > limit {
+			content = truncateWithNotice(content, limit, file.Name)
 		}
 		if len(content) == 0 {
 			continue
@@ -666,18 +662,25 @@ func (s *CodingSession) pruneTransientContextMessages() {
 		return
 	}
 
-	filtered := make([]agent.AgentMessage, 0, len(state.Messages))
-	changed := false
+	// Scan first to avoid allocation when there is nothing to prune.
+	hasTransient := false
 	for _, msg := range state.Messages {
 		if isTransientContextMessage(msg) {
-			changed = true
-			continue
+			hasTransient = true
+			break
 		}
-		filtered = append(filtered, msg)
 	}
-	if changed {
-		s.agent.ReplaceMessages(filtered)
+	if !hasTransient {
+		return
 	}
+
+	filtered := make([]agent.AgentMessage, 0, len(state.Messages))
+	for _, msg := range state.Messages {
+		if !isTransientContextMessage(msg) {
+			filtered = append(filtered, msg)
+		}
+	}
+	s.agent.ReplaceMessages(filtered)
 }
 
 // SetModel changes the active model.

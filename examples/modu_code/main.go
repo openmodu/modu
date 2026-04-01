@@ -749,9 +749,6 @@ func loadModuCodeConfig() (moduCodeConfig, bool) {
 
 func registerConfiguredProvider(cfg moduCodeConfig) (*types.Model, func(string) (string, error)) {
 	providerID := cfg.Provider
-	if providerID == "" {
-		providerID = "lmstudio"
-	}
 	baseURL := cfg.BaseURL
 	if !strings.Contains(baseURL, "://") {
 		baseURL = "http://" + baseURL

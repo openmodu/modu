@@ -144,7 +144,7 @@ func (b *SystemPromptBuilder) Build() string {
 			return
 		}
 		seenPaths[clean] = struct{}{}
-		content, used := b.loadContextFile(path, minInt(maxContextFileBytes, remainingContextBudget))
+		content, used := b.loadContextFile(path, min(maxContextFileBytes, remainingContextBudget))
 		if content == "" || used == 0 {
 			return
 		}
@@ -243,9 +243,3 @@ func truncateWithNotice(content string, maxBytes int, label string) string {
 	return content + ellipsis
 }
 
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
