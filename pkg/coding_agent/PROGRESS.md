@@ -44,6 +44,12 @@ High-priority gaps identified before this round:
 - Wired `examples/modu_code` to use its local `agents/` directory by default.
 - Added a local in-process mailbox runtime to `examples/modu_code` so `spawn_agent` is exercised during example runs instead of remaining disconnected.
 - Added manual validation slash commands to `examples/modu_code` for `/agents`, `/todos`, `/tasks`, `/plan`, and `/worktree`.
+- Optimized context loading so project instruction files are discovered hierarchically from repo root to the active working directory.
+- Added prompt-level context deduplication and size budgeting to reduce token waste from repeated or oversized instruction files.
+- Flattened prior conversation summaries during compaction so repeated compaction does not recursively summarize old summary envelopes.
+- Added dynamic nested-context injection triggered by file/tool access so deeper path-specific instructions can be loaded on demand during a turn.
+- Extended dynamic context triggers beyond `read/edit/write` to include `grep`, `find`, and `ls` path discovery.
+- Marked dynamic nested-context messages as transient so they do not persist into long-term session history or saved transcripts.
 - Added focused tests for:
   session persistence after prompt/tool execution
   isolated slash-skill execution

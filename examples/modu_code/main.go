@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -583,6 +584,13 @@ func locateExampleDir() string {
 	return filepath.Dir(file)
 }
 
+type moduCodeConfig struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	BaseURL  string `json:"baseUrl"`
+	APIKey   string `json:"apiKey"`
+}
+
 // resolveProvider returns the model and GetAPIKey function based on env vars.
 func resolveProvider() (*types.Model, func(string) (string, error)) {
 	// 1. Anthropic Claude via OpenAI-compat endpoint.
@@ -705,7 +713,72 @@ func resolveProvider() (*types.Model, func(string) (string, error)) {
 		return model, func(provider string) (string, error) { return "", nil }
 	}
 
-	return nil, nil
+	// 6. ~/.coding_agent/config.json
+	if cfg, ok := loadModuCodeConfig(); ok {
+		return registerConfiguredProvider(cfg)
+	}
+
+	// 7. Built-in local default for this environment.
+	return registerConfiguredProvider(moduCodeConfig{
+		Provider: "lmstudio",
+		Model:    "qwen/qwen3.5-35b-a3b",
+		BaseURL:  "http://192.168.5.149:1234/v1",
+		APIKey:   "lm-studio",
+	})
+}
+
+func loadModuCodeConfig() (moduCodeConfig, bool) {
+	path := filepath.Join(coding_agent.DefaultAgentDir(), "config.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return moduCodeConfig{}, false
+	}
+	var cfg moduCodeConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return moduCodeConfig{}, false
+	}
+	cfg.Provider = strings.TrimSpace(cfg.Provider)
+	cfg.Model = strings.TrimSpace(cfg.Model)
+	cfg.BaseURL = strings.TrimSpace(cfg.BaseURL)
+	cfg.APIKey = strings.TrimSpace(cfg.APIKey)
+	if cfg.Provider == "" || cfg.Model == "" || cfg.BaseURL == "" {
+		return moduCodeConfig{}, false
+	}
+	return cfg, true
+}
+
+func registerConfiguredProvider(cfg moduCodeConfig) (*types.Model, func(string) (string, error)) {
+	providerID := cfg.Provider
+	if providerID == "" {
+		providerID = "lmstudio"
+	}
+	baseURL := cfg.BaseURL
+	if !strings.Contains(baseURL, "://") {
+		baseURL = "http://" + baseURL
+	}
+	apiKey := cfg.APIKey
+	if apiKey == "" {
+		apiKey = "lm-studio"
+	}
+
+	providers.Register(openai.New(
+		providerID,
+		openai.WithBaseURL(baseURL),
+		openai.WithAPIKey(apiKey),
+	))
+
+	model := &types.Model{
+		ID:         cfg.Model,
+		Name:       cfg.Model + " (" + providerID + ")",
+		ProviderID: providerID,
+		BaseURL:    baseURL,
+	}
+	return model, func(provider string) (string, error) {
+		if provider == providerID {
+			return apiKey, nil
+		}
+		return "", fmt.Errorf("no key for %s", provider)
+	}
 }
 
 // resolveThinkingLevel maps the THINKING_LEVEL env var to an agent.ThinkingLevel.

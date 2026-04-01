@@ -96,6 +96,8 @@ type CodingSession struct {
 	worktreeMu     sync.Mutex
 	originalCwd    string
 	worktreePath   string
+	contextMu      sync.Mutex
+	loadedContexts map[string]struct{}
 
 	// approvalManager handles tool execution approval.
 	approvalManager *ApprovalManager
@@ -281,12 +283,16 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		thinkingLevel:    cfg.ThinkingLevel,
 		sessionStarted:   time.Now().UnixMilli(),
 		taskManager:      taskMgr,
+		loadedContexts:   make(map[string]struct{}),
 		approvalManager:  approvalMgr,
 	}
 	cs.replaceTodoTool()
 	cs.replaceTaskOutputTool()
 	cs.replacePlanTools()
 	cs.replaceWorktreeTools()
+	for _, ctxFile := range loader.LoadContextFiles() {
+		cs.loadedContexts[ctxFile.Path] = struct{}{}
+	}
 
 	// Subscribe to events for token usage tracking (auto-compaction)
 	ag.Subscribe(func(event agent.AgentEvent) {
@@ -304,6 +310,14 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 				addUsage(msg.Usage)
 			}
 			cs.handleMessageEnd(event.Message)
+			return
+		}
+		if event.Type == agent.EventTypeToolExecutionEnd && !event.IsError {
+			cs.handleToolExecutionEnd(event)
+			return
+		}
+		if event.Type == agent.EventTypeAgentEnd {
+			cs.pruneTransientContextMessages()
 		}
 	})
 
@@ -498,6 +512,172 @@ func (s *CodingSession) GetActiveToolNames() []string {
 		names[i] = t.Name()
 	}
 	return names
+}
+
+func (s *CodingSession) handleToolExecutionEnd(event agent.AgentEvent) {
+	if s.resources == nil {
+		return
+	}
+	switch event.ToolName {
+	case "read", "edit", "write", "grep", "find", "ls":
+	default:
+		return
+	}
+
+	paths := extractToolPaths(event)
+	if len(paths) == 0 {
+		return
+	}
+
+	newContexts := s.collectNewContextFiles(paths)
+	if len(newContexts) == 0 {
+		return
+	}
+
+	text := formatDynamicContextMessage(paths, newContexts)
+	if text == "" {
+		return
+	}
+	s.agent.Steer((&CustomMessage{
+		Source: nestedContextSource,
+		Text:   text,
+	}).ToLlmMessage())
+}
+
+func extractToolPaths(event agent.AgentEvent) []string {
+	var paths []string
+	seen := make(map[string]struct{})
+	add := func(path string) {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			return
+		}
+		if _, ok := seen[path]; ok {
+			return
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+
+	switch result := event.Result.(type) {
+	case agent.AgentToolResult:
+		if details, ok := result.Details.(map[string]any); ok {
+			collectToolPathsFromDetails(details, add)
+		}
+	case *agent.AgentToolResult:
+		if result != nil {
+			if details, ok := result.Details.(map[string]any); ok {
+				collectToolPathsFromDetails(details, add)
+			}
+		}
+	}
+	if args, ok := event.Args.(map[string]any); ok {
+		collectToolPathsFromDetails(args, add)
+	}
+	return paths
+}
+
+func collectToolPathsFromDetails(details map[string]any, add func(string)) {
+	if path, _ := details["path"].(string); path != "" {
+		add(path)
+	}
+	switch matched := details["matched_paths"].(type) {
+	case []string:
+		for _, path := range matched {
+			add(path)
+		}
+	case []any:
+		for _, raw := range matched {
+			if path, ok := raw.(string); ok {
+				add(path)
+			}
+		}
+	}
+}
+
+func (s *CodingSession) collectNewContextFiles(paths []string) []resource.ContextFile {
+	if len(paths) == 0 {
+		return nil
+	}
+	s.contextMu.Lock()
+	defer s.contextMu.Unlock()
+
+	var out []resource.ContextFile
+	for _, path := range paths {
+		files := s.resources.LoadContextFilesForPath(path)
+		for _, file := range files {
+			if _, seen := s.loadedContexts[file.Path]; seen {
+				continue
+			}
+			s.loadedContexts[file.Path] = struct{}{}
+			out = append(out, file)
+		}
+	}
+	return out
+}
+
+func formatDynamicContextMessage(targetPaths []string, files []resource.ContextFile) string {
+	const (
+		maxFileBytes  = 4 * 1024
+		maxTotalBytes = 12 * 1024
+	)
+
+	if len(files) == 0 {
+		return ""
+	}
+
+	var parts []string
+	parts = append(parts, "Additional path-specific instructions became relevant after accessing:")
+	for _, path := range targetPaths {
+		parts = append(parts, "- "+path)
+	}
+
+	remaining := maxTotalBytes
+	for _, file := range files {
+		if remaining <= 0 {
+			break
+		}
+		content := strings.TrimSpace(file.Content)
+		if content == "" {
+			continue
+		}
+		if len(content) > maxFileBytes {
+			content = truncateWithNotice(content, maxFileBytes, file.Name)
+		}
+		if len(content) > remaining {
+			content = truncateWithNotice(content, remaining, file.Name)
+		}
+		if len(content) == 0 {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("# Path Context: %s\n%s", file.Name, content))
+		remaining -= len(content)
+	}
+
+	if len(parts) == 1 {
+		return ""
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func (s *CodingSession) pruneTransientContextMessages() {
+	state := s.agent.GetState()
+	if len(state.Messages) == 0 {
+		return
+	}
+
+	filtered := make([]agent.AgentMessage, 0, len(state.Messages))
+	changed := false
+	for _, msg := range state.Messages {
+		if isTransientContextMessage(msg) {
+			changed = true
+			continue
+		}
+		filtered = append(filtered, msg)
+	}
+	if changed {
+		s.agent.ReplaceMessages(filtered)
+	}
 }
 
 // SetModel changes the active model.
@@ -1072,6 +1252,9 @@ func (s *CodingSession) executeSkill(ctx context.Context, originalInput string, 
 
 func (s *CodingSession) handleMessageEnd(msg agent.AgentMessage) {
 	if msg == nil {
+		return
+	}
+	if isTransientContextMessage(msg) {
 		return
 	}
 

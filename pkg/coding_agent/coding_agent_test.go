@@ -1260,3 +1260,113 @@ func TestMaybeAutoCompact_DisabledByConfig(t *testing.T) {
 		t.Fatal("should not compact when AutoCompaction is disabled")
 	}
 }
+
+func TestHandleToolExecutionEndQueuesNestedContextForDeeperPath(t *testing.T) {
+	root := t.TempDir()
+	cwd := filepath.Join(root, "repo")
+	deepDir := filepath.Join(cwd, "pkg", "feature")
+	agentDir := filepath.Join(root, ".coding_agent")
+
+	for _, dir := range []string{deepDir, agentDir, filepath.Join(cwd, ".git")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(cwd, "AGENTS.md"), []byte("root context"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deepDir, "AGENTS.md"), []byte("deep context"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	targetFile := filepath.Join(deepDir, "file.go")
+	if err := os.WriteFile(targetFile, []byte("package feature\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       cwd,
+		AgentDir:  agentDir,
+		Model:     newTestModel(),
+		GetAPIKey: func(provider string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if session.agent.QueuedMessageCount() != 0 {
+		t.Fatalf("expected no queued steering messages initially, got %d", session.agent.QueuedMessageCount())
+	}
+
+	session.handleToolExecutionEnd(agent.AgentEvent{
+		Type:     agent.EventTypeToolExecutionEnd,
+		ToolName: "read",
+		Args:     map[string]any{"path": targetFile},
+		Result: agent.AgentToolResult{
+			Details: map[string]any{"path": targetFile},
+		},
+	})
+
+	if session.agent.QueuedMessageCount() != 1 {
+		t.Fatalf("expected one queued steering message, got %d", session.agent.QueuedMessageCount())
+	}
+
+	session.handleToolExecutionEnd(agent.AgentEvent{
+		Type:     agent.EventTypeToolExecutionEnd,
+		ToolName: "read",
+		Args:     map[string]any{"path": targetFile},
+		Result: agent.AgentToolResult{
+			Details: map[string]any{"path": targetFile},
+		},
+	})
+
+	if session.agent.QueuedMessageCount() != 1 {
+		t.Fatalf("expected nested context to dedupe, got %d queued messages", session.agent.QueuedMessageCount())
+	}
+}
+
+func TestTransientNestedContextMessagesArePrunedAndNotPersisted(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  agentDir,
+		Model:     newTestModel(),
+		GetAPIKey: func(provider string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	transient := (&CustomMessage{
+		Source: nestedContextSource,
+		Text:   "Additional path-specific instructions became relevant after accessing:\n- " + filepath.Join(dir, "nested", "file.go"),
+	}).ToLlmMessage()
+	normal := types.UserMessage{Role: "user", Content: "regular user message"}
+
+	session.agent.AppendMessage(transient)
+	session.handleMessageEnd(transient)
+	session.agent.AppendMessage(normal)
+	session.handleMessageEnd(normal)
+	session.pruneTransientContextMessages()
+
+	msgs := session.agent.GetState().Messages
+	if len(msgs) != 1 {
+		t.Fatalf("expected only non-transient message to remain, got %d", len(msgs))
+	}
+	if _, ok := msgs[0].(types.UserMessage); !ok {
+		t.Fatalf("expected remaining message to be user message, got %T", msgs[0])
+	}
+
+	data, err := os.ReadFile(session.messagesFilePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if strings.Contains(text, nestedContextSource) {
+		t.Fatalf("expected transient nested context not to be persisted, got:\n%s", text)
+	}
+	if !strings.Contains(text, "regular user message") {
+		t.Fatalf("expected regular message to be persisted, got:\n%s", text)
+	}
+}

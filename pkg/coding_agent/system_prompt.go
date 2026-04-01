@@ -10,6 +10,12 @@ import (
 	"github.com/openmodu/modu/pkg/agent"
 )
 
+const (
+	maxContextFileBytes   = 12 * 1024
+	maxTotalContextBytes  = 48 * 1024
+	maxMemoryContextBytes = 16 * 1024
+)
+
 const defaultSystemPrompt = `You are an expert software engineer operating as an autonomous coding agent. You have tools to read, write, and edit files, run shell commands, and search code. You work in the user's working directory and can make changes directly.
 
 # Core Workflow
@@ -130,12 +136,28 @@ func (b *SystemPromptBuilder) Build() string {
 		parts = append(parts, strings.Join(toolDescs, "\n\n"))
 	}
 
+	remainingContextBudget := maxTotalContextBytes
+	seenPaths := make(map[string]struct{})
+	appendContext := func(label, path string) {
+		clean := filepath.Clean(path)
+		if _, ok := seenPaths[clean]; ok {
+			return
+		}
+		seenPaths[clean] = struct{}{}
+		content, used := b.loadContextFile(path, minInt(maxContextFileBytes, remainingContextBudget))
+		if content == "" || used == 0 {
+			return
+		}
+		remainingContextBudget -= used
+		parts = append(parts, fmt.Sprintf("# Context: %s\n%s", label, content))
+	}
+
 	// 3. Context files (AGENTS.md, .agents.md, etc.)
 	for _, path := range b.contextFiles {
-		content := b.loadContextFile(path)
-		if content != "" {
-			parts = append(parts, fmt.Sprintf("# Context: %s\n%s", filepath.Base(path), content))
+		if remainingContextBudget <= 0 {
+			break
 		}
+		appendContext(filepath.Base(path), path)
 	}
 
 	// Auto-discover standard context files
@@ -150,11 +172,11 @@ func (b *SystemPromptBuilder) Build() string {
 	}
 
 	for _, name := range bootstrapFiles {
-		path := filepath.Join(b.cwd, name)
-		content := b.loadContextFile(path)
-		if content != "" {
-			parts = append(parts, fmt.Sprintf("## %s\n\n%s", name, content))
+		if remainingContextBudget <= 0 {
+			break
 		}
+		path := filepath.Join(b.cwd, name)
+		appendContext(name, path)
 	}
 
 	// 4. Skill descriptions (XML format per Agent Skills spec)
@@ -171,6 +193,9 @@ func (b *SystemPromptBuilder) Build() string {
 	if b.memoryStore != nil {
 		memCtx := b.memoryStore.GetMemoryContext()
 		if memCtx != "" {
+			if len(memCtx) > maxMemoryContextBytes {
+				memCtx = truncateWithNotice(memCtx, maxMemoryContextBytes, "memory context")
+			}
 			parts = append(parts, memCtx)
 		}
 	}
@@ -184,10 +209,43 @@ func (b *SystemPromptBuilder) Build() string {
 	return strings.Join(parts, "\n\n---\n\n")
 }
 
-func (b *SystemPromptBuilder) loadContextFile(path string) string {
+func (b *SystemPromptBuilder) loadContextFile(path string, maxBytes int) (string, int) {
+	if maxBytes <= 0 {
+		return "", 0
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return ""
+		return "", 0
 	}
-	return strings.TrimSpace(string(data))
+	content := strings.TrimSpace(string(data))
+	if content == "" {
+		return "", 0
+	}
+	if len(content) > maxBytes {
+		content = truncateWithNotice(content, maxBytes, filepath.Base(path))
+	}
+	return content, len(content)
+}
+
+func truncateWithNotice(content string, maxBytes int, label string) string {
+	if maxBytes <= 0 || len(content) <= maxBytes {
+		return content
+	}
+	const ellipsis = "\n\n...[truncated for context budget]"
+	keep := maxBytes - len(ellipsis)
+	if keep < 0 {
+		keep = 0
+	}
+	content = strings.TrimSpace(content[:keep])
+	if label != "" {
+		return content + ellipsis + " (" + label + ")"
+	}
+	return content + ellipsis
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

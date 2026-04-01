@@ -119,10 +119,25 @@ func (t *FindTool) executeFd(ctx context.Context, fdPath, pattern, searchPath st
 	} else {
 		result = strings.Join(lines, "\n")
 	}
+	matchedPaths := make([]string, 0, min(len(lines), 20))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		matchedPaths = append(matchedPaths, filepath.Join(searchPath, line))
+		if len(matchedPaths) >= 20 {
+			break
+		}
+	}
 
 	return agent.AgentToolResult{
 		Content: []types.ContentBlock{
 			&types.TextContent{Type: "text", Text: result},
+		},
+		Details: map[string]any{
+			"path":          searchPath,
+			"matched_paths": matchedPaths,
 		},
 	}, nil
 }
@@ -200,5 +215,27 @@ func (t *FindTool) executeBuiltin(ctx context.Context, pattern, searchPath strin
 		Content: []types.ContentBlock{
 			&types.TextContent{Type: "text", Text: text},
 		},
+		Details: map[string]any{
+			"path":          searchPath,
+			"matched_paths": absolutePaths(searchPath, results, 20),
+		},
 	}, nil
+}
+
+func absolutePaths(base string, rels []string, limit int) []string {
+	out := make([]string, 0, min(len(rels), limit))
+	for _, rel := range rels {
+		out = append(out, filepath.Join(base, rel))
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

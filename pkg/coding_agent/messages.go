@@ -1,8 +1,10 @@
 package coding_agent
 
 import (
+	"strings"
 	"time"
 
+	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -75,6 +77,8 @@ type CustomMessage struct {
 	Text   string `json:"text"`
 }
 
+const nestedContextSource = "nested_context"
+
 // ToLlmMessage converts a CustomMessage to a UserMessage.
 func (m *CustomMessage) ToLlmMessage() types.UserMessage {
 	return types.UserMessage{
@@ -87,4 +91,30 @@ func (m *CustomMessage) ToLlmMessage() types.UserMessage {
 		},
 		Timestamp: time.Now().UnixMilli(),
 	}
+}
+
+func isTransientContextMessage(msg agent.AgentMessage) bool {
+	switch m := msg.(type) {
+	case types.UserMessage:
+		return customMessageHasSource(m.Content, nestedContextSource)
+	case *types.UserMessage:
+		return customMessageHasSource(m.Content, nestedContextSource)
+	default:
+		return false
+	}
+}
+
+func customMessageHasSource(content any, source string) bool {
+	prefix := "[" + source + "] "
+	switch c := content.(type) {
+	case string:
+		return strings.HasPrefix(c, prefix)
+	case []types.ContentBlock:
+		for _, block := range c {
+			if tc, ok := block.(*types.TextContent); ok && strings.HasPrefix(tc.Text, prefix) {
+				return true
+			}
+		}
+	}
+	return false
 }
