@@ -39,6 +39,11 @@ High-priority gaps identified before this round:
 - Added minimal plan-mode tools: `enter_plan_mode` and `exit_plan_mode`.
 - Added minimal worktree-mode tools: `enter_worktree` and `exit_worktree`.
 - Added `isolation: worktree` support for subagents by running them inside temporary git worktrees with cwd-bound tools.
+- Refreshed the session system prompt dynamically when plan mode or worktree mode changes.
+- Added exported session accessors for discovered subagents, current todos, background tasks, plan mode, and active worktree so external frontends can inspect agent state.
+- Wired `examples/modu_code` to use its local `agents/` directory by default.
+- Added a local in-process mailbox runtime to `examples/modu_code` so `spawn_agent` is exercised during example runs instead of remaining disconnected.
+- Added manual validation slash commands to `examples/modu_code` for `/agents`, `/todos`, `/tasks`, `/plan`, and `/worktree`.
 - Added focused tests for:
   session persistence after prompt/tool execution
   isolated slash-skill execution
@@ -56,7 +61,9 @@ High-priority gaps identified before this round:
 
 ## Still Missing
 
-- Broader test coverage for `skills`, `subagent`, `resource`, and RPC flows
+- Broader end-to-end coverage for the `examples/modu_code` interactive path
+- Deeper plan-mode semantics beyond the current state/prompt toggle
+- Richer worktree lifecycle controls and cleanup introspection
 
 ## Suggested Next Steps
 

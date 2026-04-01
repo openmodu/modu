@@ -22,6 +22,9 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -59,12 +62,27 @@ func main() {
 	}
 
 	thinkingLevel := resolveThinkingLevel()
+	exampleDir := locateExampleDir()
+	agentDir := coding_agent.DefaultAgentDir()
+	exampleAgentsDir := filepath.Join(exampleDir, "agents")
+	mailboxRuntime, mailboxErr := startMailboxRuntime(agentDir, exampleAgentsDir, cwd, model, getAPIKey)
+	if mailboxErr != nil {
+		fmt.Fprintf(os.Stderr, "[mailbox] failed to start local runtime: %v\n", mailboxErr)
+	}
+	if mailboxRuntime != nil {
+		defer mailboxRuntime.Close()
+	}
 
 	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
 		Cwd:           cwd,
+		AgentDir:      agentDir,
 		Model:         model,
 		ThinkingLevel: thinkingLevel,
 		GetAPIKey:     getAPIKey,
+		MailboxClient: mailboxRuntime.Client(),
+		ExtraSubagentDirs: []string{
+			exampleAgentsDir,
+		},
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create session: %v\n", err)
@@ -229,7 +247,7 @@ func main() {
 		}
 
 		// Built-in slash commands handled before forwarding to the session.
-		if handled, exit := handleSlash(ctx, line, session, renderer, model); handled {
+		if handled, exit := handleSlash(ctx, line, session, renderer, model, mailboxRuntime); handled {
 			if exit {
 				break
 			}
@@ -287,7 +305,7 @@ func main() {
 }
 
 // handleSlash processes built-in /commands. Returns (handled, shouldExit).
-func handleSlash(ctx context.Context, line string, session *coding_agent.CodingSession, r *tui.Renderer, model *types.Model) (bool, bool) {
+func handleSlash(ctx context.Context, line string, session *coding_agent.CodingSession, r *tui.Renderer, model *types.Model, mailboxRuntime *moduCodeMailboxRuntime) (bool, bool) {
 	if !strings.HasPrefix(line, "/") {
 		return false, false
 	}
@@ -336,6 +354,109 @@ func handleSlash(ctx context.Context, line string, session *coding_agent.CodingS
 	case "tools":
 		names := session.GetActiveToolNames()
 		r.PrintInfo("active tools: " + strings.Join(names, ", "))
+		return true, false
+
+	case "agents":
+		subagents := session.GetSubagents()
+		sort.Slice(subagents, func(i, j int) bool { return subagents[i].Name < subagents[j].Name })
+		if len(subagents) == 0 {
+			r.PrintInfo("no subagents found")
+		} else {
+			r.PrintInfo(fmt.Sprintf("available subagents (%d):", len(subagents)))
+			for _, sg := range subagents {
+				line := "  " + sg.Name
+				if sg.Description != "" {
+					line += " — " + sg.Description
+				}
+				line += " [" + sg.Source + "]"
+				r.PrintInfo(line)
+			}
+		}
+		if mailboxRuntime != nil && len(mailboxRuntime.AgentIDs()) > 0 {
+			r.PrintInfo("mailbox workers: " + strings.Join(mailboxRuntime.AgentIDs(), ", "))
+		}
+		return true, false
+
+	case "todos":
+		todos := session.GetTodos()
+		if len(todos) == 0 {
+			r.PrintInfo("no todos")
+			return true, false
+		}
+		r.PrintInfo(fmt.Sprintf("todos (%d):", len(todos)))
+		for i, todo := range todos {
+			r.PrintInfo(fmt.Sprintf("  %d. [%s] %s", i+1, todo.Status, todo.Content))
+		}
+		return true, false
+
+	case "tasks":
+		tasks := session.GetBackgroundTasks()
+		sort.Slice(tasks, func(i, j int) bool { return tasks[i].CreatedAt < tasks[j].CreatedAt })
+		if len(tasks) == 0 {
+			r.PrintInfo("no background tasks")
+			return true, false
+		}
+		r.PrintInfo(fmt.Sprintf("background tasks (%d):", len(tasks)))
+		for _, task := range tasks {
+			line := fmt.Sprintf("  %s [%s] %s", task.ID, task.Status, task.Summary)
+			if task.Error != "" {
+				line += " error=" + task.Error
+			}
+			r.PrintInfo(line)
+		}
+		return true, false
+
+	case "plan":
+		arg := ""
+		if len(parts) > 1 {
+			arg = strings.TrimSpace(parts[1])
+		}
+		switch arg {
+		case "", "status":
+			if session.IsPlanMode() {
+				r.PrintInfo("plan mode: on")
+			} else {
+				r.PrintInfo("plan mode: off")
+			}
+		case "on":
+			session.EnterPlanMode()
+			r.PrintInfo("plan mode enabled")
+		case "off":
+			session.ExitPlanMode("manually exited from /plan off")
+			r.PrintInfo("plan mode disabled")
+		default:
+			r.PrintInfo("usage: /plan [status|on|off]")
+		}
+		return true, false
+
+	case "worktree":
+		arg := ""
+		if len(parts) > 1 {
+			arg = strings.TrimSpace(parts[1])
+		}
+		switch arg {
+		case "", "status":
+			if path := session.ActiveWorktree(); path != "" {
+				r.PrintInfo("active worktree: " + path)
+			} else {
+				r.PrintInfo("active worktree: none")
+			}
+		case "on":
+			path, err := session.EnterWorktree()
+			if err != nil {
+				r.PrintError(err)
+			} else {
+				r.PrintInfo("entered worktree: " + path)
+			}
+		case "off":
+			if err := session.ExitWorktree(); err != nil {
+				r.PrintError(err)
+			} else {
+				r.PrintInfo("exited worktree")
+			}
+		default:
+			r.PrintInfo("usage: /worktree [status|on|off]")
+		}
 		return true, false
 
 	case "skills":
@@ -428,6 +549,11 @@ func printHelp(r *tui.Renderer) {
 		"  /compact            — compact the conversation context",
 		"  /tokens             — show total token usage",
 		"  /tools              — list active tools",
+		"  /agents             — list discovered subagents and mailbox workers",
+		"  /todos              — show current todo list",
+		"  /tasks              — show background subagent tasks",
+		"  /plan [on|off]      — inspect or toggle plan mode",
+		"  /worktree [on|off]  — inspect or toggle isolated worktree mode",
 		"  /skills             — list available skills",
 		"  /telegram           — show Telegram bot config",
 		"  /telegram token <t> — set Telegram bot token",
@@ -447,6 +573,14 @@ func printHelp(r *tui.Renderer) {
 	for _, l := range lines {
 		r.PrintInfo(l)
 	}
+}
+
+func locateExampleDir() string {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		return ""
+	}
+	return filepath.Dir(file)
 }
 
 // resolveProvider returns the model and GetAPIKey function based on env vars.

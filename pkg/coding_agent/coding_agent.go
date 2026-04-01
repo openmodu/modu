@@ -49,29 +49,32 @@ type CodingSessionOptions struct {
 	StreamFn agent.StreamFn
 	// MailboxClient enables the spawn_agent tool when provided.
 	MailboxClient *client.MailboxClient
+	// ExtraSubagentDirs adds extra directories to scan for subagent definitions.
+	ExtraSubagentDirs []string
 }
 
 // CodingSession is the main entry point for the coding agent system.
 type CodingSession struct {
-	agent          *agent.Agent
-	sessionManager *session.Manager
-	sessionTree    *session.Tree
-	config         *Config
-	extensions     *extension.Runner
-	skillManager   *skills.Manager
-	templateMgr    *skills.TemplateManager
-	resources      *resource.Loader
-	memoryStore    *MemoryStore
-	subagentLoader *subagent.Loader
-	cwd            string
-	agentDir       string
-	model          *types.Model
-	activeTools    []agent.AgentTool
-	slashCommands  map[string]SlashCommand
-	getAPIKey      func(provider string) (string, error)
-	streamFn       agent.StreamFn
-	mailboxClient  *client.MailboxClient
-	lastSavedIndex int
+	agent            *agent.Agent
+	sessionManager   *session.Manager
+	sessionTree      *session.Tree
+	config           *Config
+	extensions       *extension.Runner
+	skillManager     *skills.Manager
+	templateMgr      *skills.TemplateManager
+	resources        *resource.Loader
+	memoryStore      *MemoryStore
+	subagentLoader   *subagent.Loader
+	cwd              string
+	agentDir         string
+	baseSystemPrompt string
+	model            *types.Model
+	activeTools      []agent.AgentTool
+	slashCommands    map[string]SlashCommand
+	getAPIKey        func(provider string) (string, error)
+	streamFn         agent.StreamFn
+	mailboxClient    *client.MailboxClient
+	lastSavedIndex   int
 	// totalTokens tracks accumulated token usage for auto-compaction.
 	totalTokens   int
 	retryManager  *RetryManager
@@ -219,6 +222,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	// Discover subagents and register spawn_subagent tool if any are found.
 	subagentLoader := subagent.NewLoader()
 	subagentLoader.Discover(agentDir, opts.Cwd)
+	subagentLoader.DiscoverExtra(opts.ExtraSubagentDirs...)
 	taskMgr := newBackgroundTaskManager()
 	if subagentLoader.Count() > 0 {
 		activeTools = append(activeTools, tools.NewSpawnSubagentTool(opts.Cwd, agentDir, subagentLoader, activeTools, opts.Model, getAPIKey, streamFn, func(def *subagent.SubagentDefinition) *subagent.SubagentDefinition {
@@ -252,31 +256,32 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	})
 
 	cs := &CodingSession{
-		agent:           ag,
-		sessionManager:  sessionMgr,
-		sessionTree:     session.NewTree(sessionMgr),
-		config:          cfg,
-		extensions:      extRunner,
-		skillManager:    skillMgr,
-		templateMgr:     templateMgr,
-		resources:       loader,
-		memoryStore:     memoryStore,
-		subagentLoader:  subagentLoader,
-		cwd:             opts.Cwd,
-		agentDir:        agentDir,
-		model:           opts.Model,
-		activeTools:     activeTools,
-		slashCommands:   make(map[string]SlashCommand),
-		getAPIKey:       getAPIKey,
-		streamFn:        streamFn,
-		mailboxClient:   opts.MailboxClient,
-		retryManager:    NewRetryManager(cfg.RetrySettings, cfg.AutoRetry),
-		eventBus:        eventbus.NewEventBus(),
-		scopedModels:    cfg.ScopedModels,
-		thinkingLevel:   cfg.ThinkingLevel,
-		sessionStarted:  time.Now().UnixMilli(),
-		taskManager:     taskMgr,
-		approvalManager: approvalMgr,
+		agent:            ag,
+		sessionManager:   sessionMgr,
+		sessionTree:      session.NewTree(sessionMgr),
+		config:           cfg,
+		extensions:       extRunner,
+		skillManager:     skillMgr,
+		templateMgr:      templateMgr,
+		resources:        loader,
+		memoryStore:      memoryStore,
+		subagentLoader:   subagentLoader,
+		cwd:              opts.Cwd,
+		agentDir:         agentDir,
+		baseSystemPrompt: systemPrompt,
+		model:            opts.Model,
+		activeTools:      activeTools,
+		slashCommands:    make(map[string]SlashCommand),
+		getAPIKey:        getAPIKey,
+		streamFn:         streamFn,
+		mailboxClient:    opts.MailboxClient,
+		retryManager:     NewRetryManager(cfg.RetrySettings, cfg.AutoRetry),
+		eventBus:         eventbus.NewEventBus(),
+		scopedModels:     cfg.ScopedModels,
+		thinkingLevel:    cfg.ThinkingLevel,
+		sessionStarted:   time.Now().UnixMilli(),
+		taskManager:      taskMgr,
+		approvalManager:  approvalMgr,
 	}
 	cs.replaceTodoTool()
 	cs.replaceTaskOutputTool()
@@ -446,6 +451,14 @@ type SkillInfo struct {
 	Source      string // "user" or "project"
 }
 
+// SubagentInfo is a minimal view of a discovered subagent definition.
+type SubagentInfo struct {
+	Name        string
+	Description string
+	Source      string // "user" or "project"
+	FilePath    string
+}
+
 // GetSkills returns all discovered skills.
 func (s *CodingSession) GetSkills() []SkillInfo {
 	if s.skillManager == nil {
@@ -455,6 +468,24 @@ func (s *CodingSession) GetSkills() []SkillInfo {
 	out := make([]SkillInfo, len(list))
 	for i, sk := range list {
 		out[i] = SkillInfo{Name: sk.Name, Description: sk.Description, Source: sk.Source}
+	}
+	return out
+}
+
+// GetSubagents returns all discovered subagent definitions.
+func (s *CodingSession) GetSubagents() []SubagentInfo {
+	if s.subagentLoader == nil {
+		return nil
+	}
+	list := s.subagentLoader.List()
+	out := make([]SubagentInfo, len(list))
+	for i, def := range list {
+		out[i] = SubagentInfo{
+			Name:        def.Name,
+			Description: def.Description,
+			Source:      def.Source,
+			FilePath:    def.FilePath,
+		}
 	}
 	return out
 }

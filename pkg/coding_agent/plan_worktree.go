@@ -22,8 +22,9 @@ func (a planModeAdapter) EnterPlanMode() {
 		return
 	}
 	a.session.planMu.Lock()
-	defer a.session.planMu.Unlock()
 	a.session.planMode = true
+	a.session.planMu.Unlock()
+	a.session.refreshDynamicSystemPrompt()
 }
 
 func (a planModeAdapter) ExitPlanMode(plan string) {
@@ -31,8 +32,9 @@ func (a planModeAdapter) ExitPlanMode(plan string) {
 		return
 	}
 	a.session.planMu.Lock()
-	defer a.session.planMu.Unlock()
 	a.session.planMode = false
+	a.session.planMu.Unlock()
+	a.session.refreshDynamicSystemPrompt()
 	_ = plan
 }
 
@@ -43,6 +45,23 @@ func (a planModeAdapter) IsPlanMode() bool {
 	a.session.planMu.RLock()
 	defer a.session.planMu.RUnlock()
 	return a.session.planMode
+}
+
+// IsPlanMode reports whether the session is currently in plan mode.
+func (s *CodingSession) IsPlanMode() bool {
+	s.planMu.RLock()
+	defer s.planMu.RUnlock()
+	return s.planMode
+}
+
+// EnterPlanMode enables plan mode for the current session.
+func (s *CodingSession) EnterPlanMode() {
+	planModeAdapter{session: s}.EnterPlanMode()
+}
+
+// ExitPlanMode disables plan mode for the current session.
+func (s *CodingSession) ExitPlanMode(plan string) {
+	planModeAdapter{session: s}.ExitPlanMode(plan)
 }
 
 func (s *CodingSession) replacePlanTools() {
@@ -80,6 +99,13 @@ func (a worktreeAdapter) ActiveWorktree() string {
 	return a.session.worktreePath
 }
 
+// ActiveWorktree returns the currently active isolated worktree path, if any.
+func (s *CodingSession) ActiveWorktree() string {
+	s.worktreeMu.Lock()
+	defer s.worktreeMu.Unlock()
+	return s.worktreePath
+}
+
 func (s *CodingSession) replaceWorktreeTools() {
 	enter := tools.NewEnterWorktreeTool(worktreeAdapter{session: s})
 	exit := tools.NewExitWorktreeTool(worktreeAdapter{session: s})
@@ -92,23 +118,26 @@ func (s *CodingSession) replaceWorktreeTools() {
 
 func (s *CodingSession) EnterWorktree() (string, error) {
 	s.worktreeMu.Lock()
-	defer s.worktreeMu.Unlock()
-
 	if s.worktreePath != "" {
-		return s.worktreePath, nil
+		path := s.worktreePath
+		s.worktreeMu.Unlock()
+		return path, nil
 	}
 
 	root, err := gitOutput(s.cwd, "rev-parse", "--show-toplevel")
 	if err != nil {
+		s.worktreeMu.Unlock()
 		return "", fmt.Errorf("enter_worktree: not a git repository: %w", err)
 	}
 
 	baseDir := filepath.Join(s.agentDir, "worktrees")
 	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		s.worktreeMu.Unlock()
 		return "", err
 	}
 	path := filepath.Join(baseDir, fmt.Sprintf("wt-%d", time.Now().UnixMilli()))
 	if _, err := runGit(root, "worktree", "add", "--detach", path, "HEAD"); err != nil {
+		s.worktreeMu.Unlock()
 		return "", fmt.Errorf("enter_worktree: %w", err)
 	}
 
@@ -116,14 +145,15 @@ func (s *CodingSession) EnterWorktree() (string, error) {
 	s.worktreePath = path
 	s.cwd = path
 	s.refreshToolsForCwd(path)
+	s.worktreeMu.Unlock()
+	s.refreshDynamicSystemPrompt()
 	return path, nil
 }
 
 func (s *CodingSession) ExitWorktree() error {
 	s.worktreeMu.Lock()
-	defer s.worktreeMu.Unlock()
-
 	if s.worktreePath == "" {
+		s.worktreeMu.Unlock()
 		return nil
 	}
 	path := s.worktreePath
@@ -138,7 +168,28 @@ func (s *CodingSession) ExitWorktree() error {
 		s.originalCwd = ""
 		s.refreshToolsForCwd(restore)
 	}
+	s.worktreeMu.Unlock()
+	s.refreshDynamicSystemPrompt()
 	return nil
+}
+
+func (s *CodingSession) refreshDynamicSystemPrompt() {
+	var parts []string
+	parts = append(parts, s.baseSystemPrompt)
+
+	s.planMu.RLock()
+	planMode := s.planMode
+	s.planMu.RUnlock()
+	s.worktreeMu.Lock()
+	worktreePath := s.worktreePath
+	s.worktreeMu.Unlock()
+	if planMode {
+		parts = append(parts, "## Active Mode\nThe session is currently in plan mode. Focus on planning, sequencing, and validation strategy before making changes.")
+	}
+	if worktreePath != "" {
+		parts = append(parts, "## Active Worktree\nThe session is currently operating inside an isolated git worktree at: "+worktreePath)
+	}
+	s.agent.SetSystemPrompt(strings.Join(parts, "\n\n---\n\n"))
 }
 
 func (s *CodingSession) refreshToolsForCwd(cwd string) {

@@ -97,3 +97,11 @@ func (m *backgroundTaskManager) List() []BackgroundTask {
 	}
 	return out
 }
+
+// GetBackgroundTasks returns a snapshot of session background tasks.
+func (s *CodingSession) GetBackgroundTasks() []BackgroundTask {
+	if s.taskManager == nil {
+		return nil
+	}
+	return s.taskManager.List()
+}

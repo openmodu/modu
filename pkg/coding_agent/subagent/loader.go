@@ -26,6 +26,17 @@ func (l *Loader) Discover(agentDir, cwd string) {
 	l.loadFromDir(filepath.Join(cwd, ".coding_agent", "agents"), "project")
 }
 
+// DiscoverExtra loads subagent definitions from explicit agent directories.
+// Later directories override earlier ones.
+func (l *Loader) DiscoverExtra(dirs ...string) {
+	for _, dir := range dirs {
+		if strings.TrimSpace(dir) == "" {
+			continue
+		}
+		l.loadFromDir(dir, "extra")
+	}
+}
+
 func (l *Loader) loadFromDir(dir, source string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
