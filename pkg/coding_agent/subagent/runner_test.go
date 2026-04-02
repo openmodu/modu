@@ -83,6 +83,7 @@ func TestParseDefinitionSupportsExtendedFrontmatter(t *testing.T) {
 description: test agent
 tools: read, bash
 disallowed_tools: bash
+harness_block_tools: edit, write
 permission_mode: read-only
 background: true
 effort: high
@@ -103,6 +104,9 @@ You are a test agent.`
 	}
 	if len(def.DisallowedTools) != 1 || def.DisallowedTools[0] != "bash" {
 		t.Fatalf("unexpected disallowed tools: %#v", def.DisallowedTools)
+	}
+	if len(def.HarnessBlockTools) != 2 || def.HarnessBlockTools[0] != "edit" || def.HarnessBlockTools[1] != "write" {
+		t.Fatalf("unexpected harness block tools: %#v", def.HarnessBlockTools)
 	}
 	if def.PermissionMode != "read-only" {
 		t.Fatalf("unexpected permission mode: %q", def.PermissionMode)

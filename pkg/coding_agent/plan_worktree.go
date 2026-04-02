@@ -38,8 +38,10 @@ func (a planModeAdapter) ExitPlanMode(plan string) {
 		defer a.session.planMu.Unlock()
 		a.session.planMode = false
 	}()
+	if strings.TrimSpace(plan) != "" {
+		_ = a.session.writeLatestPlan(plan)
+	}
 	a.session.refreshDynamicSystemPrompt()
-	_ = plan
 }
 
 func (a planModeAdapter) IsPlanMode() bool {
@@ -219,7 +221,7 @@ func (s *CodingSession) refreshToolsForCwd(cwd string) {
 		case "spawn_subagent":
 			updated = append(updated, tools.NewSpawnSubagentTool(cwd, s.agentDir, s.subagentLoader, updated, s.model, s.getAPIKey, s.streamFn, func(def *subagent.SubagentDefinition) *subagent.SubagentDefinition {
 				return prepareSubagentDefinition(def, s.skillManager, s.memoryStore)
-			}, taskStoreAdapter{manager: s.taskManager}))
+			}, taskStoreAdapter{manager: s.taskManager}, s))
 		default:
 			updated = append(updated, tool)
 		}
@@ -244,4 +246,12 @@ func runGit(dir string, args ...string) (string, error) {
 		return string(out), fmt.Errorf("%s", strings.TrimSpace(string(out)))
 	}
 	return string(out), nil
+}
+
+func (s *CodingSession) writeLatestPlan(plan string) error {
+	paths := s.RuntimePaths()
+	if err := os.MkdirAll(paths.PlansDir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(paths.PlanFile, []byte(strings.TrimSpace(plan)+"\n"), 0o600)
 }

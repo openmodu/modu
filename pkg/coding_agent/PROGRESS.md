@@ -50,6 +50,18 @@ High-priority gaps identified before this round:
 - Added dynamic nested-context injection triggered by file/tool access so deeper path-specific instructions can be loaded on demand during a turn.
 - Extended dynamic context triggers beyond `read/edit/write` to include `grep`, `find`, and `ls` path discovery.
 - Marked dynamic nested-context messages as transient so they do not persist into long-term session history or saved transcripts.
+- Added a lightweight session-scoped harness hook layer around tool execution.
+- Added a harness-only hint side channel by stripping `<claude-code-hint .../>` tags from tool-visible text output while recording them for the host runtime.
+- Added harness-managed runtime path exposure through a new `harness_paths` tool and session API.
+- Persisted the latest recorded plan to a harness-managed plan file under the runtime `plans/` tree.
+- Extended harness hooks with compaction lifecycle callbacks (`PreCompact` / `PostCompact`).
+- Extended harness hooks with subagent lifecycle callbacks (`SubagentStart` / `SubagentStop`).
+- Persisted per-tool text result artifacts under the harness-managed `tool-results/` tree.
+- Added `settings.json`-driven harness policy for blocking tools before execution.
+- Added `settings.json`-driven toggles for harness hint capture and tool-result artifact persistence.
+- Added `settings.json`-driven JSONL event logging for tool-use, compaction, and subagent lifecycle events.
+- Added subagent frontmatter support for `harness_block_tools` and merged it into effective tool blocking.
+- Added `examples/modu_code` inspection commands for harness hints and runtime paths.
 - Added focused tests for:
   session persistence after prompt/tool execution
   isolated slash-skill execution
@@ -64,6 +76,16 @@ High-priority gaps identified before this round:
   plan mode tool toggling
   worktree enter/exit
   subagent worktree isolation
+  harness hook execution
+  harness hint stripping/storage
+  harness runtime paths and plan file access
+  harness compaction lifecycle hooks
+  harness subagent lifecycle hooks
+  harness tool-result artifact persistence
+  config-driven harness tool blocking
+  config-driven disabling of harness hint capture and tool-result persistence
+  config-driven harness JSONL event logging
+  subagent frontmatter parsing for `harness_block_tools`
 
 ## Still Missing
 
@@ -73,6 +95,6 @@ High-priority gaps identified before this round:
 
 ## Suggested Next Steps
 
-1. Integrate `spawn_agent` behind an option so orchestration can be enabled without coupling every session to mailbox.
-2. Improve plan/worktree semantics beyond the current minimal implementation.
-3. Expand integration coverage around background tasks, tool replacement, and session switching.
+1. Improve plan/worktree semantics beyond the current minimal implementation.
+2. Expand integration coverage around background tasks, tool replacement, and session switching.
+3. Add configurable hook actions beyond blocking and file append, such as host command dispatch or structured artifact fan-out.

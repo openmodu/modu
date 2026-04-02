@@ -98,6 +98,7 @@ type CodingSession struct {
 	worktreePath   string
 	contextMu      sync.Mutex
 	loadedContexts map[string]struct{}
+	harness        *harnessState
 
 	// approvalManager handles tool execution approval.
 	approvalManager *ApprovalManager
@@ -229,7 +230,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	if subagentLoader.Count() > 0 {
 		activeTools = append(activeTools, tools.NewSpawnSubagentTool(opts.Cwd, agentDir, subagentLoader, activeTools, opts.Model, getAPIKey, streamFn, func(def *subagent.SubagentDefinition) *subagent.SubagentDefinition {
 			return prepareSubagentDefinition(def, skillMgr, memoryStore)
-		}, taskStoreAdapter{manager: taskMgr}))
+		}, taskStoreAdapter{manager: taskMgr}, nil))
 		if subagentsPrompt := formatSubagentsForPrompt(subagentLoader.List()); subagentsPrompt != "" {
 			promptBuilder.AppendPrompt(subagentsPrompt)
 		}
@@ -284,12 +285,16 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		sessionStarted:   time.Now().UnixMilli(),
 		taskManager:      taskMgr,
 		loadedContexts:   make(map[string]struct{}),
+		harness:          newHarnessState(),
 		approvalManager:  approvalMgr,
 	}
+	cs.refreshToolsForCwd(cs.cwd)
 	cs.replaceTodoTool()
 	cs.replaceTaskOutputTool()
 	cs.replacePlanTools()
 	cs.replaceWorktreeTools()
+	cs.installConfigHarnessHooks()
+	cs.installHarnessLayer()
 	for _, ctxFile := range loader.LoadContextFiles() {
 		cs.loadedContexts[ctxFile.Path] = struct{}{}
 	}
@@ -371,6 +376,8 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 			}
 		}
 	}
+
+	cs.installHarnessLayer()
 
 	return cs, nil
 }
@@ -715,12 +722,16 @@ func (s *CodingSession) Compact(ctx context.Context) error {
 
 	state := s.agent.GetState()
 
+	if preErr := s.runHarnessPreCompact(len(state.Messages)); preErr != nil {
+		return fmt.Errorf("compaction blocked by harness: %w", preErr)
+	}
 	result, err := compaction.Compact(ctx, state.Messages, compaction.Options{
 		PreserveRecent: s.config.CompactionSettings.PreserveRecentMessages,
 		Model:          s.model,
 		GetAPIKey:      s.getAPIKey,
 		StreamFn:       s.streamFn,
 	})
+	s.runHarnessPostCompact(result, err)
 	if err != nil {
 		return fmt.Errorf("compaction failed: %w", err)
 	}
@@ -1173,6 +1184,8 @@ func prepareSubagentDefinition(def *subagent.SubagentDefinition, skillMgr *skill
 	}
 
 	clone := *def
+	clone.DisallowedTools = append([]string{}, clone.DisallowedTools...)
+	clone.DisallowedTools = append(clone.DisallowedTools, clone.HarnessBlockTools...)
 	var parts []string
 	if clone.SystemPrompt != "" {
 		parts = append(parts, clone.SystemPrompt)

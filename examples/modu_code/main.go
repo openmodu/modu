@@ -407,6 +407,31 @@ func handleSlash(ctx context.Context, line string, session *coding_agent.CodingS
 		}
 		return true, false
 
+	case "hints":
+		hints := session.GetPendingHarnessHints()
+		if len(hints) == 0 {
+			r.PrintInfo("no harness hints")
+			return true, false
+		}
+		r.PrintInfo(fmt.Sprintf("harness hints (%d):", len(hints)))
+		for _, hint := range hints {
+			r.PrintInfo(fmt.Sprintf("  v%d %s=%s [%s]", hint.Version, hint.Type, hint.Value, hint.SourceTool))
+		}
+		return true, false
+
+	case "runtime":
+		paths := session.RuntimePaths()
+		r.PrintInfo("runtime paths:")
+		r.PrintInfo("  root: " + paths.Root)
+		r.PrintInfo("  sessions: " + paths.SessionsDir)
+		r.PrintInfo("  plans: " + paths.PlansDir)
+		r.PrintInfo("  plan_file: " + paths.PlanFile)
+		r.PrintInfo("  worktrees: " + paths.WorktreesDir)
+		r.PrintInfo("  tool_results: " + paths.ToolResultsDir)
+		r.PrintInfo("  global_memory: " + paths.GlobalMemoryDir)
+		r.PrintInfo("  project_memory: " + paths.ProjectMemoryDir)
+		return true, false
+
 	case "plan":
 		arg := ""
 		if len(parts) > 1 {
@@ -553,6 +578,8 @@ func printHelp(r *tui.Renderer) {
 		"  /agents             — list discovered subagents and mailbox workers",
 		"  /todos              — show current todo list",
 		"  /tasks              — show background subagent tasks",
+		"  /hints              — show pending harness-only hints",
+		"  /runtime            — show harness runtime paths",
 		"  /plan [on|off]      — inspect or toggle plan mode",
 		"  /worktree [on|off]  — inspect or toggle isolated worktree mode",
 		"  /skills             — list available skills",

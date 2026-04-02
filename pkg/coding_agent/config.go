@@ -51,6 +51,26 @@ type Config struct {
 
 	// BlockImages prevents image content from being sent to the model.
 	BlockImages bool `json:"blockImages,omitempty"`
+
+	// Harness controls host-side runtime behavior.
+	Harness HarnessConfig `json:"harness,omitempty"`
+}
+
+type HarnessConfig struct {
+	// BlockTools denies matching tool names before execution.
+	BlockTools []string `json:"blockTools,omitempty"`
+	// CaptureHints strips and stores harness-only hint tags from tool output.
+	CaptureHints *bool `json:"captureHints,omitempty"`
+	// PersistToolResults writes plain-text tool artifacts to the runtime tree.
+	PersistToolResults *bool `json:"persistToolResults,omitempty"`
+	// LogFiles appends JSONL event records for selected harness lifecycle events.
+	LogFiles HarnessLogFiles `json:"logFiles,omitempty"`
+}
+
+type HarnessLogFiles struct {
+	ToolUse  string `json:"toolUse,omitempty"`
+	Compact  string `json:"compact,omitempty"`
+	Subagent string `json:"subagent,omitempty"`
 }
 
 // CompactionConfig controls context compaction behavior.
@@ -73,6 +93,8 @@ type RetryConfig struct {
 
 // DefaultConfig returns a config with sensible defaults.
 func DefaultConfig() *Config {
+	captureHints := true
+	persistToolResults := true
 	return &Config{
 		ThinkingLevel:  agent.ThinkingLevelMedium,
 		AutoCompaction: true,
@@ -80,7 +102,25 @@ func DefaultConfig() *Config {
 			MaxContextPercentage:   80.0,
 			PreserveRecentMessages: 4,
 		},
+		Harness: HarnessConfig{
+			CaptureHints:       &captureHints,
+			PersistToolResults: &persistToolResults,
+		},
 	}
+}
+
+func (c *Config) HarnessCaptureHints() bool {
+	if c == nil || c.Harness.CaptureHints == nil {
+		return true
+	}
+	return *c.Harness.CaptureHints
+}
+
+func (c *Config) HarnessPersistToolResults() bool {
+	if c == nil || c.Harness.PersistToolResults == nil {
+		return true
+	}
+	return *c.Harness.PersistToolResults
 }
 
 // LoadConfig loads configuration from global and project-level settings files.

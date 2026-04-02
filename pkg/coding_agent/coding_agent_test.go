@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/coding_agent/compaction"
 	"github.com/openmodu/modu/pkg/coding_agent/extension"
 	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/session"
 	"github.com/openmodu/modu/pkg/coding_agent/skills"
@@ -36,6 +37,26 @@ func (t *testEchoTool) Execute(ctx context.Context, toolCallID string, args map[
 	value, _ := args["value"].(string)
 	return agent.AgentToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "echoed: " + value}},
+	}, nil
+}
+
+type testHintTool struct{}
+
+func (t *testHintTool) Name() string        { return "hint_tool" }
+func (t *testHintTool) Label() string       { return "Hint Tool" }
+func (t *testHintTool) Description() string { return "Emit a harness hint in output" }
+func (t *testHintTool) Parameters() any {
+	return map[string]any{
+		"type":       "object",
+		"properties": map[string]any{},
+	}
+}
+func (t *testHintTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+	return agent.AgentToolResult{
+		Content: []types.ContentBlock{&types.TextContent{
+			Type: "text",
+			Text: "visible output\n<claude-code-hint v=1 type=plugin value=test@local />",
+		}},
 	}, nil
 }
 
@@ -1015,10 +1036,12 @@ func TestPrepareSubagentDefinitionInjectsSkillsAndMemory(t *testing.T) {
 	}
 
 	def := prepareSubagentDefinition(&subagent.SubagentDefinition{
-		Name:         "worker",
-		SystemPrompt: "Base prompt.",
-		Skills:       []string{"helper"},
-		MemoryScope:  "both",
+		Name:              "worker",
+		SystemPrompt:      "Base prompt.",
+		Skills:            []string{"helper"},
+		MemoryScope:       "both",
+		DisallowedTools:   []string{"bash"},
+		HarnessBlockTools: []string{"edit", "write"},
 	}, skillMgr, mem)
 
 	if !strings.Contains(def.SystemPrompt, "Base prompt.") {
@@ -1029,6 +1052,9 @@ func TestPrepareSubagentDefinitionInjectsSkillsAndMemory(t *testing.T) {
 	}
 	if !strings.Contains(def.SystemPrompt, "global note") || !strings.Contains(def.SystemPrompt, "project note") {
 		t.Fatalf("expected memory context in %q", def.SystemPrompt)
+	}
+	if len(def.DisallowedTools) != 3 || def.DisallowedTools[0] != "bash" || def.DisallowedTools[1] != "edit" || def.DisallowedTools[2] != "write" {
+		t.Fatalf("expected merged disallowed tools, got %#v", def.DisallowedTools)
 	}
 }
 
@@ -1259,6 +1285,459 @@ func TestMaybeAutoCompact_DisabledByConfig(t *testing.T) {
 	if msgsAfter != msgsBefore {
 		t.Fatal("should not compact when AutoCompaction is disabled")
 	}
+}
+
+func TestHarnessHooksWrapToolExecution(t *testing.T) {
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:         t.TempDir(),
+		AgentDir:    filepath.Join(t.TempDir(), ".coding_agent"),
+		Model:       newTestModel(),
+		CustomTools: []agent.AgentTool{&testEchoTool{}},
+		GetAPIKey:   func(provider string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var preCalled, postCalled bool
+	session.RegisterHarnessHook(HarnessHook{
+		PreToolUse: func(call HarnessToolCall) error {
+			if call.ToolName == "echo" {
+				preCalled = true
+			}
+			return nil
+		},
+		PostToolUse: func(call HarnessToolCall, result agent.AgentToolResult, err error) {
+			if call.ToolName == "echo" && err == nil {
+				postCalled = true
+			}
+		},
+	})
+
+	var echo agent.AgentTool
+	for _, tool := range session.GetAgent().GetState().Tools {
+		if tool.Name() == "echo" {
+			echo = tool
+			break
+		}
+	}
+	if echo == nil {
+		t.Fatal("expected wrapped echo tool")
+	}
+
+	_, err = echo.Execute(context.Background(), "echo-1", map[string]any{"value": "ok"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !preCalled || !postCalled {
+		t.Fatalf("expected harness hooks to run, pre=%v post=%v", preCalled, postCalled)
+	}
+}
+
+func TestHarnessHintStrippedAndStored(t *testing.T) {
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:         t.TempDir(),
+		AgentDir:    filepath.Join(t.TempDir(), ".coding_agent"),
+		Model:       newTestModel(),
+		CustomTools: []agent.AgentTool{&testHintTool{}},
+		GetAPIKey:   func(provider string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var hintTool agent.AgentTool
+	for _, tool := range session.GetAgent().GetState().Tools {
+		if tool.Name() == "hint_tool" {
+			hintTool = tool
+			break
+		}
+	}
+	if hintTool == nil {
+		t.Fatal("expected wrapped hint tool")
+	}
+
+	result, err := hintTool.Execute(context.Background(), "hint-1", map[string]any{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := result.Content[0].(*types.TextContent).Text
+	if strings.Contains(text, "claude-code-hint") {
+		t.Fatalf("expected hint tag to be stripped, got %q", text)
+	}
+	hints := session.GetPendingHarnessHints()
+	if len(hints) != 1 || hints[0].Value != "test@local" {
+		t.Fatalf("expected stored harness hint, got %#v", hints)
+	}
+	entries, err := os.ReadDir(session.RuntimePaths().ToolResultsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("expected tool result artifact to be written")
+	}
+}
+
+func TestHarnessPathsToolAndPlanFile(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(t.TempDir(), ".coding_agent")
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  agentDir,
+		Model:     newTestModel(),
+		GetAPIKey: func(provider string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var harnessPathsTool, readTool agent.AgentTool
+	for _, tool := range session.GetAgent().GetState().Tools {
+		switch tool.Name() {
+		case "harness_paths":
+			harnessPathsTool = tool
+		case "read":
+			readTool = tool
+		}
+	}
+	if harnessPathsTool == nil || readTool == nil {
+		t.Fatalf("expected harness_paths and read tools, got %v", session.GetActiveToolNames())
+	}
+
+	session.ExitPlanMode("ship feature safely")
+	paths := session.RuntimePaths()
+	if _, err := os.Stat(paths.PlanFile); err != nil {
+		t.Fatalf("expected plan file to exist: %v", err)
+	}
+
+	result, err := harnessPathsTool.Execute(context.Background(), "paths-1", map[string]any{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	details, _ := result.Details.(map[string]any)
+	if details["plan_file"] != paths.PlanFile {
+		t.Fatalf("expected plan_file detail %q, got %#v", paths.PlanFile, details)
+	}
+
+	readResult, err := readTool.Execute(context.Background(), "read-plan", map[string]any{"path": paths.PlanFile}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(readResult.Content[0].(*types.TextContent).Text, "ship feature safely") {
+		t.Fatalf("expected read tool to access harness plan file, got %#v", readResult.Content)
+	}
+}
+
+func TestHarnessCompactHooksRun(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(t.TempDir(), ".coding_agent")
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:      dir,
+		AgentDir: agentDir,
+		Model:    newTestModel(),
+		GetAPIKey: func(provider string) (string, error) {
+			return "", nil
+		},
+		StreamFn: func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+			stream := types.NewEventStream()
+			go func() {
+				msg := &types.AssistantMessage{
+					Role:       "assistant",
+					ProviderID: "mock",
+					Model:      "mock",
+					StopReason: "stop",
+					Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "summary ok"}},
+					Timestamp:  time.Now().UnixMilli(),
+				}
+				stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+				stream.Resolve(msg, nil)
+				stream.Close()
+			}()
+			return stream, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "one"})
+	session.GetAgent().AppendMessage(types.AssistantMessage{Role: "assistant", Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "two"}}})
+	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "three"})
+	session.GetAgent().AppendMessage(types.AssistantMessage{Role: "assistant", Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "four"}}})
+	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "five"})
+
+	var preCount, postCount int
+	session.RegisterHarnessHook(HarnessHook{
+		PreCompact: func(messageCount int) error {
+			preCount = messageCount
+			return nil
+		},
+		PostCompact: func(result *compaction.Result, err error) {
+			if err == nil && result != nil {
+				postCount = result.NewCount
+			}
+		},
+	})
+
+	if err := session.Compact(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if preCount != 5 || postCount == 0 {
+		t.Fatalf("expected compact hooks to run, pre=%d post=%d", preCount, postCount)
+	}
+}
+
+func TestHarnessSubagentHooksRun(t *testing.T) {
+	root := t.TempDir()
+	agentDir := filepath.Join(root, ".coding_agent")
+	agentsDir := filepath.Join(agentDir, "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir, "reviewer.md"), []byte("review stuff"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:      root,
+		AgentDir: agentDir,
+		Model:    newTestModel(),
+		GetAPIKey: func(provider string) (string, error) {
+			return "", nil
+		},
+		StreamFn: func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+			stream := types.NewEventStream()
+			go func() {
+				msg := &types.AssistantMessage{
+					Role:       "assistant",
+					ProviderID: "mock",
+					Model:      "mock",
+					StopReason: "stop",
+					Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "subagent ok"}},
+					Timestamp:  time.Now().UnixMilli(),
+				}
+				stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+				stream.Resolve(msg, nil)
+				stream.Close()
+			}()
+			return stream, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var started, stopped bool
+	session.RegisterHarnessHook(HarnessHook{
+		SubagentStart: func(run HarnessSubagentRun) {
+			if run.Name == "reviewer" {
+				started = true
+			}
+		},
+		SubagentStop: func(run HarnessSubagentRun, result string, err error) {
+			if run.Name == "reviewer" && err == nil && result == "subagent ok" {
+				stopped = true
+			}
+		},
+	})
+
+	var tool agent.AgentTool
+	for _, ttool := range session.GetAgent().GetState().Tools {
+		if ttool.Name() == "spawn_subagent" {
+			tool = ttool
+			break
+		}
+	}
+	if tool == nil {
+		t.Fatal("expected spawn_subagent tool")
+	}
+
+	_, err = tool.Execute(context.Background(), "spawn-1", map[string]any{"name": "reviewer", "task": "check code"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !started || !stopped {
+		t.Fatalf("expected subagent hooks to run, started=%v stopped=%v", started, stopped)
+	}
+}
+
+func TestHarnessConfigBlocksTools(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configContent := `{"harness":{"blockTools":["echo"]}}`
+	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(configContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:         dir,
+		AgentDir:    agentDir,
+		Model:       newTestModel(),
+		CustomTools: []agent.AgentTool{&testEchoTool{}},
+		GetAPIKey:   func(provider string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var echo agent.AgentTool
+	for _, tool := range session.GetAgent().GetState().Tools {
+		if tool.Name() == "echo" {
+			echo = tool
+			break
+		}
+	}
+	if echo == nil {
+		t.Fatal("expected echo tool")
+	}
+
+	result, err := echo.Execute(context.Background(), "echo-2", map[string]any{"value": "blocked"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := extractTextBlocks(result.Content)
+	if !strings.Contains(text, "harness blocked echo") {
+		t.Fatalf("expected config-driven harness block, got %q", text)
+	}
+}
+
+func TestHarnessConfigCanDisableHintCaptureAndArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configContent := `{"harness":{"captureHints":false,"persistToolResults":false}}`
+	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(configContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:         dir,
+		AgentDir:    agentDir,
+		Model:       newTestModel(),
+		CustomTools: []agent.AgentTool{&testHintTool{}},
+		GetAPIKey:   func(provider string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var hintTool agent.AgentTool
+	for _, tool := range session.GetAgent().GetState().Tools {
+		if tool.Name() == "hint_tool" {
+			hintTool = tool
+			break
+		}
+	}
+	if hintTool == nil {
+		t.Fatal("expected hint tool")
+	}
+
+	result, err := hintTool.Execute(context.Background(), "hint-2", map[string]any{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := extractTextBlocks(result.Content)
+	if !strings.Contains(text, "<claude-code-hint") {
+		t.Fatalf("expected hint tag to remain visible when capture is disabled, got %q", text)
+	}
+	if hints := session.GetPendingHarnessHints(); len(hints) != 0 {
+		t.Fatalf("expected no stored hints, got %#v", hints)
+	}
+	entries, err := os.ReadDir(session.RuntimePaths().ToolResultsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected no tool artifacts, got %d entries", len(entries))
+	}
+}
+
+func TestHarnessConfigAppendsEventLogs(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	if err := os.MkdirAll(filepath.Join(agentDir, "agents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "agents", "reviewer.md"), []byte("review stuff"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configContent := `{"harness":{"logFiles":{"toolUse":"logs/tool-use.jsonl","compact":"logs/compact.jsonl","subagent":"logs/subagent.jsonl"}}}`
+	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(configContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:         dir,
+		AgentDir:    agentDir,
+		Model:       newTestModel(),
+		CustomTools: []agent.AgentTool{&testEchoTool{}},
+		GetAPIKey:   func(provider string) (string, error) { return "", nil },
+		StreamFn: func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+			stream := types.NewEventStream()
+			go func() {
+				msg := &types.AssistantMessage{
+					Role:       "assistant",
+					ProviderID: "mock",
+					Model:      "mock",
+					StopReason: "stop",
+					Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "subagent ok"}},
+					Timestamp:  time.Now().UnixMilli(),
+				}
+				stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+				stream.Resolve(msg, nil)
+				stream.Close()
+			}()
+			return stream, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var echoTool, spawnTool agent.AgentTool
+	for _, tool := range session.GetAgent().GetState().Tools {
+		switch tool.Name() {
+		case "echo":
+			echoTool = tool
+		case "spawn_subagent":
+			spawnTool = tool
+		}
+	}
+	if echoTool == nil || spawnTool == nil {
+		t.Fatalf("expected echo and spawn_subagent, got %v", session.GetActiveToolNames())
+	}
+
+	if _, err := echoTool.Execute(context.Background(), "echo-log-1", map[string]any{"value": "ok"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "one"})
+	session.GetAgent().AppendMessage(types.AssistantMessage{Role: "assistant", Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "two"}}})
+	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "three"})
+	session.GetAgent().AppendMessage(types.AssistantMessage{Role: "assistant", Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "four"}}})
+	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "five"})
+	if err := session.Compact(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := spawnTool.Execute(context.Background(), "spawn-log-1", map[string]any{"name": "reviewer", "task": "check code"}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	checkLog := func(rel string, want string) {
+		data, err := os.ReadFile(filepath.Join(agentDir, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("expected %s log to contain %q, got %q", rel, want, string(data))
+		}
+	}
+	checkLog("logs/tool-use.jsonl", `"tool":"echo"`)
+	checkLog("logs/compact.jsonl", `"event":"post_compact"`)
+	checkLog("logs/subagent.jsonl", `"name":"reviewer"`)
 }
 
 func TestHandleToolExecutionEndQueuesNestedContextForDeeperPath(t *testing.T) {
