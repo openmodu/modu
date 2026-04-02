@@ -1,8 +1,10 @@
 package coding_agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -570,7 +572,6 @@ func (s *CodingSession) resolveHarnessTarget(target string) string {
 	return filepath.Join(s.agentDir, target)
 }
 
-
 func (s *CodingSession) writeHarnessBridgeEvent(targetDir string, entry map[string]any) {
 	dir := s.resolveHarnessTarget(targetDir)
 	if dir == "" {
@@ -600,30 +601,212 @@ func asString(v any) string {
 }
 
 func (s *CodingSession) dispatchHarnessActions(category string, actions []HarnessAction, entry map[string]any) {
+	if s.config == nil || !s.config.Harness.EnableActions {
+		return
+	}
 	for _, action := range actions {
 		if action.normalizedType() != "exec" || strings.TrimSpace(action.Command) == "" {
 			continue
 		}
-		eventJSON, err := json.Marshal(entry)
-		if err != nil {
-			continue
+		result := s.runHarnessAction(category, action, entry)
+		if result.Status == "error" && strings.EqualFold(strings.TrimSpace(action.OnFailure), "stop") {
+			return
 		}
-		cmd := exec.Command(action.Command, action.Args...)
-		cmd.Dir = s.cwd
-		if dir := strings.TrimSpace(action.Dir); dir != "" {
-			cmd.Dir = s.resolveHarnessTarget(dir)
-		}
-		cmd.Env = append(os.Environ(),
-			"HARNESS_EVENT_CATEGORY="+category,
-			"HARNESS_EVENT_TYPE="+asString(entry["event"]),
-			"HARNESS_EVENT_JSON="+string(eventJSON),
-			"HARNESS_AGENT_DIR="+s.agentDir,
-			"HARNESS_RUNTIME_ROOT="+s.RuntimePaths().RuntimeDir,
-			"HARNESS_TOOL="+asString(entry["tool"]),
-			"HARNESS_SUBAGENT_NAME="+asString(entry["name"]),
-		)
-		_ = cmd.Run()
 	}
+}
+
+func (s *CodingSession) runHarnessAction(category string, action HarnessAction, entry map[string]any) harnessActionRunResult {
+	eventJSON, err := json.Marshal(entry)
+	if err != nil {
+		return harnessActionRunResult{}
+	}
+	cmdName := s.expandHarnessTemplate(action.Command, category, entry)
+	if strings.TrimSpace(cmdName) == "" {
+		return harnessActionRunResult{}
+	}
+	if err := validateHarnessActionCommand(s.config.Harness.ActionPolicy, cmdName); err != nil {
+		result := harnessActionRunResult{
+			Status:    "error",
+			Error:     errString(err),
+			Attempts:  0,
+			Completed: time.Now().UnixMilli(),
+		}
+		s.writeHarnessActionStatus(category, action, entry, result)
+		return result
+	}
+	args := make([]string, 0, len(action.Args))
+	for _, arg := range action.Args {
+		args = append(args, s.expandHarnessTemplate(arg, category, entry))
+	}
+	cmdDir := s.cwd
+	if dir := strings.TrimSpace(action.Dir); dir != "" {
+		dir = s.expandHarnessTemplate(dir, category, entry)
+		cmdDir = s.resolveHarnessTarget(dir)
+	}
+	if filepath.IsAbs(cmdDir) {
+		for _, denied := range s.config.Harness.ActionPolicy.DenyDirPrefixes {
+			if denied = strings.TrimSpace(denied); denied != "" && strings.HasPrefix(cmdDir, denied) {
+				result := harnessActionRunResult{
+					Status:    "error",
+					Error:     fmt.Sprintf("harness action dir denied by policy: %s", cmdDir),
+					Attempts:  0,
+					Completed: time.Now().UnixMilli(),
+				}
+				s.writeHarnessActionStatus(category, action, entry, result)
+				return result
+			}
+		}
+		if len(s.config.Harness.ActionPolicy.AllowDirPrefixes) > 0 {
+			allowed := false
+			for _, prefix := range s.config.Harness.ActionPolicy.AllowDirPrefixes {
+				if prefix = strings.TrimSpace(prefix); prefix != "" && strings.HasPrefix(cmdDir, prefix) {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				result := harnessActionRunResult{
+					Status:    "error",
+					Error:     fmt.Sprintf("harness action dir not allowed by policy: %s", cmdDir),
+					Attempts:  0,
+					Completed: time.Now().UnixMilli(),
+				}
+				s.writeHarnessActionStatus(category, action, entry, result)
+				return result
+			}
+		}
+	}
+	maxAttempts := 1
+	if action.Retry.MaxAttempts > 1 {
+		maxAttempts = action.Retry.MaxAttempts
+	}
+	delay := time.Duration(action.Retry.DelayMs) * time.Millisecond
+	var result harnessActionRunResult
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		result = s.runHarnessActionAttempt(category, action, entry, cmdName, args, cmdDir, string(eventJSON), attempt)
+		if result.Status == "ok" || attempt == maxAttempts {
+			break
+		}
+		if delay > 0 {
+			time.Sleep(delay)
+		}
+	}
+	s.writeHarnessActionStatus(category, action, entry, result)
+	return result
+}
+
+func (s *CodingSession) expandHarnessTemplate(value, category string, entry map[string]any) string {
+	replacements := map[string]string{
+		"{{agent_dir}}":      s.agentDir,
+		"{{cwd}}":            s.cwd,
+		"{{runtime_dir}}":    s.RuntimePaths().RuntimeDir,
+		"{{event_category}}": category,
+		"{{event_type}}":     asString(entry["event"]),
+		"{{tool}}":           asString(entry["tool"]),
+		"{{subagent_name}}":  asString(entry["name"]),
+		"{{subagent_task}}":  asString(entry["task"]),
+	}
+	for from, to := range replacements {
+		value = strings.ReplaceAll(value, from, to)
+	}
+	return value
+}
+
+type harnessActionRunResult struct {
+	Status    string `json:"status"`
+	Error     string `json:"error,omitempty"`
+	Stdout    string `json:"stdout,omitempty"`
+	Stderr    string `json:"stderr,omitempty"`
+	Output    string `json:"output,omitempty"`
+	TimedOut  bool   `json:"timed_out,omitempty"`
+	Attempts  int    `json:"attempts,omitempty"`
+	Completed int64  `json:"completed_at,omitempty"`
+}
+
+func (s *CodingSession) runHarnessActionAttempt(category string, action HarnessAction, entry map[string]any, cmdName string, args []string, cmdDir string, eventJSON string, attempt int) harnessActionRunResult {
+	result := harnessActionRunResult{
+		Status:    "ok",
+		Attempts:  attempt,
+		Completed: time.Now().UnixMilli(),
+	}
+	runCtx := context.Background()
+	var cancel context.CancelFunc
+	if action.TimeoutMs > 0 {
+		runCtx, cancel = context.WithTimeout(context.Background(), time.Duration(action.TimeoutMs)*time.Millisecond)
+	} else {
+		runCtx, cancel = context.WithCancel(context.Background())
+	}
+	defer cancel()
+
+	cmd := exec.CommandContext(runCtx, cmdName, args...)
+	cmd.Dir = cmdDir
+	var stdoutBuf bytes.Buffer
+	var stderrBuf bytes.Buffer
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
+	cmd.Env = append(os.Environ(),
+		"HARNESS_EVENT_CATEGORY="+category,
+		"HARNESS_EVENT_TYPE="+asString(entry["event"]),
+		"HARNESS_EVENT_JSON="+eventJSON,
+		"HARNESS_AGENT_DIR="+s.agentDir,
+		"HARNESS_RUNTIME_ROOT="+s.RuntimePaths().RuntimeDir,
+		"HARNESS_TOOL="+asString(entry["tool"]),
+		"HARNESS_SUBAGENT_NAME="+asString(entry["name"]),
+	)
+	err := cmd.Run()
+	result.Stdout = stdoutBuf.String()
+	result.Stderr = stderrBuf.String()
+	result.Output = result.Stdout + result.Stderr
+	if err != nil {
+		result.Status = "error"
+		result.Error = err.Error()
+	}
+	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+		result.TimedOut = true
+	}
+	result.Completed = time.Now().UnixMilli()
+	return result
+}
+
+func (s *CodingSession) writeHarnessActionStatus(category string, action HarnessAction, entry map[string]any, result harnessActionRunResult) {
+	dir := filepath.Join(s.RuntimePaths().RuntimeDir, "actions", sanitizeArtifactName(category))
+	if mkErr := os.MkdirAll(dir, 0o755); mkErr != nil {
+		return
+	}
+	status := map[string]any{
+		"updated_at":   time.Now().UnixMilli(),
+		"category":     category,
+		"event":        entry,
+		"status":       result.Status,
+		"stdout":       result.Stdout,
+		"stderr":       result.Stderr,
+		"output":       result.Output,
+		"attempts":     result.Attempts,
+		"completed_at": result.Completed,
+		"action": map[string]any{
+			"type":       action.Type,
+			"command":    action.Command,
+			"args":       action.Args,
+			"dir":        action.Dir,
+			"timeout_ms": action.TimeoutMs,
+			"on_failure": action.OnFailure,
+			"retry": map[string]any{
+				"max_attempts": action.Retry.MaxAttempts,
+				"delay_ms":     action.Retry.DelayMs,
+			},
+		},
+	}
+	if result.Error != "" {
+		status["error"] = result.Error
+	}
+	if result.TimedOut {
+		status["timed_out"] = true
+	}
+	data, marshalErr := json.MarshalIndent(status, "", "  ")
+	if marshalErr != nil {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(dir, "latest.json"), append(data, '\n'), 0o600)
 }
 
 func errString(err error) string {

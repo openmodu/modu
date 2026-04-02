@@ -432,6 +432,20 @@ func handleSlash(ctx context.Context, line string, session *coding_agent.CodingS
 		r.PrintInfo("  project_memory: " + paths.ProjectMemoryDir)
 		return true, false
 
+	case "config":
+		r.PrintInfo("effective config:")
+		for _, line := range strings.Split(strings.TrimSpace(session.EffectiveConfigJSON()), "\n") {
+			r.PrintInfo(line)
+		}
+		return true, false
+
+	case "config-template":
+		r.PrintInfo("default config template:")
+		for _, line := range strings.Split(strings.TrimSpace(coding_agent.DefaultConfigTemplate()), "\n") {
+			r.PrintInfo(line)
+		}
+		return true, false
+
 	case "logs":
 		printHarnessTargets(r, "harness log files", session, map[string]string{
 			"tool_use": session.GetConfig().Harness.LogFiles.ToolUse,
@@ -454,6 +468,10 @@ func handleSlash(ctx context.Context, line string, session *coding_agent.CodingS
 			"compact":  session.GetConfig().Harness.BridgeDirs.Compact,
 			"subagent": session.GetConfig().Harness.BridgeDirs.Subagent,
 		}, true)
+		return true, false
+
+	case "actions":
+		printHarnessActions(r, session)
 		return true, false
 
 	case "plan":
@@ -604,9 +622,12 @@ func printHelp(r *tui.Renderer) {
 		"  /tasks              — show background subagent tasks",
 		"  /hints              — show pending harness-only hints",
 		"  /runtime            — show harness runtime paths",
+		"  /config             — show effective merged config",
+		"  /config-template    — show the default config template",
 		"  /logs               — show configured harness JSONL logs",
 		"  /artifacts          — show configured harness latest snapshots",
 		"  /bridge             — show configured harness event bridge dirs",
+		"  /actions            — show latest harness action statuses",
 		"  /plan [on|off]      — inspect or toggle plan mode",
 		"  /worktree [on|off]  — inspect or toggle isolated worktree mode",
 		"  /skills             — list available skills",
@@ -658,6 +679,36 @@ func printHarnessTargets(r *tui.Renderer, title string, session *coding_agent.Co
 	}
 	if !seenAny {
 		r.PrintInfo("  (not configured)")
+	}
+}
+
+func printHarnessActions(r *tui.Renderer, session *coding_agent.CodingSession) {
+	base := filepath.Join(session.RuntimePaths().RuntimeDir, "actions")
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		if os.IsNotExist(err) {
+			r.PrintInfo("no harness action status files")
+			return
+		}
+		r.PrintError(err)
+		return
+	}
+	dirs := make([]os.DirEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			dirs = append(dirs, entry)
+		}
+	}
+	if len(dirs) == 0 {
+		r.PrintInfo("no harness action status files")
+		return
+	}
+	sort.Slice(dirs, func(i, j int) bool { return dirs[i].Name() < dirs[j].Name() })
+	r.PrintInfo("harness action status files:")
+	for _, entry := range dirs {
+		path := filepath.Join(base, entry.Name(), "latest.json")
+		r.PrintInfo("  " + entry.Name() + ": " + path)
+		printFilePreview(r, path)
 	}
 }
 

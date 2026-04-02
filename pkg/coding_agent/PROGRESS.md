@@ -62,11 +62,30 @@ High-priority gaps identified before this round:
 - Added `settings.json`-driven JSONL event logging for tool-use, compaction, and subagent lifecycle events.
 - Added `settings.json`-driven latest-artifact fan-out for tool-use, compaction, and subagent lifecycle snapshots.
 - Added `settings.json`-driven bridge directories that emit one structured JSON file per tool-use, compaction, and subagent lifecycle event.
+- Added controlled `settings.json`-driven host action dispatch for harness lifecycle events via explicit `exec` actions.
+- Added a runtime index file under the harness runtime tree that records resolved output targets and the latest event per category.
+- Added explicit `enableActions` permission gating so host actions stay disabled unless opt-in is set.
+- Added template expansion for harness action command arguments and working directory fields.
+- Added harness-managed action status artifacts under the runtime tree so action failures are observable.
+- Added `timeoutMs` support for harness `exec` actions.
+- Added stdout/stderr capture into harness action status artifacts.
+- Added README usage documentation for harness runtime outputs and action configuration.
+- Added safe harness output defaults so logs/artifacts/bridge work without manual settings.
+- Added automatic global `settings.json` bootstrap when no config exists.
+- Changed harness actions to auto-enable by default, while still allowing explicit `enableActions: false` opt-out.
+- Added config validation for harness action policy, including default absolute-command enforcement.
+- Extended harness action policy with directory-prefix checks and max-timeout limits.
+- Added effective merged-config export for sessions and surfaced it in `examples/modu_code`.
+- Added a default config template exporter so frontends can show the generated baseline configuration.
+- Split harness action status output into explicit `stdout` and `stderr` fields while keeping merged `output`.
+- Added per-action retry semantics with configurable attempt count and delay.
+- Added per-action `onFailure` handling so failed actions can stop later actions in the same event batch.
 - Added subagent frontmatter support for `harness_block_tools` and merged it into effective tool blocking.
 - Added `examples/modu_code` inspection commands for harness hints and runtime paths.
 - Added `examples/modu_code` inspection commands for configured harness logs, latest artifacts, and bridge directories.
 - Added `examples/modu_code` command-level tests that exercise `/runtime`, `/logs`, `/artifacts`, and `/bridge` through the real slash-command path.
 - Added `examples/modu_code` smoke tests for print-mode output and rpc-mode request/response flow.
+- Added an integration-style regression that runs a real prompt through tool execution and verifies harness artifact emission end-to-end.
 - Added focused tests for:
   session persistence after prompt/tool execution
   isolated slash-skill execution
@@ -92,6 +111,24 @@ High-priority gaps identified before this round:
   config-driven harness JSONL event logging
   config-driven latest artifact snapshot files
   config-driven event bridge directories
+  config-driven host action dispatch
+  runtime index generation
+  prompt -> tool -> harness artifact integration
+  action permission gating
+  action template expansion
+  action failure status artifacts
+  action timeout handling
+  action output capture
+  action directory policy validation
+  action retry success flow
+  action onFailure validation
+  action stop-on-failure flow
+  automatic safe harness defaults
+  automatic settings bootstrap
+  automatic action enablement with explicit opt-out
+  config validation for harness action policy
+  effective config export
+  default config template export
   subagent frontmatter parsing for `harness_block_tools`
 
 ## Still Missing
@@ -104,4 +141,5 @@ High-priority gaps identified before this round:
 
 1. Improve plan/worktree semantics beyond the current minimal implementation.
 2. Expand integration coverage around background tasks, tool replacement, and session switching.
-3. Add configurable hook actions beyond blocking and file output, such as host command dispatch or direct IPC delivery.
+3. Add richer host action policies such as backoff variants, command/dir allowlist presets, and per-action failure handling.
+4. Expose more runtime state directly in frontends so action status inspection does not require browsing runtime directories manually.

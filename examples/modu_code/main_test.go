@@ -82,6 +82,13 @@ func TestHandleSlashHarnessInspectionCommands(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(agentDir, "bridge", "subagent", "3-subagent_stop.json"), []byte("{\"event\":\"subagent_stop\",\"name\":\"reviewer\"}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	runtimeProjectKey := strings.ReplaceAll(strings.TrimPrefix(cwd, "/"), "/", "_")
+	if err := os.MkdirAll(filepath.Join(agentDir, "runtime", runtimeProjectKey, "actions", "tool_use"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "runtime", runtimeProjectKey, "actions", "tool_use", "latest.json"), []byte("{\"status\":\"ok\",\"stdout\":\"done\"}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
 		Cwd:       cwd,
@@ -97,7 +104,7 @@ func TestHandleSlashHarnessInspectionCommands(t *testing.T) {
 	renderer := tui.NewRenderer(&out)
 	renderer.SetNoColor(true)
 
-	for _, line := range []string{"/runtime", "/logs", "/artifacts", "/bridge"} {
+	for _, line := range []string{"/runtime", "/config", "/config-template", "/logs", "/artifacts", "/bridge", "/actions"} {
 		handled, shouldExit := handleSlash(context.Background(), line, session, renderer, testExampleModel(), nil)
 		if !handled || shouldExit {
 			t.Fatalf("expected %s to be handled without exit", line)
@@ -107,13 +114,18 @@ func TestHandleSlashHarnessInspectionCommands(t *testing.T) {
 	got := out.String()
 	for _, want := range []string{
 		"runtime paths:",
+		"effective config:",
+		"default config template:",
 		"harness log files:",
 		"harness artifact files:",
 		"harness bridge directories:",
+		"harness action status files:",
 		filepath.Join(agentDir, "logs", "tool-use.jsonl"),
 		filepath.Join(agentDir, "artifacts", "tool-use-latest.json"),
 		filepath.Join(agentDir, "bridge", "tool-use"),
+		filepath.Join(agentDir, "runtime", runtimeProjectKey, "actions", "tool_use", "latest.json"),
 		"preview: {\"event\":\"post_tool_use\",\"tool\":\"echo\"}",
+		"preview: {\"status\":\"ok\",\"stdout\":\"done\"}",
 		"- 1-post_tool_use.json",
 	} {
 		if !strings.Contains(got, want) {

@@ -3,10 +3,12 @@ package coding_agent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"html"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -806,6 +808,24 @@ func (s *CodingSession) Abort() {
 // GetConfig returns the current configuration.
 func (s *CodingSession) GetConfig() *Config {
 	return s.config
+}
+
+func (s *CodingSession) EffectiveConfigJSON() string {
+	if s.config == nil {
+		return "{}\n"
+	}
+	payload := map[string]any{
+		"config": s.config,
+		"paths": map[string]string{
+			"global":  filepath.Join(s.agentDir, "settings.json"),
+			"project": filepath.Join(s.cwd, ".coding_agent", "settings.json"),
+		},
+	}
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return "{}\n"
+	}
+	return string(data) + "\n"
 }
 
 // CycleModel cycles to the next model in the scopedModels list.
