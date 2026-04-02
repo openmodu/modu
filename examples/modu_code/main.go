@@ -637,6 +637,7 @@ func printHarnessTargets(r *tui.Renderer, title string, session *coding_agent.Co
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+	agentDir := session.RuntimePaths().Root
 	seenAny := false
 	for _, key := range keys {
 		target := strings.TrimSpace(targets[key])
@@ -646,7 +647,7 @@ func printHarnessTargets(r *tui.Renderer, title string, session *coding_agent.Co
 		seenAny = true
 		abs := target
 		if !filepath.IsAbs(abs) {
-			abs = filepath.Join(session.RuntimePaths().Root, abs)
+			abs = filepath.Join(agentDir, abs)
 		}
 		r.PrintInfo("  " + key + ": " + abs)
 		if dirMode {

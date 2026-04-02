@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -46,6 +48,8 @@ type HarnessSubagentRun struct {
 
 type HarnessRuntimePaths struct {
 	Root             string `json:"root"`
+	RuntimeDir       string `json:"runtimeDir"`
+	RuntimeIndexFile string `json:"runtimeIndexFile"`
 	SessionsDir      string `json:"sessionsDir"`
 	PlansDir         string `json:"plansDir"`
 	PlanFile         string `json:"planFile"`
@@ -58,6 +62,8 @@ type HarnessRuntimePaths struct {
 func (p HarnessRuntimePaths) ToMap() map[string]any {
 	return map[string]any{
 		"root":               p.Root,
+		"runtime_dir":        p.RuntimeDir,
+		"runtime_index_file": p.RuntimeIndexFile,
 		"sessions_dir":       p.SessionsDir,
 		"plans_dir":          p.PlansDir,
 		"plan_file":          p.PlanFile,
@@ -73,7 +79,7 @@ func (s *CodingSession) HarnessPathsMap() map[string]any {
 }
 
 type harnessState struct {
-	mu           sync.Mutex
+	mu           sync.RWMutex
 	hooks        []HarnessHook
 	pendingHints []HarnessHint
 }
@@ -111,6 +117,7 @@ func (s *CodingSession) installConfigHarnessHooks() {
 	logFiles := s.config.Harness.LogFiles
 	artifactFiles := s.config.Harness.ArtifactFiles
 	bridgeDirs := s.config.Harness.BridgeDirs
+	actions := s.config.Harness.Actions
 	s.RegisterHarnessHook(HarnessHook{
 		PreToolUse: func(call HarnessToolCall) error {
 			if len(blocked) > 0 {
@@ -122,60 +129,57 @@ func (s *CodingSession) installConfigHarnessHooks() {
 		},
 		PostToolUse: func(call HarnessToolCall, result agent.AgentToolResult, err error) {
 			entry := map[string]any{
-				"event": "post_tool_use",
-				"tool":  call.ToolName,
-				"args":  call.Args,
-				"error": errString(err),
+				"event":    "post_tool_use",
+				"category": "tool_use",
+				"tool":     call.ToolName,
+				"args":     call.Args,
+				"error":    errString(err),
 			}
 			s.emitHarnessRecord(logFiles.ToolUse, artifactFiles.ToolUse, bridgeDirs.ToolUse, entry)
+			s.dispatchHarnessActions("tool_use", actions.ToolUse, entry)
 		},
 		PreCompact: func(messageCount int) error {
-			s.emitHarnessRecord(logFiles.Compact, artifactFiles.Compact, bridgeDirs.Compact, map[string]any{
-				"event":         "pre_compact",
-				"message_count": messageCount,
-			})
+			entry := map[string]any{"event": "pre_compact", "category": "compact", "message_count": messageCount}
+			s.emitHarnessRecord(logFiles.Compact, artifactFiles.Compact, bridgeDirs.Compact, entry)
+			s.dispatchHarnessActions("compact", actions.Compact, entry)
 			return nil
 		},
 		PostCompact: func(result *compaction.Result, err error) {
 			entry := map[string]any{
-				"event": "post_compact",
-				"error": errString(err),
+				"event":    "post_compact",
+				"category": "compact",
+				"error":    errString(err),
 			}
 			if result != nil {
 				entry["original_count"] = result.OriginalCount
 				entry["new_count"] = result.NewCount
 			}
 			s.emitHarnessRecord(logFiles.Compact, artifactFiles.Compact, bridgeDirs.Compact, entry)
+			s.dispatchHarnessActions("compact", actions.Compact, entry)
 		},
 		SubagentStart: func(run HarnessSubagentRun) {
-			s.emitHarnessRecord(logFiles.Subagent, artifactFiles.Subagent, bridgeDirs.Subagent, map[string]any{
-				"event":      "subagent_start",
-				"name":       run.Name,
-				"task":       run.Task,
-				"background": run.Background,
-			})
+			entry := map[string]any{"event": "subagent_start", "category": "subagent", "name": run.Name, "task": run.Task, "background": run.Background}
+			s.emitHarnessRecord(logFiles.Subagent, artifactFiles.Subagent, bridgeDirs.Subagent, entry)
+			s.dispatchHarnessActions("subagent", actions.Subagent, entry)
 		},
 		SubagentStop: func(run HarnessSubagentRun, result string, err error) {
-			s.emitHarnessRecord(logFiles.Subagent, artifactFiles.Subagent, bridgeDirs.Subagent, map[string]any{
-				"event":      "subagent_stop",
-				"name":       run.Name,
-				"task":       run.Task,
-				"background": run.Background,
-				"result":     result,
-				"error":      errString(err),
-			})
+			entry := map[string]any{"event": "subagent_stop", "category": "subagent", "name": run.Name, "task": run.Task, "background": run.Background, "result": result, "error": errString(err)}
+			s.emitHarnessRecord(logFiles.Subagent, artifactFiles.Subagent, bridgeDirs.Subagent, entry)
+			s.dispatchHarnessActions("subagent", actions.Subagent, entry)
 		},
 	})
 }
 
+// GetPendingHarnessHints drains and returns all accumulated hints since the
+// last call. Callers receive each hint exactly once.
 func (s *CodingSession) GetPendingHarnessHints() []HarnessHint {
 	if s.harness == nil {
 		return nil
 	}
 	s.harness.mu.Lock()
 	defer s.harness.mu.Unlock()
-	out := make([]HarnessHint, len(s.harness.pendingHints))
-	copy(out, s.harness.pendingHints)
+	out := s.harness.pendingHints
+	s.harness.pendingHints = nil
 	return out
 }
 
@@ -186,11 +190,15 @@ func (s *CodingSession) RuntimePaths() HarnessRuntimePaths {
 	}
 	plansDir := filepath.Join(s.agentDir, "plans", projectKey)
 	toolResultsDir := filepath.Join(s.agentDir, "tool-results", projectKey)
+	runtimeDir := filepath.Join(s.agentDir, "runtime", projectKey)
 	_ = os.MkdirAll(plansDir, 0o755)
 	_ = os.MkdirAll(toolResultsDir, 0o755)
+	_ = os.MkdirAll(runtimeDir, 0o755)
 
 	return HarnessRuntimePaths{
 		Root:             s.agentDir,
+		RuntimeDir:       runtimeDir,
+		RuntimeIndexFile: filepath.Join(runtimeDir, "index.json"),
 		SessionsDir:      filepath.Dir(s.messagesFilePath()),
 		PlansDir:         plansDir,
 		PlanFile:         filepath.Join(plansDir, "latest.md"),
@@ -255,9 +263,9 @@ func (s *CodingSession) runHarnessPreToolHooks(call HarnessToolCall) error {
 	if s.harness == nil {
 		return nil
 	}
-	s.harness.mu.Lock()
-	hooks := append([]HarnessHook{}, s.harness.hooks...)
-	s.harness.mu.Unlock()
+	s.harness.mu.RLock()
+	hooks := s.harness.hooks
+	s.harness.mu.RUnlock()
 	for _, hook := range hooks {
 		if hook.PreToolUse != nil {
 			if err := hook.PreToolUse(call); err != nil {
@@ -273,9 +281,9 @@ func (s *CodingSession) runHarnessPostToolHooks(call HarnessToolCall, result age
 		return
 	}
 	s.writeToolResultArtifact(call, result, err)
-	s.harness.mu.Lock()
-	hooks := append([]HarnessHook{}, s.harness.hooks...)
-	s.harness.mu.Unlock()
+	s.harness.mu.RLock()
+	hooks := s.harness.hooks
+	s.harness.mu.RUnlock()
 	for _, hook := range hooks {
 		if hook.PostToolUse != nil {
 			hook.PostToolUse(call, result, err)
@@ -287,9 +295,9 @@ func (s *CodingSession) runHarnessPreCompact(messageCount int) error {
 	if s.harness == nil {
 		return nil
 	}
-	s.harness.mu.Lock()
-	hooks := append([]HarnessHook{}, s.harness.hooks...)
-	s.harness.mu.Unlock()
+	s.harness.mu.RLock()
+	hooks := s.harness.hooks
+	s.harness.mu.RUnlock()
 	for _, hook := range hooks {
 		if hook.PreCompact != nil {
 			if err := hook.PreCompact(messageCount); err != nil {
@@ -304,9 +312,9 @@ func (s *CodingSession) runHarnessPostCompact(result *compaction.Result, err err
 	if s.harness == nil {
 		return
 	}
-	s.harness.mu.Lock()
-	hooks := append([]HarnessHook{}, s.harness.hooks...)
-	s.harness.mu.Unlock()
+	s.harness.mu.RLock()
+	hooks := s.harness.hooks
+	s.harness.mu.RUnlock()
 	for _, hook := range hooks {
 		if hook.PostCompact != nil {
 			hook.PostCompact(result, err)
@@ -326,9 +334,9 @@ func (s *CodingSession) onSubagentStart(run HarnessSubagentRun) {
 	if s.harness == nil {
 		return
 	}
-	s.harness.mu.Lock()
-	hooks := append([]HarnessHook{}, s.harness.hooks...)
-	s.harness.mu.Unlock()
+	s.harness.mu.RLock()
+	hooks := s.harness.hooks
+	s.harness.mu.RUnlock()
 	for _, hook := range hooks {
 		if hook.SubagentStart != nil {
 			hook.SubagentStart(run)
@@ -340,9 +348,9 @@ func (s *CodingSession) onSubagentStop(run HarnessSubagentRun, result string, er
 	if s.harness == nil {
 		return
 	}
-	s.harness.mu.Lock()
-	hooks := append([]HarnessHook{}, s.harness.hooks...)
-	s.harness.mu.Unlock()
+	s.harness.mu.RLock()
+	hooks := s.harness.hooks
+	s.harness.mu.RUnlock()
 	for _, hook := range hooks {
 		if hook.SubagentStop != nil {
 			hook.SubagentStop(run, result, err)
@@ -449,12 +457,9 @@ func sanitizeArtifactName(name string) string {
 }
 
 func (s *CodingSession) appendHarnessLog(target string, entry map[string]any) {
-	path := strings.TrimSpace(target)
+	path := s.resolveHarnessTarget(target)
 	if path == "" {
 		return
-	}
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(s.agentDir, path)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return
@@ -476,12 +481,9 @@ func (s *CodingSession) appendHarnessLog(target string, entry map[string]any) {
 }
 
 func (s *CodingSession) writeHarnessArtifact(target string, entry map[string]any) {
-	path := strings.TrimSpace(target)
+	path := s.resolveHarnessTarget(target)
 	if path == "" {
 		return
-	}
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(s.agentDir, path)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return
@@ -498,35 +500,81 @@ func (s *CodingSession) writeHarnessArtifact(target string, entry map[string]any
 }
 
 func (s *CodingSession) emitHarnessRecord(logTarget, artifactTarget, bridgeDir string, entry map[string]any) {
+	s.updateRuntimeIndex(asString(entry["category"]), maps.Clone(entry))
 	if strings.TrimSpace(logTarget) != "" {
-		s.appendHarnessLog(logTarget, cloneHarnessEntry(entry))
+		s.appendHarnessLog(logTarget, maps.Clone(entry))
 	}
 	if strings.TrimSpace(artifactTarget) != "" {
-		s.writeHarnessArtifact(artifactTarget, cloneHarnessEntry(entry))
+		s.writeHarnessArtifact(artifactTarget, maps.Clone(entry))
 	}
 	if strings.TrimSpace(bridgeDir) != "" {
-		s.writeHarnessBridgeEvent(bridgeDir, cloneHarnessEntry(entry))
+		s.writeHarnessBridgeEvent(bridgeDir, maps.Clone(entry))
 	}
 }
 
-func cloneHarnessEntry(entry map[string]any) map[string]any {
-	if entry == nil {
-		return nil
-	}
-	out := make(map[string]any, len(entry))
-	for k, v := range entry {
-		out[k] = v
-	}
-	return out
-}
-
-func (s *CodingSession) writeHarnessBridgeEvent(targetDir string, entry map[string]any) {
-	dir := strings.TrimSpace(targetDir)
-	if dir == "" {
+func (s *CodingSession) updateRuntimeIndex(category string, entry map[string]any) {
+	if s.config == nil {
 		return
 	}
-	if !filepath.IsAbs(dir) {
-		dir = filepath.Join(s.agentDir, dir)
+	paths := s.RuntimePaths()
+	index := map[string]any{
+		"updated_at": time.Now().UnixMilli(),
+		"paths":      paths.ToMap(),
+		"outputs": map[string]any{
+			"log_files": map[string]string{
+				"tool_use": s.resolveHarnessTarget(s.config.Harness.LogFiles.ToolUse),
+				"compact":  s.resolveHarnessTarget(s.config.Harness.LogFiles.Compact),
+				"subagent": s.resolveHarnessTarget(s.config.Harness.LogFiles.Subagent),
+			},
+			"artifact_files": map[string]string{
+				"tool_use": s.resolveHarnessTarget(s.config.Harness.ArtifactFiles.ToolUse),
+				"compact":  s.resolveHarnessTarget(s.config.Harness.ArtifactFiles.Compact),
+				"subagent": s.resolveHarnessTarget(s.config.Harness.ArtifactFiles.Subagent),
+			},
+			"bridge_dirs": map[string]string{
+				"tool_use": s.resolveHarnessTarget(s.config.Harness.BridgeDirs.ToolUse),
+				"compact":  s.resolveHarnessTarget(s.config.Harness.BridgeDirs.Compact),
+				"subagent": s.resolveHarnessTarget(s.config.Harness.BridgeDirs.Subagent),
+			},
+		},
+		"last_events": map[string]any{},
+	}
+	if data, err := os.ReadFile(paths.RuntimeIndexFile); err == nil {
+		var existing map[string]any
+		if json.Unmarshal(data, &existing) == nil {
+			if prev, ok := existing["last_events"].(map[string]any); ok {
+				index["last_events"] = prev
+			}
+		}
+	}
+	if category == "" {
+		category = "misc"
+	}
+	lastEvents := index["last_events"].(map[string]any)
+	lastEvents[category] = entry
+	data, err := json.MarshalIndent(index, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(paths.RuntimeIndexFile, append(data, '\n'), 0o600)
+}
+
+func (s *CodingSession) resolveHarnessTarget(target string) string {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return ""
+	}
+	if filepath.IsAbs(target) {
+		return target
+	}
+	return filepath.Join(s.agentDir, target)
+}
+
+
+func (s *CodingSession) writeHarnessBridgeEvent(targetDir string, entry map[string]any) {
+	dir := s.resolveHarnessTarget(targetDir)
+	if dir == "" {
+		return
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return
@@ -549,6 +597,33 @@ func asString(v any) string {
 		return s
 	}
 	return ""
+}
+
+func (s *CodingSession) dispatchHarnessActions(category string, actions []HarnessAction, entry map[string]any) {
+	for _, action := range actions {
+		if action.normalizedType() != "exec" || strings.TrimSpace(action.Command) == "" {
+			continue
+		}
+		eventJSON, err := json.Marshal(entry)
+		if err != nil {
+			continue
+		}
+		cmd := exec.Command(action.Command, action.Args...)
+		cmd.Dir = s.cwd
+		if dir := strings.TrimSpace(action.Dir); dir != "" {
+			cmd.Dir = s.resolveHarnessTarget(dir)
+		}
+		cmd.Env = append(os.Environ(),
+			"HARNESS_EVENT_CATEGORY="+category,
+			"HARNESS_EVENT_TYPE="+asString(entry["event"]),
+			"HARNESS_EVENT_JSON="+string(eventJSON),
+			"HARNESS_AGENT_DIR="+s.agentDir,
+			"HARNESS_RUNTIME_ROOT="+s.RuntimePaths().RuntimeDir,
+			"HARNESS_TOOL="+asString(entry["tool"]),
+			"HARNESS_SUBAGENT_NAME="+asString(entry["name"]),
+		)
+		_ = cmd.Run()
+	}
 }
 
 func errString(err error) string {

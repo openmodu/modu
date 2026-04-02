@@ -294,7 +294,6 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	cs.replacePlanTools()
 	cs.replaceWorktreeTools()
 	cs.installConfigHarnessHooks()
-	cs.installHarnessLayer()
 	for _, ctxFile := range loader.LoadContextFiles() {
 		cs.loadedContexts[ctxFile.Path] = struct{}{}
 	}
