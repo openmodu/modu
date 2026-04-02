@@ -164,6 +164,34 @@ func TestNewCodingSessionRegistersTodoWriteTool(t *testing.T) {
 	}
 }
 
+func TestNewCodingSessionHonorsFeatureGates(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configContent := `{"features":{"todoTool":false,"taskOutputTool":false,"planMode":false,"worktreeMode":false,"memoryTool":false}}`
+	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(configContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  agentDir,
+		Model:     newTestModel(),
+		GetAPIKey: func(provider string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range []string{"todo_write", "task_output", "enter_plan_mode", "exit_plan_mode", "enter_worktree", "exit_worktree", "memory"} {
+		if containsTool(session.GetActiveToolNames(), name) {
+			t.Fatalf("expected feature-gated tool %s to be disabled, got %v", name, session.GetActiveToolNames())
+		}
+	}
+}
+
 func TestSpawnSubagentBackgroundAndTaskOutput(t *testing.T) {
 	dir := t.TempDir()
 	agentDir := filepath.Join(dir, ".coding_agent")
@@ -567,6 +595,22 @@ func TestLoadConfigRejectsInvalidHarnessActionOnFailure(t *testing.T) {
 	}
 	if _, err := LoadConfig(agentDir, cwd); err == nil || !strings.Contains(err.Error(), "onFailure") {
 		t.Fatalf("expected onFailure validation error, got %v", err)
+	}
+}
+
+func TestRuntimeStateFileAndJSON(t *testing.T) {
+	session := newTestSession(t, newTestModel())
+	session.SetTodos([]TodoItem{{Content: "plan work", Status: "in_progress"}})
+	stateJSON := session.RuntimeStateJSON()
+	if !strings.Contains(stateJSON, `"todos"`) || !strings.Contains(stateJSON, `"features"`) {
+		t.Fatalf("expected runtime state json, got %q", stateJSON)
+	}
+	data, err := os.ReadFile(session.RuntimePaths().RuntimeStateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"todo_tool": true`) || !strings.Contains(string(data), `"content": "plan work"`) {
+		t.Fatalf("unexpected runtime state file: %q", string(data))
 	}
 }
 

@@ -80,6 +80,8 @@ High-priority gaps identified before this round:
 - Split harness action status output into explicit `stdout` and `stderr` fields while keeping merged `output`.
 - Added per-action retry semantics with configurable attempt count and delay.
 - Added per-action `onFailure` handling so failed actions can stop later actions in the same event batch.
+- Added unified runtime state snapshots under `runtime/<project>/state.json`.
+- Added top-level feature gates for core runtime capabilities such as memory, todos, task output, plan mode, worktree mode, subagents, and harness actions.
 - Added subagent frontmatter support for `harness_block_tools` and merged it into effective tool blocking.
 - Added `examples/modu_code` inspection commands for harness hints and runtime paths.
 - Added `examples/modu_code` inspection commands for configured harness logs, latest artifacts, and bridge directories.
@@ -123,6 +125,8 @@ High-priority gaps identified before this round:
   action retry success flow
   action onFailure validation
   action stop-on-failure flow
+  runtime state snapshot persistence
+  feature-gated tool registration
   automatic safe harness defaults
   automatic settings bootstrap
   automatic action enablement with explicit opt-out
@@ -142,4 +146,4 @@ High-priority gaps identified before this round:
 1. Improve plan/worktree semantics beyond the current minimal implementation.
 2. Expand integration coverage around background tasks, tool replacement, and session switching.
 3. Add richer host action policies such as backoff variants, command/dir allowlist presets, and per-action failure handling.
-4. Expose more runtime state directly in frontends so action status inspection does not require browsing runtime directories manually.
+4. Keep refining the runtime state/control plane so more session resources are represented as first-class harness-managed artifacts instead of ad hoc prompt/session state.

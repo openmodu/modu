@@ -432,6 +432,13 @@ func handleSlash(ctx context.Context, line string, session *coding_agent.CodingS
 		r.PrintInfo("  project_memory: " + paths.ProjectMemoryDir)
 		return true, false
 
+	case "state":
+		r.PrintInfo("runtime state:")
+		for _, line := range strings.Split(strings.TrimSpace(session.RuntimeStateJSON()), "\n") {
+			r.PrintInfo(line)
+		}
+		return true, false
+
 	case "config":
 		r.PrintInfo("effective config:")
 		for _, line := range strings.Split(strings.TrimSpace(session.EffectiveConfigJSON()), "\n") {
@@ -622,6 +629,7 @@ func printHelp(r *tui.Renderer) {
 		"  /tasks              — show background subagent tasks",
 		"  /hints              — show pending harness-only hints",
 		"  /runtime            — show harness runtime paths",
+		"  /state              — show unified runtime state snapshot",
 		"  /config             — show effective merged config",
 		"  /config-template    — show the default config template",
 		"  /logs               — show configured harness JSONL logs",

@@ -39,6 +39,11 @@ func (a todoStoreAdapter) SetTodos(items []tools.TodoItem) {
 }
 
 func (s *CodingSession) replaceTodoTool() {
+	if !s.config.FeatureTodoTool() {
+		s.activeTools = removeAgentToolByName(s.activeTools, "todo_write")
+		s.agent.SetTools(removeAgentToolByName(s.agent.GetState().Tools, "todo_write"))
+		return
+	}
 	todoTool := tools.NewTodoWriteTool(todoStoreAdapter{session: s})
 	s.activeTools = replaceAgentTool(s.activeTools, todoTool)
 	s.agent.SetTools(replaceAgentTool(s.agent.GetState().Tools, todoTool))
@@ -75,7 +80,8 @@ func (s *CodingSession) GetTodos() []TodoItem {
 // SetTodos replaces the current session todo list.
 func (s *CodingSession) SetTodos(items []TodoItem) {
 	s.todoMu.Lock()
-	defer s.todoMu.Unlock()
 	s.todos = make([]TodoItem, len(items))
 	copy(s.todos, items)
+	s.todoMu.Unlock()
+	s.writeRuntimeState()
 }

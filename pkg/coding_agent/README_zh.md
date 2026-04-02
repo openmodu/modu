@@ -346,6 +346,9 @@ session, _ := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
 
 常用能力：
 
+- `features`
+  - 统一开关宿主级能力
+  - 支持 `memoryTool`、`todoTool`、`taskOutputTool`、`planMode`、`worktreeMode`、`spawnSubagentTool`、`harnessActions`
 - `blockTools`
   - 在工具执行前直接阻断指定工具
 - `captureHints`
@@ -371,6 +374,15 @@ session, _ := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
 
 ```json
 {
+  "features": {
+    "memoryTool": true,
+    "todoTool": true,
+    "taskOutputTool": true,
+    "planMode": true,
+    "worktreeMode": true,
+    "spawnSubagentTool": true,
+    "harnessActions": true
+  },
   "harness": {
     "blockTools": ["bash"],
     "captureHints": true,
@@ -428,12 +440,15 @@ session, _ := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
 - `plans/`
 - `tool-results/`
 - `runtime/<project>/index.json`
+- `runtime/<project>/state.json`
 - `runtime/<project>/actions/<category>/latest.json`
 
 其中：
 
 - `runtime index`
   - 记录 resolved 输出目标和每个 category 的最新事件
+- `runtime state`
+  - 记录统一 session 状态快照，包括 mode、feature gate、todo、background task、tool count 和 runtime paths
 - `action status artifact`
   - 记录 host action 的执行状态、`stdout`、`stderr`、合并 `output`、错误、重试次数和 timeout 标记
 

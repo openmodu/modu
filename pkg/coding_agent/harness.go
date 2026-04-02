@@ -52,6 +52,7 @@ type HarnessRuntimePaths struct {
 	Root             string `json:"root"`
 	RuntimeDir       string `json:"runtimeDir"`
 	RuntimeIndexFile string `json:"runtimeIndexFile"`
+	RuntimeStateFile string `json:"runtimeStateFile"`
 	SessionsDir      string `json:"sessionsDir"`
 	PlansDir         string `json:"plansDir"`
 	PlanFile         string `json:"planFile"`
@@ -66,6 +67,7 @@ func (p HarnessRuntimePaths) ToMap() map[string]any {
 		"root":               p.Root,
 		"runtime_dir":        p.RuntimeDir,
 		"runtime_index_file": p.RuntimeIndexFile,
+		"runtime_state_file": p.RuntimeStateFile,
 		"sessions_dir":       p.SessionsDir,
 		"plans_dir":          p.PlansDir,
 		"plan_file":          p.PlanFile,
@@ -179,9 +181,10 @@ func (s *CodingSession) GetPendingHarnessHints() []HarnessHint {
 		return nil
 	}
 	s.harness.mu.Lock()
-	defer s.harness.mu.Unlock()
 	out := s.harness.pendingHints
 	s.harness.pendingHints = nil
+	s.harness.mu.Unlock()
+	s.writeRuntimeState()
 	return out
 }
 
@@ -201,6 +204,7 @@ func (s *CodingSession) RuntimePaths() HarnessRuntimePaths {
 		Root:             s.agentDir,
 		RuntimeDir:       runtimeDir,
 		RuntimeIndexFile: filepath.Join(runtimeDir, "index.json"),
+		RuntimeStateFile: filepath.Join(runtimeDir, "state.json"),
 		SessionsDir:      filepath.Dir(s.messagesFilePath()),
 		PlansDir:         plansDir,
 		PlanFile:         filepath.Join(plansDir, "latest.md"),
@@ -377,6 +381,7 @@ func (s *CodingSession) stripHarnessHints(call HarnessToolCall, result agent.Age
 		s.harness.mu.Lock()
 		s.harness.pendingHints = append(s.harness.pendingHints, hints...)
 		s.harness.mu.Unlock()
+		s.writeRuntimeState()
 	}
 	return result
 }
@@ -601,7 +606,7 @@ func asString(v any) string {
 }
 
 func (s *CodingSession) dispatchHarnessActions(category string, actions []HarnessAction, entry map[string]any) {
-	if s.config == nil || !s.config.Harness.EnableActions {
+	if s.config == nil || !s.config.Harness.EnableActions || !s.config.FeatureHarnessActions() {
 		return
 	}
 	for _, action := range actions {

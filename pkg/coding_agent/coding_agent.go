@@ -151,13 +151,23 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	}
 
 	// Always include the memory tool
-	activeTools = append(activeTools, tools.NewMemoryTool(memoryStore))
-	activeTools = append(activeTools, tools.NewTodoWriteTool(todoStoreAdapter{session: nil}))
-	activeTools = append(activeTools, tools.NewTaskOutputTool(taskStoreAdapter{manager: nil}))
-	activeTools = append(activeTools, tools.NewEnterPlanModeTool(planModeAdapter{session: nil}))
-	activeTools = append(activeTools, tools.NewExitPlanModeTool(planModeAdapter{session: nil}))
-	activeTools = append(activeTools, tools.NewEnterWorktreeTool(worktreeAdapter{session: nil}))
-	activeTools = append(activeTools, tools.NewExitWorktreeTool(worktreeAdapter{session: nil}))
+	if cfg.FeatureMemoryTool() {
+		activeTools = append(activeTools, tools.NewMemoryTool(memoryStore))
+	}
+	if cfg.FeatureTodoTool() {
+		activeTools = append(activeTools, tools.NewTodoWriteTool(todoStoreAdapter{session: nil}))
+	}
+	if cfg.FeatureTaskOutputTool() {
+		activeTools = append(activeTools, tools.NewTaskOutputTool(taskStoreAdapter{manager: nil}))
+	}
+	if cfg.FeaturePlanMode() {
+		activeTools = append(activeTools, tools.NewEnterPlanModeTool(planModeAdapter{session: nil}))
+		activeTools = append(activeTools, tools.NewExitPlanModeTool(planModeAdapter{session: nil}))
+	}
+	if cfg.FeatureWorktreeMode() {
+		activeTools = append(activeTools, tools.NewEnterWorktreeTool(worktreeAdapter{session: nil}))
+		activeTools = append(activeTools, tools.NewExitWorktreeTool(worktreeAdapter{session: nil}))
+	}
 
 	// Create session manager
 	sessionMgr, err := session.NewManager(agentDir, opts.Cwd)
@@ -229,7 +239,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	subagentLoader.Discover(agentDir, opts.Cwd)
 	subagentLoader.DiscoverExtra(opts.ExtraSubagentDirs...)
 	taskMgr := newBackgroundTaskManager()
-	if subagentLoader.Count() > 0 {
+	if cfg.FeatureSpawnSubagentTool() && subagentLoader.Count() > 0 {
 		activeTools = append(activeTools, tools.NewSpawnSubagentTool(opts.Cwd, agentDir, subagentLoader, activeTools, opts.Model, getAPIKey, streamFn, func(def *subagent.SubagentDefinition) *subagent.SubagentDefinition {
 			return prepareSubagentDefinition(def, skillMgr, memoryStore)
 		}, taskStoreAdapter{manager: taskMgr}, nil))
@@ -290,6 +300,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		harness:          newHarnessState(),
 		approvalManager:  approvalMgr,
 	}
+	taskMgr.SetOnChange(func() { cs.writeRuntimeState() })
 	cs.refreshToolsForCwd(cs.cwd)
 	cs.replaceTodoTool()
 	cs.replaceTaskOutputTool()
@@ -379,6 +390,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	}
 
 	cs.installHarnessLayer()
+	cs.writeRuntimeState()
 
 	return cs, nil
 }
@@ -464,6 +476,7 @@ func (s *CodingSession) SetActiveTools(names []string) {
 	}
 
 	s.agent.SetTools(active)
+	s.writeRuntimeState()
 }
 
 // SkillInfo is a minimal view of a skill for display purposes.
@@ -700,6 +713,7 @@ func (s *CodingSession) SetModel(model *types.Model) {
 		Provider: model.ProviderID,
 		ModelID:  model.ID,
 	}))
+	s.writeRuntimeState()
 }
 
 // SetModelByID changes the active model by provider and model ID.
@@ -893,6 +907,7 @@ func (s *CodingSession) SetThinkingLevel(level agent.ThinkingLevel) {
 		Type:  SessionEventThinkingChange,
 		Level: string(level),
 	})
+	s.writeRuntimeState()
 }
 
 // GetThinkingLevel returns the current thinking level.
@@ -918,6 +933,7 @@ func (s *CodingSession) GetSessionID() string {
 // SetAutoCompaction enables or disables auto-compaction.
 func (s *CodingSession) SetAutoCompaction(enabled bool) {
 	s.config.AutoCompaction = enabled
+	s.writeRuntimeState()
 }
 
 // SetAutoRetry enables or disables auto-retry.

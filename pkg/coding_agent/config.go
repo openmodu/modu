@@ -56,6 +56,19 @@ type Config struct {
 
 	// Harness controls host-side runtime behavior.
 	Harness HarnessConfig `json:"harness,omitempty"`
+
+	// Features controls higher-level runtime feature gates.
+	Features FeatureConfig `json:"features,omitempty"`
+}
+
+type FeatureConfig struct {
+	MemoryTool        *bool `json:"memoryTool,omitempty"`
+	TodoTool          *bool `json:"todoTool,omitempty"`
+	TaskOutputTool    *bool `json:"taskOutputTool,omitempty"`
+	PlanMode          *bool `json:"planMode,omitempty"`
+	WorktreeMode      *bool `json:"worktreeMode,omitempty"`
+	SpawnSubagentTool *bool `json:"spawnSubagentTool,omitempty"`
+	HarnessActions    *bool `json:"harnessActions,omitempty"`
 }
 
 type HarnessConfig struct {
@@ -180,8 +193,19 @@ func DefaultConfig() *Config {
 				Subagent: "bridge/subagent",
 			},
 		},
+		Features: FeatureConfig{
+			MemoryTool:        boolPtr(true),
+			TodoTool:          boolPtr(true),
+			TaskOutputTool:    boolPtr(true),
+			PlanMode:          boolPtr(true),
+			WorktreeMode:      boolPtr(true),
+			SpawnSubagentTool: boolPtr(true),
+			HarnessActions:    boolPtr(true),
+		},
 	}
 }
+
+func boolPtr(v bool) *bool { return &v }
 
 func (c *Config) HarnessCaptureHints() bool {
 	if c == nil || c.Harness.CaptureHints == nil {
@@ -195,6 +219,29 @@ func (c *Config) HarnessPersistToolResults() bool {
 		return true
 	}
 	return *c.Harness.PersistToolResults
+}
+
+func featureEnabled(flag *bool) bool {
+	if flag == nil {
+		return true
+	}
+	return *flag
+}
+
+func (c *Config) FeatureMemoryTool() bool { return c == nil || featureEnabled(c.Features.MemoryTool) }
+func (c *Config) FeatureTodoTool() bool   { return c == nil || featureEnabled(c.Features.TodoTool) }
+func (c *Config) FeatureTaskOutputTool() bool {
+	return c == nil || featureEnabled(c.Features.TaskOutputTool)
+}
+func (c *Config) FeaturePlanMode() bool { return c == nil || featureEnabled(c.Features.PlanMode) }
+func (c *Config) FeatureWorktreeMode() bool {
+	return c == nil || featureEnabled(c.Features.WorktreeMode)
+}
+func (c *Config) FeatureSpawnSubagentTool() bool {
+	return c == nil || featureEnabled(c.Features.SpawnSubagentTool)
+}
+func (c *Config) FeatureHarnessActions() bool {
+	return c == nil || featureEnabled(c.Features.HarnessActions)
 }
 
 func (a HarnessAction) normalizedType() string {

@@ -65,6 +65,11 @@ func (a taskStoreAdapter) List() []tools.BackgroundTask {
 }
 
 func (s *CodingSession) replaceTaskOutputTool() {
+	if !s.config.FeatureTaskOutputTool() {
+		s.activeTools = removeAgentToolByName(s.activeTools, "task_output")
+		s.agent.SetTools(removeAgentToolByName(s.agent.GetState().Tools, "task_output"))
+		return
+	}
 	taskTool := tools.NewTaskOutputTool(taskStoreAdapter{manager: s.taskManager})
 	s.activeTools = replaceAgentTool(s.activeTools, taskTool)
 	s.agent.SetTools(replaceAgentTool(s.agent.GetState().Tools, taskTool))
