@@ -89,6 +89,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed to create session: %v\n", err)
 		os.Exit(1)
 	}
+	defer session.Close("prompt_input_exit")
 
 	// Print mode: non-interactive, output result then exit.
 	if *printPrompt != "" {
@@ -439,6 +440,23 @@ func handleSlash(ctx context.Context, line string, session *coding_agent.CodingS
 		}
 		return true, false
 
+	case "git":
+		if gitState, ok := session.RuntimeState().Git["available"].(bool); ok && !gitState {
+			r.PrintInfo("git: not a repository")
+			return true, false
+		}
+		r.PrintInfo("git preflight:")
+		gitData := session.RuntimeState().Git
+		raw, _ := json.MarshalIndent(gitData, "", "  ")
+		for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+			r.PrintInfo(line)
+		}
+		return true, false
+
+	case "dashboard":
+		printDashboard(r, session)
+		return true, false
+
 	case "config":
 		r.PrintInfo("effective config:")
 		for _, line := range strings.Split(strings.TrimSpace(session.EffectiveConfigJSON()), "\n") {
@@ -455,25 +473,31 @@ func handleSlash(ctx context.Context, line string, session *coding_agent.CodingS
 
 	case "logs":
 		printHarnessTargets(r, "harness log files", session, map[string]string{
-			"tool_use": session.GetConfig().Harness.LogFiles.ToolUse,
-			"compact":  session.GetConfig().Harness.LogFiles.Compact,
-			"subagent": session.GetConfig().Harness.LogFiles.Subagent,
+			"tool_use":   session.GetConfig().Harness.LogFiles.ToolUse,
+			"compact":    session.GetConfig().Harness.LogFiles.Compact,
+			"subagent":   session.GetConfig().Harness.LogFiles.Subagent,
+			"session":    session.GetConfig().Harness.LogFiles.Session,
+			"permission": session.GetConfig().Harness.LogFiles.Permission,
 		}, false)
 		return true, false
 
 	case "artifacts":
 		printHarnessTargets(r, "harness artifact files", session, map[string]string{
-			"tool_use": session.GetConfig().Harness.ArtifactFiles.ToolUse,
-			"compact":  session.GetConfig().Harness.ArtifactFiles.Compact,
-			"subagent": session.GetConfig().Harness.ArtifactFiles.Subagent,
+			"tool_use":   session.GetConfig().Harness.ArtifactFiles.ToolUse,
+			"compact":    session.GetConfig().Harness.ArtifactFiles.Compact,
+			"subagent":   session.GetConfig().Harness.ArtifactFiles.Subagent,
+			"session":    session.GetConfig().Harness.ArtifactFiles.Session,
+			"permission": session.GetConfig().Harness.ArtifactFiles.Permission,
 		}, false)
 		return true, false
 
 	case "bridge":
 		printHarnessTargets(r, "harness bridge directories", session, map[string]string{
-			"tool_use": session.GetConfig().Harness.BridgeDirs.ToolUse,
-			"compact":  session.GetConfig().Harness.BridgeDirs.Compact,
-			"subagent": session.GetConfig().Harness.BridgeDirs.Subagent,
+			"tool_use":   session.GetConfig().Harness.BridgeDirs.ToolUse,
+			"compact":    session.GetConfig().Harness.BridgeDirs.Compact,
+			"subagent":   session.GetConfig().Harness.BridgeDirs.Subagent,
+			"session":    session.GetConfig().Harness.BridgeDirs.Session,
+			"permission": session.GetConfig().Harness.BridgeDirs.Permission,
 		}, true)
 		return true, false
 
@@ -629,6 +653,8 @@ func printHelp(r *tui.Renderer) {
 		"  /tasks              — show background subagent tasks",
 		"  /hints              — show pending harness-only hints",
 		"  /runtime            — show harness runtime paths",
+		"  /git                — show structured git preflight state",
+		"  /dashboard          — show runtime summary and latest events",
 		"  /state              — show unified runtime state snapshot",
 		"  /config             — show effective merged config",
 		"  /config-template    — show the default config template",
@@ -718,6 +744,49 @@ func printHarnessActions(r *tui.Renderer, session *coding_agent.CodingSession) {
 		r.PrintInfo("  " + entry.Name() + ": " + path)
 		printFilePreview(r, path)
 	}
+}
+
+func printDashboard(r *tui.Renderer, session *coding_agent.CodingSession) {
+	r.PrintInfo("runtime dashboard:")
+	state := session.RuntimeState()
+	r.PrintInfo(fmt.Sprintf("  session: %s", state.SessionID))
+	r.PrintInfo(fmt.Sprintf("  cwd: %s", state.Cwd))
+	r.PrintInfo(fmt.Sprintf("  model: %s/%s", state.Model["provider"], state.Model["id"]))
+	r.PrintInfo(fmt.Sprintf("  thinking: %s", state.Thinking))
+	r.PrintInfo(fmt.Sprintf("  modes: plan=%v worktree=%v streaming=%v", state.Modes["plan"], state.Modes["worktree"], state.Modes["streaming"]))
+	r.PrintInfo(fmt.Sprintf("  counts: messages=%d todos=%d tasks=%d tools=%d", state.Counts["messages"], state.Counts["todos"], state.Counts["tasks"], state.Counts["tools"]))
+	if gitInfo, ok := state.Git["inGitRepository"].(bool); ok && gitInfo {
+		r.PrintInfo(fmt.Sprintf("  git: staged=%d unstaged=%d untracked=%d", len(asSlice(state.Git["stagedFiles"])), len(asSlice(state.Git["unstagedFiles"])), len(asSlice(state.Git["untrackedFiles"]))))
+	} else {
+		r.PrintInfo("  git: not a repository")
+	}
+	if data, err := os.ReadFile(session.RuntimePaths().RuntimeIndexFile); err == nil {
+		var payload map[string]any
+		if json.Unmarshal(data, &payload) == nil {
+			r.PrintInfo("  latest events:")
+			if last, ok := payload["last_events"].(map[string]any); ok {
+				keys := make([]string, 0, len(last))
+				for key := range last {
+					keys = append(keys, key)
+				}
+				sort.Strings(keys)
+				for _, key := range keys {
+					raw, _ := json.Marshal(last[key])
+					line := string(raw)
+					if len(line) > 180 {
+						line = line[:180] + "..."
+					}
+					r.PrintInfo("    " + key + ": " + line)
+				}
+			}
+		}
+	}
+	printHarnessActions(r, session)
+}
+
+func asSlice(v any) []any {
+	items, _ := v.([]any)
+	return items
 }
 
 func printRecentDirEntries(r *tui.Renderer, dir string) {

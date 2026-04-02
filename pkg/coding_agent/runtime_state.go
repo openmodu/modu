@@ -16,6 +16,8 @@ type RuntimeStateSnapshot struct {
 	Thinking     string            `json:"thinking"`
 	Modes        map[string]any    `json:"modes"`
 	Features     map[string]bool   `json:"features"`
+	Permissions  map[string]any    `json:"permissions"`
+	Git          map[string]any    `json:"git"`
 	Counts       map[string]int    `json:"counts"`
 	Paths        map[string]any    `json:"paths"`
 	Todos        []TodoItem        `json:"todos"`
@@ -63,6 +65,13 @@ func (s *CodingSession) RuntimeState() RuntimeStateSnapshot {
 			"tasks":    len(tasks),
 			"tools":    len(s.GetActiveToolNames()),
 		},
+		Permissions: map[string]any{
+			"allow_tools":         append([]string(nil), s.config.Permissions.AllowTools...),
+			"deny_tools":          append([]string(nil), s.config.Permissions.DenyTools...),
+			"allow_bash_prefixes": append([]string(nil), s.config.Permissions.AllowBashPrefixes...),
+			"deny_bash_prefixes":  append([]string(nil), s.config.Permissions.DenyBashPrefixes...),
+		},
+		Git:          s.gitRuntimeState(),
 		Paths:        s.RuntimePaths().ToMap(),
 		Todos:        todos,
 		Tasks:        tasks,

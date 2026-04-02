@@ -256,6 +256,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 
 	// Create approval manager
 	approvalMgr := NewApprovalManager()
+	approvalMgr.SetRules(cfg.Permissions)
 
 	// Create the underlying agent
 	ag := agent.NewAgent(agent.AgentConfig{
@@ -300,6 +301,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		harness:          newHarnessState(),
 		approvalManager:  approvalMgr,
 	}
+	approvalMgr.SetObserver(cs)
 	taskMgr.SetOnChange(func() { cs.writeRuntimeState() })
 	cs.refreshToolsForCwd(cs.cwd)
 	cs.replaceTodoTool()
@@ -334,7 +336,13 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 			return
 		}
 		if event.Type == agent.EventTypeAgentEnd {
+			if errText := strings.TrimSpace(cs.agent.GetState().Error); errText != "" {
+				cs.runHarnessStopFailure(fmt.Errorf("%s", errText))
+			} else {
+				cs.runHarnessStop()
+			}
 			cs.pruneTransientContextMessages()
+			cs.writeRuntimeState()
 		}
 	})
 
@@ -390,6 +398,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	}
 
 	cs.installHarnessLayer()
+	cs.runHarnessSessionStart("startup")
 	cs.writeRuntimeState()
 
 	return cs, nil
@@ -421,6 +430,10 @@ func (s *CodingSession) Prompt(ctx context.Context, text string) error {
 		}
 	}
 
+	if err := s.runHarnessUserPromptSubmit(text); err != nil {
+		return err
+	}
+
 	// Record to session
 	_ = s.sessionManager.Append(session.NewEntry(session.EntryTypeMessage, "", session.MessageData{
 		Role:    agent.RoleUser,
@@ -429,6 +442,7 @@ func (s *CodingSession) Prompt(ctx context.Context, text string) error {
 
 	err := s.agent.Prompt(ctx, text)
 	if err != nil {
+		s.runHarnessStopFailure(err)
 		return err
 	}
 
@@ -436,6 +450,11 @@ func (s *CodingSession) Prompt(ctx context.Context, text string) error {
 	s.maybeAutoCompact(ctx)
 
 	return nil
+}
+
+func (s *CodingSession) Close(reason string) {
+	s.runHarnessSessionEnd(reason)
+	s.writeRuntimeState()
 }
 
 // Steer injects a high-priority message during processing.

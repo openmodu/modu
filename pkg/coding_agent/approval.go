@@ -1,6 +1,7 @@
 package coding_agent
 
 import (
+	"strings"
 	"sync"
 
 	"github.com/openmodu/modu/pkg/agent"
@@ -10,12 +11,19 @@ import (
 // It remembers always-allow and always-deny decisions per tool name,
 // and delegates unknown tools to the configured callback.
 type ApprovalManager struct {
-	mu         sync.RWMutex
+	mu          sync.RWMutex
 	alwaysAllow map[string]bool
 	alwaysDeny  map[string]bool
+	rules       PermissionConfig
+	observer    ApprovalObserver
 	// callback is called when no cached decision exists.
 	// If nil, all tools are auto-approved.
 	callback func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error)
+}
+
+type ApprovalObserver interface {
+	OnPermissionRequest(toolName, toolCallID string, args map[string]any)
+	OnPermissionDenied(toolName, toolCallID string, args map[string]any, reason string)
 }
 
 // NewApprovalManager creates an ApprovalManager with no cached rules.
@@ -33,6 +41,18 @@ func (m *ApprovalManager) SetCallback(fn func(toolName, toolCallID string, args 
 	m.callback = fn
 }
 
+func (m *ApprovalManager) SetRules(rules PermissionConfig) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rules = rules
+}
+
+func (m *ApprovalManager) SetObserver(observer ApprovalObserver) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.observer = observer
+}
+
 // Approve is the AgentConfig.ApproveTool implementation.
 func (m *ApprovalManager) Approve(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
 	m.mu.RLock()
@@ -45,15 +65,33 @@ func (m *ApprovalManager) Approve(toolName, toolCallID string, args map[string]a
 		return agent.ToolApprovalDeny, nil
 	}
 	cb := m.callback
+	rules := m.rules
+	observer := m.observer
 	m.mu.RUnlock()
+
+	if decision, reason, ok := evaluatePermissionRules(rules, toolName, args); ok {
+		if !decision.IsAllow() && observer != nil {
+			observer.OnPermissionDenied(toolName, toolCallID, args, reason)
+		}
+		return decision, nil
+	}
 
 	if cb == nil {
 		return agent.ToolApprovalAllow, nil
 	}
+	if observer != nil {
+		observer.OnPermissionRequest(toolName, toolCallID, args)
+	}
 
 	decision, err := cb(toolName, toolCallID, args)
 	if err != nil {
+		if observer != nil {
+			observer.OnPermissionDenied(toolName, toolCallID, args, err.Error())
+		}
 		return agent.ToolApprovalDeny, err
+	}
+	if !decision.IsAllow() && observer != nil {
+		observer.OnPermissionDenied(toolName, toolCallID, args, string(decision))
 	}
 
 	// Persist always decisions
@@ -68,6 +106,41 @@ func (m *ApprovalManager) Approve(toolName, toolCallID string, args map[string]a
 	}
 
 	return decision, nil
+}
+
+func evaluatePermissionRules(rules PermissionConfig, toolName string, args map[string]any) (agent.ToolApprovalDecision, string, bool) {
+	for _, denied := range rules.DenyTools {
+		if strings.TrimSpace(denied) == toolName {
+			return agent.ToolApprovalDeny, "denied by permission rules", true
+		}
+	}
+	for _, allowed := range rules.AllowTools {
+		if strings.TrimSpace(allowed) == toolName {
+			return agent.ToolApprovalAllow, "", true
+		}
+	}
+	if toolName != "bash" {
+		return "", "", false
+	}
+	command, _ := args["command"].(string)
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return "", "", false
+	}
+	for _, denied := range rules.DenyBashPrefixes {
+		if denied = strings.TrimSpace(denied); denied != "" && strings.HasPrefix(command, denied) {
+			return agent.ToolApprovalDeny, "bash command denied by permission rules", true
+		}
+	}
+	if len(rules.AllowBashPrefixes) > 0 {
+		for _, allowed := range rules.AllowBashPrefixes {
+			if allowed = strings.TrimSpace(allowed); allowed != "" && strings.HasPrefix(command, allowed) {
+				return agent.ToolApprovalAllow, "", true
+			}
+		}
+		return agent.ToolApprovalDeny, "bash command not allowed by permission rules", true
+	}
+	return "", "", false
 }
 
 // AllowAlways marks a tool as always allowed.
@@ -92,6 +165,8 @@ func (m *ApprovalManager) Reset() {
 	defer m.mu.Unlock()
 	m.alwaysAllow = make(map[string]bool)
 	m.alwaysDeny = make(map[string]bool)
+	m.rules = PermissionConfig{}
+	m.observer = nil
 	m.callback = nil
 }
 
@@ -118,4 +193,14 @@ func (cs *CodingSession) DenyToolAlways(toolName string) {
 // ResetToolApprovals clears all cached tool approval rules and the callback.
 func (cs *CodingSession) ResetToolApprovals() {
 	cs.approvalManager.Reset()
+}
+
+func (cs *CodingSession) OnPermissionRequest(toolName, toolCallID string, args map[string]any) {
+	cs.runHarnessPermissionRequest(HarnessToolCall{ToolName: toolName, Args: args})
+	cs.writeRuntimeState()
+}
+
+func (cs *CodingSession) OnPermissionDenied(toolName, toolCallID string, args map[string]any, reason string) {
+	cs.runHarnessPermissionDenied(HarnessToolCall{ToolName: toolName, Args: args}, reason)
+	cs.writeRuntimeState()
 }

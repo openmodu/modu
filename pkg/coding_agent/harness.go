@@ -27,12 +27,22 @@ type HarnessToolCall struct {
 }
 
 type HarnessHook struct {
-	PreToolUse    func(call HarnessToolCall) error
-	PostToolUse   func(call HarnessToolCall, result agent.AgentToolResult, err error)
-	PreCompact    func(messageCount int) error
-	PostCompact   func(result *compaction.Result, err error)
-	SubagentStart func(run HarnessSubagentRun)
-	SubagentStop  func(run HarnessSubagentRun, result string, err error)
+	PreToolUse        func(call HarnessToolCall) error
+	PostToolUse       func(call HarnessToolCall, result agent.AgentToolResult, err error)
+	PreCompact        func(messageCount int) error
+	PostCompact       func(result *compaction.Result, err error)
+	SubagentStart     func(run HarnessSubagentRun)
+	SubagentStop      func(run HarnessSubagentRun, result string, err error)
+	UserPromptSubmit  func(text string) error
+	SessionStart      func(source string)
+	SessionEnd        func(reason string)
+	PermissionRequest func(call HarnessToolCall)
+	PermissionDenied  func(call HarnessToolCall, reason string)
+	Stop              func()
+	StopFailure       func(err error)
+	CwdChanged        func(oldCwd, newCwd string)
+	WorktreeCreate    func(path string)
+	WorktreeRemove    func(path string)
 }
 
 type HarnessHint struct {
@@ -104,6 +114,149 @@ func (s *CodingSession) RegisterHarnessHook(hook HarnessHook) {
 	s.harness.hooks = append(s.harness.hooks, hook)
 }
 
+func (s *CodingSession) runHarnessUserPromptSubmit(text string) error {
+	if s.harness == nil {
+		return nil
+	}
+	s.harness.mu.RLock()
+	hooks := s.harness.hooks
+	s.harness.mu.RUnlock()
+	for _, hook := range hooks {
+		if hook.UserPromptSubmit != nil {
+			if err := hook.UserPromptSubmit(text); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (s *CodingSession) runHarnessSessionStart(source string) {
+	if s.harness == nil {
+		return
+	}
+	s.harness.mu.RLock()
+	hooks := s.harness.hooks
+	s.harness.mu.RUnlock()
+	for _, hook := range hooks {
+		if hook.SessionStart != nil {
+			hook.SessionStart(source)
+		}
+	}
+}
+
+func (s *CodingSession) runHarnessSessionEnd(reason string) {
+	if s.harness == nil {
+		return
+	}
+	s.harness.mu.RLock()
+	hooks := s.harness.hooks
+	s.harness.mu.RUnlock()
+	for _, hook := range hooks {
+		if hook.SessionEnd != nil {
+			hook.SessionEnd(reason)
+		}
+	}
+}
+
+func (s *CodingSession) runHarnessPermissionRequest(call HarnessToolCall) {
+	if s.harness == nil {
+		return
+	}
+	s.harness.mu.RLock()
+	hooks := s.harness.hooks
+	s.harness.mu.RUnlock()
+	for _, hook := range hooks {
+		if hook.PermissionRequest != nil {
+			hook.PermissionRequest(call)
+		}
+	}
+}
+
+func (s *CodingSession) runHarnessPermissionDenied(call HarnessToolCall, reason string) {
+	if s.harness == nil {
+		return
+	}
+	s.harness.mu.RLock()
+	hooks := s.harness.hooks
+	s.harness.mu.RUnlock()
+	for _, hook := range hooks {
+		if hook.PermissionDenied != nil {
+			hook.PermissionDenied(call, reason)
+		}
+	}
+}
+
+func (s *CodingSession) runHarnessStop() {
+	if s.harness == nil {
+		return
+	}
+	s.harness.mu.RLock()
+	hooks := s.harness.hooks
+	s.harness.mu.RUnlock()
+	for _, hook := range hooks {
+		if hook.Stop != nil {
+			hook.Stop()
+		}
+	}
+}
+
+func (s *CodingSession) runHarnessStopFailure(err error) {
+	if s.harness == nil {
+		return
+	}
+	s.harness.mu.RLock()
+	hooks := s.harness.hooks
+	s.harness.mu.RUnlock()
+	for _, hook := range hooks {
+		if hook.StopFailure != nil {
+			hook.StopFailure(err)
+		}
+	}
+}
+
+func (s *CodingSession) runHarnessCwdChanged(oldCwd, newCwd string) {
+	if s.harness == nil {
+		return
+	}
+	s.harness.mu.RLock()
+	hooks := s.harness.hooks
+	s.harness.mu.RUnlock()
+	for _, hook := range hooks {
+		if hook.CwdChanged != nil {
+			hook.CwdChanged(oldCwd, newCwd)
+		}
+	}
+}
+
+func (s *CodingSession) runHarnessWorktreeCreate(path string) {
+	if s.harness == nil {
+		return
+	}
+	s.harness.mu.RLock()
+	hooks := s.harness.hooks
+	s.harness.mu.RUnlock()
+	for _, hook := range hooks {
+		if hook.WorktreeCreate != nil {
+			hook.WorktreeCreate(path)
+		}
+	}
+}
+
+func (s *CodingSession) runHarnessWorktreeRemove(path string) {
+	if s.harness == nil {
+		return
+	}
+	s.harness.mu.RLock()
+	hooks := s.harness.hooks
+	s.harness.mu.RUnlock()
+	for _, hook := range hooks {
+		if hook.WorktreeRemove != nil {
+			hook.WorktreeRemove(path)
+		}
+	}
+}
+
 func (s *CodingSession) installConfigHarnessHooks() {
 	if s.config == nil {
 		return
@@ -123,6 +276,22 @@ func (s *CodingSession) installConfigHarnessHooks() {
 	bridgeDirs := s.config.Harness.BridgeDirs
 	actions := s.config.Harness.Actions
 	s.RegisterHarnessHook(HarnessHook{
+		UserPromptSubmit: func(text string) error {
+			entry := map[string]any{"event": "user_prompt_submit", "category": "session", "text": text}
+			s.emitHarnessRecord(logFiles.Session, artifactFiles.Session, bridgeDirs.Session, entry)
+			s.dispatchHarnessActions("session", actions.Session, entry)
+			return nil
+		},
+		SessionStart: func(source string) {
+			entry := map[string]any{"event": "session_start", "category": "session", "source": source}
+			s.emitHarnessRecord(logFiles.Session, artifactFiles.Session, bridgeDirs.Session, entry)
+			s.dispatchHarnessActions("session", actions.Session, entry)
+		},
+		SessionEnd: func(reason string) {
+			entry := map[string]any{"event": "session_end", "category": "session", "reason": reason}
+			s.emitHarnessRecord(logFiles.Session, artifactFiles.Session, bridgeDirs.Session, entry)
+			s.dispatchHarnessActions("session", actions.Session, entry)
+		},
 		PreToolUse: func(call HarnessToolCall) error {
 			if len(blocked) > 0 {
 				if _, ok := blocked[call.ToolName]; ok {
@@ -170,6 +339,41 @@ func (s *CodingSession) installConfigHarnessHooks() {
 			entry := map[string]any{"event": "subagent_stop", "category": "subagent", "name": run.Name, "task": run.Task, "background": run.Background, "result": result, "error": errString(err)}
 			s.emitHarnessRecord(logFiles.Subagent, artifactFiles.Subagent, bridgeDirs.Subagent, entry)
 			s.dispatchHarnessActions("subagent", actions.Subagent, entry)
+		},
+		PermissionRequest: func(call HarnessToolCall) {
+			entry := map[string]any{"event": "permission_request", "category": "permission", "tool": call.ToolName, "args": call.Args}
+			s.emitHarnessRecord(logFiles.Permission, artifactFiles.Permission, bridgeDirs.Permission, entry)
+			s.dispatchHarnessActions("permission", actions.Permission, entry)
+		},
+		PermissionDenied: func(call HarnessToolCall, reason string) {
+			entry := map[string]any{"event": "permission_denied", "category": "permission", "tool": call.ToolName, "args": call.Args, "reason": reason}
+			s.emitHarnessRecord(logFiles.Permission, artifactFiles.Permission, bridgeDirs.Permission, entry)
+			s.dispatchHarnessActions("permission", actions.Permission, entry)
+		},
+		Stop: func() {
+			entry := map[string]any{"event": "stop", "category": "session"}
+			s.emitHarnessRecord(logFiles.Session, artifactFiles.Session, bridgeDirs.Session, entry)
+			s.dispatchHarnessActions("session", actions.Session, entry)
+		},
+		StopFailure: func(err error) {
+			entry := map[string]any{"event": "stop_failure", "category": "session", "error": errString(err)}
+			s.emitHarnessRecord(logFiles.Session, artifactFiles.Session, bridgeDirs.Session, entry)
+			s.dispatchHarnessActions("session", actions.Session, entry)
+		},
+		CwdChanged: func(oldCwd, newCwd string) {
+			entry := map[string]any{"event": "cwd_changed", "category": "session", "old_cwd": oldCwd, "new_cwd": newCwd}
+			s.emitHarnessRecord(logFiles.Session, artifactFiles.Session, bridgeDirs.Session, entry)
+			s.dispatchHarnessActions("session", actions.Session, entry)
+		},
+		WorktreeCreate: func(path string) {
+			entry := map[string]any{"event": "worktree_create", "category": "session", "path": path}
+			s.emitHarnessRecord(logFiles.Session, artifactFiles.Session, bridgeDirs.Session, entry)
+			s.dispatchHarnessActions("session", actions.Session, entry)
+		},
+		WorktreeRemove: func(path string) {
+			entry := map[string]any{"event": "worktree_remove", "category": "session", "path": path}
+			s.emitHarnessRecord(logFiles.Session, artifactFiles.Session, bridgeDirs.Session, entry)
+			s.dispatchHarnessActions("session", actions.Session, entry)
 		},
 	})
 }
@@ -529,19 +733,25 @@ func (s *CodingSession) updateRuntimeIndex(category string, entry map[string]any
 		"paths":      paths.ToMap(),
 		"outputs": map[string]any{
 			"log_files": map[string]string{
-				"tool_use": s.resolveHarnessTarget(s.config.Harness.LogFiles.ToolUse),
-				"compact":  s.resolveHarnessTarget(s.config.Harness.LogFiles.Compact),
-				"subagent": s.resolveHarnessTarget(s.config.Harness.LogFiles.Subagent),
+				"tool_use":   s.resolveHarnessTarget(s.config.Harness.LogFiles.ToolUse),
+				"compact":    s.resolveHarnessTarget(s.config.Harness.LogFiles.Compact),
+				"subagent":   s.resolveHarnessTarget(s.config.Harness.LogFiles.Subagent),
+				"session":    s.resolveHarnessTarget(s.config.Harness.LogFiles.Session),
+				"permission": s.resolveHarnessTarget(s.config.Harness.LogFiles.Permission),
 			},
 			"artifact_files": map[string]string{
-				"tool_use": s.resolveHarnessTarget(s.config.Harness.ArtifactFiles.ToolUse),
-				"compact":  s.resolveHarnessTarget(s.config.Harness.ArtifactFiles.Compact),
-				"subagent": s.resolveHarnessTarget(s.config.Harness.ArtifactFiles.Subagent),
+				"tool_use":   s.resolveHarnessTarget(s.config.Harness.ArtifactFiles.ToolUse),
+				"compact":    s.resolveHarnessTarget(s.config.Harness.ArtifactFiles.Compact),
+				"subagent":   s.resolveHarnessTarget(s.config.Harness.ArtifactFiles.Subagent),
+				"session":    s.resolveHarnessTarget(s.config.Harness.ArtifactFiles.Session),
+				"permission": s.resolveHarnessTarget(s.config.Harness.ArtifactFiles.Permission),
 			},
 			"bridge_dirs": map[string]string{
-				"tool_use": s.resolveHarnessTarget(s.config.Harness.BridgeDirs.ToolUse),
-				"compact":  s.resolveHarnessTarget(s.config.Harness.BridgeDirs.Compact),
-				"subagent": s.resolveHarnessTarget(s.config.Harness.BridgeDirs.Subagent),
+				"tool_use":   s.resolveHarnessTarget(s.config.Harness.BridgeDirs.ToolUse),
+				"compact":    s.resolveHarnessTarget(s.config.Harness.BridgeDirs.Compact),
+				"subagent":   s.resolveHarnessTarget(s.config.Harness.BridgeDirs.Subagent),
+				"session":    s.resolveHarnessTarget(s.config.Harness.BridgeDirs.Session),
+				"permission": s.resolveHarnessTarget(s.config.Harness.BridgeDirs.Permission),
 			},
 		},
 		"last_events": map[string]any{},

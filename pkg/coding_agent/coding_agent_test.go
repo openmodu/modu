@@ -614,6 +614,74 @@ func TestRuntimeStateFileAndJSON(t *testing.T) {
 	}
 }
 
+func TestPermissionRulesEmitHarnessArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configContent := `{"permissions":{"denyTools":["echo"]}}`
+	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(configContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	model := newTestModel()
+	callCount := 0
+	streamFn := func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+		callCount++
+		stream := types.NewEventStream()
+		go func() {
+			var msg *types.AssistantMessage
+			if callCount == 1 {
+				msg = &types.AssistantMessage{
+					Role:       "assistant",
+					ProviderID: model.ProviderID,
+					Model:      model.ID,
+					StopReason: "toolUse",
+					Content: []types.ContentBlock{
+						&types.ToolCallContent{Type: "toolCall", ID: "tool-1", Name: "echo", Arguments: map[string]any{"value": "hi"}},
+					},
+					Timestamp: time.Now().UnixMilli(),
+				}
+			} else {
+				msg = &types.AssistantMessage{
+					Role:       "assistant",
+					ProviderID: model.ProviderID,
+					Model:      model.ID,
+					StopReason: "stop",
+					Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "done"}},
+					Timestamp:  time.Now().UnixMilli(),
+				}
+			}
+			stream.Push(types.StreamEvent{Type: "done", Reason: msg.StopReason, Message: msg})
+			stream.Resolve(msg, nil)
+			stream.Close()
+		}()
+		return stream, nil
+	}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:         dir,
+		AgentDir:    agentDir,
+		Model:       model,
+		CustomTools: []agent.AgentTool{&testEchoTool{}},
+		GetAPIKey:   func(provider string) (string, error) { return "", nil },
+		StreamFn:    streamFn,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Prompt(context.Background(), "test"); err != nil {
+		t.Fatal(err)
+	}
+	artifactPath := filepath.Join(agentDir, "artifacts", "permission-latest.json")
+	data, err := os.ReadFile(artifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"event": "permission_denied"`) || !strings.Contains(string(data), `"tool": "echo"`) {
+		t.Fatalf("expected permission artifact, got %q", string(data))
+	}
+}
+
 func TestDefaultHarnessOutputsWorkWithoutManualSettings(t *testing.T) {
 	dir := t.TempDir()
 	agentDir := filepath.Join(dir, ".coding_agent")

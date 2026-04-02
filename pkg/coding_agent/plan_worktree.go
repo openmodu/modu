@@ -175,11 +175,14 @@ func (s *CodingSession) EnterWorktree() (string, error) {
 	}
 
 	s.originalCwd = s.cwd
+	oldCwd := s.cwd
 	s.worktreePath = path
 	s.cwd = path
 	s.refreshToolsForCwd(path)
 	s.worktreeMu.Unlock()
 	s.refreshDynamicSystemPrompt()
+	s.runHarnessWorktreeCreate(path)
+	s.runHarnessCwdChanged(oldCwd, path)
 	s.writeRuntimeState()
 	return path, nil
 }
@@ -198,12 +201,15 @@ func (s *CodingSession) ExitWorktree() error {
 	}
 	s.worktreePath = ""
 	if restore != "" {
+		oldCwd := s.cwd
 		s.cwd = restore
 		s.originalCwd = ""
 		s.refreshToolsForCwd(restore)
+		s.runHarnessCwdChanged(oldCwd, restore)
 	}
 	s.worktreeMu.Unlock()
 	s.refreshDynamicSystemPrompt()
+	s.runHarnessWorktreeRemove(path)
 	s.writeRuntimeState()
 	return nil
 }
@@ -235,6 +241,8 @@ func (s *CodingSession) refreshToolsForCwd(cwd string) {
 		switch tool.Name() {
 		case "read":
 			updated = append(updated, tools.NewReadTool(cwd))
+		case "git_preflight":
+			updated = append(updated, tools.NewGitPreflightTool(cwd))
 		case "write":
 			updated = append(updated, tools.NewWriteTool(cwd))
 		case "edit":

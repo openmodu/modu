@@ -89,6 +89,9 @@ func TestHandleSlashHarnessInspectionCommands(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(agentDir, "runtime", runtimeProjectKey, "actions", "tool_use", "latest.json"), []byte("{\"status\":\"ok\",\"stdout\":\"done\"}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(agentDir, "runtime", runtimeProjectKey, "index.json"), []byte("{\"last_events\":{\"session\":{\"event\":\"session_start\"},\"permission\":{\"event\":\"permission_denied\"}}}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
 		Cwd:       cwd,
@@ -104,7 +107,7 @@ func TestHandleSlashHarnessInspectionCommands(t *testing.T) {
 	renderer := tui.NewRenderer(&out)
 	renderer.SetNoColor(true)
 
-	for _, line := range []string{"/runtime", "/state", "/config", "/config-template", "/logs", "/artifacts", "/bridge", "/actions"} {
+	for _, line := range []string{"/runtime", "/git", "/dashboard", "/state", "/config", "/config-template", "/logs", "/artifacts", "/bridge", "/actions"} {
 		handled, shouldExit := handleSlash(context.Background(), line, session, renderer, testExampleModel(), nil)
 		if !handled || shouldExit {
 			t.Fatalf("expected %s to be handled without exit", line)
@@ -114,6 +117,9 @@ func TestHandleSlashHarnessInspectionCommands(t *testing.T) {
 	got := out.String()
 	for _, want := range []string{
 		"runtime paths:",
+		"git: not a repository",
+		"runtime dashboard:",
+		"latest events:",
 		"runtime state:",
 		"effective config:",
 		"default config template:",
@@ -127,6 +133,7 @@ func TestHandleSlashHarnessInspectionCommands(t *testing.T) {
 		filepath.Join(agentDir, "runtime", runtimeProjectKey, "actions", "tool_use", "latest.json"),
 		"preview: {\"event\":\"post_tool_use\",\"tool\":\"echo\"}",
 		"preview: {\"status\":\"ok\",\"stdout\":\"done\"}",
+		"session: {\"category\":\"session\",\"event\":\"session_start\",\"source\":\"startup\"}",
 		"- 1-post_tool_use.json",
 	} {
 		if !strings.Contains(got, want) {

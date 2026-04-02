@@ -59,6 +59,9 @@ type Config struct {
 
 	// Features controls higher-level runtime feature gates.
 	Features FeatureConfig `json:"features,omitempty"`
+
+	// Permissions controls host-side tool permission policy.
+	Permissions PermissionConfig `json:"permissions,omitempty"`
 }
 
 type FeatureConfig struct {
@@ -69,6 +72,13 @@ type FeatureConfig struct {
 	WorktreeMode      *bool `json:"worktreeMode,omitempty"`
 	SpawnSubagentTool *bool `json:"spawnSubagentTool,omitempty"`
 	HarnessActions    *bool `json:"harnessActions,omitempty"`
+}
+
+type PermissionConfig struct {
+	AllowTools        []string `json:"allowTools,omitempty"`
+	DenyTools         []string `json:"denyTools,omitempty"`
+	AllowBashPrefixes []string `json:"allowBashPrefixes,omitempty"`
+	DenyBashPrefixes  []string `json:"denyBashPrefixes,omitempty"`
 }
 
 type HarnessConfig struct {
@@ -93,27 +103,35 @@ type HarnessConfig struct {
 }
 
 type HarnessLogFiles struct {
-	ToolUse  string `json:"toolUse,omitempty"`
-	Compact  string `json:"compact,omitempty"`
-	Subagent string `json:"subagent,omitempty"`
+	ToolUse    string `json:"toolUse,omitempty"`
+	Compact    string `json:"compact,omitempty"`
+	Subagent   string `json:"subagent,omitempty"`
+	Session    string `json:"session,omitempty"`
+	Permission string `json:"permission,omitempty"`
 }
 
 type HarnessArtifactFiles struct {
-	ToolUse  string `json:"toolUse,omitempty"`
-	Compact  string `json:"compact,omitempty"`
-	Subagent string `json:"subagent,omitempty"`
+	ToolUse    string `json:"toolUse,omitempty"`
+	Compact    string `json:"compact,omitempty"`
+	Subagent   string `json:"subagent,omitempty"`
+	Session    string `json:"session,omitempty"`
+	Permission string `json:"permission,omitempty"`
 }
 
 type HarnessBridgeDirs struct {
-	ToolUse  string `json:"toolUse,omitempty"`
-	Compact  string `json:"compact,omitempty"`
-	Subagent string `json:"subagent,omitempty"`
+	ToolUse    string `json:"toolUse,omitempty"`
+	Compact    string `json:"compact,omitempty"`
+	Subagent   string `json:"subagent,omitempty"`
+	Session    string `json:"session,omitempty"`
+	Permission string `json:"permission,omitempty"`
 }
 
 type HarnessActions struct {
-	ToolUse  []HarnessAction `json:"toolUse,omitempty"`
-	Compact  []HarnessAction `json:"compact,omitempty"`
-	Subagent []HarnessAction `json:"subagent,omitempty"`
+	ToolUse    []HarnessAction `json:"toolUse,omitempty"`
+	Compact    []HarnessAction `json:"compact,omitempty"`
+	Subagent   []HarnessAction `json:"subagent,omitempty"`
+	Session    []HarnessAction `json:"session,omitempty"`
+	Permission []HarnessAction `json:"permission,omitempty"`
 }
 
 type HarnessAction struct {
@@ -178,19 +196,25 @@ func DefaultConfig() *Config {
 				RequireAbsoluteCommand: true,
 			},
 			LogFiles: HarnessLogFiles{
-				ToolUse:  "logs/tool-use.jsonl",
-				Compact:  "logs/compact.jsonl",
-				Subagent: "logs/subagent.jsonl",
+				ToolUse:    "logs/tool-use.jsonl",
+				Compact:    "logs/compact.jsonl",
+				Subagent:   "logs/subagent.jsonl",
+				Session:    "logs/session.jsonl",
+				Permission: "logs/permission.jsonl",
 			},
 			ArtifactFiles: HarnessArtifactFiles{
-				ToolUse:  "artifacts/tool-use-latest.json",
-				Compact:  "artifacts/compact-latest.json",
-				Subagent: "artifacts/subagent-latest.json",
+				ToolUse:    "artifacts/tool-use-latest.json",
+				Compact:    "artifacts/compact-latest.json",
+				Subagent:   "artifacts/subagent-latest.json",
+				Session:    "artifacts/session-latest.json",
+				Permission: "artifacts/permission-latest.json",
 			},
 			BridgeDirs: HarnessBridgeDirs{
-				ToolUse:  "bridge/tool-use",
-				Compact:  "bridge/compact",
-				Subagent: "bridge/subagent",
+				ToolUse:    "bridge/tool-use",
+				Compact:    "bridge/compact",
+				Subagent:   "bridge/subagent",
+				Session:    "bridge/session",
+				Permission: "bridge/permission",
 			},
 		},
 		Features: FeatureConfig{
@@ -202,6 +226,7 @@ func DefaultConfig() *Config {
 			SpawnSubagentTool: boolPtr(true),
 			HarnessActions:    boolPtr(true),
 		},
+		Permissions: PermissionConfig{},
 	}
 }
 

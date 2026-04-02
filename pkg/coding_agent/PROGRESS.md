@@ -82,6 +82,9 @@ High-priority gaps identified before this round:
 - Added per-action `onFailure` handling so failed actions can stop later actions in the same event batch.
 - Added unified runtime state snapshots under `runtime/<project>/state.json`.
 - Added top-level feature gates for core runtime capabilities such as memory, todos, task output, plan mode, worktree mode, subagents, and harness actions.
+- Added top-level permission rules for tool allow/deny and bash command prefix allow/deny.
+- Extended harness events and outputs with `session` and `permission` categories.
+- Added a dashboard view in `examples/modu_code` that summarizes runtime state, latest events, and action statuses.
 - Added subagent frontmatter support for `harness_block_tools` and merged it into effective tool blocking.
 - Added `examples/modu_code` inspection commands for harness hints and runtime paths.
 - Added `examples/modu_code` inspection commands for configured harness logs, latest artifacts, and bridge directories.
@@ -127,6 +130,7 @@ High-priority gaps identified before this round:
   action stop-on-failure flow
   runtime state snapshot persistence
   feature-gated tool registration
+  permission-rule-driven harness artifacts
   automatic safe harness defaults
   automatic settings bootstrap
   automatic action enablement with explicit opt-out

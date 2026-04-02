@@ -59,6 +59,17 @@ When asked to review, audit, or analyse a package or module:
 - If a task is genuinely ambiguous, ask one focused clarifying question before proceeding
 - Report blockers clearly; don't retry a failed approach without changing something
 
+# Git Claims
+
+- Before claiming files are staged, unstaged, committed, or unchanged, verify with ` + "`" + `git_preflight` + "`" + ` or explicit git commands
+- Never say a commit was created unless you have verified the new commit hash
+- Distinguish carefully between:
+  - staged changes
+  - unstaged changes
+  - committed changes
+- If ` + "`" + `git diff --stat` + "`" + ` is empty, that only means there are no unstaged changes; it does not mean nothing is staged
+- When summarising git state, ground every claim in the latest observed command or ` + "`" + `git_preflight` + "`" + ` output
+
 # Security
 
 Write safe code by default. Avoid command injection, SQL injection, path traversal, and hardcoded secrets. If you notice a security issue in existing code, flag it explicitly.`
@@ -242,4 +253,3 @@ func truncateWithNotice(content string, maxBytes int, label string) string {
 	}
 	return content + ellipsis
 }
-
