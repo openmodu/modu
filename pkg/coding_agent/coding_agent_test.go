@@ -1740,6 +1740,184 @@ func TestHarnessConfigAppendsEventLogs(t *testing.T) {
 	checkLog("logs/subagent.jsonl", `"name":"reviewer"`)
 }
 
+func TestHarnessConfigWritesLatestArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	if err := os.MkdirAll(filepath.Join(agentDir, "agents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "agents", "reviewer.md"), []byte("review stuff"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configContent := `{"harness":{"artifactFiles":{"toolUse":"artifacts/tool-use-latest.json","compact":"artifacts/compact-latest.json","subagent":"artifacts/subagent-latest.json"}}}`
+	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(configContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:         dir,
+		AgentDir:    agentDir,
+		Model:       newTestModel(),
+		CustomTools: []agent.AgentTool{&testEchoTool{}},
+		GetAPIKey:   func(provider string) (string, error) { return "", nil },
+		StreamFn: func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+			stream := types.NewEventStream()
+			go func() {
+				msg := &types.AssistantMessage{
+					Role:       "assistant",
+					ProviderID: "mock",
+					Model:      "mock",
+					StopReason: "stop",
+					Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "subagent ok"}},
+					Timestamp:  time.Now().UnixMilli(),
+				}
+				stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+				stream.Resolve(msg, nil)
+				stream.Close()
+			}()
+			return stream, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var echoTool, spawnTool agent.AgentTool
+	for _, tool := range session.GetAgent().GetState().Tools {
+		switch tool.Name() {
+		case "echo":
+			echoTool = tool
+		case "spawn_subagent":
+			spawnTool = tool
+		}
+	}
+	if echoTool == nil || spawnTool == nil {
+		t.Fatalf("expected echo and spawn_subagent, got %v", session.GetActiveToolNames())
+	}
+
+	if _, err := echoTool.Execute(context.Background(), "echo-artifact-1", map[string]any{"value": "ok"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "one"})
+	session.GetAgent().AppendMessage(types.AssistantMessage{Role: "assistant", Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "two"}}})
+	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "three"})
+	session.GetAgent().AppendMessage(types.AssistantMessage{Role: "assistant", Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "four"}}})
+	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "five"})
+	if err := session.Compact(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := spawnTool.Execute(context.Background(), "spawn-artifact-1", map[string]any{"name": "reviewer", "task": "check code"}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	checkArtifact := func(rel string, want string) {
+		data, err := os.ReadFile(filepath.Join(agentDir, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("expected %s artifact to contain %q, got %q", rel, want, string(data))
+		}
+	}
+	checkArtifact("artifacts/tool-use-latest.json", `"tool": "spawn_subagent"`)
+	checkArtifact("artifacts/compact-latest.json", `"event": "post_compact"`)
+	checkArtifact("artifacts/subagent-latest.json", `"event": "subagent_stop"`)
+}
+
+func TestHarnessConfigWritesEventBridgeFiles(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	if err := os.MkdirAll(filepath.Join(agentDir, "agents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "agents", "reviewer.md"), []byte("review stuff"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configContent := `{"harness":{"bridgeDirs":{"toolUse":"bridge/tool-use","compact":"bridge/compact","subagent":"bridge/subagent"}}}`
+	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(configContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:         dir,
+		AgentDir:    agentDir,
+		Model:       newTestModel(),
+		CustomTools: []agent.AgentTool{&testEchoTool{}},
+		GetAPIKey:   func(provider string) (string, error) { return "", nil },
+		StreamFn: func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+			stream := types.NewEventStream()
+			go func() {
+				msg := &types.AssistantMessage{
+					Role:       "assistant",
+					ProviderID: "mock",
+					Model:      "mock",
+					StopReason: "stop",
+					Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "subagent ok"}},
+					Timestamp:  time.Now().UnixMilli(),
+				}
+				stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+				stream.Resolve(msg, nil)
+				stream.Close()
+			}()
+			return stream, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var echoTool, spawnTool agent.AgentTool
+	for _, tool := range session.GetAgent().GetState().Tools {
+		switch tool.Name() {
+		case "echo":
+			echoTool = tool
+		case "spawn_subagent":
+			spawnTool = tool
+		}
+	}
+	if echoTool == nil || spawnTool == nil {
+		t.Fatalf("expected echo and spawn_subagent, got %v", session.GetActiveToolNames())
+	}
+
+	if _, err := echoTool.Execute(context.Background(), "echo-bridge-1", map[string]any{"value": "ok"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "one"})
+	session.GetAgent().AppendMessage(types.AssistantMessage{Role: "assistant", Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "two"}}})
+	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "three"})
+	session.GetAgent().AppendMessage(types.AssistantMessage{Role: "assistant", Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "four"}}})
+	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "five"})
+	if err := session.Compact(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := spawnTool.Execute(context.Background(), "spawn-bridge-1", map[string]any{"name": "reviewer", "task": "check code"}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	checkBridge := func(rel string, want string) {
+		entries, err := os.ReadDir(filepath.Join(agentDir, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) == 0 {
+			t.Fatalf("expected bridge events in %s", rel)
+		}
+		for _, entry := range entries {
+			data, err := os.ReadFile(filepath.Join(agentDir, rel, entry.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(data), want) {
+				return
+			}
+		}
+		t.Fatalf("expected %s bridge events to contain %q", rel, want)
+	}
+	checkBridge("bridge/tool-use", `"tool":"spawn_subagent"`)
+	checkBridge("bridge/compact", `"event":"post_compact"`)
+	checkBridge("bridge/subagent", `"event":"subagent_stop"`)
+}
+
 func TestHandleToolExecutionEndQueuesNestedContextForDeeperPath(t *testing.T) {
 	root := t.TempDir()
 	cwd := filepath.Join(root, "repo")

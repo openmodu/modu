@@ -432,6 +432,30 @@ func handleSlash(ctx context.Context, line string, session *coding_agent.CodingS
 		r.PrintInfo("  project_memory: " + paths.ProjectMemoryDir)
 		return true, false
 
+	case "logs":
+		printHarnessTargets(r, "harness log files", session, map[string]string{
+			"tool_use": session.GetConfig().Harness.LogFiles.ToolUse,
+			"compact":  session.GetConfig().Harness.LogFiles.Compact,
+			"subagent": session.GetConfig().Harness.LogFiles.Subagent,
+		}, false)
+		return true, false
+
+	case "artifacts":
+		printHarnessTargets(r, "harness artifact files", session, map[string]string{
+			"tool_use": session.GetConfig().Harness.ArtifactFiles.ToolUse,
+			"compact":  session.GetConfig().Harness.ArtifactFiles.Compact,
+			"subagent": session.GetConfig().Harness.ArtifactFiles.Subagent,
+		}, false)
+		return true, false
+
+	case "bridge":
+		printHarnessTargets(r, "harness bridge directories", session, map[string]string{
+			"tool_use": session.GetConfig().Harness.BridgeDirs.ToolUse,
+			"compact":  session.GetConfig().Harness.BridgeDirs.Compact,
+			"subagent": session.GetConfig().Harness.BridgeDirs.Subagent,
+		}, true)
+		return true, false
+
 	case "plan":
 		arg := ""
 		if len(parts) > 1 {
@@ -580,6 +604,9 @@ func printHelp(r *tui.Renderer) {
 		"  /tasks              — show background subagent tasks",
 		"  /hints              — show pending harness-only hints",
 		"  /runtime            — show harness runtime paths",
+		"  /logs               — show configured harness JSONL logs",
+		"  /artifacts          — show configured harness latest snapshots",
+		"  /bridge             — show configured harness event bridge dirs",
 		"  /plan [on|off]      — inspect or toggle plan mode",
 		"  /worktree [on|off]  — inspect or toggle isolated worktree mode",
 		"  /skills             — list available skills",
@@ -601,6 +628,73 @@ func printHelp(r *tui.Renderer) {
 	for _, l := range lines {
 		r.PrintInfo(l)
 	}
+}
+
+func printHarnessTargets(r *tui.Renderer, title string, session *coding_agent.CodingSession, targets map[string]string, dirMode bool) {
+	r.PrintInfo(title + ":")
+	keys := make([]string, 0, len(targets))
+	for key := range targets {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	seenAny := false
+	for _, key := range keys {
+		target := strings.TrimSpace(targets[key])
+		if target == "" {
+			continue
+		}
+		seenAny = true
+		abs := target
+		if !filepath.IsAbs(abs) {
+			abs = filepath.Join(session.RuntimePaths().Root, abs)
+		}
+		r.PrintInfo("  " + key + ": " + abs)
+		if dirMode {
+			printRecentDirEntries(r, abs)
+		} else {
+			printFilePreview(r, abs)
+		}
+	}
+	if !seenAny {
+		r.PrintInfo("  (not configured)")
+	}
+}
+
+func printRecentDirEntries(r *tui.Renderer, dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		r.PrintInfo("    status: " + err.Error())
+		return
+	}
+	if len(entries) == 0 {
+		r.PrintInfo("    status: empty")
+		return
+	}
+	count := len(entries)
+	if count > 5 {
+		count = 5
+	}
+	start := len(entries) - count
+	for _, entry := range entries[start:] {
+		r.PrintInfo("    - " + entry.Name())
+	}
+}
+
+func printFilePreview(r *tui.Renderer, path string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		r.PrintInfo("    status: " + err.Error())
+		return
+	}
+	text := strings.TrimSpace(string(data))
+	if text == "" {
+		r.PrintInfo("    status: empty")
+		return
+	}
+	if len(text) > 160 {
+		text = text[:160] + "..."
+	}
+	r.PrintInfo("    preview: " + text)
 }
 
 func locateExampleDir() string {

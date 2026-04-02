@@ -60,8 +60,13 @@ High-priority gaps identified before this round:
 - Added `settings.json`-driven harness policy for blocking tools before execution.
 - Added `settings.json`-driven toggles for harness hint capture and tool-result artifact persistence.
 - Added `settings.json`-driven JSONL event logging for tool-use, compaction, and subagent lifecycle events.
+- Added `settings.json`-driven latest-artifact fan-out for tool-use, compaction, and subagent lifecycle snapshots.
+- Added `settings.json`-driven bridge directories that emit one structured JSON file per tool-use, compaction, and subagent lifecycle event.
 - Added subagent frontmatter support for `harness_block_tools` and merged it into effective tool blocking.
 - Added `examples/modu_code` inspection commands for harness hints and runtime paths.
+- Added `examples/modu_code` inspection commands for configured harness logs, latest artifacts, and bridge directories.
+- Added `examples/modu_code` command-level tests that exercise `/runtime`, `/logs`, `/artifacts`, and `/bridge` through the real slash-command path.
+- Added `examples/modu_code` smoke tests for print-mode output and rpc-mode request/response flow.
 - Added focused tests for:
   session persistence after prompt/tool execution
   isolated slash-skill execution
@@ -85,6 +90,8 @@ High-priority gaps identified before this round:
   config-driven harness tool blocking
   config-driven disabling of harness hint capture and tool-result persistence
   config-driven harness JSONL event logging
+  config-driven latest artifact snapshot files
+  config-driven event bridge directories
   subagent frontmatter parsing for `harness_block_tools`
 
 ## Still Missing
@@ -97,4 +104,4 @@ High-priority gaps identified before this round:
 
 1. Improve plan/worktree semantics beyond the current minimal implementation.
 2. Expand integration coverage around background tasks, tool replacement, and session switching.
-3. Add configurable hook actions beyond blocking and file append, such as host command dispatch or structured artifact fan-out.
+3. Add configurable hook actions beyond blocking and file output, such as host command dispatch or direct IPC delivery.

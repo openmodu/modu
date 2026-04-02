@@ -109,6 +109,8 @@ func (s *CodingSession) installConfigHarnessHooks() {
 		blocked = nil
 	}
 	logFiles := s.config.Harness.LogFiles
+	artifactFiles := s.config.Harness.ArtifactFiles
+	bridgeDirs := s.config.Harness.BridgeDirs
 	s.RegisterHarnessHook(HarnessHook{
 		PreToolUse: func(call HarnessToolCall) error {
 			if len(blocked) > 0 {
@@ -119,29 +121,22 @@ func (s *CodingSession) installConfigHarnessHooks() {
 			return nil
 		},
 		PostToolUse: func(call HarnessToolCall, result agent.AgentToolResult, err error) {
-			if logFiles.ToolUse == "" {
-				return
-			}
-			s.appendHarnessLog(logFiles.ToolUse, map[string]any{
+			entry := map[string]any{
 				"event": "post_tool_use",
 				"tool":  call.ToolName,
 				"args":  call.Args,
 				"error": errString(err),
-			})
+			}
+			s.emitHarnessRecord(logFiles.ToolUse, artifactFiles.ToolUse, bridgeDirs.ToolUse, entry)
 		},
 		PreCompact: func(messageCount int) error {
-			if logFiles.Compact != "" {
-				s.appendHarnessLog(logFiles.Compact, map[string]any{
-					"event":         "pre_compact",
-					"message_count": messageCount,
-				})
-			}
+			s.emitHarnessRecord(logFiles.Compact, artifactFiles.Compact, bridgeDirs.Compact, map[string]any{
+				"event":         "pre_compact",
+				"message_count": messageCount,
+			})
 			return nil
 		},
 		PostCompact: func(result *compaction.Result, err error) {
-			if logFiles.Compact == "" {
-				return
-			}
 			entry := map[string]any{
 				"event": "post_compact",
 				"error": errString(err),
@@ -150,13 +145,10 @@ func (s *CodingSession) installConfigHarnessHooks() {
 				entry["original_count"] = result.OriginalCount
 				entry["new_count"] = result.NewCount
 			}
-			s.appendHarnessLog(logFiles.Compact, entry)
+			s.emitHarnessRecord(logFiles.Compact, artifactFiles.Compact, bridgeDirs.Compact, entry)
 		},
 		SubagentStart: func(run HarnessSubagentRun) {
-			if logFiles.Subagent == "" {
-				return
-			}
-			s.appendHarnessLog(logFiles.Subagent, map[string]any{
+			s.emitHarnessRecord(logFiles.Subagent, artifactFiles.Subagent, bridgeDirs.Subagent, map[string]any{
 				"event":      "subagent_start",
 				"name":       run.Name,
 				"task":       run.Task,
@@ -164,10 +156,7 @@ func (s *CodingSession) installConfigHarnessHooks() {
 			})
 		},
 		SubagentStop: func(run HarnessSubagentRun, result string, err error) {
-			if logFiles.Subagent == "" {
-				return
-			}
-			s.appendHarnessLog(logFiles.Subagent, map[string]any{
+			s.emitHarnessRecord(logFiles.Subagent, artifactFiles.Subagent, bridgeDirs.Subagent, map[string]any{
 				"event":      "subagent_stop",
 				"name":       run.Name,
 				"task":       run.Task,
@@ -484,6 +473,82 @@ func (s *CodingSession) appendHarnessLog(target string, entry map[string]any) {
 	}
 	defer f.Close()
 	_, _ = f.Write(append(data, '\n'))
+}
+
+func (s *CodingSession) writeHarnessArtifact(target string, entry map[string]any) {
+	path := strings.TrimSpace(target)
+	if path == "" {
+		return
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(s.agentDir, path)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	if entry == nil {
+		entry = make(map[string]any)
+	}
+	entry["timestamp"] = time.Now().UnixMilli()
+	data, err := json.MarshalIndent(entry, "", "  ")
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(path, append(data, '\n'), 0o600)
+}
+
+func (s *CodingSession) emitHarnessRecord(logTarget, artifactTarget, bridgeDir string, entry map[string]any) {
+	if strings.TrimSpace(logTarget) != "" {
+		s.appendHarnessLog(logTarget, cloneHarnessEntry(entry))
+	}
+	if strings.TrimSpace(artifactTarget) != "" {
+		s.writeHarnessArtifact(artifactTarget, cloneHarnessEntry(entry))
+	}
+	if strings.TrimSpace(bridgeDir) != "" {
+		s.writeHarnessBridgeEvent(bridgeDir, cloneHarnessEntry(entry))
+	}
+}
+
+func cloneHarnessEntry(entry map[string]any) map[string]any {
+	if entry == nil {
+		return nil
+	}
+	out := make(map[string]any, len(entry))
+	for k, v := range entry {
+		out[k] = v
+	}
+	return out
+}
+
+func (s *CodingSession) writeHarnessBridgeEvent(targetDir string, entry map[string]any) {
+	dir := strings.TrimSpace(targetDir)
+	if dir == "" {
+		return
+	}
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(s.agentDir, dir)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	if entry == nil {
+		entry = make(map[string]any)
+	}
+	ts := time.Now().UnixMilli()
+	entry["timestamp"] = ts
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return
+	}
+	name := fmt.Sprintf("%d-%s.json", ts, sanitizeArtifactName(firstNonEmpty(asString(entry["event"]), "event")))
+	_ = os.WriteFile(filepath.Join(dir, name), append(data, '\n'), 0o600)
+}
+
+func asString(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
 }
 
 func errString(err error) string {

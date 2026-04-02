@@ -65,9 +65,25 @@ type HarnessConfig struct {
 	PersistToolResults *bool `json:"persistToolResults,omitempty"`
 	// LogFiles appends JSONL event records for selected harness lifecycle events.
 	LogFiles HarnessLogFiles `json:"logFiles,omitempty"`
+	// ArtifactFiles overwrites the latest structured event snapshot for selected lifecycle events.
+	ArtifactFiles HarnessArtifactFiles `json:"artifactFiles,omitempty"`
+	// BridgeDirs writes one structured event file per occurrence for external watchers.
+	BridgeDirs HarnessBridgeDirs `json:"bridgeDirs,omitempty"`
 }
 
 type HarnessLogFiles struct {
+	ToolUse  string `json:"toolUse,omitempty"`
+	Compact  string `json:"compact,omitempty"`
+	Subagent string `json:"subagent,omitempty"`
+}
+
+type HarnessArtifactFiles struct {
+	ToolUse  string `json:"toolUse,omitempty"`
+	Compact  string `json:"compact,omitempty"`
+	Subagent string `json:"subagent,omitempty"`
+}
+
+type HarnessBridgeDirs struct {
 	ToolUse  string `json:"toolUse,omitempty"`
 	Compact  string `json:"compact,omitempty"`
 	Subagent string `json:"subagent,omitempty"`
