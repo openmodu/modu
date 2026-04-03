@@ -256,13 +256,13 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.refreshViewport()
-		if !m.approvalCmdStarted && m.approvalCh != nil {
-			m.approvalCmdStarted = true
-			return m, m.waitApprovalCmd()
-		}
 		if m.state == uiStateInit {
 			m.state = uiStateInput
 			m.input.Focus()
+		}
+		if !m.approvalCmdStarted && m.approvalCh != nil {
+			m.approvalCmdStarted = true
+			return m, m.waitApprovalCmd()
 		}
 		return m, nil
 
