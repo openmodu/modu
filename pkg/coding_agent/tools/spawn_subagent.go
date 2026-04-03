@@ -27,6 +27,12 @@ type SpawnSubagentTool struct {
 	streamFn   agent.StreamFn
 	prepareDef func(*subagent.SubagentDefinition) *subagent.SubagentDefinition
 	taskStore  BackgroundTaskStore
+	observer   SubagentLifecycleObserver
+}
+
+type SubagentLifecycleObserver interface {
+	OnSubagentStart(name, task string, background bool)
+	OnSubagentStop(name, task string, background bool, result string, err error)
 }
 
 // NewSpawnSubagentTool creates a SpawnSubagentTool.
@@ -40,6 +46,7 @@ func NewSpawnSubagentTool(
 	streamFn agent.StreamFn,
 	prepareDef func(*subagent.SubagentDefinition) *subagent.SubagentDefinition,
 	taskStore BackgroundTaskStore,
+	observer SubagentLifecycleObserver,
 ) *SpawnSubagentTool {
 	return &SpawnSubagentTool{
 		cwd:        cwd,
@@ -51,6 +58,7 @@ func NewSpawnSubagentTool(
 		streamFn:   streamFn,
 		prepareDef: prepareDef,
 		taskStore:  taskStore,
+		observer:   observer,
 	}
 }
 
@@ -131,7 +139,13 @@ func (t *SpawnSubagentTool) runBackground(ctx context.Context, def *subagent.Sub
 	}
 	taskID := t.taskStore.Create("subagent", fmt.Sprintf("%s: %s", name, task))
 	go func() {
+		if t.observer != nil {
+			t.observer.OnSubagentStart(name, task, true)
+		}
 		result, err := t.runSubagent(context.Background(), def, task)
+		if t.observer != nil {
+			t.observer.OnSubagentStop(name, task, true, result, err)
+		}
 		if err != nil {
 			t.taskStore.Fail(taskID, err.Error())
 			return
@@ -153,10 +167,21 @@ func (t *SpawnSubagentTool) runBackground(ctx context.Context, def *subagent.Sub
 }
 
 func (t *SpawnSubagentTool) runSubagent(ctx context.Context, def *subagent.SubagentDefinition, task string) (string, error) {
-	if def != nil && strings.EqualFold(def.Isolation, "worktree") {
-		return t.runInWorktree(ctx, def, task)
+	if t.observer != nil && def != nil && !def.Background {
+		t.observer.OnSubagentStart(def.Name, task, false)
 	}
-	return subagent.Run(ctx, def, task, t.allTools, t.model, t.getAPIKey, t.streamFn)
+	if def != nil && strings.EqualFold(def.Isolation, "worktree") {
+		result, err := t.runInWorktree(ctx, def, task)
+		if t.observer != nil && def != nil && !def.Background {
+			t.observer.OnSubagentStop(def.Name, task, false, result, err)
+		}
+		return result, err
+	}
+	result, err := subagent.Run(ctx, def, task, t.allTools, t.model, t.getAPIKey, t.streamFn)
+	if t.observer != nil && def != nil && !def.Background {
+		t.observer.OnSubagentStop(def.Name, task, false, result, err)
+	}
+	return result, err
 }
 
 func (t *SpawnSubagentTool) runInWorktree(ctx context.Context, def *subagent.SubagentDefinition, task string) (string, error) {

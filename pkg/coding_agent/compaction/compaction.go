@@ -48,6 +48,8 @@ Be specific about technical details. The summary will be used to continue the co
 
 Format as a structured summary with clear sections.`
 
+const previousConversationSummaryPrefix = "[Previous Conversation Summary]"
+
 // ExtractFileOperations inspects messages to find which files were read or modified
 // using tools, and recursively extracts these from past summary blocks.
 func ExtractFileOperations(messages []types.AgentMessage) ([]string, []string) {
@@ -124,7 +126,7 @@ func ExtractFileOperations(messages []types.AgentMessage) ([]string, []string) {
 }
 
 func parseUserMessageText(readSet, modifiedSet *map[string]bool, text string) {
-	if !strings.HasPrefix(text, "[Previous Conversation Summary]") {
+	if !strings.HasPrefix(text, previousConversationSummaryPrefix) {
 		return
 	}
 	if matches := readFilesRegex.FindStringSubmatch(text); len(matches) > 1 {
@@ -167,16 +169,17 @@ func Compact(ctx context.Context, messages []types.AgentMessage, opts Options) (
 	// Split messages into those to compact and those to preserve
 	toCompact := messages[:len(messages)-preserve]
 	toPreserve := messages[len(messages)-preserve:]
+	priorSummary, summaryFreeMessages := flattenPreviousSummaries(toCompact)
 
 	// Build a text representation of messages to compact
 	var sb strings.Builder
-	for _, msg := range toCompact {
+	for _, msg := range summaryFreeMessages {
 		sb.WriteString(formatMessageForSummary(msg))
 		sb.WriteString("\n\n")
 	}
 
 	// Generate summary using LLM
-	summary, err := generateSummary(ctx, sb.String(), opts)
+	summary, err := generateSummary(ctx, priorSummary, sb.String(), opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate compaction summary: %w", err)
 	}
@@ -186,7 +189,7 @@ func Compact(ctx context.Context, messages []types.AgentMessage, opts Options) (
 
 	// Combine summary with tracked files
 	var parts []string
-	parts = append(parts, "[Previous Conversation Summary]\n\n"+summary)
+	parts = append(parts, previousConversationSummaryPrefix+"\n\n"+summary)
 	if len(readFiles) > 0 {
 		parts = append(parts, fmt.Sprintf("<read-files>\n%s\n</read-files>", strings.Join(readFiles, "\n")))
 	}
@@ -217,13 +220,14 @@ func Compact(ctx context.Context, messages []types.AgentMessage, opts Options) (
 	}, nil
 }
 
-func generateSummary(ctx context.Context, conversationText string, opts Options) (string, error) {
+func generateSummary(ctx context.Context, priorSummary, conversationText string, opts Options) (string, error) {
+	promptBody := buildSummaryPromptInput(priorSummary, conversationText)
 	if opts.StreamFn == nil || opts.Model == nil {
 		// Fallback: simple truncation without LLM
-		if len(conversationText) > 2000 {
-			return conversationText[:2000] + "\n\n... (truncated)", nil
+		if len(promptBody) > 2000 {
+			return promptBody[:2000] + "\n\n... (truncated)", nil
 		}
-		return conversationText, nil
+		return promptBody, nil
 	}
 
 	summaryCtx := &types.LLMContext{
@@ -231,7 +235,7 @@ func generateSummary(ctx context.Context, conversationText string, opts Options)
 		Messages: []types.AgentMessage{
 			types.UserMessage{
 				Role:    "user",
-				Content: "Please summarize this conversation:\n\n" + conversationText,
+				Content: "Please summarize this conversation:\n\n" + promptBody,
 			},
 		},
 	}
@@ -272,6 +276,77 @@ func generateSummary(ctx context.Context, conversationText string, opts Options)
 	}
 
 	return strings.TrimSpace(summary.String()), nil
+}
+
+func buildSummaryPromptInput(priorSummary, conversationText string) string {
+	var parts []string
+	if strings.TrimSpace(priorSummary) != "" {
+		parts = append(parts, "Existing summary context:\n"+strings.TrimSpace(priorSummary))
+	}
+	if strings.TrimSpace(conversationText) != "" {
+		parts = append(parts, "New conversation since that summary:\n"+strings.TrimSpace(conversationText))
+	}
+	if len(parts) == 0 {
+		return "No conversation content available."
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func flattenPreviousSummaries(messages []types.AgentMessage) (string, []types.AgentMessage) {
+	var summaries []string
+	remaining := make([]types.AgentMessage, 0, len(messages))
+	for _, msg := range messages {
+		summaryText, ok := extractPreviousSummaryText(msg)
+		if ok {
+			if summaryText != "" {
+				summaries = append(summaries, summaryText)
+			}
+			continue
+		}
+		remaining = append(remaining, msg)
+	}
+	return strings.TrimSpace(strings.Join(summaries, "\n\n")), remaining
+}
+
+func extractPreviousSummaryText(msg types.AgentMessage) (string, bool) {
+	switch m := msg.(type) {
+	case types.UserMessage:
+		return extractPreviousSummaryFromContent(m.Content)
+	case *types.UserMessage:
+		return extractPreviousSummaryFromContent(m.Content)
+	default:
+		return "", false
+	}
+}
+
+func extractPreviousSummaryFromContent(content any) (string, bool) {
+	switch c := content.(type) {
+	case string:
+		return parsePreviousSummaryText(c)
+	case []types.ContentBlock:
+		for _, block := range c {
+			if tc, ok := block.(*types.TextContent); ok {
+				if summary, found := parsePreviousSummaryText(tc.Text); found {
+					return summary, true
+				}
+			}
+		}
+	}
+	return "", false
+}
+
+func parsePreviousSummaryText(text string) (string, bool) {
+	if !strings.HasPrefix(text, previousConversationSummaryPrefix) {
+		return "", false
+	}
+	body := strings.TrimSpace(strings.TrimPrefix(text, previousConversationSummaryPrefix))
+	if idx := strings.Index(body, "\n<read-files>"); idx >= 0 {
+		body = body[:idx]
+	}
+	if idx := strings.Index(body, "\n<modified-files>"); idx >= 0 {
+		body = body[:idx]
+	}
+	return strings.TrimSpace(body), true
 }
 
 func formatMessageForSummary(msg types.AgentMessage) string {

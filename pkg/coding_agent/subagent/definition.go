@@ -11,22 +11,23 @@ import (
 
 // SubagentDefinition holds the parsed metadata and system prompt for a subagent.
 type SubagentDefinition struct {
-	Name            string
-	Description     string
-	Tools           []string // tool names to allow; empty = no tools
-	DisallowedTools []string // tool names to remove after allow-list resolution
-	Skills          []string
-	MemoryScope     string
-	PermissionMode  string
-	Background      bool
-	Effort          string
-	Isolation       string
-	Model           string // optional model ID override
-	ThinkingLevel   agent.ThinkingLevel
-	MaxTurns        int
-	SystemPrompt    string
-	FilePath        string
-	Source          string // "user" or "project"
+	Name              string
+	Description       string
+	Tools             []string // tool names to allow; empty = no tools
+	DisallowedTools   []string // tool names to remove after allow-list resolution
+	HarnessBlockTools []string
+	Skills            []string
+	MemoryScope       string
+	PermissionMode    string
+	Background        bool
+	Effort            string
+	Isolation         string
+	Model             string // optional model ID override
+	ThinkingLevel     agent.ThinkingLevel
+	MaxTurns          int
+	SystemPrompt      string
+	FilePath          string
+	Source            string // "user" or "project"
 }
 
 // ParseDefinition reads a markdown file and parses its YAML frontmatter into a
@@ -85,6 +86,8 @@ func parseFrontmatter(fm string, def *SubagentDefinition) {
 			def.Tools = appendCSV(def.Tools, value)
 		case "disallowed_tools", "disallowed-tools":
 			def.DisallowedTools = appendCSV(def.DisallowedTools, value)
+		case "harness_block_tools", "harness-block-tools":
+			def.HarnessBlockTools = appendCSV(def.HarnessBlockTools, value)
 		case "skills":
 			def.Skills = appendCSV(def.Skills, value)
 		case "memory", "memory_scope", "memory-scope":

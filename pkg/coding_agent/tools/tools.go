@@ -8,6 +8,7 @@ import (
 func CodingTools(cwd string) []agent.AgentTool {
 	return []agent.AgentTool{
 		NewReadTool(cwd),
+		NewGitPreflightTool(cwd),
 		NewBashTool(cwd),
 		NewEditTool(cwd),
 		NewWriteTool(cwd),
@@ -18,6 +19,7 @@ func CodingTools(cwd string) []agent.AgentTool {
 func ReadOnlyTools(cwd string) []agent.AgentTool {
 	return []agent.AgentTool{
 		NewReadTool(cwd),
+		NewGitPreflightTool(cwd),
 		NewGrepTool(cwd),
 		NewFindTool(cwd),
 		NewLsTool(cwd),
@@ -25,14 +27,16 @@ func ReadOnlyTools(cwd string) []agent.AgentTool {
 }
 
 // AllTools returns all available tools.
+// ls is intentionally excluded: bash covers it, and removing it
+// keeps the tool list lean for better model latency.
 func AllTools(cwd string) []agent.AgentTool {
 	return []agent.AgentTool{
 		NewReadTool(cwd),
+		NewGitPreflightTool(cwd),
 		NewWriteTool(cwd),
 		NewEditTool(cwd),
 		NewBashTool(cwd),
 		NewGrepTool(cwd),
 		NewFindTool(cwd),
-		NewLsTool(cwd),
 	}
 }

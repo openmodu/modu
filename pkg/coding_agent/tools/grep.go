@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/openmodu/modu/pkg/agent"
@@ -164,6 +165,10 @@ func (t *GrepTool) executeRipgrep(ctx context.Context, rgPath, pattern, searchPa
 		Content: []types.ContentBlock{
 			&types.TextContent{Type: "text", Text: result},
 		},
+		Details: map[string]any{
+			"path":          searchPath,
+			"matched_paths": extractMatchedPathsFromRipgrepOutput(output, searchPath),
+		},
 	}, nil
 }
 
@@ -182,6 +187,7 @@ func (t *GrepTool) executeBuiltin(ctx context.Context, pattern, searchPath, glob
 	}
 
 	var results []string
+	matchFiles := make(map[string]struct{})
 	matchCount := 0
 
 	err = filepath.Walk(searchPath, func(path string, info os.FileInfo, err error) error {
@@ -238,6 +244,7 @@ func (t *GrepTool) executeBuiltin(ctx context.Context, pattern, searchPath, glob
 				}
 				truncatedLine := TruncateLine(line, GrepMaxLineLen)
 				results = append(results, fmt.Sprintf("%s:%d:%s", relPath, lineNum, truncatedLine))
+				matchFiles[path] = struct{}{}
 			}
 		}
 
@@ -265,5 +272,49 @@ func (t *GrepTool) executeBuiltin(ctx context.Context, pattern, searchPath, glob
 		Content: []types.ContentBlock{
 			&types.TextContent{Type: "text", Text: text},
 		},
+		Details: map[string]any{
+			"path":          searchPath,
+			"matched_paths": sortedKeys(matchFiles, 20),
+		},
 	}, nil
+}
+
+func extractMatchedPathsFromRipgrepOutput(output []byte, searchPath string) []string {
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	seen := make(map[string]struct{})
+	var paths []string
+	for _, line := range lines {
+		if line == "" || strings.HasPrefix(line, "--") {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 3)
+		if len(parts) < 2 {
+			continue
+		}
+		path := parts[0]
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(searchPath, path)
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+		if len(paths) >= 20 {
+			break
+		}
+	}
+	return paths
+}
+
+func sortedKeys(set map[string]struct{}, limit int) []string {
+	keys := make([]string, 0, len(set))
+	for key := range set {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	if len(keys) > limit {
+		keys = keys[:limit]
+	}
+	return keys
 }

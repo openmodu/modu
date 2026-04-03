@@ -2,7 +2,9 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -423,7 +425,7 @@ func TestAllToolsCreation(t *testing.T) {
 		names[tool.Name()] = true
 	}
 
-	expected := []string{"read", "write", "edit", "bash", "grep", "find", "ls"}
+	expected := []string{"read", "git_preflight", "write", "edit", "bash", "grep", "find"}
 	for _, name := range expected {
 		if !names[name] {
 			t.Fatalf("missing tool: %s", name)
@@ -433,15 +435,67 @@ func TestAllToolsCreation(t *testing.T) {
 
 func TestCodingTools(t *testing.T) {
 	ct := CodingTools("/tmp")
-	if len(ct) != 4 {
-		t.Fatalf("expected 4 coding tools, got %d", len(ct))
+	if len(ct) != 5 {
+		t.Fatalf("expected 5 coding tools, got %d", len(ct))
 	}
 }
 
 func TestReadOnlyTools(t *testing.T) {
 	ro := ReadOnlyTools("/tmp")
-	if len(ro) != 4 {
-		t.Fatalf("expected 4 read-only tools, got %d", len(ro))
+	if len(ro) != 5 {
+		t.Fatalf("expected 5 read-only tools, got %d", len(ro))
+	}
+}
+
+func TestGitPreflightTool(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := t.TempDir()
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+		}
+	}
+	run("init")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "test")
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "a.txt")
+	run("commit", "-m", "init")
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("one\ntwo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "b.txt"), []byte("new\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "a.txt")
+
+	tool := NewGitPreflightTool(dir)
+	result, err := tool.Execute(context.Background(), "git-1", map[string]any{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state GitPreflightState
+	if err := json.Unmarshal([]byte(extractText(result.Content)), &state); err != nil {
+		t.Fatal(err)
+	}
+	if !state.InGitRepository || state.RepoRoot == "" {
+		t.Fatalf("unexpected git state: %#v", state)
+	}
+	if state.StagedStats.Files == 0 {
+		t.Fatalf("expected staged stats, got %#v", state.StagedStats)
+	}
+	if len(state.UntrackedFiles) != 1 || state.UntrackedFiles[0] != "b.txt" {
+		t.Fatalf("expected untracked b.txt, got %#v", state.UntrackedFiles)
+	}
+	if state.LastCommit == nil || state.LastCommit.Hash == "" {
+		t.Fatalf("expected last commit, got %#v", state.LastCommit)
 	}
 }
 

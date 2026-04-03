@@ -61,6 +61,10 @@ type Input struct {
 	boxDrawn bool
 }
 
+func (i *Input) decoratePrompt(prompt string) string {
+	return styled(i.noColor, ansiBrightBlack, "│ ") + prompt
+}
+
 // ApprovalRequest is sent on Input.ApprovalRequests when a tool needs user approval.
 type ApprovalRequest struct {
 	ToolName   string
@@ -578,8 +582,8 @@ func (i *Input) initLine(prompt string) {
 	}
 	sep := styled(i.noColor, ansiBrightBlack, strings.Repeat("─", sepW))
 
-	// Truncate the hint to fit in w columns so it never wraps either.
-	hintText := "  /help for commands · ctrl+c to interrupt"
+	// Truncate the hint to fit in w columns so it never wrap either.
+	hintText := "  /help commands · /dashboard runtime · ctrl+c interrupt"
 	if visibleLen(hintText) >= w {
 		// Keep as many runes as fit, leaving room for at least 1 column margin.
 		runes := []rune(hintText)
@@ -589,12 +593,14 @@ func (i *Input) initLine(prompt string) {
 		hintText = string(runes)
 	}
 	hint := styled(i.noColor, ansiDim, hintText)
+	promptLine := i.decoratePrompt(prompt)
+	cursorCol := visibleLen("│ ") + visibleLen(prompt)
 
 	// Print prompt line, separator, hint; then jump back up to the prompt row.
 	// Both sep and hint are guaranteed to fit in one terminal row (no wrapping),
 	// so \033[2A reliably moves back exactly 2 physical rows.
 	fmt.Fprintf(i.out, "%s\r\n%s\r\n%s\033[2A\r\033[%dC",
-		prompt, sep, hint, visibleLen(prompt))
+		promptLine, sep, hint, cursorCol)
 	i.boxDrawn = true
 }
 
@@ -638,7 +644,7 @@ func (i *Input) redrawContent(prompt string, ls *lineState) {
 		return
 	}
 	// Inline mode: \r to column 1, erase line, reprint prompt + buffer.
-	fmt.Fprintf(i.out, "\r\033[K%s%s", prompt, string(ls.buf))
+	fmt.Fprintf(i.out, "\r\033[K%s%s", i.decoratePrompt(prompt), string(ls.buf))
 	// Move cursor left to the correct position within the buffer.
 	tailCols := visibleLen(string(ls.buf[ls.cursor:]))
 	if tailCols > 0 {

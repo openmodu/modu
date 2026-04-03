@@ -14,6 +14,13 @@ import (
 	"github.com/openmodu/modu/pkg/types"
 )
 
+type telegramPrinter interface {
+	ClearLine()
+	PrintUser(string)
+	PrintInfo(string)
+	PrintError(error)
+}
+
 // startTelegramBackground launches the Telegram bot as a background goroutine
 // that shares the same CodingSession as the TUI. promptMu must be held by the
 // caller whenever session.Prompt() is called, preventing concurrent execution.
@@ -29,7 +36,7 @@ func startTelegramBackground(
 	token string,
 	attachDir string,
 	session *coding_agent.CodingSession,
-	renderer *tui.Renderer,
+	renderer telegramPrinter,
 	promptMu *sync.Mutex,
 	approvalCh chan tui.ApprovalRequest,
 ) (string, error) {
