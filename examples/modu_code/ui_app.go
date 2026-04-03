@@ -58,6 +58,7 @@ type uiBlock struct {
 	Kind      string
 	Title     string
 	Content   string
+	RawText   string
 	Thinking  string
 	Tools     []*uiToolState
 	Timestamp time.Time
@@ -401,10 +402,45 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case uiStatePermission:
 		return m.handlePermissionKey(msg)
 	case uiStateQuerying:
-		return m.handleScrollKey(msg)
+		return m.handleQueryingKey(msg)
 	default:
 		return m.handleInputKey(msg)
 	}
+}
+
+func (m *uiModel) handleQueryingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "pgup", "ctrl+b":
+		m.viewport.HalfViewUp()
+		m.userScrolled = true
+		return m, nil
+	case "pgdown", "ctrl+f":
+		m.viewport.HalfViewDown()
+		if m.viewport.AtBottom() {
+			m.userScrolled = false
+		}
+		return m, nil
+	case "home":
+		m.viewport.GotoTop()
+		m.userScrolled = true
+		return m, nil
+	case "end":
+		m.viewport.GotoBottom()
+		m.userScrolled = false
+		return m, nil
+	case "enter":
+		if strings.TrimSpace(m.input.RawValue()) != "" {
+			m.statusMsg = "busy: press ctrl+c to interrupt"
+		}
+		return m, nil
+	}
+
+	submitted, cmd := m.input.Update(msg)
+	if submitted {
+		return m, nil
+	}
+	m.updateSlashAutocomplete()
+	return m, cmd
 }
 
 func (m *uiModel) handleScrollKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -553,7 +589,7 @@ func (m *uiModel) submitLineCmd(line string) tea.Cmd {
 	m.appendBlock(uiBlock{Kind: "user", Content: line, Timestamp: time.Now()})
 	m.queryActive = true
 	m.state = uiStateQuerying
-	m.input.Blur()
+	m.input.Focus()
 	m.statusMsg = "thinking"
 	m.userScrolled = false
 	m.spinnerVerb = randomSpinnerVerb()
@@ -590,7 +626,12 @@ func (m *uiModel) handleAgentEvent(ev agent.AgentEvent) {
 			}
 		case types.EventTextDelta:
 			block := m.currentAssistantBlock()
-			block.Content += ev.StreamEvent.Delta
+			block.RawText += ev.StreamEvent.Delta
+			thinking, content := extractThinkText(block.RawText)
+			if thinking != "" {
+				block.Thinking = thinking
+			}
+			block.Content = content
 		}
 
 	case agent.EventTypeToolExecutionStart:
@@ -637,7 +678,12 @@ func (m *uiModel) handleAgentEvent(ev agent.AgentEvent) {
 				}
 			case *types.TextContent:
 				if c != nil && strings.TrimSpace(c.Text) != "" {
-					block.Content = c.Text
+					block.RawText = c.Text
+					thinking, content := extractThinkText(c.Text)
+					if thinking != "" {
+						block.Thinking = thinking
+					}
+					block.Content = content
 				}
 			}
 		}
@@ -657,12 +703,19 @@ func (m *uiModel) View() string {
 	}
 	var parts []string
 	parts = append(parts, m.renderHeader())
+	if meta := m.renderSessionMeta(); meta != "" {
+		parts = append(parts, meta)
+	}
 	parts = append(parts, m.viewport.View())
 	switch m.state {
 	case uiStatePermission:
 		parts = append(parts, m.renderPermissionPrompt())
 	case uiStateQuerying:
 		parts = append(parts, m.renderActivityLine())
+		if m.showSlash && len(m.slashMatches) > 0 {
+			parts = append(parts, m.renderSlashSuggestions())
+		}
+		parts = append(parts, m.renderInputArea())
 	case uiStateInit:
 		parts = append(parts, "  "+m.spinner.View()+" Initializing...")
 	default:
@@ -676,48 +729,58 @@ func (m *uiModel) View() string {
 }
 
 func (m *uiModel) renderHeader() string {
-	left := uiPrimaryText.Render(" ● modu_code")
-	model := uiMutedText.Render(" " + m.model.Name)
+	line := "  " + uiPrimaryText.Render("●") + " " + uiPrimaryText.Bold(true).Render("modu_code")
+	line += uiMutedText.Render("  " + m.model.Name)
 	if m.tgUsername != "" {
-		model += uiMutedText.Render("  @" + m.tgUsername)
+		line += uiMutedText.Render("  @" + m.tgUsername)
 	}
-	gap := max(1, m.width-lipgloss.Width(left+model))
-	return lipgloss.NewStyle().
-		Background(lipgloss.Color("#1a1b26")).
-		Foreground(uiMuted).
-		Width(m.width).
-		Render(left + model + strings.Repeat(" ", gap))
+	return lipgloss.NewStyle().Width(m.width).Render(line)
 }
 
-func (m *uiModel) renderStatusBar() string {
-	stats := m.session.GetSessionStats()
+func (m *uiModel) renderSessionMeta() string {
 	var parts []string
-	if stats.TotalTokens > 0 {
-		parts = append(parts, uiMutedText.Render(fmt.Sprintf("~%d tokens", stats.TotalTokens)))
-	}
-	if m.session.IsPlanMode() {
-		parts = append(parts, uiSecondaryText.Render("plan"))
-	}
-	if m.session.ActiveWorktree() != "" {
-		parts = append(parts, uiWarningText.Render("worktree"))
+	if m.session != nil {
+		stats := m.session.GetSessionStats()
+		if stats.TotalTokens > 0 {
+			parts = append(parts, uiMutedText.Render(fmt.Sprintf("~%d tokens", stats.TotalTokens)))
+		}
+		if m.session.IsPlanMode() {
+			parts = append(parts, uiSecondaryText.Render("plan"))
+		}
+		if m.session.ActiveWorktree() != "" {
+			parts = append(parts, uiWarningText.Render("worktree"))
+		}
 	}
 	if m.transcriptMode {
 		parts = append(parts, uiDimText.Render("expanded"))
 	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "    " + strings.Join(parts, uiDimText.Render(" · "))
+}
+
+func (m *uiModel) renderStatusBar() string {
+	var parts []string
 	if m.statusMsg != "" {
 		parts = append(parts, uiPrimaryText.Render(m.statusMsg))
 	}
 	if m.errMsg != "" {
 		parts = append(parts, uiErrorText.Render(m.errMsg))
 	}
-	left := strings.Join(parts, uiDimText.Render(" │ "))
-	right := uiDimText.Render(fmt.Sprintf(" %d%% ", int(m.viewport.ScrollPercent()*100)))
-	if m.viewport.AtBottom() {
+	left := strings.Join(parts, uiDimText.Render(" · "))
+	right := ""
+	if m.viewport.Height > 0 {
+		right = uiDimText.Render(fmt.Sprintf(" %d%% ", int(m.viewport.ScrollPercent()*100)))
+	}
+	if right != "" && m.viewport.AtBottom() {
 		right = ""
 	}
+	if len(parts) == 0 && right == "" {
+		return ""
+	}
 	gap := max(1, m.width-lipgloss.Width(left)-lipgloss.Width(right)-1)
-	return lipgloss.NewStyle().Background(lipgloss.Color("#1a1b26")).Width(m.width).PaddingLeft(1).
-		Render(left + strings.Repeat(" ", gap) + right)
+	return lipgloss.NewStyle().Width(m.width).PaddingLeft(1).Render(left + strings.Repeat(" ", gap) + right)
 }
 
 func (m *uiModel) renderActivityLine() string {
@@ -729,19 +792,21 @@ func (m *uiModel) renderActivityLine() string {
 	if label == "..." {
 		label = "Thinking..."
 	}
-	return "  " + m.spinner.View() + " " + uiPrimaryText.Render(label) + uiDimText.Render(elapsed)
+	return "  " + m.spinner.View() + " " + uiDimText.Render(label) + uiDimText.Render(elapsed)
 }
 
 func (m *uiModel) renderInputArea() string {
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(uiDim).
-		Render(m.input.View())
-	hint := uiDimText.Render("enter send  shift+enter newline  tab complete  ctrl+o expand  /help")
-	if m.errMsg != "" {
-		return uiErrorText.Render("  ✗ "+m.errMsg) + "\n" + box + "\n" + hint
+	box := lipgloss.NewStyle().PaddingLeft(1).Render(m.input.View())
+	hint := "enter send  shift+enter newline  tab complete  ctrl+o expand  /help"
+	if m.state == uiStateQuerying {
+		hint = "draft while waiting  enter waits  ctrl+c interrupt  shift+enter newline"
 	}
-	return box + "\n" + hint
+	hintText := uiDimText.Render(hint)
+	areaStyle := lipgloss.NewStyle().MarginTop(1)
+	if m.errMsg != "" {
+		return areaStyle.Render(uiErrorText.Render("  ! "+m.errMsg) + "\n" + box + "\n  " + hintText)
+	}
+	return areaStyle.Render(box + "\n  " + hintText)
 }
 
 func (m *uiModel) renderPermissionPrompt() string {
@@ -752,21 +817,15 @@ func (m *uiModel) renderPermissionPrompt() string {
 	if len(input) > 400 {
 		input = input[:400] + "..."
 	}
-	body := strings.Join([]string{
-		fmt.Sprintf("%s wants to execute:", uiPrimaryText.Bold(true).Render(m.pendingPerm.ToolName)),
-		"",
-		uiDimText.Render(input),
-		"",
-		uiSuccessText.Bold(true).Render("[Y]es") + "  " +
+	lines := []string{
+		fmt.Sprintf("  %s %s", uiWarningText.Render("●"), uiPrimaryText.Bold(true).Render(m.pendingPerm.ToolName)),
+		hookPad + uiDimText.Render(input),
+		dotPad + uiSuccessText.Bold(true).Render("[Y]es") + "  " +
 			uiErrorText.Render("[N]o") + "  " +
 			uiWarningText.Bold(true).Render("[A]lways allow") + "  " +
 			uiMutedText.Render("[D]eny always"),
-	}, "\n")
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(uiWarning).
-		Padding(0, 1).
-		Render(body)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m *uiModel) renderSlashSuggestions() string {
@@ -779,21 +838,16 @@ func (m *uiModel) renderSlashSuggestions() string {
 		cmd := m.slashMatches[i]
 		name := lipgloss.NewStyle().Bold(true).Foreground(uiSecondary).Render(cmd.Name)
 		desc := uiDimText.Render("  " + cmd.Description)
-		inner.WriteString(name + desc)
+		prefix := "  " + uiDimText.Render("·") + " "
+		inner.WriteString(prefix + name + desc)
 		if i < maxShow-1 {
 			inner.WriteString("\n")
 		}
 	}
 	if len(m.slashMatches) > maxShow {
-		inner.WriteString(fmt.Sprintf("\n%s", uiDimText.Render(fmt.Sprintf("  +%d more", len(m.slashMatches)-maxShow))))
+		inner.WriteString(fmt.Sprintf("\n  %s", uiDimText.Render(fmt.Sprintf("+%d more", len(m.slashMatches)-maxShow))))
 	}
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(uiDim).
-		Padding(0, 1).
-		MarginLeft(2).
-		Render(inner.String())
-	return box
+	return inner.String()
 }
 
 // ─── Viewport ────────────────────────────────────
@@ -814,6 +868,17 @@ func (m *uiModel) refreshViewport() {
 	}
 	m.viewport.GotoBottom()
 }
+
+// dotPadW is the visual cell-width of the "  ● " prefix (accounts for
+// ● being 2 cells in CJK terminals).
+var dotPadW = lipgloss.Width("  ● ")
+
+// dotPad is a pure-space indent that matches the dot-prefix width.
+var dotPad = strings.Repeat(" ", dotPadW)
+
+// hookPad uses "⎿" as a visual connector from the ● header to its body,
+// padded to the same width as dotPad so content stays aligned.
+var hookPad = "  " + uiDimText.Render("⎿") + strings.Repeat(" ", dotPadW-lipgloss.Width("  ⎿"))
 
 // ─── Conversation rendering ───────────────────────
 
@@ -844,9 +909,7 @@ func (m *uiModel) renderConversation() string {
 						content = strings.TrimSpace(rendered)
 					}
 				}
-				for _, line := range strings.Split(content, "\n") {
-					out.WriteString("  " + line + "\n")
-				}
+				out.WriteString(renderUIAssistantBlock(content))
 			}
 		case "tool":
 			for _, tool := range block.Tools {
@@ -865,14 +928,12 @@ func (m *uiModel) renderConversation() string {
 }
 
 func renderUIUserBlock(content string, width int) string {
+	_ = width
 	var b strings.Builder
-	sepWidth := min(max(18, width-8), 52)
-	b.WriteString(uiDimText.Render("  " + strings.Repeat("─", sepWidth)))
-	b.WriteString("\n")
 	for idx, line := range strings.Split(content, "\n") {
-		prefix := "    "
+		prefix := dotPad
 		if idx == 0 {
-			prefix = "  " + uiSecondaryText.Bold(true).Render(">") + " "
+			prefix = "  " + uiSecondaryText.Render("●") + " "
 		}
 		b.WriteString(prefix + line + "\n")
 	}
@@ -881,13 +942,38 @@ func renderUIUserBlock(content string, width int) string {
 
 func renderUIThinking(content string) string {
 	var b strings.Builder
-	b.WriteString("  " + uiSecondaryText.Render("✧ ") + uiDimText.Render("Thinking…") + "\n")
+	b.WriteString("  " + uiSecondaryText.Render("●") + " " + uiMutedText.Render("thinking") + "\n")
+	first := true
 	for _, line := range strings.Split(strings.TrimRight(content, "\n"), "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		b.WriteString(uiThinkText.Render("  ⎿  " + line))
-		b.WriteString("\n")
+		if first {
+			b.WriteString(hookPad + uiMutedText.Render(line) + "\n")
+			first = false
+		} else {
+			b.WriteString(dotPad + uiMutedText.Render(line) + "\n")
+		}
+	}
+	return b.String()
+}
+
+func renderUIAssistantBlock(content string) string {
+	var b strings.Builder
+	b.WriteString("  " + uiPrimaryText.Render("●") + " " + uiMutedText.Render("assistant") + "\n")
+	first := true
+	for _, line := range strings.Split(strings.TrimRight(content, "\n"), "\n") {
+		trimmed := strings.TrimLeft(line, " ")
+		if strings.TrimSpace(trimmed) == "" {
+			b.WriteString("\n")
+			continue
+		}
+		if first {
+			b.WriteString(hookPad + trimmed + "\n")
+			first = false
+		} else {
+			b.WriteString(dotPad + trimmed + "\n")
+		}
 	}
 	return b.String()
 }
@@ -896,13 +982,13 @@ func renderUITool(tool *uiToolState, expanded bool, width int) string {
 	var b strings.Builder
 	w := width
 
-	dot := uiPrimaryText.Render("⏺")
+	dot := uiPrimaryText.Render("●")
 	nameStyle := uiPrimaryText.Bold(true)
 	if tool.Status == "done" {
-		dot = uiSuccessText.Render("✓")
+		dot = uiSuccessText.Render("●")
 		nameStyle = uiSuccessText.Bold(true)
 	} else if tool.IsError || tool.Status == "error" {
-		dot = uiErrorText.Render("✗")
+		dot = uiErrorText.Render("●")
 		nameStyle = uiErrorText
 	}
 
@@ -913,18 +999,22 @@ func renderUITool(tool *uiToolState, expanded bool, width int) string {
 	b.WriteString(fmt.Sprintf("  %s %s%s\n", dot, nameStyle.Render(tool.Name), args))
 
 	if tool.Status == "running" {
-		b.WriteString("    " + uiDimText.Render("Running...") + "\n")
+		b.WriteString(hookPad + uiDimText.Render("running") + "\n")
 		return b.String()
 	}
 
 	if tool.IsError && tool.Output != "" {
 		errLines := strings.Split(tool.Output, "\n")
 		for i, line := range errLines {
+			pad := dotPad
+			if i == 0 {
+				pad = hookPad
+			}
 			if i >= 5 {
-				b.WriteString("    " + uiErrorText.Render(fmt.Sprintf("... +%d more lines", len(errLines)-5)) + "\n")
+				b.WriteString(dotPad + uiErrorText.Render(fmt.Sprintf("... +%d more lines", len(errLines)-5)) + "\n")
 				break
 			}
-			b.WriteString("    " + uiErrorText.Render(truncateUI(line, w-8)) + "\n")
+			b.WriteString(pad + uiErrorText.Render(truncateUI(line, w-8)) + "\n")
 		}
 		return b.String()
 	}
@@ -945,17 +1035,25 @@ func renderUIToolOutput(toolName, output string, expanded bool, w int) string {
 	collapsedMax := 3
 	expandedMax := 30
 
+	// padAt returns hookPad for the first line (idx==0), dotPad otherwise.
+	padAt := func(idx int) string {
+		if idx == 0 {
+			return hookPad
+		}
+		return dotPad
+	}
+
 	switch toolName {
 	case "read":
 		if !expanded {
-			b.WriteString(fmt.Sprintf("    ⎿ %s\n", uiDimText.Render(fmt.Sprintf("%d lines", total))))
+			b.WriteString(hookPad + uiDimText.Render(fmt.Sprintf("%d lines", total)) + "\n")
 		} else {
 			show := min(total, expandedMax)
 			for i := 0; i < show; i++ {
-				b.WriteString("    " + uiDimText.Render(truncateUI(lines[i], w-8)) + "\n")
+				b.WriteString(padAt(i) + uiDimText.Render(truncateUI(lines[i], w-8)) + "\n")
 			}
 			if total > show {
-				b.WriteString("    " + uiDimText.Render(fmt.Sprintf("... +%d lines", total-show)) + "\n")
+				b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d lines", total-show)) + "\n")
 			}
 		}
 
@@ -965,46 +1063,47 @@ func renderUIToolOutput(toolName, output string, expanded bool, w int) string {
 			show = expandedMax
 		}
 		if total <= show {
-			for _, line := range lines {
-				b.WriteString("    " + uiDimText.Render(truncateUI(line, w-8)) + "\n")
+			for i, line := range lines {
+				b.WriteString(padAt(i) + uiDimText.Render(truncateUI(line, w-8)) + "\n")
 			}
 		} else {
 			for i := 0; i < show; i++ {
-				b.WriteString("    " + uiDimText.Render(truncateUI(lines[i], w-8)) + "\n")
+				b.WriteString(padAt(i) + uiDimText.Render(truncateUI(lines[i], w-8)) + "\n")
 			}
-			b.WriteString("    " + uiDimText.Render(fmt.Sprintf("... +%d lines (ctrl+o to expand)", total-show)) + "\n")
+			b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d lines (ctrl+o to expand)", total-show)) + "\n")
 		}
 
 	case "edit":
 		if !expanded {
-			b.WriteString("    ⎿ " + uiSuccessText.Render("file updated") + "\n")
+			b.WriteString(hookPad + uiSuccessText.Render("updated") + "\n")
 		} else {
 			show := min(total, expandedMax)
 			for i := 0; i < show; i++ {
+				pad := padAt(i)
 				line := lines[i]
 				if strings.HasPrefix(line, "+") {
-					b.WriteString("    " + uiSuccessText.Render(truncateUI(line, w-8)) + "\n")
+					b.WriteString(pad + uiSuccessText.Render(truncateUI(line, w-8)) + "\n")
 				} else if strings.HasPrefix(line, "-") {
-					b.WriteString("    " + uiErrorText.Render(truncateUI(line, w-8)) + "\n")
+					b.WriteString(pad + uiErrorText.Render(truncateUI(line, w-8)) + "\n")
 				} else {
-					b.WriteString("    " + uiDimText.Render(truncateUI(line, w-8)) + "\n")
+					b.WriteString(pad + uiDimText.Render(truncateUI(line, w-8)) + "\n")
 				}
 			}
 			if total > show {
-				b.WriteString("    " + uiDimText.Render(fmt.Sprintf("... +%d lines", total-show)) + "\n")
+				b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d lines", total-show)) + "\n")
 			}
 		}
 
 	case "write":
 		if !expanded {
-			b.WriteString("    ⎿ " + uiSuccessText.Render("file written") + "\n")
+			b.WriteString(hookPad + uiSuccessText.Render("written") + "\n")
 		} else {
 			show := min(total, expandedMax)
 			for i := 0; i < show; i++ {
-				b.WriteString("    " + uiDimText.Render(truncateUI(lines[i], w-8)) + "\n")
+				b.WriteString(padAt(i) + uiDimText.Render(truncateUI(lines[i], w-8)) + "\n")
 			}
 			if total > show {
-				b.WriteString("    " + uiDimText.Render(fmt.Sprintf("... +%d lines", total-show)) + "\n")
+				b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d lines", total-show)) + "\n")
 			}
 		}
 
@@ -1014,14 +1113,14 @@ func renderUIToolOutput(toolName, output string, expanded bool, w int) string {
 			show = 30
 		}
 		if total <= show {
-			for _, line := range lines {
-				b.WriteString("    " + uiDimText.Render(truncateUI(line, w-8)) + "\n")
+			for i, line := range lines {
+				b.WriteString(padAt(i) + uiDimText.Render(truncateUI(line, w-8)) + "\n")
 			}
 		} else {
 			for i := 0; i < show; i++ {
-				b.WriteString("    " + uiDimText.Render(truncateUI(lines[i], w-8)) + "\n")
+				b.WriteString(padAt(i) + uiDimText.Render(truncateUI(lines[i], w-8)) + "\n")
 			}
-			b.WriteString("    " + uiDimText.Render(fmt.Sprintf("... +%d files", total-show)) + "\n")
+			b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d files", total-show)) + "\n")
 		}
 
 	case "grep":
@@ -1030,14 +1129,14 @@ func renderUIToolOutput(toolName, output string, expanded bool, w int) string {
 			show = 30
 		}
 		if total <= show {
-			for _, line := range lines {
-				b.WriteString("    " + uiDimText.Render(truncateUI(line, w-8)) + "\n")
+			for i, line := range lines {
+				b.WriteString(padAt(i) + uiDimText.Render(truncateUI(line, w-8)) + "\n")
 			}
 		} else {
 			for i := 0; i < show; i++ {
-				b.WriteString("    " + uiDimText.Render(truncateUI(lines[i], w-8)) + "\n")
+				b.WriteString(padAt(i) + uiDimText.Render(truncateUI(lines[i], w-8)) + "\n")
 			}
-			b.WriteString("    " + uiDimText.Render(fmt.Sprintf("... +%d matches", total-show)) + "\n")
+			b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d matches", total-show)) + "\n")
 		}
 
 	default:
@@ -1046,23 +1145,24 @@ func renderUIToolOutput(toolName, output string, expanded bool, w int) string {
 			show = expandedMax
 		}
 		if total <= show {
+			idx := 0
 			for _, line := range lines {
 				if line != "" {
-					b.WriteString("    ⎿ " + uiDimText.Render(truncateUI(line, w-10)) + "\n")
+					b.WriteString(padAt(idx) + uiDimText.Render(truncateUI(line, w-8)) + "\n")
+					idx++
 				}
 			}
 		} else {
-			b.WriteString("    ⎿ " + uiDimText.Render(truncateUI(lines[0], w-10)) + "\n")
-			b.WriteString("    " + uiDimText.Render(fmt.Sprintf("  ... +%d lines (ctrl+o to expand)", total-1)) + "\n")
+			b.WriteString(hookPad + uiDimText.Render(truncateUI(lines[0], w-8)) + "\n")
+			b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d lines (ctrl+o to expand)", total-1)) + "\n")
 		}
 	}
 	return b.String()
 }
 
 func renderUISection(title, content string, width int) string {
-	boxWidth := min(max(28, width-4), 96)
-	style := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(uiDim).Padding(0, 1).Width(boxWidth - 2)
-	return style.Render(uiPrimaryText.Render(title) + "\n" + content)
+	_ = width
+	return "  " + uiPrimaryText.Render(title) + "\n" + strings.TrimRight(content, "\n")
 }
 
 func (m *uiModel) renderWelcome() string {
@@ -1077,25 +1177,10 @@ func (m *uiModel) renderWelcome() string {
 
 	var b strings.Builder
 	b.WriteString("\n")
-	b.WriteString(p.Render("    ███╗   ███╗ ██████╗ ██████╗ ██╗   ██╗") + "\n")
-	b.WriteString(p.Render("    ████╗ ████║██╔═══██╗██╔══██╗██║   ██║") + "\n")
-	b.WriteString(p.Render("    ██╔████╔██║██║   ██║██║  ██║██║   ██║") + "\n")
-	b.WriteString(p.Render("    ██║╚██╔╝██║██║   ██║██║  ██║██║   ██║") + "\n")
-	b.WriteString(p.Render("    ██║ ╚═╝ ██║╚██████╔╝██████╔╝╚██████╔╝") + "\n")
-	b.WriteString(p.Render("    ╚═╝     ╚═╝ ╚═════╝ ╚═════╝  ╚═════╝ ") + uiSecondaryText.Bold(true).Render(" _code") + "\n")
+	b.WriteString("  " + p.Render("●") + " " + p.Bold(true).Render("modu_code") + mt.Render(" interactive coding session") + "\n")
+	b.WriteString(hookPad + mt.Render(fmt.Sprintf("cwd   %s", cwd)) + "\n")
+	b.WriteString(dotPad + mt.Render(fmt.Sprintf("model %s", m.model.Name)) + "\n")
 	b.WriteString("\n")
-	b.WriteString(mt.Render("    coding agent interactive console") + "\n")
-	b.WriteString("\n")
-	b.WriteString(mt.Render(fmt.Sprintf("    cwd    %s", cwd)) + "\n")
-	b.WriteString(mt.Render(fmt.Sprintf("    model  %s", m.model.Name)) + "\n")
-
-	b.WriteString("\n")
-	tipBorder := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(uiDim).
-		Padding(0, 1).
-		MarginLeft(3)
-
 	tips := d.Render("Enter") + mt.Render(" send") +
 		d.Render("  Shift+Enter") + mt.Render(" newline") +
 		d.Render("  Tab") + mt.Render(" complete") +
@@ -1106,7 +1191,9 @@ func (m *uiModel) renderWelcome() string {
 		d.Render("  Ctrl+L") + mt.Render(" clear") +
 		d.Render("  ! cmd") + mt.Render(" shell")
 
-	b.WriteString(tipBorder.Render(tips))
+	for _, line := range strings.Split(tips, "\n") {
+		b.WriteString("   " + line + "\n")
+	}
 	b.WriteString("\n\n")
 	return b.String()
 }
@@ -1356,6 +1443,76 @@ func formatUIDuration(d time.Duration) string {
 	return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
 }
 
+func extractThinkText(raw string) (thinking string, visible string) {
+	const openTag = "<think>"
+	const closeTag = "</think>"
+
+	var thinkParts []string
+	var visibleParts strings.Builder
+	rest := raw
+
+	for {
+		start := strings.Index(rest, openTag)
+		if start < 0 {
+			visibleParts.WriteString(rest)
+			break
+		}
+
+		visibleParts.WriteString(rest[:start])
+		rest = rest[start+len(openTag):]
+
+		end := strings.Index(rest, closeTag)
+		if end < 0 {
+			break
+		}
+
+		chunk := strings.TrimSpace(rest[:end])
+		if chunk != "" {
+			thinkParts = append(thinkParts, chunk)
+		}
+		rest = rest[end+len(closeTag):]
+	}
+
+	return strings.Join(thinkParts, "\n"), visibleParts.String()
+}
+
+func (m *uiModel) renderExitSessionMeta() string {
+	var parts []string
+	if m.session != nil {
+		stats := m.session.GetSessionStats()
+		if stats.TotalTokens > 0 {
+			parts = append(parts, fmt.Sprintf("~%d tokens", stats.TotalTokens))
+		}
+		if m.session.IsPlanMode() {
+			parts = append(parts, "plan")
+		}
+		if m.session.ActiveWorktree() != "" {
+			parts = append(parts, "worktree")
+		}
+	}
+	if m.transcriptMode {
+		parts = append(parts, "expanded")
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "session: " + strings.Join(parts, " | ")
+}
+
+func (m *uiModel) renderExitTranscript() string {
+	var parts []string
+	if meta := m.renderExitSessionMeta(); meta != "" {
+		parts = append(parts, meta)
+	}
+	if conv := m.renderConversation(); conv != "" {
+		parts = append(parts, conv)
+	}
+	if m.errMsg != "" {
+		parts = append(parts, uiErrorText.Render("  ! "+m.errMsg))
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n\n"))
+}
+
 // ─── Run ─────────────────────────────────────────
 
 func runInteractiveUI(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, mailboxRuntime *moduCodeMailboxRuntime, noApprove bool) error {
@@ -1419,6 +1576,11 @@ func runInteractiveUI(ctx context.Context, session *coding_agent.CodingSession, 
 		}
 	}
 
-	_, err := program.Run()
+	finalModel, err := program.Run()
+	if uiFinal, ok := finalModel.(*uiModel); ok && uiFinal != nil {
+		if transcript := strings.TrimSpace(uiFinal.renderExitTranscript()); transcript != "" {
+			fmt.Printf("\n%s\n", transcript)
+		}
+	}
 	return err
 }
