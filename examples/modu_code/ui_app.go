@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -12,7 +13,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
@@ -24,6 +24,8 @@ import (
 	"github.com/openmodu/modu/pkg/types"
 )
 
+// ─── Tea messages ────────────────────────────────
+
 type uiAgentEventMsg struct{ event agent.AgentEvent }
 type uiSessionEventMsg struct{ event coding_agent.SessionEvent }
 type uiPromptDoneMsg struct{ err error }
@@ -31,8 +33,26 @@ type uiApprovalRequestMsg struct{ req tui.ApprovalRequest }
 type uiApprovalCancelMsg struct{ toolCallID string }
 type uiExternalInfoMsg struct{ text string }
 type uiExternalUserMsg struct{ text string }
+type uiShellResultMsg struct {
+	cmd    string
+	output string
+	err    error
+}
 type uiClearScreenMsg struct{}
 type uiQuitMsg struct{}
+
+// ─── UI states ───────────────────────────────────
+
+type uiState int
+
+const (
+	uiStateInit uiState = iota
+	uiStateInput
+	uiStateQuerying
+	uiStatePermission
+)
+
+// ─── Display blocks ──────────────────────────────
 
 type uiBlock struct {
 	Kind      string
@@ -52,30 +72,69 @@ type uiToolState struct {
 	IsError bool
 }
 
+// ─── Slash autocomplete ──────────────────────────
+
+type slashCommandDef struct {
+	Name        string
+	Description string
+}
+
+var uiSlashCommands = []slashCommandDef{
+	{"/help", "show help"},
+	{"/quit", "exit"},
+	{"/clear", "clear screen and session"},
+	{"/model", "show current model"},
+	{"/compact", "compact context"},
+	{"/tokens", "show token usage"},
+	{"/tools", "list active tools"},
+	{"/agents", "list subagents"},
+	{"/todos", "show todo list"},
+	{"/tasks", "show background tasks"},
+	{"/hints", "show harness hints"},
+	{"/runtime", "show runtime paths"},
+	{"/git", "show git preflight state"},
+	{"/dashboard", "runtime summary"},
+	{"/state", "runtime state snapshot"},
+	{"/config", "show effective config"},
+	{"/config-template", "default config template"},
+	{"/logs", "harness JSONL log paths"},
+	{"/artifacts", "harness artifact paths"},
+	{"/bridge", "harness event bridge dirs"},
+	{"/actions", "harness action statuses"},
+	{"/plan", "toggle plan mode"},
+	{"/worktree", "toggle worktree mode"},
+	{"/skills", "list skills"},
+	{"/telegram", "Telegram bot config"},
+}
+
+func matchSlashCommands(prefix string) []slashCommandDef {
+	var out []slashCommandDef
+	for _, cmd := range uiSlashCommands {
+		if strings.HasPrefix(cmd.Name, prefix) {
+			out = append(out, cmd)
+		}
+	}
+	return out
+}
+
+// ─── Printer implementations ─────────────────────
+
 type uiSlashPrinter struct {
 	lines []string
 	clear bool
 }
 
-func (p *uiSlashPrinter) PrintInfo(msg string) {
-	p.lines = append(p.lines, msg)
-}
-
+func (p *uiSlashPrinter) PrintInfo(msg string) { p.lines = append(p.lines, msg) }
 func (p *uiSlashPrinter) PrintError(err error) {
-	if err == nil {
-		return
+	if err != nil {
+		p.lines = append(p.lines, "error: "+err.Error())
 	}
-	p.lines = append(p.lines, "error: "+err.Error())
 }
-
 func (p *uiSlashPrinter) PrintSection(title string, lines []string) {
 	p.lines = append(p.lines, title)
 	p.lines = append(p.lines, lines...)
 }
-
-func (p *uiSlashPrinter) ClearScreen() {
-	p.clear = true
-}
+func (p *uiSlashPrinter) ClearScreen() { p.clear = true }
 
 type uiBridgePrinter struct {
 	program *tea.Program
@@ -86,23 +145,20 @@ func (p *uiBridgePrinter) PrintInfo(msg string) {
 		p.program.Send(uiExternalInfoMsg{text: msg})
 	}
 }
-
 func (p *uiBridgePrinter) PrintError(err error) {
-	if err == nil {
+	if err == nil || p.program == nil {
 		return
 	}
-	if p.program != nil {
-		p.program.Send(uiExternalInfoMsg{text: "error: " + err.Error()})
-	}
+	p.program.Send(uiExternalInfoMsg{text: "error: " + err.Error()})
 }
-
 func (p *uiBridgePrinter) PrintUser(msg string) {
 	if p.program != nil {
 		p.program.Send(uiExternalUserMsg{text: msg})
 	}
 }
-
 func (p *uiBridgePrinter) ClearLine() {}
+
+// ─── Model ───────────────────────────────────────
 
 type uiModel struct {
 	session        *coding_agent.CodingSession
@@ -117,14 +173,12 @@ type uiModel struct {
 	width    int
 	height   int
 	ready    bool
+	state    uiState
 	viewport viewport.Model
-	input    textarea.Model
+	input    *uiInputModel
 	spinner  spinner.Model
 
 	blocks             []uiBlock
-	history            []string
-	historyIdx         int
-	historyDraft       string
 	queryActive        bool
 	userScrolled       bool
 	errMsg             string
@@ -132,24 +186,21 @@ type uiModel struct {
 	pendingPerm        *tui.ApprovalRequest
 	sessionStart       time.Time
 	approvalCmdStarted bool
+
+	// Query tracking
+	spinnerVerb    string
+	queryStartTime time.Time
+	thinkingStart  time.Time
+
+	// Toggle modes
+	transcriptMode bool
+
+	// Slash autocomplete
+	slashMatches []slashCommandDef
+	showSlash    bool
 }
 
 func newUIModel(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, mailboxRuntime *moduCodeMailboxRuntime, histFile string, approvalCh chan tui.ApprovalRequest, promptMu *sync.Mutex, tgUsername string) *uiModel {
-	ta := textarea.New()
-	ta.Placeholder = "Type a message... (Enter to send, Shift+Enter for newline)"
-	ta.ShowLineNumbers = false
-	ta.CharLimit = 0
-	ta.MaxHeight = 8
-	ta.SetHeight(1)
-	ta.Prompt = "> "
-	ta.Focus()
-	ta.FocusedStyle.Base = lipgloss.NewStyle()
-	ta.BlurredStyle.Base = lipgloss.NewStyle()
-	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
-	ta.FocusedStyle.Placeholder = lipgloss.NewStyle().Foreground(uiDim)
-	ta.FocusedStyle.Prompt = lipgloss.NewStyle().Foreground(uiPrimary).Bold(true)
-	ta.BlurredStyle.Prompt = lipgloss.NewStyle().Foreground(uiDim)
-
 	sp := spinner.New()
 	sp.Spinner = spinner.MiniDot
 	sp.Style = lipgloss.NewStyle().Foreground(uiPrimary)
@@ -167,10 +218,11 @@ func newUIModel(ctx context.Context, session *coding_agent.CodingSession, model 
 		ctx:            ctx,
 		tgUsername:     tgUsername,
 		viewport:       vp,
-		input:          ta,
+		input:          newUIInputModel(),
 		spinner:        sp,
-		historyIdx:     -1,
+		state:          uiStateInit,
 		sessionStart:   time.Now(),
+		spinnerVerb:    randomSpinnerVerb(),
 	}
 }
 
@@ -184,6 +236,9 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		headerHeight := 1
 		statusHeight := 1
 		inputHeight := lipgloss.Height(m.renderInputArea())
+		if inputHeight > 0 {
+			inputHeight--
+		}
 		prevContent := m.viewport.View()
 		prevOffset := m.viewport.YOffset
 		prevScrolled := m.userScrolled
@@ -205,6 +260,10 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.approvalCmdStarted = true
 			return m, m.waitApprovalCmd()
 		}
+		if m.state == uiStateInit {
+			m.state = uiStateInput
+			m.input.Focus()
+		}
 		return m, nil
 
 	case spinner.TickMsg:
@@ -212,75 +271,24 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
 
-	case tea.KeyMsg:
-		if m.pendingPerm != nil {
-			switch strings.ToLower(msg.String()) {
-			case "y":
-				m.resolveApproval("allow")
-			case "a":
-				m.resolveApproval("allow_always")
-			case "n", "esc":
-				m.resolveApproval("deny")
-			case "d":
-				m.resolveApproval("deny_always")
-			}
-			return m, nil
-		}
-		if handled := m.handleViewportKey(msg.String()); handled {
-			return m, nil
-		}
-		switch msg.String() {
-		case "ctrl+c":
-			if m.queryActive {
-				m.session.Abort()
-				m.statusMsg = "interrupted"
-				return m, nil
-			}
-			return m, tea.Quit
-		case "ctrl+l":
-			m.blocks = nil
-			m.errMsg = ""
-			m.statusMsg = "cleared viewport"
-			m.refreshViewport()
-			return m, nil
-		case "enter":
-			if strings.TrimSpace(m.input.Value()) == "" {
-				return m, nil
-			}
-			if strings.Count(m.input.Value(), "\n")+1 > 1 && !msg.Alt {
-				var cmd tea.Cmd
-				m.input, cmd = m.input.Update(msg)
-				return m, cmd
-			}
-			line := strings.TrimSpace(m.input.Value())
-			m.captureHistory(line)
-			m.input.Reset()
-			m.input.SetHeight(1)
-			return m, m.submitLineCmd(line)
-		case "up":
-			if strings.Count(m.input.Value(), "\n")+1 == 1 {
-				if strings.TrimSpace(m.input.Value()) == "" && m.handleViewportKey("up") {
-					return m, nil
-				}
-				m.navigateHistory(-1)
-				return m, nil
-			}
-		case "down":
-			if strings.Count(m.input.Value(), "\n")+1 == 1 {
-				if strings.TrimSpace(m.input.Value()) == "" && m.handleViewportKey("down") {
-					return m, nil
-				}
-				m.navigateHistory(1)
-				return m, nil
-			}
-		}
+	case tea.MouseMsg:
 		var cmd tea.Cmd
-		m.input, cmd = m.input.Update(msg)
-		m.syncInputHeight()
+		m.viewport, cmd = m.viewport.Update(msg)
+		if msg.Button == tea.MouseButtonWheelUp {
+			m.userScrolled = true
+		}
+		if msg.Button == tea.MouseButtonWheelDown && m.viewport.AtBottom() {
+			m.userScrolled = false
+		}
 		return m, cmd
+
+	case tea.KeyMsg:
+		return m.handleKey(msg)
 
 	case uiPromptDoneMsg:
 		m.queryActive = false
+		m.state = uiStateInput
+		m.input.Focus()
 		if msg.err != nil {
 			m.errMsg = msg.err.Error()
 			m.appendBlock(uiBlock{Kind: "system", Content: "error: " + msg.err.Error(), Timestamp: time.Now()})
@@ -288,9 +296,11 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.errMsg = ""
 		}
 		m.statusMsg = ""
+		m.thinkingStart = time.Time{}
 		_ = m.session.SaveMessages()
-		_ = saveHistoryFile(m.histFile, m.history)
+		_ = saveHistoryFile(m.histFile, m.input.History())
 		m.refreshViewport()
+		fmt.Print("\a") // bell notification
 		return m, nil
 
 	case uiAgentEventMsg:
@@ -310,6 +320,7 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case uiApprovalRequestMsg:
 		m.pendingPerm = &msg.req
+		m.state = uiStatePermission
 		m.statusMsg = "approval required"
 		m.refreshViewport()
 		cmds := []tea.Cmd{m.waitApprovalCmd()}
@@ -321,6 +332,7 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case uiApprovalCancelMsg:
 		if m.pendingPerm != nil && m.pendingPerm.ToolCallID == msg.toolCallID {
 			m.pendingPerm = nil
+			m.state = uiStateQuerying
 			m.statusMsg = "approval dismissed"
 			m.refreshViewport()
 		}
@@ -332,6 +344,14 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case uiExternalUserMsg:
 		m.appendBlock(uiBlock{Kind: "user", Content: msg.text, Timestamp: time.Now()})
+		return m, nil
+
+	case uiShellResultMsg:
+		out := strings.TrimRight(msg.output, "\n")
+		if msg.err != nil {
+			out += "\n" + msg.err.Error()
+		}
+		m.appendBlock(uiBlock{Kind: "system", Content: out, Timestamp: time.Now()})
 		return m, nil
 
 	case uiClearScreenMsg:
@@ -346,18 +366,291 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// ─── Key handling ────────────────────────────────
+
+func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		if m.state == uiStateQuerying || m.state == uiStatePermission {
+			m.session.Abort()
+			m.queryActive = false
+			m.pendingPerm = nil
+			m.state = uiStateInput
+			m.input.Focus()
+			m.statusMsg = "interrupted"
+			m.refreshViewport()
+			return m, nil
+		}
+		return m, tea.Quit
+	case "ctrl+d":
+		if m.state == uiStateInput && strings.TrimSpace(m.input.Value()) == "" {
+			return m, tea.Quit
+		}
+	case "ctrl+l":
+		m.blocks = nil
+		m.errMsg = ""
+		m.statusMsg = "cleared"
+		m.refreshViewport()
+		return m, nil
+	case "ctrl+o":
+		m.transcriptMode = !m.transcriptMode
+		m.refreshViewport()
+		return m, nil
+	}
+
+	switch m.state {
+	case uiStatePermission:
+		return m.handlePermissionKey(msg)
+	case uiStateQuerying:
+		return m.handleScrollKey(msg)
+	default:
+		return m.handleInputKey(msg)
+	}
+}
+
+func (m *uiModel) handleScrollKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "up", "k":
+		m.viewport.LineUp(1)
+		m.userScrolled = true
+	case "down", "j":
+		m.viewport.LineDown(1)
+		if m.viewport.AtBottom() {
+			m.userScrolled = false
+		}
+	case "pgup", "ctrl+b":
+		m.viewport.HalfViewUp()
+		m.userScrolled = true
+	case "pgdown", "ctrl+f":
+		m.viewport.HalfViewDown()
+		if m.viewport.AtBottom() {
+			m.userScrolled = false
+		}
+	case "home", "g":
+		m.viewport.GotoTop()
+		m.userScrolled = true
+	case "end", "G":
+		m.viewport.GotoBottom()
+		m.userScrolled = false
+	}
+	return m, nil
+}
+
+func (m *uiModel) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "pgup":
+		m.viewport.HalfViewUp()
+		m.userScrolled = true
+		return m, nil
+	case "pgdown":
+		m.viewport.HalfViewDown()
+		if m.viewport.AtBottom() {
+			m.userScrolled = false
+		}
+		return m, nil
+	case "tab":
+		if m.showSlash && len(m.slashMatches) > 0 {
+			m.input.ta.Reset()
+			m.input.ta.InsertString(m.slashMatches[0].Name + " ")
+			m.showSlash = false
+			m.slashMatches = nil
+			return m, nil
+		}
+	case "esc":
+		if m.showSlash {
+			m.showSlash = false
+			m.slashMatches = nil
+			return m, nil
+		}
+		m.input.Reset()
+		return m, nil
+	case "enter":
+		if strings.TrimSpace(m.input.Value()) == "" {
+			return m, nil
+		}
+		line := strings.TrimSpace(m.input.Value())
+		m.input.Reset()
+		m.showSlash = false
+		m.slashMatches = nil
+		return m, m.submitLineCmd(line)
+	}
+
+	submitted, cmd := m.input.Update(msg)
+	if submitted {
+		line := m.input.Value()
+		m.input.Reset()
+		m.showSlash = false
+		m.slashMatches = nil
+		if line == "" {
+			return m, nil
+		}
+		return m, m.submitLineCmd(line)
+	}
+	m.updateSlashAutocomplete()
+	return m, cmd
+}
+
+func (m *uiModel) handlePermissionKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.pendingPerm == nil {
+		return m, nil
+	}
+	switch strings.ToLower(msg.String()) {
+	case "y", "enter":
+		m.resolveApproval("allow")
+	case "a":
+		m.resolveApproval("allow_always")
+	case "n", "esc":
+		m.resolveApproval("deny")
+	case "d":
+		m.resolveApproval("deny_always")
+	}
+	return m, nil
+}
+
+func (m *uiModel) updateSlashAutocomplete() {
+	val := m.input.Value()
+	if strings.HasPrefix(val, "/") && !strings.Contains(val, " ") {
+		m.slashMatches = matchSlashCommands(val)
+		m.showSlash = len(m.slashMatches) > 0
+	} else {
+		m.showSlash = false
+		m.slashMatches = nil
+	}
+}
+
+// ─── Submit ──────────────────────────────────────
+
+func (m *uiModel) submitLineCmd(line string) tea.Cmd {
+	// Shell escape: ! <cmd>
+	if strings.HasPrefix(line, "! ") {
+		shellCmd := strings.TrimPrefix(line, "! ")
+		m.appendBlock(uiBlock{Kind: "system", Content: "$ " + shellCmd, Timestamp: time.Now()})
+		return func() tea.Msg {
+			out, err := exec.Command("bash", "-c", shellCmd).CombinedOutput()
+			return uiShellResultMsg{cmd: shellCmd, output: string(out), err: err}
+		}
+	}
+
+	// Slash commands
+	if strings.HasPrefix(line, "/") {
+		return func() tea.Msg {
+			printer := &uiSlashPrinter{}
+			handled, exit := handleSlash(m.ctx, line, m.session, printer, m.model, m.mailboxRuntime)
+			if !handled {
+				return uiExternalInfoMsg{text: "unknown command: " + line}
+			}
+			if printer.clear {
+				return uiClearScreenMsg{}
+			}
+			if exit {
+				return uiQuitMsg{}
+			}
+			text := strings.TrimSpace(strings.Join(printer.lines, "\n"))
+			return uiExternalInfoMsg{text: text}
+		}
+	}
+
+	// Regular prompt
+	m.appendBlock(uiBlock{Kind: "user", Content: line, Timestamp: time.Now()})
+	m.queryActive = true
+	m.state = uiStateQuerying
+	m.input.Blur()
+	m.statusMsg = "thinking"
+	m.userScrolled = false
+	m.spinnerVerb = randomSpinnerVerb()
+	m.queryStartTime = time.Now()
+	m.thinkingStart = time.Time{}
+	return func() tea.Msg {
+		if !m.promptMu.TryLock() {
+			return uiPromptDoneMsg{err: fmt.Errorf("session is busy")}
+		}
+		defer m.promptMu.Unlock()
+		err := m.session.Prompt(m.ctx, line)
+		return uiPromptDoneMsg{err: err}
+	}
+}
+
+// ─── Agent events ────────────────────────────────
+
+func (m *uiModel) handleAgentEvent(ev agent.AgentEvent) {
+	switch ev.Type {
+	case agent.EventTypeAgentStart:
+		m.queryActive = true
+		m.statusMsg = "thinking"
+
+	case agent.EventTypeMessageUpdate:
+		if ev.StreamEvent == nil {
+			break
+		}
+		switch ev.StreamEvent.Type {
+		case types.EventThinkingDelta:
+			block := m.currentAssistantBlock()
+			block.Thinking += ev.StreamEvent.Delta
+			if m.thinkingStart.IsZero() {
+				m.thinkingStart = time.Now()
+			}
+		case types.EventTextDelta:
+			block := m.currentAssistantBlock()
+			block.Content += ev.StreamEvent.Delta
+		}
+
+	case agent.EventTypeToolExecutionStart:
+		var args map[string]any
+		if margs, ok := ev.Args.(map[string]any); ok {
+			args = margs
+		}
+		block := m.currentToolBlock()
+		block.Tools = append(block.Tools, &uiToolState{
+			ID:     ev.ToolCallID,
+			Name:   ev.ToolName,
+			Input:  formatToolInput(ev.ToolName, args),
+			Status: "running",
+		})
+		m.spinnerVerb = uiToolVerb(ev.ToolName) + " " + ev.ToolName
+
+	case agent.EventTypeToolExecutionEnd:
+		block := m.currentToolBlock()
+		for _, tool := range block.Tools {
+			if tool.ID == ev.ToolCallID || tool.Name == ev.ToolName {
+				tool.Status = "done"
+				tool.IsError = ev.IsError
+				tool.Output = fullResultText(ev)
+				if ev.IsError {
+					tool.Status = "error"
+				}
+				break
+			}
+		}
+		// Reset spinner verb after tool finishes
+		m.spinnerVerb = randomSpinnerVerb()
+
+	case agent.EventTypeAgentEnd:
+		m.queryActive = false
+		m.statusMsg = ""
+	}
+	m.refreshViewport()
+}
+
+// ─── View ────────────────────────────────────────
+
 func (m *uiModel) View() string {
 	if !m.ready {
-		return "loading modu_code..."
+		return "  " + m.spinner.View() + " loading modu_code..."
 	}
 	var parts []string
 	parts = append(parts, m.renderHeader())
 	parts = append(parts, m.viewport.View())
-	if m.pendingPerm != nil {
+	switch m.state {
+	case uiStatePermission:
 		parts = append(parts, m.renderPermissionPrompt())
-	} else if m.queryActive {
+	case uiStateQuerying:
 		parts = append(parts, m.renderActivityLine())
-	} else {
+	case uiStateInit:
+		parts = append(parts, "  "+m.spinner.View()+" Initializing...")
+	default:
+		if m.showSlash && len(m.slashMatches) > 0 {
+			parts = append(parts, m.renderSlashSuggestions())
+		}
 		parts = append(parts, m.renderInputArea())
 	}
 	parts = append(parts, m.renderStatusBar())
@@ -367,10 +660,10 @@ func (m *uiModel) View() string {
 func (m *uiModel) renderHeader() string {
 	left := uiPrimaryText.Render(" ● modu_code")
 	model := uiMutedText.Render(" " + m.model.Name)
-	right := uiDimText.Render(" " + formatUIDuration(time.Since(m.sessionStart)))
 	if m.tgUsername != "" {
 		model += uiMutedText.Render("  @" + m.tgUsername)
 	}
+	right := uiDimText.Render(" " + formatUIDuration(time.Since(m.sessionStart)) + " ")
 	gap := max(1, m.width-lipgloss.Width(left+model)-lipgloss.Width(right))
 	return lipgloss.NewStyle().
 		Background(lipgloss.Color("#1a1b26")).
@@ -380,15 +673,20 @@ func (m *uiModel) renderHeader() string {
 }
 
 func (m *uiModel) renderStatusBar() string {
-	parts := []string{
-		uiMutedText.Render(fmt.Sprintf("tokens %d", m.session.GetSessionStats().TotalTokens)),
-		uiMutedText.Render(fmt.Sprintf("tools %d", len(m.session.GetActiveToolNames()))),
+	stats := m.session.GetSessionStats()
+	var parts []string
+	if stats.TotalTokens > 0 {
+		parts = append(parts, uiMutedText.Render(fmt.Sprintf("~%d tokens", stats.TotalTokens)))
 	}
+	parts = append(parts, uiMutedText.Render(fmt.Sprintf("%d tools", len(m.session.GetActiveToolNames()))))
 	if m.session.IsPlanMode() {
 		parts = append(parts, uiSecondaryText.Render("plan"))
 	}
 	if m.session.ActiveWorktree() != "" {
 		parts = append(parts, uiWarningText.Render("worktree"))
+	}
+	if m.transcriptMode {
+		parts = append(parts, uiDimText.Render("expanded"))
 	}
 	if m.statusMsg != "" {
 		parts = append(parts, uiPrimaryText.Render(m.statusMsg))
@@ -407,20 +705,23 @@ func (m *uiModel) renderStatusBar() string {
 }
 
 func (m *uiModel) renderActivityLine() string {
-	label := "Thinking…"
-	if tool := m.latestRunningTool(); tool != nil {
-		label = "running " + tool.Name + "..."
+	elapsed := ""
+	if !m.queryStartTime.IsZero() {
+		elapsed = " (" + formatUIDuration(time.Since(m.queryStartTime)) + ")"
 	}
-	return "  " + m.spinner.View() + " " + uiDimText.Render(label)
+	label := m.spinnerVerb + "..."
+	if label == "..." {
+		label = "Thinking..."
+	}
+	return "  " + m.spinner.View() + " " + uiPrimaryText.Render(label) + uiDimText.Render(elapsed)
 }
 
 func (m *uiModel) renderInputArea() string {
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(uiDim).
-		Padding(0, 1).
 		Render(m.input.View())
-	hint := uiDimText.Render("enter send  shift+enter newline  /help commands  ctrl+c abort")
+	hint := uiDimText.Render("enter send  shift+enter newline  tab complete  ctrl+o expand  /help")
 	if m.errMsg != "" {
 		return uiErrorText.Render("  ✗ "+m.errMsg) + "\n" + box + "\n" + hint
 	}
@@ -428,7 +729,13 @@ func (m *uiModel) renderInputArea() string {
 }
 
 func (m *uiModel) renderPermissionPrompt() string {
-	input := formatApprovalArgs(m.pendingPerm.Args)
+	if m.pendingPerm == nil {
+		return ""
+	}
+	input := formatToolInput(m.pendingPerm.ToolName, m.pendingPerm.Args)
+	if len(input) > 400 {
+		input = input[:400] + "..."
+	}
 	body := strings.Join([]string{
 		fmt.Sprintf("%s wants to execute:", uiPrimaryText.Bold(true).Render(m.pendingPerm.ToolName)),
 		"",
@@ -445,6 +752,35 @@ func (m *uiModel) renderPermissionPrompt() string {
 		Padding(0, 1).
 		Render(body)
 }
+
+func (m *uiModel) renderSlashSuggestions() string {
+	maxShow := 8
+	if len(m.slashMatches) < maxShow {
+		maxShow = len(m.slashMatches)
+	}
+	var inner strings.Builder
+	for i := 0; i < maxShow; i++ {
+		cmd := m.slashMatches[i]
+		name := lipgloss.NewStyle().Bold(true).Foreground(uiSecondary).Render(cmd.Name)
+		desc := uiDimText.Render("  " + cmd.Description)
+		inner.WriteString(name + desc)
+		if i < maxShow-1 {
+			inner.WriteString("\n")
+		}
+	}
+	if len(m.slashMatches) > maxShow {
+		inner.WriteString(fmt.Sprintf("\n%s", uiDimText.Render(fmt.Sprintf("  +%d more", len(m.slashMatches)-maxShow))))
+	}
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(uiDim).
+		Padding(0, 1).
+		MarginLeft(2).
+		Render(inner.String())
+	return box
+}
+
+// ─── Viewport ────────────────────────────────────
 
 func (m *uiModel) refreshViewport() {
 	if !m.ready {
@@ -463,33 +799,7 @@ func (m *uiModel) refreshViewport() {
 	m.viewport.GotoBottom()
 }
 
-func (m *uiModel) handleViewportKey(key string) bool {
-	if !m.ready {
-		return false
-	}
-	switch key {
-	case "pgup":
-		m.viewport.HalfViewUp()
-	case "pgdown":
-		m.viewport.HalfViewDown()
-	case "home":
-		m.viewport.GotoTop()
-	case "end":
-		m.viewport.GotoBottom()
-	case "ctrl+u":
-		m.viewport.HalfViewUp()
-	case "ctrl+d":
-		m.viewport.HalfViewDown()
-	case "up":
-		m.viewport.LineUp(1)
-	case "down":
-		m.viewport.LineDown(1)
-	default:
-		return false
-	}
-	m.userScrolled = !m.viewport.AtBottom()
-	return true
-}
+// ─── Conversation rendering ───────────────────────
 
 func (m *uiModel) renderConversation() string {
 	if len(m.blocks) == 0 {
@@ -524,7 +834,7 @@ func (m *uiModel) renderConversation() string {
 			}
 		case "tool":
 			for _, tool := range block.Tools {
-				out.WriteString(renderUITool(tool, m.width))
+				out.WriteString(renderUITool(tool, m.transcriptMode, m.width))
 			}
 		case "section":
 			out.WriteString(renderUISection(block.Title, block.Content, m.width))
@@ -566,43 +876,176 @@ func renderUIThinking(content string) string {
 	return b.String()
 }
 
-func renderUITool(tool *uiToolState, width int) string {
+func renderUITool(tool *uiToolState, expanded bool, width int) string {
 	var b strings.Builder
+	w := width
+
 	dot := uiPrimaryText.Render("⏺")
 	nameStyle := uiPrimaryText.Bold(true)
 	if tool.Status == "done" {
 		dot = uiSuccessText.Render("✓")
 		nameStyle = uiSuccessText.Bold(true)
-	} else if tool.IsError {
+	} else if tool.IsError || tool.Status == "error" {
 		dot = uiErrorText.Render("✗")
 		nameStyle = uiErrorText
 	}
-	b.WriteString(fmt.Sprintf("  %s %s%s\n", dot, nameStyle.Render(tool.Name), uiMutedText.Render("("+truncateUI(tool.Input, 72)+")")))
-	switch {
-	case tool.Status == "running":
+
+	args := ""
+	if tool.Input != "" {
+		args = uiMutedText.Render("(" + truncateUI(tool.Input, 80) + ")")
+	}
+	b.WriteString(fmt.Sprintf("  %s %s%s\n", dot, nameStyle.Render(tool.Name), args))
+
+	if tool.Status == "running" {
 		b.WriteString("    " + uiDimText.Render("Running...") + "\n")
-	case tool.Output != "":
-		lines := strings.Split(strings.TrimSpace(tool.Output), "\n")
-		maxLines := 6
-		if len(lines) < maxLines {
-			maxLines = len(lines)
+		return b.String()
+	}
+
+	if tool.IsError && tool.Output != "" {
+		errLines := strings.Split(tool.Output, "\n")
+		for i, line := range errLines {
+			if i >= 5 {
+				b.WriteString("    " + uiErrorText.Render(fmt.Sprintf("... +%d more lines", len(errLines)-5)) + "\n")
+				break
+			}
+			b.WriteString("    " + uiErrorText.Render(truncateUI(line, w-8)) + "\n")
 		}
-		for _, line := range lines[:maxLines] {
-			b.WriteString("    " + uiDimText.Render(truncateUI(line, width-8)) + "\n")
+		return b.String()
+	}
+
+	if tool.Output == "" {
+		return b.String()
+	}
+
+	b.WriteString(renderUIToolOutput(tool.Name, tool.Output, expanded, w))
+	return b.String()
+}
+
+func renderUIToolOutput(toolName, output string, expanded bool, w int) string {
+	var b strings.Builder
+	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
+	total := len(lines)
+
+	collapsedMax := 3
+	expandedMax := 30
+
+	switch toolName {
+	case "read":
+		if !expanded {
+			b.WriteString(fmt.Sprintf("    ⎿ %s\n", uiDimText.Render(fmt.Sprintf("%d lines", total))))
+		} else {
+			show := min(total, expandedMax)
+			for i := 0; i < show; i++ {
+				b.WriteString("    " + uiDimText.Render(truncateUI(lines[i], w-8)) + "\n")
+			}
+			if total > show {
+				b.WriteString("    " + uiDimText.Render(fmt.Sprintf("... +%d lines", total-show)) + "\n")
+			}
 		}
-		if len(lines) > maxLines {
-			b.WriteString("    " + uiDimText.Render(fmt.Sprintf("... +%d lines", len(lines)-maxLines)) + "\n")
+
+	case "bash":
+		show := collapsedMax
+		if expanded {
+			show = expandedMax
 		}
+		if total <= show {
+			for _, line := range lines {
+				b.WriteString("    " + uiDimText.Render(truncateUI(line, w-8)) + "\n")
+			}
+		} else {
+			for i := 0; i < show; i++ {
+				b.WriteString("    " + uiDimText.Render(truncateUI(lines[i], w-8)) + "\n")
+			}
+			b.WriteString("    " + uiDimText.Render(fmt.Sprintf("... +%d lines (ctrl+o to expand)", total-show)) + "\n")
+		}
+
+	case "edit":
+		if !expanded {
+			b.WriteString("    ⎿ " + uiSuccessText.Render("file updated") + "\n")
+		} else {
+			show := min(total, expandedMax)
+			for i := 0; i < show; i++ {
+				line := lines[i]
+				if strings.HasPrefix(line, "+") {
+					b.WriteString("    " + uiSuccessText.Render(truncateUI(line, w-8)) + "\n")
+				} else if strings.HasPrefix(line, "-") {
+					b.WriteString("    " + uiErrorText.Render(truncateUI(line, w-8)) + "\n")
+				} else {
+					b.WriteString("    " + uiDimText.Render(truncateUI(line, w-8)) + "\n")
+				}
+			}
+			if total > show {
+				b.WriteString("    " + uiDimText.Render(fmt.Sprintf("... +%d lines", total-show)) + "\n")
+			}
+		}
+
+	case "write":
+		if !expanded {
+			b.WriteString("    ⎿ " + uiSuccessText.Render("file written") + "\n")
+		} else {
+			show := min(total, expandedMax)
+			for i := 0; i < show; i++ {
+				b.WriteString("    " + uiDimText.Render(truncateUI(lines[i], w-8)) + "\n")
+			}
+			if total > show {
+				b.WriteString("    " + uiDimText.Render(fmt.Sprintf("... +%d lines", total-show)) + "\n")
+			}
+		}
+
+	case "glob":
+		show := 8
+		if expanded {
+			show = 30
+		}
+		if total <= show {
+			for _, line := range lines {
+				b.WriteString("    " + uiDimText.Render(truncateUI(line, w-8)) + "\n")
+			}
+		} else {
+			for i := 0; i < show; i++ {
+				b.WriteString("    " + uiDimText.Render(truncateUI(lines[i], w-8)) + "\n")
+			}
+			b.WriteString("    " + uiDimText.Render(fmt.Sprintf("... +%d files", total-show)) + "\n")
+		}
+
+	case "grep":
+		show := 5
+		if expanded {
+			show = 30
+		}
+		if total <= show {
+			for _, line := range lines {
+				b.WriteString("    " + uiDimText.Render(truncateUI(line, w-8)) + "\n")
+			}
+		} else {
+			for i := 0; i < show; i++ {
+				b.WriteString("    " + uiDimText.Render(truncateUI(lines[i], w-8)) + "\n")
+			}
+			b.WriteString("    " + uiDimText.Render(fmt.Sprintf("... +%d matches", total-show)) + "\n")
+		}
+
 	default:
-		b.WriteString("    " + uiDimText.Render("done") + "\n")
+		show := collapsedMax
+		if expanded {
+			show = expandedMax
+		}
+		if total <= show {
+			for _, line := range lines {
+				if line != "" {
+					b.WriteString("    ⎿ " + uiDimText.Render(truncateUI(line, w-10)) + "\n")
+				}
+			}
+		} else {
+			b.WriteString("    ⎿ " + uiDimText.Render(truncateUI(lines[0], w-10)) + "\n")
+			b.WriteString("    " + uiDimText.Render(fmt.Sprintf("  ... +%d lines (ctrl+o to expand)", total-1)) + "\n")
+		}
 	}
 	return b.String()
 }
 
 func renderUISection(title, content string, width int) string {
 	boxWidth := min(max(28, width-4), 96)
-	border := lipgloss.RoundedBorder()
-	style := lipgloss.NewStyle().Border(border).BorderForeground(uiDim).Padding(0, 1).Width(boxWidth - 2)
+	style := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(uiDim).Padding(0, 1).Width(boxWidth - 2)
 	return style.Render(uiPrimaryText.Render(title) + "\n" + content)
 }
 
@@ -612,27 +1055,53 @@ func (m *uiModel) renderWelcome() string {
 	if home != "" && strings.HasPrefix(cwd, home) {
 		cwd = "~" + cwd[len(home):]
 	}
-	box := lipgloss.NewStyle().
+	p := uiPrimaryText
+	mt := uiMutedText
+	d := uiDimText
+
+	var b strings.Builder
+	b.WriteString("\n")
+	b.WriteString(p.Render("    ███╗   ███╗ ██████╗ ██████╗ ██╗   ██╗") + "\n")
+	b.WriteString(p.Render("    ████╗ ████║██╔═══██╗██╔══██╗██║   ██║") + "\n")
+	b.WriteString(p.Render("    ██╔████╔██║██║   ██║██║  ██║██║   ██║") + "\n")
+	b.WriteString(p.Render("    ██║╚██╔╝██║██║   ██║██║  ██║██║   ██║") + "\n")
+	b.WriteString(p.Render("    ██║ ╚═╝ ██║╚██████╔╝██████╔╝╚██████╔╝") + "\n")
+	b.WriteString(p.Render("    ╚═╝     ╚═╝ ╚═════╝ ╚═════╝  ╚═════╝ ") + uiSecondaryText.Bold(true).Render(" _code") + "\n")
+	b.WriteString("\n")
+	b.WriteString(mt.Render("    coding agent interactive console") + "\n")
+	b.WriteString("\n")
+	b.WriteString(mt.Render(fmt.Sprintf("    cwd    %s", cwd)) + "\n")
+	b.WriteString(mt.Render(fmt.Sprintf("    model  %s", m.model.Name)) + "\n")
+
+	b.WriteString("\n")
+	tipBorder := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(uiDim).
-		Padding(1, 2)
-	lines := []string{
-		uiPrimaryText.Bold(true).Render("modu_code"),
-		uiMutedText.Render("coding_agent interactive console"),
-		"",
-		uiMutedText.Render("cwd    " + cwd),
-		uiMutedText.Render("model  " + m.model.Name),
-		uiMutedText.Render("help   /help"),
-	}
-	return "\n" + box.Render(strings.Join(lines, "\n")) + "\n"
+		Padding(0, 1).
+		MarginLeft(3)
+
+	tips := d.Render("Enter") + mt.Render(" send") +
+		d.Render("  Shift+Enter") + mt.Render(" newline") +
+		d.Render("  Tab") + mt.Render(" complete") +
+		d.Render("  /help") + mt.Render(" commands") +
+		"\n" +
+		d.Render("Ctrl+C") + mt.Render(" cancel") +
+		d.Render("  Ctrl+O") + mt.Render(" expand output") +
+		d.Render("  Ctrl+L") + mt.Render(" clear") +
+		d.Render("  ! cmd") + mt.Render(" shell")
+
+	b.WriteString(tipBorder.Render(tips))
+	b.WriteString("\n\n")
+	return b.String()
 }
+
+// ─── Block helpers ───────────────────────────────
 
 func (m *uiModel) latestRunningTool() *uiToolState {
 	for i := len(m.blocks) - 1; i >= 0; i-- {
-		block := m.blocks[i]
-		for j := len(block.Tools) - 1; j >= 0; j-- {
-			if block.Tools[j].Status == "running" {
-				return block.Tools[j]
+		for j := len(m.blocks[i].Tools) - 1; j >= 0; j-- {
+			if m.blocks[i].Tools[j].Status == "running" {
+				return m.blocks[i].Tools[j]
 			}
 		}
 	}
@@ -658,166 +1127,7 @@ func (m *uiModel) currentToolBlock() *uiBlock {
 	return &m.blocks[len(m.blocks)-1]
 }
 
-func (m *uiModel) handleAgentEvent(ev agent.AgentEvent) {
-	switch ev.Type {
-	case agent.EventTypeAgentStart:
-		m.queryActive = true
-		m.statusMsg = "thinking"
-	case agent.EventTypeMessageUpdate:
-		if ev.StreamEvent == nil {
-			break
-		}
-		switch ev.StreamEvent.Type {
-		case types.EventThinkingDelta:
-			block := m.currentAssistantBlock()
-			block.Thinking += ev.StreamEvent.Delta
-		case types.EventTextDelta:
-			block := m.currentAssistantBlock()
-			block.Content += ev.StreamEvent.Delta
-		}
-	case agent.EventTypeToolExecutionStart:
-		var args map[string]any
-		if margs, ok := ev.Args.(map[string]any); ok {
-			args = margs
-		}
-		block := m.currentToolBlock()
-		block.Tools = append(block.Tools, &uiToolState{
-			ID:     ev.ToolCallID,
-			Name:   ev.ToolName,
-			Input:  formatApprovalArgs(args),
-			Status: "running",
-		})
-	case agent.EventTypeToolExecutionEnd:
-		block := m.currentToolBlock()
-		for _, tool := range block.Tools {
-			if tool.ID == ev.ToolCallID || tool.Name == ev.ToolName {
-				tool.Status = "done"
-				tool.IsError = ev.IsError
-				tool.Output = fullResultText(ev)
-				if ev.IsError {
-					tool.Status = "error"
-				}
-				break
-			}
-		}
-	case agent.EventTypeAgentEnd:
-		m.queryActive = false
-		m.statusMsg = ""
-	}
-	m.refreshViewport()
-}
-
-func fullResultText(ev agent.AgentEvent) string {
-	if ev.Result == nil {
-		return ""
-	}
-	if texts, ok := ev.Result.([]types.ContentBlock); ok {
-		var parts []string
-		for _, block := range texts {
-			if t, ok := block.(*types.TextContent); ok && t != nil {
-				parts = append(parts, t.Text)
-			}
-		}
-		return strings.TrimSpace(strings.Join(parts, "\n"))
-	}
-	switch v := ev.Result.(type) {
-	case string:
-		return strings.TrimSpace(v)
-	default:
-		raw, _ := json.Marshal(v)
-		return strings.TrimSpace(string(raw))
-	}
-}
-
-func (m *uiModel) submitLineCmd(line string) tea.Cmd {
-	if strings.HasPrefix(line, "/") {
-		return func() tea.Msg {
-			printer := &uiSlashPrinter{}
-			handled, exit := handleSlash(m.ctx, line, m.session, printer, m.model, m.mailboxRuntime)
-			if !handled {
-				return uiExternalInfoMsg{text: "unknown command: " + line}
-			}
-			if printer.clear {
-				return uiClearScreenMsg{}
-			}
-			if exit {
-				return uiQuitMsg{}
-			}
-			text := strings.TrimSpace(strings.Join(printer.lines, "\n"))
-			return uiExternalInfoMsg{text: text}
-		}
-	}
-	m.appendBlock(uiBlock{Kind: "user", Content: line, Timestamp: time.Now()})
-	m.queryActive = true
-	m.statusMsg = "thinking"
-	return func() tea.Msg {
-		if !m.promptMu.TryLock() {
-			return uiPromptDoneMsg{err: fmt.Errorf("session is busy")}
-		}
-		defer m.promptMu.Unlock()
-		err := m.session.Prompt(m.ctx, line)
-		return uiPromptDoneMsg{err: err}
-	}
-}
-
-func (m *uiModel) syncInputHeight() {
-	lines := strings.Count(m.input.Value(), "\n") + 1
-	if lines < 1 {
-		lines = 1
-	}
-	if lines > 8 {
-		lines = 8
-	}
-	m.input.SetHeight(lines)
-}
-
-func (m *uiModel) captureHistory(line string) {
-	if strings.TrimSpace(line) == "" {
-		return
-	}
-	for idx, item := range m.history {
-		if item == line {
-			m.history = append(m.history[:idx], m.history[idx+1:]...)
-			break
-		}
-	}
-	m.history = append(m.history, line)
-	if len(m.history) > 200 {
-		m.history = m.history[len(m.history)-200:]
-	}
-	m.historyIdx = -1
-	m.historyDraft = ""
-}
-
-func (m *uiModel) navigateHistory(direction int) {
-	if len(m.history) == 0 {
-		return
-	}
-	if direction < 0 {
-		if m.historyIdx == -1 {
-			m.historyDraft = m.input.Value()
-			m.historyIdx = len(m.history) - 1
-		} else if m.historyIdx > 0 {
-			m.historyIdx--
-		}
-	} else {
-		if m.historyIdx == -1 {
-			return
-		}
-		if m.historyIdx < len(m.history)-1 {
-			m.historyIdx++
-		} else {
-			m.historyIdx = -1
-			m.input.SetValue(m.historyDraft)
-			m.input.CursorEnd()
-			return
-		}
-	}
-	if m.historyIdx >= 0 {
-		m.input.SetValue(m.history[m.historyIdx])
-		m.input.CursorEnd()
-	}
-}
+// ─── Approval ────────────────────────────────────
 
 func (m *uiModel) resolveApproval(decision string) {
 	if m.pendingPerm == nil {
@@ -825,6 +1135,7 @@ func (m *uiModel) resolveApproval(decision string) {
 	}
 	m.pendingPerm.Response <- decision
 	m.pendingPerm = nil
+	m.state = uiStateQuerying
 	m.statusMsg = ""
 	m.refreshViewport()
 }
@@ -845,6 +1156,8 @@ func (m *uiModel) waitApprovalCancelCmd(toolCallID string, cancel <-chan struct{
 		return uiApprovalCancelMsg{toolCallID: toolCallID}
 	}
 }
+
+// ─── History persistence ─────────────────────────
 
 func loadHistoryFile(path string) ([]string, error) {
 	data, err := os.ReadFile(path)
@@ -871,10 +1184,76 @@ func saveHistoryFile(path string, history []string) error {
 	return os.WriteFile(path, []byte(strings.Join(history, "\n")+"\n"), 0o600)
 }
 
-func formatApprovalArgs(args map[string]any) string {
+// ─── Tool input formatting ───────────────────────
+
+func formatToolInput(toolName string, args map[string]any) string {
 	if args == nil {
 		return ""
 	}
+	switch toolName {
+	case "bash":
+		if cmd, ok := args["command"].(string); ok {
+			if idx := strings.Index(cmd, "\n"); idx > 0 {
+				return cmd[:idx] + "..."
+			}
+			return cmd
+		}
+	case "read":
+		if fp, ok := args["file_path"].(string); ok {
+			s := shortenUIPath(fp)
+			if offset, ok := args["offset"].(float64); ok && offset > 0 {
+				s += fmt.Sprintf(":%d", int(offset))
+			}
+			return s
+		}
+	case "write":
+		if fp, ok := args["file_path"].(string); ok {
+			return shortenUIPath(fp)
+		}
+	case "edit":
+		if fp, ok := args["file_path"].(string); ok {
+			old, _ := args["old_string"].(string)
+			if len(old) > 40 {
+				old = old[:40] + "..."
+			}
+			return fmt.Sprintf("%s: %q → ...", shortenUIPath(fp), old)
+		}
+	case "glob":
+		if p, ok := args["pattern"].(string); ok {
+			path, _ := args["path"].(string)
+			if path != "" {
+				return p + " in " + shortenUIPath(path)
+			}
+			return p
+		}
+	case "grep":
+		if p, ok := args["pattern"].(string); ok {
+			path, _ := args["path"].(string)
+			if path != "" {
+				return fmt.Sprintf("%q in %s", p, shortenUIPath(path))
+			}
+			return fmt.Sprintf("%q", p)
+		}
+	case "web_fetch":
+		if u, ok := args["url"].(string); ok {
+			return u
+		}
+	case "web_search":
+		if q, ok := args["query"].(string); ok {
+			return fmt.Sprintf("%q", q)
+		}
+	case "agent":
+		if desc, ok := args["description"].(string); ok && desc != "" {
+			return desc
+		}
+		if prompt, ok := args["prompt"].(string); ok {
+			if len(prompt) > 60 {
+				prompt = prompt[:60] + "..."
+			}
+			return prompt
+		}
+	}
+	// Fallback: sort keys and render key=value
 	keys := make([]string, 0, len(args))
 	for key := range args {
 		keys = append(keys, key)
@@ -884,21 +1263,59 @@ func formatApprovalArgs(args map[string]any) string {
 	for _, key := range keys {
 		parts = append(parts, fmt.Sprintf("%s=%v", key, args[key]))
 	}
-	return strings.Join(parts, " ")
+	s := strings.Join(parts, " ")
+	if len(s) > 120 {
+		s = s[:120] + "..."
+	}
+	return s
 }
 
-func truncateUI(s string, max int) string {
-	if max <= 0 {
+func shortenUIPath(path string) string {
+	home, err := os.UserHomeDir()
+	if err == nil && strings.HasPrefix(path, home) {
+		return "~" + path[len(home):]
+	}
+	return path
+}
+
+// ─── Result text extraction ──────────────────────
+
+func fullResultText(ev agent.AgentEvent) string {
+	if ev.Result == nil {
+		return ""
+	}
+	if texts, ok := ev.Result.([]types.ContentBlock); ok {
+		var parts []string
+		for _, block := range texts {
+			if t, ok := block.(*types.TextContent); ok && t != nil {
+				parts = append(parts, t.Text)
+			}
+		}
+		return strings.TrimSpace(strings.Join(parts, "\n"))
+	}
+	switch v := ev.Result.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	default:
+		raw, _ := json.Marshal(v)
+		return strings.TrimSpace(string(raw))
+	}
+}
+
+// ─── Utility ─────────────────────────────────────
+
+func truncateUI(s string, maxLen int) string {
+	if maxLen <= 0 {
 		return ""
 	}
 	rs := []rune(s)
-	if len(rs) <= max {
+	if len(rs) <= maxLen {
 		return s
 	}
-	if max == 1 {
+	if maxLen == 1 {
 		return string(rs[:1])
 	}
-	return string(rs[:max-1]) + "…"
+	return string(rs[:maxLen-1]) + "…"
 }
 
 func formatUIDuration(d time.Duration) string {
@@ -911,12 +1328,10 @@ func formatUIDuration(d time.Duration) string {
 	return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
 }
 
+// ─── Run ─────────────────────────────────────────
+
 func runInteractiveUI(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, mailboxRuntime *moduCodeMailboxRuntime, noApprove bool) error {
 	if n, err := session.RestoreMessages(); err == nil && n > 0 {
-		// Surface the restore in the initial viewport without sending a Tea
-		// message before the program has started.
-		// The session state is already restored internally by this point.
-		// Keep this lightweight; full transcript hydration can come later.
 		_ = n
 	}
 	histFile := session.InputHistoryFile()
@@ -935,10 +1350,10 @@ func runInteractiveUI(ctx context.Context, session *coding_agent.CodingSession, 
 		})
 	}
 	if history, err := loadHistoryFile(histFile); err == nil {
-		ui.history = history
+		ui.input.SetHistory(history)
 	}
 
-	program := tea.NewProgram(ui)
+	program := tea.NewProgram(ui, tea.WithAltScreen(), tea.WithMouseCellMotion())
 
 	if approvalCh != nil {
 		session.SetToolApprovalCallback(func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
