@@ -233,6 +233,14 @@ Return a short completion message.`
 		return stream, nil
 	}
 
+	// Enable task_output explicitly for this test (it's off by default).
+	cfg := DefaultConfig()
+	cfg.Features.TaskOutputTool = boolPtr(true)
+	settingsPath := filepath.Join(agentDir, "settings.json")
+	if err := SaveConfig(cfg, settingsPath); err != nil {
+		t.Fatal(err)
+	}
+
 	session, err := NewCodingSession(CodingSessionOptions{
 		Cwd:       dir,
 		AgentDir:  agentDir,

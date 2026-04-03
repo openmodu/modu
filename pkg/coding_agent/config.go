@@ -220,7 +220,7 @@ func DefaultConfig() *Config {
 		Features: FeatureConfig{
 			MemoryTool:        boolPtr(true),
 			TodoTool:          boolPtr(true),
-			TaskOutputTool:    boolPtr(true),
+			TaskOutputTool:    boolPtr(false), // opt-in: only needed for background task workflows
 			PlanMode:          boolPtr(true),
 			WorktreeMode:      boolPtr(true),
 			SpawnSubagentTool: boolPtr(true),
