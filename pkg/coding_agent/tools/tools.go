@@ -27,8 +27,8 @@ func ReadOnlyTools(cwd string) []agent.AgentTool {
 }
 
 // AllTools returns all available tools.
-// find and ls are intentionally excluded: bash covers both, and
-// removing them keeps the tool list lean for better model latency.
+// ls is intentionally excluded: bash covers it, and removing it
+// keeps the tool list lean for better model latency.
 func AllTools(cwd string) []agent.AgentTool {
 	return []agent.AgentTool{
 		NewReadTool(cwd),
@@ -37,5 +37,6 @@ func AllTools(cwd string) []agent.AgentTool {
 		NewEditTool(cwd),
 		NewBashTool(cwd),
 		NewGrepTool(cwd),
+		NewFindTool(cwd),
 	}
 }
