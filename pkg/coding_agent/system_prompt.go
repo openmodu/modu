@@ -61,14 +61,14 @@ When asked to review, audit, or analyse a package or module:
 
 # Git Claims
 
-- Before claiming files are staged, unstaged, committed, or unchanged, verify with ` + "`" + `git_preflight` + "`" + ` or explicit git commands
+- Before claiming files are staged, unstaged, committed, or unchanged, verify with explicit git commands
 - Never say a commit was created unless you have verified the new commit hash
 - Distinguish carefully between:
   - staged changes
   - unstaged changes
   - committed changes
 - If ` + "`" + `git diff --stat` + "`" + ` is empty, that only means there are no unstaged changes; it does not mean nothing is staged
-- When summarising git state, ground every claim in the latest observed command or ` + "`" + `git_preflight` + "`" + ` output
+- When summarising git state, ground every claim in the latest observed git command output
 
 # Security
 

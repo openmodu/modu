@@ -8,7 +8,6 @@ import (
 func CodingTools(cwd string) []agent.AgentTool {
 	return []agent.AgentTool{
 		NewReadTool(cwd),
-		NewGitPreflightTool(cwd),
 		NewBashTool(cwd),
 		NewEditTool(cwd),
 		NewWriteTool(cwd),
@@ -19,7 +18,6 @@ func CodingTools(cwd string) []agent.AgentTool {
 func ReadOnlyTools(cwd string) []agent.AgentTool {
 	return []agent.AgentTool{
 		NewReadTool(cwd),
-		NewGitPreflightTool(cwd),
 		NewGrepTool(cwd),
 		NewFindTool(cwd),
 		NewLsTool(cwd),
@@ -32,7 +30,6 @@ func ReadOnlyTools(cwd string) []agent.AgentTool {
 func AllTools(cwd string) []agent.AgentTool {
 	return []agent.AgentTool{
 		NewReadTool(cwd),
-		NewGitPreflightTool(cwd),
 		NewWriteTool(cwd),
 		NewEditTool(cwd),
 		NewBashTool(cwd),

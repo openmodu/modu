@@ -92,7 +92,6 @@ var uiSlashCommands = []slashCommandDef{
 	{"/tasks", "show background tasks"},
 	{"/hints", "show harness hints"},
 	{"/runtime", "show runtime paths"},
-	{"/git", "show git preflight state"},
 	{"/dashboard", "runtime summary"},
 	{"/state", "runtime state snapshot"},
 	{"/config", "show effective config"},
@@ -624,6 +623,25 @@ func (m *uiModel) handleAgentEvent(ev agent.AgentEvent) {
 		// Reset spinner verb after tool finishes
 		m.spinnerVerb = randomSpinnerVerb()
 
+	case agent.EventTypeMessageEnd:
+		msg, ok := assistantMessageFromEvent(ev.Message)
+		if !ok {
+			break
+		}
+		block := m.currentAssistantBlock()
+		for _, content := range msg.Content {
+			switch c := content.(type) {
+			case *types.ThinkingContent:
+				if c != nil && strings.TrimSpace(c.Thinking) != "" {
+					block.Thinking = c.Thinking
+				}
+			case *types.TextContent:
+				if c != nil && strings.TrimSpace(c.Text) != "" {
+					block.Content = c.Text
+				}
+			}
+		}
+
 	case agent.EventTypeAgentEnd:
 		m.queryActive = false
 		m.statusMsg = ""
@@ -663,13 +681,12 @@ func (m *uiModel) renderHeader() string {
 	if m.tgUsername != "" {
 		model += uiMutedText.Render("  @" + m.tgUsername)
 	}
-	right := uiDimText.Render(" " + formatUIDuration(time.Since(m.sessionStart)) + " ")
-	gap := max(1, m.width-lipgloss.Width(left+model)-lipgloss.Width(right))
+	gap := max(1, m.width-lipgloss.Width(left+model))
 	return lipgloss.NewStyle().
 		Background(lipgloss.Color("#1a1b26")).
 		Foreground(uiMuted).
 		Width(m.width).
-		Render(left + model + strings.Repeat(" ", gap) + right)
+		Render(left + model + strings.Repeat(" ", gap))
 }
 
 func (m *uiModel) renderStatusBar() string {
@@ -678,7 +695,6 @@ func (m *uiModel) renderStatusBar() string {
 	if stats.TotalTokens > 0 {
 		parts = append(parts, uiMutedText.Render(fmt.Sprintf("~%d tokens", stats.TotalTokens)))
 	}
-	parts = append(parts, uiMutedText.Render(fmt.Sprintf("%d tools", len(m.session.GetActiveToolNames()))))
 	if m.session.IsPlanMode() {
 		parts = append(parts, uiSecondaryText.Render("plan"))
 	}
@@ -697,7 +713,7 @@ func (m *uiModel) renderStatusBar() string {
 	left := strings.Join(parts, uiDimText.Render(" │ "))
 	right := uiDimText.Render(fmt.Sprintf(" %d%% ", int(m.viewport.ScrollPercent()*100)))
 	if m.viewport.AtBottom() {
-		right = uiDimText.Render(" end ")
+		right = ""
 	}
 	gap := max(1, m.width-lipgloss.Width(left)-lipgloss.Width(right)-1)
 	return lipgloss.NewStyle().Background(lipgloss.Color("#1a1b26")).Width(m.width).PaddingLeft(1).
@@ -1096,6 +1112,18 @@ func (m *uiModel) renderWelcome() string {
 }
 
 // ─── Block helpers ───────────────────────────────
+
+func assistantMessageFromEvent(msg agent.AgentMessage) (types.AssistantMessage, bool) {
+	switch v := msg.(type) {
+	case types.AssistantMessage:
+		return v, true
+	case *types.AssistantMessage:
+		if v != nil {
+			return *v, true
+		}
+	}
+	return types.AssistantMessage{}, false
+}
 
 func (m *uiModel) latestRunningTool() *uiToolState {
 	for i := len(m.blocks) - 1; i >= 0; i-- {
