@@ -816,7 +816,7 @@ func asString(v any) string {
 }
 
 func (s *CodingSession) dispatchHarnessActions(category string, actions []HarnessAction, entry map[string]any) {
-	if s.config == nil || !s.config.Harness.EnableActions || !s.config.FeatureHarnessActions() {
+	if s.config == nil || !s.config.HarnessEnableActions() || !s.config.FeatureHarnessActions() {
 		return
 	}
 	for _, action := range actions {

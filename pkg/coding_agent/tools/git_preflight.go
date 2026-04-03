@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -175,8 +174,4 @@ func parseGitDiffStats(out string) GitDiffStats {
 		}
 	}
 	return stats
-}
-
-func gitProjectKey(cwd string) string {
-	return strings.ReplaceAll(strings.TrimPrefix(filepath.Clean(cwd), "/"), "/", "_")
 }

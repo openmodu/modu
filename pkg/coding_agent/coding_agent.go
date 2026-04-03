@@ -104,6 +104,10 @@ type CodingSession struct {
 
 	// approvalManager handles tool execution approval.
 	approvalManager *ApprovalManager
+
+	// gitCache holds the last-known git state to avoid spawning git subprocesses
+	// on every writeRuntimeState call.
+	gitCache cachedGitState
 }
 
 // NewCodingSession creates and initializes a new coding session.
@@ -342,6 +346,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 				cs.runHarnessStop()
 			}
 			cs.pruneTransientContextMessages()
+			go cs.refreshGitRuntimeState()
 			cs.writeRuntimeState()
 		}
 	})
@@ -442,7 +447,6 @@ func (s *CodingSession) Prompt(ctx context.Context, text string) error {
 
 	err := s.agent.Prompt(ctx, text)
 	if err != nil {
-		s.runHarnessStopFailure(err)
 		return err
 	}
 

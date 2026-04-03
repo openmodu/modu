@@ -83,7 +83,7 @@ type PermissionConfig struct {
 
 type HarnessConfig struct {
 	// EnableActions allows host-side action dispatch. Defaults to true.
-	EnableActions bool `json:"enableActions,omitempty"`
+	EnableActions *bool `json:"enableActions,omitempty"`
 	// BlockTools denies matching tool names before execution.
 	BlockTools []string `json:"blockTools,omitempty"`
 	// CaptureHints strips and stores harness-only hint tags from tool output.
@@ -189,7 +189,7 @@ func DefaultConfig() *Config {
 			PreserveRecentMessages: 4,
 		},
 		Harness: HarnessConfig{
-			EnableActions:      enableActions,
+			EnableActions:      &enableActions,
 			CaptureHints:       &captureHints,
 			PersistToolResults: &persistToolResults,
 			ActionPolicy: HarnessActionPolicy{
@@ -231,6 +231,13 @@ func DefaultConfig() *Config {
 }
 
 func boolPtr(v bool) *bool { return &v }
+
+func (c *Config) HarnessEnableActions() bool {
+	if c == nil || c.Harness.EnableActions == nil {
+		return true
+	}
+	return *c.Harness.EnableActions
+}
 
 func (c *Config) HarnessCaptureHints() bool {
 	if c == nil || c.Harness.CaptureHints == nil {

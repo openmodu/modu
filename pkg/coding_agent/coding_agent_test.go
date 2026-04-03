@@ -491,7 +491,7 @@ func TestDefaultConfig(t *testing.T) {
 	if !cfg.AutoCompaction {
 		t.Fatal("auto compaction should be on by default")
 	}
-	if !cfg.Harness.EnableActions {
+	if !cfg.HarnessEnableActions() {
 		t.Fatal("harness actions should be enabled by default")
 	}
 	if cfg.Harness.LogFiles.ToolUse == "" || cfg.Harness.ArtifactFiles.ToolUse == "" || cfg.Harness.BridgeDirs.ToolUse == "" {
