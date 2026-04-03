@@ -27,7 +27,6 @@ import (
 	"runtime"
 	"sort"
 	"strings"
-	"sync"
 	"syscall"
 
 	"github.com/openmodu/modu/pkg/agent"
@@ -36,9 +35,18 @@ import (
 	"github.com/openmodu/modu/pkg/coding_agent/modes/rpc"
 	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/providers/openai"
-	"github.com/openmodu/modu/pkg/tui"
 	"github.com/openmodu/modu/pkg/types"
 )
+
+type slashPrinter interface {
+	PrintInfo(string)
+	PrintError(error)
+	PrintSection(string, []string)
+}
+
+type slashClearer interface {
+	ClearScreen()
+}
 
 func main() {
 	var (
@@ -125,189 +133,16 @@ func main() {
 		return
 	}
 
-	renderer := tui.NewRenderer(os.Stdout)
-	input := tui.NewInput(os.Stdin, os.Stdout)
-	input.OnCtrlR = renderer.ExpandLastTool
-	input.OnPromptChange = renderer.SetActivePrompt
-
-	// Load persisted input history for this project.
-	histFile := session.InputHistoryFile()
-	if err := input.LoadHistoryFile(histFile); err != nil {
-		renderer.PrintInfo(fmt.Sprintf("(warning: failed to load input history: %v)", err))
-	}
-
-	// Wire tool approval (default on; disabled with --no-approve).
-	var tuiApprovalCh chan tui.ApprovalRequest
-	if !*noApprove {
-		tuiApprovalCh = make(chan tui.ApprovalRequest, 1)
-		input.ApprovalRequests = tuiApprovalCh
-		session.SetToolApprovalCallback(func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
-			respCh := make(chan string, 1)
-			tuiApprovalCh <- tui.ApprovalRequest{
-				ToolName:   toolName,
-				ToolCallID: toolCallID,
-				Args:       args,
-				Response:   respCh,
-			}
-			return agent.ToolApprovalDecision(<-respCh), nil
-		})
-	}
-
-	// Wire agent events to the renderer.
-	unsub := session.Subscribe(func(ev agent.AgentEvent) {
-		renderer.HandleEvent(ev)
-	})
-	defer unsub()
-
-	// promptMu serializes session.Prompt() calls between the TUI and the
-	// Telegram background goroutine so they never run concurrently.
-	var promptMu sync.Mutex
-
-	// Wire session events (compaction, model changes, etc.) to the renderer.
-	unsubSession := session.SubscribeSession(func(ev coding_agent.SessionEvent) {
-		switch ev.Type {
-		case coding_agent.SessionEventCompactionStart:
-			renderer.PrintInfo("compacting context…")
-		case coding_agent.SessionEventCompactionDone:
-			renderer.PrintInfo("context compacted")
-		}
-	})
-	defer unsubSession()
-
-	// SIGINT: abort the current streaming operation.
-	// Ctrl+C during input is handled via ErrInterrupt from ReadLine below.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT)
-	go func() {
-		for range sigCh {
-			if session.IsStreaming() {
-				session.Abort()
-				renderer.PrintInfo("[interrupted]")
-			}
-		}
-	}()
-
-	// SIGWINCH: terminal resize — notify the input loop to redraw itself.
-	resizeCh := make(chan struct{}, 1)
-	input.ResizeCh = resizeCh
-	sigwinchCh := make(chan os.Signal, 1)
-	signal.Notify(sigwinchCh, syscall.SIGWINCH)
-	go func() {
-		for range sigwinchCh {
-			select {
-			case resizeCh <- struct{}{}:
-			default: // drop if already pending
-			}
-		}
-	}()
-
-	ctx, cancelCtx := context.WithCancel(context.Background())
-	exit := func() { cancelCtx(); os.Exit(0) }
-
-	// Auto-start Telegram bot in background if a token is configured.
-	// Resolve the bot username before printing the banner so it appears inline.
-	var tgUsername string
-	{
-		token := os.Getenv("MOMS_TG_TOKEN")
-		if tgCfg, err := loadTelegramConfig(); err == nil && tgCfg.Token != "" {
-			token = tgCfg.Token
-		}
-		if token != "" {
-			attachDir := os.TempDir() + "/modu_code_tg"
-			if username, err := startTelegramBackground(ctx, token, attachDir, session, renderer, &promptMu, tuiApprovalCh); err != nil {
-				fmt.Fprintf(os.Stderr, "[telegram] failed to start: %v\n", err)
-			} else {
-				tgUsername = username
-			}
-		}
-	}
-
-	// Restore previous session for this working directory (like Claude Code).
-	if n, err := session.RestoreMessages(); err != nil {
-		renderer.PrintInfo(fmt.Sprintf("(failed to restore session: %v)", err))
-	} else if n > 0 {
-		renderer.PrintInfo(fmt.Sprintf("(restored previous session — %d messages)", n))
-	}
-
-	renderer.PrintBanner(model.Name, cwd, tgUsername)
-
-	// REPL loop.
-	for {
-		line, err := input.ReadLine("❯ ")
-		if err == tui.ErrInterrupt {
-			// Ctrl+C while idle → exit.
-			exit()
-		}
-		if err != nil {
-			// EOF (Ctrl+D) — exit cleanly.
-			exit()
-		}
-
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-
-		// Built-in slash commands handled before forwarding to the session.
-		if handled, exit := handleSlash(ctx, line, session, renderer, model, mailboxRuntime); handled {
-			if exit {
-				break
-			}
-			continue
-		}
-
-		renderer.PrintUser(line)
-
-		// Run prompt in a goroutine so the main goroutine can handle
-		// scroll events (mouse wheel, Page Up/Down) during AI streaming.
-		// Use a cancellable context so Ctrl+C aborts the HTTP request.
-		promptCtx, promptCancel := context.WithCancel(ctx)
-		promptDone := make(chan struct{})
-		var promptErr error
-		go func() {
-			defer promptCancel()
-			// TryLock: if the session is busy (e.g. a Telegram prompt is
-			// running), reject immediately instead of deadlocking the TUI.
-			if !promptMu.TryLock() {
-				renderer.PrintInfo("[busy] session is processing a Telegram message, please wait…")
-				close(promptDone)
-				return
-			}
-			defer promptMu.Unlock()
-			promptErr = session.Prompt(promptCtx, line)
-			close(promptDone)
-		}()
-
-		input.RunScrollLoop(promptDone, func() {
-			promptCancel()
-			session.Abort()
-			renderer.PrintInfo("[interrupted]")
-		})
-
-		<-promptDone // wait for the goroutine to finish before reading promptErr
-
-		if promptErr != nil {
-			renderer.PrintError(promptErr)
-		}
-		session.WaitForIdle()
-
-		// Persist the conversation so the next startup can resume.
-		if err := session.SaveMessages(); err != nil {
-			renderer.PrintInfo(fmt.Sprintf("(warning: failed to save session: %v)", err))
-		}
-		// Persist input history so up-arrow works across restarts.
-		if err := input.SaveHistoryFile(histFile); err != nil {
-			renderer.PrintInfo(fmt.Sprintf("(warning: failed to save input history: %v)", err))
-		}
-
-		stats := session.GetSessionStats()
-		renderer.PrintUsage(stats.TotalTokens)
-		renderer.PrintSeparator()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := runInteractiveUI(ctx, session, model, mailboxRuntime, *noApprove); err != nil {
+		fmt.Fprintf(os.Stderr, "ui error: %v\n", err)
+		os.Exit(1)
 	}
 }
 
 // handleSlash processes built-in /commands. Returns (handled, shouldExit).
-func handleSlash(ctx context.Context, line string, session *coding_agent.CodingSession, r *tui.Renderer, model *types.Model, mailboxRuntime *moduCodeMailboxRuntime) (bool, bool) {
+func handleSlash(ctx context.Context, line string, session *coding_agent.CodingSession, r slashPrinter, model *types.Model, mailboxRuntime *moduCodeMailboxRuntime) (bool, bool) {
 	if !strings.HasPrefix(line, "/") {
 		return false, false
 	}
@@ -331,7 +166,11 @@ func handleSlash(ctx context.Context, line string, session *coding_agent.CodingS
 		} else {
 			r.PrintInfo("session cleared")
 		}
-		fmt.Print("\033[2J\033[H")
+		if clearer, ok := r.(slashClearer); ok {
+			clearer.ClearScreen()
+		} else {
+			fmt.Print("\033[2J\033[H")
+		}
 		return true, false
 
 	case "model":
@@ -422,22 +261,20 @@ func handleSlash(ctx context.Context, line string, session *coding_agent.CodingS
 
 	case "runtime":
 		paths := session.RuntimePaths()
-		r.PrintInfo("runtime paths:")
-		r.PrintInfo("  root: " + paths.Root)
-		r.PrintInfo("  sessions: " + paths.SessionsDir)
-		r.PrintInfo("  plans: " + paths.PlansDir)
-		r.PrintInfo("  plan_file: " + paths.PlanFile)
-		r.PrintInfo("  worktrees: " + paths.WorktreesDir)
-		r.PrintInfo("  tool_results: " + paths.ToolResultsDir)
-		r.PrintInfo("  global_memory: " + paths.GlobalMemoryDir)
-		r.PrintInfo("  project_memory: " + paths.ProjectMemoryDir)
+		r.PrintSection("Runtime Paths", []string{
+			"root: " + paths.Root,
+			"sessions: " + paths.SessionsDir,
+			"plans: " + paths.PlansDir,
+			"plan_file: " + paths.PlanFile,
+			"worktrees: " + paths.WorktreesDir,
+			"tool_results: " + paths.ToolResultsDir,
+			"global_memory: " + paths.GlobalMemoryDir,
+			"project_memory: " + paths.ProjectMemoryDir,
+		})
 		return true, false
 
 	case "state":
-		r.PrintInfo("runtime state:")
-		for _, line := range strings.Split(strings.TrimSpace(session.RuntimeStateJSON()), "\n") {
-			r.PrintInfo(line)
-		}
+		r.PrintSection("Runtime State", strings.Split(strings.TrimSpace(session.RuntimeStateJSON()), "\n"))
 		return true, false
 
 	case "git":
@@ -445,12 +282,9 @@ func handleSlash(ctx context.Context, line string, session *coding_agent.CodingS
 			r.PrintInfo("git: not a repository")
 			return true, false
 		}
-		r.PrintInfo("git preflight:")
 		gitData := session.RuntimeState().Git
 		raw, _ := json.MarshalIndent(gitData, "", "  ")
-		for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
-			r.PrintInfo(line)
-		}
+		r.PrintSection("Git Preflight", strings.Split(strings.TrimSpace(string(raw)), "\n"))
 		return true, false
 
 	case "dashboard":
@@ -458,17 +292,11 @@ func handleSlash(ctx context.Context, line string, session *coding_agent.CodingS
 		return true, false
 
 	case "config":
-		r.PrintInfo("effective config:")
-		for _, line := range strings.Split(strings.TrimSpace(session.EffectiveConfigJSON()), "\n") {
-			r.PrintInfo(line)
-		}
+		r.PrintSection("Effective Config", strings.Split(strings.TrimSpace(session.EffectiveConfigJSON()), "\n"))
 		return true, false
 
 	case "config-template":
-		r.PrintInfo("default config template:")
-		for _, line := range strings.Split(strings.TrimSpace(coding_agent.DefaultConfigTemplate()), "\n") {
-			r.PrintInfo(line)
-		}
+		r.PrintSection("Default Config Template", strings.Split(strings.TrimSpace(coding_agent.DefaultConfigTemplate()), "\n"))
 		return true, false
 
 	case "logs":
@@ -592,7 +420,7 @@ func handleSlash(ctx context.Context, line string, session *coding_agent.CodingS
 }
 
 // handleTelegramCommand processes /telegram [subcommand].
-func handleTelegramCommand(arg string, r *tui.Renderer) {
+func handleTelegramCommand(arg string, r slashPrinter) {
 	configPath := telegramConfigPath()
 
 	// /telegram token <token>  — set bot token
@@ -638,55 +466,52 @@ func handleTelegramCommand(arg string, r *tui.Renderer) {
 	r.PrintInfo("  start with: modu_code --telegram")
 }
 
-func printHelp(r *tui.Renderer) {
+func printHelp(r slashPrinter) {
 	lines := []string{
-		"built-in commands:",
-		"  /help, /h           — show this help",
-		"  /quit, /exit        — exit",
-		"  /clear              — clear the screen",
-		"  /model              — show current model",
-		"  /compact            — compact the conversation context",
-		"  /tokens             — show total token usage",
-		"  /tools              — list active tools",
-		"  /agents             — list discovered subagents and mailbox workers",
-		"  /todos              — show current todo list",
-		"  /tasks              — show background subagent tasks",
-		"  /hints              — show pending harness-only hints",
-		"  /runtime            — show harness runtime paths",
-		"  /git                — show structured git preflight state",
-		"  /dashboard          — show runtime summary and latest events",
-		"  /state              — show unified runtime state snapshot",
-		"  /config             — show effective merged config",
-		"  /config-template    — show the default config template",
-		"  /logs               — show configured harness JSONL logs",
-		"  /artifacts          — show configured harness latest snapshots",
-		"  /bridge             — show configured harness event bridge dirs",
-		"  /actions            — show latest harness action statuses",
-		"  /plan [on|off]      — inspect or toggle plan mode",
-		"  /worktree [on|off]  — inspect or toggle isolated worktree mode",
-		"  /skills             — list available skills",
-		"  /telegram           — show Telegram bot config",
-		"  /telegram token <t> — set Telegram bot token",
+		"/help, /h           — show this help",
+		"/quit, /exit        — exit",
+		"/clear              — clear the screen",
+		"/model              — show current model",
+		"/compact            — compact the conversation context",
+		"/tokens             — show total token usage",
+		"/tools              — list active tools",
+		"/agents             — list discovered subagents and mailbox workers",
+		"/todos              — show current todo list",
+		"/tasks              — show background subagent tasks",
+		"/hints              — show pending harness-only hints",
+		"/runtime            — show harness runtime paths",
+		"/git                — show structured git preflight state",
+		"/dashboard          — show runtime summary and latest events",
+		"/state              — show unified runtime state snapshot",
+		"/config             — show effective merged config",
+		"/config-template    — show the default config template",
+		"/logs               — show configured harness JSONL logs",
+		"/artifacts          — show configured harness latest snapshots",
+		"/bridge             — show configured harness event bridge dirs",
+		"/actions            — show latest harness action statuses",
+		"/plan [on|off]      — inspect or toggle plan mode",
+		"/worktree [on|off]  — inspect or toggle isolated worktree mode",
+		"/skills             — list available skills",
+		"/telegram           — show Telegram bot config",
+		"/telegram token <t> — set Telegram bot token",
 		"",
-		"keyboard:",
-		"  Enter          — send message",
-		"  Ctrl+R         — expand last tool call output",
-		"  Ctrl+C         — abort current operation (or exit when idle)",
-		"  Ctrl+D         — exit",
+		"keyboard",
+		"Enter          — send message",
+		"Ctrl+R         — expand last tool call output",
+		"Ctrl+C         — abort current operation (or exit when idle)",
+		"Ctrl+D         — exit",
 		"",
-		"tool approval (when prompted):",
-		"  y              — allow once",
-		"  a              — always allow this tool",
-		"  n / ESC        — deny once",
-		"  d              — always deny this tool",
+		"tool approval",
+		"y              — allow once",
+		"a              — always allow this tool",
+		"n / ESC        — deny once",
+		"d              — always deny this tool",
 	}
-	for _, l := range lines {
-		r.PrintInfo(l)
-	}
+	r.PrintSection("Help", lines)
 }
 
-func printHarnessTargets(r *tui.Renderer, title string, session *coding_agent.CodingSession, targets map[string]string, dirMode bool) {
-	r.PrintInfo(title + ":")
+func printHarnessTargets(r slashPrinter, title string, session *coding_agent.CodingSession, targets map[string]string, dirMode bool) {
+	lines := make([]string, 0, len(targets)*3)
 	keys := make([]string, 0, len(targets))
 	for key := range targets {
 		keys = append(keys, key)
@@ -704,19 +529,20 @@ func printHarnessTargets(r *tui.Renderer, title string, session *coding_agent.Co
 		if !filepath.IsAbs(abs) {
 			abs = filepath.Join(agentDir, abs)
 		}
-		r.PrintInfo("  " + key + ": " + abs)
+		lines = append(lines, key+": "+abs)
 		if dirMode {
-			printRecentDirEntries(r, abs)
+			lines = append(lines, formatRecentDirEntries(abs)...)
 		} else {
-			printFilePreview(r, abs)
+			lines = append(lines, formatFilePreview(abs)...)
 		}
 	}
 	if !seenAny {
-		r.PrintInfo("  (not configured)")
+		lines = append(lines, "(not configured)")
 	}
+	r.PrintSection(title, lines)
 }
 
-func printHarnessActions(r *tui.Renderer, session *coding_agent.CodingSession) {
+func printHarnessActions(r slashPrinter, session *coding_agent.CodingSession) {
 	base := filepath.Join(session.RuntimePaths().RuntimeDir, "actions")
 	entries, err := os.ReadDir(base)
 	if err != nil {
@@ -738,32 +564,34 @@ func printHarnessActions(r *tui.Renderer, session *coding_agent.CodingSession) {
 		return
 	}
 	sort.Slice(dirs, func(i, j int) bool { return dirs[i].Name() < dirs[j].Name() })
-	r.PrintInfo("harness action status files:")
+	lines := make([]string, 0, len(dirs)*2)
 	for _, entry := range dirs {
 		path := filepath.Join(base, entry.Name(), "latest.json")
-		r.PrintInfo("  " + entry.Name() + ": " + path)
-		printFilePreview(r, path)
+		lines = append(lines, entry.Name()+": "+path)
+		lines = append(lines, formatFilePreview(path)...)
 	}
+	r.PrintSection("Harness Action Status Files", lines)
 }
 
-func printDashboard(r *tui.Renderer, session *coding_agent.CodingSession) {
-	r.PrintInfo("runtime dashboard:")
+func printDashboard(r slashPrinter, session *coding_agent.CodingSession) {
 	state := session.RuntimeState()
-	r.PrintInfo(fmt.Sprintf("  session: %s", state.SessionID))
-	r.PrintInfo(fmt.Sprintf("  cwd: %s", state.Cwd))
-	r.PrintInfo(fmt.Sprintf("  model: %s/%s", state.Model["provider"], state.Model["id"]))
-	r.PrintInfo(fmt.Sprintf("  thinking: %s", state.Thinking))
-	r.PrintInfo(fmt.Sprintf("  modes: plan=%v worktree=%v streaming=%v", state.Modes["plan"], state.Modes["worktree"], state.Modes["streaming"]))
-	r.PrintInfo(fmt.Sprintf("  counts: messages=%d todos=%d tasks=%d tools=%d", state.Counts["messages"], state.Counts["todos"], state.Counts["tasks"], state.Counts["tools"]))
+	lines := []string{
+		fmt.Sprintf("session: %s", state.SessionID),
+		fmt.Sprintf("cwd: %s", state.Cwd),
+		fmt.Sprintf("model: %s/%s", state.Model["provider"], state.Model["id"]),
+		fmt.Sprintf("thinking: %s", state.Thinking),
+		fmt.Sprintf("modes: plan=%v worktree=%v streaming=%v", state.Modes["plan"], state.Modes["worktree"], state.Modes["streaming"]),
+		fmt.Sprintf("counts: messages=%d todos=%d tasks=%d tools=%d", state.Counts["messages"], state.Counts["todos"], state.Counts["tasks"], state.Counts["tools"]),
+	}
 	if gitInfo, ok := state.Git["inGitRepository"].(bool); ok && gitInfo {
-		r.PrintInfo(fmt.Sprintf("  git: staged=%d unstaged=%d untracked=%d", len(asSlice(state.Git["stagedFiles"])), len(asSlice(state.Git["unstagedFiles"])), len(asSlice(state.Git["untrackedFiles"]))))
+		lines = append(lines, fmt.Sprintf("git: staged=%d unstaged=%d untracked=%d", len(asSlice(state.Git["stagedFiles"])), len(asSlice(state.Git["unstagedFiles"])), len(asSlice(state.Git["untrackedFiles"]))))
 	} else {
-		r.PrintInfo("  git: not a repository")
+		lines = append(lines, "git: not a repository")
 	}
 	if data, err := os.ReadFile(session.RuntimePaths().RuntimeIndexFile); err == nil {
 		var payload map[string]any
 		if json.Unmarshal(data, &payload) == nil {
-			r.PrintInfo("  latest events:")
+			lines = append(lines, "", "latest events:")
 			if last, ok := payload["last_events"].(map[string]any); ok {
 				keys := make([]string, 0, len(last))
 				for key := range last {
@@ -776,11 +604,12 @@ func printDashboard(r *tui.Renderer, session *coding_agent.CodingSession) {
 					if len(line) > 180 {
 						line = line[:180] + "..."
 					}
-					r.PrintInfo("    " + key + ": " + line)
+					lines = append(lines, "  "+key+": "+line)
 				}
 			}
 		}
 	}
+	r.PrintSection("Runtime Dashboard", lines)
 	printHarnessActions(r, session)
 }
 
@@ -789,41 +618,39 @@ func asSlice(v any) []any {
 	return items
 }
 
-func printRecentDirEntries(r *tui.Renderer, dir string) {
+func formatRecentDirEntries(dir string) []string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		r.PrintInfo("    status: " + err.Error())
-		return
+		return []string{"  status: " + err.Error()}
 	}
 	if len(entries) == 0 {
-		r.PrintInfo("    status: empty")
-		return
+		return []string{"  status: empty"}
 	}
 	count := len(entries)
 	if count > 5 {
 		count = 5
 	}
 	start := len(entries) - count
+	lines := make([]string, 0, count)
 	for _, entry := range entries[start:] {
-		r.PrintInfo("    - " + entry.Name())
+		lines = append(lines, "  - "+entry.Name())
 	}
+	return lines
 }
 
-func printFilePreview(r *tui.Renderer, path string) {
+func formatFilePreview(path string) []string {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		r.PrintInfo("    status: " + err.Error())
-		return
+		return []string{"  status: " + err.Error()}
 	}
 	text := strings.TrimSpace(string(data))
 	if text == "" {
-		r.PrintInfo("    status: empty")
-		return
+		return []string{"  status: empty"}
 	}
 	if len(text) > 160 {
 		text = text[:160] + "..."
 	}
-	r.PrintInfo("    preview: " + text)
+	return []string{"  preview: " + text}
 }
 
 func locateExampleDir() string {

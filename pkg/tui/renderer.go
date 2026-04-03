@@ -62,8 +62,8 @@ type Renderer struct {
 	// Each Ctrl+R press cycles one step older; wraps around to most recent.
 	// expandShown is true in Screen mode when the expanded view is drawn and
 	// should be erased before the next expand.
-	expandIdx        int
-	expandShown      bool
+	expandIdx         int
+	expandShown       bool
 	expandMarkLines   int
 	expandMarkPending string
 
@@ -350,7 +350,7 @@ func (r *Renderer) processTextDelta(delta string) {
 						break
 					}
 				}
-				
+
 				if len(r.textBuf) > guard {
 					cut := len(r.textBuf) - guard
 					for cut > 0 && cut < len(r.textBuf) && !utf8.RuneStart(r.textBuf[cut]) {
@@ -701,15 +701,158 @@ func formatElapsed(d time.Duration) string {
 
 // ── public print helpers ─────────────────────────────────────────────────────
 
+func (r *Renderer) panelLine(title string, width int) string {
+	if width < 20 {
+		width = 20
+	}
+	label := " " + title + " "
+	if visibleLen(label) > width-4 {
+		label = " " + truncateRunes(title, width-6) + " "
+	}
+	remaining := width - 2 - visibleLen(label)
+	if remaining < 0 {
+		remaining = 0
+	}
+	return styled(r.noColor, ansiBrightBlack, "╭"+label+strings.Repeat("─", remaining)+"╮")
+}
+
+func (r *Renderer) panelBottom(width int) string {
+	if width < 20 {
+		width = 20
+	}
+	return styled(r.noColor, ansiBrightBlack, "╰"+strings.Repeat("─", width-2)+"╯")
+}
+
+func truncateRunes(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	rs := []rune(s)
+	if len(rs) <= max {
+		return s
+	}
+	if max <= 1 {
+		return string(rs[:max])
+	}
+	return string(rs[:max-1]) + "…"
+}
+
+func (r *Renderer) printPanel(title string, lines []string) {
+	width := termWidth()
+	if width > 96 {
+		width = 96
+	}
+	if width < 28 {
+		width = 28
+	}
+	innerWidth := width - 4
+
+	r.writeln("")
+	r.writeln(r.panelLine(title, width))
+	for _, line := range lines {
+		if line == "" {
+			r.writeln(styled(r.noColor, ansiBrightBlack, "│") + " " + strings.Repeat(" ", innerWidth) + " " + styled(r.noColor, ansiBrightBlack, "│"))
+			continue
+		}
+		for _, wrapped := range wrapVisible(line, innerWidth) {
+			padding := innerWidth - visibleLen(wrapped)
+			if padding < 0 {
+				padding = 0
+			}
+			r.writeln(
+				styled(r.noColor, ansiBrightBlack, "│") + " " +
+					wrapped +
+					strings.Repeat(" ", padding) + " " +
+					styled(r.noColor, ansiBrightBlack, "│"),
+			)
+		}
+	}
+	r.writeln(r.panelBottom(width))
+}
+
+func wrapVisible(s string, width int) []string {
+	if width <= 0 {
+		return []string{s}
+	}
+	if s == "" {
+		return []string{""}
+	}
+	parts := strings.Split(s, "\n")
+	lines := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part == "" {
+			lines = append(lines, "")
+			continue
+		}
+		for visibleLen(part) > width {
+			cut := -1
+			rs := []rune(part)
+			if len(rs) <= width {
+				break
+			}
+			for idx := width; idx > 0; idx-- {
+				if rs[idx-1] == ' ' {
+					cut = idx
+					break
+				}
+			}
+			if cut <= 0 {
+				break
+			}
+			lines = append(lines, strings.TrimRight(string(rs[:cut]), " "))
+			part = strings.TrimLeft(string(rs[cut:]), " ")
+		}
+		if part != "" {
+			lines = append(lines, part)
+			continue
+		}
+	}
+	return lines
+}
+
 // PrintUser renders the user's prompt line.
 func (r *Renderer) PrintUser(msg string) {
+	sepWidth := termWidth() - 10
+	if sepWidth > 56 {
+		sepWidth = 56
+	}
+	if sepWidth < 18 {
+		sepWidth = 18
+	}
+	sep := styled(r.noColor, ansiBrightBlack, "  "+strings.Repeat("─", sepWidth))
 	prompt := styled(r.noColor, ansiBold+ansiBlue, "❯")
-	r.writeln(fmt.Sprintf("\n%s %s", prompt, msg))
+	lines := wrapVisible(msg, termWidth()-6)
+
+	r.writeln("")
+	r.writeln(sep)
+	for idx, line := range lines {
+		prefix := "    "
+		if idx == 0 {
+			prefix = "  " + prompt + " "
+		}
+		r.writeln(prefix + line)
+	}
 }
 
 // PrintInfo renders a dim informational line.
 func (r *Renderer) PrintInfo(msg string) {
 	r.writeln(styled(r.noColor, ansiDim, msg))
+}
+
+// PrintSection renders a titled information panel.
+func (r *Renderer) PrintSection(title string, lines []string) {
+	styledLines := make([]string, 0, len(lines))
+	for _, line := range lines {
+		switch {
+		case line == "":
+			styledLines = append(styledLines, "")
+		case strings.HasPrefix(line, "  "):
+			styledLines = append(styledLines, styled(r.noColor, ansiDim, line))
+		default:
+			styledLines = append(styledLines, line)
+		}
+	}
+	r.printPanel(title, styledLines)
 }
 
 // ClearLine erases the current terminal line (\r\033[2K). Call this before
@@ -729,19 +872,17 @@ func (r *Renderer) PrintError(err error) {
 
 // PrintBanner renders the startup banner.
 func (r *Renderer) PrintBanner(model, cwd, tgUsername string) {
-	w := termWidth()
-	bar := styled(r.noColor, ansiBrightGreen, strings.Repeat("─", w))
-	r.writeln(bar)
-	r.writeln(styled(r.noColor, ansiBold, "  modu code"))
-	r.writeln(styled(r.noColor, ansiDim, fmt.Sprintf("  model: %s", model)))
-	r.writeln(styled(r.noColor, ansiDim, fmt.Sprintf("  cwd:   %s", cwd)))
-	if tgUsername != "" {
-		r.writeln(styled(r.noColor, ansiDim, fmt.Sprintf("  telegram: @%s", tgUsername)))
+	lines := []string{
+		styled(r.noColor, ansiBold, "modu_code"),
+		styled(r.noColor, ansiDim, fmt.Sprintf("model    %s", model)),
+		styled(r.noColor, ansiDim, fmt.Sprintf("cwd      %s", cwd)),
 	}
-	r.writeln(bar)
-	r.writeln("")
-	r.writeln(styled(r.noColor, ansiDim, "Type your message and press Enter. /help for commands, Ctrl+C to abort."))
-	r.writeln("")
+	if tgUsername != "" {
+		lines = append(lines, styled(r.noColor, ansiDim, fmt.Sprintf("telegram @%s", tgUsername)))
+	}
+	lines = append(lines, "")
+	lines = append(lines, styled(r.noColor, ansiDim, "/help commands  /dashboard runtime  ctrl+r expand tool  ctrl+c abort"))
+	r.printPanel("Session", lines)
 }
 
 // PrintSeparator renders a turn separator.
