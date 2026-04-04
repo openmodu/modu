@@ -242,20 +242,7 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.input.SetWidth(max(20, msg.Width-4))
-		reserved := lipgloss.Height(m.renderInputArea())
-		if m.state == uiStateQuerying {
-			reserved += 1 // activity line
-		}
-		if m.showSlash && len(m.slashMatches) > 0 {
-			reserved += lipgloss.Height(m.renderSlashSuggestions())
-		}
-		if m.state == uiStatePermission {
-			reserved += lipgloss.Height(m.renderPermissionPrompt())
-		}
-		if sb := m.renderStatusBar(); sb != "" {
-			reserved += lipgloss.Height(sb)
-		}
-		m.viewport = viewport.New(msg.Width, max(4, msg.Height-reserved))
+		m.viewport = viewport.New(msg.Width, 4) // height set by recalcViewportHeight in refreshViewport below
 		m.ready = true
 		if prevContent != "" {
 			m.viewport.SetContent(prevContent)
@@ -731,9 +718,7 @@ func (m *uiModel) View() string {
 		}
 		parts = append(parts, m.renderInputArea())
 	}
-	if sb := m.renderStatusBar(); sb != "" {
-		parts = append(parts, sb)
-	}
+	parts = append(parts, m.renderStatusBar()) // always 1 line, even if empty
 	return strings.Join(parts, "\n")
 }
 
@@ -747,7 +732,7 @@ func (m *uiModel) renderSessionMeta() string {
 
 func (m *uiModel) renderStatusBar() string {
 	var parts []string
-	if m.statusMsg != "" {
+	if m.statusMsg != "" && m.statusMsg != "thinking" {
 		parts = append(parts, uiPrimaryText.Render(m.statusMsg))
 	}
 	if m.errMsg != "" {
@@ -769,15 +754,14 @@ func (m *uiModel) renderStatusBar() string {
 }
 
 func (m *uiModel) renderActivityLine() string {
-	elapsed := ""
+	hint := "esc to interrupt"
 	if !m.queryStartTime.IsZero() {
-		elapsed = " (" + formatUIDuration(time.Since(m.queryStartTime)) + ")"
+		secs := int(time.Since(m.queryStartTime).Seconds())
+		if secs > 0 {
+			hint = fmt.Sprintf("%ds • esc to interrupt", secs)
+		}
 	}
-	label := m.spinnerVerb + "..."
-	if label == "..." {
-		label = "Thinking..."
-	}
-	return "  " + m.spinner.View() + " " + uiDimText.Render(label) + uiDimText.Render(elapsed)
+	return "  " + uiDimText.Render("Working ("+hint+")")
 }
 
 func (m *uiModel) renderInputArea() string {
@@ -869,10 +853,26 @@ func (m *uiModel) renderSlashSuggestions() string {
 
 // ─── Viewport ────────────────────────────────────
 
+func (m *uiModel) recalcViewportHeight() {
+	reserved := lipgloss.Height(m.renderInputArea())
+	if m.state == uiStateQuerying {
+		reserved += 1 // activity line
+	}
+	if m.showSlash && len(m.slashMatches) > 0 {
+		reserved += lipgloss.Height(m.renderSlashSuggestions())
+	}
+	if m.state == uiStatePermission {
+		reserved += lipgloss.Height(m.renderPermissionPrompt())
+	}
+	reserved += 1 // status bar always occupies 1 line (avoids circular dependency with scroll %)
+	m.viewport.Height = max(4, m.height-reserved)
+}
+
 func (m *uiModel) refreshViewport() {
 	if !m.ready {
 		return
 	}
+	m.recalcViewportHeight()
 	offset := m.viewport.YOffset
 	keepOffset := m.userScrolled
 	m.viewport.SetContent(m.renderConversation())
@@ -934,9 +934,6 @@ func (m *uiModel) renderConversation() string {
 		case "user":
 			out.WriteString(renderUIUserBlock(block.Content, m.width))
 		case "assistant":
-			if block.Thinking != "" {
-				out.WriteString(renderUIThinking(block.Thinking, m.width))
-			}
 			if strings.TrimSpace(block.Content) != "" {
 				content := block.Content
 				if renderer != nil {
@@ -968,13 +965,6 @@ func (m *uiModel) renderConversation() string {
 func renderUIUserBlock(content string, width int) string {
 	var b strings.Builder
 	writeWrappedStyledLines(&b, content, max(20, width-lipgloss.Width("> ")), uiSecondaryText.Render(">")+" ", strings.Repeat(" ", lipgloss.Width("> ")), lipgloss.NewStyle())
-	return b.String()
-}
-
-func renderUIThinking(content string, width int) string {
-	var b strings.Builder
-	b.WriteString(uiSecondaryText.Render("●") + " " + uiMutedText.Render("thinking") + "\n")
-	writeWrappedStyledLines(&b, content, widthForPrefix(width), hookPad, dotPad, uiMutedText)
 	return b.String()
 }
 
@@ -1488,16 +1478,6 @@ func truncateUI(s string, maxLen int) string {
 		return string(rs[:1])
 	}
 	return string(rs[:maxLen-1]) + "…"
-}
-
-func formatUIDuration(d time.Duration) string {
-	if d < time.Second {
-		return fmt.Sprintf("%dms", d.Milliseconds())
-	}
-	if d < time.Minute {
-		return fmt.Sprintf("%.1fs", d.Seconds())
-	}
-	return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
 }
 
 func extractThinkText(raw string) (thinking string, visible string) {
