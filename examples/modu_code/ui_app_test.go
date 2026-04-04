@@ -144,3 +144,20 @@ func TestRenderToolOutputWrapsWhenNarrow(t *testing.T) {
 		t.Fatalf("expected later wrapped segment, got %q", got)
 	}
 }
+
+func TestRenderToolOutputCollapsedShowsExpandHint(t *testing.T) {
+	got := renderUIToolOutput("read", "l1\nl2\nl3\nl4\nl5", false, 80)
+	if !strings.Contains(got, "ctrl+o to expand") {
+		t.Fatalf("expected expand hint, got %q", got)
+	}
+	if strings.Contains(got, "l5") {
+		t.Fatalf("expected collapsed output to hide later lines, got %q", got)
+	}
+}
+
+func TestRenderToolOutputCollapsedShowsExpandHintForWrappedSingleLine(t *testing.T) {
+	got := renderUIToolOutput("bash", "this is one extremely long output line that should wrap into many terminal rows and still show the expand hint", false, 24)
+	if !strings.Contains(got, "ctrl+o to expand") {
+		t.Fatalf("expected expand hint for wrapped single line, got %q", got)
+	}
+}

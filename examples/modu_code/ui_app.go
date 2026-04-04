@@ -1017,10 +1017,10 @@ func renderUITool(tool *uiToolState, expanded bool, width int) string {
 func renderUIToolOutput(toolName, output string, expanded bool, w int) string {
 	var b strings.Builder
 	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
-	total := len(lines)
 
 	collapsedMax := 3
 	expandedMax := 30
+	rowWidth := widthForPrefix(w)
 
 	// padAt returns hookPad for the first line (idx==0), dotPad otherwise.
 	padAt := func(idx int) string {
@@ -1029,119 +1029,114 @@ func renderUIToolOutput(toolName, output string, expanded bool, w int) string {
 		}
 		return dotPad
 	}
+	maxRows := collapsedMax
+	if expanded {
+		maxRows = expandedMax
+	}
+
+	appendMoreHint := func(remaining int) {
+		if remaining > 0 {
+			b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d more lines (ctrl+o to expand)", remaining)) + "\n")
+		}
+	}
 
 	switch toolName {
 	case "read":
-		if !expanded {
-			b.WriteString(hookPad + uiDimText.Render(fmt.Sprintf("%d lines", total)) + "\n")
-		} else {
-			show := min(total, expandedMax)
-			for i := 0; i < show; i++ {
-				writeWrappedStyledLines(&b, lines[i], widthForPrefix(w), padAt(i), dotPad, uiDimText)
+		used, remaining := writeWrappedStyledRows(&b, lines, rowWidth, hookPad, dotPad, uiDimText, maxRows)
+		if expanded {
+			if remaining > 0 {
+				b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d more lines", remaining)) + "\n")
 			}
-			if total > show {
-				b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d lines", total-show)) + "\n")
-			}
+		} else if used > 0 {
+			appendMoreHint(remaining)
 		}
 
 	case "bash":
-		show := collapsedMax
-		if expanded {
-			show = expandedMax
-		}
-		if total <= show {
-			for i, line := range lines {
-				writeWrappedStyledLines(&b, line, widthForPrefix(w), padAt(i), dotPad, uiDimText)
-			}
-		} else {
-			for i := 0; i < show; i++ {
-				writeWrappedStyledLines(&b, lines[i], widthForPrefix(w), padAt(i), dotPad, uiDimText)
-			}
-			b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d lines (ctrl+o to expand)", total-show)) + "\n")
+		_, remaining := writeWrappedStyledRows(&b, lines, rowWidth, hookPad, dotPad, uiDimText, maxRows)
+		if !expanded {
+			appendMoreHint(remaining)
+		} else if remaining > 0 {
+			b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d more lines", remaining)) + "\n")
 		}
 
 	case "edit":
-		if !expanded {
+		if len(lines) == 0 || (len(lines) == 1 && lines[0] == "") {
 			b.WriteString(hookPad + uiSuccessText.Render("updated") + "\n")
 		} else {
-			show := min(total, expandedMax)
-			for i := 0; i < show; i++ {
-				pad := padAt(i)
-				line := lines[i]
+			usedRows := 0
+			remaining := 0
+			for lineIdx := 0; lineIdx < len(lines) && usedRows < maxRows; lineIdx++ {
+				pad := padAt(lineIdx)
+				line := lines[lineIdx]
+				style := uiDimText
 				if strings.HasPrefix(line, "+") {
-					writeWrappedStyledLines(&b, line, widthForPrefix(w), pad, dotPad, uiSuccessText)
+					style = uiSuccessText
 				} else if strings.HasPrefix(line, "-") {
-					writeWrappedStyledLines(&b, line, widthForPrefix(w), pad, dotPad, uiErrorText)
-				} else {
-					writeWrappedStyledLines(&b, line, widthForPrefix(w), pad, dotPad, uiDimText)
+					style = uiErrorText
 				}
+				used, complete, hidden := writeSingleWrappedRowBudget(&b, line, rowWidth, pad, dotPad, style, maxRows-usedRows)
+				usedRows += used
+				if !complete {
+					remaining += hidden
+					remaining += wrappedLineCount(lines[lineIdx+1:], rowWidth)
+					break
+				}
+				if lineIdx == len(lines)-1 {
+					break
+				}
+				remaining = wrappedLineCount(lines[lineIdx+1:], rowWidth)
 			}
-			if total > show {
-				b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d lines", total-show)) + "\n")
+			if expanded {
+				if remaining > 0 {
+					b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d more lines", remaining)) + "\n")
+				}
+			} else {
+				appendMoreHint(remaining)
 			}
 		}
 
 	case "write":
-		if !expanded {
+		if len(lines) == 0 || (len(lines) == 1 && lines[0] == "") {
 			b.WriteString(hookPad + uiSuccessText.Render("written") + "\n")
 		} else {
-			show := min(total, expandedMax)
-			for i := 0; i < show; i++ {
-				writeWrappedStyledLines(&b, lines[i], widthForPrefix(w), padAt(i), dotPad, uiDimText)
-			}
-			if total > show {
-				b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d lines", total-show)) + "\n")
+			_, remaining := writeWrappedStyledRows(&b, lines, rowWidth, hookPad, dotPad, uiDimText, maxRows)
+			if expanded {
+				if remaining > 0 {
+					b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d more lines", remaining)) + "\n")
+				}
+			} else {
+				appendMoreHint(remaining)
 			}
 		}
 
 	case "glob":
-		show := 8
+		_, remaining := writeWrappedStyledRows(&b, lines, rowWidth, hookPad, dotPad, uiDimText, maxRows)
 		if expanded {
-			show = 30
-		}
-		if total <= show {
-			for i, line := range lines {
-				writeWrappedStyledLines(&b, line, widthForPrefix(w), padAt(i), dotPad, uiDimText)
+			if remaining > 0 {
+				b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d more lines", remaining)) + "\n")
 			}
 		} else {
-			for i := 0; i < show; i++ {
-				writeWrappedStyledLines(&b, lines[i], widthForPrefix(w), padAt(i), dotPad, uiDimText)
-			}
-			b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d files", total-show)) + "\n")
+			appendMoreHint(remaining)
 		}
 
 	case "grep":
-		show := 5
+		_, remaining := writeWrappedStyledRows(&b, lines, rowWidth, hookPad, dotPad, uiDimText, maxRows)
 		if expanded {
-			show = 30
-		}
-		if total <= show {
-			for i, line := range lines {
-				writeWrappedStyledLines(&b, line, widthForPrefix(w), padAt(i), dotPad, uiDimText)
+			if remaining > 0 {
+				b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d more lines", remaining)) + "\n")
 			}
 		} else {
-			for i := 0; i < show; i++ {
-				writeWrappedStyledLines(&b, lines[i], widthForPrefix(w), padAt(i), dotPad, uiDimText)
-			}
-			b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d matches", total-show)) + "\n")
+			appendMoreHint(remaining)
 		}
 
 	default:
-		show := collapsedMax
+		_, remaining := writeWrappedStyledRows(&b, lines, rowWidth, hookPad, dotPad, uiDimText, maxRows)
 		if expanded {
-			show = expandedMax
-		}
-		if total <= show {
-			idx := 0
-			for _, line := range lines {
-				if line != "" {
-					writeWrappedStyledLines(&b, line, widthForPrefix(w), padAt(idx), dotPad, uiDimText)
-					idx++
-				}
+			if remaining > 0 {
+				b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d more lines", remaining)) + "\n")
 			}
 		} else {
-			writeWrappedStyledLines(&b, lines[0], widthForPrefix(w), hookPad, dotPad, uiDimText)
-			b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d lines (ctrl+o to expand)", total-1)) + "\n")
+			appendMoreHint(remaining)
 		}
 	}
 	return b.String()
@@ -1428,6 +1423,67 @@ func writeWrappedStyledLines(b *strings.Builder, text string, width int, firstPr
 			b.WriteString(prefix + style.Render(part) + "\n")
 		}
 	}
+}
+
+func wrapSegments(rawLine string, width int) []string {
+	width = max(8, width)
+	if strings.TrimSpace(rawLine) == "" {
+		return []string{""}
+	}
+	wrapped := wrap.String(rawLine, width)
+	parts := strings.Split(strings.TrimRight(wrapped, "\n"), "\n")
+	if len(parts) == 0 {
+		return []string{""}
+	}
+	return parts
+}
+
+func wrappedLineCount(lines []string, width int) int {
+	total := 0
+	for _, line := range lines {
+		total += len(wrapSegments(line, width))
+	}
+	return total
+}
+
+func writeWrappedStyledRows(b *strings.Builder, lines []string, width int, firstPrefix, restPrefix string, style lipgloss.Style, maxRows int) (used int, remaining int) {
+	maxRows = max(1, maxRows)
+	first := true
+	for i, line := range lines {
+		segments := wrapSegments(line, width)
+		for j, seg := range segments {
+			if used >= maxRows {
+				remaining += len(segments) - j
+				remaining += wrappedLineCount(lines[i+1:], width)
+				return used, remaining
+			}
+			prefix := restPrefix
+			if first {
+				prefix = firstPrefix
+				first = false
+			}
+			b.WriteString(prefix + style.Render(seg) + "\n")
+			used++
+		}
+	}
+	return used, remaining
+}
+
+func writeSingleWrappedRowBudget(b *strings.Builder, line string, width int, firstPrefix, restPrefix string, style lipgloss.Style, budget int) (used int, complete bool, hidden int) {
+	segments := wrapSegments(line, width)
+	budget = max(0, budget)
+	for i, seg := range segments {
+		if used >= budget {
+			return used, false, len(segments) - i
+		}
+		prefix := restPrefix
+		if i == 0 {
+			prefix = firstPrefix
+		}
+		b.WriteString(prefix + style.Render(seg) + "\n")
+		used++
+	}
+	return used, true, 0
 }
 
 func truncateUI(s string, maxLen int) string {
