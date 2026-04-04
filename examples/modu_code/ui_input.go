@@ -159,16 +159,48 @@ func (i *uiInputModel) navigateHistory(direction int) tea.Cmd {
 }
 
 func (i *uiInputModel) syncHeight() {
-	lines := strings.Count(i.ta.Value(), "\n") + 1
-	if lines < 1 {
-		lines = 1
+	// Content area width = total width minus prompt.
+	promptW := lipgloss.Width(i.ta.Prompt)
+	contentW := max(1, i.ta.Width()-promptW)
+	visualLines := 0
+	for _, line := range strings.Split(i.ta.Value(), "\n") {
+		w := lipgloss.Width(line)
+		if w <= contentW {
+			visualLines++
+		} else {
+			visualLines += (w + contentW - 1) / contentW
+		}
 	}
-	if lines > 10 {
-		lines = 10
+	newH := min(max(1, visualLines), 10)
+	oldH := i.ta.Height()
+	if newH != oldH {
+		// Re-set content so the textarea's internal viewport re-layouts
+		// from scratch with the new height. Without this, the viewport
+		// offset stays stale and only the last line is visible.
+		val := i.ta.Value()
+		i.ta.SetHeight(newH)
+		i.ta.Reset()
+		i.ta.InsertString(val)
 	}
-	i.ta.SetHeight(lines)
 }
 
 func (i *uiInputModel) View() string {
-	return "  " + i.ta.View()
+	raw := i.ta.View()
+	lines := strings.Split(raw, "\n")
+	if len(lines) <= 1 {
+		return raw
+	}
+	// First line keeps the "> " prompt; continuation lines replace it
+	// with spaces of the same visual width so text stays aligned.
+	pad := strings.Repeat(" ", lipgloss.Width(i.ta.Prompt))
+	for idx := 1; idx < len(lines); idx++ {
+		// The textarea renders the prompt (styled) at the start of each line.
+		// Strip styled prompt and replace with plain padding.
+		if after, ok := strings.CutPrefix(lines[idx], i.ta.FocusedStyle.Prompt.Render(i.ta.Prompt)); ok {
+			lines[idx] = pad + after
+		} else if after, ok := strings.CutPrefix(lines[idx], i.ta.BlurredStyle.Prompt.Render(i.ta.Prompt)); ok {
+			lines[idx] = pad + after
+		}
+	}
+	return strings.Join(lines, "\n")
 }

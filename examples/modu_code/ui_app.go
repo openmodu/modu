@@ -233,18 +233,13 @@ func (m *uiModel) Init() tea.Cmd {
 func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		headerHeight := 1
-		statusHeight := 1
-		inputHeight := lipgloss.Height(m.renderInputArea())
-		if inputHeight > 0 {
-			inputHeight--
-		}
 		prevContent := m.viewport.View()
 		prevOffset := m.viewport.YOffset
 		prevScrolled := m.userScrolled
 		m.width = msg.Width
 		m.height = msg.Height
-		m.viewport = viewport.New(msg.Width, max(4, msg.Height-headerHeight-statusHeight-inputHeight-2))
+		// Reserve fixed space: header(1) + activity(1) + input area(~4) + separators(~2) = 8
+		m.viewport = viewport.New(msg.Width, max(4, msg.Height-8))
 		m.input.SetWidth(max(20, msg.Width-4))
 		m.ready = true
 		if prevContent != "" {
@@ -701,6 +696,7 @@ func (m *uiModel) View() string {
 	if !m.ready {
 		return "  " + m.spinner.View() + " loading modu_code..."
 	}
+
 	var parts []string
 	parts = append(parts, m.renderHeader())
 	if meta := m.renderSessionMeta(); meta != "" {
@@ -724,7 +720,9 @@ func (m *uiModel) View() string {
 		}
 		parts = append(parts, m.renderInputArea())
 	}
-	parts = append(parts, m.renderStatusBar())
+	if sb := m.renderStatusBar(); sb != "" {
+		parts = append(parts, sb)
+	}
 	return strings.Join(parts, "\n")
 }
 
@@ -796,17 +794,17 @@ func (m *uiModel) renderActivityLine() string {
 }
 
 func (m *uiModel) renderInputArea() string {
-	box := lipgloss.NewStyle().PaddingLeft(1).Render(m.input.View())
+	box := m.input.View()
 	hint := "enter send  shift+enter newline  tab complete  ctrl+o expand  /help"
 	if m.state == uiStateQuerying {
 		hint = "draft while waiting  enter waits  ctrl+c interrupt  shift+enter newline"
 	}
 	hintText := uiDimText.Render(hint)
-	areaStyle := lipgloss.NewStyle().MarginTop(1)
+	rule := uiDimText.Render(strings.Repeat("─", max(10, m.width)))
 	if m.errMsg != "" {
-		return areaStyle.Render(uiErrorText.Render("  ! "+m.errMsg) + "\n" + box + "\n  " + hintText)
+		return rule + "\n" + uiErrorText.Render("  ! "+m.errMsg) + "\n" + box + "\n" + rule + "\n" + hintText
 	}
-	return areaStyle.Render(box + "\n  " + hintText)
+	return rule + "\n" + box + "\n" + rule + "\n" + hintText
 }
 
 func (m *uiModel) renderPermissionPrompt() string {
@@ -851,6 +849,7 @@ func (m *uiModel) renderSlashSuggestions() string {
 }
 
 // ─── Viewport ────────────────────────────────────
+
 
 func (m *uiModel) refreshViewport() {
 	if !m.ready {
