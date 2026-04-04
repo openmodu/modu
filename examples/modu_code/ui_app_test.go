@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 func TestUIQueryingKeepsDraftOnEnter(t *testing.T) {
@@ -58,10 +59,10 @@ func TestUIRenderInputAreaUsesQueryingHint(t *testing.T) {
 	m.state = uiStateQuerying
 
 	got := m.renderInputArea()
-	if !strings.Contains(got, "model "+model.Name) {
+	if !strings.Contains(got, model.Name) || !strings.Contains(got, "("+model.ProviderID+")") {
 		t.Fatalf("expected model info, got %q", got)
 	}
-	if !strings.Contains(got, "cwd ") {
+	if !strings.Contains(got, session.RuntimeState().Cwd) && !strings.Contains(got, filepath.Base(session.RuntimeState().Cwd)) {
 		t.Fatalf("expected cwd info, got %q", got)
 	}
 
@@ -187,11 +188,25 @@ func TestRenderInputMetaUsesShortenedCwd(t *testing.T) {
 	model := testExampleModel()
 	m := newUIModel(context.Background(), session, model, nil, "", nil, nil, "")
 	got := m.renderInputMeta()
-	if !strings.Contains(got, "model "+model.Name) {
+	if !strings.Contains(got, model.Name) || !strings.Contains(got, "("+model.ProviderID+")") {
 		t.Fatalf("expected model in meta, got %q", got)
 	}
 	if !strings.Contains(got, filepath.Base(session.RuntimeState().Cwd)) {
 		t.Fatalf("expected cwd in meta, got %q", got)
+	}
+}
+
+func TestRenderInputMetaDoesNotDuplicateProvider(t *testing.T) {
+	session := newExampleTestSession(t)
+	model := &types.Model{
+		ID:         "qwen/qwen3.5-35b-a3b",
+		Name:       "qwen/qwen3.5-35b-a3b (lmstudio)",
+		ProviderID: "lmstudio",
+	}
+	m := newUIModel(context.Background(), session, model, nil, "", nil, nil, "")
+	got := m.renderInputMeta()
+	if strings.Count(strings.ToLower(got), "lmstudio") != 1 {
+		t.Fatalf("expected provider to appear once, got %q", got)
 	}
 }
 
@@ -200,6 +215,19 @@ func TestRenderInputAreaOmitsTrailingEmptyMetaLine(t *testing.T) {
 	got := m.renderInputArea()
 	if strings.HasSuffix(got, "\n") {
 		t.Fatalf("expected no trailing empty line, got %q", got)
+	}
+}
+
+func TestWindowResizeUsesRenderedInputHeight(t *testing.T) {
+	session := newExampleTestSession(t)
+	model := testExampleModel()
+	m := newUIModel(context.Background(), session, model, nil, "", nil, nil, "")
+	m.ready = true
+	m.state = uiStateInput
+
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	if m.viewport.Height <= 12 {
+		t.Fatalf("expected viewport height to use rendered footer space, got %d", m.viewport.Height)
 	}
 }
 

@@ -241,9 +241,21 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		prevScrolled := m.userScrolled
 		m.width = msg.Width
 		m.height = msg.Height
-		// Reserve fixed space: header(1) + activity(1) + input area(~4) + separators(~2) = 8
-		m.viewport = viewport.New(msg.Width, max(4, msg.Height-8))
 		m.input.SetWidth(max(20, msg.Width-4))
+		reserved := lipgloss.Height(m.renderInputArea())
+		if m.state == uiStateQuerying {
+			reserved += 1 // activity line
+		}
+		if m.showSlash && len(m.slashMatches) > 0 {
+			reserved += lipgloss.Height(m.renderSlashSuggestions())
+		}
+		if m.state == uiStatePermission {
+			reserved += lipgloss.Height(m.renderPermissionPrompt())
+		}
+		if sb := m.renderStatusBar(); sb != "" {
+			reserved += lipgloss.Height(sb)
+		}
+		m.viewport = viewport.New(msg.Width, max(4, msg.Height-reserved))
 		m.ready = true
 		if prevContent != "" {
 			m.viewport.SetContent(prevContent)
@@ -788,14 +800,23 @@ func (m *uiModel) renderInputArea() string {
 
 func (m *uiModel) renderInputMeta() string {
 	var parts []string
-	if m.model != nil && m.model.Name != "" {
-		parts = append(parts, "model "+m.model.Name)
+	if m.model != nil {
+		modelText := m.model.Name
+		if modelText == "" {
+			modelText = m.model.ID
+		}
+		if m.model.ProviderID != "" && !strings.Contains(modelText, "(") {
+			modelText += " (" + m.model.ProviderID + ")"
+		}
+		if strings.TrimSpace(modelText) != "" {
+			parts = append(parts, modelText)
+		}
 	}
 	if m.session != nil {
 		cwd := m.session.RuntimeState().Cwd
 		if cwd != "" {
 			cwd = shortenUIPath(cwd)
-			parts = append(parts, "cwd "+cwd)
+			parts = append(parts, cwd)
 		}
 	}
 	if m.tgUsername != "" {
