@@ -16,7 +16,10 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
+	glamouransi "github.com/charmbracelet/glamour/ansi"
+	glamourstyles "github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/reflow/wrap"
 
 	"github.com/openmodu/modu/pkg/agent"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
@@ -799,7 +802,7 @@ func (m *uiModel) renderInputArea() string {
 	if m.state == uiStateQuerying {
 		hint = "draft while waiting  enter waits  ctrl+c interrupt  shift+enter newline"
 	}
-	hintText := uiDimText.Render(hint)
+	hintText := uiDimText.Render(wrap.String(hint, max(20, m.width)))
 	rule := uiDimText.Render(strings.Repeat("─", max(10, m.width)))
 	if m.errMsg != "" {
 		return rule + "\n" + uiErrorText.Render("  ! "+m.errMsg) + "\n" + box + "\n" + rule + "\n" + hintText
@@ -815,6 +818,7 @@ func (m *uiModel) renderPermissionPrompt() string {
 	if len(input) > 400 {
 		input = input[:400] + "..."
 	}
+	input = wrap.String(input, max(20, m.width-hookPadW))
 	lines := []string{
 		fmt.Sprintf("%s %s", uiWarningText.Render("●"), uiPrimaryText.Bold(true).Render(m.pendingPerm.ToolName)),
 		hookPad + uiDimText.Render(input),
@@ -849,7 +853,6 @@ func (m *uiModel) renderSlashSuggestions() string {
 }
 
 // ─── Viewport ────────────────────────────────────
-
 
 func (m *uiModel) refreshViewport() {
 	if !m.ready {
@@ -889,11 +892,19 @@ func (m *uiModel) renderConversation() string {
 	if len(m.blocks) == 0 {
 		return m.renderWelcome()
 	}
-	// Wrap width accounts for the dot/hook prefix so lines don't overflow.
-	wrapWidth := max(40, m.width-max(dotPadW, hookPadW)-1)
+	// Build a glamour style with zero document margin so we control all
+	// indentation ourselves. We pass a large word wrap and re-wrap ourselves
+	// using reflow/wrap which is display-width-aware (handles CJK correctly).
+	contentWidth := max(20, m.width-max(dotPadW, hookPadW))
+	noMargin := uint(0)
+	style := glamourstyles.DarkStyleConfig
+	style.Document = glamouransi.StyleBlock{
+		StylePrimitive: style.Document.StylePrimitive,
+		Margin:         &noMargin,
+	}
 	renderer, _ := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
-		glamour.WithWordWrap(wrapWidth),
+		glamour.WithStyles(style),
+		glamour.WithWordWrap(contentWidth),
 	)
 	var out strings.Builder
 	for idx, block := range m.blocks {
@@ -905,7 +916,7 @@ func (m *uiModel) renderConversation() string {
 			out.WriteString(renderUIUserBlock(block.Content, m.width))
 		case "assistant":
 			if block.Thinking != "" {
-				out.WriteString(renderUIThinking(block.Thinking))
+				out.WriteString(renderUIThinking(block.Thinking, m.width))
 			}
 			if strings.TrimSpace(block.Content) != "" {
 				content := block.Content
@@ -914,7 +925,10 @@ func (m *uiModel) renderConversation() string {
 						content = strings.TrimSpace(rendered)
 					}
 				}
-				out.WriteString(renderUIAssistantBlock(content))
+				// Re-wrap using display-width-aware wrap so CJK and long
+				// lines always fit within contentWidth after the prefix.
+				content = wrap.String(content, contentWidth)
+				out.WriteString(renderUIAssistantBlock(content, m.width))
 			}
 		case "tool":
 			for _, tool := range block.Tools {
@@ -933,56 +947,21 @@ func (m *uiModel) renderConversation() string {
 }
 
 func renderUIUserBlock(content string, width int) string {
-	_ = width
 	var b strings.Builder
-	// User messages use "> " instead of a dot.
-	promptW := lipgloss.Width("> ")
-	userPad := strings.Repeat(" ", promptW)
-	for idx, line := range strings.Split(content, "\n") {
-		prefix := userPad
-		if idx == 0 {
-			prefix = uiSecondaryText.Render(">") + " "
-		}
-		b.WriteString(prefix + line + "\n")
-	}
+	writeWrappedStyledLines(&b, content, max(20, width-lipgloss.Width("> ")), uiSecondaryText.Render(">")+" ", strings.Repeat(" ", lipgloss.Width("> ")), lipgloss.NewStyle())
 	return b.String()
 }
 
-func renderUIThinking(content string) string {
+func renderUIThinking(content string, width int) string {
 	var b strings.Builder
 	b.WriteString(uiSecondaryText.Render("●") + " " + uiMutedText.Render("thinking") + "\n")
-	first := true
-	for _, line := range strings.Split(strings.TrimRight(content, "\n"), "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		if first {
-			b.WriteString(hookPad + uiMutedText.Render(line) + "\n")
-			first = false
-		} else {
-			b.WriteString(dotPad + uiMutedText.Render(line) + "\n")
-		}
-	}
+	writeWrappedStyledLines(&b, content, widthForPrefix(width), hookPad, dotPad, uiMutedText)
 	return b.String()
 }
 
-func renderUIAssistantBlock(content string) string {
+func renderUIAssistantBlock(content string, width int) string {
 	var b strings.Builder
-	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
-	first := true
-	for _, line := range lines {
-		trimmed := strings.TrimLeft(line, " ")
-		if strings.TrimSpace(trimmed) == "" {
-			b.WriteString("\n")
-			continue
-		}
-		if first {
-			b.WriteString(uiWhiteText.Render("●") + " " + trimmed + "\n")
-			first = false
-		} else {
-			b.WriteString(dotPad + trimmed + "\n")
-		}
-	}
+	writeWrappedStyledLines(&b, content, widthForPrefix(width), uiWhiteText.Render("●")+" ", dotPad, lipgloss.NewStyle())
 	return b.String()
 }
 
@@ -1022,7 +1001,7 @@ func renderUITool(tool *uiToolState, expanded bool, width int) string {
 				b.WriteString(dotPad + uiErrorText.Render(fmt.Sprintf("... +%d more lines", len(errLines)-5)) + "\n")
 				break
 			}
-			b.WriteString(pad + uiErrorText.Render(truncateUI(line, w-8)) + "\n")
+			writeWrappedStyledLines(&b, line, widthForPrefix(w), pad, dotPad, uiErrorText)
 		}
 		return b.String()
 	}
@@ -1058,7 +1037,7 @@ func renderUIToolOutput(toolName, output string, expanded bool, w int) string {
 		} else {
 			show := min(total, expandedMax)
 			for i := 0; i < show; i++ {
-				b.WriteString(padAt(i) + uiDimText.Render(truncateUI(lines[i], w-8)) + "\n")
+				writeWrappedStyledLines(&b, lines[i], widthForPrefix(w), padAt(i), dotPad, uiDimText)
 			}
 			if total > show {
 				b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d lines", total-show)) + "\n")
@@ -1072,11 +1051,11 @@ func renderUIToolOutput(toolName, output string, expanded bool, w int) string {
 		}
 		if total <= show {
 			for i, line := range lines {
-				b.WriteString(padAt(i) + uiDimText.Render(truncateUI(line, w-8)) + "\n")
+				writeWrappedStyledLines(&b, line, widthForPrefix(w), padAt(i), dotPad, uiDimText)
 			}
 		} else {
 			for i := 0; i < show; i++ {
-				b.WriteString(padAt(i) + uiDimText.Render(truncateUI(lines[i], w-8)) + "\n")
+				writeWrappedStyledLines(&b, lines[i], widthForPrefix(w), padAt(i), dotPad, uiDimText)
 			}
 			b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d lines (ctrl+o to expand)", total-show)) + "\n")
 		}
@@ -1090,11 +1069,11 @@ func renderUIToolOutput(toolName, output string, expanded bool, w int) string {
 				pad := padAt(i)
 				line := lines[i]
 				if strings.HasPrefix(line, "+") {
-					b.WriteString(pad + uiSuccessText.Render(truncateUI(line, w-8)) + "\n")
+					writeWrappedStyledLines(&b, line, widthForPrefix(w), pad, dotPad, uiSuccessText)
 				} else if strings.HasPrefix(line, "-") {
-					b.WriteString(pad + uiErrorText.Render(truncateUI(line, w-8)) + "\n")
+					writeWrappedStyledLines(&b, line, widthForPrefix(w), pad, dotPad, uiErrorText)
 				} else {
-					b.WriteString(pad + uiDimText.Render(truncateUI(line, w-8)) + "\n")
+					writeWrappedStyledLines(&b, line, widthForPrefix(w), pad, dotPad, uiDimText)
 				}
 			}
 			if total > show {
@@ -1108,7 +1087,7 @@ func renderUIToolOutput(toolName, output string, expanded bool, w int) string {
 		} else {
 			show := min(total, expandedMax)
 			for i := 0; i < show; i++ {
-				b.WriteString(padAt(i) + uiDimText.Render(truncateUI(lines[i], w-8)) + "\n")
+				writeWrappedStyledLines(&b, lines[i], widthForPrefix(w), padAt(i), dotPad, uiDimText)
 			}
 			if total > show {
 				b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d lines", total-show)) + "\n")
@@ -1122,11 +1101,11 @@ func renderUIToolOutput(toolName, output string, expanded bool, w int) string {
 		}
 		if total <= show {
 			for i, line := range lines {
-				b.WriteString(padAt(i) + uiDimText.Render(truncateUI(line, w-8)) + "\n")
+				writeWrappedStyledLines(&b, line, widthForPrefix(w), padAt(i), dotPad, uiDimText)
 			}
 		} else {
 			for i := 0; i < show; i++ {
-				b.WriteString(padAt(i) + uiDimText.Render(truncateUI(lines[i], w-8)) + "\n")
+				writeWrappedStyledLines(&b, lines[i], widthForPrefix(w), padAt(i), dotPad, uiDimText)
 			}
 			b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d files", total-show)) + "\n")
 		}
@@ -1138,11 +1117,11 @@ func renderUIToolOutput(toolName, output string, expanded bool, w int) string {
 		}
 		if total <= show {
 			for i, line := range lines {
-				b.WriteString(padAt(i) + uiDimText.Render(truncateUI(line, w-8)) + "\n")
+				writeWrappedStyledLines(&b, line, widthForPrefix(w), padAt(i), dotPad, uiDimText)
 			}
 		} else {
 			for i := 0; i < show; i++ {
-				b.WriteString(padAt(i) + uiDimText.Render(truncateUI(lines[i], w-8)) + "\n")
+				writeWrappedStyledLines(&b, lines[i], widthForPrefix(w), padAt(i), dotPad, uiDimText)
 			}
 			b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d matches", total-show)) + "\n")
 		}
@@ -1156,12 +1135,12 @@ func renderUIToolOutput(toolName, output string, expanded bool, w int) string {
 			idx := 0
 			for _, line := range lines {
 				if line != "" {
-					b.WriteString(padAt(idx) + uiDimText.Render(truncateUI(line, w-8)) + "\n")
+					writeWrappedStyledLines(&b, line, widthForPrefix(w), padAt(idx), dotPad, uiDimText)
 					idx++
 				}
 			}
 		} else {
-			b.WriteString(hookPad + uiDimText.Render(truncateUI(lines[0], w-8)) + "\n")
+			writeWrappedStyledLines(&b, lines[0], widthForPrefix(w), hookPad, dotPad, uiDimText)
 			b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d lines (ctrl+o to expand)", total-1)) + "\n")
 		}
 	}
@@ -1426,6 +1405,30 @@ func fullResultText(ev agent.AgentEvent) string {
 }
 
 // ─── Utility ─────────────────────────────────────
+
+func widthForPrefix(totalWidth int) int {
+	return max(12, totalWidth-max(dotPadW, hookPadW))
+}
+
+func writeWrappedStyledLines(b *strings.Builder, text string, width int, firstPrefix, restPrefix string, style lipgloss.Style) {
+	width = max(8, width)
+	first := true
+	for _, rawLine := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+		if strings.TrimSpace(rawLine) == "" {
+			b.WriteString("\n")
+			continue
+		}
+		wrapped := wrap.String(rawLine, width)
+		for _, part := range strings.Split(strings.TrimRight(wrapped, "\n"), "\n") {
+			prefix := restPrefix
+			if first {
+				prefix = firstPrefix
+				first = false
+			}
+			b.WriteString(prefix + style.Render(part) + "\n")
+		}
+	}
+}
 
 func truncateUI(s string, maxLen int) string {
 	if maxLen <= 0 {

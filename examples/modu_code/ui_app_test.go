@@ -134,3 +134,13 @@ func TestExtractThinkTextHidesIncompleteThinkBlock(t *testing.T) {
 		t.Fatalf("expected visible text before incomplete think block, got %q", visible)
 	}
 }
+
+func TestRenderToolOutputWrapsWhenNarrow(t *testing.T) {
+	got := renderUIToolOutput("bash", "this is a long line that should wrap instead of disappearing", true, 24)
+	if !strings.Contains(got, "this is a") {
+		t.Fatalf("expected first wrapped segment, got %q", got)
+	}
+	if !strings.Contains(got, "should wrap") {
+		t.Fatalf("expected later wrapped segment, got %q", got)
+	}
+}
