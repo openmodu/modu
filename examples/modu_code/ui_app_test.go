@@ -107,8 +107,8 @@ func TestUIRenderConversationUsesBulletPrefixes(t *testing.T) {
 	if !strings.Contains(got, "thinking") {
 		t.Fatalf("expected thinking header, got %q", got)
 	}
-	if !strings.Contains(got, "assistant") {
-		t.Fatalf("expected assistant header, got %q", got)
+	if !strings.Contains(got, "answer") {
+		t.Fatalf("expected assistant content, got %q", got)
 	}
 	if !strings.Contains(got, "read") {
 		t.Fatalf("expected tool line, got %q", got)

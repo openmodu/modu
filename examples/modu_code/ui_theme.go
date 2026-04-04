@@ -16,6 +16,7 @@ var (
 	uiMuted     = lipgloss.Color("#8B9098")
 	uiDim       = lipgloss.Color("#5C6370")
 
+	uiWhiteText     = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
 	uiPrimaryText   = lipgloss.NewStyle().Foreground(uiPrimary)
 	uiSecondaryText = lipgloss.NewStyle().Foreground(uiSecondary)
 	uiSuccessText   = lipgloss.NewStyle().Foreground(uiSuccess)

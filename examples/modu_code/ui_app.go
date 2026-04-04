@@ -727,7 +727,7 @@ func (m *uiModel) View() string {
 }
 
 func (m *uiModel) renderHeader() string {
-	line := "  " + uiPrimaryText.Render("●") + " " + uiPrimaryText.Bold(true).Render("modu_code")
+	line := uiPrimaryText.Render("●") + " " + uiPrimaryText.Bold(true).Render("modu_code")
 	line += uiMutedText.Render("  " + m.model.Name)
 	if m.tgUsername != "" {
 		line += uiMutedText.Render("  @" + m.tgUsername)
@@ -816,7 +816,7 @@ func (m *uiModel) renderPermissionPrompt() string {
 		input = input[:400] + "..."
 	}
 	lines := []string{
-		fmt.Sprintf("  %s %s", uiWarningText.Render("●"), uiPrimaryText.Bold(true).Render(m.pendingPerm.ToolName)),
+		fmt.Sprintf("%s %s", uiWarningText.Render("●"), uiPrimaryText.Bold(true).Render(m.pendingPerm.ToolName)),
 		hookPad + uiDimText.Render(input),
 		dotPad + uiSuccessText.Bold(true).Render("[Y]es") + "  " +
 			uiErrorText.Render("[N]o") + "  " +
@@ -868,16 +868,20 @@ func (m *uiModel) refreshViewport() {
 	m.viewport.GotoBottom()
 }
 
-// dotPadW is the visual cell-width of the "  ● " prefix (accounts for
-// ● being 2 cells in CJK terminals).
-var dotPadW = lipgloss.Width("  ● ")
+// dotPadW is the visual cell-width of "● " (● may be 2 cells in CJK terminals).
+var dotPadW = lipgloss.Width("● ")
 
-// dotPad is a pure-space indent that matches the dot-prefix width.
-var dotPad = strings.Repeat(" ", dotPadW)
+// hookStr is the raw connector string: 2 spaces + ⎿ + 1 space.
+const hookStr = "  ⎿ "
 
-// hookPad uses "⎿" as a visual connector from the ● header to its body,
-// padded to the same width as dotPad so content stays aligned.
-var hookPad = "  " + uiDimText.Render("⎿") + strings.Repeat(" ", dotPadW-lipgloss.Width("  ⎿"))
+// hookPadW is the visual width of hookStr.
+var hookPadW = lipgloss.Width(hookStr)
+
+// dotPad aligns continuation lines to the widest of the two prefixes.
+var dotPad = strings.Repeat(" ", max(dotPadW, hookPadW))
+
+// hookPad renders the ⎿ connector at fixed width.
+var hookPad = uiDimText.Render(hookStr)
 
 // ─── Conversation rendering ───────────────────────
 
@@ -885,9 +889,11 @@ func (m *uiModel) renderConversation() string {
 	if len(m.blocks) == 0 {
 		return m.renderWelcome()
 	}
+	// Wrap width accounts for the dot/hook prefix so lines don't overflow.
+	wrapWidth := max(40, m.width-max(dotPadW, hookPadW)-1)
 	renderer, _ := glamour.NewTermRenderer(
 		glamour.WithAutoStyle(),
-		glamour.WithWordWrap(max(40, m.width-8)),
+		glamour.WithWordWrap(wrapWidth),
 	)
 	var out strings.Builder
 	for idx, block := range m.blocks {
@@ -929,10 +935,13 @@ func (m *uiModel) renderConversation() string {
 func renderUIUserBlock(content string, width int) string {
 	_ = width
 	var b strings.Builder
+	// User messages use "> " instead of a dot.
+	promptW := lipgloss.Width("> ")
+	userPad := strings.Repeat(" ", promptW)
 	for idx, line := range strings.Split(content, "\n") {
-		prefix := dotPad
+		prefix := userPad
 		if idx == 0 {
-			prefix = "  " + uiSecondaryText.Render("●") + " "
+			prefix = uiSecondaryText.Render(">") + " "
 		}
 		b.WriteString(prefix + line + "\n")
 	}
@@ -941,7 +950,7 @@ func renderUIUserBlock(content string, width int) string {
 
 func renderUIThinking(content string) string {
 	var b strings.Builder
-	b.WriteString("  " + uiSecondaryText.Render("●") + " " + uiMutedText.Render("thinking") + "\n")
+	b.WriteString(uiSecondaryText.Render("●") + " " + uiMutedText.Render("thinking") + "\n")
 	first := true
 	for _, line := range strings.Split(strings.TrimRight(content, "\n"), "\n") {
 		if strings.TrimSpace(line) == "" {
@@ -959,16 +968,16 @@ func renderUIThinking(content string) string {
 
 func renderUIAssistantBlock(content string) string {
 	var b strings.Builder
-	b.WriteString("  " + uiPrimaryText.Render("●") + " " + uiMutedText.Render("assistant") + "\n")
+	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
 	first := true
-	for _, line := range strings.Split(strings.TrimRight(content, "\n"), "\n") {
+	for _, line := range lines {
 		trimmed := strings.TrimLeft(line, " ")
 		if strings.TrimSpace(trimmed) == "" {
 			b.WriteString("\n")
 			continue
 		}
 		if first {
-			b.WriteString(hookPad + trimmed + "\n")
+			b.WriteString(uiWhiteText.Render("●") + " " + trimmed + "\n")
 			first = false
 		} else {
 			b.WriteString(dotPad + trimmed + "\n")
@@ -981,7 +990,7 @@ func renderUITool(tool *uiToolState, expanded bool, width int) string {
 	var b strings.Builder
 	w := width
 
-	dot := uiPrimaryText.Render("●")
+	dot := uiWhiteText.Render("●")
 	nameStyle := uiPrimaryText.Bold(true)
 	if tool.Status == "done" {
 		dot = uiSuccessText.Render("●")
@@ -995,7 +1004,7 @@ func renderUITool(tool *uiToolState, expanded bool, width int) string {
 	if tool.Input != "" {
 		args = uiMutedText.Render("(" + truncateUI(tool.Input, 80) + ")")
 	}
-	b.WriteString(fmt.Sprintf("  %s %s%s\n", dot, nameStyle.Render(tool.Name), args))
+	b.WriteString(fmt.Sprintf("%s %s%s\n", dot, nameStyle.Render(tool.Name), args))
 
 	if tool.Status == "running" {
 		b.WriteString(hookPad + uiDimText.Render("running") + "\n")
@@ -1176,7 +1185,7 @@ func (m *uiModel) renderWelcome() string {
 
 	var b strings.Builder
 	b.WriteString("\n")
-	b.WriteString("  " + p.Render("●") + " " + p.Bold(true).Render("modu_code") + mt.Render(" interactive coding session") + "\n")
+	b.WriteString(p.Render("●") + " " + p.Bold(true).Render("modu_code") + mt.Render(" interactive coding session") + "\n")
 	b.WriteString(hookPad + mt.Render(fmt.Sprintf("cwd   %s", cwd)) + "\n")
 	b.WriteString(dotPad + mt.Render(fmt.Sprintf("model %s", m.model.Name)) + "\n")
 	b.WriteString("\n")
