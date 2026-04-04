@@ -788,13 +788,13 @@ func (m *uiModel) renderInputArea() string {
 		if meta == "" {
 			return rule + "\n" + uiErrorText.Render("  ! "+m.errMsg) + "\n" + box + "\n" + rule
 		}
-		hintText := uiDimText.Render(wrap.String(meta, max(20, m.width)))
+		hintText := uiDimText.Render(truncateUI(meta, max(8, m.width)))
 		return rule + "\n" + uiErrorText.Render("  ! "+m.errMsg) + "\n" + box + "\n" + rule + "\n" + hintText
 	}
 	if meta == "" {
 		return rule + "\n" + box + "\n" + rule
 	}
-	hintText := uiDimText.Render(wrap.String(meta, max(20, m.width)))
+	hintText := uiDimText.Render(truncateUI(meta, max(8, m.width)))
 	return rule + "\n" + box + "\n" + rule + "\n" + hintText
 }
 
