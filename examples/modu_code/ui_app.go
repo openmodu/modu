@@ -701,10 +701,6 @@ func (m *uiModel) View() string {
 	}
 
 	var parts []string
-	parts = append(parts, m.renderHeader())
-	if meta := m.renderSessionMeta(); meta != "" {
-		parts = append(parts, meta)
-	}
 	parts = append(parts, m.viewport.View())
 	switch m.state {
 	case uiStatePermission:
@@ -730,35 +726,11 @@ func (m *uiModel) View() string {
 }
 
 func (m *uiModel) renderHeader() string {
-	line := uiPrimaryText.Render("●") + " " + uiPrimaryText.Bold(true).Render("modu_code")
-	line += uiMutedText.Render("  " + m.model.Name)
-	if m.tgUsername != "" {
-		line += uiMutedText.Render("  @" + m.tgUsername)
-	}
-	return lipgloss.NewStyle().Width(m.width).Render(line)
+	return ""
 }
 
 func (m *uiModel) renderSessionMeta() string {
-	var parts []string
-	if m.session != nil {
-		stats := m.session.GetSessionStats()
-		if stats.TotalTokens > 0 {
-			parts = append(parts, uiMutedText.Render(fmt.Sprintf("~%d tokens", stats.TotalTokens)))
-		}
-		if m.session.IsPlanMode() {
-			parts = append(parts, uiSecondaryText.Render("plan"))
-		}
-		if m.session.ActiveWorktree() != "" {
-			parts = append(parts, uiWarningText.Render("worktree"))
-		}
-	}
-	if m.transcriptMode {
-		parts = append(parts, uiDimText.Render("expanded"))
-	}
-	if len(parts) == 0 {
-		return ""
-	}
-	return "    " + strings.Join(parts, uiDimText.Render(" · "))
+	return ""
 }
 
 func (m *uiModel) renderStatusBar() string {
@@ -798,16 +770,38 @@ func (m *uiModel) renderActivityLine() string {
 
 func (m *uiModel) renderInputArea() string {
 	box := m.input.View()
-	hint := "enter send  shift+enter newline  tab complete  ctrl+o expand  /help"
-	if m.state == uiStateQuerying {
-		hint = "draft while waiting  enter waits  ctrl+c interrupt  shift+enter newline"
-	}
-	hintText := uiDimText.Render(wrap.String(hint, max(20, m.width)))
+	meta := strings.TrimSpace(m.renderInputMeta())
 	rule := uiDimText.Render(strings.Repeat("─", max(10, m.width)))
 	if m.errMsg != "" {
+		if meta == "" {
+			return rule + "\n" + uiErrorText.Render("  ! "+m.errMsg) + "\n" + box + "\n" + rule
+		}
+		hintText := uiDimText.Render(wrap.String(meta, max(20, m.width)))
 		return rule + "\n" + uiErrorText.Render("  ! "+m.errMsg) + "\n" + box + "\n" + rule + "\n" + hintText
 	}
+	if meta == "" {
+		return rule + "\n" + box + "\n" + rule
+	}
+	hintText := uiDimText.Render(wrap.String(meta, max(20, m.width)))
 	return rule + "\n" + box + "\n" + rule + "\n" + hintText
+}
+
+func (m *uiModel) renderInputMeta() string {
+	var parts []string
+	if m.model != nil && m.model.Name != "" {
+		parts = append(parts, "model "+m.model.Name)
+	}
+	if m.session != nil {
+		cwd := m.session.RuntimeState().Cwd
+		if cwd != "" {
+			cwd = shortenUIPath(cwd)
+			parts = append(parts, "cwd "+cwd)
+		}
+	}
+	if m.tgUsername != "" {
+		parts = append(parts, "@"+m.tgUsername)
+	}
+	return strings.Join(parts, "  ·  ")
 }
 
 func (m *uiModel) renderPermissionPrompt() string {
@@ -1152,36 +1146,7 @@ func renderUISection(title, content string, width int) string {
 }
 
 func (m *uiModel) renderWelcome() string {
-	cwd := m.session.RuntimeState().Cwd
-	home, _ := os.UserHomeDir()
-	if home != "" && strings.HasPrefix(cwd, home) {
-		cwd = "~" + cwd[len(home):]
-	}
-	p := uiPrimaryText
-	mt := uiMutedText
-	d := uiDimText
-
-	var b strings.Builder
-	b.WriteString("\n")
-	b.WriteString(p.Render("●") + " " + p.Bold(true).Render("modu_code") + mt.Render(" interactive coding session") + "\n")
-	b.WriteString(hookPad + mt.Render(fmt.Sprintf("cwd   %s", cwd)) + "\n")
-	b.WriteString(dotPad + mt.Render(fmt.Sprintf("model %s", m.model.Name)) + "\n")
-	b.WriteString("\n")
-	tips := d.Render("Enter") + mt.Render(" send") +
-		d.Render("  Shift+Enter") + mt.Render(" newline") +
-		d.Render("  Tab") + mt.Render(" complete") +
-		d.Render("  /help") + mt.Render(" commands") +
-		"\n" +
-		d.Render("Ctrl+C") + mt.Render(" cancel") +
-		d.Render("  Ctrl+O") + mt.Render(" expand output") +
-		d.Render("  Ctrl+L") + mt.Render(" clear") +
-		d.Render("  ! cmd") + mt.Render(" shell")
-
-	for _, line := range strings.Split(tips, "\n") {
-		b.WriteString("   " + line + "\n")
-	}
-	b.WriteString("\n\n")
-	return b.String()
+	return ""
 }
 
 // ─── Block helpers ───────────────────────────────
@@ -1598,13 +1563,6 @@ func runInteractiveUI(ctx context.Context, session *coding_agent.CodingSession, 
 	var promptMu sync.Mutex
 
 	ui := newUIModel(ctx, session, model, mailboxRuntime, histFile, approvalCh, &promptMu, "")
-	if count := len(session.GetMessages()); count > 0 {
-		ui.blocks = append(ui.blocks, uiBlock{
-			Kind:      "system",
-			Content:   fmt.Sprintf("restored previous session — %d messages", count),
-			Timestamp: time.Now(),
-		})
-	}
 	if history, err := loadHistoryFile(histFile); err == nil {
 		ui.input.SetHistory(history)
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -51,18 +52,23 @@ func TestUISubmitLineKeepsInputFocusedDuringQuery(t *testing.T) {
 }
 
 func TestUIRenderInputAreaUsesQueryingHint(t *testing.T) {
-	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
+	session := newExampleTestSession(t)
+	model := testExampleModel()
+	m := newUIModel(context.Background(), session, model, nil, "", nil, nil, "")
 	m.state = uiStateQuerying
 
 	got := m.renderInputArea()
-	if !strings.Contains(got, "draft while waiting") {
-		t.Fatalf("expected querying hint, got %q", got)
+	if !strings.Contains(got, "model "+model.Name) {
+		t.Fatalf("expected model info, got %q", got)
+	}
+	if !strings.Contains(got, "cwd ") {
+		t.Fatalf("expected cwd info, got %q", got)
 	}
 
 	m.state = uiStateInput
 	got = m.renderInputArea()
-	if !strings.Contains(got, "enter send") {
-		t.Fatalf("expected input hint, got %q", got)
+	if strings.Contains(got, "enter send") {
+		t.Fatalf("did not expect old shortcut hint, got %q", got)
 	}
 }
 
@@ -115,6 +121,20 @@ func TestUIRenderConversationUsesBulletPrefixes(t *testing.T) {
 	}
 }
 
+func TestUIInputCtrlJInsertsNewline(t *testing.T) {
+	input := newUIInputModel()
+	input.Focus()
+	input.ta.InsertString("hello")
+
+	submitted, _ := input.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
+	if submitted {
+		t.Fatal("expected ctrl+j to insert newline, not submit")
+	}
+	if got := input.RawValue(); got != "hello\n" {
+		t.Fatalf("expected newline inserted, got %q", got)
+	}
+}
+
 func TestExtractThinkText(t *testing.T) {
 	thinking, visible := extractThinkText("before<think>secret plan</think>after")
 	if thinking != "secret plan" {
@@ -159,6 +179,27 @@ func TestRenderToolOutputCollapsedShowsExpandHintForWrappedSingleLine(t *testing
 	got := renderUIToolOutput("bash", "this is one extremely long output line that should wrap into many terminal rows and still show the expand hint", false, 24)
 	if !strings.Contains(got, "ctrl+o to expand") {
 		t.Fatalf("expected expand hint for wrapped single line, got %q", got)
+	}
+}
+
+func TestRenderInputMetaUsesShortenedCwd(t *testing.T) {
+	session := newExampleTestSession(t)
+	model := testExampleModel()
+	m := newUIModel(context.Background(), session, model, nil, "", nil, nil, "")
+	got := m.renderInputMeta()
+	if !strings.Contains(got, "model "+model.Name) {
+		t.Fatalf("expected model in meta, got %q", got)
+	}
+	if !strings.Contains(got, filepath.Base(session.RuntimeState().Cwd)) {
+		t.Fatalf("expected cwd in meta, got %q", got)
+	}
+}
+
+func TestRenderInputAreaOmitsTrailingEmptyMetaLine(t *testing.T) {
+	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
+	got := m.renderInputArea()
+	if strings.HasSuffix(got, "\n") {
+		t.Fatalf("expected no trailing empty line, got %q", got)
 	}
 }
 

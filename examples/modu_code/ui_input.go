@@ -21,7 +21,7 @@ type uiInputModel struct {
 
 func newUIInputModel() *uiInputModel {
 	ta := textarea.New()
-	ta.Placeholder = "Type a message... (Enter to send, Shift+Enter for newline)"
+	ta.Placeholder = "Type a message... (Enter to send, Alt+Enter/Ctrl+J for newline)"
 	ta.ShowLineNumbers = false
 	ta.CharLimit = 0
 	ta.MaxHeight = 10
@@ -116,7 +116,7 @@ func (i *uiInputModel) Update(msg tea.Msg) (bool, tea.Cmd) {
 			if i.historyIdx >= 0 {
 				return false, i.navigateHistory(1)
 			}
-		case "shift+enter", "alt+enter":
+		case "alt+enter", "ctrl+j":
 			i.ta.InsertString("\n")
 			i.syncHeight()
 			return false, nil
