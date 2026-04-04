@@ -886,6 +886,10 @@ var dotPad = strings.Repeat(" ", max(dotPadW, hookPadW))
 // hookPad renders the ⎿ connector at fixed width.
 var hookPad = uiDimText.Render(hookStr)
 
+// assistantPad keeps assistant continuation lines aligned with the first
+// content character after the leading "● ".
+var assistantPad = strings.Repeat(" ", dotPadW)
+
 // ─── Conversation rendering ───────────────────────
 
 func (m *uiModel) renderConversation() string {
@@ -961,7 +965,7 @@ func renderUIThinking(content string, width int) string {
 
 func renderUIAssistantBlock(content string, width int) string {
 	var b strings.Builder
-	writeWrappedStyledLines(&b, content, widthForPrefix(width), uiWhiteText.Render("●")+" ", dotPad, lipgloss.NewStyle())
+	writeWrappedStyledLines(&b, content, max(12, width-dotPadW), uiWhiteText.Render("●")+" ", assistantPad, lipgloss.NewStyle())
 	return b.String()
 }
 

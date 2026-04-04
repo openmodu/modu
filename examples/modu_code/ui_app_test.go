@@ -161,3 +161,20 @@ func TestRenderToolOutputCollapsedShowsExpandHintForWrappedSingleLine(t *testing
 		t.Fatalf("expected expand hint for wrapped single line, got %q", got)
 	}
 }
+
+func TestRenderUIAssistantBlockContinuationAlignsWithFirstLine(t *testing.T) {
+	got := renderUIAssistantBlock("first line\nsecond line", 80)
+	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines, got %q", got)
+	}
+	if !strings.HasPrefix(lines[0], "● ") {
+		t.Fatalf("expected bullet prefix on first line, got %q", lines[0])
+	}
+	if !strings.HasPrefix(lines[1], assistantPad) {
+		t.Fatalf("expected assistant continuation indent, got %q", lines[1])
+	}
+	if strings.HasPrefix(lines[1], dotPad) && assistantPad != dotPad {
+		t.Fatalf("expected assistant continuation not to use tool indent, got %q", lines[1])
+	}
+}
