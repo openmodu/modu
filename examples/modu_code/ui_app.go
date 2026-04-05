@@ -51,6 +51,7 @@ type uiState int
 const (
 	uiStateInit uiState = iota
 	uiStateInput
+	uiStateNormal // vim normal mode
 	uiStateQuerying
 	uiStatePermission
 )
@@ -197,6 +198,8 @@ type uiModel struct {
 
 	// Toggle modes
 	transcriptMode bool
+	mouseMode      bool   // true = mouse scroll active, false = terminal text selection
+	pendingKey     string // vim multi-key prefix (g, y)
 
 	// Slash autocomplete
 	slashMatches []slashCommandDef
@@ -226,6 +229,7 @@ func newUIModel(ctx context.Context, session *coding_agent.CodingSession, model 
 		state:          uiStateInit,
 		sessionStart:   time.Now(),
 		spinnerVerb:    randomSpinnerVerb(),
+		mouseMode:      true,
 	}
 }
 
@@ -356,6 +360,14 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, nil
 
+	case uiClipboardMsg:
+		if msg.err != nil {
+			m.statusMsg = "copy failed: " + msg.err.Error()
+		} else {
+			m.statusMsg = "copied to clipboard"
+		}
+		return m, nil
+
 	case uiQuitMsg:
 		return m, tea.Quit
 	}
@@ -376,11 +388,11 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.input.Focus()
 			m.statusMsg = "interrupted"
 			m.refreshViewport()
-			return m, nil
+			return m, tea.EnableMouseCellMotion
 		}
 		return m, tea.Quit
 	case "ctrl+d":
-		if m.state == uiStateInput && strings.TrimSpace(m.input.Value()) == "" {
+		if (m.state == uiStateInput || m.state == uiStateNormal) && strings.TrimSpace(m.input.Value()) == "" {
 			return m, tea.Quit
 		}
 	case "ctrl+l":
@@ -400,8 +412,167 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handlePermissionKey(msg)
 	case uiStateQuerying:
 		return m.handleQueryingKey(msg)
+	case uiStateNormal:
+		return m.handleNormalKey(msg)
 	default:
 		return m.handleInputKey(msg)
+	}
+}
+
+// ─── Vim normal mode ─────────────────────────────
+
+func (m *uiModel) enterInsert() (tea.Model, tea.Cmd) {
+	m.state = uiStateInput
+	m.pendingKey = ""
+	m.mouseMode = true
+	m.input.Focus()
+	return m, tea.EnableMouseCellMotion
+}
+
+func (m *uiModel) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
+	// Handle pending prefix
+	if m.pendingKey != "" {
+		seq := m.pendingKey + key
+		m.pendingKey = ""
+		switch seq {
+		case "gg":
+			m.viewport.GotoTop()
+			m.userScrolled = true
+		case "yy", "yR": // yank last assistant response
+			return m, m.yankLastResponseCmd()
+		case "yG": // yank entire conversation
+			return m, m.yankAllCmd()
+		}
+		return m, nil
+	}
+
+	switch key {
+	// ── Back to insert ──
+	case "i", "a", "esc":
+		return m.enterInsert()
+
+	// ── Scroll ──
+	case "j":
+		m.viewport.LineDown(1)
+		if m.viewport.AtBottom() {
+			m.userScrolled = false
+		}
+	case "k":
+		m.viewport.LineUp(1)
+		m.userScrolled = true
+	case "ctrl+d":
+		m.viewport.HalfViewDown()
+		if m.viewport.AtBottom() {
+			m.userScrolled = false
+		}
+	case "ctrl+u":
+		m.viewport.HalfViewUp()
+		m.userScrolled = true
+	case "ctrl+f", " ":
+		m.viewport.ViewDown()
+		if m.viewport.AtBottom() {
+			m.userScrolled = false
+		}
+	case "ctrl+b":
+		m.viewport.ViewUp()
+		m.userScrolled = true
+	case "G":
+		m.viewport.GotoBottom()
+		m.userScrolled = false
+
+	// ── Pending prefix ──
+	case "g", "y":
+		m.pendingKey = key
+
+	// ── Misc ──
+	case "ctrl+l":
+		m.blocks = nil
+		m.errMsg = ""
+		m.statusMsg = "cleared"
+		m.refreshViewport()
+	case "ctrl+o":
+		m.transcriptMode = !m.transcriptMode
+		m.refreshViewport()
+	}
+	return m, nil
+}
+
+// ─── Clipboard ───────────────────────────────────
+
+type uiClipboardMsg struct{ err error }
+
+func clipboardCmd(text string) tea.Cmd {
+	return func() tea.Msg {
+		cmd := exec.Command("pbcopy")
+		cmd.Stdin = strings.NewReader(text)
+		return uiClipboardMsg{err: cmd.Run()}
+	}
+}
+
+func (m *uiModel) yankLastResponseCmd() tea.Cmd {
+	// Find last assistant block
+	for i := len(m.blocks) - 1; i >= 0; i-- {
+		if m.blocks[i].Kind == "assistant" && strings.TrimSpace(m.blocks[i].Content) != "" {
+			return clipboardCmd(m.blocks[i].Content)
+		}
+	}
+	return clipboardCmd("")
+}
+
+func (m *uiModel) yankAllCmd() tea.Cmd {
+	var sb strings.Builder
+	for i, block := range m.blocks {
+		if i > 0 {
+			sb.WriteString("\n\n")
+		}
+		switch block.Kind {
+		case "user":
+			sb.WriteString("> " + block.Content)
+		case "assistant":
+			sb.WriteString(block.Content)
+		case "tool":
+			for _, t := range block.Tools {
+				sb.WriteString("[" + t.Name + "] " + t.Input + "\n")
+				if t.Output != "" {
+					sb.WriteString(t.Output)
+				}
+			}
+		default:
+			sb.WriteString(block.Content)
+		}
+	}
+	return clipboardCmd(sb.String())
+}
+
+func (m *uiModel) copyToClipboardCmd() tea.Cmd {
+	var sb strings.Builder
+	for i, block := range m.blocks {
+		if i > 0 {
+			sb.WriteString("\n\n")
+		}
+		switch block.Kind {
+		case "user":
+			sb.WriteString("> " + block.Content)
+		case "assistant":
+			sb.WriteString(block.Content)
+		case "tool":
+			for _, t := range block.Tools {
+				sb.WriteString("[tool:" + t.Name + "] " + t.Input + "\n")
+				if t.Output != "" {
+					sb.WriteString(t.Output)
+				}
+			}
+		default:
+			sb.WriteString(block.Content)
+		}
+	}
+	text := sb.String()
+	return func() tea.Msg {
+		cmd := exec.Command("pbcopy")
+		cmd.Stdin = strings.NewReader(text)
+		return uiClipboardMsg{err: cmd.Run()}
 	}
 }
 
@@ -494,8 +665,11 @@ func (m *uiModel) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.slashMatches = nil
 			return m, nil
 		}
-		m.input.Reset()
-		return m, nil
+		// Enter vim normal mode
+		m.state = uiStateNormal
+		m.pendingKey = ""
+		m.mouseMode = false
+		return m, tea.DisableMouse
 	case "enter":
 		if strings.TrimSpace(m.input.Value()) == "" {
 			return m, nil
@@ -710,6 +884,8 @@ func (m *uiModel) View() string {
 			parts = append(parts, m.renderSlashSuggestions())
 		}
 		parts = append(parts, m.renderInputArea())
+	case uiStateNormal:
+		parts = append(parts, m.renderInputArea())
 	case uiStateInit:
 		parts = append(parts, "  "+m.spinner.View()+" Initializing...")
 	default:
@@ -732,6 +908,19 @@ func (m *uiModel) renderSessionMeta() string {
 
 func (m *uiModel) renderStatusBar() string {
 	var parts []string
+
+	// Vim mode indicator
+	switch m.state {
+	case uiStateNormal:
+		pending := ""
+		if m.pendingKey != "" {
+			pending = m.pendingKey
+		}
+		parts = append(parts, uiPrimaryText.Bold(true).Render("NORMAL"+pending))
+	case uiStateInput:
+		parts = append(parts, uiDimText.Render("INSERT"))
+	}
+
 	if m.statusMsg != "" && m.statusMsg != "thinking" {
 		parts = append(parts, uiPrimaryText.Render(m.statusMsg))
 	}
@@ -740,14 +929,8 @@ func (m *uiModel) renderStatusBar() string {
 	}
 	left := strings.Join(parts, uiDimText.Render(" · "))
 	right := ""
-	if m.viewport.Height > 0 {
+	if !m.viewport.AtBottom() && m.viewport.Height > 0 {
 		right = uiDimText.Render(fmt.Sprintf(" %d%% ", int(m.viewport.ScrollPercent()*100)))
-	}
-	if right != "" && m.viewport.AtBottom() {
-		right = ""
-	}
-	if len(parts) == 0 && right == "" {
-		return ""
 	}
 	gap := max(1, m.width-lipgloss.Width(left)-lipgloss.Width(right)-1)
 	return lipgloss.NewStyle().Width(m.width).PaddingLeft(1).Render(left + strings.Repeat(" ", gap) + right)
