@@ -16,7 +16,10 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
+	glamouransi "github.com/charmbracelet/glamour/ansi"
+	glamourstyles "github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/reflow/wrap"
 
 	"github.com/openmodu/modu/pkg/agent"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
@@ -48,6 +51,7 @@ type uiState int
 const (
 	uiStateInit uiState = iota
 	uiStateInput
+	uiStateNormal // vim normal mode
 	uiStateQuerying
 	uiStatePermission
 )
@@ -58,6 +62,7 @@ type uiBlock struct {
 	Kind      string
 	Title     string
 	Content   string
+	RawText   string
 	Thinking  string
 	Tools     []*uiToolState
 	Timestamp time.Time
@@ -92,7 +97,6 @@ var uiSlashCommands = []slashCommandDef{
 	{"/tasks", "show background tasks"},
 	{"/hints", "show harness hints"},
 	{"/runtime", "show runtime paths"},
-	{"/git", "show git preflight state"},
 	{"/dashboard", "runtime summary"},
 	{"/state", "runtime state snapshot"},
 	{"/config", "show effective config"},
@@ -194,6 +198,8 @@ type uiModel struct {
 
 	// Toggle modes
 	transcriptMode bool
+	mouseMode      bool   // true = mouse scroll active, false = terminal text selection
+	pendingKey     string // vim multi-key prefix (g, y)
 
 	// Slash autocomplete
 	slashMatches []slashCommandDef
@@ -223,6 +229,7 @@ func newUIModel(ctx context.Context, session *coding_agent.CodingSession, model 
 		state:          uiStateInit,
 		sessionStart:   time.Now(),
 		spinnerVerb:    randomSpinnerVerb(),
+		mouseMode:      true,
 	}
 }
 
@@ -233,19 +240,13 @@ func (m *uiModel) Init() tea.Cmd {
 func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		headerHeight := 1
-		statusHeight := 1
-		inputHeight := lipgloss.Height(m.renderInputArea())
-		if inputHeight > 0 {
-			inputHeight--
-		}
 		prevContent := m.viewport.View()
 		prevOffset := m.viewport.YOffset
 		prevScrolled := m.userScrolled
 		m.width = msg.Width
 		m.height = msg.Height
-		m.viewport = viewport.New(msg.Width, max(4, msg.Height-headerHeight-statusHeight-inputHeight-2))
 		m.input.SetWidth(max(20, msg.Width-4))
+		m.viewport = viewport.New(msg.Width, 4) // height set by recalcViewportHeight in refreshViewport below
 		m.ready = true
 		if prevContent != "" {
 			m.viewport.SetContent(prevContent)
@@ -359,6 +360,14 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		return m, nil
 
+	case uiClipboardMsg:
+		if msg.err != nil {
+			m.statusMsg = "copy failed: " + msg.err.Error()
+		} else {
+			m.statusMsg = "copied to clipboard"
+		}
+		return m, nil
+
 	case uiQuitMsg:
 		return m, tea.Quit
 	}
@@ -379,11 +388,11 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.input.Focus()
 			m.statusMsg = "interrupted"
 			m.refreshViewport()
-			return m, nil
+			return m, tea.EnableMouseCellMotion
 		}
 		return m, tea.Quit
 	case "ctrl+d":
-		if m.state == uiStateInput && strings.TrimSpace(m.input.Value()) == "" {
+		if (m.state == uiStateInput || m.state == uiStateNormal) && strings.TrimSpace(m.input.Value()) == "" {
 			return m, tea.Quit
 		}
 	case "ctrl+l":
@@ -402,10 +411,204 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case uiStatePermission:
 		return m.handlePermissionKey(msg)
 	case uiStateQuerying:
-		return m.handleScrollKey(msg)
+		return m.handleQueryingKey(msg)
+	case uiStateNormal:
+		return m.handleNormalKey(msg)
 	default:
 		return m.handleInputKey(msg)
 	}
+}
+
+// ─── Vim normal mode ─────────────────────────────
+
+func (m *uiModel) enterInsert() (tea.Model, tea.Cmd) {
+	m.state = uiStateInput
+	m.pendingKey = ""
+	m.mouseMode = true
+	m.input.Focus()
+	return m, tea.EnableMouseCellMotion
+}
+
+func (m *uiModel) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
+	// Handle pending prefix
+	if m.pendingKey != "" {
+		seq := m.pendingKey + key
+		m.pendingKey = ""
+		switch seq {
+		case "gg":
+			m.viewport.GotoTop()
+			m.userScrolled = true
+		case "yy", "yR": // yank last assistant response
+			return m, m.yankLastResponseCmd()
+		case "yG": // yank entire conversation
+			return m, m.yankAllCmd()
+		}
+		return m, nil
+	}
+
+	switch key {
+	// ── Back to insert ──
+	case "i", "a", "esc":
+		return m.enterInsert()
+
+	// ── Scroll ──
+	case "j":
+		m.viewport.LineDown(1)
+		if m.viewport.AtBottom() {
+			m.userScrolled = false
+		}
+	case "k":
+		m.viewport.LineUp(1)
+		m.userScrolled = true
+	case "ctrl+d":
+		m.viewport.HalfViewDown()
+		if m.viewport.AtBottom() {
+			m.userScrolled = false
+		}
+	case "ctrl+u":
+		m.viewport.HalfViewUp()
+		m.userScrolled = true
+	case "ctrl+f", " ":
+		m.viewport.ViewDown()
+		if m.viewport.AtBottom() {
+			m.userScrolled = false
+		}
+	case "ctrl+b":
+		m.viewport.ViewUp()
+		m.userScrolled = true
+	case "G":
+		m.viewport.GotoBottom()
+		m.userScrolled = false
+
+	// ── Pending prefix ──
+	case "g", "y":
+		m.pendingKey = key
+
+	// ── Misc ──
+	case "ctrl+l":
+		m.blocks = nil
+		m.errMsg = ""
+		m.statusMsg = "cleared"
+		m.refreshViewport()
+	case "ctrl+o":
+		m.transcriptMode = !m.transcriptMode
+		m.refreshViewport()
+	}
+	return m, nil
+}
+
+// ─── Clipboard ───────────────────────────────────
+
+type uiClipboardMsg struct{ err error }
+
+func clipboardCmd(text string) tea.Cmd {
+	return func() tea.Msg {
+		cmd := exec.Command("pbcopy")
+		cmd.Stdin = strings.NewReader(text)
+		return uiClipboardMsg{err: cmd.Run()}
+	}
+}
+
+func (m *uiModel) yankLastResponseCmd() tea.Cmd {
+	// Find last assistant block
+	for i := len(m.blocks) - 1; i >= 0; i-- {
+		if m.blocks[i].Kind == "assistant" && strings.TrimSpace(m.blocks[i].Content) != "" {
+			return clipboardCmd(m.blocks[i].Content)
+		}
+	}
+	return clipboardCmd("")
+}
+
+func (m *uiModel) yankAllCmd() tea.Cmd {
+	var sb strings.Builder
+	for i, block := range m.blocks {
+		if i > 0 {
+			sb.WriteString("\n\n")
+		}
+		switch block.Kind {
+		case "user":
+			sb.WriteString("> " + block.Content)
+		case "assistant":
+			sb.WriteString(block.Content)
+		case "tool":
+			for _, t := range block.Tools {
+				sb.WriteString("[" + t.Name + "] " + t.Input + "\n")
+				if t.Output != "" {
+					sb.WriteString(t.Output)
+				}
+			}
+		default:
+			sb.WriteString(block.Content)
+		}
+	}
+	return clipboardCmd(sb.String())
+}
+
+func (m *uiModel) copyToClipboardCmd() tea.Cmd {
+	var sb strings.Builder
+	for i, block := range m.blocks {
+		if i > 0 {
+			sb.WriteString("\n\n")
+		}
+		switch block.Kind {
+		case "user":
+			sb.WriteString("> " + block.Content)
+		case "assistant":
+			sb.WriteString(block.Content)
+		case "tool":
+			for _, t := range block.Tools {
+				sb.WriteString("[tool:" + t.Name + "] " + t.Input + "\n")
+				if t.Output != "" {
+					sb.WriteString(t.Output)
+				}
+			}
+		default:
+			sb.WriteString(block.Content)
+		}
+	}
+	text := sb.String()
+	return func() tea.Msg {
+		cmd := exec.Command("pbcopy")
+		cmd.Stdin = strings.NewReader(text)
+		return uiClipboardMsg{err: cmd.Run()}
+	}
+}
+
+func (m *uiModel) handleQueryingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "pgup", "ctrl+b":
+		m.viewport.HalfViewUp()
+		m.userScrolled = true
+		return m, nil
+	case "pgdown", "ctrl+f":
+		m.viewport.HalfViewDown()
+		if m.viewport.AtBottom() {
+			m.userScrolled = false
+		}
+		return m, nil
+	case "home":
+		m.viewport.GotoTop()
+		m.userScrolled = true
+		return m, nil
+	case "end":
+		m.viewport.GotoBottom()
+		m.userScrolled = false
+		return m, nil
+	case "enter":
+		if strings.TrimSpace(m.input.RawValue()) != "" {
+			m.statusMsg = "busy: press ctrl+c to interrupt"
+		}
+		return m, nil
+	}
+
+	submitted, cmd := m.input.Update(msg)
+	if submitted {
+		return m, nil
+	}
+	m.updateSlashAutocomplete()
+	return m, cmd
 }
 
 func (m *uiModel) handleScrollKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -462,8 +665,11 @@ func (m *uiModel) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.slashMatches = nil
 			return m, nil
 		}
-		m.input.Reset()
-		return m, nil
+		// Enter vim normal mode
+		m.state = uiStateNormal
+		m.pendingKey = ""
+		m.mouseMode = false
+		return m, tea.DisableMouse
 	case "enter":
 		if strings.TrimSpace(m.input.Value()) == "" {
 			return m, nil
@@ -554,7 +760,7 @@ func (m *uiModel) submitLineCmd(line string) tea.Cmd {
 	m.appendBlock(uiBlock{Kind: "user", Content: line, Timestamp: time.Now()})
 	m.queryActive = true
 	m.state = uiStateQuerying
-	m.input.Blur()
+	m.input.Focus()
 	m.statusMsg = "thinking"
 	m.userScrolled = false
 	m.spinnerVerb = randomSpinnerVerb()
@@ -591,7 +797,12 @@ func (m *uiModel) handleAgentEvent(ev agent.AgentEvent) {
 			}
 		case types.EventTextDelta:
 			block := m.currentAssistantBlock()
-			block.Content += ev.StreamEvent.Delta
+			block.RawText += ev.StreamEvent.Delta
+			thinking, content := extractThinkText(block.RawText)
+			if thinking != "" {
+				block.Thinking = thinking
+			}
+			block.Content = content
 		}
 
 	case agent.EventTypeToolExecutionStart:
@@ -624,6 +835,30 @@ func (m *uiModel) handleAgentEvent(ev agent.AgentEvent) {
 		// Reset spinner verb after tool finishes
 		m.spinnerVerb = randomSpinnerVerb()
 
+	case agent.EventTypeMessageEnd:
+		msg, ok := assistantMessageFromEvent(ev.Message)
+		if !ok {
+			break
+		}
+		block := m.currentAssistantBlock()
+		for _, content := range msg.Content {
+			switch c := content.(type) {
+			case *types.ThinkingContent:
+				if c != nil && strings.TrimSpace(c.Thinking) != "" {
+					block.Thinking = c.Thinking
+				}
+			case *types.TextContent:
+				if c != nil && strings.TrimSpace(c.Text) != "" {
+					block.RawText = c.Text
+					thinking, content := extractThinkText(c.Text)
+					if thinking != "" {
+						block.Thinking = thinking
+					}
+					block.Content = content
+				}
+			}
+		}
+
 	case agent.EventTypeAgentEnd:
 		m.queryActive = false
 		m.statusMsg = ""
@@ -637,14 +872,20 @@ func (m *uiModel) View() string {
 	if !m.ready {
 		return "  " + m.spinner.View() + " loading modu_code..."
 	}
+
 	var parts []string
-	parts = append(parts, m.renderHeader())
 	parts = append(parts, m.viewport.View())
 	switch m.state {
 	case uiStatePermission:
 		parts = append(parts, m.renderPermissionPrompt())
 	case uiStateQuerying:
 		parts = append(parts, m.renderActivityLine())
+		if m.showSlash && len(m.slashMatches) > 0 {
+			parts = append(parts, m.renderSlashSuggestions())
+		}
+		parts = append(parts, m.renderInputArea())
+	case uiStateNormal:
+		parts = append(parts, m.renderInputArea())
 	case uiStateInit:
 		parts = append(parts, "  "+m.spinner.View()+" Initializing...")
 	default:
@@ -653,79 +894,102 @@ func (m *uiModel) View() string {
 		}
 		parts = append(parts, m.renderInputArea())
 	}
-	parts = append(parts, m.renderStatusBar())
+	parts = append(parts, m.renderStatusBar()) // always 1 line, even if empty
 	return strings.Join(parts, "\n")
 }
 
 func (m *uiModel) renderHeader() string {
-	left := uiPrimaryText.Render(" ● modu_code")
-	model := uiMutedText.Render(" " + m.model.Name)
-	if m.tgUsername != "" {
-		model += uiMutedText.Render("  @" + m.tgUsername)
-	}
-	right := uiDimText.Render(" " + formatUIDuration(time.Since(m.sessionStart)) + " ")
-	gap := max(1, m.width-lipgloss.Width(left+model)-lipgloss.Width(right))
-	return lipgloss.NewStyle().
-		Background(lipgloss.Color("#1a1b26")).
-		Foreground(uiMuted).
-		Width(m.width).
-		Render(left + model + strings.Repeat(" ", gap) + right)
+	return ""
+}
+
+func (m *uiModel) renderSessionMeta() string {
+	return ""
 }
 
 func (m *uiModel) renderStatusBar() string {
-	stats := m.session.GetSessionStats()
 	var parts []string
-	if stats.TotalTokens > 0 {
-		parts = append(parts, uiMutedText.Render(fmt.Sprintf("~%d tokens", stats.TotalTokens)))
+
+	// Vim mode indicator
+	switch m.state {
+	case uiStateNormal:
+		pending := ""
+		if m.pendingKey != "" {
+			pending = m.pendingKey
+		}
+		parts = append(parts, uiPrimaryText.Bold(true).Render("NORMAL"+pending))
+	case uiStateInput:
+		parts = append(parts, uiDimText.Render("INSERT"))
 	}
-	parts = append(parts, uiMutedText.Render(fmt.Sprintf("%d tools", len(m.session.GetActiveToolNames()))))
-	if m.session.IsPlanMode() {
-		parts = append(parts, uiSecondaryText.Render("plan"))
-	}
-	if m.session.ActiveWorktree() != "" {
-		parts = append(parts, uiWarningText.Render("worktree"))
-	}
-	if m.transcriptMode {
-		parts = append(parts, uiDimText.Render("expanded"))
-	}
-	if m.statusMsg != "" {
+
+	if m.statusMsg != "" && m.statusMsg != "thinking" {
 		parts = append(parts, uiPrimaryText.Render(m.statusMsg))
 	}
 	if m.errMsg != "" {
 		parts = append(parts, uiErrorText.Render(m.errMsg))
 	}
-	left := strings.Join(parts, uiDimText.Render(" │ "))
-	right := uiDimText.Render(fmt.Sprintf(" %d%% ", int(m.viewport.ScrollPercent()*100)))
-	if m.viewport.AtBottom() {
-		right = uiDimText.Render(" end ")
+	left := strings.Join(parts, uiDimText.Render(" · "))
+	right := ""
+	if !m.viewport.AtBottom() && m.viewport.Height > 0 {
+		right = uiDimText.Render(fmt.Sprintf(" %d%% ", int(m.viewport.ScrollPercent()*100)))
 	}
 	gap := max(1, m.width-lipgloss.Width(left)-lipgloss.Width(right)-1)
-	return lipgloss.NewStyle().Background(lipgloss.Color("#1a1b26")).Width(m.width).PaddingLeft(1).
-		Render(left + strings.Repeat(" ", gap) + right)
+	return lipgloss.NewStyle().Width(m.width).PaddingLeft(1).Render(left + strings.Repeat(" ", gap) + right)
 }
 
 func (m *uiModel) renderActivityLine() string {
-	elapsed := ""
+	hint := "esc to interrupt"
 	if !m.queryStartTime.IsZero() {
-		elapsed = " (" + formatUIDuration(time.Since(m.queryStartTime)) + ")"
+		secs := int(time.Since(m.queryStartTime).Seconds())
+		if secs > 0 {
+			hint = fmt.Sprintf("%ds • esc to interrupt", secs)
+		}
 	}
-	label := m.spinnerVerb + "..."
-	if label == "..." {
-		label = "Thinking..."
-	}
-	return "  " + m.spinner.View() + " " + uiPrimaryText.Render(label) + uiDimText.Render(elapsed)
+	return "  " + uiDimText.Render("Working ("+hint+")")
 }
 
 func (m *uiModel) renderInputArea() string {
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(uiDim).
-		Render(m.input.View())
-	hint := uiDimText.Render("enter send  shift+enter newline  tab complete  ctrl+o expand  /help")
+	box := m.input.View()
+	meta := strings.TrimSpace(m.renderInputMeta())
+	rule := uiDimText.Render(strings.Repeat("─", max(10, m.width)))
 	if m.errMsg != "" {
-		return uiErrorText.Render("  ✗ "+m.errMsg) + "\n" + box + "\n" + hint
+		if meta == "" {
+			return rule + "\n" + uiErrorText.Render("  ! "+m.errMsg) + "\n" + box + "\n" + rule
+		}
+		hintText := uiDimText.Render(truncateUI(meta, max(8, m.width)))
+		return rule + "\n" + uiErrorText.Render("  ! "+m.errMsg) + "\n" + box + "\n" + rule + "\n" + hintText
 	}
-	return box + "\n" + hint
+	if meta == "" {
+		return rule + "\n" + box + "\n" + rule
+	}
+	hintText := uiDimText.Render(truncateUI(meta, max(8, m.width)))
+	return rule + "\n" + box + "\n" + rule + "\n" + hintText
+}
+
+func (m *uiModel) renderInputMeta() string {
+	var parts []string
+	if m.model != nil {
+		modelText := m.model.Name
+		if modelText == "" {
+			modelText = m.model.ID
+		}
+		if m.model.ProviderID != "" && !strings.Contains(modelText, "(") {
+			modelText += " (" + m.model.ProviderID + ")"
+		}
+		if strings.TrimSpace(modelText) != "" {
+			parts = append(parts, modelText)
+		}
+	}
+	if m.session != nil {
+		cwd := m.session.RuntimeState().Cwd
+		if cwd != "" {
+			cwd = shortenUIPath(cwd)
+			parts = append(parts, cwd)
+		}
+	}
+	if m.tgUsername != "" {
+		parts = append(parts, "@"+m.tgUsername)
+	}
+	return strings.Join(parts, "  ·  ")
 }
 
 func (m *uiModel) renderPermissionPrompt() string {
@@ -736,21 +1000,16 @@ func (m *uiModel) renderPermissionPrompt() string {
 	if len(input) > 400 {
 		input = input[:400] + "..."
 	}
-	body := strings.Join([]string{
-		fmt.Sprintf("%s wants to execute:", uiPrimaryText.Bold(true).Render(m.pendingPerm.ToolName)),
-		"",
-		uiDimText.Render(input),
-		"",
-		uiSuccessText.Bold(true).Render("[Y]es") + "  " +
+	input = wrap.String(input, max(20, m.width-hookPadW))
+	lines := []string{
+		fmt.Sprintf("%s %s", uiWarningText.Render("●"), uiPrimaryText.Bold(true).Render(m.pendingPerm.ToolName)),
+		hookPad + uiDimText.Render(input),
+		dotPad + uiSuccessText.Bold(true).Render("[Y]es") + "  " +
 			uiErrorText.Render("[N]o") + "  " +
 			uiWarningText.Bold(true).Render("[A]lways allow") + "  " +
 			uiMutedText.Render("[D]eny always"),
-	}, "\n")
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(uiWarning).
-		Padding(0, 1).
-		Render(body)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m *uiModel) renderSlashSuggestions() string {
@@ -763,29 +1022,40 @@ func (m *uiModel) renderSlashSuggestions() string {
 		cmd := m.slashMatches[i]
 		name := lipgloss.NewStyle().Bold(true).Foreground(uiSecondary).Render(cmd.Name)
 		desc := uiDimText.Render("  " + cmd.Description)
-		inner.WriteString(name + desc)
+		prefix := "  " + uiDimText.Render("·") + " "
+		inner.WriteString(prefix + name + desc)
 		if i < maxShow-1 {
 			inner.WriteString("\n")
 		}
 	}
 	if len(m.slashMatches) > maxShow {
-		inner.WriteString(fmt.Sprintf("\n%s", uiDimText.Render(fmt.Sprintf("  +%d more", len(m.slashMatches)-maxShow))))
+		inner.WriteString(fmt.Sprintf("\n  %s", uiDimText.Render(fmt.Sprintf("+%d more", len(m.slashMatches)-maxShow))))
 	}
-	box := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(uiDim).
-		Padding(0, 1).
-		MarginLeft(2).
-		Render(inner.String())
-	return box
+	return inner.String()
 }
 
 // ─── Viewport ────────────────────────────────────
+
+func (m *uiModel) recalcViewportHeight() {
+	reserved := lipgloss.Height(m.renderInputArea())
+	if m.state == uiStateQuerying {
+		reserved += 1 // activity line
+	}
+	if m.showSlash && len(m.slashMatches) > 0 {
+		reserved += lipgloss.Height(m.renderSlashSuggestions())
+	}
+	if m.state == uiStatePermission {
+		reserved += lipgloss.Height(m.renderPermissionPrompt())
+	}
+	reserved += 1 // status bar always occupies 1 line (avoids circular dependency with scroll %)
+	m.viewport.Height = max(4, m.height-reserved)
+}
 
 func (m *uiModel) refreshViewport() {
 	if !m.ready {
 		return
 	}
+	m.recalcViewportHeight()
 	offset := m.viewport.YOffset
 	keepOffset := m.userScrolled
 	m.viewport.SetContent(m.renderConversation())
@@ -799,15 +1069,44 @@ func (m *uiModel) refreshViewport() {
 	m.viewport.GotoBottom()
 }
 
+// dotPadW is the visual cell-width of "● " (● may be 2 cells in CJK terminals).
+var dotPadW = lipgloss.Width("● ")
+
+// hookStr is the raw connector string: 2 spaces + ⎿ + 1 space.
+const hookStr = "  ⎿ "
+
+// hookPadW is the visual width of hookStr.
+var hookPadW = lipgloss.Width(hookStr)
+
+// dotPad aligns continuation lines to the widest of the two prefixes.
+var dotPad = strings.Repeat(" ", max(dotPadW, hookPadW))
+
+// hookPad renders the ⎿ connector at fixed width.
+var hookPad = uiDimText.Render(hookStr)
+
+// assistantPad keeps assistant continuation lines aligned with the first
+// content character after the leading "● ".
+var assistantPad = strings.Repeat(" ", dotPadW)
+
 // ─── Conversation rendering ───────────────────────
 
 func (m *uiModel) renderConversation() string {
 	if len(m.blocks) == 0 {
 		return m.renderWelcome()
 	}
+	// Build a glamour style with zero document margin so we control all
+	// indentation ourselves. We pass a large word wrap and re-wrap ourselves
+	// using reflow/wrap which is display-width-aware (handles CJK correctly).
+	contentWidth := max(20, m.width-max(dotPadW, hookPadW))
+	noMargin := uint(0)
+	style := glamourstyles.DarkStyleConfig
+	style.Document = glamouransi.StyleBlock{
+		StylePrimitive: style.Document.StylePrimitive,
+		Margin:         &noMargin,
+	}
 	renderer, _ := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
-		glamour.WithWordWrap(max(40, m.width-8)),
+		glamour.WithStyles(style),
+		glamour.WithWordWrap(contentWidth),
 	)
 	var out strings.Builder
 	for idx, block := range m.blocks {
@@ -818,9 +1117,6 @@ func (m *uiModel) renderConversation() string {
 		case "user":
 			out.WriteString(renderUIUserBlock(block.Content, m.width))
 		case "assistant":
-			if block.Thinking != "" {
-				out.WriteString(renderUIThinking(block.Thinking))
-			}
 			if strings.TrimSpace(block.Content) != "" {
 				content := block.Content
 				if renderer != nil {
@@ -828,9 +1124,10 @@ func (m *uiModel) renderConversation() string {
 						content = strings.TrimSpace(rendered)
 					}
 				}
-				for _, line := range strings.Split(content, "\n") {
-					out.WriteString("  " + line + "\n")
-				}
+				// Re-wrap using display-width-aware wrap so CJK and long
+				// lines always fit within contentWidth after the prefix.
+				content = wrap.String(content, contentWidth)
+				out.WriteString(renderUIAssistantBlock(content, m.width))
 			}
 		case "tool":
 			for _, tool := range block.Tools {
@@ -850,29 +1147,13 @@ func (m *uiModel) renderConversation() string {
 
 func renderUIUserBlock(content string, width int) string {
 	var b strings.Builder
-	sepWidth := min(max(18, width-8), 52)
-	b.WriteString(uiDimText.Render("  " + strings.Repeat("─", sepWidth)))
-	b.WriteString("\n")
-	for idx, line := range strings.Split(content, "\n") {
-		prefix := "    "
-		if idx == 0 {
-			prefix = "  " + uiSecondaryText.Bold(true).Render(">") + " "
-		}
-		b.WriteString(prefix + line + "\n")
-	}
+	writeWrappedStyledLines(&b, content, max(20, width-lipgloss.Width("> ")), uiSecondaryText.Render(">")+" ", strings.Repeat(" ", lipgloss.Width("> ")), lipgloss.NewStyle())
 	return b.String()
 }
 
-func renderUIThinking(content string) string {
+func renderUIAssistantBlock(content string, width int) string {
 	var b strings.Builder
-	b.WriteString("  " + uiSecondaryText.Render("✧ ") + uiDimText.Render("Thinking…") + "\n")
-	for _, line := range strings.Split(strings.TrimRight(content, "\n"), "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		b.WriteString(uiThinkText.Render("  ⎿  " + line))
-		b.WriteString("\n")
-	}
+	writeWrappedStyledLines(&b, content, max(12, width-dotPadW), uiWhiteText.Render("●")+" ", assistantPad, lipgloss.NewStyle())
 	return b.String()
 }
 
@@ -880,13 +1161,13 @@ func renderUITool(tool *uiToolState, expanded bool, width int) string {
 	var b strings.Builder
 	w := width
 
-	dot := uiPrimaryText.Render("⏺")
+	dot := uiWhiteText.Render("●")
 	nameStyle := uiPrimaryText.Bold(true)
 	if tool.Status == "done" {
-		dot = uiSuccessText.Render("✓")
+		dot = uiSuccessText.Render("●")
 		nameStyle = uiSuccessText.Bold(true)
 	} else if tool.IsError || tool.Status == "error" {
-		dot = uiErrorText.Render("✗")
+		dot = uiErrorText.Render("●")
 		nameStyle = uiErrorText
 	}
 
@@ -894,21 +1175,25 @@ func renderUITool(tool *uiToolState, expanded bool, width int) string {
 	if tool.Input != "" {
 		args = uiMutedText.Render("(" + truncateUI(tool.Input, 80) + ")")
 	}
-	b.WriteString(fmt.Sprintf("  %s %s%s\n", dot, nameStyle.Render(tool.Name), args))
+	b.WriteString(fmt.Sprintf("%s %s%s\n", dot, nameStyle.Render(tool.Name), args))
 
 	if tool.Status == "running" {
-		b.WriteString("    " + uiDimText.Render("Running...") + "\n")
+		b.WriteString(hookPad + uiDimText.Render("running") + "\n")
 		return b.String()
 	}
 
 	if tool.IsError && tool.Output != "" {
 		errLines := strings.Split(tool.Output, "\n")
 		for i, line := range errLines {
+			pad := dotPad
+			if i == 0 {
+				pad = hookPad
+			}
 			if i >= 5 {
-				b.WriteString("    " + uiErrorText.Render(fmt.Sprintf("... +%d more lines", len(errLines)-5)) + "\n")
+				b.WriteString(dotPad + uiErrorText.Render(fmt.Sprintf("... +%d more lines", len(errLines)-5)) + "\n")
 				break
 			}
-			b.WriteString("    " + uiErrorText.Render(truncateUI(line, w-8)) + "\n")
+			writeWrappedStyledLines(&b, line, widthForPrefix(w), pad, dotPad, uiErrorText)
 		}
 		return b.String()
 	}
@@ -924,178 +1209,153 @@ func renderUITool(tool *uiToolState, expanded bool, width int) string {
 func renderUIToolOutput(toolName, output string, expanded bool, w int) string {
 	var b strings.Builder
 	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
-	total := len(lines)
 
 	collapsedMax := 3
 	expandedMax := 30
+	rowWidth := widthForPrefix(w)
+
+	// padAt returns hookPad for the first line (idx==0), dotPad otherwise.
+	padAt := func(idx int) string {
+		if idx == 0 {
+			return hookPad
+		}
+		return dotPad
+	}
+	maxRows := collapsedMax
+	if expanded {
+		maxRows = expandedMax
+	}
+
+	appendMoreHint := func(remaining int) {
+		if remaining > 0 {
+			b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d more lines (ctrl+o to expand)", remaining)) + "\n")
+		}
+	}
 
 	switch toolName {
 	case "read":
-		if !expanded {
-			b.WriteString(fmt.Sprintf("    ⎿ %s\n", uiDimText.Render(fmt.Sprintf("%d lines", total))))
-		} else {
-			show := min(total, expandedMax)
-			for i := 0; i < show; i++ {
-				b.WriteString("    " + uiDimText.Render(truncateUI(lines[i], w-8)) + "\n")
+		used, remaining := writeWrappedStyledRows(&b, lines, rowWidth, hookPad, dotPad, uiDimText, maxRows)
+		if expanded {
+			if remaining > 0 {
+				b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d more lines", remaining)) + "\n")
 			}
-			if total > show {
-				b.WriteString("    " + uiDimText.Render(fmt.Sprintf("... +%d lines", total-show)) + "\n")
-			}
+		} else if used > 0 {
+			appendMoreHint(remaining)
 		}
 
 	case "bash":
-		show := collapsedMax
-		if expanded {
-			show = expandedMax
-		}
-		if total <= show {
-			for _, line := range lines {
-				b.WriteString("    " + uiDimText.Render(truncateUI(line, w-8)) + "\n")
-			}
-		} else {
-			for i := 0; i < show; i++ {
-				b.WriteString("    " + uiDimText.Render(truncateUI(lines[i], w-8)) + "\n")
-			}
-			b.WriteString("    " + uiDimText.Render(fmt.Sprintf("... +%d lines (ctrl+o to expand)", total-show)) + "\n")
+		_, remaining := writeWrappedStyledRows(&b, lines, rowWidth, hookPad, dotPad, uiDimText, maxRows)
+		if !expanded {
+			appendMoreHint(remaining)
+		} else if remaining > 0 {
+			b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d more lines", remaining)) + "\n")
 		}
 
 	case "edit":
-		if !expanded {
-			b.WriteString("    ⎿ " + uiSuccessText.Render("file updated") + "\n")
+		if len(lines) == 0 || (len(lines) == 1 && lines[0] == "") {
+			b.WriteString(hookPad + uiSuccessText.Render("updated") + "\n")
 		} else {
-			show := min(total, expandedMax)
-			for i := 0; i < show; i++ {
-				line := lines[i]
+			usedRows := 0
+			remaining := 0
+			for lineIdx := 0; lineIdx < len(lines) && usedRows < maxRows; lineIdx++ {
+				pad := padAt(lineIdx)
+				line := lines[lineIdx]
+				style := uiDimText
 				if strings.HasPrefix(line, "+") {
-					b.WriteString("    " + uiSuccessText.Render(truncateUI(line, w-8)) + "\n")
+					style = uiSuccessText
 				} else if strings.HasPrefix(line, "-") {
-					b.WriteString("    " + uiErrorText.Render(truncateUI(line, w-8)) + "\n")
-				} else {
-					b.WriteString("    " + uiDimText.Render(truncateUI(line, w-8)) + "\n")
+					style = uiErrorText
 				}
+				used, complete, hidden := writeSingleWrappedRowBudget(&b, line, rowWidth, pad, dotPad, style, maxRows-usedRows)
+				usedRows += used
+				if !complete {
+					remaining += hidden
+					remaining += wrappedLineCount(lines[lineIdx+1:], rowWidth)
+					break
+				}
+				if lineIdx == len(lines)-1 {
+					break
+				}
+				remaining = wrappedLineCount(lines[lineIdx+1:], rowWidth)
 			}
-			if total > show {
-				b.WriteString("    " + uiDimText.Render(fmt.Sprintf("... +%d lines", total-show)) + "\n")
+			if expanded {
+				if remaining > 0 {
+					b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d more lines", remaining)) + "\n")
+				}
+			} else {
+				appendMoreHint(remaining)
 			}
 		}
 
 	case "write":
-		if !expanded {
-			b.WriteString("    ⎿ " + uiSuccessText.Render("file written") + "\n")
+		if len(lines) == 0 || (len(lines) == 1 && lines[0] == "") {
+			b.WriteString(hookPad + uiSuccessText.Render("written") + "\n")
 		} else {
-			show := min(total, expandedMax)
-			for i := 0; i < show; i++ {
-				b.WriteString("    " + uiDimText.Render(truncateUI(lines[i], w-8)) + "\n")
-			}
-			if total > show {
-				b.WriteString("    " + uiDimText.Render(fmt.Sprintf("... +%d lines", total-show)) + "\n")
+			_, remaining := writeWrappedStyledRows(&b, lines, rowWidth, hookPad, dotPad, uiDimText, maxRows)
+			if expanded {
+				if remaining > 0 {
+					b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d more lines", remaining)) + "\n")
+				}
+			} else {
+				appendMoreHint(remaining)
 			}
 		}
 
 	case "glob":
-		show := 8
+		_, remaining := writeWrappedStyledRows(&b, lines, rowWidth, hookPad, dotPad, uiDimText, maxRows)
 		if expanded {
-			show = 30
-		}
-		if total <= show {
-			for _, line := range lines {
-				b.WriteString("    " + uiDimText.Render(truncateUI(line, w-8)) + "\n")
+			if remaining > 0 {
+				b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d more lines", remaining)) + "\n")
 			}
 		} else {
-			for i := 0; i < show; i++ {
-				b.WriteString("    " + uiDimText.Render(truncateUI(lines[i], w-8)) + "\n")
-			}
-			b.WriteString("    " + uiDimText.Render(fmt.Sprintf("... +%d files", total-show)) + "\n")
+			appendMoreHint(remaining)
 		}
 
 	case "grep":
-		show := 5
+		_, remaining := writeWrappedStyledRows(&b, lines, rowWidth, hookPad, dotPad, uiDimText, maxRows)
 		if expanded {
-			show = 30
-		}
-		if total <= show {
-			for _, line := range lines {
-				b.WriteString("    " + uiDimText.Render(truncateUI(line, w-8)) + "\n")
+			if remaining > 0 {
+				b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d more lines", remaining)) + "\n")
 			}
 		} else {
-			for i := 0; i < show; i++ {
-				b.WriteString("    " + uiDimText.Render(truncateUI(lines[i], w-8)) + "\n")
-			}
-			b.WriteString("    " + uiDimText.Render(fmt.Sprintf("... +%d matches", total-show)) + "\n")
+			appendMoreHint(remaining)
 		}
 
 	default:
-		show := collapsedMax
+		_, remaining := writeWrappedStyledRows(&b, lines, rowWidth, hookPad, dotPad, uiDimText, maxRows)
 		if expanded {
-			show = expandedMax
-		}
-		if total <= show {
-			for _, line := range lines {
-				if line != "" {
-					b.WriteString("    ⎿ " + uiDimText.Render(truncateUI(line, w-10)) + "\n")
-				}
+			if remaining > 0 {
+				b.WriteString(dotPad + uiDimText.Render(fmt.Sprintf("... +%d more lines", remaining)) + "\n")
 			}
 		} else {
-			b.WriteString("    ⎿ " + uiDimText.Render(truncateUI(lines[0], w-10)) + "\n")
-			b.WriteString("    " + uiDimText.Render(fmt.Sprintf("  ... +%d lines (ctrl+o to expand)", total-1)) + "\n")
+			appendMoreHint(remaining)
 		}
 	}
 	return b.String()
 }
 
 func renderUISection(title, content string, width int) string {
-	boxWidth := min(max(28, width-4), 96)
-	style := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(uiDim).Padding(0, 1).Width(boxWidth - 2)
-	return style.Render(uiPrimaryText.Render(title) + "\n" + content)
+	_ = width
+	return "  " + uiPrimaryText.Render(title) + "\n" + strings.TrimRight(content, "\n")
 }
 
 func (m *uiModel) renderWelcome() string {
-	cwd := m.session.RuntimeState().Cwd
-	home, _ := os.UserHomeDir()
-	if home != "" && strings.HasPrefix(cwd, home) {
-		cwd = "~" + cwd[len(home):]
-	}
-	p := uiPrimaryText
-	mt := uiMutedText
-	d := uiDimText
-
-	var b strings.Builder
-	b.WriteString("\n")
-	b.WriteString(p.Render("    ███╗   ███╗ ██████╗ ██████╗ ██╗   ██╗") + "\n")
-	b.WriteString(p.Render("    ████╗ ████║██╔═══██╗██╔══██╗██║   ██║") + "\n")
-	b.WriteString(p.Render("    ██╔████╔██║██║   ██║██║  ██║██║   ██║") + "\n")
-	b.WriteString(p.Render("    ██║╚██╔╝██║██║   ██║██║  ██║██║   ██║") + "\n")
-	b.WriteString(p.Render("    ██║ ╚═╝ ██║╚██████╔╝██████╔╝╚██████╔╝") + "\n")
-	b.WriteString(p.Render("    ╚═╝     ╚═╝ ╚═════╝ ╚═════╝  ╚═════╝ ") + uiSecondaryText.Bold(true).Render(" _code") + "\n")
-	b.WriteString("\n")
-	b.WriteString(mt.Render("    coding agent interactive console") + "\n")
-	b.WriteString("\n")
-	b.WriteString(mt.Render(fmt.Sprintf("    cwd    %s", cwd)) + "\n")
-	b.WriteString(mt.Render(fmt.Sprintf("    model  %s", m.model.Name)) + "\n")
-
-	b.WriteString("\n")
-	tipBorder := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(uiDim).
-		Padding(0, 1).
-		MarginLeft(3)
-
-	tips := d.Render("Enter") + mt.Render(" send") +
-		d.Render("  Shift+Enter") + mt.Render(" newline") +
-		d.Render("  Tab") + mt.Render(" complete") +
-		d.Render("  /help") + mt.Render(" commands") +
-		"\n" +
-		d.Render("Ctrl+C") + mt.Render(" cancel") +
-		d.Render("  Ctrl+O") + mt.Render(" expand output") +
-		d.Render("  Ctrl+L") + mt.Render(" clear") +
-		d.Render("  ! cmd") + mt.Render(" shell")
-
-	b.WriteString(tipBorder.Render(tips))
-	b.WriteString("\n\n")
-	return b.String()
+	return ""
 }
 
 // ─── Block helpers ───────────────────────────────
+
+func assistantMessageFromEvent(msg agent.AgentMessage) (types.AssistantMessage, bool) {
+	switch v := msg.(type) {
+	case types.AssistantMessage:
+		return v, true
+	case *types.AssistantMessage:
+		if v != nil {
+			return *v, true
+		}
+	}
+	return types.AssistantMessage{}, false
+}
 
 func (m *uiModel) latestRunningTool() *uiToolState {
 	for i := len(m.blocks) - 1; i >= 0; i-- {
@@ -1304,6 +1564,91 @@ func fullResultText(ev agent.AgentEvent) string {
 
 // ─── Utility ─────────────────────────────────────
 
+func widthForPrefix(totalWidth int) int {
+	return max(12, totalWidth-max(dotPadW, hookPadW))
+}
+
+func writeWrappedStyledLines(b *strings.Builder, text string, width int, firstPrefix, restPrefix string, style lipgloss.Style) {
+	width = max(8, width)
+	first := true
+	for _, rawLine := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+		if strings.TrimSpace(rawLine) == "" {
+			b.WriteString("\n")
+			continue
+		}
+		wrapped := wrap.String(rawLine, width)
+		for _, part := range strings.Split(strings.TrimRight(wrapped, "\n"), "\n") {
+			prefix := restPrefix
+			if first {
+				prefix = firstPrefix
+				first = false
+			}
+			b.WriteString(prefix + style.Render(part) + "\n")
+		}
+	}
+}
+
+func wrapSegments(rawLine string, width int) []string {
+	width = max(8, width)
+	if strings.TrimSpace(rawLine) == "" {
+		return []string{""}
+	}
+	wrapped := wrap.String(rawLine, width)
+	parts := strings.Split(strings.TrimRight(wrapped, "\n"), "\n")
+	if len(parts) == 0 {
+		return []string{""}
+	}
+	return parts
+}
+
+func wrappedLineCount(lines []string, width int) int {
+	total := 0
+	for _, line := range lines {
+		total += len(wrapSegments(line, width))
+	}
+	return total
+}
+
+func writeWrappedStyledRows(b *strings.Builder, lines []string, width int, firstPrefix, restPrefix string, style lipgloss.Style, maxRows int) (used int, remaining int) {
+	maxRows = max(1, maxRows)
+	first := true
+	for i, line := range lines {
+		segments := wrapSegments(line, width)
+		for j, seg := range segments {
+			if used >= maxRows {
+				remaining += len(segments) - j
+				remaining += wrappedLineCount(lines[i+1:], width)
+				return used, remaining
+			}
+			prefix := restPrefix
+			if first {
+				prefix = firstPrefix
+				first = false
+			}
+			b.WriteString(prefix + style.Render(seg) + "\n")
+			used++
+		}
+	}
+	return used, remaining
+}
+
+func writeSingleWrappedRowBudget(b *strings.Builder, line string, width int, firstPrefix, restPrefix string, style lipgloss.Style, budget int) (used int, complete bool, hidden int) {
+	segments := wrapSegments(line, width)
+	budget = max(0, budget)
+	for i, seg := range segments {
+		if used >= budget {
+			return used, false, len(segments) - i
+		}
+		prefix := restPrefix
+		if i == 0 {
+			prefix = firstPrefix
+		}
+		b.WriteString(prefix + style.Render(seg) + "\n")
+		used++
+	}
+	return used, true, 0
+}
+
 func truncateUI(s string, maxLen int) string {
 	if maxLen <= 0 {
 		return ""
@@ -1318,14 +1663,74 @@ func truncateUI(s string, maxLen int) string {
 	return string(rs[:maxLen-1]) + "…"
 }
 
-func formatUIDuration(d time.Duration) string {
-	if d < time.Second {
-		return fmt.Sprintf("%dms", d.Milliseconds())
+func extractThinkText(raw string) (thinking string, visible string) {
+	const openTag = "<think>"
+	const closeTag = "</think>"
+
+	var thinkParts []string
+	var visibleParts strings.Builder
+	rest := raw
+
+	for {
+		start := strings.Index(rest, openTag)
+		if start < 0 {
+			visibleParts.WriteString(rest)
+			break
+		}
+
+		visibleParts.WriteString(rest[:start])
+		rest = rest[start+len(openTag):]
+
+		end := strings.Index(rest, closeTag)
+		if end < 0 {
+			break
+		}
+
+		chunk := strings.TrimSpace(rest[:end])
+		if chunk != "" {
+			thinkParts = append(thinkParts, chunk)
+		}
+		rest = rest[end+len(closeTag):]
 	}
-	if d < time.Minute {
-		return fmt.Sprintf("%.1fs", d.Seconds())
+
+	return strings.Join(thinkParts, "\n"), visibleParts.String()
+}
+
+func (m *uiModel) renderExitSessionMeta() string {
+	var parts []string
+	if m.session != nil {
+		stats := m.session.GetSessionStats()
+		if stats.TotalTokens > 0 {
+			parts = append(parts, fmt.Sprintf("~%d tokens", stats.TotalTokens))
+		}
+		if m.session.IsPlanMode() {
+			parts = append(parts, "plan")
+		}
+		if m.session.ActiveWorktree() != "" {
+			parts = append(parts, "worktree")
+		}
 	}
-	return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
+	if m.transcriptMode {
+		parts = append(parts, "expanded")
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "session: " + strings.Join(parts, " | ")
+}
+
+func (m *uiModel) renderExitTranscript() string {
+	var parts []string
+	if meta := m.renderExitSessionMeta(); meta != "" {
+		parts = append(parts, meta)
+	}
+	if conv := m.renderConversation(); conv != "" {
+		parts = append(parts, conv)
+	}
+	if m.errMsg != "" {
+		parts = append(parts, uiErrorText.Render("  ! "+m.errMsg))
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n\n"))
 }
 
 // ─── Run ─────────────────────────────────────────
@@ -1342,13 +1747,6 @@ func runInteractiveUI(ctx context.Context, session *coding_agent.CodingSession, 
 	var promptMu sync.Mutex
 
 	ui := newUIModel(ctx, session, model, mailboxRuntime, histFile, approvalCh, &promptMu, "")
-	if count := len(session.GetMessages()); count > 0 {
-		ui.blocks = append(ui.blocks, uiBlock{
-			Kind:      "system",
-			Content:   fmt.Sprintf("restored previous session — %d messages", count),
-			Timestamp: time.Now(),
-		})
-	}
 	if history, err := loadHistoryFile(histFile); err == nil {
 		ui.input.SetHistory(history)
 	}
@@ -1391,6 +1789,11 @@ func runInteractiveUI(ctx context.Context, session *coding_agent.CodingSession, 
 		}
 	}
 
-	_, err := program.Run()
+	finalModel, err := program.Run()
+	if uiFinal, ok := finalModel.(*uiModel); ok && uiFinal != nil {
+		if transcript := strings.TrimSpace(uiFinal.renderExitTranscript()); transcript != "" {
+			fmt.Printf("\n%s\n", transcript)
+		}
+	}
 	return err
 }

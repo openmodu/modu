@@ -107,7 +107,7 @@ func TestHandleSlashHarnessInspectionCommands(t *testing.T) {
 	renderer := tui.NewRenderer(&out)
 	renderer.SetNoColor(true)
 
-	for _, line := range []string{"/runtime", "/git", "/dashboard", "/state", "/config", "/config-template", "/logs", "/artifacts", "/bridge", "/actions"} {
+	for _, line := range []string{"/runtime", "/dashboard", "/state", "/config", "/config-template", "/logs", "/artifacts", "/bridge", "/actions"} {
 		handled, shouldExit := handleSlash(context.Background(), line, session, renderer, testExampleModel(), nil)
 		if !handled || shouldExit {
 			t.Fatalf("expected %s to be handled without exit", line)
@@ -117,7 +117,6 @@ func TestHandleSlashHarnessInspectionCommands(t *testing.T) {
 	got := out.String()
 	for _, want := range []string{
 		"Runtime Paths",
-		"git: not a repository",
 		"Runtime Dashboard",
 		"latest events:",
 		"Runtime State",

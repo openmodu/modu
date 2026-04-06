@@ -277,16 +277,6 @@ func handleSlash(ctx context.Context, line string, session *coding_agent.CodingS
 		r.PrintSection("Runtime State", strings.Split(strings.TrimSpace(session.RuntimeStateJSON()), "\n"))
 		return true, false
 
-	case "git":
-		if gitState, ok := session.RuntimeState().Git["available"].(bool); ok && !gitState {
-			r.PrintInfo("git: not a repository")
-			return true, false
-		}
-		gitData := session.RuntimeState().Git
-		raw, _ := json.MarshalIndent(gitData, "", "  ")
-		r.PrintSection("Git Preflight", strings.Split(strings.TrimSpace(string(raw)), "\n"))
-		return true, false
-
 	case "dashboard":
 		printDashboard(r, session)
 		return true, false
@@ -480,7 +470,6 @@ func printHelp(r slashPrinter) {
 		"/tasks              — show background subagent tasks",
 		"/hints              — show pending harness-only hints",
 		"/runtime            — show harness runtime paths",
-		"/git                — show structured git preflight state",
 		"/dashboard          — show runtime summary and latest events",
 		"/state              — show unified runtime state snapshot",
 		"/config             — show effective merged config",

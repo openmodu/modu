@@ -416,8 +416,8 @@ func TestTodoWriteToolRejectsMultipleInProgress(t *testing.T) {
 
 func TestAllToolsCreation(t *testing.T) {
 	allTools := AllTools("/tmp")
-	if len(allTools) != 7 {
-		t.Fatalf("expected 7 tools, got %d", len(allTools))
+	if len(allTools) != 6 {
+		t.Fatalf("expected 6 tools, got %d", len(allTools))
 	}
 
 	names := make(map[string]bool)
@@ -425,7 +425,7 @@ func TestAllToolsCreation(t *testing.T) {
 		names[tool.Name()] = true
 	}
 
-	expected := []string{"read", "git_preflight", "write", "edit", "bash", "grep", "find"}
+	expected := []string{"read", "write", "edit", "bash", "grep", "find"}
 	for _, name := range expected {
 		if !names[name] {
 			t.Fatalf("missing tool: %s", name)
@@ -435,15 +435,15 @@ func TestAllToolsCreation(t *testing.T) {
 
 func TestCodingTools(t *testing.T) {
 	ct := CodingTools("/tmp")
-	if len(ct) != 5 {
-		t.Fatalf("expected 5 coding tools, got %d", len(ct))
+	if len(ct) != 4 {
+		t.Fatalf("expected 4 coding tools, got %d", len(ct))
 	}
 }
 
 func TestReadOnlyTools(t *testing.T) {
 	ro := ReadOnlyTools("/tmp")
-	if len(ro) != 5 {
-		t.Fatalf("expected 5 read-only tools, got %d", len(ro))
+	if len(ro) != 4 {
+		t.Fatalf("expected 4 read-only tools, got %d", len(ro))
 	}
 }
 
