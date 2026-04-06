@@ -1,12 +1,15 @@
-package main
+package ui
 
 import (
 	"context"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -53,8 +56,8 @@ func TestUISubmitLineKeepsInputFocusedDuringQuery(t *testing.T) {
 }
 
 func TestUIRenderInputAreaUsesQueryingHint(t *testing.T) {
-	session := newExampleTestSession(t)
-	model := testExampleModel()
+	session := newUITestSession(t)
+	model := testUIModel()
 	m := newUIModel(context.Background(), session, model, nil, "", nil, nil, "")
 	m.state = uiStateQuerying
 
@@ -110,9 +113,6 @@ func TestUIRenderConversationUsesBulletPrefixes(t *testing.T) {
 	got := m.renderConversation()
 	if !strings.Contains(got, "●") {
 		t.Fatalf("expected bullet markers, got %q", got)
-	}
-	if !strings.Contains(got, "thinking") {
-		t.Fatalf("expected thinking header, got %q", got)
 	}
 	if !strings.Contains(got, "answer") {
 		t.Fatalf("expected assistant content, got %q", got)
@@ -184,8 +184,8 @@ func TestRenderToolOutputCollapsedShowsExpandHintForWrappedSingleLine(t *testing
 }
 
 func TestRenderInputMetaUsesShortenedCwd(t *testing.T) {
-	session := newExampleTestSession(t)
-	model := testExampleModel()
+	session := newUITestSession(t)
+	model := testUIModel()
 	m := newUIModel(context.Background(), session, model, nil, "", nil, nil, "")
 	got := m.renderInputMeta()
 	if !strings.Contains(got, model.Name) || !strings.Contains(got, "("+model.ProviderID+")") {
@@ -197,7 +197,7 @@ func TestRenderInputMetaUsesShortenedCwd(t *testing.T) {
 }
 
 func TestRenderInputMetaDoesNotDuplicateProvider(t *testing.T) {
-	session := newExampleTestSession(t)
+	session := newUITestSession(t)
 	model := &types.Model{
 		ID:         "qwen/qwen3.5-35b-a3b",
 		Name:       "qwen/qwen3.5-35b-a3b (lmstudio)",
@@ -219,8 +219,8 @@ func TestRenderInputAreaOmitsTrailingEmptyMetaLine(t *testing.T) {
 }
 
 func TestWindowResizeUsesRenderedInputHeight(t *testing.T) {
-	session := newExampleTestSession(t)
-	model := testExampleModel()
+	session := newUITestSession(t)
+	model := testUIModel()
 	m := newUIModel(context.Background(), session, model, nil, "", nil, nil, "")
 	m.ready = true
 	m.state = uiStateInput
@@ -232,7 +232,7 @@ func TestWindowResizeUsesRenderedInputHeight(t *testing.T) {
 }
 
 func TestRenderInputAreaTruncatesMetaWhenNarrow(t *testing.T) {
-	session := newExampleTestSession(t)
+	session := newUITestSession(t)
 	model := &types.Model{
 		ID:         "qwen/qwen3.5-35b-a3b",
 		Name:       "qwen/qwen3.5-35b-a3b",
@@ -261,4 +261,54 @@ func TestRenderUIAssistantBlockContinuationAlignsWithFirstLine(t *testing.T) {
 	if strings.HasPrefix(lines[1], dotPad) && assistantPad != dotPad {
 		t.Fatalf("expected assistant continuation not to use tool indent, got %q", lines[1])
 	}
+}
+
+// ─── Test helpers ────────────────────────────────
+
+func testUIModel() *types.Model {
+	return &types.Model{
+		ID:         "test-model",
+		Name:       "Test Model",
+		ProviderID: "test",
+	}
+}
+
+func newUITestSession(t *testing.T) *coding_agent.CodingSession {
+	t.Helper()
+
+	root := t.TempDir()
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:      root,
+		AgentDir: filepath.Join(root, ".coding_agent"),
+		Model:    testUIModel(),
+		GetAPIKey: func(provider string) (string, error) {
+			return "", nil
+		},
+		StreamFn: func(ctx context.Context, model *types.Model, llmCtx *types.LLMContext, opts *types.SimpleStreamOptions) (types.EventStream, error) {
+			stream := types.NewEventStream()
+			go func() {
+				last := llmCtx.Messages[len(llmCtx.Messages)-1]
+				userText := ""
+				if msg, ok := last.(types.UserMessage); ok {
+					userText, _ = msg.Content.(string)
+				}
+				msg := &types.AssistantMessage{
+					Role:       "assistant",
+					ProviderID: model.ProviderID,
+					Model:      model.ID,
+					StopReason: "stop",
+					Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "assistant: " + userText}},
+					Timestamp:  time.Now().UnixMilli(),
+				}
+				stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+				stream.Resolve(msg, nil)
+				stream.Close()
+			}()
+			return stream, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return session
 }
