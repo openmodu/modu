@@ -240,12 +240,12 @@ func (m *uiModel) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.slashMatches = nil
 			return m, nil
 		}
-		// Keep mouse capture enabled so wheel scroll stays inside the
-		// viewport and the footer remains fixed at the bottom.
+		// Enter vim normal mode and return mouse control to the terminal so
+		// users can drag-select and copy text directly.
 		m.state = uiStateNormal
 		m.pendingKey = ""
-		m.mouseMode = true
-		return m, nil
+		m.mouseMode = false
+		return m, tea.DisableMouse
 	case "enter":
 		if strings.TrimSpace(m.input.Value()) == "" {
 			return m, nil

@@ -72,7 +72,7 @@ func TestUIQueryingEscInterrupts(t *testing.T) {
 	}
 }
 
-func TestUIEscIntoNormalKeepsMouseCaptured(t *testing.T) {
+func TestUIEscIntoNormalDisablesMouseCapture(t *testing.T) {
 	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
 	m.state = uiStateInput
 	m.mouseMode = true
@@ -82,11 +82,11 @@ func TestUIEscIntoNormalKeepsMouseCaptured(t *testing.T) {
 	if m.state != uiStateNormal {
 		t.Fatalf("expected normal state after esc, got %v", m.state)
 	}
-	if !m.mouseMode {
-		t.Fatal("expected mouse capture to stay enabled in normal mode")
+	if m.mouseMode {
+		t.Fatal("expected mouse capture to be disabled in normal mode")
 	}
-	if cmd != nil {
-		t.Fatal("expected esc into normal mode to avoid disabling mouse")
+	if cmd == nil {
+		t.Fatal("expected esc into normal mode to disable mouse")
 	}
 }
 
