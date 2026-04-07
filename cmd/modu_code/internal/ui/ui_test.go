@@ -3,11 +3,13 @@ package ui
 import (
 	"context"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/types"
@@ -52,6 +54,39 @@ func TestUISubmitLineKeepsInputFocusedDuringQuery(t *testing.T) {
 	}
 	if m.statusMsg != "thinking" {
 		t.Fatalf("expected thinking status, got %q", m.statusMsg)
+	}
+}
+
+func TestUIQueryingEscInterrupts(t *testing.T) {
+	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
+	m.state = uiStateQuerying
+	m.statusMsg = "thinking"
+
+	m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+
+	if m.state != uiStateInput {
+		t.Fatalf("expected input state after esc interrupt, got %v", m.state)
+	}
+	if m.statusMsg != "interrupted" {
+		t.Fatalf("expected interrupted status, got %q", m.statusMsg)
+	}
+}
+
+func TestUIEscIntoNormalKeepsMouseCaptured(t *testing.T) {
+	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
+	m.state = uiStateInput
+	m.mouseMode = true
+
+	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+
+	if m.state != uiStateNormal {
+		t.Fatalf("expected normal state after esc, got %v", m.state)
+	}
+	if !m.mouseMode {
+		t.Fatal("expected mouse capture to stay enabled in normal mode")
+	}
+	if cmd != nil {
+		t.Fatal("expected esc into normal mode to avoid disabling mouse")
 	}
 }
 
@@ -119,6 +154,34 @@ func TestUIRenderConversationUsesBulletPrefixes(t *testing.T) {
 	}
 	if !strings.Contains(got, "read") {
 		t.Fatalf("expected tool line, got %q", got)
+	}
+}
+
+func TestUIRenderConversationMarkdownDoesNotDuplicateHeadings(t *testing.T) {
+	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
+	m.width = 72
+	m.blocks = []uiBlock{
+		{Kind: "assistant", Content: "### render.go (+39 -1)\n\n- first item\n- second item"},
+	}
+
+	got := m.renderConversation()
+	got = ansiPattern.ReplaceAllString(got, "")
+	if strings.Count(got, "render.go (+39 -1)") != 1 {
+		t.Fatalf("expected markdown heading once, got %q", got)
+	}
+}
+
+func TestNormalizeRenderedMarkdownStripsANSIPadding(t *testing.T) {
+	raw := "\x1b[38;5;39m### title   \x1b[0m\n\x1b[38;5;252m     \x1b[0m\n"
+	got := normalizeRenderedMarkdown(raw)
+	if strings.Contains(got, "\x1b[") {
+		t.Fatalf("expected ansi to be stripped, got %q", got)
+	}
+	if strings.Contains(got, "title   ") {
+		t.Fatalf("expected trailing padding to be removed, got %q", got)
+	}
+	if strings.Count(got, "\n") > 1 {
+		t.Fatalf("expected normalized markdown without extra filler lines, got %q", got)
 	}
 }
 
@@ -231,6 +294,95 @@ func TestWindowResizeUsesRenderedInputHeight(t *testing.T) {
 	}
 }
 
+func TestUIViewDoesNotExceedWindowHeightWhileQuerying(t *testing.T) {
+	session := newUITestSession(t)
+	model := testUIModel()
+	m := newUIModel(context.Background(), session, model, nil, "", nil, nil, "")
+	m.state = uiStateQuerying
+	m.statusMsg = "thinking"
+	m.ready = true
+	m.blocks = []uiBlock{
+		{Kind: "assistant", Content: strings.Repeat("line\n", 40)},
+	}
+
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+
+	if got := lipgloss.Height(m.View()); got > 20 {
+		t.Fatalf("expected rendered view to fit window height, got %d", got)
+	}
+}
+
+func TestUIViewDoesNotExceedWindowHeightWhileStreamingMarkdown(t *testing.T) {
+	session := newUITestSession(t)
+	model := testUIModel()
+	m := newUIModel(context.Background(), session, model, nil, "", nil, nil, "")
+	m.state = uiStateQuerying
+	m.statusMsg = "thinking"
+	m.ready = true
+	m.blocks = []uiBlock{
+		{
+			Kind:      "assistant",
+			Streaming: true,
+			Content:   "## Title\n\n- item 1\n- item 2\n\n```go\nfmt.Println(\"hi\")\n```",
+		},
+	}
+
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+
+	if got := lipgloss.Height(m.View()); got > 20 {
+		t.Fatalf("expected rendered streaming markdown view to fit window height, got %d", got)
+	}
+}
+
+func TestUIViewDoesNotExceedWindowHeightWithLongMarkdownLines(t *testing.T) {
+	session := newUITestSession(t)
+	model := testUIModel()
+	m := newUIModel(context.Background(), session, model, nil, "", nil, nil, "")
+	m.state = uiStateInput
+	m.ready = true
+	m.blocks = []uiBlock{
+		{
+			Kind:    "assistant",
+			Content: "```go\n" + strings.Repeat("veryLongIdentifierWithoutSpaces", 8) + "\n```",
+		},
+	}
+
+	m.Update(tea.WindowSizeMsg{Width: 60, Height: 18})
+
+	if got := lipgloss.Height(m.View()); got > 18 {
+		t.Fatalf("expected rendered long-markdown view to fit window height, got %d", got)
+	}
+}
+
+func TestViewportConversationWrapsWithinViewportWidth(t *testing.T) {
+	session := newUITestSession(t)
+	model := testUIModel()
+	m := newUIModel(context.Background(), session, model, nil, "", nil, nil, "")
+	m.ready = true
+	m.state = uiStateInput
+	m.width = 60
+	m.height = 18
+	m.viewport.Width = 60
+	m.viewport.Height = 10
+	m.blocks = []uiBlock{
+		{
+			Kind:    "assistant",
+			Content: "```txt\n" + strings.Repeat("LongToken", 12) + "\n```",
+		},
+	}
+
+	got := m.renderConversation()
+	maxLineWidth := 0
+	for _, line := range strings.Split(got, "\n") {
+		if w := lipgloss.Width(ansiPattern.ReplaceAllString(line, "")); w > maxLineWidth {
+			maxLineWidth = w
+		}
+	}
+	if maxLineWidth > m.viewportContentWidth() {
+		t.Fatalf("expected wrapped conversation lines to fit viewport width, got line width %d > %d", maxLineWidth, m.viewportContentWidth())
+	}
+}
+
 func TestRenderInputAreaTruncatesMetaWhenNarrow(t *testing.T) {
 	session := newUITestSession(t)
 	model := &types.Model{
@@ -243,6 +395,26 @@ func TestRenderInputAreaTruncatesMetaWhenNarrow(t *testing.T) {
 	got := m.renderInputArea()
 	if !strings.Contains(got, "...") {
 		t.Fatalf("expected truncated meta with ellipsis, got %q", got)
+	}
+}
+
+func TestRenderStatusBarHidesThinkingDuringQuery(t *testing.T) {
+	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
+	m.width = 80
+	m.state = uiStateQuerying
+	m.statusMsg = "thinking"
+	if got := m.renderStatusBar(); strings.Contains(got, "thinking") {
+		t.Fatalf("expected querying status bar to hide duplicate thinking text, got %q", got)
+	}
+}
+
+func TestRenderStatusBarOmitsScrollPercentage(t *testing.T) {
+	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
+	m.width = 80
+	m.state = uiStateInput
+	m.statusMsg = "ready"
+	if got := m.renderStatusBar(); strings.Contains(got, "%") {
+		t.Fatalf("expected status bar without scroll percentage, got %q", got)
 	}
 }
 
@@ -272,6 +444,8 @@ func testUIModel() *types.Model {
 		ProviderID: "test",
 	}
 }
+
+var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 func newUITestSession(t *testing.T) *coding_agent.CodingSession {
 	t.Helper()

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -12,11 +13,14 @@ import (
 	glamouransi "github.com/charmbracelet/glamour/ansi"
 	glamourstyles "github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
+	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/muesli/reflow/wrap"
 
 	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/types"
 )
+
+var uiANSIPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 // dotPadW is the visual cell-width of "● " (● may be 2 cells in CJK terminals).
 var dotPadW = lipgloss.Width("● ")
@@ -44,8 +48,23 @@ func (m *uiModel) View() string {
 		return "  " + m.spinner.View() + " loading modu_code..."
 	}
 
+	footer := m.renderFooter()
+	if footer == "" {
+		return m.viewport.View()
+	}
+	return m.viewport.View() + "\n" + footer
+}
+
+func (m *uiModel) renderHeader() string {
+	return ""
+}
+
+func (m *uiModel) renderSessionMeta() string {
+	return ""
+}
+
+func (m *uiModel) renderFooter() string {
 	var parts []string
-	parts = append(parts, m.viewport.View())
 	switch m.state {
 	case uiStatePermission:
 		parts = append(parts, m.renderPermissionPrompt())
@@ -65,16 +84,10 @@ func (m *uiModel) View() string {
 		}
 		parts = append(parts, m.renderInputArea())
 	}
-	parts = append(parts, m.renderStatusBar()) // always 1 line, even if empty
+	if sb := m.renderStatusBar(); sb != "" {
+		parts = append(parts, sb)
+	}
 	return strings.Join(parts, "\n")
-}
-
-func (m *uiModel) renderHeader() string {
-	return ""
-}
-
-func (m *uiModel) renderSessionMeta() string {
-	return ""
 }
 
 func (m *uiModel) renderStatusBar() string {
@@ -98,13 +111,10 @@ func (m *uiModel) renderStatusBar() string {
 	if m.errMsg != "" {
 		parts = append(parts, uiErrorText.Render(m.errMsg))
 	}
-	left := strings.Join(parts, uiDimText.Render(" · "))
-	right := ""
-	if !m.viewport.AtBottom() && m.viewport.Height > 0 {
-		right = uiDimText.Render(fmt.Sprintf(" %d%% ", int(m.viewport.ScrollPercent()*100)))
+	if len(parts) == 0 {
+		return ""
 	}
-	gap := max(1, m.width-lipgloss.Width(left)-lipgloss.Width(right)-1)
-	return lipgloss.NewStyle().Width(m.width).PaddingLeft(1).Render(left + strings.Repeat(" ", gap) + right)
+	return " " + strings.Join(parts, uiDimText.Render(" · "))
 }
 
 func (m *uiModel) renderActivityLine() string {
@@ -211,10 +221,11 @@ func (m *uiModel) renderConversation() string {
 	if len(m.blocks) == 0 {
 		return m.renderWelcome()
 	}
+	viewWidth := m.viewportContentWidth()
 	// Build a glamour style with zero document margin so we control all
 	// indentation ourselves. We pass a large word wrap and re-wrap ourselves
 	// using reflow/wrap which is display-width-aware (handles CJK correctly).
-	contentWidth := max(20, m.width-max(dotPadW, hookPadW))
+	contentWidth := max(20, viewWidth-max(dotPadW, hookPadW))
 	noMargin := uint(0)
 	style := glamourstyles.DarkStyleConfig
 	style.Document = glamouransi.StyleBlock{
@@ -232,34 +243,36 @@ func (m *uiModel) renderConversation() string {
 		}
 		switch block.Kind {
 		case "user":
-			out.WriteString(renderUIUserBlock(block.Content, m.width))
+			out.WriteString(renderUIUserBlock(block.Content, viewWidth))
 		case "assistant":
+			if block.Thinking != "" {
+				out.WriteString(renderUIThinking(block.Thinking, viewWidth))
+			}
 			if strings.TrimSpace(block.Content) != "" {
-				content := block.Content
-				if renderer != nil {
-					if rendered, err := renderer.Render(content); err == nil {
-						content = strings.TrimSpace(rendered)
+				if !block.Streaming && renderer != nil {
+					if rendered, err := renderer.Render(block.Content); err == nil {
+						out.WriteString(renderUIAssistantMarkdownBlock(normalizeRenderedMarkdown(rendered), viewWidth))
+						continue
 					}
 				}
-				// Re-wrap using display-width-aware wrap so CJK and long
-				// lines always fit within contentWidth after the prefix.
-				content = wrap.String(content, contentWidth)
-				out.WriteString(renderUIAssistantBlock(content, m.width))
+				content := wrap.String(block.Content, contentWidth)
+				out.WriteString(renderUIAssistantBlock(content, viewWidth))
 			}
 		case "tool":
 			for _, tool := range block.Tools {
-				out.WriteString(renderUITool(tool, m.transcriptMode, m.width))
+				out.WriteString(renderUITool(tool, m.transcriptMode, viewWidth))
 			}
 		case "section":
-			out.WriteString(renderUISection(block.Title, block.Content, m.width))
+			out.WriteString(renderUISection(block.Title, block.Content, viewWidth))
 		default:
 			for _, line := range strings.Split(block.Content, "\n") {
-				out.WriteString(uiDimText.Render("  " + line))
-				out.WriteString("\n")
+				var b strings.Builder
+				writeWrappedStyledLines(&b, line, max(12, viewWidth-lipgloss.Width("  ")), "  ", "  ", uiDimText)
+				out.WriteString(b.String())
 			}
 		}
 	}
-	return strings.TrimRight(out.String(), "\n")
+	return strings.TrimRight(hardWrapRenderedText(out.String(), viewWidth), "\n")
 }
 
 func renderUIUserBlock(content string, width int) string {
@@ -271,6 +284,33 @@ func renderUIUserBlock(content string, width int) string {
 func renderUIAssistantBlock(content string, width int) string {
 	var b strings.Builder
 	writeWrappedStyledLines(&b, content, max(12, width-dotPadW), uiWhiteText.Render("●")+" ", assistantPad, lipgloss.NewStyle())
+	return b.String()
+}
+
+func renderUIAssistantMarkdownBlock(content string, width int) string {
+	var b strings.Builder
+	writeWrappedStyledLines(&b, content, widthForPrefix(width), uiWhiteText.Render("●")+" ", assistantPad, lipgloss.NewStyle())
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func normalizeRenderedMarkdown(content string) string {
+	var lines []string
+	for _, line := range strings.Split(strings.TrimRight(content, "\n"), "\n") {
+		stripped := uiANSIPattern.ReplaceAllString(line, "")
+		trimmed := strings.TrimRight(stripped, " \t")
+		if strings.TrimSpace(trimmed) == "" {
+			lines = append(lines, "")
+			continue
+		}
+		lines = append(lines, trimmed)
+	}
+	return strings.TrimRight(strings.Join(lines, "\n"), "\n")
+}
+
+func renderUIThinking(content string, width int) string {
+	var b strings.Builder
+	b.WriteString(uiSecondaryText.Render("●") + " " + uiMutedText.Render("thinking") + "\n")
+	writeWrappedStyledLines(&b, content, widthForPrefix(width), hookPad, dotPad, uiMutedText)
 	return b.String()
 }
 
@@ -452,8 +492,10 @@ func renderUIToolOutput(toolName, output string, expanded bool, w int) string {
 }
 
 func renderUISection(title, content string, width int) string {
-	_ = width
-	return "  " + uiPrimaryText.Render(title) + "\n" + strings.TrimRight(content, "\n")
+	var b strings.Builder
+	b.WriteString("  " + uiPrimaryText.Render(title) + "\n")
+	writeWrappedStyledLines(&b, content, max(12, width-lipgloss.Width("  ")), "  ", "  ", lipgloss.NewStyle())
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func (m *uiModel) renderWelcome() string {
@@ -646,6 +688,19 @@ func fullResultText(ev agent.AgentEvent) string {
 
 func widthForPrefix(totalWidth int) int {
 	return max(12, totalWidth-max(dotPadW, hookPadW))
+}
+
+func (m *uiModel) viewportContentWidth() int {
+	return max(20, m.width-m.viewport.Style.GetHorizontalFrameSize())
+}
+
+func hardWrapRenderedText(text string, width int) string {
+	width = max(8, width)
+	var out []string
+	for _, line := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+		out = append(out, strings.Split(xansi.Hardwrap(line, width, true), "\n")...)
+	}
+	return strings.Join(out, "\n")
 }
 
 func writeWrappedStyledLines(b *strings.Builder, text string, width int, firstPrefix, restPrefix string, style lipgloss.Style) {

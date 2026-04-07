@@ -26,6 +26,7 @@ import (
 type uiAgentEventMsg struct{ event agent.AgentEvent }
 type uiSessionEventMsg struct{ event coding_agent.SessionEvent }
 type uiPromptDoneMsg struct{ err error }
+type uiStreamTickMsg struct{}
 type uiApprovalRequestMsg struct{ req tui.ApprovalRequest }
 type uiApprovalCancelMsg struct{ toolCallID string }
 type uiExternalInfoMsg struct{ text string }
@@ -58,6 +59,7 @@ type uiBlock struct {
 	Content   string
 	RawText   string
 	Thinking  string
+	Streaming bool // true while LLM is still streaming this block; skip glamour render
 	Tools     []*uiToolState
 	Timestamp time.Time
 }
@@ -190,6 +192,12 @@ type uiModel struct {
 	queryStartTime time.Time
 	thinkingStart  time.Time
 
+	// Per-query cancellation
+	queryCancel context.CancelFunc
+
+	// Streaming viewport batching
+	viewportDirty bool // set by streaming deltas; cleared by stream tick
+
 	// Toggle modes
 	transcriptMode bool
 	mouseMode      bool   // true = mouse scroll active, false = terminal text selection
@@ -228,7 +236,12 @@ func newUIModel(ctx context.Context, session *coding_agent.CodingSession, model 
 }
 
 func (m *uiModel) Init() tea.Cmd {
-	return m.spinner.Tick
+	return tea.Batch(m.spinner.Tick, streamTickCmd())
+}
+
+// streamTickCmd schedules the next stream viewport refresh tick (50ms).
+func streamTickCmd() tea.Cmd {
+	return tea.Tick(50*time.Millisecond, func(time.Time) tea.Msg { return uiStreamTickMsg{} })
 }
 
 // ─── Block helpers ───────────────────────────────

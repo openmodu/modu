@@ -3,17 +3,10 @@ package ui
 import "github.com/charmbracelet/lipgloss"
 
 func (m *uiModel) recalcViewportHeight() {
-	reserved := lipgloss.Height(m.renderInputArea())
-	if m.state == uiStateQuerying {
-		reserved += 1 // activity line
+	reserved := 0
+	if footer := m.renderFooter(); footer != "" {
+		reserved = lipgloss.Height(footer) + 1
 	}
-	if m.showSlash && len(m.slashMatches) > 0 {
-		reserved += lipgloss.Height(m.renderSlashSuggestions())
-	}
-	if m.state == uiStatePermission {
-		reserved += lipgloss.Height(m.renderPermissionPrompt())
-	}
-	reserved += 1 // status bar always occupies 1 line (avoids circular dependency with scroll %)
 	m.viewport.Height = max(4, m.height-reserved)
 }
 

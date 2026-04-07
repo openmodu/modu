@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -13,18 +14,31 @@ import (
 
 // ─── Key handling ────────────────────────────────
 
+// abortQuery cancels the running query context and resets state to input.
+func (m *uiModel) abortQuery() tea.Cmd {
+	if m.queryCancel != nil {
+		m.queryCancel()
+		m.queryCancel = nil
+	}
+	if m.session != nil {
+		m.session.Abort()
+		m.session.AbortBash()
+	}
+	m.queryActive = false
+	m.pendingPerm = nil
+	m.state = uiStateInput
+	m.mouseMode = true
+	m.input.Focus()
+	m.statusMsg = "interrupted"
+	m.refreshViewport()
+	return tea.EnableMouseCellMotion
+}
+
 func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		if m.state == uiStateQuerying || m.state == uiStatePermission {
-			m.session.Abort()
-			m.queryActive = false
-			m.pendingPerm = nil
-			m.state = uiStateInput
-			m.input.Focus()
-			m.statusMsg = "interrupted"
-			m.refreshViewport()
-			return m, tea.EnableMouseCellMotion
+			return m, m.abortQuery()
 		}
 		return m, tea.Quit
 	case "ctrl+d":
@@ -137,6 +151,8 @@ func (m *uiModel) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *uiModel) handleQueryingKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
+	case "esc":
+		return m, m.abortQuery()
 	case "pgup", "ctrl+b":
 		m.viewport.HalfViewUp()
 		m.userScrolled = true
@@ -224,11 +240,12 @@ func (m *uiModel) handleInputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.slashMatches = nil
 			return m, nil
 		}
-		// Enter vim normal mode
+		// Keep mouse capture enabled so wheel scroll stays inside the
+		// viewport and the footer remains fixed at the bottom.
 		m.state = uiStateNormal
 		m.pendingKey = ""
-		m.mouseMode = false
-		return m, tea.DisableMouse
+		m.mouseMode = true
+		return m, nil
 	case "enter":
 		if strings.TrimSpace(m.input.Value()) == "" {
 			return m, nil
@@ -325,12 +342,15 @@ func (m *uiModel) submitLineCmd(line string) tea.Cmd {
 	m.spinnerVerb = randomSpinnerVerb()
 	m.queryStartTime = time.Now()
 	m.thinkingStart = time.Time{}
+	queryCtx, queryCancel := context.WithCancel(m.ctx)
+	m.queryCancel = queryCancel
 	return func() tea.Msg {
+		defer queryCancel()
 		if !m.promptMu.TryLock() {
 			return uiPromptDoneMsg{err: fmt.Errorf("session is busy")}
 		}
 		defer m.promptMu.Unlock()
-		err := m.session.Prompt(m.ctx, line)
+		err := m.session.Prompt(queryCtx, line)
 		return uiPromptDoneMsg{err: err}
 	}
 }

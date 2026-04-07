@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -67,19 +69,28 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.queryActive = false
 		m.state = uiStateInput
 		m.input.Focus()
-		if msg.err != nil {
+		if msg.err != nil && !errors.Is(msg.err, context.Canceled) {
 			m.errMsg = msg.err.Error()
 			m.appendBlock(uiBlock{Kind: "system", Content: "error: " + msg.err.Error(), Timestamp: time.Now()})
 		} else {
 			m.errMsg = ""
 		}
-		m.statusMsg = ""
+		if m.statusMsg != "interrupted" {
+			m.statusMsg = ""
+		}
 		m.thinkingStart = time.Time{}
 		_ = m.session.SaveMessages()
 		_ = saveHistoryFile(m.histFile, m.input.History())
 		m.refreshViewport()
 		fmt.Print("\a") // bell notification
 		return m, nil
+
+	case uiStreamTickMsg:
+		if m.viewportDirty {
+			m.viewportDirty = false
+			m.refreshViewport()
+		}
+		return m, streamTickCmd()
 
 	case uiAgentEventMsg:
 		m.handleAgentEvent(msg.event)
@@ -167,12 +178,14 @@ func (m *uiModel) handleAgentEvent(ev agent.AgentEvent) {
 		switch ev.StreamEvent.Type {
 		case types.EventThinkingDelta:
 			block := m.currentAssistantBlock()
+			block.Streaming = true
 			block.Thinking += ev.StreamEvent.Delta
 			if m.thinkingStart.IsZero() {
 				m.thinkingStart = time.Now()
 			}
 		case types.EventTextDelta:
 			block := m.currentAssistantBlock()
+			block.Streaming = true
 			block.RawText += ev.StreamEvent.Delta
 			thinking, content := extractThinkText(block.RawText)
 			if thinking != "" {
@@ -180,6 +193,9 @@ func (m *uiModel) handleAgentEvent(ev agent.AgentEvent) {
 			}
 			block.Content = content
 		}
+		// Mark dirty instead of refreshing immediately; tick will batch the update.
+		m.viewportDirty = true
+		return
 
 	case agent.EventTypeToolExecutionStart:
 		var args map[string]any
@@ -234,10 +250,13 @@ func (m *uiModel) handleAgentEvent(ev agent.AgentEvent) {
 				}
 			}
 		}
+		block.Streaming = false
 
 	case agent.EventTypeAgentEnd:
 		m.queryActive = false
-		m.statusMsg = ""
+		if m.statusMsg != "interrupted" {
+			m.statusMsg = ""
+		}
 	}
 	m.refreshViewport()
 }
