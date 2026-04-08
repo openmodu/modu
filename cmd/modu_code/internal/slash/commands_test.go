@@ -1,20 +1,18 @@
-package main
+package slash
 
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
-	"github.com/openmodu/modu/pkg/coding_agent/modes"
-	"github.com/openmodu/modu/pkg/coding_agent/modes/rpc"
 	"github.com/openmodu/modu/pkg/tui"
 	"github.com/openmodu/modu/pkg/types"
+
+	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 )
 
 func TestHandleSlashHarnessInspectionCommands(t *testing.T) {
@@ -96,7 +94,7 @@ func TestHandleSlashHarnessInspectionCommands(t *testing.T) {
 	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
 		Cwd:       cwd,
 		AgentDir:  agentDir,
-		Model:     testExampleModel(),
+		Model:     testSlashModel(),
 		GetAPIKey: func(provider string) (string, error) { return "", nil },
 	})
 	if err != nil {
@@ -108,7 +106,7 @@ func TestHandleSlashHarnessInspectionCommands(t *testing.T) {
 	renderer.SetNoColor(true)
 
 	for _, line := range []string{"/runtime", "/dashboard", "/state", "/config", "/config-template", "/logs", "/artifacts", "/bridge", "/actions"} {
-		handled, shouldExit := handleSlash(context.Background(), line, session, renderer, testExampleModel(), nil)
+		handled, shouldExit := Handle(context.Background(), line, session, renderer, testSlashModel(), nil)
 		if !handled || shouldExit {
 			t.Fatalf("expected %s to be handled without exit", line)
 		}
@@ -141,7 +139,9 @@ func TestHandleSlashHarnessInspectionCommands(t *testing.T) {
 	}
 }
 
-func testExampleModel() *types.Model {
+// ─── Test helpers ─────────────────────────────────
+
+func testSlashModel() *types.Model {
 	return &types.Model{
 		ID:         "test-model",
 		Name:       "Test Model",
@@ -149,89 +149,14 @@ func testExampleModel() *types.Model {
 	}
 }
 
-func TestPrintModeSmoke(t *testing.T) {
-	session := newExampleTestSession(t)
-
-	var textOut bytes.Buffer
-	if err := modes.RunPrint(context.Background(), modes.PrintOptions{
-		Mode:     modes.PrintModeText,
-		Messages: []string{"hello"},
-		Output:   &textOut,
-		Session:  session,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(textOut.String(), "assistant: hello") {
-		t.Fatalf("expected text print output, got %q", textOut.String())
-	}
-
-	session = newExampleTestSession(t)
-	var jsonOut bytes.Buffer
-	if err := modes.RunPrint(context.Background(), modes.PrintOptions{
-		Mode:     modes.PrintModeJSON,
-		Messages: []string{"hello"},
-		Output:   &jsonOut,
-		Session:  session,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	lines := strings.Split(strings.TrimSpace(jsonOut.String()), "\n")
-	if len(lines) < 2 {
-		t.Fatalf("expected json print events, got %q", jsonOut.String())
-	}
-	if !strings.Contains(lines[0], `"type":"session_start"`) {
-		t.Fatalf("expected session_start, got %q", lines[0])
-	}
-	if !strings.Contains(lines[len(lines)-1], `"type":"session_end"`) {
-		t.Fatalf("expected session_end, got %q", lines[len(lines)-1])
-	}
-}
-
-func TestRPCModeSmoke(t *testing.T) {
-	session := newExampleTestSession(t)
-	mode := rpc.NewRpcMode(session)
-
-	input := strings.NewReader(strings.Join([]string{
-		`{"id":"1","type":"get_state"}`,
-		`{"id":"2","type":"get_commands"}`,
-	}, "\n"))
-	var output bytes.Buffer
-	mode.SetIO(input, &output)
-
-	if err := mode.Run(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-
-	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
-	if len(lines) < 2 {
-		t.Fatalf("expected rpc responses, got %q", output.String())
-	}
-
-	var resp1 rpc.RpcResponse
-	if err := json.Unmarshal([]byte(lines[0]), &resp1); err != nil {
-		t.Fatal(err)
-	}
-	if !resp1.Success || resp1.Command != rpc.RpcCmdGetState {
-		t.Fatalf("unexpected first response: %#v", resp1)
-	}
-
-	var resp2 rpc.RpcResponse
-	if err := json.Unmarshal([]byte(lines[1]), &resp2); err != nil {
-		t.Fatal(err)
-	}
-	if !resp2.Success || resp2.Command != rpc.RpcCmdGetCommands {
-		t.Fatalf("unexpected second response: %#v", resp2)
-	}
-}
-
-func newExampleTestSession(t *testing.T) *coding_agent.CodingSession {
+func newSlashTestSession(t *testing.T) *coding_agent.CodingSession {
 	t.Helper()
 
 	root := t.TempDir()
 	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
 		Cwd:      root,
 		AgentDir: filepath.Join(root, ".coding_agent"),
-		Model:    testExampleModel(),
+		Model:    testSlashModel(),
 		GetAPIKey: func(provider string) (string, error) {
 			return "", nil
 		},

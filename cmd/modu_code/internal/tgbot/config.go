@@ -1,4 +1,4 @@
-package main
+package tgbot
 
 import (
 	"encoding/json"
@@ -8,34 +8,33 @@ import (
 	"github.com/openmodu/modu/pkg/coding_agent/resource"
 )
 
-// TelegramConfig holds Telegram bot settings.
-// Stored at ~/.coding_agent/channels/telegram/config.json (0600).
-type TelegramConfig struct {
+// Config holds Telegram bot settings stored at
+// ~/.coding_agent/channels/telegram/config.json (0600).
+type Config struct {
 	Token string `json:"token"`
 }
 
-// telegramConfigPath returns ~/.coding_agent/channels/telegram/config.json.
-func telegramConfigPath() string {
+func ConfigPath() string {
 	return filepath.Join(resource.DefaultAgentDir(), "channels", "telegram", "config.json")
 }
 
-func loadTelegramConfig() (*TelegramConfig, error) {
-	data, err := os.ReadFile(telegramConfigPath())
+func LoadConfig() (*Config, error) {
+	data, err := os.ReadFile(ConfigPath())
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &TelegramConfig{}, nil
+			return &Config{}, nil
 		}
 		return nil, err
 	}
-	var cfg TelegramConfig
+	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
 }
 
-func saveTelegramConfig(cfg *TelegramConfig) error {
-	path := telegramConfigPath()
+func SaveConfig(cfg *Config) error {
+	path := ConfigPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
