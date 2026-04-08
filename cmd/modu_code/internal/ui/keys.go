@@ -120,6 +120,14 @@ func (m *uiModel) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+u":
 		m.viewport.HalfViewUp()
 		m.userScrolled = true
+	case "pgdown":
+		m.viewport.HalfViewDown()
+		if m.viewport.AtBottom() {
+			m.userScrolled = false
+		}
+	case "pgup":
+		m.viewport.HalfViewUp()
+		m.userScrolled = true
 	case "ctrl+f", " ":
 		m.viewport.ViewDown()
 		if m.viewport.AtBottom() {
@@ -127,6 +135,12 @@ func (m *uiModel) handleNormalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "ctrl+b":
 		m.viewport.ViewUp()
+		m.userScrolled = true
+	case "end":
+		m.viewport.GotoBottom()
+		m.userScrolled = false
+	case "home":
+		m.viewport.GotoTop()
 		m.userScrolled = true
 	case "G":
 		m.viewport.GotoBottom()

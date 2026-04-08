@@ -90,6 +90,59 @@ func TestUIEscIntoNormalDisablesMouseCapture(t *testing.T) {
 	}
 }
 
+func TestUINormalModeHomeAndEndKeys(t *testing.T) {
+	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
+	m.state = uiStateNormal
+	m.viewport.Width = 80
+	m.viewport.Height = 6
+	m.viewport.SetContent(strings.Repeat("line\n", 40))
+	m.viewport.GotoBottom()
+
+	if m.viewport.YOffset == 0 {
+		t.Fatal("expected initial viewport to start near the bottom")
+	}
+
+	m.handleKey(tea.KeyMsg{Type: tea.KeyHome})
+	if m.viewport.YOffset != 0 {
+		t.Fatalf("expected home to jump to top, got offset %d", m.viewport.YOffset)
+	}
+	if !m.userScrolled {
+		t.Fatal("expected home to keep scroll lock away from the bottom")
+	}
+
+	m.handleKey(tea.KeyMsg{Type: tea.KeyEnd})
+	if !m.viewport.AtBottom() {
+		t.Fatalf("expected end to jump to bottom, got offset %d", m.viewport.YOffset)
+	}
+	if m.userScrolled {
+		t.Fatal("expected end to clear manual scroll state at the bottom")
+	}
+}
+
+func TestUINormalModePageKeys(t *testing.T) {
+	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
+	m.state = uiStateNormal
+	m.viewport.Width = 80
+	m.viewport.Height = 6
+	m.viewport.SetContent(strings.Repeat("line\n", 40))
+	m.viewport.GotoBottom()
+
+	bottomOffset := m.viewport.YOffset
+	m.handleKey(tea.KeyMsg{Type: tea.KeyPgUp})
+	if m.viewport.YOffset >= bottomOffset {
+		t.Fatalf("expected pgup to move upward from %d, got %d", bottomOffset, m.viewport.YOffset)
+	}
+	if !m.userScrolled {
+		t.Fatal("expected pgup to mark the viewport as manually scrolled")
+	}
+
+	afterPgUp := m.viewport.YOffset
+	m.handleKey(tea.KeyMsg{Type: tea.KeyPgDown})
+	if m.viewport.YOffset <= afterPgUp {
+		t.Fatalf("expected pgdown to move downward from %d, got %d", afterPgUp, m.viewport.YOffset)
+	}
+}
+
 func TestUIRenderInputAreaUsesQueryingHint(t *testing.T) {
 	session := newUITestSession(t)
 	model := testUIModel()
