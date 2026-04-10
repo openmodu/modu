@@ -88,6 +88,7 @@ var uiSlashCommands = []slashCommandDef{
 	{"/compact", "compact context"},
 	{"/tokens", "show token usage"},
 	{"/tools", "list active tools"},
+	{"/allow", "clear deny decision for a tool"},
 	{"/agents", "list subagents"},
 	{"/todos", "show todo list"},
 	{"/tasks", "show background tasks"},

@@ -159,6 +159,15 @@ func (m *ApprovalManager) DenyAlways(toolName string) {
 	delete(m.alwaysAllow, toolName)
 }
 
+// ClearDecision removes any cached always-allow or always-deny decision for a tool,
+// so it will be asked interactively again on the next call.
+func (m *ApprovalManager) ClearDecision(toolName string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.alwaysAllow, toolName)
+	delete(m.alwaysDeny, toolName)
+}
+
 // Reset clears all cached decisions and the callback.
 func (m *ApprovalManager) Reset() {
 	m.mu.Lock()
@@ -188,6 +197,11 @@ func (cs *CodingSession) AllowToolAlways(toolName string) {
 // DenyToolAlways marks a tool as always denied for this session.
 func (cs *CodingSession) DenyToolAlways(toolName string) {
 	cs.approvalManager.DenyAlways(toolName)
+}
+
+// ClearToolDecision removes any cached always-allow or always-deny decision for a tool.
+func (cs *CodingSession) ClearToolDecision(toolName string) {
+	cs.approvalManager.ClearDecision(toolName)
 }
 
 // ResetToolApprovals clears all cached tool approval rules and the callback.

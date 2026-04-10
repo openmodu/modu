@@ -67,7 +67,7 @@ func (m *uiModel) renderFooter() string {
 	var parts []string
 	switch m.state {
 	case uiStatePermission:
-		parts = append(parts, m.renderPermissionPrompt())
+		parts = append(parts, m.renderInputArea())
 	case uiStateQuerying:
 		parts = append(parts, m.renderActivityLine())
 		if m.showSlash && len(m.slashMatches) > 0 {
@@ -173,24 +173,42 @@ func (m *uiModel) renderInputMeta() string {
 	return strings.Join(parts, "  ·  ")
 }
 
-func (m *uiModel) renderPermissionPrompt() string {
+func (m *uiModel) renderPermissionInline(width int) string {
 	if m.pendingPerm == nil {
 		return ""
 	}
+
+	boxWidth := max(40, min(width-4, 80))
+
 	input := formatToolInput(m.pendingPerm.ToolName, m.pendingPerm.Args)
-	if len(input) > 400 {
-		input = input[:400] + "..."
+	if len(input) > 300 {
+		input = input[:300] + "..."
 	}
-	input = wrap.String(input, max(20, m.width-hookPadW))
-	lines := []string{
-		fmt.Sprintf("%s %s", uiWarningText.Render("●"), uiPrimaryText.Bold(true).Render(m.pendingPerm.ToolName)),
-		hookPad + uiDimText.Render(input),
-		dotPad + uiSuccessText.Bold(true).Render("[Y]es") + "  " +
-			uiErrorText.Render("[N]o") + "  " +
-			uiWarningText.Bold(true).Render("[A]lways allow") + "  " +
-			uiMutedText.Render("[D]eny always"),
+	input = wrap.String(input, max(20, boxWidth-4))
+
+	titleStyle := uiWarningText.Bold(true)
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(uiWarning).
+		Padding(0, 1).
+		Width(boxWidth)
+
+	var body strings.Builder
+	body.WriteString(titleStyle.Render(m.pendingPerm.ToolName))
+	if input != "" {
+		body.WriteString("\n")
+		body.WriteString(uiDimText.Render(input))
 	}
-	return strings.Join(lines, "\n")
+
+	box := boxStyle.Render(body.String())
+
+	actions := "  " +
+		uiSuccessText.Bold(true).Render("[Y]es") + "  " +
+		uiErrorText.Bold(true).Render("[N]o") + "  " +
+		uiWarningText.Bold(true).Render("[A]lways allow") + "  " +
+		uiMutedText.Render("[D]eny always")
+
+	return box + "\n" + actions
 }
 
 func (m *uiModel) renderSlashSuggestions() string {
@@ -236,47 +254,58 @@ func (m *uiModel) renderConversation() string {
 		glamour.WithStyles(style),
 		glamour.WithWordWrap(contentWidth),
 	)
-	var out strings.Builder
-	for idx, block := range m.blocks {
-		if idx > 0 {
-			if block.Kind == "user" {
-				out.WriteString("\n\n")
-			} else {
-				out.WriteString("\n")
-			}
-		}
+	var rendered []string
+	for _, block := range m.blocks {
+		var s string
 		switch block.Kind {
 		case "user":
-			out.WriteString(renderUIUserBlock(block.Content, viewWidth))
+			s = renderUIUserBlock(block.Content, viewWidth)
 		case "assistant":
+			var ab strings.Builder
 			if block.Thinking != "" {
-				out.WriteString(renderUIThinking(block.Thinking, viewWidth))
+				ab.WriteString(renderUIThinking(block.Thinking, viewWidth))
 			}
 			if strings.TrimSpace(block.Content) != "" {
 				if !block.Streaming && renderer != nil {
-					if rendered, err := renderer.Render(block.Content); err == nil {
-						out.WriteString(renderUIAssistantMarkdownBlock(normalizeRenderedMarkdown(rendered), viewWidth))
-						continue
+					if md, err := renderer.Render(block.Content); err == nil {
+						ab.WriteString(renderUIAssistantMarkdownBlock(normalizeRenderedMarkdown(md), viewWidth))
+					} else {
+						content := wrap.String(block.Content, contentWidth)
+						ab.WriteString(renderUIAssistantBlock(content, viewWidth))
 					}
+				} else {
+					content := wrap.String(block.Content, contentWidth)
+					ab.WriteString(renderUIAssistantBlock(content, viewWidth))
 				}
-				content := wrap.String(block.Content, contentWidth)
-				out.WriteString(renderUIAssistantBlock(content, viewWidth))
 			}
+			s = ab.String()
 		case "tool":
+			var tb strings.Builder
 			for _, tool := range block.Tools {
-				out.WriteString(renderUITool(tool, m.transcriptMode, viewWidth))
+				tb.WriteString(renderUITool(tool, m.transcriptMode, viewWidth))
 			}
+			s = tb.String()
 		case "section":
-			out.WriteString(renderUISection(block.Title, block.Content, viewWidth))
+			s = renderUISection(block.Title, block.Content, viewWidth)
 		default:
+			var db strings.Builder
 			for _, line := range strings.Split(block.Content, "\n") {
-				var b strings.Builder
-				writeWrappedStyledLines(&b, line, max(12, viewWidth-lipgloss.Width("  ")), "  ", "  ", uiDimText)
-				out.WriteString(b.String())
+				var lb strings.Builder
+				writeWrappedStyledLines(&lb, line, max(12, viewWidth-lipgloss.Width("  ")), "  ", "  ", uiDimText)
+				db.WriteString(lb.String())
 			}
+			s = db.String()
+		}
+		s = strings.TrimRight(s, "\n")
+		if s != "" {
+			rendered = append(rendered, s)
 		}
 	}
-	return strings.TrimRight(hardWrapRenderedText(out.String(), viewWidth), "\n")
+	result := strings.TrimRight(hardWrapRenderedText(strings.Join(rendered, "\n\n"), viewWidth), "\n")
+	if m.pendingPerm != nil {
+		result += "\n\n" + m.renderPermissionInline(viewWidth)
+	}
+	return result
 }
 
 func renderUIUserBlock(content string, width int) string {

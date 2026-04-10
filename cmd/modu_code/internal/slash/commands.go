@@ -83,6 +83,16 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		r.PrintInfo("active tools: " + strings.Join(names, ", "))
 		return true, false
 
+	case "allow":
+		if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
+			r.PrintInfo("usage: /allow <tool>  — clear deny decision so the tool is asked again")
+			return true, false
+		}
+		toolName := strings.TrimSpace(parts[1])
+		session.ClearToolDecision(toolName)
+		r.PrintInfo(fmt.Sprintf("cleared decision for %q — will ask again on next call", toolName))
+		return true, false
+
 	case "agents":
 		subagents := session.GetSubagents()
 		sort.Slice(subagents, func(i, j int) bool { return subagents[i].Name < subagents[j].Name })
