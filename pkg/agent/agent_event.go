@@ -17,6 +17,9 @@ const (
 	EventTypeToolExecutionStart  EventType = "tool_execution_start"
 	EventTypeToolExecutionUpdate EventType = "tool_execution_update"
 	EventTypeToolExecutionEnd    EventType = "tool_execution_end"
+	// EventTypeInterrupt is emitted when the agent pauses for a human decision.
+	// Callers should call Agent.Resume() to continue or abort.
+	EventTypeInterrupt EventType = "interrupt"
 )
 
 // AgentEvent union type in Go struct
@@ -37,4 +40,8 @@ type AgentEvent struct {
 	// Renderers should skip cursor-up / placeholder-collapse for parallel tools.
 	Parallel    bool
 	StreamEvent *types.StreamEvent
+
+	// Interrupt is populated for EventTypeInterrupt events.
+	// Call Agent.Resume() to continue or abort.
+	Interrupt *InterruptEvent
 }

@@ -26,6 +26,10 @@ type Agent struct {
 	listeners  map[int]func(AgentEvent)
 	listenerID int
 	running    chan struct{}
+
+	// Interrupt/resume support (populated when config.EnableInterrupts is true).
+	// interruptResume is set by the EventTypeInterrupt handler; Resume() sends to it.
+	interruptResume chan ResumeDecision
 }
 
 func NewAgent(cfg AgentConfig) *Agent {
@@ -275,6 +279,39 @@ func (a *Agent) Abort() {
 	}
 }
 
+// Resume unblocks an agent paused at an interrupt point.
+// Returns false if the agent is not currently paused.
+// Call this after receiving an EventTypeInterrupt event.
+func (a *Agent) Resume(decision ResumeDecision) bool {
+	a.mu.Lock()
+	ch := a.interruptResume
+	a.mu.Unlock()
+	if ch == nil {
+		return false
+	}
+	select {
+	case ch <- decision:
+		return true
+	default:
+		return false
+	}
+}
+
+// GetStatus returns the current session lifecycle status.
+// Only meaningful when config.EnableInterrupts is true.
+func (a *Agent) GetStatus() SessionStatus {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.state.Status
+}
+
+// GetInterrupt returns the current interrupt event if the agent is paused, otherwise nil.
+func (a *Agent) GetInterrupt() *InterruptEvent {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.state.Interrupt
+}
+
 func (a *Agent) WaitForIdle() {
 	a.mu.RLock()
 	running := a.running
@@ -403,10 +440,17 @@ func (a *Agent) runLoop(ctx context.Context, messages []AgentMessage, skipInitia
 		a.state.IsStreaming = false
 		a.state.StreamMessage = nil
 		a.state.PendingToolCalls = map[string]struct{}{}
+		if a.config.EnableInterrupts {
+			a.state.Interrupt = nil
+			a.interruptResume = nil
+		}
 		a.mu.Unlock()
 	}()
 
-	a.mu.RLock()
+	a.mu.Lock()
+	if a.config.EnableInterrupts {
+		a.state.Status = SessionStatusRunning
+	}
 	agentCtx := AgentContext{
 		SystemPrompt: a.state.SystemPrompt,
 		Messages:     append([]AgentMessage{}, a.state.Messages...),
@@ -414,11 +458,52 @@ func (a *Agent) runLoop(ctx context.Context, messages []AgentMessage, skipInitia
 	}
 	model := a.state.Model
 	reasoning := a.state.ThinkingLevel
-	a.mu.RUnlock()
+	a.mu.Unlock()
 
 	config := a.config
 	config.Model = model
 	config.Reasoning = reasoning
+
+	// Wire up the interrupt/resume pattern when EnableInterrupts is true.
+	if config.EnableInterrupts {
+		// interruptBlock is called from the AgentLoop goroutine after EventTypeInterrupt
+		// has been pushed to the stream. Agent.runLoop will have already processed the
+		// interrupt event (setting interruptResume) before this function is reached,
+		// because stream.Push blocks until Agent.runLoop reads the event.
+		interruptBlock := func() ResumeDecision {
+			a.mu.RLock()
+			ch := a.interruptResume
+			a.mu.RUnlock()
+			if ch == nil {
+				return ResumeDecision{Allow: false}
+			}
+			decision := <-ch
+			a.mu.Lock()
+			a.state.Status = SessionStatusRunning
+			a.state.Interrupt = nil
+			a.interruptResume = nil
+			a.mu.Unlock()
+			return decision
+		}
+
+		// Set ApproveTool only if caller hasn't provided one — the interrupt pattern
+		// replaces the blocking callback with an event-driven Resume().
+		if config.ApproveTool == nil {
+			config.ApproveTool = func(toolName, toolCallID string, args map[string]any) (ToolApprovalDecision, error) {
+				decision := interruptBlock()
+				if decision.Allow {
+					return ToolApprovalAllow, nil
+				}
+				return ToolApprovalDeny, nil
+			}
+		}
+
+		// MaxSteps interrupt handler.
+		config.onMaxStepsReached = func(stepCount int) ResumeDecision {
+			return interruptBlock()
+		}
+	}
+
 	config.GetSteeringMessages = func() ([]AgentMessage, error) {
 		a.mu.Lock()
 		defer a.mu.Unlock()
@@ -466,6 +551,18 @@ func (a *Agent) runLoop(ctx context.Context, messages []AgentMessage, skipInitia
 			a.state.StreamMessage = nil
 			a.state.Messages = append(a.state.Messages, event.Message)
 			a.mu.Unlock()
+		case EventTypeInterrupt:
+			// Set up the buffered resume channel before notifying subscribers.
+			// The AgentLoop goroutine will unblock from stream.Push and then
+			// call interruptBlock() which reads from this channel.
+			if event.Interrupt != nil && config.EnableInterrupts {
+				resumeCh := make(chan ResumeDecision, 1)
+				a.mu.Lock()
+				a.state.Status = SessionStatusPaused
+				a.state.Interrupt = event.Interrupt
+				a.interruptResume = resumeCh
+				a.mu.Unlock()
+			}
 		case EventTypeToolExecutionStart:
 			a.mu.Lock()
 			s := a.state.PendingToolCalls
@@ -488,6 +585,13 @@ func (a *Agent) runLoop(ctx context.Context, messages []AgentMessage, skipInitia
 			a.mu.Lock()
 			a.state.IsStreaming = false
 			a.state.StreamMessage = nil
+			if config.EnableInterrupts {
+				if a.state.Error != "" {
+					a.state.Status = SessionStatusFailed
+				} else {
+					a.state.Status = SessionStatusCompleted
+				}
+			}
 			a.mu.Unlock()
 		}
 		a.emit(event)
