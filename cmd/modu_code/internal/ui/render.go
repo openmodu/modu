@@ -239,7 +239,11 @@ func (m *uiModel) renderConversation() string {
 	var out strings.Builder
 	for idx, block := range m.blocks {
 		if idx > 0 {
-			out.WriteString("\n")
+			if block.Kind == "user" {
+				out.WriteString("\n\n")
+			} else {
+				out.WriteString("\n")
+			}
 		}
 		switch block.Kind {
 		case "user":
