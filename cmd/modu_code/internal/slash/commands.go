@@ -357,6 +357,7 @@ func PrintHelp(r Printer) {
 		"/compact            — compact the conversation context",
 		"/tokens             — show total token usage",
 		"/tools              — list active tools",
+		"/allow <tool>       — clear always-deny so the tool is asked again",
 		"/agents             — list discovered subagents and mailbox workers",
 		"/todos              — show current todo list",
 		"/tasks              — show background subagent tasks",

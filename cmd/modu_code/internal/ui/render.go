@@ -178,13 +178,15 @@ func (m *uiModel) renderPermissionInline(width int) string {
 		return ""
 	}
 
-	boxWidth := max(40, min(width-4, 80))
+	// lipgloss Width = content width; total rendered = Width + 2 (border) + 2 (padding) = Width+4
+	// so Width must be <= viewWidth-4 to avoid horizontal overflow.
+	boxWidth := max(8, min(width-4, 80))
 
 	input := formatToolInput(m.pendingPerm.ToolName, m.pendingPerm.Args)
 	if len(input) > 300 {
 		input = input[:300] + "..."
 	}
-	input = wrap.String(input, max(20, boxWidth-4))
+	input = wrap.String(input, max(4, boxWidth))
 
 	titleStyle := uiWarningText.Bold(true)
 	boxStyle := lipgloss.NewStyle().
@@ -301,11 +303,12 @@ func (m *uiModel) renderConversation() string {
 			rendered = append(rendered, s)
 		}
 	}
-	result := strings.TrimRight(hardWrapRenderedText(strings.Join(rendered, "\n\n"), viewWidth), "\n")
 	if m.pendingPerm != nil {
-		result += "\n\n" + m.renderPermissionInline(viewWidth)
+		if s := strings.TrimRight(m.renderPermissionInline(viewWidth), "\n"); s != "" {
+			rendered = append(rendered, s)
+		}
 	}
-	return result
+	return strings.TrimRight(hardWrapRenderedText(strings.Join(rendered, "\n\n"), viewWidth), "\n")
 }
 
 func renderUIUserBlock(content string, width int) string {

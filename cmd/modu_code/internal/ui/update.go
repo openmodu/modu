@@ -111,6 +111,7 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingPerm = &msg.req
 		m.state = uiStatePermission
 		m.statusMsg = "approval required"
+		m.userScrolled = false // force jump to bottom so approval box is visible
 		m.refreshViewport()
 		cmds := []tea.Cmd{m.waitApprovalCmd()}
 		if msg.req.Cancel != nil {
