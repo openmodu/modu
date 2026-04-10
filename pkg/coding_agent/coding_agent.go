@@ -3,10 +3,12 @@ package coding_agent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"html"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -96,9 +98,16 @@ type CodingSession struct {
 	worktreeMu     sync.Mutex
 	originalCwd    string
 	worktreePath   string
+	contextMu      sync.Mutex
+	loadedContexts map[string]struct{}
+	harness        *harnessState
 
 	// approvalManager handles tool execution approval.
 	approvalManager *ApprovalManager
+
+	// gitCache holds the last-known git state to avoid spawning git subprocesses
+	// on every writeRuntimeState call.
+	gitCache cachedGitState
 }
 
 // NewCodingSession creates and initializes a new coding session.
@@ -146,13 +155,23 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	}
 
 	// Always include the memory tool
-	activeTools = append(activeTools, tools.NewMemoryTool(memoryStore))
-	activeTools = append(activeTools, tools.NewTodoWriteTool(todoStoreAdapter{session: nil}))
-	activeTools = append(activeTools, tools.NewTaskOutputTool(taskStoreAdapter{manager: nil}))
-	activeTools = append(activeTools, tools.NewEnterPlanModeTool(planModeAdapter{session: nil}))
-	activeTools = append(activeTools, tools.NewExitPlanModeTool(planModeAdapter{session: nil}))
-	activeTools = append(activeTools, tools.NewEnterWorktreeTool(worktreeAdapter{session: nil}))
-	activeTools = append(activeTools, tools.NewExitWorktreeTool(worktreeAdapter{session: nil}))
+	if cfg.FeatureMemoryTool() {
+		activeTools = append(activeTools, tools.NewMemoryTool(memoryStore))
+	}
+	if cfg.FeatureTodoTool() {
+		activeTools = append(activeTools, tools.NewTodoWriteTool(todoStoreAdapter{session: nil}))
+	}
+	if cfg.FeatureTaskOutputTool() {
+		activeTools = append(activeTools, tools.NewTaskOutputTool(taskStoreAdapter{manager: nil}))
+	}
+	if cfg.FeaturePlanMode() {
+		activeTools = append(activeTools, tools.NewEnterPlanModeTool(planModeAdapter{session: nil}))
+		activeTools = append(activeTools, tools.NewExitPlanModeTool(planModeAdapter{session: nil}))
+	}
+	if cfg.FeatureWorktreeMode() {
+		activeTools = append(activeTools, tools.NewEnterWorktreeTool(worktreeAdapter{session: nil}))
+		activeTools = append(activeTools, tools.NewExitWorktreeTool(worktreeAdapter{session: nil}))
+	}
 
 	// Create session manager
 	sessionMgr, err := session.NewManager(agentDir, opts.Cwd)
@@ -224,10 +243,10 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	subagentLoader.Discover(agentDir, opts.Cwd)
 	subagentLoader.DiscoverExtra(opts.ExtraSubagentDirs...)
 	taskMgr := newBackgroundTaskManager()
-	if subagentLoader.Count() > 0 {
+	if cfg.FeatureSpawnSubagentTool() && subagentLoader.Count() > 0 {
 		activeTools = append(activeTools, tools.NewSpawnSubagentTool(opts.Cwd, agentDir, subagentLoader, activeTools, opts.Model, getAPIKey, streamFn, func(def *subagent.SubagentDefinition) *subagent.SubagentDefinition {
 			return prepareSubagentDefinition(def, skillMgr, memoryStore)
-		}, taskStoreAdapter{manager: taskMgr}))
+		}, taskStoreAdapter{manager: taskMgr}, nil))
 		if subagentsPrompt := formatSubagentsForPrompt(subagentLoader.List()); subagentsPrompt != "" {
 			promptBuilder.AppendPrompt(subagentsPrompt)
 		}
@@ -241,6 +260,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 
 	// Create approval manager
 	approvalMgr := NewApprovalManager()
+	approvalMgr.SetRules(cfg.Permissions)
 
 	// Create the underlying agent
 	ag := agent.NewAgent(agent.AgentConfig{
@@ -281,12 +301,21 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		thinkingLevel:    cfg.ThinkingLevel,
 		sessionStarted:   time.Now().UnixMilli(),
 		taskManager:      taskMgr,
+		loadedContexts:   make(map[string]struct{}),
+		harness:          newHarnessState(),
 		approvalManager:  approvalMgr,
 	}
+	approvalMgr.SetObserver(cs)
+	taskMgr.SetOnChange(func() { cs.writeRuntimeState() })
+	cs.refreshToolsForCwd(cs.cwd)
 	cs.replaceTodoTool()
 	cs.replaceTaskOutputTool()
 	cs.replacePlanTools()
 	cs.replaceWorktreeTools()
+	cs.installConfigHarnessHooks()
+	for _, ctxFile := range loader.LoadContextFiles() {
+		cs.loadedContexts[ctxFile.Path] = struct{}{}
+	}
 
 	// Subscribe to events for token usage tracking (auto-compaction)
 	ag.Subscribe(func(event agent.AgentEvent) {
@@ -304,6 +333,21 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 				addUsage(msg.Usage)
 			}
 			cs.handleMessageEnd(event.Message)
+			return
+		}
+		if event.Type == agent.EventTypeToolExecutionEnd && !event.IsError {
+			cs.handleToolExecutionEnd(event)
+			return
+		}
+		if event.Type == agent.EventTypeAgentEnd {
+			if errText := strings.TrimSpace(cs.agent.GetState().Error); errText != "" {
+				cs.runHarnessStopFailure(fmt.Errorf("%s", errText))
+			} else {
+				cs.runHarnessStop()
+			}
+			cs.pruneTransientContextMessages()
+			go cs.refreshGitRuntimeState()
+			cs.writeRuntimeState()
 		}
 	})
 
@@ -358,6 +402,10 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		}
 	}
 
+	cs.installHarnessLayer()
+	cs.runHarnessSessionStart("startup")
+	cs.writeRuntimeState()
+
 	return cs, nil
 }
 
@@ -387,6 +435,10 @@ func (s *CodingSession) Prompt(ctx context.Context, text string) error {
 		}
 	}
 
+	if err := s.runHarnessUserPromptSubmit(text); err != nil {
+		return err
+	}
+
 	// Record to session
 	_ = s.sessionManager.Append(session.NewEntry(session.EntryTypeMessage, "", session.MessageData{
 		Role:    agent.RoleUser,
@@ -402,6 +454,11 @@ func (s *CodingSession) Prompt(ctx context.Context, text string) error {
 	s.maybeAutoCompact(ctx)
 
 	return nil
+}
+
+func (s *CodingSession) Close(reason string) {
+	s.runHarnessSessionEnd(reason)
+	s.writeRuntimeState()
 }
 
 // Steer injects a high-priority message during processing.
@@ -442,6 +499,7 @@ func (s *CodingSession) SetActiveTools(names []string) {
 	}
 
 	s.agent.SetTools(active)
+	s.writeRuntimeState()
 }
 
 // SkillInfo is a minimal view of a skill for display purposes.
@@ -500,6 +558,175 @@ func (s *CodingSession) GetActiveToolNames() []string {
 	return names
 }
 
+func (s *CodingSession) handleToolExecutionEnd(event agent.AgentEvent) {
+	if s.resources == nil {
+		return
+	}
+	switch event.ToolName {
+	case "read", "edit", "write", "grep", "find", "ls":
+	default:
+		return
+	}
+
+	paths := extractToolPaths(event)
+	if len(paths) == 0 {
+		return
+	}
+
+	newContexts := s.collectNewContextFiles(paths)
+	if len(newContexts) == 0 {
+		return
+	}
+
+	text := formatDynamicContextMessage(paths, newContexts)
+	if text == "" {
+		return
+	}
+	s.agent.Steer((&CustomMessage{
+		Source: nestedContextSource,
+		Text:   text,
+	}).ToLlmMessage())
+}
+
+func extractToolPaths(event agent.AgentEvent) []string {
+	var paths []string
+	seen := make(map[string]struct{})
+	add := func(path string) {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			return
+		}
+		if _, ok := seen[path]; ok {
+			return
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+
+	if result, ok := event.Result.(agent.AgentToolResult); ok {
+		if details, ok := result.Details.(map[string]any); ok {
+			collectToolPathsFromDetails(details, add)
+		}
+	}
+	if args, ok := event.Args.(map[string]any); ok {
+		collectToolPathsFromDetails(args, add)
+	}
+	return paths
+}
+
+func collectToolPathsFromDetails(details map[string]any, add func(string)) {
+	if path, _ := details["path"].(string); path != "" {
+		add(path)
+	}
+	switch matched := details["matched_paths"].(type) {
+	case []string:
+		for _, path := range matched {
+			add(path)
+		}
+	case []any:
+		for _, raw := range matched {
+			if path, ok := raw.(string); ok {
+				add(path)
+			}
+		}
+	}
+}
+
+func (s *CodingSession) collectNewContextFiles(paths []string) []resource.ContextFile {
+	if len(paths) == 0 {
+		return nil
+	}
+
+	// Load context files outside the lock: this involves filesystem I/O and
+	// a git subprocess, both of which are expensive to hold a mutex across.
+	var candidates []resource.ContextFile
+	for _, path := range paths {
+		candidates = append(candidates, s.resources.LoadContextFilesForPath(path)...)
+	}
+
+	s.contextMu.Lock()
+	defer s.contextMu.Unlock()
+
+	var out []resource.ContextFile
+	for _, file := range candidates {
+		if _, seen := s.loadedContexts[file.Path]; seen {
+			continue
+		}
+		s.loadedContexts[file.Path] = struct{}{}
+		out = append(out, file)
+	}
+	return out
+}
+
+func formatDynamicContextMessage(targetPaths []string, files []resource.ContextFile) string {
+	const (
+		maxFileBytes  = 4 * 1024
+		maxTotalBytes = 12 * 1024
+	)
+
+	if len(files) == 0 {
+		return ""
+	}
+
+	var parts []string
+	parts = append(parts, "Additional path-specific instructions became relevant after accessing:")
+	for _, path := range targetPaths {
+		parts = append(parts, "- "+path)
+	}
+
+	remaining := maxTotalBytes
+	for _, file := range files {
+		if remaining <= 0 {
+			break
+		}
+		content := strings.TrimSpace(file.Content)
+		if content == "" {
+			continue
+		}
+		limit := min(maxFileBytes, remaining)
+		if len(content) > limit {
+			content = truncateWithNotice(content, limit, file.Name)
+		}
+		if len(content) == 0 {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("# Path Context: %s\n%s", file.Name, content))
+		remaining -= len(content)
+	}
+
+	if len(parts) == 1 {
+		return ""
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func (s *CodingSession) pruneTransientContextMessages() {
+	state := s.agent.GetState()
+	if len(state.Messages) == 0 {
+		return
+	}
+
+	// Scan first to avoid allocation when there is nothing to prune.
+	hasTransient := false
+	for _, msg := range state.Messages {
+		if isTransientContextMessage(msg) {
+			hasTransient = true
+			break
+		}
+	}
+	if !hasTransient {
+		return
+	}
+
+	filtered := make([]agent.AgentMessage, 0, len(state.Messages))
+	for _, msg := range state.Messages {
+		if !isTransientContextMessage(msg) {
+			filtered = append(filtered, msg)
+		}
+	}
+	s.agent.ReplaceMessages(filtered)
+}
+
 // SetModel changes the active model.
 func (s *CodingSession) SetModel(model *types.Model) {
 	s.model = model
@@ -509,6 +736,7 @@ func (s *CodingSession) SetModel(model *types.Model) {
 		Provider: model.ProviderID,
 		ModelID:  model.ID,
 	}))
+	s.writeRuntimeState()
 }
 
 // SetModelByID changes the active model by provider and model ID.
@@ -532,12 +760,16 @@ func (s *CodingSession) Compact(ctx context.Context) error {
 
 	state := s.agent.GetState()
 
+	if preErr := s.runHarnessPreCompact(len(state.Messages)); preErr != nil {
+		return fmt.Errorf("compaction blocked by harness: %w", preErr)
+	}
 	result, err := compaction.Compact(ctx, state.Messages, compaction.Options{
 		PreserveRecent: s.config.CompactionSettings.PreserveRecentMessages,
 		Model:          s.model,
 		GetAPIKey:      s.getAPIKey,
 		StreamFn:       s.streamFn,
 	})
+	s.runHarnessPostCompact(result, err)
 	if err != nil {
 		return fmt.Errorf("compaction failed: %w", err)
 	}
@@ -615,6 +847,24 @@ func (s *CodingSession) GetConfig() *Config {
 	return s.config
 }
 
+func (s *CodingSession) EffectiveConfigJSON() string {
+	if s.config == nil {
+		return "{}\n"
+	}
+	payload := map[string]any{
+		"config": s.config,
+		"paths": map[string]string{
+			"global":  filepath.Join(s.agentDir, "settings.json"),
+			"project": filepath.Join(s.cwd, ".coding_agent", "settings.json"),
+		},
+	}
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return "{}\n"
+	}
+	return string(data) + "\n"
+}
+
 // CycleModel cycles to the next model in the scopedModels list.
 // Returns the new model, or nil if no scoped models are configured.
 func (s *CodingSession) CycleModel() *types.Model {
@@ -680,6 +930,7 @@ func (s *CodingSession) SetThinkingLevel(level agent.ThinkingLevel) {
 		Type:  SessionEventThinkingChange,
 		Level: string(level),
 	})
+	s.writeRuntimeState()
 }
 
 // GetThinkingLevel returns the current thinking level.
@@ -705,6 +956,7 @@ func (s *CodingSession) GetSessionID() string {
 // SetAutoCompaction enables or disables auto-compaction.
 func (s *CodingSession) SetAutoCompaction(enabled bool) {
 	s.config.AutoCompaction = enabled
+	s.writeRuntimeState()
 }
 
 // SetAutoRetry enables or disables auto-retry.
@@ -990,6 +1242,8 @@ func prepareSubagentDefinition(def *subagent.SubagentDefinition, skillMgr *skill
 	}
 
 	clone := *def
+	clone.DisallowedTools = append([]string{}, clone.DisallowedTools...)
+	clone.DisallowedTools = append(clone.DisallowedTools, clone.HarnessBlockTools...)
 	var parts []string
 	if clone.SystemPrompt != "" {
 		parts = append(parts, clone.SystemPrompt)
@@ -1072,6 +1326,9 @@ func (s *CodingSession) executeSkill(ctx context.Context, originalInput string, 
 
 func (s *CodingSession) handleMessageEnd(msg agent.AgentMessage) {
 	if msg == nil {
+		return
+	}
+	if isTransientContextMessage(msg) {
 		return
 	}
 

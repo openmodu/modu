@@ -11,6 +11,6 @@
     "deploy:preview": "npm run build && npx wrangler pages deploy dist --project-name modu-web --branch preview"
   },
   "devDependencies": {
-    "vite": "^5.2.0"
+    "vite": "^6.4.1"
   }
 }

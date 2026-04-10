@@ -12,18 +12,18 @@ import (
 	"sync"
 	"time"
 
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"github.com/openmodu/modu/pkg/channels"
 	"github.com/openmodu/modu/pkg/types"
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 // Bot is the Telegram bot. It handles the Telegram protocol only —
 // all business logic is delegated via callbacks.
 type Bot struct {
-	api        *tgbotapi.BotAPI
-	attachDir  string // directory to save downloaded attachments
-	onMessage  channels.MessageHandler
-	onAbort    channels.AbortHandler
+	api       *tgbotapi.BotAPI
+	attachDir string // directory to save downloaded attachments
+	onMessage channels.MessageHandler
+	onAbort   channels.AbortHandler
 
 	// approvalMu guards approvalCh.
 	approvalMu sync.Mutex
@@ -33,10 +33,16 @@ type Bot struct {
 	approvalCh map[int64]chan string
 }
 
+type discardLogger struct{}
+
+func (discardLogger) Println(...interface{})        {}
+func (discardLogger) Printf(string, ...interface{}) {}
+
 // NewBot creates a new Telegram bot.
 // attachDir is where incoming file attachments are saved before being passed to onMessage.
 // onMessage is called for every user message; onAbort is called when the user sends "stop".
 func NewBot(token, attachDir string, onMessage channels.MessageHandler, onAbort channels.AbortHandler) (*Bot, error) {
+	_ = tgbotapi.SetLogger(discardLogger{})
 	api, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Telegram bot: %w", err)
@@ -65,14 +71,13 @@ func (b *Bot) Run(ctx context.Context) error {
 	// queries) to the webhook URL and does NOT return them via getUpdates,
 	// which breaks the long-polling approval flow.
 	if _, err := b.api.Request(tgbotapi.DeleteWebhookConfig{DropPendingUpdates: false}); err != nil {
-		fmt.Printf("[telegram] warning: failed to delete webhook: %v\n", err)
+		_ = err
 	}
 
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
 	u.AllowedUpdates = []string{"message", "callback_query"}
 	updates := b.api.GetUpdatesChan(u)
-
 
 	for {
 		select {
@@ -100,14 +105,12 @@ func (b *Bot) handleUpdate(ctx context.Context, update tgbotapi.Update) {
 			return
 		}
 		chatID := cq.Message.Chat.ID
-		fmt.Printf("[telegram] callback query: chatID=%d data=%q\n", chatID, cq.Data)
 		b.approvalMu.Lock()
 		if ch, ok := b.approvalCh[chatID]; ok {
 			delete(b.approvalCh, chatID)
 			b.approvalMu.Unlock()
 			ch <- cq.Data
 		} else {
-			fmt.Printf("[telegram] no pending approval for chatID=%d (data=%q dropped)\n", chatID, cq.Data)
 			b.approvalMu.Unlock()
 		}
 		return
@@ -268,7 +271,6 @@ func (b *Bot) downloadAttachments(msg *tgbotapi.Message, dir string) []string {
 	tryDownload := func(fileID, filename string) {
 		url, err := b.api.GetFileDirectURL(fileID)
 		if err != nil {
-			fmt.Printf("[telegram] failed to get URL for fileID %s: %v\n", fileID, err)
 			return
 		}
 		if filename == "" {
@@ -276,7 +278,6 @@ func (b *Bot) downloadAttachments(msg *tgbotapi.Message, dir string) []string {
 		}
 		dest := filepath.Join(dir, fmt.Sprintf("%d_%s", time.Now().UnixMilli(), filename))
 		if err := downloadFile(dest, url); err != nil {
-			fmt.Printf("[telegram] failed to download attachment: %v\n", err)
 			return
 		}
 		paths = append(paths, dest)
@@ -496,9 +497,6 @@ func (c *tgContext) UploadFile(filePath, title string) error {
 	name := filepath.Base(filePath)
 	reader := tgbotapi.FileReader{Name: name, Reader: f}
 
-	fmt.Printf("[telegram] uploading %s (%d KB) to chat %d\n", name, info.Size()/1024, c.chatID)
-	start := time.Now()
-
 	switch ext {
 	case ".mp4", ".mov", ".avi", ".mkv", ".webm":
 		vid := tgbotapi.NewVideo(c.chatID, reader)
@@ -513,7 +511,6 @@ func (c *tgContext) UploadFile(filePath, title string) error {
 		}
 		_, err = c.bot.api.Send(doc)
 	}
-	fmt.Printf("[telegram] upload %s done in %v (err=%v)\n", name, time.Since(start), err)
 	return err
 }
 

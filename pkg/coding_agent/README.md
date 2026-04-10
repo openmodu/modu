@@ -328,6 +328,161 @@ session, _ := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
 }
 ```
 
+### Harness 配置
+
+`coding_agent` 现在支持把一部分宿主层行为放到 `settings.json` 的 `harness` 段里控制。
+
+默认行为：
+
+- 首次加载会自动生成 `~/.coding_agent/settings.json`
+- safe harness outputs 默认自动开启
+  - `logFiles`
+  - `artifactFiles`
+  - `bridgeDirs`
+- host actions 默认自动开启
+  - 只要配置了 `actions` 就会执行
+  - 如需关闭，显式设置 `enableActions: false`
+
+常用能力：
+
+- `features`
+  - 统一开关宿主级能力
+  - 支持 `memoryTool`、`todoTool`、`taskOutputTool`、`planMode`、`worktreeMode`、`spawnSubagentTool`、`harnessActions`
+- `permissions`
+  - 统一配置工具权限规则
+  - 支持 `allowTools`、`denyTools`、`allowBashPrefixes`、`denyBashPrefixes`
+- `blockTools`
+  - 在工具执行前直接阻断指定工具
+- `captureHints`
+  - 是否剥离并缓存 `<claude-code-hint .../>`
+- `persistToolResults`
+  - 是否把工具文本结果写到 runtime `tool-results/`
+- `logFiles`
+  - 追加 JSONL 事件流
+- `artifactFiles`
+  - 覆盖写最新事件快照
+- `bridgeDirs`
+  - 每个事件写一个独立 JSON 文件，方便外部 watcher 消费
+- `enableActions`
+  - 是否允许执行 host action，默认 `true`
+- `actions`
+  - 目前支持 `type: "exec"` 的宿主命令分发
+  - 可通过 `onFailure: "stop"` 在失败后停止后续同类 action
+- `actionPolicy`
+  - 默认要求 `command` 使用绝对路径
+  - 可继续约束 command 前缀、dir 前缀和最大 timeout
+
+示例：
+
+```json
+{
+  "features": {
+    "memoryTool": true,
+    "todoTool": true,
+    "taskOutputTool": true,
+    "planMode": true,
+    "worktreeMode": true,
+    "spawnSubagentTool": true,
+    "harnessActions": true
+  },
+  "permissions": {
+    "denyTools": ["bash"],
+    "allowBashPrefixes": ["go test", "git status"]
+  },
+  "harness": {
+    "blockTools": ["bash"],
+    "captureHints": true,
+    "persistToolResults": true,
+    "logFiles": {
+      "toolUse": "logs/tool-use.jsonl",
+      "compact": "logs/compact.jsonl",
+      "subagent": "logs/subagent.jsonl"
+    },
+    "artifactFiles": {
+      "toolUse": "artifacts/tool-use-latest.json",
+      "compact": "artifacts/compact-latest.json",
+      "subagent": "artifacts/subagent-latest.json"
+    },
+    "bridgeDirs": {
+      "toolUse": "bridge/tool-use",
+      "compact": "bridge/compact",
+      "subagent": "bridge/subagent"
+    },
+    "enableActions": true,
+    "actions": {
+      "toolUse": [
+        {
+          "type": "exec",
+          "command": "/bin/sh",
+          "args": [
+            "-c",
+            "printf '%s:%s' \"$HARNESS_EVENT_TYPE\" \"$HARNESS_TOOL\" > action-marker.txt"
+          ],
+          "dir": "{{agent_dir}}",
+          "timeoutMs": 1000,
+          "onFailure": "stop",
+          "retry": {
+            "maxAttempts": 2,
+            "delayMs": 50
+          }
+        }
+      ]
+    },
+    "actionPolicy": {
+      "requireAbsoluteCommand": true,
+      "allowCommandPrefixes": ["/bin", "/usr/bin"],
+      "allowDirPrefixes": ["/Users/you/.coding_agent"],
+      "maxTimeoutMs": 5000
+    }
+  }
+}
+```
+
+### Harness Runtime 输出
+
+运行时路径由 harness 统一管理，主要包括：
+
+- `sessions/`
+- `plans/`
+- `tool-results/`
+- `runtime/<project>/index.json`
+- `runtime/<project>/state.json`
+- `runtime/<project>/actions/<category>/latest.json`
+
+其中：
+
+- `runtime index`
+  - 记录 resolved 输出目标和每个 category 的最新事件
+- `runtime state`
+  - 记录统一 session 状态快照，包括 mode、feature gate、permission rules、todo、background task、tool count 和 runtime paths
+- `action status artifact`
+  - 记录 host action 的执行状态、`stdout`、`stderr`、合并 `output`、错误、重试次数和 timeout 标记
+
+### Harness Action 模板变量
+
+`command`、`args`、`dir` 里支持这些模板变量：
+
+- `{{agent_dir}}`
+- `{{cwd}}`
+- `{{runtime_dir}}`
+- `{{event_category}}`
+- `{{event_type}}`
+- `{{tool}}`
+- `{{subagent_name}}`
+- `{{subagent_task}}`
+
+### Harness Action 环境变量
+
+执行 `exec` action 时，还会注入这些环境变量：
+
+- `HARNESS_EVENT_CATEGORY`
+- `HARNESS_EVENT_TYPE`
+- `HARNESS_EVENT_JSON`
+- `HARNESS_AGENT_DIR`
+- `HARNESS_RUNTIME_ROOT`
+- `HARNESS_TOOL`
+- `HARNESS_SUBAGENT_NAME`
+
 ## 请求处理流程
 
 ```

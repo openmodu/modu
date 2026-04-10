@@ -1,4 +1,4 @@
-package main
+package mailboxrt
 
 import (
 	"context"
@@ -16,33 +16,34 @@ import (
 	"github.com/openmodu/modu/pkg/types"
 )
 
-type moduCodeMailboxRuntime struct {
+// Runtime manages a local mailbox server and its worker agents.
+type Runtime struct {
 	addr         string
 	orchestrator *client.MailboxClient
 	cancel       context.CancelFunc
 	agentIDs     []string
 }
 
-func startMailboxRuntime(
+// Start creates a local mailbox server, registers an orchestrator client,
+// and launches worker goroutines for each discovered agent definition.
+func Start(
 	agentDir string,
 	extraAgentsDir string,
 	cwd string,
 	model *types.Model,
 	getAPIKey func(string) (string, error),
-) (*moduCodeMailboxRuntime, error) {
+) (*Runtime, error) {
 	addr, err := allocateLocalAddr()
 	if err != nil {
 		return nil, err
 	}
 
 	srv := server.NewMailboxServer()
-	go func() {
-		_ = srv.ListenAndServe(addr)
-	}()
+	go func() { _ = srv.ListenAndServe(addr) }()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	orchestrator := client.NewMailboxClient("modu-code-main", addr)
-	if err := registerMailboxClient(ctx, orchestrator, "orchestrator"); err != nil {
+	if err := registerClient(ctx, orchestrator, "orchestrator"); err != nil {
 		cancel()
 		return nil, err
 	}
@@ -53,27 +54,27 @@ func startMailboxRuntime(
 	defs := loader.List()
 	sort.Slice(defs, func(i, j int) bool { return defs[i].Name < defs[j].Name })
 
-	runtime := &moduCodeMailboxRuntime{
+	rt := &Runtime{
 		addr:         addr,
 		orchestrator: orchestrator,
 		cancel:       cancel,
 		agentIDs:     make([]string, 0, len(defs)),
 	}
 	for _, def := range defs {
-		runtime.agentIDs = append(runtime.agentIDs, def.Name)
-		go runMailboxWorker(ctx, addr, cwd, model, getAPIKey, def)
+		rt.agentIDs = append(rt.agentIDs, def.Name)
+		go runWorker(ctx, addr, cwd, model, getAPIKey, def)
 	}
-	return runtime, nil
+	return rt, nil
 }
 
-func (r *moduCodeMailboxRuntime) Client() *client.MailboxClient {
+func (r *Runtime) Client() *client.MailboxClient {
 	if r == nil {
 		return nil
 	}
 	return r.orchestrator
 }
 
-func (r *moduCodeMailboxRuntime) AgentIDs() []string {
+func (r *Runtime) AgentIDs() []string {
 	if r == nil {
 		return nil
 	}
@@ -82,7 +83,7 @@ func (r *moduCodeMailboxRuntime) AgentIDs() []string {
 	return out
 }
 
-func (r *moduCodeMailboxRuntime) Close() {
+func (r *Runtime) Close() {
 	if r == nil || r.cancel == nil {
 		return
 	}
@@ -99,7 +100,7 @@ func allocateLocalAddr() (string, error) {
 	return addr, nil
 }
 
-func registerMailboxClient(ctx context.Context, c *client.MailboxClient, role string) error {
+func registerClient(ctx context.Context, c *client.MailboxClient, role string) error {
 	var lastErr error
 	for attempt := 0; attempt < 30; attempt++ {
 		if err := c.Register(ctx); err != nil {
@@ -119,16 +120,15 @@ func registerMailboxClient(ctx context.Context, c *client.MailboxClient, role st
 	return lastErr
 }
 
-func runMailboxWorker(
+func runWorker(
 	ctx context.Context,
-	addr string,
-	cwd string,
+	addr, cwd string,
 	model *types.Model,
 	getAPIKey func(string) (string, error),
 	def *subagent.SubagentDefinition,
 ) {
 	worker := client.NewMailboxClient(def.Name, addr)
-	if err := registerMailboxClient(ctx, worker, "worker"); err != nil {
+	if err := registerClient(ctx, worker, "worker"); err != nil {
 		return
 	}
 	_ = worker.SetCapabilities(ctx, def.Name)
@@ -161,13 +161,8 @@ func runMailboxWorker(
 		_ = worker.StartTask(ctx, msg.TaskID)
 
 		result, runErr := subagent.Run(
-			ctx,
-			def,
-			payload.Description,
-			codingtools.AllTools(cwd),
-			model,
-			getAPIKey,
-			agent.StreamDefault,
+			ctx, def, payload.Description,
+			codingtools.AllTools(cwd), model, getAPIKey, agent.StreamDefault,
 		)
 		if runErr != nil {
 			_ = worker.FailTask(ctx, msg.TaskID, runErr.Error())

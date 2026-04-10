@@ -43,6 +43,11 @@ func BuiltinCommands() []SlashCommand {
 			Handler:     cmdSettings,
 		},
 		{
+			Name:        "state",
+			Description: "Show unified runtime state snapshot",
+			Handler:     cmdState,
+		},
+		{
 			Name:        "tools",
 			Description: "List active tools",
 			Handler:     cmdTools,
@@ -106,11 +111,12 @@ func cmdFork(session *CodingSession, args string) error {
 }
 
 func cmdSettings(session *CodingSession, _ string) error {
-	cfg := session.config
-	fmt.Printf("Thinking Level: %s\n", cfg.ThinkingLevel)
-	fmt.Printf("Auto Compaction: %v\n", cfg.AutoCompaction)
-	fmt.Printf("Default Provider: %s\n", cfg.DefaultProvider)
-	fmt.Printf("Default Model: %s\n", cfg.DefaultModel)
+	fmt.Print(session.EffectiveConfigJSON())
+	return nil
+}
+
+func cmdState(session *CodingSession, _ string) error {
+	fmt.Print(session.RuntimeStateJSON())
 	return nil
 }
 

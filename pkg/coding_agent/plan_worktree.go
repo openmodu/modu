@@ -21,16 +21,23 @@ func (a planModeAdapter) EnterPlanMode() {
 	if a.session == nil {
 		return
 	}
+	if !a.session.config.FeaturePlanMode() {
+		return
+	}
 	func() {
 		a.session.planMu.Lock()
 		defer a.session.planMu.Unlock()
 		a.session.planMode = true
 	}()
 	a.session.refreshDynamicSystemPrompt()
+	a.session.writeRuntimeState()
 }
 
 func (a planModeAdapter) ExitPlanMode(plan string) {
 	if a.session == nil {
+		return
+	}
+	if !a.session.config.FeaturePlanMode() {
 		return
 	}
 	func() {
@@ -38,8 +45,11 @@ func (a planModeAdapter) ExitPlanMode(plan string) {
 		defer a.session.planMu.Unlock()
 		a.session.planMode = false
 	}()
+	if strings.TrimSpace(plan) != "" {
+		_ = a.session.writeLatestPlan(plan)
+	}
 	a.session.refreshDynamicSystemPrompt()
-	_ = plan
+	a.session.writeRuntimeState()
 }
 
 func (a planModeAdapter) IsPlanMode() bool {
@@ -69,6 +79,14 @@ func (s *CodingSession) ExitPlanMode(plan string) {
 }
 
 func (s *CodingSession) replacePlanTools() {
+	if !s.config.FeaturePlanMode() {
+		s.activeTools = removeAgentToolByName(s.activeTools, "enter_plan_mode")
+		s.activeTools = removeAgentToolByName(s.activeTools, "exit_plan_mode")
+		stateTools := removeAgentToolByName(s.agent.GetState().Tools, "enter_plan_mode")
+		stateTools = removeAgentToolByName(stateTools, "exit_plan_mode")
+		s.agent.SetTools(stateTools)
+		return
+	}
 	enter := tools.NewEnterPlanModeTool(planModeAdapter{session: s})
 	exit := tools.NewExitPlanModeTool(planModeAdapter{session: s})
 	s.activeTools = replaceAgentTool(s.activeTools, enter)
@@ -111,6 +129,14 @@ func (s *CodingSession) ActiveWorktree() string {
 }
 
 func (s *CodingSession) replaceWorktreeTools() {
+	if !s.config.FeatureWorktreeMode() {
+		s.activeTools = removeAgentToolByName(s.activeTools, "enter_worktree")
+		s.activeTools = removeAgentToolByName(s.activeTools, "exit_worktree")
+		stateTools := removeAgentToolByName(s.agent.GetState().Tools, "enter_worktree")
+		stateTools = removeAgentToolByName(stateTools, "exit_worktree")
+		s.agent.SetTools(stateTools)
+		return
+	}
 	enter := tools.NewEnterWorktreeTool(worktreeAdapter{session: s})
 	exit := tools.NewExitWorktreeTool(worktreeAdapter{session: s})
 	s.activeTools = replaceAgentTool(s.activeTools, enter)
@@ -121,6 +147,9 @@ func (s *CodingSession) replaceWorktreeTools() {
 }
 
 func (s *CodingSession) EnterWorktree() (string, error) {
+	if !s.config.FeatureWorktreeMode() {
+		return "", fmt.Errorf("worktree mode is disabled by settings")
+	}
 	s.worktreeMu.Lock()
 	if s.worktreePath != "" {
 		path := s.worktreePath
@@ -146,11 +175,15 @@ func (s *CodingSession) EnterWorktree() (string, error) {
 	}
 
 	s.originalCwd = s.cwd
+	oldCwd := s.cwd
 	s.worktreePath = path
 	s.cwd = path
 	s.refreshToolsForCwd(path)
 	s.worktreeMu.Unlock()
 	s.refreshDynamicSystemPrompt()
+	s.runHarnessWorktreeCreate(path)
+	s.runHarnessCwdChanged(oldCwd, path)
+	s.writeRuntimeState()
 	return path, nil
 }
 
@@ -168,12 +201,16 @@ func (s *CodingSession) ExitWorktree() error {
 	}
 	s.worktreePath = ""
 	if restore != "" {
+		oldCwd := s.cwd
 		s.cwd = restore
 		s.originalCwd = ""
 		s.refreshToolsForCwd(restore)
+		s.runHarnessCwdChanged(oldCwd, restore)
 	}
 	s.worktreeMu.Unlock()
 	s.refreshDynamicSystemPrompt()
+	s.runHarnessWorktreeRemove(path)
+	s.writeRuntimeState()
 	return nil
 }
 
@@ -204,6 +241,8 @@ func (s *CodingSession) refreshToolsForCwd(cwd string) {
 		switch tool.Name() {
 		case "read":
 			updated = append(updated, tools.NewReadTool(cwd))
+		case "git_preflight":
+			updated = append(updated, tools.NewGitPreflightTool(cwd))
 		case "write":
 			updated = append(updated, tools.NewWriteTool(cwd))
 		case "edit":
@@ -219,7 +258,7 @@ func (s *CodingSession) refreshToolsForCwd(cwd string) {
 		case "spawn_subagent":
 			updated = append(updated, tools.NewSpawnSubagentTool(cwd, s.agentDir, s.subagentLoader, updated, s.model, s.getAPIKey, s.streamFn, func(def *subagent.SubagentDefinition) *subagent.SubagentDefinition {
 				return prepareSubagentDefinition(def, s.skillManager, s.memoryStore)
-			}, taskStoreAdapter{manager: s.taskManager}))
+			}, taskStoreAdapter{manager: s.taskManager}, s))
 		default:
 			updated = append(updated, tool)
 		}
@@ -244,4 +283,16 @@ func runGit(dir string, args ...string) (string, error) {
 		return string(out), fmt.Errorf("%s", strings.TrimSpace(string(out)))
 	}
 	return string(out), nil
+}
+
+func (s *CodingSession) writeLatestPlan(plan string) error {
+	paths := s.RuntimePaths()
+	if err := os.MkdirAll(paths.PlansDir, 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(paths.PlanFile, []byte(strings.TrimSpace(plan)+"\n"), 0o600); err != nil {
+		return err
+	}
+	s.writeRuntimeState()
+	return nil
 }

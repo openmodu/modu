@@ -87,6 +87,9 @@ func (s *CodingSession) SaveMessages() error {
 	// Append new messages
 	for i := s.lastSavedIndex; i < len(msgs); i++ {
 		msg := msgs[i]
+		if isTransientContextMessage(msg) {
+			continue
+		}
 
 		entry := SessionMessageEntry{
 			Type:      "message",

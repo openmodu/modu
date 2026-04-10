@@ -27,9 +27,10 @@ type BackgroundTaskStore interface {
 }
 
 type backgroundTaskManager struct {
-	mu     sync.RWMutex
-	nextID int64
-	tasks  map[string]BackgroundTask
+	mu       sync.RWMutex
+	nextID   int64
+	tasks    map[string]BackgroundTask
+	onChange func()
 }
 
 func newBackgroundTaskManager() *backgroundTaskManager {
@@ -38,9 +39,14 @@ func newBackgroundTaskManager() *backgroundTaskManager {
 	}
 }
 
-func (m *backgroundTaskManager) Create(kind, summary string) string {
+func (m *backgroundTaskManager) SetOnChange(fn func()) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.onChange = fn
+}
+
+func (m *backgroundTaskManager) Create(kind, summary string) string {
+	m.mu.Lock()
 	m.nextID++
 	id := fmt.Sprintf("task-%d", m.nextID)
 	now := time.Now().UnixMilli()
@@ -52,33 +58,48 @@ func (m *backgroundTaskManager) Create(kind, summary string) string {
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
+	onChange := m.onChange
+	m.mu.Unlock()
+	if onChange != nil {
+		onChange()
+	}
 	return id
 }
 
 func (m *backgroundTaskManager) Complete(id, output string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	task, ok := m.tasks[id]
 	if !ok {
+		m.mu.Unlock()
 		return
 	}
 	task.Status = "completed"
 	task.Output = output
 	task.UpdatedAt = time.Now().UnixMilli()
 	m.tasks[id] = task
+	onChange := m.onChange
+	m.mu.Unlock()
+	if onChange != nil {
+		onChange()
+	}
 }
 
 func (m *backgroundTaskManager) Fail(id, errMsg string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	task, ok := m.tasks[id]
 	if !ok {
+		m.mu.Unlock()
 		return
 	}
 	task.Status = "failed"
 	task.Error = errMsg
 	task.UpdatedAt = time.Now().UnixMilli()
 	m.tasks[id] = task
+	onChange := m.onChange
+	m.mu.Unlock()
+	if onChange != nil {
+		onChange()
+	}
 }
 
 func (m *backgroundTaskManager) Get(id string) (BackgroundTask, bool) {

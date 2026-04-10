@@ -99,5 +99,8 @@ func (t *LsTool) Execute(ctx context.Context, toolCallID string, args map[string
 		Content: []types.ContentBlock{
 			&types.TextContent{Type: "text", Text: text},
 		},
+		Details: map[string]any{
+			"path": dirPath,
+		},
 	}, nil
 }
