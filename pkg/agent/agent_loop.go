@@ -61,6 +61,7 @@ func AgentLoopContinue(context AgentContext, config AgentConfig, ctx context.Con
 
 func runLoop(currentContext AgentContext, newMessages []AgentMessage, config AgentConfig, ctx context.Context, stream *EventStream, streamFn StreamFn) {
 	firstTurn := true
+	stepCount := 0
 	pendingMessages := getSteeringMessages(config)
 	for {
 		hasMoreToolCalls := true
@@ -85,12 +86,38 @@ func runLoop(currentContext AgentContext, newMessages []AgentMessage, config Age
 				}
 				pendingMessages = nil
 			}
+
+			// Check MaxSteps before each LLM turn.
+			if config.MaxSteps > 0 && stepCount >= config.MaxSteps {
+				interruptEvent := &InterruptEvent{
+					Reason:    InterruptReasonMaxSteps,
+					StepCount: stepCount,
+				}
+				stream.Push(AgentEvent{Type: EventTypeInterrupt, Interrupt: interruptEvent})
+				if config.onMaxStepsReached != nil {
+					decision := config.onMaxStepsReached(stepCount)
+					if !decision.Allow {
+						stream.Push(AgentEvent{Type: EventTypeAgentEnd, Messages: newMessages})
+						stream.Resolve(newMessages, nil)
+						return
+					}
+					// Caller chose to continue; reset step count for the next stretch.
+					stepCount = 0
+				} else {
+					// No handler: stop silently.
+					stream.Push(AgentEvent{Type: EventTypeAgentEnd, Messages: newMessages})
+					stream.Resolve(newMessages, nil)
+					return
+				}
+			}
+
 			assistantMessage, err := streamAssistantResponseWithRetry(currentContext, config, ctx, stream, streamFn)
 			if err != nil {
 				stream.Push(AgentEvent{Type: EventTypeAgentEnd, Messages: newMessages})
 				stream.Resolve(newMessages, err)
 				return
 			}
+			stepCount++
 			newMessages = append(newMessages, assistantMessage)
 			currentContext.Messages = append(currentContext.Messages, assistantMessage)
 			if assistantMessage.StopReason == "error" || assistantMessage.StopReason == "aborted" {
@@ -101,7 +128,7 @@ func runLoop(currentContext AgentContext, newMessages []AgentMessage, config Age
 			}
 			toolCalls := extractToolCalls(assistantMessage)
 			hasMoreToolCalls = len(toolCalls) > 0
-		var execResults []types.ToolResultMessage
+			var execResults []types.ToolResultMessage
 			if hasMoreToolCalls {
 				execResults, steering := executeToolCalls(currentContext.Tools, toolCalls, ctx, stream, config)
 				steeringAfterTools = steering
@@ -272,6 +299,16 @@ func executeToolCalls(tools []AgentTool, toolCalls []types.ToolCallContent, ctx 
 				continue
 			}
 			if config.ApproveTool != nil {
+				// Emit EventTypeInterrupt before blocking on ApproveTool so that
+				// Agent.runLoop can set up the interruptResume channel and notify
+				// subscribers while the loop goroutine is waiting.
+				interruptEvent := &InterruptEvent{
+					Reason:     InterruptReasonToolApproval,
+					ToolCallID: tc.ID,
+					ToolName:   tc.Name,
+					ToolArgs:   parsed,
+				}
+				stream.Push(AgentEvent{Type: EventTypeInterrupt, Interrupt: interruptEvent})
 				decision, approveErr := config.ApproveTool(tc.Name, tc.ID, parsed)
 				if approveErr != nil || !decision.IsAllow() {
 					msg := "Tool execution denied by user."
