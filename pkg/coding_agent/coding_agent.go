@@ -24,7 +24,9 @@ import (
 	"github.com/openmodu/modu/pkg/coding_agent/tools"
 	"github.com/openmodu/modu/pkg/mailbox/client"
 	"github.com/openmodu/modu/pkg/providers"
+	sessiontrace "github.com/openmodu/modu/pkg/trace"
 	"github.com/openmodu/modu/pkg/types"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 // CodingSessionOptions configures a new CodingSession.
@@ -53,6 +55,8 @@ type CodingSessionOptions struct {
 	MailboxClient *client.MailboxClient
 	// ExtraSubagentDirs adds extra directories to scan for subagent definitions.
 	ExtraSubagentDirs []string
+	// OTelTracerProvider reuses an existing OpenTelemetry tracer provider when set.
+	OTelTracerProvider oteltrace.TracerProvider
 }
 
 // CodingSession is the main entry point for the coding agent system.
@@ -101,6 +105,8 @@ type CodingSession struct {
 	contextMu      sync.Mutex
 	loadedContexts map[string]struct{}
 	harness        *harnessState
+	traceRecorder  *sessiontrace.Recorder
+	otelBridge     *sessiontrace.OTelBridge
 
 	// approvalManager handles tool execution approval.
 	approvalManager *ApprovalManager
@@ -305,6 +311,40 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		harness:          newHarnessState(),
 		approvalManager:  approvalMgr,
 	}
+	tracePaths := cs.RuntimePaths()
+	traceRecorder, err := sessiontrace.NewRecorder(sessiontrace.Options{
+		SessionID:   cs.GetSessionID(),
+		Cwd:         opts.Cwd,
+		Provider:    opts.Model.ProviderID,
+		ModelID:     opts.Model.ID,
+		EventsFile:  tracePaths.TraceEventsFile,
+		SummaryFile: tracePaths.TraceSummaryFile,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to init trace recorder: %w", err)
+	}
+	cs.traceRecorder = traceRecorder
+	_ = cs.traceRecorder.RecordSessionEvent("session_start", map[string]any{
+		"source":    "startup",
+		"cwd":       opts.Cwd,
+		"provider":  opts.Model.ProviderID,
+		"modelId":   opts.Model.ID,
+		"sessionId": cs.GetSessionID(),
+	})
+	if bridgeOpts, ok := cs.otelOptions(opts); ok {
+		bridge, bridgeErr := sessiontrace.NewOTelBridge(context.Background(), bridgeOpts)
+		if bridgeErr != nil {
+			return nil, fmt.Errorf("failed to init otel bridge: %w", bridgeErr)
+		}
+		cs.otelBridge = bridge
+		cs.otelBridge.RecordSessionEvent("session_start", map[string]any{
+			"source":    "startup",
+			"cwd":       opts.Cwd,
+			"provider":  opts.Model.ProviderID,
+			"modelId":   opts.Model.ID,
+			"sessionId": cs.GetSessionID(),
+		})
+	}
 	approvalMgr.SetObserver(cs)
 	taskMgr.SetOnChange(func() { cs.writeRuntimeState() })
 	cs.refreshToolsForCwd(cs.cwd)
@@ -319,6 +359,12 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 
 	// Subscribe to events for token usage tracking (auto-compaction)
 	ag.Subscribe(func(event agent.AgentEvent) {
+		if cs.traceRecorder != nil {
+			_ = cs.traceRecorder.RecordAgentEvent(event)
+		}
+		if cs.otelBridge != nil {
+			cs.otelBridge.RecordAgentEvent(event)
+		}
 		if event.Type == agent.EventTypeMessageEnd {
 			addUsage := func(u types.AgentUsage) {
 				t := u.TotalTokens
@@ -457,6 +503,13 @@ func (s *CodingSession) Prompt(ctx context.Context, text string) error {
 }
 
 func (s *CodingSession) Close(reason string) {
+	if s.traceRecorder != nil {
+		_ = s.traceRecorder.RecordSessionEvent("session_end", map[string]any{"reason": reason})
+	}
+	if s.otelBridge != nil {
+		s.otelBridge.RecordSessionEvent("session_end", map[string]any{"reason": reason})
+		_ = s.otelBridge.Close(context.Background(), reason)
+	}
 	s.runHarnessSessionEnd(reason)
 	s.writeRuntimeState()
 }
@@ -787,7 +840,7 @@ func (s *CodingSession) Compact(ctx context.Context) error {
 		NewCount:      result.NewCount,
 	}))
 
-	s.eventBus.Emit(sessionEventChannel, SessionEvent{Type: SessionEventCompactionDone})
+	s.emitSessionEvent(SessionEvent{Type: SessionEventCompactionDone})
 
 	return nil
 }
@@ -812,7 +865,7 @@ func (s *CodingSession) maybeAutoCompact(ctx context.Context) {
 
 	usagePercent := float64(s.totalTokens) / float64(defaultContextWindow) * 100.0
 	if usagePercent >= threshold {
-		s.eventBus.Emit(sessionEventChannel, SessionEvent{Type: SessionEventCompactionStart})
+		s.emitSessionEvent(SessionEvent{Type: SessionEventCompactionStart})
 		_ = s.Compact(ctx)
 	}
 }
@@ -891,7 +944,7 @@ func (s *CodingSession) CycleModel() *types.Model {
 	}
 
 	s.SetModel(model)
-	s.eventBus.Emit(sessionEventChannel, SessionEvent{
+	s.emitSessionEvent(SessionEvent{
 		Type:     SessionEventModelChange,
 		Provider: model.ProviderID,
 		ModelID:  model.ID,
@@ -926,7 +979,7 @@ func (s *CodingSession) SetThinkingLevel(level agent.ThinkingLevel) {
 	_ = s.sessionManager.Append(session.NewEntry(session.EntryTypeThinkingChange, "", session.ThinkingChangeData{
 		Level: level,
 	}))
-	s.eventBus.Emit(sessionEventChannel, SessionEvent{
+	s.emitSessionEvent(SessionEvent{
 		Type:  SessionEventThinkingChange,
 		Level: string(level),
 	})
@@ -988,6 +1041,91 @@ func (s *CodingSession) SubscribeSession(fn func(SessionEvent)) func() {
 			fn(event)
 		}
 	})
+}
+
+func (s *CodingSession) TraceSummary() sessiontrace.Summary {
+	if s.traceRecorder == nil {
+		return sessiontrace.Summary{}
+	}
+	return s.traceRecorder.Summary()
+}
+
+func (s *CodingSession) emitSessionEvent(event SessionEvent) {
+	if s.traceRecorder != nil {
+		_ = s.traceRecorder.RecordSessionEvent(string(event.Type), sessionEventMeta(event))
+	}
+	if s.otelBridge != nil {
+		s.otelBridge.RecordSessionEvent(string(event.Type), sessionEventMeta(event))
+	}
+	s.eventBus.Emit(sessionEventChannel, event)
+}
+
+func (s *CodingSession) otelOptions(opts CodingSessionOptions) (sessiontrace.OTelOptions, bool) {
+	if opts.OTelTracerProvider == nil && !s.config.TracingOTelEnabled() {
+		return sessiontrace.OTelOptions{}, false
+	}
+	serviceName := strings.TrimSpace(s.config.Tracing.OTel.ServiceName)
+	if serviceName == "" {
+		serviceName = "modu-coding-agent"
+	}
+	return sessiontrace.OTelOptions{
+		Provider:       opts.OTelTracerProvider,
+		Exporter:       s.config.Tracing.OTel.Exporter,
+		Endpoint:       s.config.Tracing.OTel.Endpoint,
+		Headers:        copyStringMap(s.config.Tracing.OTel.Headers),
+		Insecure:       s.config.TracingOTelInsecure(),
+		ServiceName:    serviceName,
+		ServiceVersion: strings.TrimSpace(s.config.Tracing.OTel.ServiceVersion),
+		InstanceID:     strings.TrimSpace(s.config.Tracing.OTel.InstanceID),
+		SamplingRatio:  s.config.Tracing.OTel.SamplingRatio,
+		SessionID:      s.GetSessionID(),
+		Cwd:            s.cwd,
+		ModelProvider:  opts.Model.ProviderID,
+		ModelID:        opts.Model.ID,
+	}, true
+}
+
+func sessionEventMeta(event SessionEvent) map[string]any {
+	meta := map[string]any{}
+	if event.Attempt != 0 {
+		meta["attempt"] = event.Attempt
+	}
+	if event.MaxAttempts != 0 {
+		meta["maxAttempts"] = event.MaxAttempts
+	}
+	if event.DelayMs != 0 {
+		meta["delayMs"] = event.DelayMs
+	}
+	if event.ErrorMessage != "" {
+		meta["errorMessage"] = event.ErrorMessage
+	}
+	if event.Success != nil {
+		meta["success"] = *event.Success
+	}
+	if event.Provider != "" {
+		meta["provider"] = event.Provider
+	}
+	if event.ModelID != "" {
+		meta["modelId"] = event.ModelID
+	}
+	if event.Level != "" {
+		meta["level"] = event.Level
+	}
+	if len(meta) == 0 {
+		return nil
+	}
+	return meta
+}
+
+func copyStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
 }
 
 // GetSessionFile returns the session file path.

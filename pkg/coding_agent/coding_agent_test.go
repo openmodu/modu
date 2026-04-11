@@ -17,6 +17,9 @@ import (
 	"github.com/openmodu/modu/pkg/coding_agent/subagent"
 	"github.com/openmodu/modu/pkg/mailbox/client"
 	"github.com/openmodu/modu/pkg/types"
+	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 type testEchoTool struct{}
@@ -619,6 +622,210 @@ func TestRuntimeStateFileAndJSON(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"todo_tool": true`) || !strings.Contains(string(data), `"content": "plan work"`) {
 		t.Fatalf("unexpected runtime state file: %q", string(data))
+	}
+}
+
+func TestCodingSessionWritesTraceFiles(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	model := newTestModel()
+	callCount := 0
+	streamFn := func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+		callCount++
+		stream := types.NewEventStream()
+		go func() {
+			if callCount == 1 {
+				msg := &types.AssistantMessage{
+					Role:       "assistant",
+					ProviderID: model.ProviderID,
+					Model:      model.ID,
+					StopReason: "toolUse",
+					Content: []types.ContentBlock{
+						&types.ToolCallContent{Type: "toolCall", ID: "tool-1", Name: "echo", Arguments: map[string]any{"value": "trace-me"}},
+					},
+					Timestamp: time.Now().UnixMilli(),
+				}
+				stream.Push(types.StreamEvent{Type: "done", Reason: "toolUse", Message: msg})
+				stream.Resolve(msg, nil)
+			} else {
+				last := llmCtx.Messages[len(llmCtx.Messages)-1]
+				toolOutput := ""
+				if result, ok := last.(types.ToolResultMessage); ok {
+					toolOutput = extractTextBlocks(result.Content)
+				}
+				msg := &types.AssistantMessage{
+					Role:       "assistant",
+					ProviderID: model.ProviderID,
+					Model:      model.ID,
+					StopReason: "stop",
+					Content: []types.ContentBlock{
+						&types.TextContent{Type: "text", Text: "final: " + toolOutput},
+					},
+					Usage:     types.AgentUsage{Input: 13, Output: 8, TotalTokens: 21},
+					Timestamp: time.Now().UnixMilli(),
+				}
+				stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+				stream.Resolve(msg, nil)
+			}
+			stream.Close()
+		}()
+		return stream, nil
+	}
+
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  agentDir,
+		Model:     model,
+		Tools:     []agent.AgentTool{&testEchoTool{}},
+		GetAPIKey: func(provider string) (string, error) { return "", nil },
+		StreamFn:  streamFn,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := session.Prompt(context.Background(), "capture trace"); err != nil {
+		t.Fatal(err)
+	}
+
+	traceSummary := session.TraceSummary()
+	if traceSummary.Tokens.TotalTokens != 21 {
+		t.Fatalf("expected trace token total 21, got %#v", traceSummary.Tokens)
+	}
+	if traceSummary.Counts.ToolCalls != 1 {
+		t.Fatalf("expected 1 traced tool call, got %#v", traceSummary.Counts)
+	}
+
+	eventsData, err := os.ReadFile(session.RuntimePaths().TraceEventsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(eventsData), `"type":"tool_execution_start"`) || !strings.Contains(string(eventsData), `"toolName":"echo"`) {
+		t.Fatalf("expected tool execution trace, got %q", string(eventsData))
+	}
+
+	summaryData, err := os.ReadFile(session.RuntimePaths().TraceSummaryFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(summaryData), `"totalTokens": 21`) {
+		t.Fatalf("expected total token summary, got %q", string(summaryData))
+	}
+
+	stateData, err := os.ReadFile(session.RuntimePaths().RuntimeStateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(stateData), `"trace_events_file"`) || !strings.Contains(string(stateData), `"totalTokens": 21`) {
+		t.Fatalf("expected trace paths and totals in runtime state, got %q", string(stateData))
+	}
+}
+
+func TestCodingSessionWritesOTelSpans(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	model := newTestModel()
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	defer func() {
+		_ = provider.Shutdown(context.Background())
+	}()
+
+	callCount := 0
+	streamFn := func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+		callCount++
+		stream := types.NewEventStream()
+		go func() {
+			if callCount == 1 {
+				msg := &types.AssistantMessage{
+					Role:       "assistant",
+					ProviderID: model.ProviderID,
+					Model:      model.ID,
+					StopReason: "toolUse",
+					Content: []types.ContentBlock{
+						&types.ToolCallContent{Type: "toolCall", ID: "tool-otel-1", Name: "echo", Arguments: map[string]any{"value": "otel"}},
+					},
+					Timestamp: time.Now().UnixMilli(),
+				}
+				stream.Push(types.StreamEvent{Type: "done", Reason: "toolUse", Message: msg})
+				stream.Resolve(msg, nil)
+			} else {
+				last := llmCtx.Messages[len(llmCtx.Messages)-1]
+				toolOutput := ""
+				if result, ok := last.(types.ToolResultMessage); ok {
+					toolOutput = extractTextBlocks(result.Content)
+				}
+				msg := &types.AssistantMessage{
+					Role:       "assistant",
+					ProviderID: model.ProviderID,
+					Model:      model.ID,
+					StopReason: "stop",
+					Content: []types.ContentBlock{
+						&types.TextContent{Type: "text", Text: "otel final: " + toolOutput},
+					},
+					Usage:     types.AgentUsage{Input: 9, Output: 5, TotalTokens: 14},
+					Timestamp: time.Now().UnixMilli(),
+				}
+				stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+				stream.Resolve(msg, nil)
+			}
+			stream.Close()
+		}()
+		return stream, nil
+	}
+
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:                dir,
+		AgentDir:           agentDir,
+		Model:              model,
+		Tools:              []agent.AgentTool{&testEchoTool{}},
+		GetAPIKey:          func(provider string) (string, error) { return "", nil },
+		StreamFn:           streamFn,
+		OTelTracerProvider: provider,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := session.Prompt(context.Background(), "capture otel trace"); err != nil {
+		t.Fatal(err)
+	}
+	session.Close("test done")
+
+	spans := exporter.GetSpans()
+	if len(spans) == 0 {
+		t.Fatal("expected exported spans")
+	}
+
+	toolSpan, ok := findSpanByName(spans, "coding_agent.tool.echo")
+	if !ok {
+		t.Fatalf("expected tool span, got %#v", spans)
+	}
+	if got := spanStringAttr(toolSpan.Attributes, "tool.name"); got != "echo" {
+		t.Fatalf("expected tool.name=echo, got %q", got)
+	}
+
+	llmSpans := findSpansByName(spans, "coding_agent.llm")
+	if len(llmSpans) == 0 {
+		t.Fatalf("expected llm spans, got %#v", spans)
+	}
+	foundTokenSpan := false
+	for _, span := range llmSpans {
+		if spanIntAttr(span.Attributes, "llm.usage.total_tokens") == 14 {
+			foundTokenSpan = true
+			break
+		}
+	}
+	if !foundTokenSpan {
+		t.Fatalf("expected one llm span with total tokens 14, got %#v", llmSpans)
+	}
+
+	sessionSpan, ok := findSpanByName(spans, "coding_agent.session")
+	if !ok {
+		t.Fatalf("expected session span, got %#v", spans)
+	}
+	if got := spanStringAttr(sessionSpan.Attributes, "llm.model"); got != model.ID {
+		t.Fatalf("expected session llm.model=%s, got %q", model.ID, got)
 	}
 }
 
@@ -2736,4 +2943,41 @@ func TestTransientNestedContextMessagesArePrunedAndNotPersisted(t *testing.T) {
 	if !strings.Contains(text, "regular user message") {
 		t.Fatalf("expected regular message to be persisted, got:\n%s", text)
 	}
+}
+
+func findSpanByName(spans tracetest.SpanStubs, name string) (tracetest.SpanStub, bool) {
+	for _, span := range spans {
+		if span.Name == name {
+			return span, true
+		}
+	}
+	return tracetest.SpanStub{}, false
+}
+
+func findSpansByName(spans tracetest.SpanStubs, name string) tracetest.SpanStubs {
+	var out tracetest.SpanStubs
+	for _, span := range spans {
+		if span.Name == name {
+			out = append(out, span)
+		}
+	}
+	return out
+}
+
+func spanStringAttr(attrs []attribute.KeyValue, key string) string {
+	for _, attr := range attrs {
+		if string(attr.Key) == key {
+			return attr.Value.AsString()
+		}
+	}
+	return ""
+}
+
+func spanIntAttr(attrs []attribute.KeyValue, key string) int {
+	for _, attr := range attrs {
+		if string(attr.Key) == key {
+			return int(attr.Value.AsInt64())
+		}
+	}
+	return 0
 }

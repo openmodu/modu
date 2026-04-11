@@ -7,23 +7,25 @@ import (
 	"time"
 
 	"github.com/openmodu/modu/pkg/agent"
+	sessiontrace "github.com/openmodu/modu/pkg/trace"
 )
 
 type RuntimeStateSnapshot struct {
-	UpdatedAt    int64             `json:"updatedAt"`
-	SessionID    string            `json:"sessionId"`
-	Cwd          string            `json:"cwd"`
-	Model        map[string]string `json:"model"`
-	Thinking     string            `json:"thinking"`
-	Modes        map[string]any    `json:"modes"`
-	Features     map[string]bool   `json:"features"`
-	Permissions  map[string]any    `json:"permissions"`
-	Git          map[string]any    `json:"git"`
-	Counts       map[string]int    `json:"counts"`
-	Paths        map[string]any    `json:"paths"`
-	Todos        []TodoItem        `json:"todos"`
-	Tasks        []BackgroundTask  `json:"tasks"`
-	HarnessHints int               `json:"harnessHints"`
+	UpdatedAt    int64                `json:"updatedAt"`
+	SessionID    string               `json:"sessionId"`
+	Cwd          string               `json:"cwd"`
+	Model        map[string]string    `json:"model"`
+	Thinking     string               `json:"thinking"`
+	Modes        map[string]any       `json:"modes"`
+	Features     map[string]bool      `json:"features"`
+	Permissions  map[string]any       `json:"permissions"`
+	Git          map[string]any       `json:"git"`
+	Counts       map[string]int       `json:"counts"`
+	Paths        map[string]any       `json:"paths"`
+	Todos        []TodoItem           `json:"todos"`
+	Tasks        []BackgroundTask     `json:"tasks"`
+	HarnessHints int                  `json:"harnessHints"`
+	Trace        sessiontrace.Summary `json:"trace"`
 }
 
 // cachedGitState holds the last-known git state so that writeRuntimeState
@@ -108,6 +110,7 @@ func (s *CodingSession) RuntimeState() RuntimeStateSnapshot {
 		Todos:        todos,
 		Tasks:        tasks,
 		HarnessHints: hintCount,
+		Trace:        s.TraceSummary(),
 	}
 }
 

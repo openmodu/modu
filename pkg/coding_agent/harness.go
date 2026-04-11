@@ -63,6 +63,9 @@ type HarnessRuntimePaths struct {
 	RuntimeDir       string `json:"runtimeDir"`
 	RuntimeIndexFile string `json:"runtimeIndexFile"`
 	RuntimeStateFile string `json:"runtimeStateFile"`
+	TraceDir         string `json:"traceDir"`
+	TraceEventsFile  string `json:"traceEventsFile"`
+	TraceSummaryFile string `json:"traceSummaryFile"`
 	SessionsDir      string `json:"sessionsDir"`
 	PlansDir         string `json:"plansDir"`
 	PlanFile         string `json:"planFile"`
@@ -78,6 +81,9 @@ func (p HarnessRuntimePaths) ToMap() map[string]any {
 		"runtime_dir":        p.RuntimeDir,
 		"runtime_index_file": p.RuntimeIndexFile,
 		"runtime_state_file": p.RuntimeStateFile,
+		"trace_dir":          p.TraceDir,
+		"trace_events_file":  p.TraceEventsFile,
+		"trace_summary_file": p.TraceSummaryFile,
 		"sessions_dir":       p.SessionsDir,
 		"plans_dir":          p.PlansDir,
 		"plan_file":          p.PlanFile,
@@ -400,15 +406,20 @@ func (s *CodingSession) RuntimePaths() HarnessRuntimePaths {
 	plansDir := filepath.Join(s.agentDir, "plans", projectKey)
 	toolResultsDir := filepath.Join(s.agentDir, "tool-results", projectKey)
 	runtimeDir := filepath.Join(s.agentDir, "runtime", projectKey)
+	traceDir := filepath.Join(runtimeDir, "trace")
 	_ = os.MkdirAll(plansDir, 0o755)
 	_ = os.MkdirAll(toolResultsDir, 0o755)
 	_ = os.MkdirAll(runtimeDir, 0o755)
+	_ = os.MkdirAll(traceDir, 0o755)
 
 	return HarnessRuntimePaths{
 		Root:             s.agentDir,
 		RuntimeDir:       runtimeDir,
 		RuntimeIndexFile: filepath.Join(runtimeDir, "index.json"),
 		RuntimeStateFile: filepath.Join(runtimeDir, "state.json"),
+		TraceDir:         traceDir,
+		TraceEventsFile:  filepath.Join(traceDir, "events.jsonl"),
+		TraceSummaryFile: filepath.Join(traceDir, "summary.json"),
 		SessionsDir:      filepath.Dir(s.messagesFilePath()),
 		PlansDir:         plansDir,
 		PlanFile:         filepath.Join(plansDir, "latest.md"),
