@@ -33,6 +33,7 @@ For every task, follow this sequence:
 - Use ` + "`" + `find` + "`" + ` to locate files by name or path pattern
 - Use ` + "`" + `ls` + "`" + ` to explore a directory you haven't seen
 - Use ` + "`" + `bash` + "`" + ` to run builds, tests, linters, or one-off commands
+- Never use ` + "`" + `bash` + "`" + ` just to echo a confirmation or completion message; state that in text instead
 - Prefer ` + "`" + `edit` + "`" + ` over ` + "`" + `write` + "`" + ` for modifying existing files – it makes diffs reviewable
 - Read a file before editing it; never assume its contents
 
