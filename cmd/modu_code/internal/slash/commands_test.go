@@ -105,7 +105,7 @@ func TestHandleSlashHarnessInspectionCommands(t *testing.T) {
 	renderer := tui.NewRenderer(&out)
 	renderer.SetNoColor(true)
 
-	for _, line := range []string{"/runtime", "/dashboard", "/state", "/config", "/config-template", "/logs", "/artifacts", "/bridge", "/actions"} {
+	for _, line := range []string{"/runtime", "/trace", "/dashboard", "/state", "/config", "/config-template", "/logs", "/artifacts", "/bridge", "/actions"} {
 		handled, shouldExit := Handle(context.Background(), line, session, renderer, testSlashModel(), nil)
 		if !handled || shouldExit {
 			t.Fatalf("expected %s to be handled without exit", line)
@@ -115,6 +115,7 @@ func TestHandleSlashHarnessInspectionCommands(t *testing.T) {
 	got := out.String()
 	for _, want := range []string{
 		"Runtime Paths",
+		"Trace",
 		"Runtime Dashboard",
 		"latest events:",
 		"Runtime State",
@@ -124,10 +125,15 @@ func TestHandleSlashHarnessInspectionCommands(t *testing.T) {
 		"harness artifact files",
 		"harness bridge directories",
 		"Harness Action Status Files",
+		filepath.Join(agentDir, "runtime", runtimeProjectKey, "trace"),
+		filepath.Join(agentDir, "runtime", runtimeProjectKey, "trace", "events.jsonl"),
+		filepath.Join(agentDir, "runtime", runtimeProjectKey, "trace", "summary.json"),
 		filepath.Join(agentDir, "logs", "tool-use.jsonl"),
 		filepath.Join(agentDir, "artifacts", "tool-use-latest.json"),
 		filepath.Join(agentDir, "bridge", "tool-use"),
 		filepath.Join(agentDir, "runtime", runtimeProjectKey, "actions", "tool_use", "latest.json"),
+		"trace: events=1 turns=0 tool_calls=0 total_tokens=0",
+		"last_event: session/session_start",
 		"preview: {\"event\":\"post_tool_use\",\"tool\":\"echo\"}",
 		"preview: {\"status\":\"ok\",\"stdout\":\"done\"}",
 		"session: {\"category\":\"session\",\"event\":\"session_start\",\"source\":\"startup\"}",
