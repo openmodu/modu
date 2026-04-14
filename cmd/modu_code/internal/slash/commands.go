@@ -7,9 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
+	sessiontrace "github.com/openmodu/modu/pkg/trace"
 	"github.com/openmodu/modu/pkg/types"
 
 	"github.com/openmodu/modu/cmd/modu_code/internal/mailboxrt"
@@ -173,7 +175,11 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		return true, false
 
 	case "trace":
-		printTrace(r, session)
+		traceArgs := ""
+		if len(parts) > 1 {
+			traceArgs = strings.TrimSpace(parts[1])
+		}
+		printTrace(r, session, traceArgs)
 		return true, false
 
 	case "state":
@@ -370,7 +376,7 @@ func PrintHelp(r Printer) {
 		"/tasks              — show background subagent tasks",
 		"/hints              — show pending harness-only hints",
 		"/runtime            — show harness runtime paths",
-		"/trace              — show trace paths and trace summary",
+		"/trace              — show trace summary (use /trace help for subcommands)",
 		"/dashboard          — show runtime summary and latest events",
 		"/state              — show unified runtime state snapshot",
 		"/config             — show effective merged config",
@@ -452,8 +458,48 @@ func PrintDashboard(r Printer, session *coding_agent.CodingSession) {
 	printHarnessActions(r, session)
 }
 
-func printTrace(r Printer, session *coding_agent.CodingSession) {
+func printTrace(r Printer, session *coding_agent.CodingSession, args string) {
 	paths := session.RuntimePaths()
+
+	// Parse subcommand: /trace [events|tools|errors|stats|tail N]
+	sub, subArg := parseTraceSubcommand(args)
+	switch sub {
+	case "events":
+		printTraceEvents(r, paths.TraceEventsFile, sessiontrace.EventFilter{})
+		return
+	case "tools":
+		printTraceEvents(r, paths.TraceEventsFile, sessiontrace.EventFilter{
+			Types: []string{"tool_execution_start", "tool_execution_end"},
+		})
+		return
+	case "errors":
+		printTraceEvents(r, paths.TraceEventsFile, sessiontrace.EventFilter{ErrorsOnly: true})
+		return
+	case "stats":
+		printTraceStats(r, paths.TraceEventsFile)
+		return
+	case "tail":
+		n := 10
+		if subArg != "" {
+			if parsed, err := strconv.Atoi(subArg); err == nil && parsed > 0 {
+				n = parsed
+			}
+		}
+		printTraceTail(r, paths.TraceEventsFile, n)
+		return
+	case "help":
+		r.PrintSection("Trace Commands", []string{
+			"/trace           - show trace summary",
+			"/trace events    - list all events",
+			"/trace tools     - list tool execution events",
+			"/trace errors    - list error events",
+			"/trace stats     - show event statistics",
+			"/trace tail [N]  - show last N events (default 10)",
+		})
+		return
+	}
+
+	// Default: show summary
 	summary := session.TraceSummary()
 	lines := []string{
 		"trace_dir: " + paths.TraceDir,
@@ -461,22 +507,29 @@ func printTrace(r Printer, session *coding_agent.CodingSession) {
 		"summary_file: " + paths.TraceSummaryFile,
 		fmt.Sprintf("session: %s", summary.SessionID),
 		fmt.Sprintf("model: %s/%s", summary.Model.Provider, summary.Model.ID),
-		fmt.Sprintf("counts: events=%d turns=%d messages=%d assistant=%d tool_calls=%d session_events=%d errors=%d",
-			summary.Counts.Events,
-			summary.Counts.Turns,
-			summary.Counts.Messages,
-			summary.Counts.AssistantMessages,
-			summary.Counts.ToolCalls,
-			summary.Counts.SessionEvents,
-			summary.Counts.Errors,
-		),
-		fmt.Sprintf("tokens: input=%d output=%d cache_read=%d cache_write=%d total=%d",
-			summary.Tokens.Input,
-			summary.Tokens.Output,
-			summary.Tokens.CacheRead,
-			summary.Tokens.CacheWrite,
-			summary.Tokens.TotalTokens,
-		),
+	}
+	if summary.DurationMs > 0 {
+		lines = append(lines, fmt.Sprintf("duration: %s", formatTraceDuration(summary.DurationMs)))
+	}
+	lines = append(lines, fmt.Sprintf("counts: events=%d turns=%d messages=%d assistant=%d tool_calls=%d errors=%d interrupts=%d",
+		summary.Counts.Events,
+		summary.Counts.Turns,
+		summary.Counts.Messages,
+		summary.Counts.AssistantMessages,
+		summary.Counts.ToolCalls,
+		summary.Counts.Errors,
+		summary.Counts.Interrupts,
+	))
+	lines = append(lines, fmt.Sprintf("tokens: input=%d output=%d cache_read=%d cache_write=%d total=%d",
+		summary.Tokens.Input,
+		summary.Tokens.Output,
+		summary.Tokens.CacheRead,
+		summary.Tokens.CacheWrite,
+		summary.Tokens.TotalTokens,
+	))
+	if summary.Cost.Total > 0 {
+		lines = append(lines, fmt.Sprintf("cost: $%.4f (input=$%.4f output=$%.4f)",
+			summary.Cost.Total, summary.Cost.Input, summary.Cost.Output))
 	}
 	if summary.LastEvent != nil {
 		lines = append(lines, fmt.Sprintf("last_event: %s/%s", summary.LastEvent.Source, summary.LastEvent.Type))
@@ -484,10 +537,126 @@ func printTrace(r Printer, session *coding_agent.CodingSession) {
 			lines = append(lines, "last_tool: "+summary.LastEvent.ToolName)
 		}
 		if summary.LastEvent.Preview != "" {
-			lines = append(lines, "last_preview: "+summary.LastEvent.Preview)
+			preview := summary.LastEvent.Preview
+			if len(preview) > 120 {
+				preview = preview[:117] + "..."
+			}
+			lines = append(lines, "last_preview: "+preview)
 		}
 	}
 	r.PrintSection("Trace", lines)
+}
+
+func parseTraceSubcommand(args string) (string, string) {
+	args = strings.TrimSpace(args)
+	if args == "" {
+		return "", ""
+	}
+	parts := strings.SplitN(args, " ", 2)
+	sub := strings.ToLower(parts[0])
+	subArg := ""
+	if len(parts) > 1 {
+		subArg = strings.TrimSpace(parts[1])
+	}
+	return sub, subArg
+}
+
+func printTraceEvents(r Printer, eventsFile string, filter sessiontrace.EventFilter) {
+	events, err := sessiontrace.ReadEvents(eventsFile, filter)
+	if err != nil {
+		r.PrintError(fmt.Errorf("read trace events: %w", err))
+		return
+	}
+	if len(events) == 0 {
+		r.PrintInfo("no matching trace events")
+		return
+	}
+	lines := make([]string, 0, len(events))
+	for _, e := range events {
+		lines = append(lines, sessiontrace.FormatEvent(e))
+	}
+	r.PrintSection(fmt.Sprintf("Trace Events (%d)", len(events)), lines)
+}
+
+func printTraceTail(r Printer, eventsFile string, n int) {
+	events, err := sessiontrace.TailEvents(eventsFile, n)
+	if err != nil {
+		r.PrintError(fmt.Errorf("read trace events: %w", err))
+		return
+	}
+	if len(events) == 0 {
+		r.PrintInfo("no trace events")
+		return
+	}
+	lines := make([]string, 0, len(events))
+	for _, e := range events {
+		lines = append(lines, sessiontrace.FormatEvent(e))
+	}
+	r.PrintSection(fmt.Sprintf("Trace Tail (%d)", len(events)), lines)
+}
+
+func printTraceStats(r Printer, eventsFile string) {
+	events, err := sessiontrace.ReadEvents(eventsFile, sessiontrace.EventFilter{})
+	if err != nil {
+		r.PrintError(fmt.Errorf("read trace events: %w", err))
+		return
+	}
+	if len(events) == 0 {
+		r.PrintInfo("no trace events")
+		return
+	}
+	stats := sessiontrace.ComputeStats(events)
+	lines := []string{
+		fmt.Sprintf("total_events: %d", stats.TotalEvents),
+		fmt.Sprintf("errors: %d", stats.ErrorCount),
+	}
+	if stats.TimeSpanMs > 0 {
+		lines = append(lines, fmt.Sprintf("time_span: %s", formatTraceDuration(stats.TimeSpanMs)))
+	}
+	if stats.TotalDurationMs > 0 {
+		lines = append(lines, fmt.Sprintf("total_tool_duration: %s", formatTraceDuration(stats.TotalDurationMs)))
+	}
+
+	// Event types breakdown
+	lines = append(lines, "--- by type ---")
+	typeKeys := make([]string, 0, len(stats.ByType))
+	for k := range stats.ByType {
+		typeKeys = append(typeKeys, k)
+	}
+	sort.Strings(typeKeys)
+	for _, k := range typeKeys {
+		lines = append(lines, fmt.Sprintf("  %s: %d", k, stats.ByType[k]))
+	}
+
+	// Tool breakdown
+	if len(stats.ByTool) > 0 {
+		lines = append(lines, "--- by tool ---")
+		toolKeys := make([]string, 0, len(stats.ByTool))
+		for k := range stats.ByTool {
+			toolKeys = append(toolKeys, k)
+		}
+		sort.Strings(toolKeys)
+		for _, k := range toolKeys {
+			line := fmt.Sprintf("  %s: %d calls", k, stats.ByTool[k])
+			if d, ok := stats.ToolDurations[k]; ok && d > 0 {
+				line += fmt.Sprintf(" (%s)", formatTraceDuration(d))
+			}
+			lines = append(lines, line)
+		}
+	}
+	r.PrintSection("Trace Stats", lines)
+}
+
+func formatTraceDuration(ms int64) string {
+	if ms < 1000 {
+		return fmt.Sprintf("%dms", ms)
+	}
+	if ms < 60000 {
+		return fmt.Sprintf("%.1fs", float64(ms)/1000)
+	}
+	m := ms / 60000
+	s := (ms % 60000) / 1000
+	return fmt.Sprintf("%dm%ds", m, s)
 }
 
 func printHarnessTargets(r Printer, title string, session *coding_agent.CodingSession, targets map[string]string, dirMode bool) {
