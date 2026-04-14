@@ -166,6 +166,10 @@ func (s *CodingSession) runHarnessSessionEnd(reason string) {
 }
 
 func (s *CodingSession) runHarnessPermissionRequest(call HarnessToolCall) {
+	s.emitSessionEvent(SessionEvent{
+		Type:     SessionEventPermissionReq,
+		ToolName: call.ToolName,
+	})
 	if s.harness == nil {
 		return
 	}
@@ -180,6 +184,11 @@ func (s *CodingSession) runHarnessPermissionRequest(call HarnessToolCall) {
 }
 
 func (s *CodingSession) runHarnessPermissionDenied(call HarnessToolCall, reason string) {
+	s.emitSessionEvent(SessionEvent{
+		Type:     SessionEventPermissionDeny,
+		ToolName: call.ToolName,
+		Reason:   reason,
+	})
 	if s.harness == nil {
 		return
 	}
@@ -222,6 +231,11 @@ func (s *CodingSession) runHarnessStopFailure(err error) {
 }
 
 func (s *CodingSession) runHarnessCwdChanged(oldCwd, newCwd string) {
+	s.emitSessionEvent(SessionEvent{
+		Type:   SessionEventCwdChanged,
+		OldCwd: oldCwd,
+		NewCwd: newCwd,
+	})
 	if s.harness == nil {
 		return
 	}
@@ -236,6 +250,10 @@ func (s *CodingSession) runHarnessCwdChanged(oldCwd, newCwd string) {
 }
 
 func (s *CodingSession) runHarnessWorktreeCreate(path string) {
+	s.emitSessionEvent(SessionEvent{
+		Type: SessionEventWorktreeCreate,
+		Path: path,
+	})
 	if s.harness == nil {
 		return
 	}
@@ -250,6 +268,10 @@ func (s *CodingSession) runHarnessWorktreeCreate(path string) {
 }
 
 func (s *CodingSession) runHarnessWorktreeRemove(path string) {
+	s.emitSessionEvent(SessionEvent{
+		Type: SessionEventWorktreeRemove,
+		Path: path,
+	})
 	if s.harness == nil {
 		return
 	}
@@ -552,6 +574,12 @@ func (s *CodingSession) OnSubagentStop(name, task string, background bool, resul
 }
 
 func (s *CodingSession) onSubagentStart(run HarnessSubagentRun) {
+	s.emitSessionEvent(SessionEvent{
+		Type:               SessionEventSubagentStart,
+		SubagentName:       run.Name,
+		SubagentTask:       run.Task,
+		SubagentBackground: run.Background,
+	})
 	if s.harness == nil {
 		return
 	}
@@ -566,6 +594,23 @@ func (s *CodingSession) onSubagentStart(run HarnessSubagentRun) {
 }
 
 func (s *CodingSession) onSubagentStop(run HarnessSubagentRun, result string, err error) {
+	evt := SessionEvent{
+		Type:               SessionEventSubagentStop,
+		SubagentName:       run.Name,
+		SubagentTask:       run.Task,
+		SubagentBackground: run.Background,
+	}
+	if result != "" {
+		preview := result
+		if len(preview) > 240 {
+			preview = preview[:237] + "..."
+		}
+		evt.SubagentResult = preview
+	}
+	if err != nil {
+		evt.ErrorMessage = err.Error()
+	}
+	s.emitSessionEvent(evt)
 	if s.harness == nil {
 		return
 	}

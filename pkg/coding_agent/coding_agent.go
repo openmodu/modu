@@ -311,26 +311,30 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		harness:          newHarnessState(),
 		approvalManager:  approvalMgr,
 	}
-	tracePaths := cs.RuntimePaths()
-	traceRecorder, err := sessiontrace.NewRecorder(sessiontrace.Options{
-		SessionID:   cs.GetSessionID(),
-		Cwd:         opts.Cwd,
-		Provider:    opts.Model.ProviderID,
-		ModelID:     opts.Model.ID,
-		EventsFile:  tracePaths.TraceEventsFile,
-		SummaryFile: tracePaths.TraceSummaryFile,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to init trace recorder: %w", err)
+	if cfg.TracingRecorderEnabled() {
+		tracePaths := cs.RuntimePaths()
+		traceRecorder, traceErr := sessiontrace.NewRecorder(sessiontrace.Options{
+			SessionID:        cs.GetSessionID(),
+			Cwd:              opts.Cwd,
+			Provider:         opts.Model.ProviderID,
+			ModelID:          opts.Model.ID,
+			EventsFile:       tracePaths.TraceEventsFile,
+			SummaryFile:      tracePaths.TraceSummaryFile,
+			MaxFileSizeBytes: int64(cfg.TracingRecorderMaxFileSizeMB()) * 1024 * 1024,
+			MaxRotatedFiles:  cfg.TracingRecorderMaxRotatedFiles(),
+		})
+		if traceErr != nil {
+			return nil, fmt.Errorf("failed to init trace recorder: %w", traceErr)
+		}
+		cs.traceRecorder = traceRecorder
+		_ = cs.traceRecorder.RecordSessionEvent("session_start", map[string]any{
+			"source":    "startup",
+			"cwd":       opts.Cwd,
+			"provider":  opts.Model.ProviderID,
+			"modelId":   opts.Model.ID,
+			"sessionId": cs.GetSessionID(),
+		})
 	}
-	cs.traceRecorder = traceRecorder
-	_ = cs.traceRecorder.RecordSessionEvent("session_start", map[string]any{
-		"source":    "startup",
-		"cwd":       opts.Cwd,
-		"provider":  opts.Model.ProviderID,
-		"modelId":   opts.Model.ID,
-		"sessionId": cs.GetSessionID(),
-	})
 	if bridgeOpts, ok := cs.otelOptions(opts); ok {
 		bridge, bridgeErr := sessiontrace.NewOTelBridge(context.Background(), bridgeOpts)
 		if bridgeErr != nil {
@@ -1111,6 +1115,34 @@ func sessionEventMeta(event SessionEvent) map[string]any {
 	}
 	if event.Level != "" {
 		meta["level"] = event.Level
+	}
+	if event.OldCwd != "" {
+		meta["oldCwd"] = event.OldCwd
+	}
+	if event.NewCwd != "" {
+		meta["newCwd"] = event.NewCwd
+		meta["cwd"] = event.NewCwd
+	}
+	if event.Path != "" {
+		meta["path"] = event.Path
+	}
+	if event.SubagentName != "" {
+		meta["subagentName"] = event.SubagentName
+	}
+	if event.SubagentTask != "" {
+		meta["subagentTask"] = event.SubagentTask
+	}
+	if event.SubagentBackground {
+		meta["subagentBackground"] = true
+	}
+	if event.SubagentResult != "" {
+		meta["subagentResult"] = event.SubagentResult
+	}
+	if event.ToolName != "" {
+		meta["toolName"] = event.ToolName
+	}
+	if event.Reason != "" {
+		meta["reason"] = event.Reason
 	}
 	if len(meta) == 0 {
 		return nil

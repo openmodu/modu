@@ -68,7 +68,20 @@ type Config struct {
 }
 
 type TracingConfig struct {
+	// Recorder controls the file-based trace recorder.
+	Recorder RecorderConfig `json:"recorder,omitempty"`
+	// OTel controls the OpenTelemetry exporter.
 	OTel OTelConfig `json:"otel,omitempty"`
+}
+
+type RecorderConfig struct {
+	// Enabled controls whether the file-based recorder is active. Default: true.
+	Enabled *bool `json:"enabled,omitempty"`
+	// MaxFileSizeMB is the maximum size of the events.jsonl file in MB before rotation.
+	// 0 means no limit. Default: 50.
+	MaxFileSizeMB int `json:"maxFileSizeMb,omitempty"`
+	// MaxRotatedFiles is the number of rotated event files to keep. Default: 3.
+	MaxRotatedFiles int `json:"maxRotatedFiles,omitempty"`
 }
 
 type OTelConfig struct {
@@ -293,6 +306,27 @@ func (c *Config) FeatureSpawnSubagentTool() bool {
 }
 func (c *Config) FeatureHarnessActions() bool {
 	return c == nil || featureEnabled(c.Features.HarnessActions)
+}
+
+func (c *Config) TracingRecorderEnabled() bool {
+	if c == nil || c.Tracing.Recorder.Enabled == nil {
+		return true // enabled by default
+	}
+	return *c.Tracing.Recorder.Enabled
+}
+
+func (c *Config) TracingRecorderMaxFileSizeMB() int {
+	if c == nil || c.Tracing.Recorder.MaxFileSizeMB <= 0 {
+		return 50
+	}
+	return c.Tracing.Recorder.MaxFileSizeMB
+}
+
+func (c *Config) TracingRecorderMaxRotatedFiles() int {
+	if c == nil || c.Tracing.Recorder.MaxRotatedFiles <= 0 {
+		return 3
+	}
+	return c.Tracing.Recorder.MaxRotatedFiles
 }
 
 func (c *Config) TracingOTelEnabled() bool {

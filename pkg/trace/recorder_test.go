@@ -403,3 +403,75 @@ func TestRecorderSessionEventUpdatesModel(t *testing.T) {
 		t.Fatalf("expected cwd=/new/dir, got %s", summary.Cwd)
 	}
 }
+
+func TestRecorderRotation(t *testing.T) {
+	dir := t.TempDir()
+	eventsFile := filepath.Join(dir, "events.jsonl")
+	// Set a very small max size to trigger rotation quickly.
+	recorder, err := NewRecorder(Options{
+		SessionID:        "rot-1",
+		Cwd:              dir,
+		Provider:         "test",
+		ModelID:          "test",
+		EventsFile:       eventsFile,
+		SummaryFile:      filepath.Join(dir, "summary.json"),
+		MaxFileSizeBytes: 200, // ~200 bytes triggers rotation after a few events
+		MaxRotatedFiles:  2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Write enough events to trigger at least one rotation.
+	for i := 0; i < 20; i++ {
+		if err := recorder.RecordAgentEvent(agent.AgentEvent{Type: agent.EventTypeAgentStart}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Check that rotated files exist.
+	if _, err := os.Stat(eventsFile + ".1"); err != nil {
+		t.Fatalf("expected rotated file .1 to exist: %v", err)
+	}
+
+	// The current events file should still be writable and small.
+	info, err := os.Stat(eventsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() > 400 {
+		t.Fatalf("expected current file to be small after rotation, got %d bytes", info.Size())
+	}
+
+	// .3 should NOT exist since MaxRotatedFiles=2.
+	if _, err := os.Stat(eventsFile + ".3"); err == nil {
+		t.Fatal("expected .3 to not exist with MaxRotatedFiles=2")
+	}
+
+	summary := recorder.Summary()
+	if summary.Counts.Events != 20 {
+		t.Fatalf("expected 20 events in summary, got %d", summary.Counts.Events)
+	}
+}
+
+func TestRecorderDisabled(t *testing.T) {
+	// When EventsFile and SummaryFile are empty, recorder still works in-memory.
+	recorder, err := NewRecorder(Options{
+		SessionID: "disabled-1",
+		Cwd:       "/tmp",
+		Provider:  "test",
+		ModelID:   "test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.RecordAgentEvent(agent.AgentEvent{Type: agent.EventTypeAgentStart}); err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.Summary().Counts.Events != 1 {
+		t.Fatalf("expected 1 event, got %d", recorder.Summary().Counts.Events)
+	}
+}

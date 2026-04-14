@@ -16,13 +16,15 @@ import (
 const defaultPreviewLimit = 240
 
 type Options struct {
-	SessionID    string
-	Cwd          string
-	Provider     string
-	ModelID      string
-	EventsFile   string
-	SummaryFile  string
-	PreviewLimit int
+	SessionID       string
+	Cwd             string
+	Provider        string
+	ModelID         string
+	EventsFile      string
+	SummaryFile     string
+	PreviewLimit    int
+	MaxFileSizeBytes int64
+	MaxRotatedFiles  int
 }
 
 type ModelRef struct {
@@ -369,6 +371,12 @@ func (r *Recorder) appendEventFileLocked(event Event) error {
 	if strings.TrimSpace(r.opts.EventsFile) == "" {
 		return nil
 	}
+	// Check rotation before writing.
+	if r.opts.MaxFileSizeBytes > 0 {
+		if info, err := os.Stat(r.opts.EventsFile); err == nil && info.Size() >= r.opts.MaxFileSizeBytes {
+			r.rotateEventsFileLocked()
+		}
+	}
 	file, err := os.OpenFile(r.opts.EventsFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("open trace events file: %w", err)
@@ -383,6 +391,27 @@ func (r *Recorder) appendEventFileLocked(event Event) error {
 		return fmt.Errorf("write trace event: %w", err)
 	}
 	return nil
+}
+
+// rotateEventsFileLocked renames events.jsonl -> events.1.jsonl, etc.
+// Keeps at most MaxRotatedFiles rotated files.
+func (r *Recorder) rotateEventsFileLocked() {
+	base := r.opts.EventsFile
+	maxKeep := r.opts.MaxRotatedFiles
+	if maxKeep <= 0 {
+		maxKeep = 3
+	}
+	// Remove the oldest rotated file.
+	oldest := fmt.Sprintf("%s.%d", base, maxKeep)
+	_ = os.Remove(oldest)
+	// Shift existing rotated files: N-1 -> N, N-2 -> N-1, etc.
+	for i := maxKeep - 1; i >= 1; i-- {
+		from := fmt.Sprintf("%s.%d", base, i)
+		to := fmt.Sprintf("%s.%d", base, i+1)
+		_ = os.Rename(from, to)
+	}
+	// Rotate current file to .1
+	_ = os.Rename(base, fmt.Sprintf("%s.1", base))
 }
 
 func (r *Recorder) flushSummaryLocked() error {
