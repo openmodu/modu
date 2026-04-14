@@ -38,19 +38,22 @@ type Counts struct {
 	ToolCalls         int `json:"toolCalls"`
 	SessionEvents     int `json:"sessionEvents"`
 	Errors            int `json:"errors"`
+	Interrupts        int `json:"interrupts"`
 }
 
 type Totals struct {
-	Turns             int `json:"turns"`
-	Messages          int `json:"messages"`
-	AssistantMessages int `json:"assistantMessages"`
-	ToolCalls         int `json:"toolCalls"`
-	Errors            int `json:"errors"`
-	Input             int `json:"input"`
-	Output            int `json:"output"`
-	CacheRead         int `json:"cacheRead"`
-	CacheWrite        int `json:"cacheWrite"`
-	TotalTokens       int `json:"totalTokens"`
+	Turns             int     `json:"turns"`
+	Messages          int     `json:"messages"`
+	AssistantMessages int     `json:"assistantMessages"`
+	ToolCalls         int     `json:"toolCalls"`
+	Errors            int     `json:"errors"`
+	Interrupts        int     `json:"interrupts"`
+	Input             int     `json:"input"`
+	Output            int     `json:"output"`
+	CacheRead         int     `json:"cacheRead"`
+	CacheWrite        int     `json:"cacheWrite"`
+	TotalTokens       int     `json:"totalTokens"`
+	CostTotal         float64 `json:"costTotal"`
 }
 
 type Event struct {
@@ -66,6 +69,7 @@ type Event struct {
 	IsError    bool             `json:"isError,omitempty"`
 	StopReason string           `json:"stopReason,omitempty"`
 	Preview    string           `json:"preview,omitempty"`
+	DurationMs int64            `json:"durationMs,omitempty"`
 	Usage      types.AgentUsage `json:"usage,omitempty"`
 	Args       map[string]any   `json:"args,omitempty"`
 	Details    any              `json:"details,omitempty"`
@@ -74,28 +78,39 @@ type Event struct {
 }
 
 type Summary struct {
-	StartedAt int64    `json:"startedAt"`
-	UpdatedAt int64    `json:"updatedAt"`
-	SessionID string   `json:"sessionId,omitempty"`
-	Cwd       string   `json:"cwd,omitempty"`
-	Model     ModelRef `json:"model"`
-	Counts    Counts   `json:"counts"`
-	Tokens    struct {
+	StartedAt  int64    `json:"startedAt"`
+	UpdatedAt  int64    `json:"updatedAt"`
+	DurationMs int64    `json:"durationMs"`
+	SessionID  string   `json:"sessionId,omitempty"`
+	Cwd        string   `json:"cwd,omitempty"`
+	Model      ModelRef `json:"model"`
+	Counts     Counts   `json:"counts"`
+	Tokens     struct {
 		Input       int `json:"input"`
 		Output      int `json:"output"`
 		CacheRead   int `json:"cacheRead"`
 		CacheWrite  int `json:"cacheWrite"`
 		TotalTokens int `json:"totalTokens"`
 	} `json:"tokens"`
+	Cost struct {
+		Input      float64 `json:"input"`
+		Output     float64 `json:"output"`
+		CacheRead  float64 `json:"cacheRead"`
+		CacheWrite float64 `json:"cacheWrite"`
+		Total      float64 `json:"total"`
+	} `json:"cost"`
 	LastEvent *Event `json:"lastEvent,omitempty"`
 }
 
 type Recorder struct {
-	mu          sync.Mutex
-	opts        Options
-	summary     Summary
-	seq         int64
-	currentTurn int
+	mu             sync.Mutex
+	opts           Options
+	summary        Summary
+	seq            int64
+	currentTurn    int
+	turnStartTime  int64
+	toolStartTimes map[string]int64
+	closed         bool
 }
 
 func NewRecorder(opts Options) (*Recorder, error) {
@@ -115,6 +130,7 @@ func NewRecorder(opts Options) (*Recorder, error) {
 				ID:       opts.ModelID,
 			},
 		},
+		toolStartTimes: make(map[string]int64),
 	}
 	if err := ensureParentDir(opts.EventsFile); err != nil {
 		return nil, err
@@ -160,6 +176,17 @@ func (r *Recorder) RecordSessionEvent(eventType string, meta map[string]any) err
 	return r.appendEventLocked(event)
 }
 
+func (r *Recorder) Close() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return nil
+	}
+	r.closed = true
+	r.summary.DurationMs = time.Now().UnixMilli() - r.summary.StartedAt
+	return r.flushSummaryLocked()
+}
+
 func (r *Recorder) RecordAgentEvent(event agent.AgentEvent) error {
 	built, ok := r.buildAgentEvent(event)
 	if !ok {
@@ -173,15 +200,51 @@ func (r *Recorder) RecordAgentEvent(event agent.AgentEvent) error {
 
 func (r *Recorder) buildAgentEvent(event agent.AgentEvent) (Event, bool) {
 	switch event.Type {
-	case agent.EventTypeAgentStart, agent.EventTypeAgentEnd, agent.EventTypeTurnStart, agent.EventTypeTurnEnd, agent.EventTypeInterrupt:
+	case agent.EventTypeAgentStart:
+		return Event{
+			Source: "agent",
+			Type:   string(event.Type),
+		}, true
+	case agent.EventTypeAgentEnd:
+		return Event{
+			Source:  "agent",
+			Type:    string(event.Type),
+			IsError: event.IsError,
+		}, true
+	case agent.EventTypeTurnStart:
+		return Event{
+			Source: "agent",
+			Type:   string(event.Type),
+		}, true
+	case agent.EventTypeTurnEnd:
+		return Event{
+			Source:     "agent",
+			Type:       string(event.Type),
+			ToolName:   event.ToolName,
+			ToolCallID: event.ToolCallID,
+		}, true
+	case agent.EventTypeInterrupt:
 		return Event{
 			Source:     "agent",
 			Type:       string(event.Type),
 			ToolName:   event.ToolName,
 			ToolCallID: event.ToolCallID,
 			Parallel:   event.Parallel,
-			IsError:    event.IsError,
 			Meta:       interruptMeta(event),
+		}, true
+	case agent.EventTypeMessageStart:
+		role, preview, _, _ := summarizeMessage(event.Message, r.opts.PreviewLimit)
+		return Event{
+			Source:  "agent",
+			Type:    string(event.Type),
+			Role:    role,
+			Preview: preview,
+		}, true
+	case agent.EventTypeMessageUpdate:
+		// Streaming updates are high-frequency; record type only, no preview.
+		return Event{
+			Source: "agent",
+			Type:   string(event.Type),
 		}, true
 	case agent.EventTypeMessageEnd:
 		role, preview, usage, stopReason := summarizeMessage(event.Message, r.opts.PreviewLimit)
@@ -201,6 +264,14 @@ func (r *Recorder) buildAgentEvent(event agent.AgentEvent) (Event, bool) {
 			ToolCallID: event.ToolCallID,
 			Parallel:   event.Parallel,
 			Args:       cloneAnyMap(event.Args),
+		}, true
+	case agent.EventTypeToolExecutionUpdate:
+		return Event{
+			Source:     "agent",
+			Type:       string(event.Type),
+			ToolName:   event.ToolName,
+			ToolCallID: event.ToolCallID,
+			Parallel:   event.Parallel,
 		}, true
 	case agent.EventTypeToolExecutionEnd:
 		preview, details := summarizeToolResult(event.Result, r.opts.PreviewLimit)
@@ -229,29 +300,40 @@ func (r *Recorder) appendEventLocked(event Event) error {
 	case string(agent.EventTypeTurnStart):
 		r.currentTurn++
 		r.summary.Counts.Turns++
+		r.turnStartTime = now
+	case string(agent.EventTypeTurnEnd):
+		if r.turnStartTime > 0 {
+			event.DurationMs = now - r.turnStartTime
+			r.turnStartTime = 0
+		}
 	case string(agent.EventTypeMessageEnd):
 		r.summary.Counts.Messages++
 		if event.Role == string(agent.RoleAssistant) {
 			r.summary.Counts.AssistantMessages++
 		}
 		addUsage(&r.summary, event.Usage)
+	case string(agent.EventTypeToolExecutionStart):
+		r.toolStartTimes[event.ToolCallID] = now
 	case string(agent.EventTypeToolExecutionEnd):
 		r.summary.Counts.ToolCalls++
 		if event.IsError {
 			r.summary.Counts.Errors++
 		}
+		if startTime, ok := r.toolStartTimes[event.ToolCallID]; ok {
+			event.DurationMs = now - startTime
+			delete(r.toolStartTimes, event.ToolCallID)
+		}
+	case string(agent.EventTypeInterrupt):
+		r.summary.Counts.Interrupts++
 	case string(agent.EventTypeAgentEnd):
 		if event.IsError {
 			r.summary.Counts.Errors++
 		}
+		r.summary.DurationMs = now - r.summary.StartedAt
 	}
 
-	if event.Type == string(agent.EventTypeTurnEnd) || event.Type == string(agent.EventTypeAgentEnd) ||
-		event.Type == string(agent.EventTypeMessageEnd) || event.Type == string(agent.EventTypeToolExecutionStart) ||
-		event.Type == string(agent.EventTypeToolExecutionEnd) || event.Type == string(agent.EventTypeInterrupt) {
-		event.Turn = r.currentTurn
-	}
-	if event.Type == string(agent.EventTypeTurnStart) {
+	// Attach turn number to all events except agent_start.
+	if event.Type != string(agent.EventTypeAgentStart) {
 		event.Turn = r.currentTurn
 	}
 
@@ -264,11 +346,13 @@ func (r *Recorder) appendEventLocked(event Event) error {
 		AssistantMessages: r.summary.Counts.AssistantMessages,
 		ToolCalls:         r.summary.Counts.ToolCalls,
 		Errors:            r.summary.Counts.Errors,
+		Interrupts:        r.summary.Counts.Interrupts,
 		Input:             r.summary.Tokens.Input,
 		Output:            r.summary.Tokens.Output,
 		CacheRead:         r.summary.Tokens.CacheRead,
 		CacheWrite:        r.summary.Tokens.CacheWrite,
 		TotalTokens:       r.summary.Tokens.TotalTokens,
+		CostTotal:         r.summary.Cost.Total,
 	}
 	clone := event
 	clone.Meta = cloneMap(event.Meta)
@@ -460,6 +544,11 @@ func addUsage(summary *Summary, usage types.AgentUsage) {
 		total = usage.Input + usage.Output
 	}
 	summary.Tokens.TotalTokens += total
+	summary.Cost.Input += usage.Cost.Input
+	summary.Cost.Output += usage.Cost.Output
+	summary.Cost.CacheRead += usage.Cost.CacheRead
+	summary.Cost.CacheWrite += usage.Cost.CacheWrite
+	summary.Cost.Total += usage.Cost.Total
 }
 
 func sanitizeAny(value any) any {

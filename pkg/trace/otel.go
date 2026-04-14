@@ -201,10 +201,18 @@ func (b *OTelBridge) RecordAgentEvent(event agent.AgentEvent) {
 		b.sessionSpan.AddEvent("agent_start")
 	case agent.EventTypeTurnStart:
 		b.startTurnLocked()
+	case agent.EventTypeMessageStart:
+		b.activeSpanLocked().AddEvent("message_start")
+	case agent.EventTypeMessageUpdate:
+		// Streaming deltas are high-frequency; do not create events for them.
 	case agent.EventTypeMessageEnd:
 		b.recordMessageEndLocked(event.Message)
 	case agent.EventTypeToolExecutionStart:
 		b.startToolLocked(event)
+	case agent.EventTypeToolExecutionUpdate:
+		if active, ok := b.toolSpans[event.ToolCallID]; ok {
+			active.span.AddEvent("tool_progress")
+		}
 	case agent.EventTypeToolExecutionEnd:
 		b.endToolLocked(event)
 	case agent.EventTypeInterrupt:
@@ -397,13 +405,21 @@ func usageAttributes(usage types.AgentUsage) []attribute.KeyValue {
 	if total == 0 {
 		total = usage.Input + usage.Output
 	}
-	return []attribute.KeyValue{
+	attrs := []attribute.KeyValue{
 		attribute.Int("llm.usage.input_tokens", usage.Input),
 		attribute.Int("llm.usage.output_tokens", usage.Output),
 		attribute.Int("llm.usage.cache_read_tokens", usage.CacheRead),
 		attribute.Int("llm.usage.cache_write_tokens", usage.CacheWrite),
 		attribute.Int("llm.usage.total_tokens", total),
 	}
+	if usage.Cost.Total > 0 {
+		attrs = append(attrs,
+			attribute.Float64("llm.cost.input", usage.Cost.Input),
+			attribute.Float64("llm.cost.output", usage.Cost.Output),
+			attribute.Float64("llm.cost.total", usage.Cost.Total),
+		)
+	}
+	return attrs
 }
 
 func attributesFromMap(meta map[string]any) []attribute.KeyValue {
