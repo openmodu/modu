@@ -159,6 +159,9 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		paths := session.RuntimePaths()
 		r.PrintSection("Runtime Paths", []string{
 			"root: " + paths.Root,
+			"trace: " + paths.TraceDir,
+			"trace_events: " + paths.TraceEventsFile,
+			"trace_summary: " + paths.TraceSummaryFile,
 			"sessions: " + paths.SessionsDir,
 			"plans: " + paths.PlansDir,
 			"plan_file: " + paths.PlanFile,
@@ -167,6 +170,10 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 			"global_memory: " + paths.GlobalMemoryDir,
 			"project_memory: " + paths.ProjectMemoryDir,
 		})
+		return true, false
+
+	case "trace":
+		printTrace(r, session)
 		return true, false
 
 	case "state":
@@ -363,6 +370,7 @@ func PrintHelp(r Printer) {
 		"/tasks              — show background subagent tasks",
 		"/hints              — show pending harness-only hints",
 		"/runtime            — show harness runtime paths",
+		"/trace              — show trace paths and trace summary",
 		"/dashboard          — show runtime summary and latest events",
 		"/state              — show unified runtime state snapshot",
 		"/config             — show effective merged config",
@@ -407,6 +415,11 @@ func PrintDashboard(r Printer, session *coding_agent.CodingSession) {
 		fmt.Sprintf("thinking: %s", state.Thinking),
 		fmt.Sprintf("modes: plan=%v worktree=%v streaming=%v", state.Modes["plan"], state.Modes["worktree"], state.Modes["streaming"]),
 		fmt.Sprintf("counts: messages=%d todos=%d tasks=%d tools=%d", state.Counts["messages"], state.Counts["todos"], state.Counts["tasks"], state.Counts["tools"]),
+		fmt.Sprintf("trace: events=%d turns=%d tool_calls=%d total_tokens=%d",
+			state.Trace.Counts.Events, state.Trace.Counts.Turns, state.Trace.Counts.ToolCalls, state.Trace.Tokens.TotalTokens),
+	}
+	if state.Trace.LastEvent != nil {
+		lines = append(lines, fmt.Sprintf("trace last: %s/%s", state.Trace.LastEvent.Source, state.Trace.LastEvent.Type))
 	}
 	if gitInfo, ok := state.Git["inGitRepository"].(bool); ok && gitInfo {
 		lines = append(lines, fmt.Sprintf("git: staged=%d unstaged=%d untracked=%d",
@@ -437,6 +450,44 @@ func PrintDashboard(r Printer, session *coding_agent.CodingSession) {
 	}
 	r.PrintSection("Runtime Dashboard", lines)
 	printHarnessActions(r, session)
+}
+
+func printTrace(r Printer, session *coding_agent.CodingSession) {
+	paths := session.RuntimePaths()
+	summary := session.TraceSummary()
+	lines := []string{
+		"trace_dir: " + paths.TraceDir,
+		"events_file: " + paths.TraceEventsFile,
+		"summary_file: " + paths.TraceSummaryFile,
+		fmt.Sprintf("session: %s", summary.SessionID),
+		fmt.Sprintf("model: %s/%s", summary.Model.Provider, summary.Model.ID),
+		fmt.Sprintf("counts: events=%d turns=%d messages=%d assistant=%d tool_calls=%d session_events=%d errors=%d",
+			summary.Counts.Events,
+			summary.Counts.Turns,
+			summary.Counts.Messages,
+			summary.Counts.AssistantMessages,
+			summary.Counts.ToolCalls,
+			summary.Counts.SessionEvents,
+			summary.Counts.Errors,
+		),
+		fmt.Sprintf("tokens: input=%d output=%d cache_read=%d cache_write=%d total=%d",
+			summary.Tokens.Input,
+			summary.Tokens.Output,
+			summary.Tokens.CacheRead,
+			summary.Tokens.CacheWrite,
+			summary.Tokens.TotalTokens,
+		),
+	}
+	if summary.LastEvent != nil {
+		lines = append(lines, fmt.Sprintf("last_event: %s/%s", summary.LastEvent.Source, summary.LastEvent.Type))
+		if summary.LastEvent.ToolName != "" {
+			lines = append(lines, "last_tool: "+summary.LastEvent.ToolName)
+		}
+		if summary.LastEvent.Preview != "" {
+			lines = append(lines, "last_preview: "+summary.LastEvent.Preview)
+		}
+	}
+	r.PrintSection("Trace", lines)
 }
 
 func printHarnessTargets(r Printer, title string, session *coding_agent.CodingSession, targets map[string]string, dirMode bool) {
