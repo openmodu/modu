@@ -95,11 +95,8 @@ func (s *Server) handleStreamTask(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	// Send an initial status frame so the client immediately knows where the
-	// task stands, even if no further events have landed yet.
-	if t, ok := s.store.Get(id); ok {
-		writeSSE(w, flusher, "status", t)
-	}
+	// Subscribe already buffers past events; the first frame the client sees
+	// is the task's initial status or whatever came before it joined.
 
 	for {
 		select {

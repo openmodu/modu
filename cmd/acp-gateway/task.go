@@ -72,12 +72,24 @@ type Store struct {
 
 // taskEntry tracks a Task plus its SSE subscribers and cancel hook.
 type taskEntry struct {
-	task  *Task
-	subs  map[int]chan SSEEvent
-	next  int
-	done  bool // closed: no further events will be emitted
+	task   *Task
+	subs   map[int]chan SSEEvent
+	next   int
+	done   bool // closed: no further events will be emitted
 	cancel func()
+
+	// buffer is a bounded history of events emitted so far. New subscribers
+	// receive the whole buffer before the first live event — this covers the
+	// small window between POST /tasks returning and the client opening
+	// /stream, during which an impatient agent can easily produce several
+	// events (notably permission prompts) that would otherwise be lost.
+	buffer []SSEEvent
 }
+
+// eventBufferCap caps per-task replay history. Plenty for the handshake +
+// approval window; for long streaming turns, live subscribers see every
+// event, and only the late-joiner's first N are capped.
+const eventBufferCap = 256
 
 // NewStore builds a Store with a work-queue capacity of cap tasks.
 func NewStore(cap int) *Store {
@@ -180,7 +192,12 @@ func (s *Store) List() []*Task {
 
 // Subscribe opens an SSE subscription. The returned cancel must be called to
 // release the subscriber slot. If the task is already done, the channel is
-// closed immediately after any pre-buffered events drain.
+// closed immediately after any replayed events drain.
+//
+// Replay semantics: the subscriber receives every event currently in the
+// task's replay buffer (up to eventBufferCap) before seeing live events.
+// This closes the race between POST /tasks and GET /tasks/:id/stream, which
+// otherwise lets early events (notably permission prompts) slip past.
 func (s *Store) Subscribe(id string) (<-chan SSEEvent, func(), bool) {
 	s.mu.Lock()
 	e, ok := s.tasks[id]
@@ -190,22 +207,20 @@ func (s *Store) Subscribe(id string) (<-chan SSEEvent, func(), bool) {
 	}
 	e.next++
 	subID := e.next
-	ch := make(chan SSEEvent, 32)
-	e.subs[subID] = ch
-	done := e.done
-	s.mu.Unlock()
-
-	if done {
-		// Late subscriber: deliver a terminal event based on current status and
-		// close. This lets the UI get a definitive answer without hanging.
-		go func() {
-			t, _ := s.Get(id)
-			if t != nil {
-				ch <- SSEEvent{Type: "status", Data: t}
-			}
-			close(ch)
-		}()
+	// Buffer large enough to hold full replay + some live runway. Drops are
+	// OK — a slow reader loses live events but still saw the terminal state.
+	ch := make(chan SSEEvent, len(e.buffer)+64)
+	for _, ev := range e.buffer {
+		ch <- ev
 	}
+	if e.done {
+		close(ch)
+		s.mu.Unlock()
+		// Nothing else to deliver — caller drains and returns.
+		return ch, func() {}, true
+	}
+	e.subs[subID] = ch
+	s.mu.Unlock()
 
 	cancel := func() {
 		s.mu.Lock()
@@ -221,13 +236,18 @@ func (s *Store) Subscribe(id string) (<-chan SSEEvent, func(), bool) {
 }
 
 // Publishes an event to every current subscriber. Non-blocking — a slow
-// subscriber drops events rather than stalling the worker.
+// subscriber drops events rather than stalling the worker. Events are also
+// appended to the task's replay buffer so late subscribers can catch up.
 func (s *Store) publish(id string, ev SSEEvent) {
 	s.mu.Lock()
 	e, ok := s.tasks[id]
 	if !ok || e.done {
 		s.mu.Unlock()
 		return
+	}
+	e.buffer = append(e.buffer, ev)
+	if len(e.buffer) > eventBufferCap {
+		e.buffer = e.buffer[len(e.buffer)-eventBufferCap:]
 	}
 	subs := make([]chan SSEEvent, 0, len(e.subs))
 	for _, c := range e.subs {
