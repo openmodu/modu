@@ -187,7 +187,11 @@ func (c *Client) Notify(method string, params any) error {
 }
 
 // OnNotification subscribes fn to inbound notifications. The returned
-// function removes the subscription. Handlers run on their own goroutine.
+// function removes the subscription. Handlers run synchronously on the
+// read goroutine — keep them fast (channel send, counter bump) or spawn
+// your own goroutine. Synchronous dispatch preserves the wire ordering
+// between notifications and the subsequent response, which matters when
+// a caller interleaves session/update + session/prompt responses.
 func (c *Client) OnNotification(fn func(*jsonrpc.Message)) func() {
 	c.mu.Lock()
 	c.nextSub++
@@ -253,7 +257,7 @@ func (c *Client) fanoutNotification(msg *jsonrpc.Message) {
 	}
 	c.mu.Unlock()
 	for _, fn := range subs {
-		go fn(msg)
+		fn(msg)
 	}
 }
 
