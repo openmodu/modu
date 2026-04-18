@@ -21,8 +21,12 @@ import (
 // Hooks are the reverse-RPC callbacks the manager injects into every
 // client it creates. The gateway supplies real implementations; tests
 // supply fakes.
+//
+// OnPermission receives the agent config and cwd alongside the request so
+// callers can route approval prompts back to the right task (two sessions
+// for different cwds share the same process-level handler otherwise).
 type Hooks struct {
-	OnPermission client.PermissionHandler
+	OnPermission func(agent AgentConfig, cwd string, req *client.PermissionRequest) string
 	FS           client.FSHandler
 }
 
@@ -86,9 +90,15 @@ func (m *Manager) Provider(agentID, cwd string) (*provider.Provider, error) {
 	}
 
 	tx := m.makeTransport(agent)
+	var onPerm client.PermissionHandler
+	if m.hooks.OnPermission != nil {
+		onPerm = func(req *client.PermissionRequest) string {
+			return m.hooks.OnPermission(agent, cwd, req)
+		}
+	}
 	c := client.New(client.Config{
 		Transport:    tx,
-		OnPermission: m.hooks.OnPermission,
+		OnPermission: onPerm,
 		FS:           m.hooks.FS,
 	})
 	p := provider.New(provider.Options{
@@ -120,6 +130,16 @@ func (m *Manager) Shutdown() error {
 		}
 	}
 	return firstErr
+}
+
+// SetNewProcess installs a transport factory that overrides the real
+// subprocess path. Intended for tests (unit or integration) that want to
+// swap in an in-memory fake agent. Callers must invoke it before the first
+// Provider() call — providers cache their transport.
+func (m *Manager) SetNewProcess(fn func(cfg AgentConfig) client.Transport) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.newProcess = fn
 }
 
 func (m *Manager) makeTransport(agent AgentConfig) client.Transport {
