@@ -1,0 +1,15 @@
+{
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+    "sessionId": "s-1",
+    "update": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "tc-bash-42",
+      "status": "in_progress",
+      "content": [
+        {"type": "content", "content": {"type": "text", "text": "running..."}}
+      ]
+    }
+  }
+}

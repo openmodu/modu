@@ -1,0 +1,17 @@
+{
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+    "sessionId": "s-1",
+    "update": {
+      "sessionUpdate": "tool_call",
+      "toolCallId": "tc-bash-42",
+      "title": "Run a shell command",
+      "kind": "execute",
+      "rawInput": {"command": "ls -la"},
+      "_meta": {
+        "claudeCode": {"toolName": "Bash"}
+      }
+    }
+  }
+}

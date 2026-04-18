@@ -1,0 +1,14 @@
+{
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+    "sessionId": "s-1",
+    "update": {
+      "sessionUpdate": "available_commands_update",
+      "availableCommands": [
+        {"name": "compact", "description": "compact the context"},
+        {"name": "review", "description": "review pending changes"}
+      ]
+    }
+  }
+}

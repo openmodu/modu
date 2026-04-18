@@ -1,0 +1,11 @@
+{
+  "jsonrpc": "2.0",
+  "method": "session/update",
+  "params": {
+    "sessionId": "s-1",
+    "update": {
+      "sessionUpdate": "some_future_feature",
+      "content": {"type": "text", "text": "ignore me"}
+    }
+  }
+}
