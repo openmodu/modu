@@ -11,10 +11,11 @@ import (
 
 // Server bundles the HTTP routing layer with the gateway's dependencies.
 type Server struct {
-	mgr     *manager.Manager
-	store   *Store
-	token   string
-	handler http.Handler
+	mgr      *manager.Manager
+	store    *Store
+	registry *Registry
+	token    string
+	handler  http.Handler
 
 	workers sync.WaitGroup
 	cancel  context.CancelFunc
@@ -34,10 +35,16 @@ func NewServer(opts Options) *Server {
 	if opts.WorkersEach <= 0 {
 		opts.WorkersEach = 1
 	}
+	registry := NewRegistry()
+	for _, id := range opts.Manager.List() {
+		registry.Register(newACPRunner(id, opts.Manager))
+	}
+
 	s := &Server{
-		mgr:   opts.Manager,
-		store: opts.Store,
-		token: opts.Token,
+		mgr:      opts.Manager,
+		store:    opts.Store,
+		registry: registry,
+		token:    opts.Token,
 	}
 	s.handler = s.buildRouter()
 
@@ -48,7 +55,7 @@ func NewServer(opts Options) *Server {
 			s.workers.Add(1)
 			go func(agentID string) {
 				defer s.workers.Done()
-				runWorker(ctx, agentID, s.store, s.mgr)
+				runWorker(ctx, agentID, s.store, s.registry)
 			}(id)
 		}
 	}

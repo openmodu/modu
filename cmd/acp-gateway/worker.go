@@ -6,14 +6,13 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/openmodu/modu/pkg/acp/manager"
-	"github.com/openmodu/modu/pkg/providers"
+	"github.com/openmodu/modu/pkg/types"
 )
 
-// runWorker is the main loop of one ACP worker goroutine. It blocks on the
-// store's work queue, runs matching tasks end-to-end, and returns when ctx
-// is cancelled.
-func runWorker(ctx context.Context, agentID string, store *Store, mgr *manager.Manager) {
+// runWorker is the main loop of one gateway worker goroutine. It blocks on
+// the store's work queue, runs matching tasks end-to-end via the Registry,
+// and returns when ctx is cancelled.
+func runWorker(ctx context.Context, agentID string, store *Store, reg *Registry) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -33,42 +32,37 @@ func runWorker(ctx context.Context, agentID string, store *Store, mgr *manager.M
 				go func() { store.queue <- id }()
 				continue
 			}
-			runTask(ctx, t, store, mgr)
+			runner, ok := reg.Get(t.Agent)
+			if !ok {
+				store.Fail(t.ID, fmt.Sprintf("no runner registered for agent %q", t.Agent))
+				continue
+			}
+			runTask(ctx, t, store, runner)
 		}
 	}
 }
 
-// runTask executes one Task against its configured ACP provider.
-func runTask(parent context.Context, t *Task, store *Store, mgr *manager.Manager) {
+// runTask executes one Task against a Runner.
+func runTask(parent context.Context, t *Task, store *Store, runner Runner) {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 
 	store.Start(t.ID, cancel)
+	// SetActive/ClearActive remain useful for any Runner whose permissions
+	// are routed out-of-band (today: the ACP manager's global hook).
 	store.SetActive(t.Agent, t.Cwd, t.ID)
 	defer store.ClearActive(t.Agent, t.Cwd)
 
-	p, err := mgr.Provider(t.Agent, t.Cwd)
-	if err != nil {
-		store.Fail(t.ID, fmt.Sprintf("provider: %v", err))
-		return
-	}
-
-	req := &providers.ChatRequest{
-		Model: "acp:" + t.Agent,
-		Messages: []providers.Message{
-			{Role: providers.RoleUser, Content: t.Prompt},
+	hooks := RunnerHooks{
+		OnEvent: func(ev types.StreamEvent) {
+			store.PushEvent(t.ID, ev)
+		},
+		OnPermission: func(p PermissionPrompt) string {
+			return store.AwaitPermission(t.ID, p)
 		},
 	}
-	es, err := p.Stream(ctx, req)
-	if err != nil {
-		store.Fail(t.ID, fmt.Sprintf("stream: %v", err))
-		return
-	}
 
-	for ev := range es.Events() {
-		store.PushEvent(t.ID, ev)
-	}
-	msg, err := es.Result()
+	msg, err := runner.Run(ctx, t.Prompt, t.Cwd, hooks)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			store.Fail(t.ID, "cancelled")

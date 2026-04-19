@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>acp-gateway console</title>
+<style>
+  :root {
+    --fg: #e6e6e6;
+    --mut: #8b9097;
+    --bg: #0f1115;
+    --panel: #171a20;
+    --accent: #6aa3ff;
+    --ok: #8bd17c;
+    --err: #ff7878;
+    --warn: #ffcf6a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 18px;
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+  }
+  h1 { font-size: 16px; margin: 0 0 14px; font-weight: 600; }
+  h2 { font-size: 13px; margin: 0 0 8px; font-weight: 600; color: var(--mut); text-transform: uppercase; letter-spacing: .04em; }
+  .row { display: flex; gap: 14px; flex-wrap: wrap; }
+  .col { flex: 1 1 420px; min-width: 320px; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid #222731;
+    border-radius: 8px;
+    padding: 14px;
+    margin-bottom: 14px;
+  }
+  label { display: block; font-size: 12px; color: var(--mut); margin-bottom: 4px; }
+  input, select, textarea, button {
+    font: inherit;
+    color: var(--fg);
+    background: #0c0e12;
+    border: 1px solid #2a2f3a;
+    border-radius: 6px;
+    padding: 7px 9px;
+    width: 100%;
+  }
+  textarea { min-height: 78px; resize: vertical; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  button {
+    background: var(--accent);
+    color: #0c0e12;
+    border: none;
+    cursor: pointer;
+    font-weight: 600;
+    width: auto;
+    padding: 7px 14px;
+  }
+  button.secondary { background: #2a2f3a; color: var(--fg); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .field { margin-bottom: 10px; }
+  .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .tag {
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 11px;
+    background: #222731;
+    color: var(--mut);
+  }
+  .tag.ok { background: rgba(139,209,124,.15); color: var(--ok); }
+  .tag.err { background: rgba(255,120,120,.15); color: var(--err); }
+  .tag.warn { background: rgba(255,207,106,.15); color: var(--warn); }
+  .tag.run { background: rgba(106,163,255,.15); color: var(--accent); }
+  pre.log {
+    background: #0a0c10;
+    border: 1px solid #1c2028;
+    border-radius: 6px;
+    padding: 10px;
+    max-height: 360px;
+    overflow: auto;
+    font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .evt { margin: 0 0 6px; }
+  .evt .hdr { color: var(--mut); font-size: 11px; }
+  .evt.status .hdr { color: var(--accent); }
+  .evt.event .hdr { color: var(--ok); }
+  .evt.permission .hdr { color: var(--warn); }
+  .result { background: #0a0c10; border: 1px solid #1c2028; border-radius: 6px; padding: 10px; white-space: pre-wrap; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; min-height: 28px; }
+  .perm-box { border: 1px solid var(--warn); background: rgba(255,207,106,.06); padding: 10px; border-radius: 6px; margin-top: 10px; }
+  .perm-box .title { color: var(--warn); font-weight: 600; margin-bottom: 6px; }
+  .perm-opts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .perm-opts button { width: auto; }
+  .api-cheat { font: 11px/1.5 ui-monospace, Menlo, monospace; color: var(--mut); white-space: pre-wrap; }
+  .api-cheat b { color: var(--fg); }
+  .muted { color: var(--mut); }
+</style>
+</head>
+<body>
+
+<h1>acp-gateway console <span class="tag" id="healthTag">checking…</span></h1>
+
+<div class="row">
+  <div class="col">
+    <div class="panel">
+      <h2>Connection</h2>
+      <div class="field">
+        <label>Bearer token (<code>MODU_ACP_TOKEN</code>)</label>
+        <input id="token" placeholder="leave empty if gateway runs without auth" autocomplete="off">
+      </div>
+      <div class="toolbar">
+        <button id="refreshAgents" class="secondary">Refresh agents</button>
+        <span id="agentsStatus" class="muted"></span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Submit task</h2>
+      <div class="field">
+        <label>Agent</label>
+        <select id="agent"></select>
+      </div>
+      <div class="field">
+        <label>Working directory (cwd)</label>
+        <input id="cwd" placeholder="/tmp">
+      </div>
+      <div class="field">
+        <label>Prompt</label>
+        <textarea id="prompt" placeholder="ask the agent something…"></textarea>
+      </div>
+      <div class="toolbar">
+        <button id="submit">POST /api/tasks</button>
+        <span id="submitStatus" class="muted"></span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>API cheatsheet</h2>
+      <div class="api-cheat">
+<b>GET</b>  /healthz
+<b>GET</b>  /api/agents
+<b>POST</b> /api/tasks                 {agent, prompt, cwd}
+<b>GET</b>  /api/tasks/{id}
+<b>GET</b>  /api/tasks/{id}/stream    SSE: status | event | permission
+<b>POST</b> /api/tasks/{id}/approve   {toolCallId, optionId}
+
+All non-<b>/healthz</b> routes require <b>Authorization: Bearer &lt;token&gt;</b>
+when MODU_ACP_TOKEN is set on the gateway.
+      </div>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="panel">
+      <h2>Task <span id="taskIdTag" class="tag">none</span> <span id="taskStatusTag" class="tag">—</span></h2>
+      <div class="field">
+        <label>result</label>
+        <div class="result" id="result"></div>
+      </div>
+      <div id="permHost"></div>
+    </div>
+
+    <div class="panel">
+      <h2>SSE stream</h2>
+      <div class="toolbar" style="margin-bottom:8px">
+        <button id="clearLog" class="secondary">Clear</button>
+        <span class="muted" id="eventCount">0 events</span>
+      </div>
+      <pre class="log" id="log"></pre>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const tokenInput = $('token');
+  const agentSel   = $('agent');
+  const cwdInput   = $('cwd');
+  const promptInput= $('prompt');
+  const submitBtn  = $('submit');
+  const log        = $('log');
+  const result     = $('result');
+  const permHost   = $('permHost');
+  const taskIdTag  = $('taskIdTag');
+  const statusTag  = $('taskStatusTag');
+  const eventCount = $('eventCount');
+  const submitStatus = $('submitStatus');
+  const agentsStatus = $('agentsStatus');
+  const healthTag  = $('healthTag');
+
+  // Remember token + cwd across reloads (sessionStorage = cleared when tab closes).
+  tokenInput.value = sessionStorage.getItem('token') || '';
+  cwdInput.value   = sessionStorage.getItem('cwd')   || '/tmp';
+  tokenInput.addEventListener('change', () => sessionStorage.setItem('token', tokenInput.value));
+  cwdInput.addEventListener('change',   () => sessionStorage.setItem('cwd',   cwdInput.value));
+
+  let currentTaskId = null;
+  let currentAbort  = null;
+  let events = 0;
+
+  function authHeaders() {
+    const h = { 'Content-Type': 'application/json' };
+    const t = tokenInput.value.trim();
+    if (t) h['Authorization'] = 'Bearer ' + t;
+    return h;
+  }
+
+  function setTaskTag(id, status) {
+    taskIdTag.textContent = id || 'none';
+    statusTag.textContent = status || '—';
+    statusTag.className = 'tag ' + (
+      status === 'completed' ? 'ok' :
+      status === 'failed' || status === 'cancelled' ? 'err' :
+      status === 'running' ? 'run' :
+      status === 'pending' ? 'warn' : ''
+    );
+  }
+
+  function appendEvent(kind, payload) {
+    events++;
+    eventCount.textContent = events + ' event' + (events === 1 ? '' : 's');
+    const el = document.createElement('div');
+    el.className = 'evt ' + kind;
+    const hdr = document.createElement('div');
+    hdr.className = 'hdr';
+    const ts = new Date().toISOString().slice(11, 23);
+    hdr.textContent = '[' + ts + '] ' + kind;
+    el.appendChild(hdr);
+    const body = document.createElement('div');
+    body.textContent = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
+    el.appendChild(body);
+    log.appendChild(el);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  async function checkHealth() {
+    try {
+      const r = await fetch('/healthz');
+      if (r.ok) { healthTag.textContent = 'online'; healthTag.className = 'tag ok'; }
+      else      { healthTag.textContent = 'status ' + r.status; healthTag.className = 'tag err'; }
+    } catch {
+      healthTag.textContent = 'unreachable';
+      healthTag.className = 'tag err';
+    }
+  }
+
+  async function loadAgents() {
+    agentsStatus.textContent = 'loading…';
+    try {
+      const r = await fetch('/api/agents', { headers: authHeaders() });
+      if (!r.ok) {
+        agentsStatus.textContent = 'HTTP ' + r.status + ' ' + (await r.text());
+        agentSel.innerHTML = '';
+        return;
+      }
+      const data = await r.json();
+      const list = data.agents || [];
+      agentSel.innerHTML = list.map(id => `<option value="${id}">${id}</option>`).join('');
+      agentsStatus.textContent = list.length + ' agent' + (list.length === 1 ? '' : 's');
+    } catch (e) {
+      agentsStatus.textContent = 'error: ' + e.message;
+    }
+  }
+
+  // Minimal SSE parser over fetch ReadableStream — needed because EventSource
+  // cannot set custom headers (no way to pass the Bearer token).
+  async function streamTask(taskId) {
+    const ctrl = new AbortController();
+    currentAbort = ctrl;
+    const r = await fetch('/api/tasks/' + taskId + '/stream', {
+      headers: authHeaders(),
+      signal: ctrl.signal,
+    });
+    if (!r.ok || !r.body) {
+      appendEvent('error', 'stream HTTP ' + r.status);
+      return;
+    }
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const frame = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        let ev = 'message', data = '';
+        for (const line of frame.split('\n')) {
+          if (line.startsWith('event:')) ev = line.slice(6).trim();
+          else if (line.startsWith('data:')) data += line.slice(5).trim();
+        }
+        let parsed = data;
+        try { parsed = JSON.parse(data); } catch {}
+        handleFrame(ev, parsed);
+      }
+    }
+  }
+
+  function handleFrame(ev, data) {
+    appendEvent(ev, data);
+    if (ev === 'status' && data && typeof data === 'object') {
+      setTaskTag(data.id, data.status);
+      if (data.result) result.textContent = data.result;
+      if (data.error)  result.textContent = 'ERROR: ' + data.error;
+    } else if (ev === 'event' && data && data.delta) {
+      // Live-append streaming text deltas into the result box.
+      if (!result.dataset.hadDelta) { result.textContent = ''; result.dataset.hadDelta = '1'; }
+      result.textContent += data.delta;
+    } else if (ev === 'permission') {
+      renderPermission(data);
+    }
+  }
+
+  function renderPermission(p) {
+    permHost.innerHTML = '';
+    const box = document.createElement('div');
+    box.className = 'perm-box';
+    const title = document.createElement('div');
+    title.className = 'title';
+    title.textContent = '⚠ permission requested: ' + (p.title || p.toolCallId);
+    box.appendChild(title);
+    const kind = document.createElement('div');
+    kind.className = 'muted';
+    kind.textContent = 'kind=' + (p.kind || '?') + ' · toolCallId=' + p.toolCallId;
+    box.appendChild(kind);
+    const opts = document.createElement('div');
+    opts.className = 'perm-opts';
+    for (const o of (p.options || [])) {
+      const b = document.createElement('button');
+      b.textContent = o.name + ' (' + o.optionId + ')';
+      b.className = o.kind && o.kind.startsWith('reject') ? 'secondary' : '';
+      b.onclick = () => approve(p.toolCallId, o.optionId, box);
+      opts.appendChild(b);
+    }
+    box.appendChild(opts);
+    permHost.appendChild(box);
+  }
+
+  async function approve(toolCallId, optionId, box) {
+    try {
+      const r = await fetch('/api/tasks/' + currentTaskId + '/approve', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ toolCallId, optionId }),
+      });
+      if (!r.ok) {
+        appendEvent('error', 'approve HTTP ' + r.status + ': ' + (await r.text()));
+        return;
+      }
+      box.remove();
+      appendEvent('approve', { toolCallId, optionId });
+    } catch (e) {
+      appendEvent('error', 'approve: ' + e.message);
+    }
+  }
+
+  async function submit() {
+    const agent = agentSel.value;
+    const prompt = promptInput.value.trim();
+    const cwd = cwdInput.value.trim();
+    if (!agent) { submitStatus.textContent = 'pick an agent first'; return; }
+    if (!prompt) { submitStatus.textContent = 'prompt is empty'; return; }
+
+    // Reset UI for the new task.
+    if (currentAbort) currentAbort.abort();
+    log.innerHTML = '';
+    permHost.innerHTML = '';
+    result.textContent = '';
+    result.dataset.hadDelta = '';
+    events = 0; eventCount.textContent = '0 events';
+
+    submitBtn.disabled = true;
+    submitStatus.textContent = 'posting…';
+    try {
+      const r = await fetch('/api/tasks', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ agent, prompt, cwd }),
+      });
+      if (!r.ok) {
+        submitStatus.textContent = 'HTTP ' + r.status + ' ' + (await r.text());
+        submitBtn.disabled = false;
+        return;
+      }
+      const t = await r.json();
+      currentTaskId = t.id;
+      setTaskTag(t.id, t.status);
+      submitStatus.textContent = 'accepted as ' + t.id;
+      streamTask(t.id).catch(e => {
+        if (e.name !== 'AbortError') appendEvent('error', 'stream: ' + e.message);
+      }).finally(() => { submitBtn.disabled = false; });
+    } catch (e) {
+      submitStatus.textContent = 'error: ' + e.message;
+      submitBtn.disabled = false;
+    }
+  }
+
+  $('refreshAgents').onclick = loadAgents;
+  $('clearLog').onclick = () => { log.innerHTML = ''; events = 0; eventCount.textContent = '0 events'; };
+  submitBtn.onclick = submit;
+  promptInput.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') submit();
+  });
+
+  checkHealth();
+  loadAgents();
+})();
+</script>
+</body>
+</html>

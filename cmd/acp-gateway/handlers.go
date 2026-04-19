@@ -1,13 +1,19 @@
 package main
 
 import (
+	"embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/openmodu/modu/pkg/types"
 )
+
+//go:embed web/index.html
+var webFS embed.FS
 
 // buildRouter wires all HTTP routes + auth middleware.
 func (s *Server) buildRouter() http.Handler {
@@ -19,8 +25,21 @@ func (s *Server) buildRouter() http.Handler {
 	mux.HandleFunc("GET /api/tasks/{id}", s.handleGetTask)
 	mux.HandleFunc("GET /api/tasks/{id}/stream", s.handleStreamTask)
 	mux.HandleFunc("POST /api/tasks/{id}/approve", s.handleApprove)
+	mux.HandleFunc("GET /{$}", s.handleIndex)
 
-	return authMiddleware(s.token, map[string]bool{"/healthz": true}, mux)
+	exempt := map[string]bool{"/healthz": true, "/": true}
+	return authMiddleware(s.token, exempt, mux)
+}
+
+func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	b, err := fs.ReadFile(webFS, "web/index.html")
+	if err != nil {
+		http.Error(w, "web assets missing", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Write(b)
 }
 
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
@@ -45,14 +64,7 @@ func (s *Server) handlePostTask(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "agent and prompt are required", http.StatusBadRequest)
 		return
 	}
-	known := false
-	for _, id := range s.mgr.List() {
-		if id == body.Agent {
-			known = true
-			break
-		}
-	}
-	if !known {
+	if !slices.Contains(s.mgr.List(), body.Agent) {
 		http.Error(w, fmt.Sprintf("unknown agent %q", body.Agent), http.StatusBadRequest)
 		return
 	}
