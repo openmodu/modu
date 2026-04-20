@@ -23,10 +23,11 @@ type Server struct {
 
 // Options configures NewServer.
 type Options struct {
-	Manager     *manager.Manager
-	Store       *Store
-	Token       string // empty = auth disabled (dev/test)
-	WorkersEach int    // workers per agent id (default 1)
+	Manager      *manager.Manager
+	Store        *Store
+	Token        string   // empty = auth disabled (dev/test)
+	WorkersEach  int      // workers per agent id (default 1)
+	ExtraRunners []Runner // native (non-ACP) runners to register alongside ACP agents
 }
 
 // NewServer wires the router and starts worker goroutines. Call Close to
@@ -35,9 +36,13 @@ func NewServer(opts Options) *Server {
 	if opts.WorkersEach <= 0 {
 		opts.WorkersEach = 1
 	}
+
 	registry := NewRegistry()
 	for _, id := range opts.Manager.List() {
 		registry.Register(newACPRunner(id, opts.Manager))
+	}
+	for _, rn := range opts.ExtraRunners {
+		registry.Register(rn)
 	}
 
 	s := &Server{
@@ -50,7 +55,7 @@ func NewServer(opts Options) *Server {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
-	for _, id := range s.mgr.List() {
+	for _, id := range registry.List() {
 		for i := 0; i < opts.WorkersEach; i++ {
 			s.workers.Add(1)
 			go func(agentID string) {

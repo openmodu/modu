@@ -47,7 +47,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"agents": s.mgr.List()})
+	writeJSON(w, http.StatusOK, map[string]any{"agents": s.registry.List()})
 }
 
 func (s *Server) handlePostTask(w http.ResponseWriter, r *http.Request) {
@@ -64,7 +64,7 @@ func (s *Server) handlePostTask(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "agent and prompt are required", http.StatusBadRequest)
 		return
 	}
-	if !slices.Contains(s.mgr.List(), body.Agent) {
+	if !slices.Contains(s.registry.List(), body.Agent) {
 		http.Error(w, fmt.Sprintf("unknown agent %q", body.Agent), http.StatusBadRequest)
 		return
 	}

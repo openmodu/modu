@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/openmodu/modu/pkg/acp/manager"
+	"github.com/openmodu/modu/pkg/providers/gemini"
 )
 
 func main() {
@@ -48,11 +49,27 @@ func main() {
 
 	store := NewStore(128)
 	mgr := manager.New(cfg, hooksFor(store))
+
+	var extras []Runner
+	if apiKey := os.Getenv("GOOGLE_API_KEY"); apiKey != "" {
+		model := os.Getenv("GEMINI_MODEL")
+		p, err := gemini.New(context.Background(), apiKey, "gemini", model)
+		if err != nil {
+			log.Fatalf("acp-gateway: init gemini: %v", err)
+		}
+		if model == "" {
+			model = gemini.DefaultModel
+		}
+		extras = append(extras, newNativeRunner("gemini", p, model))
+		log.Printf("[acp-gateway] gemini runner registered (model=%s)", model)
+	}
+
 	srv := NewServer(Options{
-		Manager:     mgr,
-		Store:       store,
-		Token:       os.Getenv("MODU_ACP_TOKEN"),
-		WorkersEach: *workers,
+		Manager:      mgr,
+		Store:        store,
+		Token:        os.Getenv("MODU_ACP_TOKEN"),
+		WorkersEach:  *workers,
+		ExtraRunners: extras,
 	})
 
 	httpSrv := &http.Server{
