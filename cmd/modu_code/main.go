@@ -30,6 +30,7 @@ import (
 	"github.com/openmodu/modu/pkg/coding_agent/modes"
 	"github.com/openmodu/modu/pkg/coding_agent/modes/rpc"
 
+	"github.com/openmodu/modu/cmd/modu_code/internal/acp"
 	"github.com/openmodu/modu/cmd/modu_code/internal/mailboxrt"
 	"github.com/openmodu/modu/cmd/modu_code/internal/provider"
 	"github.com/openmodu/modu/cmd/modu_code/internal/ui"
@@ -41,6 +42,7 @@ func main() {
 		printJSON   = flag.Bool("json", false, "with -p: output NDJSON event stream instead of plain text")
 		rpcMode     = flag.Bool("rpc", false, "run in RPC mode: JSON-line protocol over stdin/stdout")
 		noApprove   = flag.Bool("no-approve", false, "skip user approval for tool executions (auto-allow all)")
+		acpMode     = flag.Bool("acp", false, "run as ACP stdio server (JSON-RPC 2.0 LDJSON)")
 	)
 	flag.Parse()
 
@@ -113,6 +115,21 @@ func main() {
 		}()
 		if err := rpc.NewRpcMode(session).Run(ctx); err != nil && err != context.Canceled {
 			fmt.Fprintf(os.Stderr, "rpc error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if *acpMode {
+		ctx, cancel := context.WithCancel(context.Background())
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		go func() {
+			<-sigCh
+			cancel()
+		}()
+		if err := acp.New(session).Run(ctx); err != nil && err != context.Canceled {
+			fmt.Fprintf(os.Stderr, "acp error: %v\n", err)
 			os.Exit(1)
 		}
 		return
