@@ -71,7 +71,7 @@ func main() {
 		defer rt.Close()
 	}
 
-	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+	sessionOpts := coding_agent.CodingSessionOptions{
 		Cwd:           cwd,
 		AgentDir:      agentDir,
 		Model:         model,
@@ -81,7 +81,13 @@ func main() {
 		ExtraSubagentDirs: []string{
 			exampleAgentsDir,
 		},
-	})
+	}
+	if *acpMode {
+		sessionOpts.CustomSystemPrompt = "You are Modu Code, an AI coding assistant. " +
+			"Do not refer to yourself as Claude, GPT, Gemini, or any other model name. " +
+			"You are Modu Code."
+	}
+	session, err := coding_agent.NewCodingSession(sessionOpts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create session: %v\n", err)
 		os.Exit(1)
