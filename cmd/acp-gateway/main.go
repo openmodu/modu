@@ -14,6 +14,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"flag"
 	"log"
 	"net/http"
@@ -27,9 +28,10 @@ import (
 
 func main() {
 	var (
-		addr     = flag.String("addr", ":7080", "HTTP listen address")
-		cfgPath  = flag.String("config", "", "path to acp.config.json (empty = default lookup)")
-		workers  = flag.Int("workers", 1, "workers per agent")
+		addr    = flag.String("addr", ":7080", "HTTP listen address")
+		cfgPath = flag.String("config", "", "path to acp.config.json (empty = default lookup)")
+		workers = flag.Int("workers", 1, "workers per agent")
+		dbPath  = flag.String("db", "acp-gateway.db", "SQLite database path (empty = no persistence)")
 	)
 	flag.Parse()
 
@@ -46,7 +48,20 @@ func main() {
 		log.Fatalf("acp-gateway: load config: %v", err)
 	}
 
-	store := NewStore(128)
+	var db *sql.DB
+	if *dbPath != "" {
+		var dbErr error
+		db, dbErr = openDB(*dbPath)
+		if dbErr != nil {
+			log.Fatalf("acp-gateway: %v", dbErr)
+		}
+		defer db.Close()
+	}
+
+	store := NewStore(128, db)
+	if err := dbLoadTasks(db, store); err != nil {
+		log.Printf("[acp-gateway] warn: load tasks: %v", err)
+	}
 	mgr := manager.New(cfg, hooksFor(store))
 	srv := NewServer(Options{
 		Manager:     mgr,

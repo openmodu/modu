@@ -227,7 +227,7 @@ func newHarness(t *testing.T, token string, agentIDs ...string) *harness {
 		agents[id] = newFakeAgent()
 	}
 
-	store := NewStore(32)
+	store := NewStore(32, nil)
 	mgr := manager.New(cfg, hooksFor(store))
 
 	h := &harness{

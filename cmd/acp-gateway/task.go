@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"sync"
@@ -59,6 +60,8 @@ type Store struct {
 	tasks   map[string]*taskEntry
 	queue   chan string
 
+	db *sql.DB // nil = no persistence
+
 	// perms routes permission prompts from workers → SSE subscribers and back:
 	// - Worker calls AwaitPermission which publishes an SSEEvent and blocks on ch.
 	// - HTTP handler calls Approve which sends the optionID on ch.
@@ -92,7 +95,8 @@ type taskEntry struct {
 const eventBufferCap = 256
 
 // NewStore builds a Store with a work-queue capacity of cap tasks.
-func NewStore(cap int) *Store {
+// db may be nil (no persistence).
+func NewStore(cap int, db *sql.DB) *Store {
 	if cap <= 0 {
 		cap = 64
 	}
@@ -101,6 +105,7 @@ func NewStore(cap int) *Store {
 		queue:  make(chan string, cap),
 		perms:  make(map[string]chan string),
 		active: make(map[string]string),
+		db:     db,
 	}
 }
 
@@ -151,6 +156,8 @@ func (s *Store) Publish(agent, prompt, cwd string) (*Task, error) {
 	// if the worker picks the task up immediately and mutates the live entry.
 	snap := *t
 	s.mu.Unlock()
+
+	dbInsertTask(s.db, t)
 
 	// Non-blocking send: if queue is full, reject rather than stall the HTTP
 	// request. In practice 64 is plenty for hobby deployments.
@@ -278,6 +285,7 @@ func (s *Store) markStatus(id string, status TaskStatus, errStr, result string) 
 	e.task.UpdatedAt = time.Now().UTC()
 	snap := *e.task
 	s.mu.Unlock()
+	dbUpdateTask(s.db, &snap)
 	s.publish(id, SSEEvent{Type: "status", Data: snap})
 }
 
