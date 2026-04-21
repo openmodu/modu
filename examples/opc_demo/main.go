@@ -40,7 +40,7 @@ When a command fails, explain the error and suggest fixes.
 func main() {
 	// Provider config - default to local LM Studio
 	baseURL := envOr("OPC_LLM_BASE_URL", "http://192.168.5.149:1234/v1")
-	modelName := envOr("OPC_LLM_MODEL", "qwen/qwen3.5-35b-a3b")
+	modelName := envOr("OPC_LLM_MODEL", "qwen/qwen3.6-35b-a3b")
 	providerID := envOr("OPC_LLM_PROVIDER", "lmstudio")
 
 	providers.Register(openai.New(

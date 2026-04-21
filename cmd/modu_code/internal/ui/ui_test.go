@@ -315,8 +315,8 @@ func TestRenderInputMetaUsesShortenedCwd(t *testing.T) {
 func TestRenderInputMetaDoesNotDuplicateProvider(t *testing.T) {
 	session := newUITestSession(t)
 	model := &types.Model{
-		ID:         "qwen/qwen3.5-35b-a3b",
-		Name:       "qwen/qwen3.5-35b-a3b (lmstudio)",
+		ID:         "qwen/qwen3.6-35b-a3b",
+		Name:       "qwen/qwen3.6-35b-a3b (lmstudio)",
 		ProviderID: "lmstudio",
 	}
 	m := newUIModel(context.Background(), session, model, nil, "", nil, nil, "")
@@ -439,8 +439,8 @@ func TestViewportConversationWrapsWithinViewportWidth(t *testing.T) {
 func TestRenderInputAreaTruncatesMetaWhenNarrow(t *testing.T) {
 	session := newUITestSession(t)
 	model := &types.Model{
-		ID:         "qwen/qwen3.5-35b-a3b",
-		Name:       "qwen/qwen3.5-35b-a3b",
+		ID:         "qwen/qwen3.6-35b-a3b",
+		Name:       "qwen/qwen3.6-35b-a3b",
 		ProviderID: "lmstudio",
 	}
 	m := newUIModel(context.Background(), session, model, nil, "", nil, nil, "")

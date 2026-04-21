@@ -12,7 +12,7 @@ import (
 
 const (
 	lmStudioBaseURL = "http://192.168.5.149:1234/v1"
-	lmStudioModel   = "qwen/qwen3.5-35b-a3b"
+	lmStudioModel   = "qwen/qwen3.6-35b-a3b"
 
 	lmStudioTimeout = 3 * time.Minute
 )

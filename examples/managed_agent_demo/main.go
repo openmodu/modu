@@ -223,7 +223,7 @@ func main() {
 	}
 	modelID := os.Getenv("MODEL_ID")
 	if modelID == "" {
-		modelID = "qwen/qwen3.5-35b-a3b"
+		modelID = "qwen/qwen3.6-35b-a3b"
 	}
 
 	providers.Register(openai.New("lmstudio", openai.WithBaseURL(baseURL)))

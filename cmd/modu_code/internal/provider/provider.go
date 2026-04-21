@@ -92,7 +92,7 @@ func Resolve() (*types.Model, func(string) (string, error)) {
 	if lmModel, lmURL := os.Getenv("LMSTUDIO_MODEL"), os.Getenv("LMSTUDIO_BASE_URL"); lmModel != "" || lmURL != "" {
 		modelName := lmModel
 		if modelName == "" {
-			modelName = "qwen/qwen3.5-35b-a3b"
+			modelName = "qwen/qwen3.6-35b-a3b"
 		}
 		baseURL := lmURL
 		if baseURL == "" {
@@ -109,7 +109,7 @@ func Resolve() (*types.Model, func(string) (string, error)) {
 
 	return registerConfig(Config{
 		Provider: "lmstudio",
-		Model:    "qwen/qwen3.5-35b-a3b",
+		Model:    "qwen/qwen3.6-35b-a3b",
 		BaseURL:  "http://192.168.5.149:1234/v1",
 		APIKey:   "lm-studio",
 	})

@@ -75,7 +75,7 @@ func main() {
 	modelID := os.Getenv("MOMS_MODEL")
 	if modelID == "" {
 		modelID = "zai-org/glm-4.7-flash"
-		// modelID = "qwen/qwen3.5-35b-a3b"
+		// modelID = "qwen/qwen3.6-35b-a3b"
 	}
 
 	providers.Register(openai.New(localProviderID,
