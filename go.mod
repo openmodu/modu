@@ -1,6 +1,6 @@
 module github.com/openmodu/modu
 
-go 1.25.0
+go 1.26.2
 
 require (
 	github.com/alecthomas/chroma/v2 v2.23.1
@@ -26,6 +26,7 @@ require (
 	golang.org/x/net v0.52.0
 	golang.org/x/term v0.41.0
 	golang.org/x/text v0.35.0
+	google.golang.org/genai v1.54.0
 	modernc.org/sqlite v1.47.0
 )
 
@@ -84,7 +85,6 @@ require (
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/tools v0.43.0 // indirect
-	google.golang.org/genai v1.54.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260401024825-9d38bb4040a9 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260401024825-9d38bb4040a9 // indirect
 	google.golang.org/grpc v1.80.0 // indirect
