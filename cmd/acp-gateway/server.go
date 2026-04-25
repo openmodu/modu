@@ -15,6 +15,7 @@ type Server struct {
 	store    *Store
 	registry *Registry
 	token    string
+	workdir  string
 	handler  http.Handler
 
 	workers sync.WaitGroup
@@ -28,6 +29,7 @@ type Options struct {
 	Token        string   // empty = auth disabled (dev/test)
 	WorkersEach  int      // workers per agent id (default 1)
 	ExtraRunners []Runner // native (non-ACP) runners to register alongside ACP agents
+	Workdir      string   // default cwd for tasks; empty = process cwd
 }
 
 // NewServer wires the router and starts worker goroutines. Call Close to
@@ -50,6 +52,7 @@ func NewServer(opts Options) *Server {
 		store:    opts.Store,
 		registry: registry,
 		token:    opts.Token,
+		workdir:  opts.Workdir,
 	}
 	s.handler = s.buildRouter()
 

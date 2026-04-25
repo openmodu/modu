@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/openmodu/modu/pkg/types"
 )
@@ -21,6 +24,8 @@ func (s *Server) buildRouter() http.Handler {
 
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /api/agents", s.handleListAgents)
+	mux.HandleFunc("GET /api/workdir", s.handleGetWorkdir)
+	mux.HandleFunc("GET /api/files", s.handleListFiles)
 	mux.HandleFunc("POST /api/tasks", s.handlePostTask)
 	mux.HandleFunc("GET /api/tasks/{id}", s.handleGetTask)
 	mux.HandleFunc("GET /api/tasks/{id}/stream", s.handleStreamTask)
@@ -50,6 +55,61 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"agents": s.registry.List()})
 }
 
+func (s *Server) handleGetWorkdir(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"workdir": s.workdir})
+}
+
+// FileEntry is one item returned by GET /api/files.
+type FileEntry struct {
+	Name    string    `json:"name"`
+	Path    string    `json:"path"` // relative to workdir
+	IsDir   bool      `json:"isDir"`
+	Size    int64     `json:"size,omitempty"`
+	ModTime time.Time `json:"modTime"`
+}
+
+func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
+	rel := r.URL.Query().Get("path")
+
+	// Resolve and jail to workdir.
+	target := filepath.Join(s.workdir, filepath.FromSlash(rel))
+	target = filepath.Clean(target)
+	if !strings.HasPrefix(target, s.workdir) {
+		http.Error(w, "path outside workdir", http.StatusBadRequest)
+		return
+	}
+
+	entries, err := os.ReadDir(target)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "not found", http.StatusNotFound)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	files := make([]FileEntry, 0, len(entries))
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		entryRel, _ := filepath.Rel(s.workdir, filepath.Join(target, e.Name()))
+		fe := FileEntry{
+			Name:    e.Name(),
+			Path:    filepath.ToSlash(entryRel),
+			IsDir:   e.IsDir(),
+			ModTime: info.ModTime(),
+		}
+		if !e.IsDir() {
+			fe.Size = info.Size()
+		}
+		files = append(files, fe)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"workdir": s.workdir, "path": filepath.ToSlash(rel), "files": files})
+}
+
 func (s *Server) handlePostTask(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Agent  string `json:"agent"`
@@ -69,7 +129,11 @@ func (s *Server) handlePostTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	t, err := s.store.Publish(body.Agent, body.Prompt, body.Cwd)
+	cwd := body.Cwd
+	if cwd == "" {
+		cwd = s.workdir
+	}
+	t, err := s.store.Publish(body.Agent, body.Prompt, cwd)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return

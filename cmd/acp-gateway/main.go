@@ -6,6 +6,8 @@
 //
 //	GET  /healthz
 //	GET  /api/agents
+//	GET  /api/workdir                return current default working directory
+//	GET  /api/files?path=subdir      list files/dirs relative to workdir
 //	POST /api/tasks                  {agent, prompt, cwd}  → {id, status, ...}
 //	GET  /api/tasks/{id}
 //	GET  /api/tasks/{id}/stream      Server-Sent Events
@@ -32,6 +34,7 @@ func main() {
 		cfgPath = flag.String("config", "", "path to acp.config.json (empty = default lookup)")
 		workers = flag.Int("workers", 1, "workers per agent")
 		dbPath  = flag.String("db", "acp-gateway.db", "SQLite database path (empty = no persistence)")
+		cwd     = flag.String("cwd", "", "default working directory for tasks (overrides config workdir)")
 	)
 	flag.Parse()
 
@@ -62,12 +65,22 @@ func main() {
 	if err := dbLoadTasks(db, store); err != nil {
 		log.Printf("[acp-gateway] warn: load tasks: %v", err)
 	}
+	// Resolve workdir: CLI flag > config file > process cwd.
+	workdir := *cwd
+	if workdir == "" {
+		workdir = cfg.Workdir
+	}
+	if workdir == "" {
+		workdir, _ = os.Getwd()
+	}
+
 	mgr := manager.New(cfg, hooksFor(store))
 	srv := NewServer(Options{
 		Manager:     mgr,
 		Store:       store,
 		Token:       os.Getenv("MODU_ACP_TOKEN"),
 		WorkersEach: *workers,
+		Workdir:     workdir,
 	})
 
 	httpSrv := &http.Server{

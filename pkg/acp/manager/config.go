@@ -25,6 +25,7 @@ type Config struct {
 	Version      int           `json:"version,omitempty"`
 	Agents       []AgentConfig `json:"agents"`
 	DefaultAgent string        `json:"defaultAgent,omitempty"`
+	Workdir      string        `json:"workdir,omitempty"` // default cwd for tasks; empty = process cwd
 }
 
 // DefaultConfigPaths is the lookup order LoadConfig uses when called with
