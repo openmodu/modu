@@ -29,6 +29,7 @@ func (s *Server) buildRouter() http.Handler {
 	mux.HandleFunc("GET /api/agents", s.handleListAgents)
 	mux.HandleFunc("GET /api/workdir", s.handleGetWorkdir)
 	mux.HandleFunc("GET /api/files", s.handleListFiles)
+	mux.HandleFunc("GET /api/browse", s.handleBrowse)
 
 	// Projects
 	mux.HandleFunc("GET /api/projects", s.handleListProjects)
@@ -89,6 +90,71 @@ type FileEntry struct {
 
 func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
 	s.listFilesIn(w, r, s.workdir)
+}
+
+// handleBrowse lists any absolute path on the machine so remote clients can
+// pick a project directory without knowing the filesystem layout in advance.
+// Query params:
+//
+//	path — absolute path to list (default: user home directory)
+//	dirs — if "true", return only directories (useful for project picker)
+func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
+	target := r.URL.Query().Get("path")
+	if target == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			http.Error(w, "cannot determine home dir", http.StatusInternalServerError)
+			return
+		}
+		target = home
+	}
+	if !filepath.IsAbs(target) {
+		http.Error(w, "path must be absolute", http.StatusBadRequest)
+		return
+	}
+	target = filepath.Clean(target)
+
+	entries, err := os.ReadDir(target)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "not found", http.StatusNotFound)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	dirsOnly := r.URL.Query().Get("dirs") == "true"
+	files := make([]FileEntry, 0, len(entries))
+	for _, e := range entries {
+		if dirsOnly && !e.IsDir() {
+			continue
+		}
+		// Skip hidden entries (dot-files) unless the caller explicitly
+		// navigated into a hidden directory.
+		if strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		fe := FileEntry{
+			Name:    e.Name(),
+			Path:    filepath.ToSlash(filepath.Join(target, e.Name())),
+			IsDir:   e.IsDir(),
+			ModTime: info.ModTime(),
+		}
+		if !e.IsDir() {
+			fe.Size = info.Size()
+		}
+		files = append(files, fe)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"path":   filepath.ToSlash(target),
+		"parent": filepath.ToSlash(filepath.Dir(target)),
+		"files":  files,
+	})
 }
 
 func (s *Server) handleProjectFiles(w http.ResponseWriter, r *http.Request) {

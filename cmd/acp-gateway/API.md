@@ -49,6 +49,7 @@ Project ──► Session ──► Turn
 | GET  | `/api/agents`                                       | yes | list configured agents |
 | GET  | `/api/workdir`                                      | yes | default working directory |
 | GET  | `/api/files?path=`                                  | yes | list files in workdir |
+| GET  | `/api/browse?path=&dirs=true`                       | yes | browse any absolute path (project picker) |
 | GET  | `/api/projects`                                     | yes | list all projects |
 | POST | `/api/projects`                                     | yes | create project |
 | GET  | `/api/projects/{id}`                                | yes | get project |
@@ -166,6 +167,37 @@ Lists configured agent IDs.
 ```json
 {"agents": ["codex", "claude", "gemini", "modu"]}
 ```
+
+---
+
+### `GET /api/browse?path=/Users/me&dirs=true`
+
+Browses **any absolute path** on the gateway machine. Not restricted to
+workdir — designed as a remote filesystem picker so clients can discover
+project directories without prior knowledge of the machine layout.
+
+Query params:
+- `path` — absolute path to list (default: user home directory)
+- `dirs=true` — return only directories (ideal for a project folder picker)
+
+Hidden entries (dot-files/dot-dirs) are omitted unless the caller explicitly
+navigates into a hidden directory.
+
+```json
+{
+  "path":   "/Users/me/Code",
+  "parent": "/Users/me",
+  "files": [
+    {"name": "my-app",  "path": "/Users/me/Code/my-app",  "isDir": true, "modTime": "..."},
+    {"name": "modu",    "path": "/Users/me/Code/modu",    "isDir": true, "modTime": "..."}
+  ]
+}
+```
+
+Typical project-picker flow:
+1. `GET /api/browse` → home dir contents
+2. Navigate with `GET /api/browse?path=/Users/me/Code&dirs=true`
+3. User picks a folder → `POST /api/projects` with that path
 
 ---
 
