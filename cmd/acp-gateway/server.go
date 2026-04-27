@@ -91,7 +91,7 @@ func (s *Server) Close() error {
 func hooksFor(store *Store) manager.Hooks {
 	return manager.Hooks{
 		OnPermission: func(agent manager.AgentConfig, cwd string, req *client.PermissionRequest) string {
-			tid := store.ActiveTaskFor(agent.ID, cwd)
+			tid := store.ActiveTurnFor(agent.ID, cwd)
 			if tid == "" {
 				// No task claims this (agent, cwd) — deny.
 				for _, o := range req.Options {

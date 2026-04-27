@@ -9,9 +9,8 @@ import (
 	"github.com/openmodu/modu/pkg/types"
 )
 
-// runWorker is the main loop of one gateway worker goroutine. It blocks on
-// the store's work queue, runs matching tasks end-to-end via the Registry,
-// and returns when ctx is cancelled.
+// runWorker is the main loop for one gateway worker goroutine.
+// It pulls turn IDs from the store queue and executes them.
 func runWorker(ctx context.Context, agentID string, store *Store, reg *Registry) {
 	for {
 		select {
@@ -21,35 +20,31 @@ func runWorker(ctx context.Context, agentID string, store *Store, reg *Registry)
 			if !ok {
 				return
 			}
-			t, found := store.Get(id)
+			t, found := store.GetTurn(id)
 			if !found {
 				continue
 			}
 			if t.Agent != agentID {
-				// Not for this worker — re-queue. A different worker picks it up.
-				// (Best-effort; if the queue is backed up this can spin, but the
-				// realistic load is N workers for M agents at low QPS.)
+				// Re-queue for the matching worker.
 				go func() { store.queue <- id }()
 				continue
 			}
 			runner, ok := reg.Get(t.Agent)
 			if !ok {
-				store.Fail(t.ID, fmt.Sprintf("no runner registered for agent %q", t.Agent))
+				store.FailTurn(t.ID, fmt.Sprintf("no runner registered for agent %q", t.Agent))
 				continue
 			}
-			runTask(ctx, t, store, runner)
+			runTurn(ctx, t, store, runner)
 		}
 	}
 }
 
-// runTask executes one Task against a Runner.
-func runTask(parent context.Context, t *Task, store *Store, runner Runner) {
+// runTurn executes one Turn against a Runner.
+func runTurn(parent context.Context, t *Turn, store *Store, runner Runner) {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 
-	store.Start(t.ID, cancel)
-	// SetActive/ClearActive remain useful for any Runner whose permissions
-	// are routed out-of-band (today: the ACP manager's global hook).
+	store.StartTurn(t.ID, cancel)
 	store.SetActive(t.Agent, t.Cwd, t.ID)
 	defer store.ClearActive(t.Agent, t.Cwd)
 
@@ -65,11 +60,11 @@ func runTask(parent context.Context, t *Task, store *Store, runner Runner) {
 	msg, err := runner.Run(ctx, t.Prompt, t.Cwd, hooks)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
-			store.Fail(t.ID, "cancelled")
+			store.FailTurn(t.ID, "cancelled")
 			return
 		}
-		log.Printf("[acp-gateway] task %s failed: %v", t.ID, err)
-		store.Fail(t.ID, err.Error())
+		log.Printf("[acp-gateway] turn %s failed: %v", t.ID, err)
+		store.FailTurn(t.ID, err.Error())
 		return
 	}
 
@@ -77,5 +72,5 @@ func runTask(parent context.Context, t *Task, store *Store, runner Runner) {
 	if msg != nil {
 		result = assistantText(msg)
 	}
-	store.Complete(t.ID, result)
+	store.CompleteTurn(t.ID, result)
 }

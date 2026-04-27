@@ -23,14 +23,31 @@ func (s *Server) buildRouter() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
+	mux.HandleFunc("GET /", s.handleIndex)
+
+	// Agents + workspace
 	mux.HandleFunc("GET /api/agents", s.handleListAgents)
 	mux.HandleFunc("GET /api/workdir", s.handleGetWorkdir)
 	mux.HandleFunc("GET /api/files", s.handleListFiles)
-	mux.HandleFunc("POST /api/tasks", s.handlePostTask)
-	mux.HandleFunc("GET /api/tasks/{id}", s.handleGetTask)
-	mux.HandleFunc("GET /api/tasks/{id}/stream", s.handleStreamTask)
-	mux.HandleFunc("POST /api/tasks/{id}/approve", s.handleApprove)
-	mux.HandleFunc("GET /{$}", s.handleIndex)
+
+	// Projects
+	mux.HandleFunc("GET /api/projects", s.handleListProjects)
+	mux.HandleFunc("POST /api/projects", s.handleCreateProject)
+	mux.HandleFunc("GET /api/projects/{id}", s.handleGetProject)
+	mux.HandleFunc("DELETE /api/projects/{id}", s.handleDeleteProject)
+	mux.HandleFunc("GET /api/projects/{id}/files", s.handleProjectFiles)
+
+	// Sessions
+	mux.HandleFunc("GET /api/sessions", s.handleListSessions)
+	mux.HandleFunc("POST /api/sessions", s.handleCreateSession)
+	mux.HandleFunc("GET /api/sessions/{id}", s.handleGetSession)
+	mux.HandleFunc("DELETE /api/sessions/{id}", s.handleDeleteSession)
+	mux.HandleFunc("POST /api/sessions/{id}/cancel", s.handleCancelSession)
+
+	// Turns (within a session)
+	mux.HandleFunc("POST /api/sessions/{id}/turns", s.handleAddTurn)
+	mux.HandleFunc("GET /api/sessions/{id}/turns/{turnId}/stream", s.handleStreamTurn)
+	mux.HandleFunc("POST /api/sessions/{id}/turns/{turnId}/approve", s.handleApproveTurn)
 
 	exempt := map[string]bool{"/healthz": true, "/": true}
 	return authMiddleware(s.token, exempt, mux)
@@ -59,26 +76,38 @@ func (s *Server) handleGetWorkdir(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"workdir": s.workdir})
 }
 
-// FileEntry is one item returned by GET /api/files.
+// ---------- files ----------
+
+// FileEntry is one item returned by GET /api/files or /api/projects/{id}/files.
 type FileEntry struct {
 	Name    string    `json:"name"`
-	Path    string    `json:"path"` // relative to workdir
+	Path    string    `json:"path"`
 	IsDir   bool      `json:"isDir"`
 	Size    int64     `json:"size,omitempty"`
 	ModTime time.Time `json:"modTime"`
 }
 
 func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
-	rel := r.URL.Query().Get("path")
+	s.listFilesIn(w, r, s.workdir)
+}
 
-	// Resolve and jail to workdir.
-	target := filepath.Join(s.workdir, filepath.FromSlash(rel))
-	target = filepath.Clean(target)
-	if !strings.HasPrefix(target, s.workdir) {
-		http.Error(w, "path outside workdir", http.StatusBadRequest)
+func (s *Server) handleProjectFiles(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	proj, ok := s.store.GetProject(id)
+	if !ok {
+		http.Error(w, "project not found", http.StatusNotFound)
 		return
 	}
+	s.listFilesIn(w, r, proj.Path)
+}
 
+func (s *Server) listFilesIn(w http.ResponseWriter, r *http.Request, root string) {
+	rel := r.URL.Query().Get("path")
+	target := filepath.Clean(filepath.Join(root, filepath.FromSlash(rel)))
+	if !strings.HasPrefix(target, root) {
+		http.Error(w, "path outside root", http.StatusBadRequest)
+		return
+	}
 	entries, err := os.ReadDir(target)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -88,14 +117,13 @@ func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-
 	files := make([]FileEntry, 0, len(entries))
 	for _, e := range entries {
 		info, err := e.Info()
 		if err != nil {
 			continue
 		}
-		entryRel, _ := filepath.Rel(s.workdir, filepath.Join(target, e.Name()))
+		entryRel, _ := filepath.Rel(root, filepath.Join(target, e.Name()))
 		fe := FileEntry{
 			Name:    e.Name(),
 			Path:    filepath.ToSlash(entryRel),
@@ -107,60 +135,154 @@ func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
 		}
 		files = append(files, fe)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"workdir": s.workdir, "path": filepath.ToSlash(rel), "files": files})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"root":  root,
+		"path":  filepath.ToSlash(rel),
+		"files": files,
+	})
 }
 
-func (s *Server) handlePostTask(w http.ResponseWriter, r *http.Request) {
+// ---------- projects ----------
+
+func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"projects": s.store.ListProjects()})
+}
+
+func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Agent  string `json:"agent"`
-		Prompt string `json:"prompt"`
-		Cwd    string `json:"cwd"`
+		Name string `json:"name"`
+		Path string `json:"path"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
-	if body.Agent == "" || body.Prompt == "" {
-		http.Error(w, "agent and prompt are required", http.StatusBadRequest)
+	p, err := s.store.CreateProject(body.Name, body.Path)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusCreated, p)
+}
+
+func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	p, ok := s.store.GetProject(id)
+	if !ok {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !s.store.DeleteProject(id) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ---------- sessions ----------
+
+func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
+	projectID := r.URL.Query().Get("projectId")
+	writeJSON(w, http.StatusOK, map[string]any{"sessions": s.store.ListSessions(projectID)})
+}
+
+func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ProjectID string `json:"projectId"`
+		Agent     string `json:"agent"`
+		Title     string `json:"title"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if body.ProjectID == "" || body.Agent == "" {
+		http.Error(w, "projectId and agent are required", http.StatusBadRequest)
 		return
 	}
 	if !slices.Contains(s.registry.List(), body.Agent) {
 		http.Error(w, fmt.Sprintf("unknown agent %q", body.Agent), http.StatusBadRequest)
 		return
 	}
-
-	cwd := body.Cwd
-	if cwd == "" {
-		cwd = s.workdir
-	}
-	t, err := s.store.Publish(body.Agent, body.Prompt, cwd)
+	sess, err := s.store.CreateSession(body.ProjectID, body.Agent, body.Title)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, t)
+	writeJSON(w, http.StatusCreated, sess)
 }
 
-func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	t, ok := s.store.Get(id)
+	detail, ok := s.store.GetSessionDetail(id)
 	if !ok {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	writeJSON(w, http.StatusOK, t)
+	writeJSON(w, http.StatusOK, detail)
 }
 
-func (s *Server) handleStreamTask(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if !s.store.DeleteSession(id) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleCancelSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := s.store.GetSession(id); !ok {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	s.store.CancelSession(id)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "cancel requested"})
+}
+
+// ---------- turns ----------
+
+func (s *Server) handleAddTurn(w http.ResponseWriter, r *http.Request) {
+	sessionID := r.PathValue("id")
+	if _, ok := s.store.GetSession(sessionID); !ok {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+	var body struct {
+		Prompt string `json:"prompt"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	turn, err := s.store.AddTurn(sessionID, body.Prompt)
+	if err != nil {
+		if err.Error() == "session already has a running turn" {
+			http.Error(w, err.Error(), http.StatusConflict)
+		} else {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		}
+		return
+	}
+	writeJSON(w, http.StatusAccepted, turn)
+}
+
+func (s *Server) handleStreamTurn(w http.ResponseWriter, r *http.Request) {
+	turnID := r.PathValue("turnId")
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return
 	}
-	ch, cancel, found := s.store.Subscribe(id)
+	ch, cancel, found := s.store.Subscribe(turnID)
 	if !found {
-		http.Error(w, "not found", http.StatusNotFound)
+		http.Error(w, "turn not found", http.StatusNotFound)
 		return
 	}
 	defer cancel()
@@ -170,9 +292,6 @@ func (s *Server) handleStreamTask(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
-
-	// Subscribe already buffers past events; the first frame the client sees
-	// is the task's initial status or whatever came before it joined.
 
 	for {
 		select {
@@ -187,8 +306,8 @@ func (s *Server) handleStreamTask(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+func (s *Server) handleApproveTurn(w http.ResponseWriter, r *http.Request) {
+	turnID := r.PathValue("turnId")
 	var body struct {
 		ToolCallID string `json:"toolCallId"`
 		OptionID   string `json:"optionId"`
@@ -201,12 +320,14 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "toolCallId and optionId are required", http.StatusBadRequest)
 		return
 	}
-	if !s.store.Approve(id, body.ToolCallID, body.OptionID) {
+	if !s.store.Approve(turnID, body.ToolCallID, body.OptionID) {
 		http.Error(w, "no pending permission for this toolCallId", http.StatusConflict)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "approved"})
 }
+
+// ---------- helpers ----------
 
 // assistantText concatenates all text blocks in an AssistantMessage.
 func assistantText(msg *types.AssistantMessage) string {

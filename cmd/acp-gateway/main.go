@@ -62,8 +62,8 @@ func main() {
 	}
 
 	store := NewStore(128, db)
-	if err := dbLoadTasks(db, store); err != nil {
-		log.Printf("[acp-gateway] warn: load tasks: %v", err)
+	if err := dbLoadAll(db, store); err != nil {
+		log.Printf("[acp-gateway] warn: load data: %v", err)
 	}
 	// Resolve workdir: CLI flag > config file > process cwd.
 	workdir := *cwd

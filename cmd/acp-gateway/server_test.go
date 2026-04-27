@@ -21,10 +21,6 @@ import (
 )
 
 // ---------- fake ACP agent transport ----------
-//
-// The fake responds to initialize / session/new / session/prompt with a
-// scripted stream of session/update notifications. Tests stage behavior by
-// swapping out the promptResponder callback.
 
 type fakeTransport struct {
 	lines  chan []byte
@@ -39,23 +35,13 @@ type fakeAgent struct {
 
 	sessionCounter atomic.Int32
 
-	// promptResponder is called on every session/prompt. It receives the
-	// request msg and a sink to emit session/update notifications with.
-	// It must return the stopReason (or an error to reject the prompt).
 	promptResponder func(msg *jsonrpc.Message, emit func(update map[string]any)) (string, error)
-
-	// reverseRequest, if non-nil, is sent to the client when the prompt
-	// starts — used to exercise session/request_permission routing.
-	reverseRequest *jsonrpc.Request
-
-	// reversePending holds the in-flight reverse-request id → response chan.
-	reversePending map[int]chan *jsonrpc.Message
+	reverseRequest  *jsonrpc.Request
+	reversePending  map[int]chan *jsonrpc.Message
 }
 
 func newFakeAgent() *fakeAgent {
-	return &fakeAgent{
-		reversePending: map[int]chan *jsonrpc.Message{},
-	}
+	return &fakeAgent{reversePending: map[int]chan *jsonrpc.Message{}}
 }
 
 func newFakeTransport(a *fakeAgent) *fakeTransport {
@@ -81,13 +67,10 @@ func (t *fakeTransport) Stop() error {
 func (t *fakeTransport) Lines() <-chan []byte  { return t.lines }
 func (t *fakeTransport) Done() <-chan struct{} { return t.done }
 
-// Write receives a JSON-RPC frame from the Client. We dispatch it on a
-// goroutine to avoid blocking the writer if a responder produces many
-// session/update frames.
 func (t *fakeTransport) Write(line []byte) error {
 	var msg jsonrpc.Message
 	if err := json.Unmarshal(line, &msg); err != nil {
-		return nil // ignore malformed
+		return nil
 	}
 	go t.dispatch(&msg)
 	return nil
@@ -96,7 +79,6 @@ func (t *fakeTransport) Write(line []byte) error {
 func (t *fakeTransport) dispatch(msg *jsonrpc.Message) {
 	switch {
 	case msg.IsResponse():
-		// reverse-RPC response from the client — resolve the waiter.
 		if msg.ID == nil {
 			return
 		}
@@ -111,8 +93,6 @@ func (t *fakeTransport) dispatch(msg *jsonrpc.Message) {
 		}
 	case msg.IsRequest():
 		t.handleRequest(msg)
-	case msg.IsNotification():
-		// session/cancel: ignore (test may assert on it elsewhere).
 	}
 }
 
@@ -135,7 +115,6 @@ func (t *fakeTransport) handleRequest(msg *jsonrpc.Message) {
 		}
 		_ = msg.ParseParams(&p)
 
-		// If configured, fire a reverse request before replying.
 		if t.agent.reverseRequest != nil {
 			rr := *t.agent.reverseRequest
 			t.sendReverseRequest(p.SessionID, &rr)
@@ -163,10 +142,7 @@ func (t *fakeTransport) handleRequest(msg *jsonrpc.Message) {
 	}
 }
 
-// sendReverseRequest issues a request to the Client (permission / fs) and
-// waits for its response so tests can assert on it.
 func (t *fakeTransport) sendReverseRequest(sessionID string, req *jsonrpc.Request) *jsonrpc.Message {
-	// Rewrite params to inject sessionId for methods that expect one.
 	if params, ok := req.Params.(map[string]any); ok {
 		if _, has := params["sessionId"]; !has && sessionID != "" {
 			params["sessionId"] = sessionID
@@ -208,7 +184,7 @@ type harness struct {
 	ts         *httptest.Server
 	store      *Store
 	agents     map[string]*fakeAgent
-	transports map[string]*fakeTransport // key = agentID|cwd
+	transports map[string]*fakeTransport
 	transMu    sync.Mutex
 }
 
@@ -235,9 +211,6 @@ func newHarness(t *testing.T, token string, agentIDs ...string) *harness {
 		agents:     agents,
 		transports: map[string]*fakeTransport{},
 	}
-	// Inject a per-(agent,cwd) fake transport keyed so tests can reach it
-	// for reverse-RPC staging. Note the factory has no cwd; we tag by agent
-	// and accept that tests using one cwd per agent will see distinct keys.
 	mgr.SetNewProcess(func(cfg manager.AgentConfig) client.Transport {
 		tx := newFakeTransport(agents[cfg.ID])
 		h.transMu.Lock()
@@ -282,6 +255,48 @@ func (h *harness) do(t *testing.T, method, path, token string, body any) *http.R
 	return resp
 }
 
+// postedTurn bundles the created turn with its session for URL construction.
+type postedTurn struct {
+	Turn
+	SessionID string
+}
+
+// postTurn creates a project + session + turn in one shot (test helper).
+func postTurn(t *testing.T, h *harness, agent, prompt string) postedTurn {
+	t.Helper()
+
+	// 1. Create project.
+	resp := h.do(t, "POST", "/api/projects", "", map[string]any{
+		"name": "test", "path": "/tmp",
+	})
+	var proj Project
+	_ = json.NewDecoder(resp.Body).Decode(&proj)
+	resp.Body.Close()
+
+	// 2. Create session.
+	resp = h.do(t, "POST", "/api/sessions", "", map[string]any{
+		"projectId": proj.ID, "agent": agent,
+	})
+	var sess Session
+	_ = json.NewDecoder(resp.Body).Decode(&sess)
+	resp.Body.Close()
+
+	// 3. Add turn.
+	resp = h.do(t, "POST", "/api/sessions/"+sess.ID+"/turns", "", map[string]any{
+		"prompt": prompt,
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("add turn status = %d: %s", resp.StatusCode, b)
+	}
+	var turn Turn
+	if err := json.NewDecoder(resp.Body).Decode(&turn); err != nil {
+		t.Fatalf("decode turn: %v", err)
+	}
+	return postedTurn{Turn: turn, SessionID: sess.ID}
+}
+
 // ---------- tests ----------
 
 func TestHealthz_NoAuth(t *testing.T) {
@@ -295,19 +310,16 @@ func TestHealthz_NoAuth(t *testing.T) {
 
 func TestAuthRequired(t *testing.T) {
 	h := newHarness(t, "secret")
-	// no token
 	resp := h.do(t, "GET", "/api/agents", "", nil)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("no-token status = %d, want 401", resp.StatusCode)
 	}
-	// wrong token
 	resp = h.do(t, "GET", "/api/agents", "wrong", nil)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("wrong-token status = %d, want 401", resp.StatusCode)
 	}
-	// right token
 	resp = h.do(t, "GET", "/api/agents", "secret", nil)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -328,7 +340,63 @@ func TestListAgents(t *testing.T) {
 	}
 }
 
-func TestPostTask_Publishes(t *testing.T) {
+func TestProject_CRUD(t *testing.T) {
+	h := newHarness(t, "")
+
+	// Create
+	resp := h.do(t, "POST", "/api/projects", "", map[string]any{
+		"name": "myproject", "path": "/tmp",
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d", resp.StatusCode)
+	}
+	var proj Project
+	_ = json.NewDecoder(resp.Body).Decode(&proj)
+	if proj.ID == "" || proj.Name != "myproject" {
+		t.Errorf("project = %+v", proj)
+	}
+
+	// List
+	resp2 := h.do(t, "GET", "/api/projects", "", nil)
+	defer resp2.Body.Close()
+	var list struct {
+		Projects []Project `json:"projects"`
+	}
+	_ = json.NewDecoder(resp2.Body).Decode(&list)
+	if len(list.Projects) != 1 {
+		t.Errorf("projects count = %d", len(list.Projects))
+	}
+
+	// Delete
+	resp3 := h.do(t, "DELETE", "/api/projects/"+proj.ID, "", nil)
+	resp3.Body.Close()
+	if resp3.StatusCode != http.StatusNoContent {
+		t.Errorf("delete status = %d", resp3.StatusCode)
+	}
+}
+
+func TestSession_CreateAndGet(t *testing.T) {
+	h := newHarness(t, "")
+	h.agents["claude"].promptResponder = func(_ *jsonrpc.Message, _ func(map[string]any)) (string, error) {
+		return "end_turn", nil
+	}
+
+	pt := postTurn(t, h, "claude", "hello")
+	if pt.Turn.ID == "" {
+		t.Fatal("empty turn id")
+	}
+
+	resp := h.do(t, "GET", "/api/sessions/"+pt.SessionID, "", nil)
+	defer resp.Body.Close()
+	var detail SessionDetail
+	_ = json.NewDecoder(resp.Body).Decode(&detail)
+	if detail.ID != pt.SessionID {
+		t.Errorf("session id = %q", detail.ID)
+	}
+}
+
+func TestAddTurn_Publishes(t *testing.T) {
 	h := newHarness(t, "")
 	h.agents["claude"].promptResponder = func(msg *jsonrpc.Message, emit func(map[string]any)) (string, error) {
 		emit(map[string]any{
@@ -338,28 +406,27 @@ func TestPostTask_Publishes(t *testing.T) {
 		return "end_turn", nil
 	}
 
-	resp := h.do(t, "POST", "/api/tasks", "", map[string]any{
-		"agent": "claude", "prompt": "hi", "cwd": "/tmp",
-	})
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusAccepted {
-		b, _ := io.ReadAll(resp.Body)
-		t.Fatalf("status = %d: %s", resp.StatusCode, b)
-	}
-	var tk Task
-	_ = json.NewDecoder(resp.Body).Decode(&tk)
-	if tk.ID == "" {
+	pt := postTurn(t, h, "claude", "hi")
+	if pt.Turn.ID == "" {
 		t.Error("empty id")
 	}
-	if tk.Agent != "claude" || tk.Prompt != "hi" {
-		t.Errorf("task = %+v", tk)
+	if pt.Turn.Agent != "claude" || pt.Turn.Prompt != "hi" {
+		t.Errorf("turn = %+v", pt.Turn)
 	}
 }
 
-func TestPostTask_UnknownAgent(t *testing.T) {
+func TestAddTurn_UnknownAgent(t *testing.T) {
 	h := newHarness(t, "")
-	resp := h.do(t, "POST", "/api/tasks", "", map[string]any{
-		"agent": "ghost", "prompt": "hi",
+
+	// Create project first.
+	resp := h.do(t, "POST", "/api/projects", "", map[string]any{"name": "p", "path": "/tmp"})
+	var proj Project
+	_ = json.NewDecoder(resp.Body).Decode(&proj)
+	resp.Body.Close()
+
+	// Try to create session with unknown agent.
+	resp = h.do(t, "POST", "/api/sessions", "", map[string]any{
+		"projectId": proj.ID, "agent": "ghost",
 	})
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
@@ -367,16 +434,7 @@ func TestPostTask_UnknownAgent(t *testing.T) {
 	}
 }
 
-func TestPostTask_MissingFields(t *testing.T) {
-	h := newHarness(t, "")
-	resp := h.do(t, "POST", "/api/tasks", "", map[string]any{"agent": "claude"})
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400", resp.StatusCode)
-	}
-}
-
-func TestGetTask_Status(t *testing.T) {
+func TestTurnStatus_CompletedAfterRun(t *testing.T) {
 	h := newHarness(t, "")
 	h.agents["claude"].promptResponder = func(msg *jsonrpc.Message, emit func(map[string]any)) (string, error) {
 		emit(map[string]any{
@@ -386,30 +444,25 @@ func TestGetTask_Status(t *testing.T) {
 		return "end_turn", nil
 	}
 
-	tk := postTask(t, h, "claude", "what?")
+	pt := postTurn(t, h, "claude", "what?")
 	waitFor(t, func() bool {
-		cur, _ := h.store.Get(tk.ID)
-		return cur.Status == TaskCompleted
+		cur, _ := h.store.GetTurn(pt.Turn.ID)
+		return cur.Status == TurnCompleted
 	}, 2*time.Second)
 
-	resp := h.do(t, "GET", "/api/tasks/"+tk.ID, "", nil)
+	resp := h.do(t, "GET", "/api/sessions/"+pt.SessionID, "", nil)
 	defer resp.Body.Close()
-	var got Task
-	_ = json.NewDecoder(resp.Body).Decode(&got)
-	if got.Status != TaskCompleted {
+	var detail SessionDetail
+	_ = json.NewDecoder(resp.Body).Decode(&detail)
+	if len(detail.Turns) == 0 {
+		t.Fatal("no turns in detail")
+	}
+	got := detail.Turns[0]
+	if got.Status != TurnCompleted {
 		t.Errorf("status = %q", got.Status)
 	}
 	if got.Result != "42" {
 		t.Errorf("result = %q", got.Result)
-	}
-}
-
-func TestGetTask_NotFound(t *testing.T) {
-	h := newHarness(t, "")
-	resp := h.do(t, "GET", "/api/tasks/nope", "", nil)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("status = %d", resp.StatusCode)
 	}
 }
 
@@ -425,9 +478,10 @@ func TestStreamSSE(t *testing.T) {
 		return "end_turn", nil
 	}
 
-	tk := postTask(t, h, "claude", "greet")
+	pt := postTurn(t, h, "claude", "greet")
+	streamURL := fmt.Sprintf("/api/sessions/%s/turns/%s/stream", pt.SessionID, pt.Turn.ID)
 
-	req, _ := http.NewRequest("GET", h.ts.URL+"/api/tasks/"+tk.ID+"/stream", nil)
+	req, _ := http.NewRequest("GET", h.ts.URL+streamURL, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	req = req.WithContext(ctx)
@@ -445,8 +499,8 @@ func TestStreamSSE(t *testing.T) {
 		case "event":
 			sawEvent = true
 		case "status":
-			var tk Task
-			if json.Unmarshal(f.data, &tk) == nil && tk.Status == TaskCompleted {
+			var turn Turn
+			if json.Unmarshal(f.data, &turn) == nil && turn.Status == TurnCompleted {
 				sawDone = true
 			}
 		}
@@ -462,7 +516,6 @@ func TestStreamSSE(t *testing.T) {
 func TestApprove_Forwards(t *testing.T) {
 	h := newHarness(t, "")
 
-	// Stage: agent pushes a permission request before replying.
 	permResp := make(chan string, 1)
 	h.agents["claude"].reverseRequest = jsonrpc.NewRequest(
 		99, "session/request_permission",
@@ -479,15 +532,14 @@ func TestApprove_Forwards(t *testing.T) {
 		},
 	)
 	h.agents["claude"].promptResponder = func(msg *jsonrpc.Message, emit func(map[string]any)) (string, error) {
-		// The reverse-RPC fires before this returns, giving the test time to
-		// POST /approve on the permission SSE it received.
 		return "end_turn", nil
 	}
 
-	tk := postTask(t, h, "claude", "rm -rf")
+	pt := postTurn(t, h, "claude", "rm -rf")
+	streamURL := fmt.Sprintf("/api/sessions/%s/turns/%s/stream", pt.SessionID, pt.Turn.ID)
+	approveURL := fmt.Sprintf("/api/sessions/%s/turns/%s/approve", pt.SessionID, pt.Turn.ID)
 
-	// Subscribe to SSE and wait for the permission frame.
-	req, _ := http.NewRequest("GET", h.ts.URL+"/api/tasks/"+tk.ID+"/stream", nil)
+	req, _ := http.NewRequest("GET", h.ts.URL+streamURL, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	req = req.WithContext(ctx)
@@ -508,9 +560,8 @@ func TestApprove_Forwards(t *testing.T) {
 		if f.event == "permission" {
 			var p PermissionPrompt
 			if json.Unmarshal(f.data, &p) == nil && p.ToolCallID == "tc-1" {
-				// Approve via HTTP.
 				go func() {
-					ar := h.do(t, "POST", "/api/tasks/"+tk.ID+"/approve", "",
+					ar := h.do(t, "POST", approveURL, "",
 						map[string]string{"toolCallId": "tc-1", "optionId": "allow"})
 					ar.Body.Close()
 					permResp <- "done"
@@ -529,15 +580,19 @@ func TestApprove_Forwards(t *testing.T) {
 	}
 
 	waitFor(t, func() bool {
-		cur, _ := h.store.Get(tk.ID)
-		return cur.Status == TaskCompleted
+		cur, _ := h.store.GetTurn(pt.Turn.ID)
+		return cur.Status == TurnCompleted
 	}, 3*time.Second)
 }
 
 func TestApprove_NoPending(t *testing.T) {
 	h := newHarness(t, "")
-	tk := postTask(t, h, "claude", "hi") // ensure task exists
-	resp := h.do(t, "POST", "/api/tasks/"+tk.ID+"/approve", "",
+	h.agents["claude"].promptResponder = func(_ *jsonrpc.Message, _ func(map[string]any)) (string, error) {
+		return "end_turn", nil
+	}
+	pt := postTurn(t, h, "claude", "hi")
+	approveURL := fmt.Sprintf("/api/sessions/%s/turns/%s/approve", pt.SessionID, pt.Turn.ID)
+	resp := h.do(t, "POST", approveURL, "",
 		map[string]string{"toolCallId": "ghost", "optionId": "allow"})
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusConflict {
@@ -546,23 +601,6 @@ func TestApprove_NoPending(t *testing.T) {
 }
 
 // ---------- helpers ----------
-
-func postTask(t *testing.T, h *harness, agent, prompt string) Task {
-	t.Helper()
-	resp := h.do(t, "POST", "/api/tasks", "", map[string]any{
-		"agent": agent, "prompt": prompt, "cwd": "/tmp",
-	})
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusAccepted {
-		b, _ := io.ReadAll(resp.Body)
-		t.Fatalf("post status = %d: %s", resp.StatusCode, b)
-	}
-	var tk Task
-	if err := json.NewDecoder(resp.Body).Decode(&tk); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	return tk
-}
 
 func waitFor(t *testing.T, cond func() bool, timeout time.Duration) {
 	t.Helper()
@@ -593,9 +631,9 @@ func readSSE(t *testing.T, body io.Reader, timeout time.Duration) []sseFrame {
 		}
 		out = append(out, f)
 		if f.event == "status" {
-			var tk Task
-			if json.Unmarshal(f.data, &tk) == nil &&
-				(tk.Status == TaskCompleted || tk.Status == TaskFailed) {
+			var turn Turn
+			if json.Unmarshal(f.data, &turn) == nil &&
+				(turn.Status == TurnCompleted || turn.Status == TurnFailed) {
 				break
 			}
 		}
