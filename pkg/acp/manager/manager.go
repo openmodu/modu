@@ -11,6 +11,7 @@ package manager
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/openmodu/modu/pkg/acp/client"
@@ -130,6 +131,88 @@ func (m *Manager) Shutdown() error {
 		}
 	}
 	return firstErr
+}
+
+// AddAgent adds a new agent to the manager's config at runtime.
+func (m *Manager) AddAgent(cfg AgentConfig) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, a := range m.cfg.Agents {
+		if a.ID == cfg.ID {
+			return fmt.Errorf("acp/manager: agent %q already exists", cfg.ID)
+		}
+	}
+	m.cfg.Agents = append(m.cfg.Agents, cfg)
+	return nil
+}
+
+// UpdateAgent replaces an existing agent config and stops its running providers.
+func (m *Manager) UpdateAgent(id string, cfg AgentConfig) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i, a := range m.cfg.Agents {
+		if a.ID == id {
+			m.stopAgentProviders(id)
+			m.cfg.Agents[i] = cfg
+			return nil
+		}
+	}
+	return fmt.Errorf("acp/manager: agent %q not found", id)
+}
+
+// RemoveAgent removes an agent config and stops its running providers.
+func (m *Manager) RemoveAgent(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i, a := range m.cfg.Agents {
+		if a.ID == id {
+			m.stopAgentProviders(id)
+			m.cfg.Agents = append(m.cfg.Agents[:i], m.cfg.Agents[i+1:]...)
+			return nil
+		}
+	}
+	return fmt.Errorf("acp/manager: agent %q not found", id)
+}
+
+// RestartAgent stops all running providers for agentID so they are lazily
+// re-created on the next Provider() call.
+func (m *Manager) RestartAgent(id string) {
+	m.mu.Lock()
+	m.stopAgentProviders(id)
+	m.mu.Unlock()
+}
+
+// HasProcess reports whether at least one subprocess is running for agentID.
+func (m *Manager) HasProcess(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for key := range m.providers {
+		if strings.HasPrefix(key, id+"|") {
+			return true
+		}
+	}
+	return false
+}
+
+// Config returns a snapshot of the current config (for serialization).
+func (m *Manager) Config() Config {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp := *m.cfg
+	agents := make([]AgentConfig, len(cp.Agents))
+	copy(agents, cp.Agents)
+	cp.Agents = agents
+	return cp
+}
+
+// stopAgentProviders stops and removes all providers for agentID. Caller must hold m.mu.
+func (m *Manager) stopAgentProviders(id string) {
+	for key, entry := range m.providers {
+		if strings.HasPrefix(key, id+"|") {
+			_ = entry.tx.Stop()
+			delete(m.providers, key)
+		}
+	}
 }
 
 // SetNewProcess installs a transport factory that overrides the real

@@ -55,6 +55,13 @@ func (r *Registry) Get(id string) (Runner, bool) {
 	return rn, ok
 }
 
+// Unregister removes a runner by agent ID.
+func (r *Registry) Unregister(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.runners, id)
+}
+
 func (r *Registry) List() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

@@ -41,6 +41,13 @@ type SSEEvent struct {
 	Data any    `json:"data"`
 }
 
+// bufferedEvent is an SSEEvent recorded with a timestamp for the events history endpoint.
+type bufferedEvent struct {
+	At   time.Time `json:"time"`
+	Type string    `json:"type"`
+	Data any       `json:"data"`
+}
+
 // PermissionPrompt is surfaced to SSE clients when an agent needs approval.
 type PermissionPrompt struct {
 	ToolCallID string                    `json:"toolCallId"`
@@ -56,7 +63,15 @@ type turnEntry struct {
 	next   int
 	done   bool
 	cancel func()
-	buffer []SSEEvent
+	buffer []bufferedEvent
+}
+
+// TurnFilter is used by ListTurns to filter results.
+type TurnFilter struct {
+	Status    string // "pending" | "running" | "completed" | "failed" | "" (all)
+	Agent     string
+	SessionID string
+	Limit     int // 0 = no limit
 }
 
 const eventBufferCap = 256
@@ -132,7 +147,8 @@ func (s *Store) ActiveTurnFor(agentID, cwd string) string {
 	return s.active[agentID+"|"+cwd]
 }
 
-// Subscribe opens an SSE subscription on a turn.
+// Subscribe opens an SSE subscription on a turn. Buffered past events are
+// replayed immediately so clients joining late don't miss events.
 func (s *Store) Subscribe(turnID string) (<-chan SSEEvent, func(), bool) {
 	s.mu.Lock()
 	e, ok := s.turns[turnID]
@@ -143,8 +159,8 @@ func (s *Store) Subscribe(turnID string) (<-chan SSEEvent, func(), bool) {
 	e.next++
 	subID := e.next
 	ch := make(chan SSEEvent, len(e.buffer)+64)
-	for _, ev := range e.buffer {
-		ch <- ev
+	for _, be := range e.buffer {
+		ch <- SSEEvent{Type: be.Type, Data: be.Data}
 	}
 	if e.done {
 		close(ch)
@@ -167,6 +183,19 @@ func (s *Store) Subscribe(turnID string) (<-chan SSEEvent, func(), bool) {
 	return ch, cancel, true
 }
 
+// Events returns the timestamped event history for a turn (read-only snapshot).
+func (s *Store) Events(turnID string) ([]bufferedEvent, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.turns[turnID]
+	if !ok {
+		return nil, false
+	}
+	out := make([]bufferedEvent, len(e.buffer))
+	copy(out, e.buffer)
+	return out, true
+}
+
 func (s *Store) publishEvent(turnID string, ev SSEEvent) {
 	s.mu.Lock()
 	e, ok := s.turns[turnID]
@@ -174,7 +203,8 @@ func (s *Store) publishEvent(turnID string, ev SSEEvent) {
 		s.mu.Unlock()
 		return
 	}
-	e.buffer = append(e.buffer, ev)
+	be := bufferedEvent{At: time.Now().UTC(), Type: ev.Type, Data: ev.Data}
+	e.buffer = append(e.buffer, be)
 	if len(e.buffer) > eventBufferCap {
 		e.buffer = e.buffer[len(e.buffer)-eventBufferCap:]
 	}
@@ -189,6 +219,71 @@ func (s *Store) publishEvent(turnID string, ev SSEEvent) {
 		default:
 		}
 	}
+}
+
+// ListTurns returns turns matching the filter, newest first.
+func (s *Store) ListTurns(f TurnFilter) []*Turn {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]*Turn, 0, len(s.turns))
+	for _, te := range s.turns {
+		t := te.turn
+		if f.Status != "" && string(t.Status) != f.Status {
+			continue
+		}
+		if f.Agent != "" && t.Agent != f.Agent {
+			continue
+		}
+		if f.SessionID != "" && t.SessionID != f.SessionID {
+			continue
+		}
+		cp := *t
+		out = append(out, &cp)
+	}
+	// Sort newest first.
+	for i := 0; i < len(out)-1; i++ {
+		for j := i + 1; j < len(out); j++ {
+			if out[j].CreatedAt.After(out[i].CreatedAt) {
+				out[i], out[j] = out[j], out[i]
+			}
+		}
+	}
+	if f.Limit > 0 && len(out) > f.Limit {
+		out = out[:f.Limit]
+	}
+	return out
+}
+
+// CancelTurn cancels a specific turn by calling its cancel hook.
+func (s *Store) CancelTurn(turnID string) bool {
+	s.mu.Lock()
+	te, ok := s.turns[turnID]
+	if !ok || te.turn.Status != TurnRunning || te.cancel == nil {
+		s.mu.Unlock()
+		return false
+	}
+	cancel := te.cancel
+	s.mu.Unlock()
+	cancel()
+	return true
+}
+
+// AgentStats returns activity counters for a given agent.
+func (s *Store) AgentStats(agentID string) (activeTurns, totalSessions, totalTurns int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, se := range s.sessions {
+		if se.session.Agent == agentID {
+			totalSessions++
+			totalTurns += len(se.turns)
+		}
+	}
+	for _, te := range s.turns {
+		if te.turn.Agent == agentID && te.turn.Status == TurnRunning {
+			activeTurns++
+		}
+	}
+	return
 }
 
 func (s *Store) markTurnStatus(id string, status TurnStatus, errStr, result string) {

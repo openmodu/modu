@@ -39,13 +39,14 @@ func main() {
 	flag.Parse()
 
 	var (
-		cfg *manager.Config
-		err error
+		cfg            *manager.Config
+		resolvedConfig string
+		err            error
 	)
 	if *cfgPath != "" {
-		cfg, err = manager.LoadConfig(*cfgPath)
+		cfg, resolvedConfig, err = manager.LoadConfigWithPath(*cfgPath)
 	} else {
-		cfg, err = manager.LoadConfig()
+		cfg, resolvedConfig, err = manager.LoadConfigWithPath()
 	}
 	if err != nil {
 		log.Fatalf("acp-gateway: load config: %v", err)
@@ -81,6 +82,7 @@ func main() {
 		Token:       os.Getenv("MODU_ACP_TOKEN"),
 		WorkersEach: *workers,
 		Workdir:     workdir,
+		ConfigPath:  resolvedConfig,
 	})
 
 	httpSrv := &http.Server{

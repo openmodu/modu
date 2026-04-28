@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -8,10 +9,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
+	"github.com/openmodu/modu/pkg/acp/manager"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -25,8 +29,17 @@ func (s *Server) buildRouter() http.Handler {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /", s.handleIndex)
 
+	// Gateway info
+	mux.HandleFunc("GET /api/info", s.handleInfo)
+	mux.HandleFunc("GET /api/system", s.handleSystem)
+
 	// Agents + workspace
 	mux.HandleFunc("GET /api/agents", s.handleListAgents)
+	mux.HandleFunc("POST /api/agents", s.handleAddAgent)
+	mux.HandleFunc("GET /api/agents/{id}", s.handleGetAgent)
+	mux.HandleFunc("PUT /api/agents/{id}", s.handleUpdateAgent)
+	mux.HandleFunc("DELETE /api/agents/{id}", s.handleDeleteAgent)
+	mux.HandleFunc("POST /api/agents/{id}/restart", s.handleRestartAgent)
 	mux.HandleFunc("GET /api/workdir", s.handleGetWorkdir)
 	mux.HandleFunc("GET /api/files", s.handleListFiles)
 	mux.HandleFunc("GET /api/browse", s.handleBrowse)
@@ -45,10 +58,16 @@ func (s *Server) buildRouter() http.Handler {
 	mux.HandleFunc("DELETE /api/sessions/{id}", s.handleDeleteSession)
 	mux.HandleFunc("POST /api/sessions/{id}/cancel", s.handleCancelSession)
 
+	// Global turn list
+	mux.HandleFunc("GET /api/turns", s.handleListTurns)
+
 	// Turns (within a session)
 	mux.HandleFunc("POST /api/sessions/{id}/turns", s.handleAddTurn)
 	mux.HandleFunc("GET /api/sessions/{id}/turns/{turnId}/stream", s.handleStreamTurn)
+	mux.HandleFunc("POST /api/sessions/{id}/turns/{turnId}/stream", s.handleStreamTurn) // EventSource workaround
 	mux.HandleFunc("POST /api/sessions/{id}/turns/{turnId}/approve", s.handleApproveTurn)
+	mux.HandleFunc("POST /api/sessions/{id}/turns/{turnId}/cancel", s.handleCancelTurn)
+	mux.HandleFunc("GET /api/sessions/{id}/turns/{turnId}/events", s.handleTurnEvents)
 
 	exempt := map[string]bool{"/healthz": true, "/": true}
 	return authMiddleware(s.token, exempt, mux)
@@ -69,8 +88,204 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// ---------- gateway info ----------
+
+// GatewayInfo is returned by GET /api/info.
+type GatewayInfo struct {
+	Version     string  `json:"version"`
+	StartTime   string  `json:"startTime"`
+	UptimeSec   float64 `json:"uptimeSec"`
+	Connections int64   `json:"connections"`
+	Agents      int     `json:"agents"`
+}
+
+func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, GatewayInfo{
+		Version:     Version,
+		StartTime:   s.startTime.UTC().Format(time.RFC3339),
+		UptimeSec:   time.Since(s.startTime).Seconds(),
+		Connections: s.connections.Load(),
+		Agents:      len(s.registry.List()),
+	})
+}
+
+// SystemInfo is returned by GET /api/system.
+type SystemInfo struct {
+	Goroutines int    `json:"goroutines"`
+	HeapMB     uint64 `json:"heapMB"`
+	AllocMB    uint64 `json:"allocMB"`
+	DiskTotalGB float64 `json:"diskTotalGB"`
+	DiskFreeGB  float64 `json:"diskFreeGB"`
+	DiskUsedPct float64 `json:"diskUsedPct"`
+}
+
+func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	info := SystemInfo{
+		Goroutines: runtime.NumGoroutine(),
+		HeapMB:     ms.HeapSys / 1024 / 1024,
+		AllocMB:    ms.Alloc / 1024 / 1024,
+	}
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(s.workdir, &stat); err == nil {
+		total := float64(stat.Blocks) * float64(stat.Bsize)
+		free := float64(stat.Bavail) * float64(stat.Bsize)
+		info.DiskTotalGB = total / 1e9
+		info.DiskFreeGB = free / 1e9
+		if total > 0 {
+			info.DiskUsedPct = (total - free) / total * 100
+		}
+	}
+	writeJSON(w, http.StatusOK, info)
+}
+
+// ---------- agents ----------
+
+// AgentDetail is returned by GET /api/agents and GET /api/agents/{id}.
+type AgentDetail struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Command       string `json:"command"`
+	Args          []string `json:"args,omitempty"`
+	Status        string `json:"status"` // "running" | "idle" | "offline"
+	ActiveTurns   int    `json:"activeTurns"`
+	TotalSessions int    `json:"totalSessions"`
+	TotalTurns    int    `json:"totalTurns"`
+}
+
+func (s *Server) agentDetail(id string) (AgentDetail, bool) {
+	cfg := s.mgr.Config()
+	var ac *manager.AgentConfig
+	for i := range cfg.Agents {
+		if cfg.Agents[i].ID == id {
+			ac = &cfg.Agents[i]
+			break
+		}
+	}
+	if ac == nil {
+		return AgentDetail{}, false
+	}
+	active, sessions, turns := s.store.AgentStats(id)
+	status := "offline"
+	if active > 0 {
+		status = "running"
+	} else if s.mgr.HasProcess(id) {
+		status = "idle"
+	}
+	return AgentDetail{
+		ID:            ac.ID,
+		Name:          ac.Name,
+		Command:       ac.Command,
+		Args:          ac.Args,
+		Status:        status,
+		ActiveTurns:   active,
+		TotalSessions: sessions,
+		TotalTurns:    turns,
+	}, true
+}
+
 func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"agents": s.registry.List()})
+	ids := s.registry.List()
+	details := make([]AgentDetail, 0, len(ids))
+	for _, id := range ids {
+		if d, ok := s.agentDetail(id); ok {
+			details = append(details, d)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"agents": details})
+}
+
+func (s *Server) handleGetAgent(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	d, ok := s.agentDetail(id)
+	if !ok {
+		http.Error(w, "agent not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
+}
+
+func (s *Server) handleAddAgent(w http.ResponseWriter, r *http.Request) {
+	var body manager.AgentConfig
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if body.ID == "" || body.Command == "" {
+		http.Error(w, "id and command are required", http.StatusBadRequest)
+		return
+	}
+	if err := s.mgr.AddAgent(body); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	s.registry.Register(newACPRunner(body.ID, s.mgr))
+	_ = s.saveConfig()
+	// Workers run under the server's lifetime context stored via cancel;
+	// use a background context here since we don't have access to the
+	// server's root ctx. Dynamic agents run until server shutdown.
+	workerCtx := context.Background()
+	s.workers.Add(1)
+	go func() {
+		defer s.workers.Done()
+		runWorker(workerCtx, body.ID, s.store, s.registry)
+	}()
+	d, _ := s.agentDetail(body.ID)
+	writeJSON(w, http.StatusCreated, d)
+}
+
+func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body manager.AgentConfig
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	body.ID = id
+	if err := s.mgr.UpdateAgent(id, body); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	_ = s.saveConfig()
+	d, _ := s.agentDetail(id)
+	writeJSON(w, http.StatusOK, d)
+}
+
+func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.mgr.RemoveAgent(id); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	s.registry.Unregister(id)
+	_ = s.saveConfig()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleRestartAgent(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := s.agentDetail(id); !ok {
+		http.Error(w, "agent not found", http.StatusNotFound)
+		return
+	}
+	s.mgr.RestartAgent(id)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "restarted"})
+}
+
+// ---------- global turn list ----------
+
+func (s *Server) handleListTurns(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	limit := 50
+	fmt.Sscan(q.Get("limit"), &limit)
+	turns := s.store.ListTurns(TurnFilter{
+		Status:    q.Get("status"),
+		Agent:     q.Get("agent"),
+		SessionID: q.Get("sessionId"),
+		Limit:     limit,
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"turns": turns})
 }
 
 func (s *Server) handleGetWorkdir(w http.ResponseWriter, r *http.Request) {
@@ -353,6 +568,9 @@ func (s *Server) handleStreamTurn(w http.ResponseWriter, r *http.Request) {
 	}
 	defer cancel()
 
+	s.connections.Add(1)
+	defer s.connections.Add(-1)
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -370,6 +588,25 @@ func (s *Server) handleStreamTurn(w http.ResponseWriter, r *http.Request) {
 			writeSSE(w, flusher, ev.Type, ev.Data)
 		}
 	}
+}
+
+func (s *Server) handleCancelTurn(w http.ResponseWriter, r *http.Request) {
+	turnID := r.PathValue("turnId")
+	if !s.store.CancelTurn(turnID) {
+		http.Error(w, "turn not running or not found", http.StatusConflict)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "cancel requested"})
+}
+
+func (s *Server) handleTurnEvents(w http.ResponseWriter, r *http.Request) {
+	turnID := r.PathValue("turnId")
+	events, ok := s.store.Events(turnID)
+	if !ok {
+		http.Error(w, "turn not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": events})
 }
 
 func (s *Server) handleApproveTurn(w http.ResponseWriter, r *http.Request) {

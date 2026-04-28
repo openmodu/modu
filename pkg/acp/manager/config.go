@@ -43,9 +43,14 @@ func DefaultConfigPaths() []string {
 }
 
 // LoadConfig reads the first existing file from paths (or DefaultConfigPaths
-// when paths is empty) and parses it as a Config. It validates agent IDs
-// are unique and DefaultAgent — if set — refers to a known agent.
+// when paths is empty) and parses it as a Config.
 func LoadConfig(paths ...string) (*Config, error) {
+	cfg, _, err := LoadConfigWithPath(paths...)
+	return cfg, err
+}
+
+// LoadConfigWithPath is like LoadConfig but also returns the resolved file path.
+func LoadConfigWithPath(paths ...string) (*Config, string, error) {
 	if len(paths) == 0 {
 		paths = DefaultConfigPaths()
 	}
@@ -55,11 +60,24 @@ func LoadConfig(paths ...string) (*Config, error) {
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
-			return nil, fmt.Errorf("acp/manager: read %s: %w", p, err)
+			return nil, "", fmt.Errorf("acp/manager: read %s: %w", p, err)
 		}
-		return parseConfig(data, p)
+		cfg, err := parseConfig(data, p)
+		return cfg, p, err
 	}
-	return nil, fmt.Errorf("acp/manager: no config file found in %v", paths)
+	return nil, "", fmt.Errorf("acp/manager: no config file found in %v", paths)
+}
+
+// SaveConfig writes cfg as JSON to path, creating or overwriting the file.
+func SaveConfig(cfg *Config, path string) error {
+	b, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("acp/manager: marshal config: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("acp/manager: mkdir: %w", err)
+	}
+	return os.WriteFile(path, append(b, '\n'), 0o644)
 }
 
 func parseConfig(data []byte, source string) (*Config, error) {
