@@ -30,43 +30,94 @@ Project ──► Session ──► Turn
   (workdir)   (agent+context)  (one prompt/response)
 ```
 
-- **Project** — a named working directory. All file-system operations are
-  jailed to the project path.
-- **Session** — a persistent conversation between a user and one agent
-  inside a project. The agent subprocess (or modu's CodingSession) stays
-  alive across turns, so conversation context accumulates naturally.
-- **Turn** — one round-trip: user prompt → agent response. Each turn
-  streams events via SSE while the agent is running.
+- **Project** — a named working directory. File-system operations are jailed to the project path.
+- **Session** — a persistent conversation between a user and one agent inside a project. The agent subprocess stays alive across turns so conversation context accumulates naturally.
+- **Turn** — one round-trip: user prompt → agent response. Each turn streams events via SSE while running.
 
 ---
 
 ## Endpoint summary
 
-| Method | Path | Auth | Purpose |
-|--------|------|------|---------|
-| GET  | `/healthz`                                          | no  | liveness probe |
-| GET  | `/`                                                 | no  | web console (HTML) |
-| GET  | `/api/agents`                                       | yes | list configured agents |
-| GET  | `/api/workdir`                                      | yes | default working directory |
-| GET  | `/api/files?path=`                                  | yes | list files in workdir |
-| GET  | `/api/browse?path=&dirs=true`                       | yes | browse any absolute path (project picker) |
-| GET  | `/api/projects`                                     | yes | list all projects |
-| POST | `/api/projects`                                     | yes | create project |
-| GET  | `/api/projects/{id}`                                | yes | get project |
-| DELETE | `/api/projects/{id}`                              | yes | delete project |
-| GET  | `/api/projects/{id}/files?path=`                    | yes | list files in project |
-| GET  | `/api/sessions?projectId=`                          | yes | list sessions |
-| POST | `/api/sessions`                                     | yes | create session |
-| GET  | `/api/sessions/{id}`                                | yes | session detail + turns |
-| DELETE | `/api/sessions/{id}`                              | yes | delete session |
-| POST | `/api/sessions/{id}/cancel`                         | yes | cancel running turn |
-| POST | `/api/sessions/{id}/turns`                          | yes | add a turn (send prompt) |
-| GET  | `/api/sessions/{id}/turns/{turnId}/stream`          | yes | SSE event stream for turn |
-| POST | `/api/sessions/{id}/turns/{turnId}/approve`         | yes | approve a tool call |
+| Method   | Path                                                | Auth | Purpose |
+|----------|-----------------------------------------------------|------|---------|
+| GET      | `/healthz`                                          | no   | liveness probe |
+| GET      | `/`                                                 | no   | web console (HTML) |
+| GET      | `/api/info`                                         | yes  | gateway version, uptime, connections |
+| GET      | `/api/system`                                       | yes  | memory & disk usage |
+| GET      | `/api/agents`                                       | yes  | list agents with status |
+| POST     | `/api/agents`                                       | yes  | add agent (persists to config) |
+| GET      | `/api/agents/{id}`                                  | yes  | agent detail + stats |
+| PUT      | `/api/agents/{id}`                                  | yes  | update agent config |
+| DELETE   | `/api/agents/{id}`                                  | yes  | remove agent |
+| POST     | `/api/agents/{id}/restart`                          | yes  | restart agent subprocess |
+| GET      | `/api/workdir`                                      | yes  | default working directory |
+| GET      | `/api/files?path=`                                  | yes  | list files in workdir |
+| GET      | `/api/browse?path=&dirs=true`                       | yes  | browse any absolute path (project picker) |
+| GET      | `/api/projects`                                     | yes  | list all projects |
+| POST     | `/api/projects`                                     | yes  | create project |
+| GET      | `/api/projects/{id}`                                | yes  | get project |
+| DELETE   | `/api/projects/{id}`                                | yes  | delete project |
+| GET      | `/api/projects/{id}/files?path=`                    | yes  | list files in project |
+| GET      | `/api/sessions?projectId=`                          | yes  | list sessions |
+| POST     | `/api/sessions`                                     | yes  | create session |
+| GET      | `/api/sessions/{id}`                                | yes  | session detail + turns |
+| DELETE   | `/api/sessions/{id}`                                | yes  | delete session |
+| POST     | `/api/sessions/{id}/cancel`                         | yes  | cancel running turn (session-level) |
+| GET      | `/api/turns?status=&agent=&sessionId=&limit=`       | yes  | global turn list with filtering |
+| POST     | `/api/sessions/{id}/turns`                          | yes  | add a turn (send prompt) |
+| GET      | `/api/sessions/{id}/turns/{turnId}/stream`          | yes  | SSE event stream for turn |
+| POST     | `/api/sessions/{id}/turns/{turnId}/approve`         | yes  | approve a tool call |
+| POST     | `/api/sessions/{id}/turns/{turnId}/cancel`          | yes  | cancel individual turn |
+| GET      | `/api/sessions/{id}/turns/{turnId}/events`          | yes  | timestamped event history |
 
 ---
 
 ## Models
+
+### GatewayInfo
+
+```json
+{
+  "version":     "1.2.0",
+  "startTime":   "2026-04-28T10:00:00Z",
+  "uptimeSec":   3600.5,
+  "connections": 3,
+  "agents":      4
+}
+```
+
+### SystemInfo
+
+```json
+{
+  "goroutines":  42,
+  "heapMB":      128,
+  "allocMB":     64,
+  "diskTotalGB": 500.1,
+  "diskFreeGB":  120.3,
+  "diskUsedPct": 75.9
+}
+```
+
+### AgentDetail
+
+```json
+{
+  "id":            "claude",
+  "name":          "Claude Code",
+  "command":       "npx",
+  "args":          ["-y", "@zed-industries/claude-code-acp"],
+  "status":        "running | idle | offline",
+  "activeTurns":   1,
+  "totalSessions": 8,
+  "totalTurns":    23
+}
+```
+
+`status` values:
+- `running` — at least one turn is actively executing
+- `idle` — subprocess is alive but no active turn
+- `offline` — no subprocess spawned yet (first prompt will launch it)
 
 ### Project
 
@@ -94,15 +145,14 @@ Project ──► Session ──► Turn
 }
 ```
 
-`title` is auto-set to the first 80 characters of the first prompt if not
-provided at creation time.
+`title` is auto-set to the first 80 characters of the first prompt if not provided at creation time.
 
-### SessionDetail (GET /api/sessions/{id})
+### SessionDetail
 
 ```json
 {
   /* all Session fields */
-  "turns": [ /* array of Turn */ ]
+  "turns": [ /* Turn[] */ ]
 }
 ```
 
@@ -115,7 +165,7 @@ provided at creation time.
   "agent":     "claude",
   "cwd":       "/Users/me/Code/my-app",
   "prompt":    "Add a dark mode toggle to the settings page.",
-  "result":    "Done! I added a toggle in src/settings/page.tsx ...",
+  "result":    "Done! I added a toggle in ...",
   "error":     "",
   "status":    "pending | running | completed | failed",
   "createdAt": "2026-04-25T14:04:00Z",
@@ -130,10 +180,19 @@ pending ──► running ──► completed
                     └──► failed   (also used for cancel)
 ```
 
-- `result` is present only when `status=completed`.
-- `error` is present only when `status=failed`.
-- A session can only have one `running` turn at a time. Posting a new turn
-  while one is running returns `409 Conflict`.
+- `result` populated only when `status=completed`.
+- `error` populated only when `status=failed`.
+- A session can have only one `running` turn at a time. Posting while one runs → `409`.
+
+### BufferedEvent (events history)
+
+```json
+{
+  "time": "2026-04-28T14:30:06.123Z",
+  "type": "status | event | permission",
+  "data": { /* same shape as the SSE data field */ }
+}
+```
 
 ### PermissionPrompt (SSE frame)
 
@@ -160,51 +219,82 @@ No auth. Returns `{"status": "ok"}`.
 
 ---
 
-### `GET /api/agents`
+### `GET /api/info`
 
-Lists configured agent IDs.
-
-```json
-{"agents": ["codex", "claude", "gemini", "modu"]}
-```
-
----
-
-### `GET /api/browse?path=/Users/me&dirs=true`
-
-Browses **any absolute path** on the gateway machine. Not restricted to
-workdir — designed as a remote filesystem picker so clients can discover
-project directories without prior knowledge of the machine layout.
-
-Query params:
-- `path` — absolute path to list (default: user home directory)
-- `dirs=true` — return only directories (ideal for a project folder picker)
-
-Hidden entries (dot-files/dot-dirs) are omitted unless the caller explicitly
-navigates into a hidden directory.
+Gateway status for the overview dashboard.
 
 ```json
 {
-  "path":   "/Users/me/Code",
-  "parent": "/Users/me",
-  "files": [
-    {"name": "my-app",  "path": "/Users/me/Code/my-app",  "isDir": true, "modTime": "..."},
-    {"name": "modu",    "path": "/Users/me/Code/modu",    "isDir": true, "modTime": "..."}
-  ]
+  "version": "dev",
+  "startTime": "2026-04-28T10:00:00Z",
+  "uptimeSec": 3600.5,
+  "connections": 3,
+  "agents": 4
 }
 ```
 
-Typical project-picker flow:
-1. `GET /api/browse` → home dir contents
-2. Navigate with `GET /api/browse?path=/Users/me/Code&dirs=true`
-3. User picks a folder → `POST /api/projects` with that path
+`version` is set at build time via `-ldflags "-X main.Version=1.2.0"`.
+
+---
+
+### `GET /api/system`
+
+Process and disk metrics. `diskTotalGB` / `diskFreeGB` are measured on the
+gateway's workdir filesystem.
+
+---
+
+### `GET /api/agents`
+
+Returns an array of `AgentDetail` (not just IDs).
+
+```json
+{"agents": [ /* AgentDetail[] */ ]}
+```
+
+### `POST /api/agents`
+
+Adds an agent at runtime and persists it to `acp.config.json`.
+
+```json
+{
+  "id":      "my-agent",
+  "name":    "My Agent",
+  "command": "/usr/local/bin/my-agent",
+  "args":    ["--acp"]
+}
+```
+
+Response `201`: `AgentDetail`. `409` if ID already exists.
+
+### `GET /api/agents/{id}`
+
+Response `200`: `AgentDetail`. `404` if not found.
+
+### `PUT /api/agents/{id}`
+
+Replaces agent config and restarts its subprocess. Persists to config.
+
+```json
+{"id": "my-agent", "name": "My Agent v2", "command": "...", "args": [...]}
+```
+
+Response `200`: updated `AgentDetail`.
+
+### `DELETE /api/agents/{id}`
+
+Stops the subprocess and removes the agent from config. Response `204`.
+
+### `POST /api/agents/{id}/restart`
+
+Stops all running subprocesses for the agent. The next prompt will lazily
+re-launch the process.
+
+Response `200`: `{"status": "restarted"}`.
 
 ---
 
 ### `GET /api/workdir`
-
-Returns the default working directory used when a project path is not
-specified.
 
 ```json
 {"workdir": "/Users/me/Code"}
@@ -214,18 +304,32 @@ specified.
 
 ### `GET /api/files?path=subdir`
 
-Lists files in the default workdir. `path` is relative to the workdir.
+Lists files relative to workdir. `path` is a relative path.
+
+---
+
+### `GET /api/browse?path=/Users/me&dirs=true`
+
+Browses **any absolute path** on the gateway machine — designed as a remote
+filesystem picker for project directory selection.
+
+Query params:
+- `path` — absolute path (default: home directory)
+- `dirs=true` — return only directories
+
+Hidden entries (dot-files) are omitted.
 
 ```json
 {
-  "root":  "/Users/me/Code",
-  "path":  "go/src",
+  "path":   "/Users/me/Code",
+  "parent": "/Users/me",
   "files": [
-    {"name": "main.go", "path": "go/src/main.go", "isDir": false, "size": 1234, "modTime": "..."},
-    {"name": "pkg",     "path": "go/src/pkg",     "isDir": true,  "modTime": "..."}
+    {"name": "my-app", "path": "/Users/me/Code/my-app", "isDir": true, "modTime": "..."}
   ]
 }
 ```
+
+Picker flow: `GET /api/browse` → navigate → user picks → `POST /api/projects`.
 
 ---
 
@@ -249,79 +353,72 @@ Response `200`: `Project`. `404` if not found.
 
 ### `DELETE /api/projects/{id}`
 
-Response `204`. `404` if not found.
+Response `204`.
 
 ### `GET /api/projects/{id}/files?path=subdir`
 
-Same shape as `GET /api/files` but rooted at the project's path.
+Same as `GET /api/files` but rooted at the project path.
 
 ---
 
 ### `GET /api/sessions?projectId=proj-1`
 
-`projectId` is optional; omit to list all sessions.
-
-```json
-{"sessions": [ /* Session[] */ ]}
-```
+`projectId` is optional. Returns `{"sessions": [ /* Session[] */ ]}`.
 
 ### `POST /api/sessions`
 
-Creates a new idle session.
-
 ```json
-{"projectId": "proj-1", "agent": "claude", "title": "optional title"}
+{"projectId": "proj-1", "agent": "claude", "title": "optional"}
 ```
 
-Response `201`: `Session`.
-
-Errors: `400` bad fields / unknown agent / unknown project.
+Response `201`: `Session`. Errors: `400` bad fields / unknown agent / project.
 
 ### `GET /api/sessions/{id}`
 
-Response `200`: `SessionDetail` (session + full turn history). `404` if not found.
+Response `200`: `SessionDetail` (session + all turns). `404` if not found.
 
 ### `DELETE /api/sessions/{id}`
 
-Removes the session and all its turns. Response `204`.
+Removes session and all its turns. Response `204`.
 
 ### `POST /api/sessions/{id}/cancel`
 
-Cancels the currently running turn (if any). The worker observes ctx
-cancellation and marks the turn `failed` with `error="cancelled"`.
+Cancels the currently running turn. Response `200`: `{"status": "cancel requested"}`.
 
-Response `200`:
+---
+
+### `GET /api/turns?status=running&agent=claude&sessionId=sess-3&limit=50`
+
+Global turn list across all sessions, newest first.
+
+Query params (all optional):
+- `status` — `pending | running | completed | failed`
+- `agent` — filter by agent ID
+- `sessionId` — filter by session
+- `limit` — max results (default 50)
+
 ```json
-{"status": "cancel requested"}
+{"turns": [ /* Turn[] */ ]}
 ```
 
 ---
 
 ### `POST /api/sessions/{id}/turns`
 
-Adds a new turn to the session and queues it for execution. Returns
-immediately; subscribe to `/stream` for live output.
+Adds a turn and queues it. Returns immediately.
 
 ```json
-{"prompt": "Add a dark mode toggle to the settings page."}
+{"prompt": "Add a dark mode toggle."}
 ```
 
-Response `202`: `Turn` (status=pending).
-
-Errors:
-- `400` — missing prompt or session not found
-- `409` — session already has a running turn
+Response `202`: `Turn` (status=pending). `409` if session already has a running turn.
 
 ---
 
 ### `GET /api/sessions/{id}/turns/{turnId}/stream`
 
-**Server-Sent Events.** Stays open until the turn reaches a terminal
-status.
-
-The server replays events buffered since the turn started (up to 256
-frames), closing the race between `POST /turns` returning and the client
-opening the stream.
+**Server-Sent Events.** Stays open until turn reaches a terminal status.
+Replays up to 256 buffered past events on connect.
 
 Frame format:
 ```
@@ -332,46 +429,60 @@ data: <JSON>
 
 #### SSE event types
 
-| `event:` | `data:` shape | Meaning |
-|----------|---------------|---------|
-| `status`     | `Turn`             | Status transition (running → completed/failed) |
-| `event`      | `StreamEvent`      | Token-level stream from the agent |
+| `event:`     | `data:` shape      | Meaning |
+|--------------|--------------------|---------|
+| `status`     | `Turn`             | Status transition |
+| `event`      | `StreamEvent`      | Token stream from agent |
 | `permission` | `PermissionPrompt` | Agent requests tool approval |
 
 `StreamEvent` payload:
 ```json
 {
-  "type":  "start | text_delta | thinking_delta | done | error | ...",
-  "delta": "string",   // on *_delta
-  "reason": "end_turn",// on done
-  "error": "message"   // on error
+  "type":   "start | text_delta | thinking_delta | done | error | ...",
+  "delta":  "string",
+  "reason": "end_turn",
+  "error":  "message"
 }
 ```
-
-#### Client loop
-
-1. Open `/stream` immediately after `POST /turns` returns `202`.
-2. Parse `event:` / `data:` lines split by blank lines.
-3. On `event=status` with `status=completed|failed` → turn is done.
-4. On `event=event` + `type=text_delta` → append `delta` to the message bubble.
-5. On `event=permission` → render approval UI, POST to `/approve`.
-6. On EOF / context cancel → stream ended; re-GET session for final state.
 
 ---
 
 ### `POST /api/sessions/{id}/turns/{turnId}/approve`
 
-Replies to the most recent `permission` SSE frame.
-
 ```json
 {"toolCallId": "call-abc", "optionId": "allow_once"}
 ```
 
-Response `200`: `{"status": "approved"}`.
+Response `200`: `{"status": "approved"}`. `409` if no pending permission.
 
-Errors:
-- `400` — missing fields
-- `409` — no pending permission for this toolCallId
+---
+
+### `POST /api/sessions/{id}/turns/{turnId}/cancel`
+
+Cancels a specific running turn (more granular than session cancel).
+
+Response `200`: `{"status": "cancel requested"}`. `409` if turn not running.
+
+---
+
+### `GET /api/sessions/{id}/turns/{turnId}/events`
+
+Returns the full timestamped event history for a turn (in-memory replay
+buffer, up to 256 entries).
+
+```json
+{
+  "events": [
+    {"time": "2026-04-28T14:30:06.123Z", "type": "status", "data": {...}},
+    {"time": "2026-04-28T14:30:07.001Z", "type": "event",  "data": {"type": "text_delta", "delta": "Hello"}},
+    {"time": "2026-04-28T14:30:09.500Z", "type": "status", "data": {...}}
+  ]
+}
+```
+
+Note: the buffer lives in memory and is lost on gateway restart. For
+completed turns this provides an execution log; for running turns it
+provides a snapshot of events so far.
 
 ---
 
@@ -379,47 +490,53 @@ Errors:
 
 ```bash
 BASE=http://localhost:7080
-TOKEN=dev-token
 H="Authorization: Bearer $TOKEN"
 
-# 1. Create a project
+# Gateway info
+curl -H "$H" $BASE/api/info | jq
+
+# Create project + session + turn
 proj=$(curl -s -H "$H" -H "Content-Type: application/json" \
   -d '{"name":"my-app","path":"/Users/me/Code/my-app"}' \
   $BASE/api/projects | jq -r .id)
 
-# 2. Create a session
 sess=$(curl -s -H "$H" -H "Content-Type: application/json" \
   -d "{\"projectId\":\"$proj\",\"agent\":\"claude\"}" \
   $BASE/api/sessions | jq -r .id)
 
-# 3. Send a prompt (turn)
 turn=$(curl -s -H "$H" -H "Content-Type: application/json" \
-  -d '{"prompt":"List the files in the project."}' \
+  -d '{"prompt":"List files in the project."}' \
   $BASE/api/sessions/$sess/turns | jq -r .id)
 
-# 4. Stream the response
+# Stream live output
 curl -N -H "$H" $BASE/api/sessions/$sess/turns/$turn/stream
 
-# 5. Send a follow-up (multi-turn)
+# Multi-turn follow-up (wait for first turn to complete first)
 turn2=$(curl -s -H "$H" -H "Content-Type: application/json" \
   -d '{"prompt":"Now add a README.md."}' \
   $BASE/api/sessions/$sess/turns | jq -r .id)
 curl -N -H "$H" $BASE/api/sessions/$sess/turns/$turn2/stream
 
-# 6. Get full session history
-curl -H "$H" $BASE/api/sessions/$sess | jq
+# View execution log
+curl -H "$H" $BASE/api/sessions/$sess/turns/$turn/events | jq
+
+# Global task view
+curl -H "$H" "$BASE/api/turns?status=completed&agent=claude" | jq
+
+# Add a custom agent at runtime
+curl -X POST -H "$H" -H "Content-Type: application/json" \
+  -d '{"id":"my-bot","name":"My Bot","command":"/usr/local/bin/my-bot","args":["--acp"]}' \
+  $BASE/api/agents | jq
 ```
 
 ---
 
 ## Multi-turn conversation
 
-Turns within the same session share an agent subprocess (or modu
-CodingSession), so each successive prompt sees the full conversation
-history. The gateway enforces sequential execution: if you POST a turn
-while one is running, you get `409` — wait for the current turn to
-complete (watch for `status=completed` on the stream) before sending
-the next.
+Turns within the same session share an agent subprocess, so each successive
+prompt sees the full conversation history. Sequential execution is enforced:
+posting a turn while one is running returns `409` — wait for
+`status=completed` on the stream before sending the next prompt.
 
 ---
 
@@ -448,27 +565,41 @@ for try await line in bytes.lines {
 
 ### Backgrounding
 
-SSE over URLSession does not survive backgrounding. On return to
-foreground: `GET /api/sessions/{id}` for current state, then reopen
-`/stream` on the active turn (replay buffer replays recent events).
+SSE does not survive backgrounding. On return to foreground:
+1. `GET /api/sessions/{id}` for current state
+2. If a turn is still running, reopen `/stream` (replay buffer catches you up)
+3. If completed, `GET /api/sessions/{id}/turns/{turnId}/events` for the full log
 
 ### Cancel
 
-`POST /api/sessions/{id}/cancel` — the running turn is marked `failed`
-with `error="cancelled"` within one scheduler tick.
+- Turn-level: `POST /api/sessions/{id}/turns/{turnId}/cancel`
+- Session-level: `POST /api/sessions/{id}/cancel` (cancels current running turn)
+
+Both mark the turn `failed` with `error="cancelled"` within one scheduler tick.
 
 ---
 
 ## Persistence
 
-Tasks survive gateway restarts. Projects and sessions are written to
-SQLite (`acp-gateway.db` by default, override with `-db`). Turns that
-were `pending` or `running` at shutdown are marked `failed` on next
-startup so the UI never shows stale running state.
+Projects, sessions, and turns are written to SQLite (`acp-gateway.db` by
+default, override with `-db`). Turns that were `pending` or `running` at
+shutdown are marked `failed` on next startup. Agent config changes (add /
+update / delete) are persisted to `acp.config.json`.
+
+The event buffer (turn execution log) lives in memory only and is not
+persisted across restarts.
+
+---
+
+## Build flags
+
+```bash
+go build -ldflags "-X main.Version=1.2.0" ./cmd/acp-gateway
+```
 
 ---
 
 ## Versioning
 
-Pre-1.0; unversioned. Breaking changes will be noted in commit messages.
-Stable routes will move under `/v1/` when the API solidifies.
+Pre-1.0; unversioned. Breaking changes noted in commit messages.
+Routes will move under `/v1/` when the API stabilizes.
