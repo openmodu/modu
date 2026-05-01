@@ -394,6 +394,10 @@ textarea.prompt::placeholder{color:var(--subtle)}
   <div class="modal">
     <h2>New Session</h2>
     <div class="field">
+      <label>Project</label>
+      <select id="sProject"></select>
+    </div>
+    <div class="field">
       <label>Profile</label>
       <select id="sProfile"></select>
     </div>
@@ -973,13 +977,19 @@ async function deleteProfile(id) {
 
 // ── New Session ────────────────────────────────────────────────────────────
 function showNewSessWithProfile(prof) {
-  const pid = S.detail?.projectId || S.projects[0]?.id;
-  if (!pid) { toast('Create a project first', true); return; }
-  showNewSess(pid, prof.id);
+  if (!S.projects.length) { toast('Create a project first', true); return; }
+  showNewSess(null, prof.id);
 }
 
 function showNewSess(pid, profileId) {
-  S.newSessProj = pid;
+  // Project selector
+  const projSel = document.getElementById('sProject');
+  projSel.innerHTML = S.projects.map(p => {
+    const name = esc(p.name || base(p.path));
+    const sel = p.id === (pid || S.detail?.projectId) ? ' selected' : '';
+    return `<option value="${esc(p.id)}"${sel}>${name}</option>`;
+  }).join('') || '<option value="">No projects</option>';
+
   const sel = document.getElementById('sAgent');
   sel.innerHTML = agentOptions(S.agents[0]?.id||'');
   const psel = document.getElementById('sProfile');
@@ -1008,15 +1018,16 @@ function syncSessionProfile() {
 }
 
 async function createSess() {
+  const projectId = document.getElementById('sProject').value;
   const agent = document.getElementById('sAgent').value;
   const profileId = document.getElementById('sProfile').value;
   const title = document.getElementById('sTitle').value.trim();
-  if (!S.newSessProj||!agent) return;
+  if (!projectId||!agent) return;
   try {
-    const sess = await api('POST','/api/sessions',{projectId:S.newSessProj,agent,profileId:profileId||undefined,title:title||undefined});
-    if (!S.byProj[S.newSessProj]) S.byProj[S.newSessProj]=[];
-    S.byProj[S.newSessProj].push(sess);
-    S.expanded.add(S.newSessProj); saveExp();
+    const sess = await api('POST','/api/sessions',{projectId,agent,profileId:profileId||undefined,title:title||undefined});
+    if (!S.byProj[projectId]) S.byProj[projectId]=[];
+    S.byProj[projectId].push(sess);
+    S.expanded.add(projectId); saveExp();
     document.getElementById('sessOverlay').classList.add('hidden');
     renderSidebar();
     await openSession(sess.id);
