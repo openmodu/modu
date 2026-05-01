@@ -66,10 +66,13 @@ aside{
   background:var(--panel);border-right:1px solid var(--border);
   display:flex;flex-direction:column;overflow:hidden
 }
+.sb-scroll{flex:1;overflow-y:auto}
 .sb-head{
   padding:9px 12px 8px;display:flex;align-items:center;justify-content:space-between;
-  border-bottom:1px solid var(--border);flex-shrink:0
+  border-bottom:1px solid var(--border);flex-shrink:0;
+  position:sticky;top:0;z-index:1;background:var(--panel)
 }
+.sb-sep{border-top:1px solid var(--border)}
 .sb-label{font:600 10px/1 sans-serif;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
 .icon-btn{
   background:none;border:1px solid var(--border);color:var(--muted);
@@ -78,7 +81,9 @@ aside{
 }
 .icon-btn:hover{background:var(--elevated);color:var(--fg)}
 .sb-actions{display:flex;gap:5px}
-#projList{flex:1;overflow-y:auto;padding:4px 0}
+#projList,#profileSideList{padding:4px 0}
+.prof-edit{opacity:0;transition:opacity .12s}
+.proj-hd:hover .prof-edit{opacity:1}
 
 .proj-hd{
   display:flex;align-items:center;gap:6px;padding:6px 12px;
@@ -308,14 +313,18 @@ textarea.prompt::placeholder{color:var(--subtle)}
 
   <!-- Sidebar -->
   <aside>
-    <div class="sb-head">
-      <span class="sb-label">Projects</span>
-      <div class="sb-actions">
-        <button class="icon-btn" id="profilesBtn" title="Profiles">🎭</button>
+    <div class="sb-scroll">
+      <div class="sb-head">
+        <span class="sb-label">Profiles</span>
+        <button class="icon-btn" id="newProfileSideBtn" title="New profile">+</button>
+      </div>
+      <div id="profileSideList"></div>
+      <div class="sb-head sb-sep">
+        <span class="sb-label">Projects</span>
         <button class="icon-btn" id="newProjBtn" title="New project">+</button>
       </div>
+      <div id="projList"></div>
     </div>
-    <div id="projList"></div>
   </aside>
 
   <!-- Main -->
@@ -407,18 +416,11 @@ textarea.prompt::placeholder{color:var(--subtle)}
   </div>
 </div>
 
-<!-- Profiles modal -->
+<!-- Profile form modal -->
 <div class="overlay hidden" id="profilesOverlay">
   <div class="modal">
-    <h2>Profiles</h2>
+    <h2 id="profileModalTitle">New Profile</h2>
     <div id="profileFormHost"></div>
-    <div style="display:flex;justify-content:flex-end;margin-bottom:12px">
-      <button class="btn prim" id="newProfileBtn">+ New Profile</button>
-    </div>
-    <div class="profile-list" id="profileList"></div>
-    <div class="modal-foot">
-      <button class="btn" id="profilesClose">Close</button>
-    </div>
   </div>
 </div>
 
@@ -543,10 +545,65 @@ async function loadSessions(pid) {
   catch { S.byProj[pid]=[]; }
 }
 
+function allSessionsForProfile(profileId) {
+  const out = [];
+  for (const sessions of Object.values(S.byProj))
+    for (const s of sessions) if (s.profileId === profileId) out.push(s);
+  return out;
+}
+
 function renderSidebar() {
+  renderProfilesSide();
+  renderProjectsSide();
+}
+
+function renderProfilesSide() {
+  const list = document.getElementById('profileSideList');
+  if (!S.profiles.length) {
+    list.innerHTML = '<div style="padding:10px 12px;font-size:11px;color:var(--subtle)">No profiles yet</div>';
+    return;
+  }
+  list.innerHTML = '';
+  for (const prof of S.profiles) {
+    const open = S.expanded.has('prof|'+prof.id);
+    const sessions = allSessionsForProfile(prof.id);
+    const wrap = document.createElement('div');
+    wrap.innerHTML = `
+      <div class="proj-hd" data-prid="${prof.id}">
+        <span class="tri${open?' open':''}">▶</span>
+        <span class="proj-name">${esc(prof.icon||'🤖')} ${esc(prof.name)}</span>
+        <span class="sess-agent">${esc(prof.agentId)}</span>
+        <button class="icon-btn prof-edit" title="Edit" style="font-size:11px">✏</button>
+      </div>
+      <div class="proj-sess${open?' open':''}" id="prs-${prof.id}"></div>`;
+    const sessEl = wrap.querySelector('#prs-'+prof.id);
+    for (const sess of sessions) {
+      const active = sess.id === S.sessId;
+      const dc = sess.status==='running'?'run':sess.status==='idle'?'ok':'';
+      const row = document.createElement('div');
+      row.className = 'sess-row'+(active?' active':'');
+      row.dataset.sid = sess.id;
+      row.innerHTML = `<span class="sdot ${dc}"></span><span class="sess-title">${esc(sess.title||'Session')}</span>`;
+      row.onclick = () => openSession(sess.id);
+      sessEl.appendChild(row);
+    }
+    const ns = document.createElement('div');
+    ns.className = 'sess-row new-sess';
+    ns.innerHTML = `<span>＋</span><span class="sess-title" style="font-style:italic">New session</span>`;
+    ns.onclick = () => showNewSessWithProfile(prof);
+    sessEl.appendChild(ns);
+
+    const hd = wrap.querySelector('.proj-hd');
+    hd.onclick = e => { if (e.target.closest('.prof-edit')) return; toggleProfile(prof.id); };
+    wrap.querySelector('.prof-edit').onclick = () => openProfileForm(prof);
+    list.appendChild(wrap);
+  }
+}
+
+function renderProjectsSide() {
   const list = document.getElementById('projList');
   if (!S.projects.length) {
-    list.innerHTML = '<div style="padding:14px 12px;font-size:11px;color:var(--subtle);text-align:center">No projects yet</div>';
+    list.innerHTML = '<div style="padding:10px 12px;font-size:11px;color:var(--subtle);text-align:center">No projects yet</div>';
     return;
   }
   list.innerHTML = '';
@@ -575,7 +632,6 @@ function renderSidebar() {
       row.onclick = () => openSession(sess.id);
       sessEl.appendChild(row);
     }
-    // New session entry
     const ns = document.createElement('div');
     ns.className = 'sess-row new-sess';
     ns.innerHTML = `<span>＋</span><span class="sess-title" style="font-style:italic">New session</span>`;
@@ -589,7 +645,14 @@ function renderSidebar() {
 function toggleProj(pid) {
   S.expanded.has(pid) ? S.expanded.delete(pid) : S.expanded.add(pid);
   saveExp();
-  renderSidebar();
+  renderProjectsSide();
+}
+
+function toggleProfile(id) {
+  const key = 'prof|'+id;
+  S.expanded.has(key) ? S.expanded.delete(key) : S.expanded.add(key);
+  saveExp();
+  renderProfilesSide();
 }
 
 // ── Session view ──────────────────────────────────────────────────────────
@@ -838,77 +901,47 @@ async function createProj() {
 }
 
 // ── Profiles ──────────────────────────────────────────────────────────────
-function showProfiles() {
-  document.getElementById('profilesOverlay').classList.remove('hidden');
-  renderProfiles();
-}
-
-function renderProfiles() {
-  document.getElementById('profileFormHost').innerHTML = '';
-  const list = document.getElementById('profileList');
-  if (!S.profiles.length) {
-    list.innerHTML = '<div style="padding:16px;text-align:center;color:var(--subtle);font-size:12px">No profiles yet</div>';
-    return;
-  }
-  list.innerHTML = '';
-  for (const p of S.profiles) {
-    const row = document.createElement('div');
-    row.className = 'profile-row';
-    row.innerHTML = `
-      <div class="profile-icon">${esc(p.icon||'🤖')}</div>
-      <div class="profile-main">
-        <div class="profile-name">${esc(p.name)}</div>
-        <div class="profile-meta">${esc(p.agentId)}</div>
-        <div class="profile-desc">${esc(p.description||'')}</div>
-      </div>
-      <div class="profile-actions">
-        <button class="btn" data-act="edit">Edit</button>
-        <button class="btn ghost" data-act="delete">Delete</button>
-      </div>`;
-    row.querySelector('[data-act="edit"]').onclick = () => showProfileForm(p);
-    row.querySelector('[data-act="delete"]').onclick = () => deleteProfile(p.id);
-    list.appendChild(row);
-  }
-}
-
 function agentOptions(selected) {
   return S.agents.length
     ? S.agents.map(a=>`<option value="${esc(a.id)}"${a.id===selected?' selected':''}>${esc(a.name||a.id)}</option>`).join('')
     : '<option value="">No agents configured</option>';
 }
 
-function showProfileForm(profile) {
+function openProfileForm(profile) {
+  document.getElementById('profileModalTitle').textContent = profile ? 'Edit Profile' : 'New Profile';
   const host = document.getElementById('profileFormHost');
   host.innerHTML = `
-    <div class="profile-form">
-      <div class="field">
-        <label>Icon</label>
-        <input id="pfIcon" placeholder="🤖" value="${esc(profile?.icon||'')}">
-      </div>
-      <div class="field">
-        <label>Name</label>
-        <input id="pfName" required value="${esc(profile?.name||'')}">
-      </div>
-      <div class="field">
-        <label>Agent</label>
-        <select id="pfAgent">${agentOptions(profile?.agentId||S.agents[0]?.id||'')}</select>
-      </div>
-      <div class="field">
-        <label>Description</label>
-        <input id="pfDescription" value="${esc(profile?.description||'')}">
-      </div>
-      <div class="field">
-        <label>System Prompt</label>
-        <textarea class="system-prompt" id="pfSystemPrompt">${esc(profile?.systemPrompt||'')}</textarea>
-      </div>
-      <div class="modal-foot">
-        <button class="btn" id="pfCancel">Cancel</button>
-        <button class="btn prim" id="pfSave">${profile?'Save':'Create'}</button>
-      </div>
+    <div class="field">
+      <label>Icon</label>
+      <input id="pfIcon" placeholder="🤖" value="${esc(profile?.icon||'')}">
+    </div>
+    <div class="field">
+      <label>Name</label>
+      <input id="pfName" required value="${esc(profile?.name||'')}">
+    </div>
+    <div class="field">
+      <label>Agent</label>
+      <select id="pfAgent">${agentOptions(profile?.agentId||S.agents[0]?.id||'')}</select>
+    </div>
+    <div class="field">
+      <label>Description</label>
+      <input id="pfDescription" value="${esc(profile?.description||'')}">
+    </div>
+    <div class="field">
+      <label>System Prompt</label>
+      <textarea class="system-prompt" id="pfSystemPrompt">${esc(profile?.systemPrompt||'')}</textarea>
+    </div>
+    <div class="modal-foot">
+      ${profile?`<button class="btn ghost" id="pfDelete" style="margin-right:auto">Delete</button>`:''}
+      <button class="btn" id="pfCancel">Cancel</button>
+      <button class="btn prim" id="pfSave">${profile?'Save':'Create'}</button>
     </div>`;
-  document.getElementById('pfCancel').onclick = () => host.innerHTML = '';
+  const closeOverlay = () => document.getElementById('profilesOverlay').classList.add('hidden');
+  document.getElementById('pfCancel').onclick = closeOverlay;
   document.getElementById('pfSave').onclick = () => saveProfile(profile?.id);
+  if (profile) document.getElementById('pfDelete').onclick = () => deleteProfile(profile.id);
   document.getElementById('pfName').focus();
+  document.getElementById('profilesOverlay').classList.remove('hidden');
 }
 
 async function saveProfile(id) {
@@ -923,7 +956,8 @@ async function saveProfile(id) {
   try {
     await api(id ? 'PUT' : 'POST', id ? '/api/profiles/'+id : '/api/profiles', body);
     await loadProfiles();
-    renderProfiles();
+    document.getElementById('profilesOverlay').classList.add('hidden');
+    renderProfilesSide();
   } catch(e) { toast('Save profile: '+e.message, true); }
 }
 
@@ -931,19 +965,27 @@ async function deleteProfile(id) {
   try {
     await api('DELETE','/api/profiles/'+id);
     await loadProfiles();
-    renderProfiles();
+    document.getElementById('profilesOverlay').classList.add('hidden');
+    renderProfilesSide();
     if (S.detail?.profileId === id) renderPane();
   } catch(e) { toast('Delete profile: '+e.message, true); }
 }
 
 // ── New Session ────────────────────────────────────────────────────────────
-function showNewSess(pid) {
+function showNewSessWithProfile(prof) {
+  const pid = S.detail?.projectId || S.projects[0]?.id;
+  if (!pid) { toast('Create a project first', true); return; }
+  showNewSess(pid, prof.id);
+}
+
+function showNewSess(pid, profileId) {
   S.newSessProj = pid;
   const sel = document.getElementById('sAgent');
   sel.innerHTML = agentOptions(S.agents[0]?.id||'');
   const psel = document.getElementById('sProfile');
   psel.innerHTML = '<option value="">— No profile —</option>' +
     S.profiles.map(p=>`<option value="${esc(p.id)}">${esc(p.icon||'🤖')} ${esc(p.name)}</option>`).join('');
+  if (profileId) psel.value = profileId;
   psel.onchange = syncSessionProfile;
   syncSessionProfile();
   document.getElementById('sTitle').value = '';
@@ -1001,14 +1043,10 @@ function wire() {
     tok.type = tok.type==='password' ? 'text' : 'password';
   };
 
-  // Sidebar / new project
-  document.getElementById('profilesBtn').onclick = showProfiles;
+  // Sidebar / new project / new profile
+  document.getElementById('newProfileSideBtn').onclick = () => openProfileForm(null);
   document.getElementById('newProjBtn').onclick = showNewProj;
   document.getElementById('emptyNew').onclick = showNewProj;
-
-  // Profiles modal
-  document.getElementById('newProfileBtn').onclick = () => showProfileForm(null);
-  document.getElementById('profilesClose').onclick = () => document.getElementById('profilesOverlay').classList.add('hidden');
 
   // New project modal
   document.getElementById('browseOpen').onclick = () => browseTo(document.getElementById('pPath').value.trim()||null);
