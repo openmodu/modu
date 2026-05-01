@@ -28,7 +28,14 @@ func newACPRunner(id string, mgr *manager.Manager) *acpRunner {
 func (r *acpRunner) AgentID() string { return r.id }
 
 func (r *acpRunner) Run(ctx context.Context, prompt, cwd string, hooks RunnerHooks) (*types.AssistantMessage, error) {
-	p, err := r.mgr.Provider(r.id, cwd)
+	// Use the gateway SessionID (injected by the worker) as the provider key
+	// so each gateway session gets an independent ACP session and conversation
+	// context, even when two sessions share the same (agent, cwd).
+	sessionKey, _ := ctx.Value(sessionIDKey).(string)
+	if sessionKey == "" {
+		sessionKey = cwd
+	}
+	p, err := r.mgr.ProviderKeyed(r.id, sessionKey, cwd)
 	if err != nil {
 		return nil, err
 	}

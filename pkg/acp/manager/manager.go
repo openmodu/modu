@@ -74,13 +74,22 @@ func (m *Manager) List() []string {
 // pair. Two callers with the same pair get the same provider; different
 // cwds get different providers, each with its own subprocess.
 func (m *Manager) Provider(agentID, cwd string) (*provider.Provider, error) {
+	return m.ProviderKeyed(agentID, cwd, cwd)
+}
+
+// ProviderKeyed is like Provider but uses sessionKey instead of cwd as the
+// map key. This allows multiple gateway sessions sharing the same (agent,
+// cwd) to each get an independent ACP session and conversation context.
+// cwd is still passed to the ACP process; sessionKey is only used for
+// internal bookkeeping.
+func (m *Manager) ProviderKeyed(agentID, sessionKey, cwd string) (*provider.Provider, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if m.shut {
 		return nil, fmt.Errorf("acp/manager: shutdown")
 	}
-	key := agentID + "|" + cwd
+	key := agentID + "|" + sessionKey
 	if entry, ok := m.providers[key]; ok {
 		return entry.prov, nil
 	}

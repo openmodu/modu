@@ -9,6 +9,12 @@ import (
 	"github.com/openmodu/modu/pkg/types"
 )
 
+type ctxKey int
+
+// sessionIDKey carries the gateway SessionID through the context so runners
+// can scope their ACP provider to the session rather than just (agent, cwd).
+const sessionIDKey ctxKey = 0
+
 // runWorker is the main loop for one gateway worker goroutine.
 // It pulls turn IDs from the store queue and executes them.
 func runWorker(ctx context.Context, agentID string, store *Store, reg *Registry) {
@@ -47,6 +53,11 @@ func runTurn(parent context.Context, t *Turn, store *Store, runner Runner) {
 	store.StartTurn(t.ID, cancel)
 	store.SetActive(t.Agent, t.Cwd, t.ID)
 	defer store.ClearActive(t.Agent, t.Cwd)
+
+	// Inject the gateway SessionID so ACP runners can scope their provider
+	// per session rather than per (agent, cwd), preventing context bleed
+	// between different sessions that share the same working directory.
+	ctx = context.WithValue(ctx, sessionIDKey, t.SessionID)
 
 	hooks := RunnerHooks{
 		OnEvent: func(ev types.StreamEvent) {
