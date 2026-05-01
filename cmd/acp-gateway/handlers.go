@@ -445,6 +445,14 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
+	if body.Path == "" {
+		http.Error(w, "path is required", http.StatusBadRequest)
+		return
+	}
+	if info, err := os.Stat(body.Path); err != nil || !info.IsDir() {
+		http.Error(w, fmt.Sprintf("directory does not exist: %s", body.Path), http.StatusBadRequest)
+		return
+	}
 	p, err := s.store.CreateProject(body.Name, body.Path)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
