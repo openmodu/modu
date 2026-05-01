@@ -612,7 +612,7 @@ function renderProjectsSide() {
   }
   list.innerHTML = '';
   for (const proj of S.projects) {
-    const sessions = S.byProj[proj.id] || [];
+    const sessions = (S.byProj[proj.id] || []).filter(s => !s.profileId);
     const open = S.expanded.has(proj.id);
     const wrap = document.createElement('div');
     const name = esc(proj.name || base(proj.path));
