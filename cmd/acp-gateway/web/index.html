@@ -37,28 +37,19 @@ body{font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:
 header{
   position:fixed;top:0;left:0;right:0;height:var(--hh);
   background:var(--panel);border-bottom:1px solid var(--border);
-  display:flex;align-items:center;padding:0 14px;gap:12px;z-index:100
+  display:flex;align-items:center;padding:0 14px;gap:10px;z-index:100
 }
-.logo{font-weight:700;font-size:14px;flex-shrink:0;display:flex;align-items:center;gap:7px}
-.ver{font:400 10px/1 monospace;color:var(--muted);background:var(--elevated);padding:2px 6px;border-radius:4px}
-.hdot{width:7px;height:7px;border-radius:50%;background:var(--subtle);flex-shrink:0}
+.logo{font-weight:700;font-size:14px;flex-shrink:0;display:flex;align-items:center;gap:6px}
+.ver{font:400 10px/1 monospace;color:var(--subtle);background:var(--elevated);padding:2px 5px;border-radius:3px}
+.hdot{width:6px;height:6px;border-radius:50%;background:var(--subtle);flex-shrink:0}
 .hdot.ok{background:var(--ok)}
 .hdot.err{background:var(--err)}
-#htxt{font-size:11px;color:var(--muted)}
-.agent-chips{display:flex;gap:5px;flex:1;overflow:hidden}
-.chip{
-  display:flex;align-items:center;gap:5px;
-  background:var(--elevated);border:1px solid var(--border);border-radius:5px;
-  padding:3px 8px;font-size:11px;white-space:nowrap;cursor:default
-}
-.chip .d{width:5px;height:5px;border-radius:50%;background:var(--subtle);flex-shrink:0}
-.chip .d.ok{background:var(--ok)}
-.chip .d.run{background:var(--accent);animation:pulse 1.5s infinite}
+.hspacer{flex:1}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
 .token-wrap{flex-shrink:0;position:relative;display:flex;align-items:center}
 .token-input{
   background:var(--input-bg);border:1px solid var(--border);border-radius:6px;
-  color:var(--fg);padding:4px 28px 4px 8px;font:12px inherit;width:170px
+  color:var(--fg);padding:4px 26px 4px 8px;font:12px inherit;width:150px
 }
 .token-input::placeholder{color:var(--subtle)}
 .token-eye{
@@ -123,7 +114,6 @@ main{flex:1;overflow:hidden;display:flex;flex-direction:column}
   align-items:center;justify-content:center;
   color:var(--subtle);gap:12px
 }
-.empty-icon{font-size:36px}
 .empty p{font-size:13px}
 
 /* ── Session pane ── */
@@ -144,15 +134,11 @@ main{flex:1;overflow:hidden;display:flex;flex-direction:column}
 /* ── Turn ── */
 .turn{display:flex;flex-direction:column;gap:7px}
 .turn-hd{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--subtle)}
-.turn-n{font-weight:600;color:var(--muted)}
-.badge{
-  display:inline-flex;align-items:center;gap:3px;
-  padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600
-}
-.badge.pending{background:var(--warn-dim);color:var(--warn)}
-.badge.running{background:var(--accent-dim);color:var(--accent)}
-.badge.completed{background:var(--ok-dim);color:var(--ok)}
-.badge.failed,.badge.cancelled{background:var(--err-dim);color:var(--err)}
+.tdot{width:5px;height:5px;border-radius:50%;background:var(--subtle);flex-shrink:0}
+.tdot.pending{background:var(--warn)}
+.tdot.running{background:var(--accent);animation:pulse 1.5s infinite}
+.tdot.completed{background:var(--ok)}
+.tdot.failed,.tdot.cancelled{background:var(--err)}
 
 .turn-prompt{
   background:var(--elevated);border-radius:8px;padding:9px 12px;
@@ -310,8 +296,7 @@ textarea.prompt::placeholder{color:var(--subtle)}
 <header>
   <div class="logo">acp-gateway <span class="ver" id="ver">dev</span></div>
   <div class="hdot" id="hdot"></div>
-  <span id="htxt">connecting…</span>
-  <div class="agent-chips" id="chips"></div>
+  <div class="hspacer"></div>
   <div class="token-wrap">
     <input class="token-input" id="tok" type="password" placeholder="Bearer token" autocomplete="off">
     <button class="token-eye" id="tokEye">👁</button>
@@ -338,7 +323,6 @@ textarea.prompt::placeholder{color:var(--subtle)}
 
     <!-- Empty state -->
     <div class="empty" id="empty">
-      <div class="empty-icon">💬</div>
       <p>Select or create a project &amp; session</p>
       <button class="btn prim" id="emptyNew">+ New Project</button>
     </div>
@@ -519,12 +503,9 @@ async function checkHealth() {
   try {
     const r = await fetch('/healthz');
     const dot = document.getElementById('hdot');
-    const txt = document.getElementById('htxt');
-    if (r.ok) { dot.className='hdot ok'; txt.textContent='online'; }
-    else       { dot.className='hdot err'; txt.textContent='HTTP '+r.status; }
+    dot.className = r.ok ? 'hdot ok' : 'hdot err';
   } catch {
-    document.getElementById('hdot').className='hdot err';
-    document.getElementById('htxt').textContent='unreachable';
+    document.getElementById('hdot').className = 'hdot err';
   }
 }
 
@@ -536,7 +517,6 @@ async function loadAgents() {
     ]);
     S.agents = agd.agents || [];
     if (inf.version) document.getElementById('ver').textContent = inf.version;
-    renderChips();
   } catch {}
 }
 
@@ -549,18 +529,6 @@ async function loadProfiles() {
   }
 }
 
-function renderChips() {
-  const host = document.getElementById('chips');
-  host.innerHTML = '';
-  for (const a of S.agents) {
-    const dc = a.status==='running'?'run':a.status==='idle'?'ok':'';
-    const c = document.createElement('div');
-    c.className = 'chip';
-    c.title = `${a.name||a.id}\nstatus: ${a.status}\nsessions: ${a.totalSessions}  turns: ${a.totalTurns}`;
-    c.innerHTML = `<span class="d ${dc}"></span><span>${esc(a.id)}</span>`;
-    host.appendChild(c);
-  }
-}
 
 // ── Sidebar ────────────────────────────────────────────────────────────────
 async function loadAll() {
@@ -680,8 +648,6 @@ function makeTurn(turn, n) {
   el.className = 'turn';
   el.dataset.tid = turn.id;
 
-  const statusLabel = {pending:'⏳ pending', running:'⟳ running', completed:'✓ done',
-                       failed:'✕ failed', cancelled:'✕ cancelled'}[turn.status] || turn.status;
   let resultHtml;
   if (turn.status==='running'||turn.status==='pending') {
     resultHtml = thinkingHtml();
@@ -693,8 +659,7 @@ function makeTurn(turn, n) {
 
   el.innerHTML = `
     <div class="turn-hd">
-      <span class="turn-n">Turn ${n}</span>
-      <span class="badge ${turn.status}">${statusLabel}</span>
+      <span class="tdot ${turn.status}"></span>
       <span>${reltime(turn.createdAt)}</span>
     </div>
     <div class="turn-prompt">${esc(turn.prompt)}</div>
@@ -749,8 +714,8 @@ async function startStream(sessId, turnId) {
         } else if (ev==='status' && parsed) {
           const tEl = document.querySelector(`[data-tid="${turnId}"]`);
           if (tEl) {
-            const b = tEl.querySelector('.badge');
-            if (b) { b.className='badge '+parsed.status; b.textContent={completed:'✓ done',failed:'✕ failed',cancelled:'✕ cancelled',running:'⟳ running',pending:'⏳ pending'}[parsed.status]||parsed.status; }
+            const d = tEl.querySelector('.tdot');
+            if (d) d.className = 'tdot ' + parsed.status;
           }
           if (resEl()) {
             resEl().classList.remove('streaming');
