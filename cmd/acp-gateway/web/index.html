@@ -3,412 +3,917 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>acp-gateway console</title>
+<title>acp-gateway</title>
 <style>
-  :root {
-    --fg: #e6e6e6;
-    --mut: #8b9097;
-    --bg: #0f1115;
-    --panel: #171a20;
-    --accent: #6aa3ff;
-    --ok: #8bd17c;
-    --err: #ff7878;
-    --warn: #ffcf6a;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    padding: 18px;
-    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
-    color: var(--fg);
-    background: var(--bg);
-  }
-  h1 { font-size: 16px; margin: 0 0 14px; font-weight: 600; }
-  h2 { font-size: 13px; margin: 0 0 8px; font-weight: 600; color: var(--mut); text-transform: uppercase; letter-spacing: .04em; }
-  .row { display: flex; gap: 14px; flex-wrap: wrap; }
-  .col { flex: 1 1 420px; min-width: 320px; }
-  .panel {
-    background: var(--panel);
-    border: 1px solid #222731;
-    border-radius: 8px;
-    padding: 14px;
-    margin-bottom: 14px;
-  }
-  label { display: block; font-size: 12px; color: var(--mut); margin-bottom: 4px; }
-  input, select, textarea, button {
-    font: inherit;
-    color: var(--fg);
-    background: #0c0e12;
-    border: 1px solid #2a2f3a;
-    border-radius: 6px;
-    padding: 7px 9px;
-    width: 100%;
-  }
-  textarea { min-height: 78px; resize: vertical; font-family: ui-monospace, "SF Mono", Menlo, monospace; }
-  button {
-    background: var(--accent);
-    color: #0c0e12;
-    border: none;
-    cursor: pointer;
-    font-weight: 600;
-    width: auto;
-    padding: 7px 14px;
-  }
-  button.secondary { background: #2a2f3a; color: var(--fg); }
-  button:disabled { opacity: .5; cursor: not-allowed; }
-  .field { margin-bottom: 10px; }
-  .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .tag {
-    display: inline-block;
-    padding: 2px 7px;
-    border-radius: 4px;
-    font-size: 11px;
-    background: #222731;
-    color: var(--mut);
-  }
-  .tag.ok { background: rgba(139,209,124,.15); color: var(--ok); }
-  .tag.err { background: rgba(255,120,120,.15); color: var(--err); }
-  .tag.warn { background: rgba(255,207,106,.15); color: var(--warn); }
-  .tag.run { background: rgba(106,163,255,.15); color: var(--accent); }
-  pre.log {
-    background: #0a0c10;
-    border: 1px solid #1c2028;
-    border-radius: 6px;
-    padding: 10px;
-    max-height: 360px;
-    overflow: auto;
-    font: 12px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
-    margin: 0;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-  .evt { margin: 0 0 6px; }
-  .evt .hdr { color: var(--mut); font-size: 11px; }
-  .evt.status .hdr { color: var(--accent); }
-  .evt.event .hdr { color: var(--ok); }
-  .evt.permission .hdr { color: var(--warn); }
-  .result { background: #0a0c10; border: 1px solid #1c2028; border-radius: 6px; padding: 10px; white-space: pre-wrap; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; min-height: 28px; }
-  .perm-box { border: 1px solid var(--warn); background: rgba(255,207,106,.06); padding: 10px; border-radius: 6px; margin-top: 10px; }
-  .perm-box .title { color: var(--warn); font-weight: 600; margin-bottom: 6px; }
-  .perm-opts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
-  .perm-opts button { width: auto; }
-  .api-cheat { font: 11px/1.5 ui-monospace, Menlo, monospace; color: var(--mut); white-space: pre-wrap; }
-  .api-cheat b { color: var(--fg); }
-  .muted { color: var(--mut); }
+:root {
+  --fg: #e6e6e6;
+  --muted: #8b9097;
+  --subtle: #555d6b;
+  --bg: #0f1115;
+  --panel: #171a20;
+  --elevated: #1c2028;
+  --input-bg: #0c0e12;
+  --border: #222731;
+  --border-hi: #3a4150;
+  --accent: #6aa3ff;
+  --accent-dim: rgba(106,163,255,.13);
+  --ok: #8bd17c;
+  --ok-dim: rgba(139,209,124,.12);
+  --err: #ff7878;
+  --err-dim: rgba(255,120,120,.12);
+  --warn: #ffcf6a;
+  --warn-dim: rgba(255,207,106,.10);
+  --sidebar: 256px;
+  --hh: 46px;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden}
+body{font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--fg);background:var(--bg)}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+
+/* ── Header ── */
+header{
+  position:fixed;top:0;left:0;right:0;height:var(--hh);
+  background:var(--panel);border-bottom:1px solid var(--border);
+  display:flex;align-items:center;padding:0 14px;gap:12px;z-index:100
+}
+.logo{font-weight:700;font-size:14px;flex-shrink:0;display:flex;align-items:center;gap:7px}
+.ver{font:400 10px/1 monospace;color:var(--muted);background:var(--elevated);padding:2px 6px;border-radius:4px}
+.hdot{width:7px;height:7px;border-radius:50%;background:var(--subtle);flex-shrink:0}
+.hdot.ok{background:var(--ok)}
+.hdot.err{background:var(--err)}
+#htxt{font-size:11px;color:var(--muted)}
+.agent-chips{display:flex;gap:5px;flex:1;overflow:hidden}
+.chip{
+  display:flex;align-items:center;gap:5px;
+  background:var(--elevated);border:1px solid var(--border);border-radius:5px;
+  padding:3px 8px;font-size:11px;white-space:nowrap;cursor:default
+}
+.chip .d{width:5px;height:5px;border-radius:50%;background:var(--subtle);flex-shrink:0}
+.chip .d.ok{background:var(--ok)}
+.chip .d.run{background:var(--accent);animation:pulse 1.5s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.token-wrap{flex-shrink:0;position:relative;display:flex;align-items:center}
+.token-input{
+  background:var(--input-bg);border:1px solid var(--border);border-radius:6px;
+  color:var(--fg);padding:4px 28px 4px 8px;font:12px inherit;width:170px
+}
+.token-input::placeholder{color:var(--subtle)}
+.token-eye{
+  position:absolute;right:6px;cursor:pointer;color:var(--subtle);font-size:11px;
+  user-select:none;background:none;border:none
+}
+
+/* ── Layout ── */
+.layout{display:flex;height:100vh;padding-top:var(--hh)}
+
+/* ── Sidebar ── */
+aside{
+  width:var(--sidebar);flex-shrink:0;
+  background:var(--panel);border-right:1px solid var(--border);
+  display:flex;flex-direction:column;overflow:hidden
+}
+.sb-head{
+  padding:9px 12px 8px;display:flex;align-items:center;justify-content:space-between;
+  border-bottom:1px solid var(--border);flex-shrink:0
+}
+.sb-label{font:600 10px/1 sans-serif;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.icon-btn{
+  background:none;border:1px solid var(--border);color:var(--muted);
+  border-radius:5px;width:21px;height:21px;display:flex;align-items:center;
+  justify-content:center;cursor:pointer;font-size:14px;line-height:1;flex-shrink:0
+}
+.icon-btn:hover{background:var(--elevated);color:var(--fg)}
+#projList{flex:1;overflow-y:auto;padding:4px 0}
+
+.proj-hd{
+  display:flex;align-items:center;gap:6px;padding:6px 12px;
+  cursor:pointer;user-select:none
+}
+.proj-hd:hover{background:var(--elevated)}
+.tri{color:var(--subtle);font-size:9px;transition:transform .12s;flex-shrink:0}
+.tri.open{transform:rotate(90deg)}
+.proj-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:500}
+.proj-cnt{font-size:10px;color:var(--subtle);background:var(--elevated);padding:1px 5px;border-radius:3px}
+.proj-sess{display:none}
+.proj-sess.open{display:block}
+
+.sess-row{
+  display:flex;align-items:center;gap:6px;
+  padding:5px 12px 5px 22px;cursor:pointer;font-size:12px;color:var(--muted)
+}
+.sess-row:hover{background:var(--elevated);color:var(--fg)}
+.sess-row.active{background:var(--accent-dim);color:var(--accent)}
+.sess-row.new-sess{color:var(--subtle);font-size:11px}
+.sess-row.new-sess:hover{color:var(--fg)}
+.sess-title{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sess-agent{font-size:10px;color:var(--subtle)}
+.sdot{width:5px;height:5px;border-radius:50%;background:var(--subtle);flex-shrink:0}
+.sdot.ok{background:var(--ok)}
+.sdot.run{background:var(--accent);animation:pulse 1.5s infinite}
+
+/* ── Main ── */
+main{flex:1;overflow:hidden;display:flex;flex-direction:column}
+
+.empty{
+  flex:1;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;
+  color:var(--subtle);gap:12px
+}
+.empty-icon{font-size:36px}
+.empty p{font-size:13px}
+
+/* ── Session pane ── */
+.spane{display:flex;flex-direction:column;height:100%;overflow:hidden}
+.spane-head{
+  padding:9px 14px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:10px;flex-shrink:0
+}
+.breadcrumb{
+  flex:1;font-size:12px;color:var(--muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap
+}
+.breadcrumb .sep{margin:0 5px;color:var(--subtle)}
+.breadcrumb .last{color:var(--fg);font-weight:500}
+
+.turns{flex:1;overflow-y:auto;padding:18px 20px;display:flex;flex-direction:column;gap:22px}
+
+/* ── Turn ── */
+.turn{display:flex;flex-direction:column;gap:7px}
+.turn-hd{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--subtle)}
+.turn-n{font-weight:600;color:var(--muted)}
+.badge{
+  display:inline-flex;align-items:center;gap:3px;
+  padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600
+}
+.badge.pending{background:var(--warn-dim);color:var(--warn)}
+.badge.running{background:var(--accent-dim);color:var(--accent)}
+.badge.completed{background:var(--ok-dim);color:var(--ok)}
+.badge.failed,.badge.cancelled{background:var(--err-dim);color:var(--err)}
+
+.turn-prompt{
+  background:var(--elevated);border-radius:8px;padding:9px 12px;
+  font-size:13px;white-space:pre-wrap;word-break:break-word;
+  border-left:2px solid var(--accent)
+}
+.turn-result{
+  background:var(--panel);border:1px solid var(--border);border-radius:8px;
+  padding:9px 12px;font:12px/1.65 ui-monospace,"SF Mono",Menlo,monospace;
+  white-space:pre-wrap;word-break:break-word;min-height:32px
+}
+.turn-result.streaming{border-color:var(--accent-dim)}
+.turn-result.is-error{border-color:var(--err);color:var(--err)}
+.cursor{
+  display:inline-block;width:2px;height:12px;background:var(--accent);
+  animation:blink .75s step-end infinite;vertical-align:text-bottom;margin-left:1px
+}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+
+.thinking{display:flex;align-items:center;gap:7px;color:var(--subtle);font-size:11px;padding:2px 0}
+.dots span{
+  display:inline-block;width:4px;height:4px;border-radius:50%;
+  background:var(--subtle);animation:bnc .8s ease-in-out infinite
+}
+.dots span:nth-child(2){animation-delay:.16s}
+.dots span:nth-child(3){animation-delay:.32s}
+@keyframes bnc{0%,80%,100%{transform:scale(.7)}40%{transform:scale(1.2)}}
+
+/* ── Permission card ── */
+.perm-card{
+  border:1px solid var(--warn);background:var(--warn-dim);
+  border-radius:8px;padding:12px
+}
+.perm-title{color:var(--warn);font-weight:600;font-size:12px;margin-bottom:3px}
+.perm-sub{color:var(--muted);font-size:10px;font-family:ui-monospace,monospace;margin-bottom:10px}
+.perm-opts{display:flex;gap:6px;flex-wrap:wrap}
+.perm-btn{
+  padding:4px 10px;border-radius:5px;border:1px solid var(--border);
+  background:var(--elevated);color:var(--fg);font:12px inherit;cursor:pointer
+}
+.perm-btn:hover{background:var(--warn);color:#1a1400;border-color:transparent}
+.perm-btn.reject:hover{background:var(--err);color:#fff}
+
+/* ── Input dock ── */
+.input-dock{border-top:1px solid var(--border);padding:11px 16px;flex-shrink:0;background:var(--bg)}
+.input-row{display:flex;gap:8px;align-items:flex-end}
+textarea.prompt{
+  flex:1;background:var(--input-bg);border:1px solid var(--border);border-radius:8px;
+  color:var(--fg);font:13px/1.5 -apple-system,sans-serif;padding:8px 11px;
+  resize:none;min-height:40px;max-height:160px;overflow-y:auto
+}
+textarea.prompt:focus{outline:none;border-color:var(--border-hi)}
+textarea.prompt::placeholder{color:var(--subtle)}
+.send-btn{
+  background:var(--accent);color:#0c0e12;border:none;border-radius:8px;
+  padding:8px 16px;font:600 13px -apple-system,sans-serif;
+  cursor:pointer;white-space:nowrap;flex-shrink:0;align-self:flex-end
+}
+.send-btn:disabled{opacity:.4;cursor:not-allowed}
+.send-btn:hover:not(:disabled){filter:brightness(1.1)}
+
+/* ── Buttons ── */
+.btn{
+  display:inline-flex;align-items:center;gap:5px;
+  padding:5px 11px;border-radius:6px;border:1px solid var(--border);
+  background:var(--elevated);color:var(--fg);font:inherit;font-size:12px;
+  cursor:pointer;white-space:nowrap;flex-shrink:0
+}
+.btn:hover{background:#252b36}
+.btn.prim{background:var(--accent);color:#0c0e12;border-color:transparent;font-weight:600}
+.btn.prim:hover{filter:brightness(1.1)}
+.btn.ghost{background:none;border-color:transparent;color:var(--muted)}
+.btn.ghost:hover{color:var(--fg);background:var(--elevated)}
+
+/* ── Modal ── */
+.overlay{
+  position:fixed;inset:0;background:rgba(0,0,0,.55);
+  z-index:200;display:flex;align-items:center;justify-content:center
+}
+.overlay.hidden{display:none}
+.modal{
+  background:var(--panel);border:1px solid var(--border);border-radius:10px;
+  padding:22px;width:440px;max-width:96vw;max-height:85vh;overflow-y:auto
+}
+.modal h2{font-size:14px;margin-bottom:16px}
+.field{margin-bottom:12px}
+.field label{display:block;font-size:11px;color:var(--muted);margin-bottom:4px}
+.field input,.field select{
+  width:100%;background:var(--input-bg);border:1px solid var(--border);
+  border-radius:6px;color:var(--fg);padding:7px 9px;font:13px inherit
+}
+.field input:focus,.field select:focus{outline:none;border-color:var(--border-hi)}
+.field select option{background:var(--panel)}
+.modal-foot{display:flex;gap:8px;justify-content:flex-end;margin-top:18px}
+
+/* ── Browse ── */
+.browse-bar{display:flex;align-items:center;gap:7px;margin-bottom:7px}
+.browse-path{
+  flex:1;font:11px/1 ui-monospace,monospace;color:var(--muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap
+}
+.browse-list{
+  background:var(--input-bg);border:1px solid var(--border);
+  border-radius:6px;max-height:200px;overflow-y:auto
+}
+.browse-entry{
+  display:flex;align-items:center;gap:8px;padding:7px 10px;
+  cursor:pointer;font-size:12px;border-bottom:1px solid var(--border)
+}
+.browse-entry:last-child{border-bottom:none}
+.browse-entry:hover{background:var(--elevated)}
+.browse-entry .bn{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.browse-foot{display:flex;gap:7px;margin-top:8px}
+
+/* ── Toast ── */
+.toast-host{
+  position:fixed;bottom:18px;right:18px;z-index:300;
+  display:flex;flex-direction:column;gap:6px;pointer-events:none
+}
+.toast{
+  background:var(--elevated);border:1px solid var(--border);border-radius:6px;
+  padding:7px 12px;font-size:12px;max-width:300px;
+  animation:tin .18s ease
+}
+.toast.err{border-color:var(--err);color:var(--err)}
+@keyframes tin{from{transform:translateX(16px);opacity:0}}
 </style>
 </head>
 <body>
 
-<h1>acp-gateway console <span class="tag" id="healthTag">checking…</span></h1>
-
-<div class="row">
-  <div class="col">
-    <div class="panel">
-      <h2>Connection</h2>
-      <div class="field">
-        <label>Bearer token (<code>MODU_ACP_TOKEN</code>)</label>
-        <input id="token" placeholder="leave empty if gateway runs without auth" autocomplete="off">
-      </div>
-      <div class="toolbar">
-        <button id="refreshAgents" class="secondary">Refresh agents</button>
-        <span id="agentsStatus" class="muted"></span>
-      </div>
-    </div>
-
-    <div class="panel">
-      <h2>Submit task</h2>
-      <div class="field">
-        <label>Agent</label>
-        <select id="agent"></select>
-      </div>
-      <div class="field">
-        <label>Working directory (cwd)</label>
-        <input id="cwd" placeholder="/tmp">
-      </div>
-      <div class="field">
-        <label>Prompt</label>
-        <textarea id="prompt" placeholder="ask the agent something…"></textarea>
-      </div>
-      <div class="toolbar">
-        <button id="submit">POST /api/tasks</button>
-        <span id="submitStatus" class="muted"></span>
-      </div>
-    </div>
-
-    <div class="panel">
-      <h2>API cheatsheet</h2>
-      <div class="api-cheat">
-<b>GET</b>  /healthz
-<b>GET</b>  /api/agents
-<b>POST</b> /api/tasks                 {agent, prompt, cwd}
-<b>GET</b>  /api/tasks/{id}
-<b>GET</b>  /api/tasks/{id}/stream    SSE: status | event | permission
-<b>POST</b> /api/tasks/{id}/approve   {toolCallId, optionId}
-
-All non-<b>/healthz</b> routes require <b>Authorization: Bearer &lt;token&gt;</b>
-when MODU_ACP_TOKEN is set on the gateway.
-      </div>
-    </div>
+<!-- Header -->
+<header>
+  <div class="logo">acp-gateway <span class="ver" id="ver">dev</span></div>
+  <div class="hdot" id="hdot"></div>
+  <span id="htxt">connecting…</span>
+  <div class="agent-chips" id="chips"></div>
+  <div class="token-wrap">
+    <input class="token-input" id="tok" type="password" placeholder="Bearer token" autocomplete="off">
+    <button class="token-eye" id="tokEye">👁</button>
   </div>
+</header>
 
-  <div class="col">
-    <div class="panel">
-      <h2>Task <span id="taskIdTag" class="tag">none</span> <span id="taskStatusTag" class="tag">—</span></h2>
-      <div class="field">
-        <label>result</label>
-        <div class="result" id="result"></div>
-      </div>
-      <div id="permHost"></div>
+<!-- Body -->
+<div class="layout">
+
+  <!-- Sidebar -->
+  <aside>
+    <div class="sb-head">
+      <span class="sb-label">Projects</span>
+      <button class="icon-btn" id="newProjBtn" title="New project">+</button>
+    </div>
+    <div id="projList"></div>
+  </aside>
+
+  <!-- Main -->
+  <main id="main">
+
+    <!-- Empty state -->
+    <div class="empty" id="empty">
+      <div class="empty-icon">💬</div>
+      <p>Select or create a project &amp; session</p>
+      <button class="btn prim" id="emptyNew">+ New Project</button>
     </div>
 
-    <div class="panel">
-      <h2>SSE stream</h2>
-      <div class="toolbar" style="margin-bottom:8px">
-        <button id="clearLog" class="secondary">Clear</button>
-        <span class="muted" id="eventCount">0 events</span>
+    <!-- Session pane -->
+    <div class="spane hidden" id="spane">
+      <div class="spane-head">
+        <div class="breadcrumb" id="breadcrumb"></div>
+        <button class="btn" id="newSessBtn">+ Session</button>
+        <button class="btn ghost hidden" id="cancelBtn" title="Cancel running turn">✕ Cancel</button>
       </div>
-      <pre class="log" id="log"></pre>
+      <div class="turns" id="turns"></div>
+      <div class="input-dock">
+        <div class="input-row">
+          <textarea class="prompt" id="prompt" placeholder="Ask the agent… (⌘↵ to send)" rows="1"></textarea>
+          <button class="send-btn" id="sendBtn">Send</button>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- New Project modal -->
+<div class="overlay hidden" id="projOverlay">
+  <div class="modal">
+    <h2>New Project</h2>
+    <div class="field">
+      <label>Name (optional — defaults to directory name)</label>
+      <input id="pName" placeholder="My Project">
+    </div>
+    <div class="field">
+      <label>Directory</label>
+      <div style="display:flex;gap:7px">
+        <input id="pPath" placeholder="/path/to/project" style="flex:1">
+        <button class="btn" id="browseOpen">Browse…</button>
+      </div>
+    </div>
+    <!-- inline browser -->
+    <div class="hidden" id="browser">
+      <div class="browse-bar">
+        <button class="btn ghost" id="brUp" style="padding:3px 7px">↑</button>
+        <span class="browse-path" id="brPath"></span>
+      </div>
+      <div class="browse-list" id="brList"></div>
+      <div class="browse-foot">
+        <button class="btn prim" id="brSelect">Select this folder</button>
+        <button class="btn" id="brClose">Close</button>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="pCancel">Cancel</button>
+      <button class="btn prim" id="pCreate">Create</button>
     </div>
   </div>
 </div>
 
+<!-- New Session modal -->
+<div class="overlay hidden" id="sessOverlay">
+  <div class="modal">
+    <h2>New Session</h2>
+    <div class="field">
+      <label>Agent</label>
+      <select id="sAgent"></select>
+    </div>
+    <div class="field">
+      <label>Title (optional)</label>
+      <input id="sTitle" placeholder="Auto-filled from first message">
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="sCancel">Cancel</button>
+      <button class="btn prim" id="sCreate">Create</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast-host" id="toasts"></div>
+
 <script>
-(() => {
-  const $ = (id) => document.getElementById(id);
-  const tokenInput = $('token');
-  const agentSel   = $('agent');
-  const cwdInput   = $('cwd');
-  const promptInput= $('prompt');
-  const submitBtn  = $('submit');
-  const log        = $('log');
-  const result     = $('result');
-  const permHost   = $('permHost');
-  const taskIdTag  = $('taskIdTag');
-  const statusTag  = $('taskStatusTag');
-  const eventCount = $('eventCount');
-  const submitStatus = $('submitStatus');
-  const agentsStatus = $('agentsStatus');
-  const healthTag  = $('healthTag');
+'use strict';
 
-  // Remember token + cwd across reloads (sessionStorage = cleared when tab closes).
-  tokenInput.value = sessionStorage.getItem('token') || '';
-  cwdInput.value   = sessionStorage.getItem('cwd')   || '/tmp';
-  tokenInput.addEventListener('change', () => sessionStorage.setItem('token', tokenInput.value));
-  cwdInput.addEventListener('change',   () => sessionStorage.setItem('cwd',   cwdInput.value));
+// ── State ──────────────────────────────────────────────────────────────────
+const S = {
+  token: localStorage.getItem('acp_tok') || '',
+  agents: [],
+  projects: [],
+  byProj: {},         // pid → Session[]
+  expanded: new Set(JSON.parse(localStorage.getItem('acp_exp') || '[]')),
+  sessId: localStorage.getItem('acp_sess') || null,
+  detail: null,       // SessionDetail
+  abort: null,        // stream AbortController
+  brParent: null,     // browse parent path
+  newSessProj: null,  // project id for new session dialog
+};
 
-  let currentTaskId = null;
-  let currentAbort  = null;
-  let events = 0;
+// ── API ────────────────────────────────────────────────────────────────────
+function hdrs() {
+  const h = {};
+  if (S.token) h['Authorization'] = 'Bearer ' + S.token;
+  return h;
+}
 
-  function authHeaders() {
-    const h = { 'Content-Type': 'application/json' };
-    const t = tokenInput.value.trim();
-    if (t) h['Authorization'] = 'Bearer ' + t;
-    return h;
+async function api(method, path, body) {
+  const opts = { method, headers: { ...hdrs(), 'Content-Type': 'application/json' } };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error('HTTP ' + r.status + ': ' + await r.text());
+  const ct = r.headers.get('content-type') || '';
+  return ct.includes('json') ? r.json() : null;
+}
+
+// ── Toast ──────────────────────────────────────────────────────────────────
+function toast(msg, err) {
+  const host = document.getElementById('toasts');
+  const el = document.createElement('div');
+  el.className = 'toast' + (err ? ' err' : '');
+  el.textContent = msg;
+  host.appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+
+// ── Utils ──────────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s || '')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+}
+
+function reltime(iso) {
+  const s = Math.floor((Date.now() - new Date(iso)) / 1000);
+  if (s < 5) return 'just now';
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.floor(s/60) + 'm ago';
+  if (s < 86400) return Math.floor(s/3600) + 'h ago';
+  return new Date(iso).toLocaleDateString();
+}
+
+function base(p) { return (p || '').split('/').filter(Boolean).pop() || p; }
+
+function scrollBottom() {
+  const c = document.getElementById('turns');
+  if (c) c.scrollTop = c.scrollHeight;
+}
+
+function saveExp() { localStorage.setItem('acp_exp', JSON.stringify([...S.expanded])); }
+
+// ── Header ─────────────────────────────────────────────────────────────────
+async function checkHealth() {
+  try {
+    const r = await fetch('/healthz');
+    const dot = document.getElementById('hdot');
+    const txt = document.getElementById('htxt');
+    if (r.ok) { dot.className='hdot ok'; txt.textContent='online'; }
+    else       { dot.className='hdot err'; txt.textContent='HTTP '+r.status; }
+  } catch {
+    document.getElementById('hdot').className='hdot err';
+    document.getElementById('htxt').textContent='unreachable';
   }
+}
 
-  function setTaskTag(id, status) {
-    taskIdTag.textContent = id || 'none';
-    statusTag.textContent = status || '—';
-    statusTag.className = 'tag ' + (
-      status === 'completed' ? 'ok' :
-      status === 'failed' || status === 'cancelled' ? 'err' :
-      status === 'running' ? 'run' :
-      status === 'pending' ? 'warn' : ''
-    );
+async function loadAgents() {
+  try {
+    const [agd, inf] = await Promise.all([
+      api('GET','/api/agents').catch(()=>({agents:[]})),
+      api('GET','/api/info').catch(()=>({})),
+    ]);
+    S.agents = agd.agents || [];
+    if (inf.version) document.getElementById('ver').textContent = inf.version;
+    renderChips();
+  } catch {}
+}
+
+function renderChips() {
+  const host = document.getElementById('chips');
+  host.innerHTML = '';
+  for (const a of S.agents) {
+    const dc = a.status==='running'?'run':a.status==='idle'?'ok':'';
+    const c = document.createElement('div');
+    c.className = 'chip';
+    c.title = `${a.name||a.id}\nstatus: ${a.status}\nsessions: ${a.totalSessions}  turns: ${a.totalTurns}`;
+    c.innerHTML = `<span class="d ${dc}"></span><span>${esc(a.id)}</span>`;
+    host.appendChild(c);
   }
+}
 
-  function appendEvent(kind, payload) {
-    events++;
-    eventCount.textContent = events + ' event' + (events === 1 ? '' : 's');
-    const el = document.createElement('div');
-    el.className = 'evt ' + kind;
-    const hdr = document.createElement('div');
-    hdr.className = 'hdr';
-    const ts = new Date().toISOString().slice(11, 23);
-    hdr.textContent = '[' + ts + '] ' + kind;
-    el.appendChild(hdr);
-    const body = document.createElement('div');
-    body.textContent = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
-    el.appendChild(body);
-    log.appendChild(el);
-    log.scrollTop = log.scrollHeight;
+// ── Sidebar ────────────────────────────────────────────────────────────────
+async function loadAll() {
+  try { const d = await api('GET','/api/projects'); S.projects = d.projects||[]; }
+  catch { S.projects = []; }
+  await Promise.all(S.projects.map(p => loadSessions(p.id)));
+  renderSidebar();
+}
+
+async function loadSessions(pid) {
+  try { const d = await api('GET','/api/sessions?projectId='+pid); S.byProj[pid]=d.sessions||[]; }
+  catch { S.byProj[pid]=[]; }
+}
+
+function renderSidebar() {
+  const list = document.getElementById('projList');
+  if (!S.projects.length) {
+    list.innerHTML = '<div style="padding:14px 12px;font-size:11px;color:var(--subtle);text-align:center">No projects yet</div>';
+    return;
   }
+  list.innerHTML = '';
+  for (const proj of S.projects) {
+    const sessions = S.byProj[proj.id] || [];
+    const open = S.expanded.has(proj.id);
+    const wrap = document.createElement('div');
+    const name = esc(proj.name || base(proj.path));
+    wrap.innerHTML = `
+      <div class="proj-hd" data-pid="${proj.id}">
+        <span class="tri${open?' open':''}">▶</span>
+        <span class="proj-name" title="${esc(proj.path)}">📁 ${name}</span>
+        <span class="proj-cnt">${sessions.length}</span>
+      </div>
+      <div class="proj-sess${open?' open':''}" id="ps-${proj.id}"></div>`;
+    list.appendChild(wrap);
 
-  async function checkHealth() {
-    try {
-      const r = await fetch('/healthz');
-      if (r.ok) { healthTag.textContent = 'online'; healthTag.className = 'tag ok'; }
-      else      { healthTag.textContent = 'status ' + r.status; healthTag.className = 'tag err'; }
-    } catch {
-      healthTag.textContent = 'unreachable';
-      healthTag.className = 'tag err';
+    const sessEl = wrap.querySelector('#ps-'+proj.id);
+    for (const sess of sessions) {
+      const active = sess.id === S.sessId;
+      const dc = sess.status==='running'?'run':sess.status==='idle'?'ok':'';
+      const row = document.createElement('div');
+      row.className = 'sess-row'+(active?' active':'');
+      row.dataset.sid = sess.id;
+      row.innerHTML = `<span class="sdot ${dc}"></span><span class="sess-title">${esc(sess.title||'Session')}</span><span class="sess-agent">${esc(sess.agent)}</span>`;
+      row.onclick = () => openSession(sess.id);
+      sessEl.appendChild(row);
     }
+    // New session entry
+    const ns = document.createElement('div');
+    ns.className = 'sess-row new-sess';
+    ns.innerHTML = `<span>＋</span><span class="sess-title" style="font-style:italic">New session</span>`;
+    ns.onclick = () => showNewSess(proj.id);
+    sessEl.appendChild(ns);
+
+    wrap.querySelector('.proj-hd').onclick = () => toggleProj(proj.id);
+  }
+}
+
+function toggleProj(pid) {
+  S.expanded.has(pid) ? S.expanded.delete(pid) : S.expanded.add(pid);
+  saveExp();
+  renderSidebar();
+}
+
+// ── Session view ──────────────────────────────────────────────────────────
+async function openSession(id) {
+  if (S.abort) { S.abort.abort(); S.abort=null; }
+  S.sessId = id;
+  localStorage.setItem('acp_sess', id);
+  try {
+    S.detail = await api('GET', '/api/sessions/'+id);
+  } catch(e) { toast('Load session: '+e.message, true); return; }
+  renderSidebar();
+  renderPane();
+  const running = S.detail.turns?.find(t => t.status==='running'||t.status==='pending');
+  if (running) startStream(id, running.id);
+}
+
+function renderPane() {
+  const d = S.detail;
+  document.getElementById('empty').classList.add('hidden');
+  const pane = document.getElementById('spane');
+  pane.classList.remove('hidden');
+
+  const proj = S.projects.find(p=>p.id===d.projectId);
+  const pname = proj ? (proj.name||base(proj.path)) : d.projectId;
+  document.getElementById('breadcrumb').innerHTML =
+    `<span style="color:var(--muted)">${esc(pname)}</span>`+
+    `<span class="sep">›</span>`+
+    `<span class="last">${esc(d.title||'Session')}</span>`+
+    `<span style="color:var(--subtle);font-size:10px;margin-left:6px">${esc(d.agent)}</span>`;
+
+  const hasRun = d.turns?.some(t=>t.status==='running'||t.status==='pending');
+  document.getElementById('cancelBtn').classList.toggle('hidden', !hasRun);
+  renderTurns();
+  document.getElementById('prompt').focus();
+}
+
+function renderTurns() {
+  const d = S.detail;
+  const c = document.getElementById('turns');
+  c.innerHTML = '';
+  if (!d.turns?.length) {
+    c.innerHTML = '<div style="text-align:center;padding:40px;font-size:12px;color:var(--subtle)">No turns yet — send the first message below</div>';
+    return;
+  }
+  d.turns.forEach((t,i) => c.appendChild(makeTurn(t, i+1)));
+  scrollBottom();
+}
+
+function makeTurn(turn, n) {
+  const el = document.createElement('div');
+  el.className = 'turn';
+  el.dataset.tid = turn.id;
+
+  const statusLabel = {pending:'⏳ pending', running:'⟳ running', completed:'✓ done',
+                       failed:'✕ failed', cancelled:'✕ cancelled'}[turn.status] || turn.status;
+  let resultHtml;
+  if (turn.status==='running'||turn.status==='pending') {
+    resultHtml = thinkingHtml();
+  } else if (turn.error) {
+    resultHtml = esc(turn.error);
+  } else {
+    resultHtml = esc(turn.result||'');
   }
 
-  async function loadAgents() {
-    agentsStatus.textContent = 'loading…';
-    try {
-      const r = await fetch('/api/agents', { headers: authHeaders() });
-      if (!r.ok) {
-        agentsStatus.textContent = 'HTTP ' + r.status + ' ' + (await r.text());
-        agentSel.innerHTML = '';
-        return;
-      }
-      const data = await r.json();
-      const list = data.agents || [];
-      agentSel.innerHTML = list.map(id => `<option value="${id}">${id}</option>`).join('');
-      agentsStatus.textContent = list.length + ' agent' + (list.length === 1 ? '' : 's');
-    } catch (e) {
-      agentsStatus.textContent = 'error: ' + e.message;
-    }
-  }
+  el.innerHTML = `
+    <div class="turn-hd">
+      <span class="turn-n">Turn ${n}</span>
+      <span class="badge ${turn.status}">${statusLabel}</span>
+      <span>${reltime(turn.createdAt)}</span>
+    </div>
+    <div class="turn-prompt">${esc(turn.prompt)}</div>
+    <div class="turn-result${turn.status==='running'?' streaming':''}${turn.status==='failed'?' is-error':''}" id="res-${turn.id}">${resultHtml}</div>`;
+  return el;
+}
 
-  // Minimal SSE parser over fetch ReadableStream — needed because EventSource
-  // cannot set custom headers (no way to pass the Bearer token).
-  async function streamTask(taskId) {
-    const ctrl = new AbortController();
-    currentAbort = ctrl;
-    const r = await fetch('/api/tasks/' + taskId + '/stream', {
-      headers: authHeaders(),
-      signal: ctrl.signal,
+function thinkingHtml() {
+  return `<div class="thinking"><div class="dots"><span></span><span></span><span></span></div> thinking…</div>`;
+}
+
+// ── Stream ─────────────────────────────────────────────────────────────────
+async function startStream(sessId, turnId) {
+  if (S.abort) S.abort.abort();
+  const ctrl = new AbortController();
+  S.abort = ctrl;
+
+  const resEl = () => document.getElementById('res-'+turnId);
+  let accumulated = '', hasContent = false;
+
+  if (resEl()) { resEl().innerHTML = thinkingHtml(); resEl().classList.add('streaming'); }
+
+  try {
+    const r = await fetch(`/api/sessions/${sessId}/turns/${turnId}/stream`, {
+      headers: hdrs(), signal: ctrl.signal,
     });
-    if (!r.ok || !r.body) {
-      appendEvent('error', 'stream HTTP ' + r.status);
-      return;
-    }
+    if (!r.ok || !r.body) throw new Error('HTTP '+r.status);
+
     const reader = r.body.getReader();
     const dec = new TextDecoder();
     let buf = '';
     while (true) {
-      const { value, done } = await reader.read();
+      const {value, done} = await reader.read();
       if (done) break;
-      buf += dec.decode(value, { stream: true });
+      buf += dec.decode(value, {stream:true});
       let idx;
       while ((idx = buf.indexOf('\n\n')) >= 0) {
-        const frame = buf.slice(0, idx);
-        buf = buf.slice(idx + 2);
-        let ev = 'message', data = '';
+        const frame = buf.slice(0, idx); buf = buf.slice(idx+2);
+        let ev='message', data='';
         for (const line of frame.split('\n')) {
           if (line.startsWith('event:')) ev = line.slice(6).trim();
           else if (line.startsWith('data:')) data += line.slice(5).trim();
         }
         let parsed = data;
         try { parsed = JSON.parse(data); } catch {}
-        handleFrame(ev, parsed);
+
+        if (ev==='event' && parsed?.delta) {
+          if (!hasContent) { if(resEl()) resEl().innerHTML=''; hasContent=true; }
+          accumulated += parsed.delta;
+          if (resEl()) { resEl().innerHTML = esc(accumulated)+'<span class="cursor"></span>'; scrollBottom(); }
+
+        } else if (ev==='status' && parsed) {
+          const tEl = document.querySelector(`[data-tid="${turnId}"]`);
+          if (tEl) {
+            const b = tEl.querySelector('.badge');
+            if (b) { b.className='badge '+parsed.status; b.textContent={completed:'✓ done',failed:'✕ failed',cancelled:'✕ cancelled',running:'⟳ running',pending:'⏳ pending'}[parsed.status]||parsed.status; }
+          }
+          if (resEl()) {
+            resEl().classList.remove('streaming');
+            resEl().querySelector('.cursor')?.remove();
+            if (parsed.error) { resEl().classList.add('is-error'); resEl().textContent=parsed.error; }
+            else if (parsed.result && !hasContent) { resEl().textContent=parsed.result; }
+          }
+          if (['completed','failed','cancelled'].includes(parsed.status)) {
+            document.getElementById('sendBtn').disabled = false;
+            document.getElementById('cancelBtn').classList.add('hidden');
+            loadAgents();
+          }
+
+        } else if (ev==='permission' && parsed) {
+          renderPerm(parsed, turnId, sessId);
+          scrollBottom();
+        }
       }
     }
+  } catch(e) {
+    if (e.name!=='AbortError') toast('Stream: '+e.message, true);
+  } finally {
+    if (S.abort===ctrl) S.abort=null;
   }
+}
 
-  function handleFrame(ev, data) {
-    appendEvent(ev, data);
-    if (ev === 'status' && data && typeof data === 'object') {
-      setTaskTag(data.id, data.status);
-      if (data.result) result.textContent = data.result;
-      if (data.error)  result.textContent = 'ERROR: ' + data.error;
-    } else if (ev === 'event' && data && data.delta) {
-      // Live-append streaming text deltas into the result box.
-      if (!result.dataset.hadDelta) { result.textContent = ''; result.dataset.hadDelta = '1'; }
-      result.textContent += data.delta;
-    } else if (ev === 'permission') {
-      renderPermission(data);
-    }
+function renderPerm(p, turnId, sessId) {
+  const tEl = document.querySelector(`[data-tid="${turnId}"]`);
+  if (!tEl) return;
+  tEl.querySelector('.perm-card')?.remove();
+
+  const card = document.createElement('div');
+  card.className = 'perm-card';
+  const isReject = k => k && (k.startsWith('reject')||k==='deny');
+  card.innerHTML = `
+    <div class="perm-title">⚠ ${esc(p.title||p.toolCallId)}</div>
+    <div class="perm-sub">kind=${esc(p.kind||'?')} · id=${esc(p.toolCallId)}</div>
+    <div class="perm-opts">${(p.options||[]).map(o=>`
+      <button class="perm-btn${isReject(o.kind)?' reject':''}"
+        data-oid="${esc(o.optionId)}" data-tid="${esc(p.toolCallId)}">${esc(o.name||o.optionId)}</button>`).join('')}
+    </div>`;
+  card.querySelectorAll('.perm-btn').forEach(b => {
+    b.onclick = async () => {
+      try { await api('POST',`/api/sessions/${sessId}/turns/${turnId}/approve`,{toolCallId:b.dataset.tid,optionId:b.dataset.oid}); card.remove(); }
+      catch(e) { toast('Approve: '+e.message, true); }
+    };
+  });
+  tEl.appendChild(card);
+}
+
+// ── Send ───────────────────────────────────────────────────────────────────
+async function send() {
+  const txt = document.getElementById('prompt').value.trim();
+  if (!txt || !S.sessId) return;
+  document.getElementById('sendBtn').disabled = true;
+  document.getElementById('prompt').value = '';
+  autoResize(document.getElementById('prompt'));
+  try {
+    const turn = await api('POST',`/api/sessions/${S.sessId}/turns`,{prompt:txt});
+    if (!S.detail.turns) S.detail.turns=[];
+    S.detail.turns.push(turn);
+    const c = document.getElementById('turns');
+    const empty = c.querySelector('div[style]');
+    if (empty) empty.remove();
+    c.appendChild(makeTurn(turn, S.detail.turns.length));
+    scrollBottom();
+    document.getElementById('cancelBtn').classList.remove('hidden');
+    startStream(S.sessId, turn.id);
+  } catch(e) {
+    toast('Send: '+e.message, true);
+    document.getElementById('sendBtn').disabled = false;
   }
+}
 
-  function renderPermission(p) {
-    permHost.innerHTML = '';
-    const box = document.createElement('div');
-    box.className = 'perm-box';
-    const title = document.createElement('div');
-    title.className = 'title';
-    title.textContent = '⚠ permission requested: ' + (p.title || p.toolCallId);
-    box.appendChild(title);
-    const kind = document.createElement('div');
-    kind.className = 'muted';
-    kind.textContent = 'kind=' + (p.kind || '?') + ' · toolCallId=' + p.toolCallId;
-    box.appendChild(kind);
-    const opts = document.createElement('div');
-    opts.className = 'perm-opts';
-    for (const o of (p.options || [])) {
-      const b = document.createElement('button');
-      b.textContent = o.name + ' (' + o.optionId + ')';
-      b.className = o.kind && o.kind.startsWith('reject') ? 'secondary' : '';
-      b.onclick = () => approve(p.toolCallId, o.optionId, box);
-      opts.appendChild(b);
-    }
-    box.appendChild(opts);
-    permHost.appendChild(box);
-  }
+// ── New Project ────────────────────────────────────────────────────────────
+function showNewProj() {
+  document.getElementById('pName').value='';
+  document.getElementById('pPath').value='';
+  document.getElementById('browser').classList.add('hidden');
+  document.getElementById('projOverlay').classList.remove('hidden');
+  document.getElementById('pName').focus();
+  browseTo(null);
+}
 
-  async function approve(toolCallId, optionId, box) {
-    try {
-      const r = await fetch('/api/tasks/' + currentTaskId + '/approve', {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify({ toolCallId, optionId }),
+async function browseTo(path) {
+  const url = '/api/browse?dirs=true'+(path?'&path='+encodeURIComponent(path):'');
+  try {
+    const d = await api('GET', url);
+    S.brParent = d.parent;
+    document.getElementById('brPath').textContent = d.path;
+    document.getElementById('pPath').value = d.path;
+    const list = document.getElementById('brList');
+    list.innerHTML = '';
+    const dirs = (d.files||[]).filter(f=>f.isDir);
+    if (!dirs.length) {
+      list.innerHTML = '<div style="padding:10px;font-size:11px;color:var(--subtle);text-align:center">No subdirectories</div>';
+    } else {
+      dirs.forEach(f => {
+        const el = document.createElement('div');
+        el.className = 'browse-entry';
+        el.innerHTML = `<span>📁</span><span class="bn">${esc(f.name)}</span><span style="color:var(--subtle);font-size:10px">›</span>`;
+        el.onclick = () => browseTo(f.path);
+        list.appendChild(el);
       });
-      if (!r.ok) {
-        appendEvent('error', 'approve HTTP ' + r.status + ': ' + (await r.text()));
-        return;
-      }
-      box.remove();
-      appendEvent('approve', { toolCallId, optionId });
-    } catch (e) {
-      appendEvent('error', 'approve: ' + e.message);
     }
-  }
+    document.getElementById('browser').classList.remove('hidden');
+  } catch(e) { toast('Browse: '+e.message, true); }
+}
 
-  async function submit() {
-    const agent = agentSel.value;
-    const prompt = promptInput.value.trim();
-    const cwd = cwdInput.value.trim();
-    if (!agent) { submitStatus.textContent = 'pick an agent first'; return; }
-    if (!prompt) { submitStatus.textContent = 'prompt is empty'; return; }
+async function createProj() {
+  const path = document.getElementById('pPath').value.trim();
+  const name = document.getElementById('pName').value.trim();
+  if (!path) { toast('Path is required', true); return; }
+  try {
+    const proj = await api('POST','/api/projects',{name:name||undefined,path});
+    S.projects.push(proj); S.byProj[proj.id]=[]; S.expanded.add(proj.id); saveExp();
+    document.getElementById('projOverlay').classList.add('hidden');
+    renderSidebar();
+    toast('Project created: '+(proj.name||base(proj.path)));
+  } catch(e) { toast('Create: '+e.message, true); }
+}
 
-    // Reset UI for the new task.
-    if (currentAbort) currentAbort.abort();
-    log.innerHTML = '';
-    permHost.innerHTML = '';
-    result.textContent = '';
-    result.dataset.hadDelta = '';
-    events = 0; eventCount.textContent = '0 events';
+// ── New Session ────────────────────────────────────────────────────────────
+function showNewSess(pid) {
+  S.newSessProj = pid;
+  const sel = document.getElementById('sAgent');
+  sel.innerHTML = S.agents.length
+    ? S.agents.map(a=>`<option value="${esc(a.id)}">${esc(a.name||a.id)}</option>`).join('')
+    : '<option value="">No agents configured</option>';
+  document.getElementById('sTitle').value = '';
+  document.getElementById('sessOverlay').classList.remove('hidden');
+}
 
-    submitBtn.disabled = true;
-    submitStatus.textContent = 'posting…';
-    try {
-      const r = await fetch('/api/tasks', {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify({ agent, prompt, cwd }),
-      });
-      if (!r.ok) {
-        submitStatus.textContent = 'HTTP ' + r.status + ' ' + (await r.text());
-        submitBtn.disabled = false;
-        return;
-      }
-      const t = await r.json();
-      currentTaskId = t.id;
-      setTaskTag(t.id, t.status);
-      submitStatus.textContent = 'accepted as ' + t.id;
-      streamTask(t.id).catch(e => {
-        if (e.name !== 'AbortError') appendEvent('error', 'stream: ' + e.message);
-      }).finally(() => { submitBtn.disabled = false; });
-    } catch (e) {
-      submitStatus.textContent = 'error: ' + e.message;
-      submitBtn.disabled = false;
-    }
-  }
+async function createSess() {
+  const agent = document.getElementById('sAgent').value;
+  const title = document.getElementById('sTitle').value.trim();
+  if (!S.newSessProj||!agent) return;
+  try {
+    const sess = await api('POST','/api/sessions',{projectId:S.newSessProj,agent,title:title||undefined});
+    if (!S.byProj[S.newSessProj]) S.byProj[S.newSessProj]=[];
+    S.byProj[S.newSessProj].push(sess);
+    S.expanded.add(S.newSessProj); saveExp();
+    document.getElementById('sessOverlay').classList.add('hidden');
+    renderSidebar();
+    await openSession(sess.id);
+  } catch(e) { toast('Create session: '+e.message, true); }
+}
 
-  $('refreshAgents').onclick = loadAgents;
-  $('clearLog').onclick = () => { log.innerHTML = ''; events = 0; eventCount.textContent = '0 events'; };
-  submitBtn.onclick = submit;
-  promptInput.addEventListener('keydown', (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') submit();
+// ── Auto-resize textarea ───────────────────────────────────────────────────
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 160) + 'px';
+}
+
+// ── Wire events ────────────────────────────────────────────────────────────
+function wire() {
+  // Token
+  const tok = document.getElementById('tok');
+  tok.value = S.token;
+  tok.onchange = () => {
+    S.token = tok.value.trim();
+    localStorage.setItem('acp_tok', S.token);
+    loadAgents(); loadAll();
+  };
+  document.getElementById('tokEye').onclick = () => {
+    tok.type = tok.type==='password' ? 'text' : 'password';
+  };
+
+  // Sidebar / new project
+  document.getElementById('newProjBtn').onclick = showNewProj;
+  document.getElementById('emptyNew').onclick = showNewProj;
+
+  // New project modal
+  document.getElementById('browseOpen').onclick = () => browseTo(document.getElementById('pPath').value.trim()||null);
+  document.getElementById('brUp').onclick = () => S.brParent && browseTo(S.brParent);
+  document.getElementById('brSelect').onclick = () => document.getElementById('browser').classList.add('hidden');
+  document.getElementById('brClose').onclick = () => document.getElementById('browser').classList.add('hidden');
+  document.getElementById('pCancel').onclick = () => document.getElementById('projOverlay').classList.add('hidden');
+  document.getElementById('pCreate').onclick = createProj;
+  document.getElementById('pName').onkeydown = e => e.key==='Enter' && document.getElementById('pPath').focus();
+  document.getElementById('pPath').onkeydown = e => e.key==='Enter' && createProj();
+
+  // New session modal
+  document.getElementById('newSessBtn').onclick = () => {
+    const proj = S.projects.find(p=>S.byProj[p.id]?.some(s=>s.id===S.sessId));
+    showNewSess(proj?.id||S.projects[0]?.id);
+  };
+  document.getElementById('sCancel').onclick = () => document.getElementById('sessOverlay').classList.add('hidden');
+  document.getElementById('sCreate').onclick = createSess;
+
+  // Cancel session
+  document.getElementById('cancelBtn').onclick = async () => {
+    if (!S.sessId) return;
+    try { await api('POST',`/api/sessions/${S.sessId}/cancel`); toast('Cancel requested'); }
+    catch(e) { toast('Cancel: '+e.message, true); }
+  };
+
+  // Send
+  document.getElementById('sendBtn').onclick = send;
+  const prompt = document.getElementById('prompt');
+  prompt.addEventListener('input', () => autoResize(prompt));
+  prompt.addEventListener('keydown', e => {
+    if ((e.metaKey||e.ctrlKey) && e.key==='Enter') { e.preventDefault(); send(); }
   });
 
-  checkHealth();
-  loadAgents();
-})();
+  // Close modals on backdrop click / Escape
+  ['projOverlay','sessOverlay'].forEach(id => {
+    document.getElementById(id).onclick = e => { if(e.target===e.currentTarget) e.currentTarget.classList.add('hidden'); };
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key==='Escape') {
+      document.getElementById('projOverlay').classList.add('hidden');
+      document.getElementById('sessOverlay').classList.add('hidden');
+    }
+  });
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────
+async function init() {
+  wire();
+  await Promise.all([checkHealth(), loadAgents(), loadAll()]);
+
+  if (S.sessId) {
+    const exists = Object.values(S.byProj).flat().some(s=>s.id===S.sessId);
+    if (exists) await openSession(S.sessId);
+    else { S.sessId=null; localStorage.removeItem('acp_sess'); }
+  }
+
+  // Periodic refresh
+  setInterval(() => { checkHealth(); loadAgents(); }, 20000);
+}
+
+init();
 </script>
 </body>
 </html>
