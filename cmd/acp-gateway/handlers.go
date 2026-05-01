@@ -51,6 +51,13 @@ func (s *Server) buildRouter() http.Handler {
 	mux.HandleFunc("DELETE /api/projects/{id}", s.handleDeleteProject)
 	mux.HandleFunc("GET /api/projects/{id}/files", s.handleProjectFiles)
 
+	// Profiles
+	mux.HandleFunc("GET /api/profiles", s.handleListProfiles)
+	mux.HandleFunc("POST /api/profiles", s.handleCreateProfile)
+	mux.HandleFunc("GET /api/profiles/{id}", s.handleGetProfile)
+	mux.HandleFunc("PUT /api/profiles/{id}", s.handleUpdateProfile)
+	mux.HandleFunc("DELETE /api/profiles/{id}", s.handleDeleteProfile)
+
 	// Sessions
 	mux.HandleFunc("GET /api/sessions", s.handleListSessions)
 	mux.HandleFunc("POST /api/sessions", s.handleCreateSession)
@@ -111,9 +118,9 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 
 // SystemInfo is returned by GET /api/system.
 type SystemInfo struct {
-	Goroutines int    `json:"goroutines"`
-	HeapMB     uint64 `json:"heapMB"`
-	AllocMB    uint64 `json:"allocMB"`
+	Goroutines  int     `json:"goroutines"`
+	HeapMB      uint64  `json:"heapMB"`
+	AllocMB     uint64  `json:"allocMB"`
 	DiskTotalGB float64 `json:"diskTotalGB"`
 	DiskFreeGB  float64 `json:"diskFreeGB"`
 	DiskUsedPct float64 `json:"diskUsedPct"`
@@ -144,14 +151,14 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 
 // AgentDetail is returned by GET /api/agents and GET /api/agents/{id}.
 type AgentDetail struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	Command       string `json:"command"`
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Command       string   `json:"command"`
 	Args          []string `json:"args,omitempty"`
-	Status        string `json:"status"` // "running" | "idle" | "offline"
-	ActiveTurns   int    `json:"activeTurns"`
-	TotalSessions int    `json:"totalSessions"`
-	TotalTurns    int    `json:"totalTurns"`
+	Status        string   `json:"status"` // "running" | "idle" | "offline"
+	ActiveTurns   int      `json:"activeTurns"`
+	TotalSessions int      `json:"totalSessions"`
+	TotalTurns    int      `json:"totalTurns"`
 }
 
 func (s *Server) agentDetail(id string) (AgentDetail, bool) {
@@ -465,6 +472,87 @@ func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// ---------- profiles ----------
+
+func (s *Server) handleListProfiles(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"profiles": s.store.ListProfiles()})
+}
+
+type profileBody struct {
+	Name         string `json:"name"`
+	AgentID      string `json:"agentId"`
+	SystemPrompt string `json:"systemPrompt"`
+	Description  string `json:"description"`
+	Icon         string `json:"icon"`
+}
+
+func (s *Server) decodeProfileBody(w http.ResponseWriter, r *http.Request) (profileBody, bool) {
+	var body profileBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return body, false
+	}
+	body.Name = strings.TrimSpace(body.Name)
+	body.AgentID = strings.TrimSpace(body.AgentID)
+	body.Description = strings.TrimSpace(body.Description)
+	body.Icon = strings.TrimSpace(body.Icon)
+	if body.Name == "" || body.AgentID == "" {
+		http.Error(w, "name and agentId are required", http.StatusBadRequest)
+		return body, false
+	}
+	if !slices.Contains(s.registry.List(), body.AgentID) {
+		http.Error(w, fmt.Sprintf("unknown agent %q", body.AgentID), http.StatusBadRequest)
+		return body, false
+	}
+	return body, true
+}
+
+func (s *Server) handleCreateProfile(w http.ResponseWriter, r *http.Request) {
+	body, ok := s.decodeProfileBody(w, r)
+	if !ok {
+		return
+	}
+	p, err := s.store.CreateProfile(body.Name, body.AgentID, body.SystemPrompt, body.Description, body.Icon)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusCreated, p)
+}
+
+func (s *Server) handleGetProfile(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	p, ok := s.store.GetProfile(id)
+	if !ok {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	body, ok := s.decodeProfileBody(w, r)
+	if !ok {
+		return
+	}
+	p, err := s.store.UpdateProfile(id, body.Name, body.AgentID, body.SystemPrompt, body.Description, body.Icon)
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+func (s *Server) handleDeleteProfile(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !s.store.DeleteProfile(id) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // ---------- sessions ----------
 
 func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
@@ -476,11 +564,24 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		ProjectID string `json:"projectId"`
 		Agent     string `json:"agent"`
+		ProfileID string `json:"profileId"`
 		Title     string `json:"title"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
+	}
+	body.Agent = strings.TrimSpace(body.Agent)
+	body.ProfileID = strings.TrimSpace(body.ProfileID)
+	if body.ProfileID != "" {
+		p, ok := s.store.GetProfile(body.ProfileID)
+		if !ok {
+			http.Error(w, fmt.Sprintf("unknown profile %q", body.ProfileID), http.StatusBadRequest)
+			return
+		}
+		if body.Agent == "" {
+			body.Agent = p.AgentID
+		}
 	}
 	if body.ProjectID == "" || body.Agent == "" {
 		http.Error(w, "projectId and agent are required", http.StatusBadRequest)
@@ -490,7 +591,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("unknown agent %q", body.Agent), http.StatusBadRequest)
 		return
 	}
-	sess, err := s.store.CreateSession(body.ProjectID, body.Agent, body.Title)
+	sess, err := s.store.CreateSession(body.ProjectID, body.Agent, body.Title, body.ProfileID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

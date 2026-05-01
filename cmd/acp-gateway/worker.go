@@ -68,7 +68,11 @@ func runTurn(parent context.Context, t *Turn, store *Store, runner Runner) {
 		},
 	}
 
-	msg, err := runner.Run(ctx, t.Prompt, t.Cwd, hooks)
+	actualPrompt := t.Prompt
+	if t.SystemPrompt != "" {
+		actualPrompt = "[System instructions]\n" + t.SystemPrompt + "\n\n[User]\n" + t.Prompt
+	}
+	msg, err := runner.Run(ctx, actualPrompt, t.Cwd, hooks)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			store.FailTurn(t.ID, "cancelled")

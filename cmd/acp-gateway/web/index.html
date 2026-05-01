@@ -86,6 +86,7 @@ aside{
   justify-content:center;cursor:pointer;font-size:14px;line-height:1;flex-shrink:0
 }
 .icon-btn:hover{background:var(--elevated);color:var(--fg)}
+.sb-actions{display:flex;gap:5px}
 #projList{flex:1;overflow-y:auto;padding:4px 0}
 
 .proj-hd{
@@ -232,19 +233,42 @@ textarea.prompt::placeholder{color:var(--subtle)}
   z-index:200;display:flex;align-items:center;justify-content:center
 }
 .overlay.hidden{display:none}
+.hidden{display:none!important}
 .modal{
   background:var(--panel);border:1px solid var(--border);border-radius:10px;
-  padding:22px;width:440px;max-width:96vw;max-height:85vh;overflow-y:auto
+  padding:22px;width:480px;max-width:96vw;max-height:85vh;overflow-y:auto
 }
 .modal h2{font-size:14px;margin-bottom:16px}
 .field{margin-bottom:12px}
 .field label{display:block;font-size:11px;color:var(--muted);margin-bottom:4px}
-.field input,.field select{
+.field input,.field select,.field textarea{
   width:100%;background:var(--input-bg);border:1px solid var(--border);
   border-radius:6px;color:var(--fg);padding:7px 9px;font:13px inherit
 }
-.field input:focus,.field select:focus{outline:none;border-color:var(--border-hi)}
+.field input:focus,.field select:focus,.field textarea:focus{outline:none;border-color:var(--border-hi)}
 .field select option{background:var(--panel)}
+.field textarea{resize:vertical}
+.field textarea.system-prompt{min-height:100px;font:12px/1.5 ui-monospace,"SF Mono",Menlo,monospace}
+.profile-preview{
+  background:var(--input-bg);border:1px solid var(--border);border-radius:6px;
+  padding:8px 9px;color:var(--muted);font:11px/1.45 ui-monospace,"SF Mono",Menlo,monospace;
+  max-height:74px;overflow:hidden;white-space:pre-wrap
+}
+.profile-list{display:flex;flex-direction:column;gap:8px}
+.profile-row{
+  display:flex;gap:10px;align-items:flex-start;border:1px solid var(--border);
+  background:var(--elevated);border-radius:8px;padding:10px
+}
+.profile-icon{width:30px;text-align:center;font-size:24px;line-height:1.2;flex-shrink:0}
+.profile-main{flex:1;min-width:0}
+.profile-name{font-weight:600;font-size:13px}
+.profile-meta{font:11px/1.4 ui-monospace,"SF Mono",Menlo,monospace;color:var(--accent)}
+.profile-desc{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.profile-actions{display:flex;gap:6px;flex-shrink:0}
+.profile-form{
+  border:1px solid var(--border-hi);background:var(--elevated);
+  border-radius:8px;padding:12px;margin-bottom:12px
+}
 .modal-foot{display:flex;gap:8px;justify-content:flex-end;margin-top:18px}
 
 /* ── Browse ── */
@@ -301,7 +325,10 @@ textarea.prompt::placeholder{color:var(--subtle)}
   <aside>
     <div class="sb-head">
       <span class="sb-label">Projects</span>
-      <button class="icon-btn" id="newProjBtn" title="New project">+</button>
+      <div class="sb-actions">
+        <button class="icon-btn" id="profilesBtn" title="Profiles">🎭</button>
+        <button class="icon-btn" id="newProjBtn" title="New project">+</button>
+      </div>
     </div>
     <div id="projList"></div>
   </aside>
@@ -374,8 +401,16 @@ textarea.prompt::placeholder{color:var(--subtle)}
   <div class="modal">
     <h2>New Session</h2>
     <div class="field">
+      <label>Profile</label>
+      <select id="sProfile"></select>
+    </div>
+    <div class="field">
       <label>Agent</label>
       <select id="sAgent"></select>
+    </div>
+    <div class="field hidden" id="sProfilePreviewField">
+      <label>System Prompt</label>
+      <div class="profile-preview" id="sProfilePreview"></div>
     </div>
     <div class="field">
       <label>Title (optional)</label>
@@ -384,6 +419,21 @@ textarea.prompt::placeholder{color:var(--subtle)}
     <div class="modal-foot">
       <button class="btn" id="sCancel">Cancel</button>
       <button class="btn prim" id="sCreate">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- Profiles modal -->
+<div class="overlay hidden" id="profilesOverlay">
+  <div class="modal">
+    <h2>Profiles</h2>
+    <div id="profileFormHost"></div>
+    <div style="display:flex;justify-content:flex-end;margin-bottom:12px">
+      <button class="btn prim" id="newProfileBtn">+ New Profile</button>
+    </div>
+    <div class="profile-list" id="profileList"></div>
+    <div class="modal-foot">
+      <button class="btn" id="profilesClose">Close</button>
     </div>
   </div>
 </div>
@@ -397,6 +447,7 @@ textarea.prompt::placeholder{color:var(--subtle)}
 const S = {
   token: localStorage.getItem('acp_tok') || '',
   agents: [],
+  profiles: [],
   projects: [],
   byProj: {},         // pid → Session[]
   expanded: new Set(JSON.parse(localStorage.getItem('acp_exp') || '[]')),
@@ -450,6 +501,11 @@ function reltime(iso) {
 }
 
 function base(p) { return (p || '').split('/').filter(Boolean).pop() || p; }
+function profileById(id) { return S.profiles.find(p => p.id === id); }
+function trunc(s, n) {
+  s = String(s || '');
+  return s.length > n ? s.slice(0, n - 1) + '…' : s;
+}
 
 function scrollBottom() {
   const c = document.getElementById('turns');
@@ -482,6 +538,15 @@ async function loadAgents() {
     if (inf.version) document.getElementById('ver').textContent = inf.version;
     renderChips();
   } catch {}
+}
+
+async function loadProfiles() {
+  try {
+    const d = await api('GET','/api/profiles');
+    S.profiles = d.profiles || [];
+  } catch {
+    S.profiles = [];
+  }
 }
 
 function renderChips() {
@@ -581,11 +646,16 @@ function renderPane() {
 
   const proj = S.projects.find(p=>p.id===d.projectId);
   const pname = proj ? (proj.name||base(proj.path)) : d.projectId;
+  const prof = profileById(d.profileId);
+  const profHtml = prof
+    ? `<span style="color:var(--subtle);font-size:10px;margin-left:6px">${esc(prof.icon||'🤖')} ${esc(prof.name)}</span>`
+    : '';
   document.getElementById('breadcrumb').innerHTML =
     `<span style="color:var(--muted)">${esc(pname)}</span>`+
     `<span class="sep">›</span>`+
     `<span class="last">${esc(d.title||'Session')}</span>`+
-    `<span style="color:var(--subtle);font-size:10px;margin-left:6px">${esc(d.agent)}</span>`;
+    `<span style="color:var(--subtle);font-size:10px;margin-left:6px">${esc(d.agent)}</span>`+
+    profHtml;
 
   const hasRun = d.turns?.some(t=>t.status==='running'||t.status==='pending');
   document.getElementById('cancelBtn').classList.toggle('hidden', !hasRun);
@@ -802,23 +872,141 @@ async function createProj() {
   } catch(e) { toast('Create: '+e.message, true); }
 }
 
+// ── Profiles ──────────────────────────────────────────────────────────────
+function showProfiles() {
+  document.getElementById('profilesOverlay').classList.remove('hidden');
+  renderProfiles();
+}
+
+function renderProfiles() {
+  document.getElementById('profileFormHost').innerHTML = '';
+  const list = document.getElementById('profileList');
+  if (!S.profiles.length) {
+    list.innerHTML = '<div style="padding:16px;text-align:center;color:var(--subtle);font-size:12px">No profiles yet</div>';
+    return;
+  }
+  list.innerHTML = '';
+  for (const p of S.profiles) {
+    const row = document.createElement('div');
+    row.className = 'profile-row';
+    row.innerHTML = `
+      <div class="profile-icon">${esc(p.icon||'🤖')}</div>
+      <div class="profile-main">
+        <div class="profile-name">${esc(p.name)}</div>
+        <div class="profile-meta">${esc(p.agentId)}</div>
+        <div class="profile-desc">${esc(p.description||'')}</div>
+      </div>
+      <div class="profile-actions">
+        <button class="btn" data-act="edit">Edit</button>
+        <button class="btn ghost" data-act="delete">Delete</button>
+      </div>`;
+    row.querySelector('[data-act="edit"]').onclick = () => showProfileForm(p);
+    row.querySelector('[data-act="delete"]').onclick = () => deleteProfile(p.id);
+    list.appendChild(row);
+  }
+}
+
+function agentOptions(selected) {
+  return S.agents.length
+    ? S.agents.map(a=>`<option value="${esc(a.id)}"${a.id===selected?' selected':''}>${esc(a.name||a.id)}</option>`).join('')
+    : '<option value="">No agents configured</option>';
+}
+
+function showProfileForm(profile) {
+  const host = document.getElementById('profileFormHost');
+  host.innerHTML = `
+    <div class="profile-form">
+      <div class="field">
+        <label>Icon</label>
+        <input id="pfIcon" placeholder="🤖" value="${esc(profile?.icon||'')}">
+      </div>
+      <div class="field">
+        <label>Name</label>
+        <input id="pfName" required value="${esc(profile?.name||'')}">
+      </div>
+      <div class="field">
+        <label>Agent</label>
+        <select id="pfAgent">${agentOptions(profile?.agentId||S.agents[0]?.id||'')}</select>
+      </div>
+      <div class="field">
+        <label>Description</label>
+        <input id="pfDescription" value="${esc(profile?.description||'')}">
+      </div>
+      <div class="field">
+        <label>System Prompt</label>
+        <textarea class="system-prompt" id="pfSystemPrompt">${esc(profile?.systemPrompt||'')}</textarea>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" id="pfCancel">Cancel</button>
+        <button class="btn prim" id="pfSave">${profile?'Save':'Create'}</button>
+      </div>
+    </div>`;
+  document.getElementById('pfCancel').onclick = () => host.innerHTML = '';
+  document.getElementById('pfSave').onclick = () => saveProfile(profile?.id);
+  document.getElementById('pfName').focus();
+}
+
+async function saveProfile(id) {
+  const body = {
+    icon: document.getElementById('pfIcon').value.trim(),
+    name: document.getElementById('pfName').value.trim(),
+    agentId: document.getElementById('pfAgent').value,
+    description: document.getElementById('pfDescription').value.trim(),
+    systemPrompt: document.getElementById('pfSystemPrompt').value,
+  };
+  if (!body.name || !body.agentId) { toast('Name and agent are required', true); return; }
+  try {
+    await api(id ? 'PUT' : 'POST', id ? '/api/profiles/'+id : '/api/profiles', body);
+    await loadProfiles();
+    renderProfiles();
+  } catch(e) { toast('Save profile: '+e.message, true); }
+}
+
+async function deleteProfile(id) {
+  try {
+    await api('DELETE','/api/profiles/'+id);
+    await loadProfiles();
+    renderProfiles();
+    if (S.detail?.profileId === id) renderPane();
+  } catch(e) { toast('Delete profile: '+e.message, true); }
+}
+
 // ── New Session ────────────────────────────────────────────────────────────
 function showNewSess(pid) {
   S.newSessProj = pid;
   const sel = document.getElementById('sAgent');
-  sel.innerHTML = S.agents.length
-    ? S.agents.map(a=>`<option value="${esc(a.id)}">${esc(a.name||a.id)}</option>`).join('')
-    : '<option value="">No agents configured</option>';
+  sel.innerHTML = agentOptions(S.agents[0]?.id||'');
+  const psel = document.getElementById('sProfile');
+  psel.innerHTML = '<option value="">— No profile —</option>' +
+    S.profiles.map(p=>`<option value="${esc(p.id)}">${esc(p.icon||'🤖')} ${esc(p.name)}</option>`).join('');
+  psel.onchange = syncSessionProfile;
+  syncSessionProfile();
   document.getElementById('sTitle').value = '';
   document.getElementById('sessOverlay').classList.remove('hidden');
 }
 
+function syncSessionProfile() {
+  const p = profileById(document.getElementById('sProfile').value);
+  const sel = document.getElementById('sAgent');
+  const previewField = document.getElementById('sProfilePreviewField');
+  if (p) {
+    sel.value = p.agentId;
+    sel.disabled = true;
+    document.getElementById('sProfilePreview').textContent = trunc(p.systemPrompt || '(empty)', 280);
+    previewField.classList.remove('hidden');
+  } else {
+    sel.disabled = false;
+    previewField.classList.add('hidden');
+  }
+}
+
 async function createSess() {
   const agent = document.getElementById('sAgent').value;
+  const profileId = document.getElementById('sProfile').value;
   const title = document.getElementById('sTitle').value.trim();
   if (!S.newSessProj||!agent) return;
   try {
-    const sess = await api('POST','/api/sessions',{projectId:S.newSessProj,agent,title:title||undefined});
+    const sess = await api('POST','/api/sessions',{projectId:S.newSessProj,agent,profileId:profileId||undefined,title:title||undefined});
     if (!S.byProj[S.newSessProj]) S.byProj[S.newSessProj]=[];
     S.byProj[S.newSessProj].push(sess);
     S.expanded.add(S.newSessProj); saveExp();
@@ -842,15 +1030,20 @@ function wire() {
   tok.onchange = () => {
     S.token = tok.value.trim();
     localStorage.setItem('acp_tok', S.token);
-    loadAgents(); loadAll();
+    loadAgents(); loadProfiles(); loadAll();
   };
   document.getElementById('tokEye').onclick = () => {
     tok.type = tok.type==='password' ? 'text' : 'password';
   };
 
   // Sidebar / new project
+  document.getElementById('profilesBtn').onclick = showProfiles;
   document.getElementById('newProjBtn').onclick = showNewProj;
   document.getElementById('emptyNew').onclick = showNewProj;
+
+  // Profiles modal
+  document.getElementById('newProfileBtn').onclick = () => showProfileForm(null);
+  document.getElementById('profilesClose').onclick = () => document.getElementById('profilesOverlay').classList.add('hidden');
 
   // New project modal
   document.getElementById('browseOpen').onclick = () => browseTo(document.getElementById('pPath').value.trim()||null);
@@ -894,13 +1087,14 @@ function wire() {
   });
 
   // Close modals on backdrop click / Escape
-  ['projOverlay','sessOverlay'].forEach(id => {
+  ['projOverlay','sessOverlay','profilesOverlay'].forEach(id => {
     document.getElementById(id).onclick = e => { if(e.target===e.currentTarget) e.currentTarget.classList.add('hidden'); };
   });
   document.addEventListener('keydown', e => {
     if (e.key==='Escape') {
       document.getElementById('projOverlay').classList.add('hidden');
       document.getElementById('sessOverlay').classList.add('hidden');
+      document.getElementById('profilesOverlay').classList.add('hidden');
     }
   });
 }
@@ -908,7 +1102,7 @@ function wire() {
 // ── Init ───────────────────────────────────────────────────────────────────
 async function init() {
   wire();
-  await Promise.all([checkHealth(), loadAgents(), loadAll()]);
+  await Promise.all([checkHealth(), loadAgents(), loadProfiles(), loadAll()]);
 
   if (S.sessId) {
     const exists = Object.values(S.byProj).flat().some(s=>s.id===S.sessId);

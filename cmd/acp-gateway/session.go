@@ -22,6 +22,7 @@ type Session struct {
 	ID        string        `json:"id"`
 	ProjectID string        `json:"projectId"`
 	Agent     string        `json:"agent"`
+	ProfileID string        `json:"profileId,omitempty"`
 	Title     string        `json:"title,omitempty"`
 	Status    SessionStatus `json:"status"`
 	Cwd       string        `json:"cwd"` // resolved from project.Path
@@ -43,7 +44,7 @@ type sessionEntry struct {
 
 // CreateSession creates a new idle session for (agent, project).
 // title may be empty; it is auto-set to the first turn's prompt later.
-func (s *Store) CreateSession(projectID, agent, title string) (*Session, error) {
+func (s *Store) CreateSession(projectID, agent, title, profileID string) (*Session, error) {
 	if projectID == "" || agent == "" {
 		return nil, errors.New("projectId and agent are required")
 	}
@@ -59,6 +60,7 @@ func (s *Store) CreateSession(projectID, agent, title string) (*Session, error) 
 		ID:        fmt.Sprintf("sess-%d", n),
 		ProjectID: projectID,
 		Agent:     agent,
+		ProfileID: profileID,
 		Title:     title,
 		Status:    SessionIdle,
 		Cwd:       proj.Path,
@@ -190,6 +192,11 @@ func (s *Store) AddTurn(sessionID, prompt string) (*Turn, error) {
 		Status:    TurnPending,
 		CreatedAt: now,
 		UpdatedAt: now,
+	}
+	if se.session.ProfileID != "" && len(se.turns) == 0 {
+		if p, ok := s.profiles[se.session.ProfileID]; ok {
+			turn.SystemPrompt = p.SystemPrompt
+		}
 	}
 	if se.session.Title == "" {
 		title := prompt

@@ -23,16 +23,17 @@ const (
 
 // Turn is one prompt/response cycle within a Session.
 type Turn struct {
-	ID        string     `json:"id"`
-	SessionID string     `json:"sessionId"`
-	Agent     string     `json:"agent"`
-	Cwd       string     `json:"cwd"`
-	Prompt    string     `json:"prompt"`
-	Result    string     `json:"result,omitempty"`
-	Error     string     `json:"error,omitempty"`
-	Status    TurnStatus `json:"status"`
-	CreatedAt time.Time  `json:"createdAt"`
-	UpdatedAt time.Time  `json:"updatedAt"`
+	ID           string     `json:"id"`
+	SessionID    string     `json:"sessionId"`
+	Agent        string     `json:"agent"`
+	Cwd          string     `json:"cwd"`
+	Prompt       string     `json:"prompt"`
+	SystemPrompt string     `json:"systemPrompt,omitempty"`
+	Result       string     `json:"result,omitempty"`
+	Error        string     `json:"error,omitempty"`
+	Status       TurnStatus `json:"status"`
+	CreatedAt    time.Time  `json:"createdAt"`
+	UpdatedAt    time.Time  `json:"updatedAt"`
 }
 
 // SSEEvent is one frame sent over a turn's /stream endpoint.
@@ -79,18 +80,20 @@ const eventBufferCap = 256
 // Store owns projects, sessions, turns, the work queue, and permission channels.
 // All methods are safe for concurrent use.
 type Store struct {
-	mu   sync.Mutex
-	pctr atomic.Uint64 // project ID counter
-	sctr atomic.Uint64 // session ID counter
-	tctr atomic.Uint64 // turn ID counter
+	mu    sync.Mutex
+	pctr  atomic.Uint64 // project ID counter
+	sctr  atomic.Uint64 // session ID counter
+	tctr  atomic.Uint64 // turn ID counter
+	prctr atomic.Uint64 // profile ID counter
 
 	projects map[string]*Project
 	sessions map[string]*sessionEntry
 	turns    map[string]*turnEntry
+	profiles map[string]*Profile
 
-	queue  chan string        // turn IDs ready to execute
+	queue  chan string            // turn IDs ready to execute
 	perms  map[string]chan string // key = turnID|toolCallID
-	active map[string]string    // agentID|cwd → turnID (for permission routing)
+	active map[string]string      // agentID|cwd → turnID (for permission routing)
 
 	db *sql.DB // nil = no persistence
 }
@@ -104,6 +107,7 @@ func NewStore(cap int, db *sql.DB) *Store {
 		projects: make(map[string]*Project),
 		sessions: make(map[string]*sessionEntry),
 		turns:    make(map[string]*turnEntry),
+		profiles: make(map[string]*Profile),
 		queue:    make(chan string, cap),
 		perms:    make(map[string]chan string),
 		active:   make(map[string]string),
