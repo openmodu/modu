@@ -771,7 +771,6 @@ async function browseTo(path) {
     const d = await api('GET', url);
     S.brParent = d.parent;
     document.getElementById('brPath').textContent = d.path;
-    document.getElementById('pPath').value = d.path;
     const list = document.getElementById('brList');
     list.innerHTML = '';
     const dirs = (d.files||[]).filter(f=>f.isDir);
@@ -856,7 +855,15 @@ function wire() {
   // New project modal
   document.getElementById('browseOpen').onclick = () => browseTo(document.getElementById('pPath').value.trim()||null);
   document.getElementById('brUp').onclick = () => S.brParent && browseTo(S.brParent);
-  document.getElementById('brSelect').onclick = () => document.getElementById('browser').classList.add('hidden');
+  document.getElementById('brSelect').onclick = () => {
+    const path = document.getElementById('brPath').textContent;
+    const input = document.getElementById('pPath');
+    // Use execCommand so the assignment enters the undo stack
+    input.focus();
+    input.select();
+    if (!document.execCommand('insertText', false, path)) input.value = path;
+    document.getElementById('browser').classList.add('hidden');
+  };
   document.getElementById('brClose').onclick = () => document.getElementById('browser').classList.add('hidden');
   document.getElementById('pCancel').onclick = () => document.getElementById('projOverlay').classList.add('hidden');
   document.getElementById('pCreate').onclick = createProj;
