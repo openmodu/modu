@@ -74,15 +74,17 @@ func (m *Manager) List() []string {
 // pair. Two callers with the same pair get the same provider; different
 // cwds get different providers, each with its own subprocess.
 func (m *Manager) Provider(agentID, cwd string) (*provider.Provider, error) {
-	return m.ProviderKeyed(agentID, cwd, cwd)
+	return m.ProviderKeyed(agentID, cwd, cwd, "")
 }
 
 // ProviderKeyed is like Provider but uses sessionKey instead of cwd as the
 // map key. This allows multiple gateway sessions sharing the same (agent,
 // cwd) to each get an independent ACP session and conversation context.
 // cwd is still passed to the ACP process; sessionKey is only used for
-// internal bookkeeping.
-func (m *Manager) ProviderKeyed(agentID, sessionKey, cwd string) (*provider.Provider, error) {
+// internal bookkeeping. systemPrompt, if non-empty, is written to the
+// agent-specific context file (CLAUDE.md / AGENTS.md / GEMINI.md) in cwd
+// before the subprocess starts.
+func (m *Manager) ProviderKeyed(agentID, sessionKey, cwd, systemPrompt string) (*provider.Provider, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -112,10 +114,11 @@ func (m *Manager) ProviderKeyed(agentID, sessionKey, cwd string) (*provider.Prov
 		FS:           m.hooks.FS,
 	})
 	p := provider.New(provider.Options{
-		ID:     providerID(agentID),
-		Client: c,
-		Cwd:    cwd,
-		Name:   agent.Name,
+		ID:           providerID(agentID),
+		Client:       c,
+		Cwd:          cwd,
+		Name:         agent.Name,
+		SystemPrompt: systemPrompt,
 	})
 	m.providers[key] = &providerEntry{prov: p, tx: tx}
 	return p, nil

@@ -27,6 +27,20 @@ func newACPRunner(id string, mgr *manager.Manager) *acpRunner {
 
 func (r *acpRunner) AgentID() string { return r.id }
 
+// acpContextFile returns the agent-specific context filename for agents that
+// support file-based system prompts (CLAUDE.md, AGENTS.md, GEMINI.md).
+func acpContextFile(agentID string) string {
+	switch agentID {
+	case "claude":
+		return "CLAUDE.md"
+	case "codex":
+		return "AGENTS.md"
+	case "gemini":
+		return "GEMINI.md"
+	}
+	return ""
+}
+
 func (r *acpRunner) Run(ctx context.Context, prompt, cwd string, hooks RunnerHooks) (*types.AssistantMessage, error) {
 	// Use the gateway SessionID (injected by the worker) as the provider key
 	// so each gateway session gets an independent ACP session and conversation
@@ -35,14 +49,22 @@ func (r *acpRunner) Run(ctx context.Context, prompt, cwd string, hooks RunnerHoo
 	if sessionKey == "" {
 		sessionKey = cwd
 	}
-	p, err := r.mgr.ProviderKeyed(r.id, sessionKey, cwd)
+	p, err := r.mgr.ProviderKeyed(r.id, sessionKey, cwd, hooks.SystemPrompt)
 	if err != nil {
 		return nil, err
 	}
+
+	// For agents without a native context-file mechanism, fall back to
+	// prepending the system prompt as a text prefix in the user message.
+	actualPrompt := prompt
+	if hooks.SystemPrompt != "" && acpContextFile(r.id) == "" {
+		actualPrompt = "[System instructions]\n" + hooks.SystemPrompt + "\n\n[User]\n" + prompt
+	}
+
 	req := &providers.ChatRequest{
 		Model: "acp:" + r.id,
 		Messages: []providers.Message{
-			{Role: providers.RoleUser, Content: prompt},
+			{Role: providers.RoleUser, Content: actualPrompt},
 		},
 	}
 	es, err := p.Stream(ctx, req)

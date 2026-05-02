@@ -54,6 +54,11 @@ type Options struct {
 
 	// Version advertised during `initialize`. Defaults to "0.1.0".
 	Version string
+
+	// SystemPrompt, if non-empty, is written to the agent-specific context
+	// file (CLAUDE.md / AGENTS.md / GEMINI.md) in Cwd before the subprocess
+	// starts. Agents that do not have a known context file are unaffected.
+	SystemPrompt string
 }
 
 // Provider is an ACP-backed providers.Provider.
@@ -63,6 +68,8 @@ type Provider struct {
 	cwd     string
 	name    string
 	version string
+
+	systemPrompt string
 
 	mu          sync.Mutex
 	started     bool
@@ -79,11 +86,12 @@ func New(opts Options) *Provider {
 		opts.Name = opts.ID
 	}
 	return &Provider{
-		id:      opts.ID,
-		client:  opts.Client,
-		cwd:     opts.Cwd,
-		name:    opts.Name,
-		version: opts.Version,
+		id:           opts.ID,
+		client:       opts.Client,
+		cwd:          opts.Cwd,
+		name:         opts.Name,
+		version:      opts.Version,
+		systemPrompt: opts.SystemPrompt,
 	}
 }
 
@@ -261,6 +269,11 @@ func (p *Provider) ensureReady() error {
 	defer p.mu.Unlock()
 
 	if !p.started {
+		if p.systemPrompt != "" {
+			// Best-effort: write agent context file before the subprocess
+			// starts so the agent picks it up on session initialisation.
+			_ = p.writeContextFile()
+		}
 		if err := p.client.Start(); err != nil {
 			return fmt.Errorf("acp/provider: start client: %w", err)
 		}

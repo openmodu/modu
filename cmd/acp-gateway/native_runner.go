@@ -24,10 +24,14 @@ func newNativeRunner(id string, p providers.Provider, model string) *nativeRunne
 func (r *nativeRunner) AgentID() string { return r.id }
 
 func (r *nativeRunner) Run(ctx context.Context, prompt, _ string, hooks RunnerHooks) (*types.AssistantMessage, error) {
+	actualPrompt := prompt
+	if hooks.SystemPrompt != "" {
+		actualPrompt = "[System instructions]\n" + hooks.SystemPrompt + "\n\n[User]\n" + prompt
+	}
 	req := &providers.ChatRequest{
 		Model: r.model,
 		Messages: []providers.Message{
-			{Role: providers.RoleUser, Content: prompt},
+			{Role: providers.RoleUser, Content: actualPrompt},
 		},
 	}
 	es, err := r.provider.Stream(ctx, req)

@@ -2,7 +2,34 @@ package provider
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 )
+
+// contextFilename returns the agent-specific context file that the ACP agent
+// reads on session start, or "" if the agent has no known file mechanism.
+func contextFilename(providerID string) string {
+	switch {
+	case strings.HasSuffix(providerID, "claude"):
+		return "CLAUDE.md"
+	case strings.HasSuffix(providerID, "codex"):
+		return "AGENTS.md"
+	case strings.HasSuffix(providerID, "gemini"):
+		return "GEMINI.md"
+	}
+	return ""
+}
+
+// writeContextFile writes the provider's SystemPrompt to the agent-specific
+// context file in Cwd. Called once before the subprocess starts.
+func (p *Provider) writeContextFile() error {
+	name := contextFilename(p.id)
+	if name == "" {
+		return nil
+	}
+	return os.WriteFile(filepath.Join(p.cwd, name), []byte(p.systemPrompt+"\n"), 0644)
+}
 
 // initialize performs the ACP protocol handshake. Must be called once,
 // before any session/* methods. Caller holds Provider.mu.

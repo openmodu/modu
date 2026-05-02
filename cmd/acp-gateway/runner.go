@@ -26,6 +26,7 @@ type Runner interface {
 type RunnerHooks struct {
 	OnEvent      func(types.StreamEvent)
 	OnPermission func(PermissionPrompt) string
+	SystemPrompt string
 }
 
 // Registry is the lookup table of agentID → Runner. It is populated once at
