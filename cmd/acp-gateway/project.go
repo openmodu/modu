@@ -57,12 +57,22 @@ func (s *Store) ListProjects() []*Project {
 	return out
 }
 
-// DeleteProject removes a project. Returns false if it did not exist.
+// DeleteProject removes a project and all its sessions and turns.
+// Returns false if it did not exist.
 func (s *Store) DeleteProject(id string) bool {
 	s.mu.Lock()
 	_, ok := s.projects[id]
 	if ok {
 		delete(s.projects, id)
+		// Remove all sessions (and their turns) that belong to this project.
+		for sid, e := range s.sessions {
+			if e.session.ProjectID == id {
+				for _, tid := range e.turns {
+					delete(s.turns, tid)
+				}
+				delete(s.sessions, sid)
+			}
+		}
 	}
 	s.mu.Unlock()
 	if ok {

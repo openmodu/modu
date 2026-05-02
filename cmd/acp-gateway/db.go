@@ -123,8 +123,15 @@ func dbDeleteProject(db *sql.DB, id string) {
 	if db == nil {
 		return
 	}
-	if _, err := db.Exec(`DELETE FROM projects WHERE id=?`, id); err != nil {
-		log.Printf("[acp-gateway] db delete project %s: %v", id, err)
+	// Delete turns → sessions → project in dependency order.
+	for _, q := range []string{
+		`DELETE FROM turns   WHERE session_id IN (SELECT id FROM sessions WHERE project_id=?)`,
+		`DELETE FROM sessions WHERE project_id=?`,
+		`DELETE FROM projects WHERE id=?`,
+	} {
+		if _, err := db.Exec(q, id); err != nil {
+			log.Printf("[acp-gateway] db delete project %s: %v", id, err)
+		}
 	}
 }
 
