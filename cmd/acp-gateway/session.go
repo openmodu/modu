@@ -193,8 +193,8 @@ func (s *Store) AddTurn(sessionID, prompt string) (*Turn, error) {
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if se.session.ProfileID != "" && len(se.turns) == 0 {
-		if p, ok := s.profiles[se.session.ProfileID]; ok {
+	if se.session.ProfileID != "" {
+		if p, ok := s.profiles[se.session.ProfileID]; ok && p.SystemPrompt != "" {
 			turn.SystemPrompt = p.SystemPrompt
 		}
 	}
