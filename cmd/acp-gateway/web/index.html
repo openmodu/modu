@@ -107,6 +107,9 @@ aside{
 .sess-row.new-sess:hover{color:var(--fg)}
 .sess-title{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sess-agent{font-size:10px;color:var(--subtle)}
+.sess-del{opacity:0;transition:opacity .12s;background:none;border:none;color:var(--subtle);cursor:pointer;font-size:11px;padding:0 2px;flex-shrink:0}
+.sess-row:hover .sess-del{opacity:1}
+.sess-del:hover{color:var(--err)}
 .sdot{width:5px;height:5px;border-radius:50%;background:var(--subtle);flex-shrink:0}
 .sdot.ok{background:var(--ok)}
 .sdot.run{background:var(--accent);animation:pulse 1.5s infinite}
@@ -587,7 +590,8 @@ function renderProfilesSide() {
       const row = document.createElement('div');
       row.className = 'sess-row'+(active?' active':'');
       row.dataset.sid = sess.id;
-      row.innerHTML = `<span class="sdot ${dc}"></span><span class="sess-title">${esc(sess.title||'Session')}</span>`;
+      row.innerHTML = `<span class="sdot ${dc}"></span><span class="sess-title">${esc(sess.title||'Session')}</span><button class="sess-del" title="Delete session">✕</button>`;
+      row.querySelector('.sess-del').onclick = e => { e.stopPropagation(); deleteSession(sess); };
       row.onclick = () => openSession(sess.id);
       sessEl.appendChild(row);
     }
@@ -633,7 +637,8 @@ function renderProjectsSide() {
       const row = document.createElement('div');
       row.className = 'sess-row'+(active?' active':'');
       row.dataset.sid = sess.id;
-      row.innerHTML = `<span class="sdot ${dc}"></span><span class="sess-title">${esc(sess.title||'Session')}</span><span class="sess-agent">${esc(sess.agent)}</span>`;
+      row.innerHTML = `<span class="sdot ${dc}"></span><span class="sess-title">${esc(sess.title||'Session')}</span><span class="sess-agent">${esc(sess.agent)}</span><button class="sess-del" title="Delete session">✕</button>`;
+      row.querySelector('.sess-del').onclick = e => { e.stopPropagation(); deleteSession(sess); };
       row.onclick = () => openSession(sess.id);
       sessEl.appendChild(row);
     }
@@ -653,6 +658,23 @@ function toggleProj(pid) {
   S.expanded.has(pid) ? S.expanded.delete(pid) : S.expanded.add(pid);
   saveExp();
   renderProjectsSide();
+}
+
+async function deleteSession(sess) {
+  if (!confirm(`Delete session "${sess.title || 'Session'}"?`)) return;
+  try {
+    await api('DELETE', '/api/sessions/'+sess.id);
+    const pid = sess.projectId;
+    if (S.byProj[pid]) S.byProj[pid] = S.byProj[pid].filter(s => s.id !== sess.id);
+    if (S.sessId === sess.id) {
+      S.sessId = null; S.detail = null;
+      localStorage.removeItem('acp_sess');
+      document.getElementById('spane').classList.add('hidden');
+      document.getElementById('empty').classList.remove('hidden');
+    }
+    renderSidebar();
+    toast('Session deleted');
+  } catch(e) { toast('Delete: ' + e.message, true); }
 }
 
 async function deleteProject(proj) {
