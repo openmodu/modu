@@ -621,6 +621,7 @@ function renderProjectsSide() {
         <span class="tri${open?' open':''}">▶</span>
         <span class="proj-name" title="${esc(proj.path)}">📁 ${name}</span>
         <span class="proj-cnt">${sessions.length}</span>
+        <button class="icon-btn prof-edit" title="Delete project" style="font-size:11px">🗑</button>
       </div>
       <div class="proj-sess${open?' open':''}" id="ps-${proj.id}"></div>`;
     list.appendChild(wrap);
@@ -642,7 +643,9 @@ function renderProjectsSide() {
     ns.onclick = () => showNewSess(proj.id);
     sessEl.appendChild(ns);
 
-    wrap.querySelector('.proj-hd').onclick = () => toggleProj(proj.id);
+    const hd = wrap.querySelector('.proj-hd');
+    hd.onclick = e => { if (e.target.closest('.prof-edit')) return; toggleProj(proj.id); };
+    wrap.querySelector('.prof-edit').onclick = () => deleteProject(proj);
   }
 }
 
@@ -650,6 +653,25 @@ function toggleProj(pid) {
   S.expanded.has(pid) ? S.expanded.delete(pid) : S.expanded.add(pid);
   saveExp();
   renderProjectsSide();
+}
+
+async function deleteProject(proj) {
+  const name = proj.name || base(proj.path);
+  if (!confirm(`Delete project "${name}"?\nThis also removes all its sessions and turns.`)) return;
+  try {
+    await api('DELETE', '/api/projects/'+proj.id);
+    S.projects = S.projects.filter(p => p.id !== proj.id);
+    delete S.byProj[proj.id];
+    S.expanded.delete(proj.id); saveExp();
+    if (S.detail?.projectId === proj.id) {
+      S.sessId = null; S.detail = null;
+      localStorage.removeItem('acp_sess');
+      document.getElementById('spane').classList.add('hidden');
+      document.getElementById('empty').classList.remove('hidden');
+    }
+    renderProjectsSide();
+    toast('Project deleted: ' + name);
+  } catch(e) { toast('Delete: ' + e.message, true); }
 }
 
 function toggleProfile(id) {
