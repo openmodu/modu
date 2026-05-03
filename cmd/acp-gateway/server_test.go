@@ -334,11 +334,14 @@ func TestListAgents(t *testing.T) {
 	resp := h.do(t, "GET", "/api/agents", "secret", nil)
 	defer resp.Body.Close()
 	var body struct {
-		Agents []string `json:"agents"`
+		Agents []AgentDetail `json:"agents"`
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&body)
 	if len(body.Agents) != 2 {
 		t.Errorf("agents = %v", body.Agents)
+	}
+	if body.Agents[0].ID != "claude" || body.Agents[1].ID != "codex" {
+		t.Fatalf("agent order = %q, %q; want claude, codex", body.Agents[0].ID, body.Agents[1].ID)
 	}
 }
 
@@ -442,17 +445,22 @@ func TestListSessions_SortsByUpdatedAtDesc(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store.mu.Lock()
-	store.sessions[older.ID].session.UpdatedAt = time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
-	store.sessions[newer.ID].session.UpdatedAt = time.Date(2026, 5, 1, 11, 0, 0, 0, time.UTC)
-	store.mu.Unlock()
-
 	got := store.ListSessions(proj.ID)
 	if len(got) != 2 {
 		t.Fatalf("sessions len = %d, want 2", len(got))
 	}
 	if got[0].ID != newer.ID || got[1].ID != older.ID {
 		t.Fatalf("session order = %s, %s; want %s, %s", got[0].ID, got[1].ID, newer.ID, older.ID)
+	}
+
+	turn, err := store.AddTurn(older.ID, "touch older")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.StartTurn(turn.ID, func() {})
+	got = store.ListSessions(proj.ID)
+	if got[0].ID != older.ID || got[1].ID != newer.ID {
+		t.Fatalf("session order after update = %s, %s; want %s, %s", got[0].ID, got[1].ID, older.ID, newer.ID)
 	}
 }
 

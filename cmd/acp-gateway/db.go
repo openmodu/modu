@@ -319,6 +319,7 @@ func dbLoadProjects(db *sql.DB, store *Store) error {
 		pc := p
 		store.mu.Lock()
 		store.projects[p.ID] = &pc
+		store.projectOrder = appendUniqueID(store.projectOrder, p.ID)
 		store.mu.Unlock()
 	}
 	return rows.Err()
@@ -355,6 +356,7 @@ func dbLoadProfiles(db *sql.DB, store *Store) error {
 		pc := p
 		store.mu.Lock()
 		store.profiles[p.ID] = &pc
+		store.profileOrder = appendUniqueID(store.profileOrder, p.ID)
 		store.mu.Unlock()
 	}
 	return rows.Err()
@@ -362,7 +364,7 @@ func dbLoadProfiles(db *sql.DB, store *Store) error {
 
 func dbLoadSessions(db *sql.DB, store *Store) error {
 	rows, err := db.Query(
-		`SELECT id,project_id,agent,profile_id,title,status,cwd,created_at,updated_at FROM sessions ORDER BY created_at`,
+		`SELECT id,project_id,agent,profile_id,title,status,cwd,created_at,updated_at FROM sessions ORDER BY updated_at DESC, created_at DESC, id DESC`,
 	)
 	if err != nil {
 		return fmt.Errorf("load sessions: %w", err)
@@ -397,6 +399,7 @@ func dbLoadSessions(db *sql.DB, store *Store) error {
 		sc := s
 		store.mu.Lock()
 		store.sessions[s.ID] = &sessionEntry{session: &sc}
+		store.sessionOrder = appendUniqueID(store.sessionOrder, s.ID)
 		store.mu.Unlock()
 	}
 	return rows.Err()

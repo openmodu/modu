@@ -101,6 +101,10 @@ type Store struct {
 	turns    map[string]*turnEntry
 	profiles map[string]*Profile
 
+	projectOrder []string
+	sessionOrder []string
+	profileOrder []string
+
 	queueCap int
 	queues   map[string]chan string // agentID -> turn IDs ready to execute
 	perms    map[string]chan string // key = turnID|toolCallID
@@ -112,6 +116,29 @@ type Store struct {
 type activeTurn struct {
 	id  string
 	ctx context.Context
+}
+
+func appendUniqueID(ids []string, id string) []string {
+	for _, cur := range ids {
+		if cur == id {
+			return ids
+		}
+	}
+	return append(ids, id)
+}
+
+func removeID(ids []string, id string) []string {
+	for i, cur := range ids {
+		if cur == id {
+			return append(ids[:i], ids[i+1:]...)
+		}
+	}
+	return ids
+}
+
+func moveIDToFront(ids []string, id string) []string {
+	ids = removeID(ids, id)
+	return append([]string{id}, ids...)
 }
 
 // NewStore builds a Store with a work-queue capacity of cap turns.
@@ -331,6 +358,7 @@ func (s *Store) CancelTurnsForAgent(agentID, reason string) int {
 		if se, ok := s.sessions[te.turn.SessionID]; ok {
 			se.session.Status = SessionIdle
 			se.session.UpdatedAt = now
+			s.sessionOrder = moveIDToFront(s.sessionOrder, se.session.ID)
 			sessSnap := *se.session
 			sessions = append(sessions, &sessSnap)
 		}
@@ -515,6 +543,7 @@ func (s *Store) StartTurn(id string, cancel func()) {
 		if se, ok := s.sessions[e.turn.SessionID]; ok {
 			se.session.Status = SessionRunning
 			se.session.UpdatedAt = time.Now().UTC()
+			s.sessionOrder = moveIDToFront(s.sessionOrder, se.session.ID)
 		}
 	}
 	s.mu.Unlock()
@@ -580,6 +609,7 @@ func (s *Store) setSessionIdle(turnID string) {
 	if ok {
 		se.session.Status = SessionIdle
 		se.session.UpdatedAt = time.Now().UTC()
+		s.sessionOrder = moveIDToFront(s.sessionOrder, se.session.ID)
 	}
 	var snap Session
 	if ok {

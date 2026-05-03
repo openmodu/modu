@@ -28,6 +28,7 @@ func (s *Store) CreateProject(name, path string) (*Project, error) {
 	}
 	s.mu.Lock()
 	s.projects[p.ID] = p
+	s.projectOrder = appendUniqueID(s.projectOrder, p.ID)
 	s.mu.Unlock()
 	dbInsertProject(s.db, p)
 	return p, nil
@@ -50,7 +51,11 @@ func (s *Store) ListProjects() []*Project {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]*Project, 0, len(s.projects))
-	for _, p := range s.projects {
+	for _, id := range s.projectOrder {
+		p, ok := s.projects[id]
+		if !ok {
+			continue
+		}
 		cp := *p
 		out = append(out, &cp)
 	}
@@ -67,6 +72,7 @@ func (s *Store) DeleteProject(id string) bool {
 	var perms []chan string
 	if ok {
 		delete(s.projects, id)
+		s.projectOrder = removeID(s.projectOrder, id)
 		// Remove all sessions (and their turns) that belong to this project.
 		for sid, e := range s.sessions {
 			if e.session.ProjectID == id {
@@ -83,6 +89,7 @@ func (s *Store) DeleteProject(id string) bool {
 					delete(s.turns, tid)
 				}
 				delete(s.sessions, sid)
+				s.sessionOrder = removeID(s.sessionOrder, sid)
 			}
 		}
 	}

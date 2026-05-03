@@ -35,6 +35,7 @@ type RunnerHooks struct {
 type Registry struct {
 	mu      sync.RWMutex
 	runners map[string]Runner
+	order   []string
 }
 
 func NewRegistry() *Registry {
@@ -46,7 +47,11 @@ func NewRegistry() *Registry {
 func (r *Registry) Register(rn Runner) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.runners[rn.AgentID()] = rn
+	id := rn.AgentID()
+	if _, ok := r.runners[id]; !ok {
+		r.order = appendUniqueID(r.order, id)
+	}
+	r.runners[id] = rn
 }
 
 func (r *Registry) Get(id string) (Runner, bool) {
@@ -61,14 +66,17 @@ func (r *Registry) Unregister(id string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.runners, id)
+	r.order = removeID(r.order, id)
 }
 
 func (r *Registry) List() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	out := make([]string, 0, len(r.runners))
-	for id := range r.runners {
-		out = append(out, id)
+	out := make([]string, 0, len(r.order))
+	for _, id := range r.order {
+		if _, ok := r.runners[id]; ok {
+			out = append(out, id)
+		}
 	}
 	return out
 }

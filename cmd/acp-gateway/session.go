@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"sort"
 	"time"
 )
 
@@ -69,6 +68,7 @@ func (s *Store) CreateSession(projectID, agent, title, profileID string) (*Sessi
 		UpdatedAt: now,
 	}
 	s.sessions[sess.ID] = &sessionEntry{session: sess}
+	s.sessionOrder = moveIDToFront(s.sessionOrder, sess.ID)
 	cp := *sess
 	s.mu.Unlock()
 
@@ -112,22 +112,17 @@ func (s *Store) ListSessions(projectID string) []*Session {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]*Session, 0, len(s.sessions))
-	for _, e := range s.sessions {
+	for _, id := range s.sessionOrder {
+		e, ok := s.sessions[id]
+		if !ok {
+			continue
+		}
 		if projectID != "" && e.session.ProjectID != projectID {
 			continue
 		}
 		cp := *e.session
 		out = append(out, &cp)
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if !out[i].UpdatedAt.Equal(out[j].UpdatedAt) {
-			return out[i].UpdatedAt.After(out[j].UpdatedAt)
-		}
-		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
-			return out[i].CreatedAt.After(out[j].CreatedAt)
-		}
-		return out[i].ID > out[j].ID
-	})
 	return out
 }
 
@@ -141,6 +136,7 @@ func (s *Store) DeleteSession(id string) bool {
 	}
 	turnIDs := append([]string(nil), e.turns...)
 	delete(s.sessions, id)
+	s.sessionOrder = removeID(s.sessionOrder, id)
 	var cancels []func()
 	var subs []chan SSEEvent
 	var perms []chan string
@@ -228,6 +224,7 @@ func (s *Store) AddTurn(sessionID, prompt string) (*Turn, error) {
 		}
 		se.session.Title = title
 		se.session.UpdatedAt = now
+		s.sessionOrder = moveIDToFront(s.sessionOrder, se.session.ID)
 	}
 	se.turns = append(se.turns, turn.ID)
 	s.turns[turn.ID] = &turnEntry{turn: turn, subs: make(map[int]chan SSEEvent)}

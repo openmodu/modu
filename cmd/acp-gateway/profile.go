@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"sort"
 	"time"
 )
 
@@ -38,6 +37,7 @@ func (s *Store) CreateProfile(name, agentID, systemPrompt, description, icon str
 	}
 	s.mu.Lock()
 	s.profiles[p.ID] = p
+	s.profileOrder = appendUniqueID(s.profileOrder, p.ID)
 	cp := *p
 	s.mu.Unlock()
 	dbInsertProfile(s.db, p)
@@ -61,16 +61,14 @@ func (s *Store) ListProfiles() []*Profile {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]*Profile, 0, len(s.profiles))
-	for _, p := range s.profiles {
+	for _, id := range s.profileOrder {
+		p, ok := s.profiles[id]
+		if !ok {
+			continue
+		}
 		cp := *p
 		out = append(out, &cp)
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
-			return out[i].CreatedAt.Before(out[j].CreatedAt)
-		}
-		return out[i].ID < out[j].ID
-	})
 	return out
 }
 
@@ -103,6 +101,7 @@ func (s *Store) DeleteProfile(id string) bool {
 	_, ok := s.profiles[id]
 	if ok {
 		delete(s.profiles, id)
+		s.profileOrder = removeID(s.profileOrder, id)
 	}
 	s.mu.Unlock()
 	if ok {
