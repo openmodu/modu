@@ -19,7 +19,7 @@ type Server struct {
 	mgr        *manager.Manager
 	store      *Store
 	registry   *Registry
-	quota      *QuotaCache
+
 	token      string
 	workdir    string
 	configPath string // path to acp.config.json (for dynamic agent management)
@@ -58,13 +58,10 @@ func NewServer(opts Options) *Server {
 		registry.Register(rn)
 	}
 
-	qc := NewQuotaCache()
-
 	s := &Server{
 		mgr:        opts.Manager,
 		store:      opts.Store,
 		registry:   registry,
-		quota:      qc,
 		token:      opts.Token,
 		workdir:    opts.Workdir,
 		configPath: opts.ConfigPath,
@@ -74,7 +71,6 @@ func NewServer(opts Options) *Server {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
-	qc.StartPoller(ctx, opts.Manager, 30*time.Minute)
 	for _, id := range registry.List() {
 		for i := 0; i < opts.WorkersEach; i++ {
 			s.workers.Add(1)

@@ -311,13 +311,6 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		}
 		stats[i].ResetAt = nextWeekday(now, rd).Format(time.RFC3339)
 
-		if q := s.quota.Get(stats[i].Agent); q != nil {
-			stats[i].ExtWeekTokens = q.WeekTokens
-			stats[i].ExtWeekRequests = q.WeekRequests
-			stats[i].ExtSource = q.Source
-			stats[i].ExtFetchedAt = q.FetchedAt
-			stats[i].ExtErr = q.Err
-		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"stats": stats})
 }

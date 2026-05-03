@@ -314,12 +314,6 @@ type AgentUsageStat struct {
 	WeeklyTurns     int     `json:"weeklyTurns"`     // completed turns since week start
 	WeeklyLimit     int     `json:"weeklyLimit"`     // 0 = unlimited; set from AgentConfig
 	ResetAt         string  `json:"resetAt"`         // RFC3339 of next quota reset
-	// External quota data fetched from provider APIs (OpenAI, Anthropic, etc.)
-	ExtWeekTokens   int    `json:"extWeekTokens,omitempty"`
-	ExtWeekRequests int    `json:"extWeekRequests,omitempty"`
-	ExtSource       string `json:"extSource,omitempty"`
-	ExtFetchedAt    string `json:"extFetchedAt,omitempty"`
-	ExtErr          string `json:"extErr,omitempty"`
 }
 
 // weekStart returns Monday 00:00:00 UTC of the week containing t.

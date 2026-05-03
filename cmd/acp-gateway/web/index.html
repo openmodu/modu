@@ -640,17 +640,6 @@ function renderStats() {
       quotaHtml = `<div class="sb-stat-reset">${st.weeklyTurns} this week · ${fmtResetAt(st.resetAt)}</div>`;
     }
 
-    // external API usage line
-    let extHtml = '';
-    if (st.extSource) {
-      if (st.extErr) {
-        extHtml = `<div class="sb-stat-reset" style="color:var(--err)" title="${esc(st.extErr)}">${esc(st.extSource)} ⚠ error</div>`;
-      } else {
-        const fetchedAgo = st.extFetchedAt ? reltime(st.extFetchedAt) : '';
-        extHtml = `<div class="sb-stat-reset">${esc(st.extSource)}: <span class="sb-stat-num accent">${fmtTokens(st.extWeekTokens)}</span> tokens · ${st.extWeekRequests} req · <span title="last fetched ${fetchedAgo}">↻ ${fetchedAgo}</span></div>`;
-      }
-    }
-
     item.innerHTML =
       `<div style="flex:1;min-width:0">` +
         `<div style="display:flex;align-items:center;gap:5px">` +
@@ -660,10 +649,8 @@ function renderStats() {
           `<span class="sb-stat-nums">` +
             `<span class="sb-stat-num ok" title="completed turns">${st.completedTurns}✓</span>` +
             (st.failedTurns > 0 ? `<span class="sb-stat-num" style="color:var(--err)" title="failed">${st.failedTurns}✗</span>` : '') +
-            (st.totalTokens > 0 ? `<span class="sb-stat-num accent" title="tokens">${fmtTokens(st.totalTokens)}</span>` : '') +
           `</span>` +
         `</div>` +
-        extHtml +
         quotaHtml +
       `</div>`;
     row.appendChild(item);
