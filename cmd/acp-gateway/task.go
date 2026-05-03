@@ -297,6 +297,57 @@ func (s *Store) CancelTurn(turnID string) bool {
 	return true
 }
 
+// CancelTurnsForAgent fails pending/running turns for an agent and cancels
+// running turn contexts. Completed/failed turns are left untouched.
+func (s *Store) CancelTurnsForAgent(agentID, reason string) int {
+	now := time.Now().UTC()
+	var cancels []func()
+	var subs []chan SSEEvent
+	var perms []chan string
+	var turns []*Turn
+	var sessions []*Session
+
+	s.mu.Lock()
+	for _, te := range s.turns {
+		if te.turn.Agent != agentID || te.done {
+			continue
+		}
+		if te.turn.Status != TurnPending && te.turn.Status != TurnRunning {
+			continue
+		}
+		te.turn.Status = TurnFailed
+		te.turn.Error = reason
+		te.turn.UpdatedAt = now
+		turnSnap := *te.turn
+		turns = append(turns, &turnSnap)
+
+		if se, ok := s.sessions[te.turn.SessionID]; ok {
+			se.session.Status = SessionIdle
+			se.session.UpdatedAt = now
+			sessSnap := *se.session
+			sessions = append(sessions, &sessSnap)
+		}
+
+		permChans := s.collectPermissionChannelsLocked(te.turn.ID + "|")
+		cancelFn, subChans, permChans := collectTurnCleanup(te, permChans)
+		if cancelFn != nil {
+			cancels = append(cancels, cancelFn)
+		}
+		subs = append(subs, subChans...)
+		perms = append(perms, permChans...)
+	}
+	s.mu.Unlock()
+
+	for _, t := range turns {
+		dbUpdateTurn(s.db, t)
+	}
+	for _, sess := range sessions {
+		dbUpdateSession(s.db, sess)
+	}
+	finishTurnCleanup(cancels, subs, perms)
+	return len(turns)
+}
+
 // AgentStats returns activity counters for a given agent.
 func (s *Store) AgentStats(agentID string) (activeTurns, totalSessions, totalTurns int) {
 	s.mu.Lock()
@@ -421,7 +472,7 @@ func (s *Store) UsageStats() []AgentUsageStat {
 func (s *Store) markTurnStatus(id string, status TurnStatus, errStr, result string) {
 	s.mu.Lock()
 	e, ok := s.turns[id]
-	if !ok {
+	if !ok || e.done {
 		s.mu.Unlock()
 		return
 	}
@@ -460,14 +511,16 @@ func (s *Store) CompleteTurn(id, result string, msg *types.AssistantMessage, dur
 	if msg != nil {
 		s.mu.Lock()
 		if e, ok := s.turns[id]; ok {
-			e.turn.DurationMs = durationMs
-			e.turn.InputTokens = msg.Usage.Input
-			e.turn.OutputTokens = msg.Usage.Output
-			e.turn.CacheReadTokens = msg.Usage.CacheRead
-			e.turn.CacheWriteTokens = msg.Usage.CacheWrite
-			e.turn.TotalTokens = msg.Usage.TotalTokens
-			e.turn.CostTotal = msg.Usage.Cost.Total
-			e.turn.Model = msg.Model
+			if !e.done {
+				e.turn.DurationMs = durationMs
+				e.turn.InputTokens = msg.Usage.Input
+				e.turn.OutputTokens = msg.Usage.Output
+				e.turn.CacheReadTokens = msg.Usage.CacheRead
+				e.turn.CacheWriteTokens = msg.Usage.CacheWrite
+				e.turn.TotalTokens = msg.Usage.TotalTokens
+				e.turn.CostTotal = msg.Usage.Cost.Total
+				e.turn.Model = msg.Model
+			}
 		}
 		s.mu.Unlock()
 	}
@@ -593,7 +646,7 @@ func (s *Store) collectPermissionChannelsLocked(prefix string) []chan string {
 
 func collectTurnCleanup(te *turnEntry, perms []chan string) (func(), []chan SSEEvent, []chan string) {
 	var cancelFn func()
-	if te.cancel != nil && te.turn.Status == TurnRunning {
+	if te.cancel != nil {
 		cancelFn = te.cancel
 	}
 	subs := make([]chan SSEEvent, 0, len(te.subs))

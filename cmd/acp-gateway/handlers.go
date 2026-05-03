@@ -262,6 +262,7 @@ func (s *Server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	s.store.CancelTurnsForAgent(id, "agent deleted")
 	if err := s.mgr.RemoveAgent(id); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return

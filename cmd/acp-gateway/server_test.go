@@ -544,6 +544,77 @@ subscriptionClosed:
 	}
 }
 
+func TestCancelTurnsForAgent_CleansPendingAndRunningTurns(t *testing.T) {
+	store := NewStore(8, nil)
+	proj, err := store.CreateProject("p", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pendingSess, err := store.CreateSession(proj.ID, "claude", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pendingTurn, err := store.AddTurn(pendingSess.ID, "pending")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runningSess, err := store.CreateSession(proj.ID, "claude", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runningTurn, err := store.AddTurn(runningSess.ID, "running")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cancelled := make(chan struct{})
+	store.StartTurn(runningTurn.ID, func() { close(cancelled) })
+	permissionResult := make(chan string, 1)
+	go func() {
+		permissionResult <- store.AwaitPermission(runningTurn.ID, PermissionPrompt{
+			ToolCallID: "tc-1",
+			Options: []client.PermissionOption{
+				{OptionID: "deny", Kind: "reject_once"},
+			},
+		})
+	}()
+	waitFor(t, func() bool {
+		events, _ := store.Events(runningTurn.ID)
+		return len(events) > 0 && events[len(events)-1].Type == "permission"
+	}, time.Second)
+
+	if got := store.CancelTurnsForAgent("claude", "agent deleted"); got != 2 {
+		t.Fatalf("cancelled turns = %d, want 2", got)
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("running turn was not cancelled")
+	}
+	select {
+	case got := <-permissionResult:
+		if got != "deny" {
+			t.Fatalf("permission result = %q, want deny", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("permission wait did not unblock")
+	}
+	for _, id := range []string{pendingTurn.ID, runningTurn.ID} {
+		cur, ok := store.GetTurn(id)
+		if !ok {
+			t.Fatalf("turn %s missing", id)
+		}
+		if cur.Status != TurnFailed || cur.Error != "agent deleted" {
+			t.Fatalf("turn %s = status %q error %q, want failed agent deleted", id, cur.Status, cur.Error)
+		}
+		store.CompleteTurn(id, "late result", nil, 1)
+		cur, _ = store.GetTurn(id)
+		if cur.Status != TurnFailed {
+			t.Fatalf("turn %s was overwritten after cancellation: %q", id, cur.Status)
+		}
+	}
+}
+
 func TestAddTurn_Publishes(t *testing.T) {
 	h := newHarness(t, "")
 	h.agents["claude"].promptResponder = func(msg *jsonrpc.Message, emit func(map[string]any)) (string, error) {

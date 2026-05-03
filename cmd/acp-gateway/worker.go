@@ -31,6 +31,9 @@ func runWorker(ctx context.Context, agentID string, store *Store, reg *Registry)
 			if !found {
 				continue
 			}
+			if t.Status != TurnPending {
+				continue
+			}
 			if t.Agent != agentID {
 				store.FailTurn(t.ID, fmt.Sprintf("turn queued for %q but belongs to %q", agentID, t.Agent))
 				continue
