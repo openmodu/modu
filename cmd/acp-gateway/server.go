@@ -103,7 +103,7 @@ func (s *Server) Close() error {
 func hooksFor(store *Store) manager.Hooks {
 	return manager.Hooks{
 		OnPermission: func(agent manager.AgentConfig, cwd string, req *client.PermissionRequest) string {
-			tid := store.ActiveTurnFor(agent.ID, cwd)
+			tid, ctx := store.ActiveTurnFor(agent.ID, cwd)
 			if tid == "" {
 				for _, o := range req.Options {
 					if o.Kind == "reject_once" || o.Kind == "reject_always" {
@@ -112,7 +112,7 @@ func hooksFor(store *Store) manager.Hooks {
 				}
 				return ""
 			}
-			return store.AwaitPermission(tid, PermissionPrompt{
+			return store.AwaitPermission(ctx, tid, PermissionPrompt{
 				ToolCallID: req.ToolCall.ToolCallID,
 				Title:      req.ToolCall.Title,
 				Kind:       req.ToolCall.Kind,

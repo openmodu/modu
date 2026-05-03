@@ -54,7 +54,7 @@ func runTurn(parent context.Context, t *Turn, store *Store, runner Runner) {
 	defer cancel()
 
 	store.StartTurn(t.ID, cancel)
-	store.SetActive(t.Agent, t.Cwd, t.ID)
+	store.SetActive(t.Agent, t.Cwd, t.ID, ctx)
 	defer store.ClearActive(t.Agent, t.Cwd)
 
 	// Inject the gateway SessionID so ACP runners can scope their provider
@@ -67,7 +67,7 @@ func runTurn(parent context.Context, t *Turn, store *Store, runner Runner) {
 			store.PushEvent(t.ID, ev)
 		},
 		OnPermission: func(p PermissionPrompt) string {
-			return store.AwaitPermission(t.ID, p)
+			return store.AwaitPermission(ctx, t.ID, p)
 		},
 		SystemPrompt: t.SystemPrompt,
 	}

@@ -498,7 +498,7 @@ func TestDeleteSession_CleansRunningTurnResources(t *testing.T) {
 
 	permissionResult := make(chan string, 1)
 	go func() {
-		permissionResult <- store.AwaitPermission(turn.ID, PermissionPrompt{
+		permissionResult <- store.AwaitPermission(context.Background(), turn.ID, PermissionPrompt{
 			ToolCallID: "tc-1",
 			Options: []client.PermissionOption{
 				{OptionID: "deny", Kind: "reject_once"},
@@ -571,7 +571,7 @@ func TestCancelTurnsForAgent_CleansPendingAndRunningTurns(t *testing.T) {
 	store.StartTurn(runningTurn.ID, func() { close(cancelled) })
 	permissionResult := make(chan string, 1)
 	go func() {
-		permissionResult <- store.AwaitPermission(runningTurn.ID, PermissionPrompt{
+		permissionResult <- store.AwaitPermission(context.Background(), runningTurn.ID, PermissionPrompt{
 			ToolCallID: "tc-1",
 			Options: []client.PermissionOption{
 				{OptionID: "deny", Kind: "reject_once"},
@@ -612,6 +612,51 @@ func TestCancelTurnsForAgent_CleansPendingAndRunningTurns(t *testing.T) {
 		if cur.Status != TurnFailed {
 			t.Fatalf("turn %s was overwritten after cancellation: %q", id, cur.Status)
 		}
+	}
+}
+
+func TestAwaitPermission_ContextCancelRejectsAndCleansPending(t *testing.T) {
+	store := NewStore(8, nil)
+	proj, err := store.CreateProject("p", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := store.CreateSession(proj.ID, "claude", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn, err := store.AddTurn(sess.ID, "permission")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan string, 1)
+	go func() {
+		result <- store.AwaitPermission(ctx, turn.ID, PermissionPrompt{
+			ToolCallID: "tc-1",
+			Options: []client.PermissionOption{
+				{OptionID: "allow", Kind: "allow_once"},
+				{OptionID: "deny", Kind: "reject_once"},
+			},
+		})
+	}()
+	waitFor(t, func() bool {
+		events, _ := store.Events(turn.ID)
+		return len(events) > 0 && events[len(events)-1].Type == "permission"
+	}, time.Second)
+
+	cancel()
+	select {
+	case got := <-result:
+		if got != "deny" {
+			t.Fatalf("permission result = %q, want deny", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("permission wait did not unblock after context cancel")
+	}
+	if store.Approve(turn.ID, "tc-1", "allow") {
+		t.Fatal("approve succeeded after permission context was cancelled")
 	}
 }
 

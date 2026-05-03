@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -103,9 +104,14 @@ type Store struct {
 	queueCap int
 	queues   map[string]chan string // agentID -> turn IDs ready to execute
 	perms    map[string]chan string // key = turnID|toolCallID
-	active   map[string]string      // agentID|cwd → turnID (for permission routing)
+	active   map[string]activeTurn  // agentID|cwd → active turn (for permission routing)
 
 	db *sql.DB // nil = no persistence
+}
+
+type activeTurn struct {
+	id  string
+	ctx context.Context
 }
 
 // NewStore builds a Store with a work-queue capacity of cap turns.
@@ -121,7 +127,7 @@ func NewStore(cap int, db *sql.DB) *Store {
 		queueCap: cap,
 		queues:   make(map[string]chan string),
 		perms:    make(map[string]chan string),
-		active:   make(map[string]string),
+		active:   make(map[string]activeTurn),
 		db:       db,
 	}
 }
@@ -155,10 +161,10 @@ func (s *Store) GetTurn(id string) (*Turn, bool) {
 	return &cp, true
 }
 
-// SetActive pins a turnID to (agentID, cwd) for permission routing.
-func (s *Store) SetActive(agentID, cwd, turnID string) {
+// SetActive pins a turn to (agentID, cwd) for permission routing.
+func (s *Store) SetActive(agentID, cwd, turnID string, ctx context.Context) {
 	s.mu.Lock()
-	s.active[agentID+"|"+cwd] = turnID
+	s.active[agentID+"|"+cwd] = activeTurn{id: turnID, ctx: ctx}
 	s.mu.Unlock()
 }
 
@@ -169,11 +175,12 @@ func (s *Store) ClearActive(agentID, cwd string) {
 	s.mu.Unlock()
 }
 
-// ActiveTurnFor returns the current turn for (agentID, cwd), or "".
-func (s *Store) ActiveTurnFor(agentID, cwd string) string {
+// ActiveTurnFor returns the current turn for (agentID, cwd), or zero values.
+func (s *Store) ActiveTurnFor(agentID, cwd string) (string, context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.active[agentID+"|"+cwd]
+	active := s.active[agentID+"|"+cwd]
+	return active.id, active.ctx
 }
 
 // Subscribe opens an SSE subscription on a turn. Buffered past events are
@@ -581,8 +588,12 @@ func (s *Store) PushEvent(turnID string, ev types.StreamEvent) {
 	s.publishEvent(turnID, SSEEvent{Type: "event", Data: streamEventPayload(ev)})
 }
 
-// AwaitPermission publishes a permission prompt and blocks until resolved.
-func (s *Store) AwaitPermission(turnID string, prompt PermissionPrompt) string {
+// AwaitPermission publishes a permission prompt and blocks until it is
+// approved, rejected, or the turn context is cancelled.
+func (s *Store) AwaitPermission(ctx context.Context, turnID string, prompt PermissionPrompt) string {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	key := turnID + "|" + prompt.ToolCallID
 	ch := make(chan string, 1)
 
@@ -592,18 +603,19 @@ func (s *Store) AwaitPermission(turnID string, prompt PermissionPrompt) string {
 
 	s.publishEvent(turnID, SSEEvent{Type: "permission", Data: prompt})
 
-	opt := <-ch
+	var opt string
+	select {
+	case opt = <-ch:
+	case <-ctx.Done():
+		opt = ""
+	}
 	s.mu.Lock()
 	delete(s.perms, key)
 	s.mu.Unlock()
-	if opt == "" {
-		for _, o := range prompt.Options {
-			if o.Kind == "reject_once" || o.Kind == "reject_always" {
-				return o.OptionID
-			}
-		}
+	if opt != "" {
+		return opt
 	}
-	return opt
+	return defaultRejectOption(prompt.Options)
 }
 
 // Approve delivers an optionID to an in-flight permission prompt.
@@ -615,12 +627,7 @@ func (s *Store) Approve(turnID, toolCallID, optionID string) bool {
 	if !ok {
 		return false
 	}
-	select {
-	case ch <- optionID:
-		return true
-	default:
-		return false
-	}
+	return resolvePermission(ch, optionID)
 }
 
 func (s *Store) closePendingPermissions(turnID string) {
@@ -629,7 +636,25 @@ func (s *Store) closePendingPermissions(turnID string) {
 	chs := s.collectPermissionChannelsLocked(prefix)
 	s.mu.Unlock()
 	for _, ch := range chs {
-		close(ch)
+		resolvePermission(ch, "")
+	}
+}
+
+func defaultRejectOption(options []client.PermissionOption) string {
+	for _, o := range options {
+		if o.Kind == "reject_once" || o.Kind == "reject_always" {
+			return o.OptionID
+		}
+	}
+	return ""
+}
+
+func resolvePermission(ch chan string, optionID string) bool {
+	select {
+	case ch <- optionID:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -666,7 +691,7 @@ func finishTurnCleanup(cancels []func(), subs []chan SSEEvent, perms []chan stri
 		close(ch)
 	}
 	for _, ch := range perms {
-		close(ch)
+		resolvePermission(ch, "")
 	}
 }
 
