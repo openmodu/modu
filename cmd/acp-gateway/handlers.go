@@ -286,7 +286,18 @@ func (s *Server) handleRestartAgent(w http.ResponseWriter, r *http.Request) {
 // ---------- usage stats ----------
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"stats": s.store.UsageStats()})
+	stats := s.store.UsageStats()
+	// Ensure every registered agent has an entry, even with no data yet.
+	seen := make(map[string]bool, len(stats))
+	for _, st := range stats {
+		seen[st.Agent] = true
+	}
+	for _, id := range s.registry.List() {
+		if !seen[id] {
+			stats = append(stats, AgentUsageStat{Agent: id})
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"stats": stats})
 }
 
 // ---------- global turn list ----------
