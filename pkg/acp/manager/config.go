@@ -17,6 +17,8 @@ type AgentConfig struct {
 	Args           []string          `json:"args,omitempty"`
 	Env            map[string]string `json:"env,omitempty"`
 	PermissionMode string            `json:"permissionMode,omitempty"` // "default" | "bypass"
+	WeeklyLimit    int               `json:"weeklyLimit,omitempty"`    // 0 = unlimited; weekly turn quota
+	ResetDay       string            `json:"resetDay,omitempty"`       // weekday for quota reset, e.g. "monday" (default)
 }
 
 // Config is the root config object. Version is declared so future config

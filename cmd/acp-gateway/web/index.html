@@ -145,6 +145,11 @@ main{flex:1;overflow:hidden;display:flex;flex-direction:column}
 
 /* ── Sidebar usage stats ── */
 .stats-title{font:600 10px/1 sans-serif;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.sb-stat-reset{font-size:10px;color:var(--subtle);margin-top:2px}
+.sb-quota-bar{height:3px;border-radius:2px;background:var(--border);margin-top:5px;overflow:hidden}
+.sb-quota-fill{height:100%;border-radius:2px;background:var(--accent);transition:width .3s}
+.sb-quota-fill.warn{background:var(--warn)}
+.sb-quota-fill.crit{background:var(--err)}
 
 /* ── Session pane ── */
 .spane{display:flex;flex-direction:column;height:100%;overflow:hidden}
@@ -600,6 +605,15 @@ function fmtDuration(ms) {
   return (ms / 1000).toFixed(1) + 's';
 }
 
+function fmtResetAt(iso) {
+  if (!iso) return '';
+  const diff = new Date(iso) - Date.now();
+  const days = Math.ceil(diff / 86400000);
+  if (days <= 0) return 'resets today';
+  if (days === 1) return 'resets tomorrow';
+  return `resets in ${days}d`;
+}
+
 function renderStats() {
   const row = document.getElementById('sbStatsRow');
   if (!row) return;
@@ -613,15 +627,33 @@ function renderStats() {
     const item = document.createElement('div');
     item.className = 'sb-stat-item';
     const liveHtml = st.activeTurns > 0 ? `<span class="sb-stat-live"></span>` : '';
+
+    // weekly capacity bar
+    let quotaHtml = '';
+    if (st.weeklyLimit > 0) {
+      const pct = Math.min(100, Math.round(st.weeklyTurns / st.weeklyLimit * 100));
+      const cls = pct >= 90 ? 'crit' : pct >= 70 ? 'warn' : '';
+      quotaHtml =
+        `<div class="sb-quota-bar"><div class="sb-quota-fill ${cls}" style="width:${pct}%"></div></div>` +
+        `<div class="sb-stat-reset">${st.weeklyTurns}/${st.weeklyLimit} this week · ${fmtResetAt(st.resetAt)}</div>`;
+    } else {
+      quotaHtml = `<div class="sb-stat-reset">${st.weeklyTurns} this week · ${fmtResetAt(st.resetAt)}</div>`;
+    }
+
     item.innerHTML =
-      `<span class="sb-stat-icon">${agentIcon(st.agent)}</span>` +
-      `<span class="sb-stat-name">${esc(st.agent)}</span>` +
-      liveHtml +
-      `<span class="sb-stat-nums">` +
-        `<span class="sb-stat-num ok" title="completed turns">${st.completedTurns}✓</span>` +
-        (st.failedTurns > 0 ? `<span class="sb-stat-num" style="color:var(--err)" title="failed turns">${st.failedTurns}✗</span>` : '') +
-        (st.totalTokens > 0 ? `<span class="sb-stat-num accent" title="total tokens">${fmtTokens(st.totalTokens)}</span>` : '') +
-      `</span>`;
+      `<div style="flex:1;min-width:0">` +
+        `<div style="display:flex;align-items:center;gap:5px">` +
+          `<span class="sb-stat-icon">${agentIcon(st.agent)}</span>` +
+          `<span class="sb-stat-name">${esc(st.agent)}</span>` +
+          liveHtml +
+          `<span class="sb-stat-nums">` +
+            `<span class="sb-stat-num ok" title="completed turns">${st.completedTurns}✓</span>` +
+            (st.failedTurns > 0 ? `<span class="sb-stat-num" style="color:var(--err)" title="failed">${st.failedTurns}✗</span>` : '') +
+            (st.totalTokens > 0 ? `<span class="sb-stat-num accent" title="tokens">${fmtTokens(st.totalTokens)}</span>` : '') +
+          `</span>` +
+        `</div>` +
+        quotaHtml +
+      `</div>`;
     row.appendChild(item);
   }
 }

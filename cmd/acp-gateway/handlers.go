@@ -297,6 +297,20 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 			stats = append(stats, AgentUsageStat{Agent: id})
 		}
 	}
+	// Inject WeeklyLimit and ResetAt from agent config.
+	cfg := s.mgr.Config()
+	now := time.Now()
+	for i := range stats {
+		ac, ok := cfg.Agent(stats[i].Agent)
+		if ok {
+			stats[i].WeeklyLimit = ac.WeeklyLimit
+		}
+		rd := parseResetDay("")
+		if ok {
+			rd = parseResetDay(ac.ResetDay)
+		}
+		stats[i].ResetAt = nextWeekday(now, rd).Format(time.RFC3339)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"stats": stats})
 }
 
