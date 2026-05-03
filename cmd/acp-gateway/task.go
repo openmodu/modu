@@ -23,17 +23,25 @@ const (
 
 // Turn is one prompt/response cycle within a Session.
 type Turn struct {
-	ID           string     `json:"id"`
-	SessionID    string     `json:"sessionId"`
-	Agent        string     `json:"agent"`
-	Cwd          string     `json:"cwd"`
-	Prompt       string     `json:"prompt"`
-	SystemPrompt string     `json:"systemPrompt,omitempty"`
-	Result       string     `json:"result,omitempty"`
-	Error        string     `json:"error,omitempty"`
-	Status       TurnStatus `json:"status"`
-	CreatedAt    time.Time  `json:"createdAt"`
-	UpdatedAt    time.Time  `json:"updatedAt"`
+	ID               string     `json:"id"`
+	SessionID        string     `json:"sessionId"`
+	Agent            string     `json:"agent"`
+	Cwd              string     `json:"cwd"`
+	Prompt           string     `json:"prompt"`
+	SystemPrompt     string     `json:"systemPrompt,omitempty"`
+	Result           string     `json:"result,omitempty"`
+	Error            string     `json:"error,omitempty"`
+	Status           TurnStatus `json:"status"`
+	DurationMs       int64      `json:"durationMs,omitempty"`
+	InputTokens      int        `json:"inputTokens,omitempty"`
+	OutputTokens     int        `json:"outputTokens,omitempty"`
+	CacheReadTokens  int        `json:"cacheReadTokens,omitempty"`
+	CacheWriteTokens int        `json:"cacheWriteTokens,omitempty"`
+	TotalTokens      int        `json:"totalTokens,omitempty"`
+	CostTotal        float64    `json:"costTotal,omitempty"`
+	Model            string     `json:"model,omitempty"`
+	CreatedAt        time.Time  `json:"createdAt"`
+	UpdatedAt        time.Time  `json:"updatedAt"`
 }
 
 // SSEEvent is one frame sent over a turn's /stream endpoint.
@@ -290,6 +298,60 @@ func (s *Store) AgentStats(agentID string) (activeTurns, totalSessions, totalTur
 	return
 }
 
+// AgentUsageStat is per-agent aggregated usage returned by GET /api/stats.
+type AgentUsageStat struct {
+	Agent           string  `json:"agent"`
+	Sessions        int     `json:"sessions"`
+	Turns           int     `json:"turns"`
+	CompletedTurns  int     `json:"completedTurns"`
+	FailedTurns     int     `json:"failedTurns"`
+	ActiveTurns     int     `json:"activeTurns"`
+	TotalTokens     int     `json:"totalTokens"`
+	InputTokens     int     `json:"inputTokens"`
+	OutputTokens    int     `json:"outputTokens"`
+	CostTotal       float64 `json:"costTotal"`
+}
+
+// UsageStats returns per-agent aggregated usage across all turns and sessions.
+func (s *Store) UsageStats() []AgentUsageStat {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	stats := map[string]*AgentUsageStat{}
+	ensure := func(agent string) *AgentUsageStat {
+		if st := stats[agent]; st != nil {
+			return st
+		}
+		st := &AgentUsageStat{Agent: agent}
+		stats[agent] = st
+		return st
+	}
+	for _, te := range s.turns {
+		t := te.turn
+		st := ensure(t.Agent)
+		st.Turns++
+		switch t.Status {
+		case TurnCompleted:
+			st.CompletedTurns++
+		case TurnFailed:
+			st.FailedTurns++
+		case TurnRunning, TurnPending:
+			st.ActiveTurns++
+		}
+		st.TotalTokens += t.TotalTokens
+		st.InputTokens += t.InputTokens
+		st.OutputTokens += t.OutputTokens
+		st.CostTotal += t.CostTotal
+	}
+	for _, se := range s.sessions {
+		ensure(se.session.Agent).Sessions++
+	}
+	out := make([]AgentUsageStat, 0, len(stats))
+	for _, v := range stats {
+		out = append(out, *v)
+	}
+	return out
+}
+
 func (s *Store) markTurnStatus(id string, status TurnStatus, errStr, result string) {
 	s.mu.Lock()
 	e, ok := s.turns[id]
@@ -327,8 +389,22 @@ func (s *Store) StartTurn(id string, cancel func()) {
 	s.markTurnStatus(id, TurnRunning, "", "")
 }
 
-// CompleteTurn marks a turn completed with its final result.
-func (s *Store) CompleteTurn(id, result string) {
+// CompleteTurn marks a turn completed with its final result and usage stats.
+func (s *Store) CompleteTurn(id, result string, msg *types.AssistantMessage, durationMs int64) {
+	if msg != nil {
+		s.mu.Lock()
+		if e, ok := s.turns[id]; ok {
+			e.turn.DurationMs = durationMs
+			e.turn.InputTokens = msg.Usage.Input
+			e.turn.OutputTokens = msg.Usage.Output
+			e.turn.CacheReadTokens = msg.Usage.CacheRead
+			e.turn.CacheWriteTokens = msg.Usage.CacheWrite
+			e.turn.TotalTokens = msg.Usage.TotalTokens
+			e.turn.CostTotal = msg.Usage.Cost.Total
+			e.turn.Model = msg.Model
+		}
+		s.mu.Unlock()
+	}
 	s.markTurnStatus(id, TurnCompleted, "", result)
 	s.finalizeTurn(id)
 	s.setSessionIdle(id)

@@ -41,17 +41,25 @@ CREATE TABLE IF NOT EXISTS profiles (
 );
 
 CREATE TABLE IF NOT EXISTS turns (
-	id         TEXT PRIMARY KEY,
-	session_id TEXT NOT NULL,
-	agent      TEXT NOT NULL DEFAULT '',
-	cwd        TEXT NOT NULL DEFAULT '',
-	prompt     TEXT NOT NULL,
-	system_prompt TEXT NOT NULL DEFAULT '',
-	result     TEXT NOT NULL DEFAULT '',
-	error      TEXT NOT NULL DEFAULT '',
-	status     TEXT NOT NULL,
-	created_at DATETIME NOT NULL,
-	updated_at DATETIME NOT NULL
+	id                TEXT PRIMARY KEY,
+	session_id        TEXT NOT NULL,
+	agent             TEXT NOT NULL DEFAULT '',
+	cwd               TEXT NOT NULL DEFAULT '',
+	prompt            TEXT NOT NULL,
+	system_prompt     TEXT NOT NULL DEFAULT '',
+	result            TEXT NOT NULL DEFAULT '',
+	error             TEXT NOT NULL DEFAULT '',
+	status            TEXT NOT NULL,
+	duration_ms       INTEGER NOT NULL DEFAULT 0,
+	input_tokens      INTEGER NOT NULL DEFAULT 0,
+	output_tokens     INTEGER NOT NULL DEFAULT 0,
+	cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+	cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+	total_tokens      INTEGER NOT NULL DEFAULT 0,
+	cost_total        REAL NOT NULL DEFAULT 0,
+	model             TEXT NOT NULL DEFAULT '',
+	created_at        DATETIME NOT NULL,
+	updated_at        DATETIME NOT NULL
 );
 `
 
@@ -72,6 +80,21 @@ func openDB(path string) (*sql.DB, error) {
 	if err := dbEnsureColumn(db, "turns", "system_prompt", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		db.Close()
 		return nil, err
+	}
+	for _, col := range []struct{ name, def string }{
+		{"duration_ms", "INTEGER NOT NULL DEFAULT 0"},
+		{"input_tokens", "INTEGER NOT NULL DEFAULT 0"},
+		{"output_tokens", "INTEGER NOT NULL DEFAULT 0"},
+		{"cache_read_tokens", "INTEGER NOT NULL DEFAULT 0"},
+		{"cache_write_tokens", "INTEGER NOT NULL DEFAULT 0"},
+		{"total_tokens", "INTEGER NOT NULL DEFAULT 0"},
+		{"cost_total", "REAL NOT NULL DEFAULT 0"},
+		{"model", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := dbEnsureColumn(db, "turns", col.name, col.def); err != nil {
+			db.Close()
+			return nil, err
+		}
 	}
 	return db, nil
 }
@@ -224,8 +247,9 @@ func dbInsertTurn(db *sql.DB, t *Turn) {
 		return
 	}
 	_, err := db.Exec(
-		`INSERT INTO turns(id,session_id,agent,cwd,prompt,system_prompt,result,error,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO turns(id,session_id,agent,cwd,prompt,system_prompt,result,error,status,duration_ms,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,total_tokens,cost_total,model,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.SessionID, t.Agent, t.Cwd, t.Prompt, t.SystemPrompt, t.Result, t.Error, string(t.Status),
+		t.DurationMs, t.InputTokens, t.OutputTokens, t.CacheReadTokens, t.CacheWriteTokens, t.TotalTokens, t.CostTotal, t.Model,
 		t.CreatedAt.UTC().Format(time.RFC3339Nano),
 		t.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	)
@@ -239,8 +263,9 @@ func dbUpdateTurn(db *sql.DB, t *Turn) {
 		return
 	}
 	_, err := db.Exec(
-		`UPDATE turns SET status=?,result=?,error=?,updated_at=? WHERE id=?`,
+		`UPDATE turns SET status=?,result=?,error=?,duration_ms=?,input_tokens=?,output_tokens=?,cache_read_tokens=?,cache_write_tokens=?,total_tokens=?,cost_total=?,model=?,updated_at=? WHERE id=?`,
 		string(t.Status), t.Result, t.Error,
+		t.DurationMs, t.InputTokens, t.OutputTokens, t.CacheReadTokens, t.CacheWriteTokens, t.TotalTokens, t.CostTotal, t.Model,
 		t.UpdatedAt.UTC().Format(time.RFC3339Nano), t.ID,
 	)
 	if err != nil {
@@ -379,7 +404,7 @@ func dbLoadSessions(db *sql.DB, store *Store) error {
 
 func dbLoadTurns(db *sql.DB, store *Store) error {
 	rows, err := db.Query(
-		`SELECT id,session_id,agent,cwd,prompt,system_prompt,result,error,status,created_at,updated_at FROM turns ORDER BY created_at`,
+		`SELECT id,session_id,agent,cwd,prompt,system_prompt,result,error,status,duration_ms,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,total_tokens,cost_total,model,created_at,updated_at FROM turns ORDER BY created_at`,
 	)
 	if err != nil {
 		return fmt.Errorf("load turns: %w", err)
@@ -389,7 +414,9 @@ func dbLoadTurns(db *sql.DB, store *Store) error {
 	for rows.Next() {
 		var t Turn
 		var createdRaw, updatedRaw string
-		if err := rows.Scan(&t.ID, &t.SessionID, &t.Agent, &t.Cwd, &t.Prompt, &t.SystemPrompt, &t.Result, &t.Error, &t.Status, &createdRaw, &updatedRaw); err != nil {
+		if err := rows.Scan(&t.ID, &t.SessionID, &t.Agent, &t.Cwd, &t.Prompt, &t.SystemPrompt, &t.Result, &t.Error, &t.Status,
+			&t.DurationMs, &t.InputTokens, &t.OutputTokens, &t.CacheReadTokens, &t.CacheWriteTokens, &t.TotalTokens, &t.CostTotal, &t.Model,
+			&createdRaw, &updatedRaw); err != nil {
 			log.Printf("[acp-gateway] db scan turn: %v", err)
 			continue
 		}

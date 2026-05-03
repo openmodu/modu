@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/openmodu/modu/pkg/types"
 )
@@ -69,7 +70,9 @@ func runTurn(parent context.Context, t *Turn, store *Store, runner Runner) {
 		SystemPrompt: t.SystemPrompt,
 	}
 
+	start := time.Now()
 	msg, err := runner.Run(ctx, t.Prompt, t.Cwd, hooks)
+	durationMs := time.Since(start).Milliseconds()
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			store.FailTurn(t.ID, "cancelled")
@@ -84,5 +87,5 @@ func runTurn(parent context.Context, t *Turn, store *Store, runner Runner) {
 	if msg != nil {
 		result = assistantText(msg)
 	}
-	store.CompleteTurn(t.ID, result)
+	store.CompleteTurn(t.ID, result, msg, durationMs)
 }

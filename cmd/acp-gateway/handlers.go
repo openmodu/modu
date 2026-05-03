@@ -65,6 +65,9 @@ func (s *Server) buildRouter() http.Handler {
 	mux.HandleFunc("DELETE /api/sessions/{id}", s.handleDeleteSession)
 	mux.HandleFunc("POST /api/sessions/{id}/cancel", s.handleCancelSession)
 
+	// Usage stats
+	mux.HandleFunc("GET /api/stats", s.handleStats)
+
 	// Global turn list
 	mux.HandleFunc("GET /api/turns", s.handleListTurns)
 
@@ -278,6 +281,12 @@ func (s *Server) handleRestartAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mgr.RestartAgent(id)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "restarted"})
+}
+
+// ---------- usage stats ----------
+
+func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"stats": s.store.UsageStats()})
 }
 
 // ---------- global turn list ----------
