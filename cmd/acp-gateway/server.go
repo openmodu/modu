@@ -16,9 +16,9 @@ var Version = "dev"
 
 // Server bundles the HTTP routing layer with the gateway's dependencies.
 type Server struct {
-	mgr        *manager.Manager
-	store      *Store
-	registry   *Registry
+	mgr      *manager.Manager
+	store    *Store
+	registry *Registry
 
 	token      string
 	workdir    string
@@ -29,6 +29,7 @@ type Server struct {
 
 	handler http.Handler
 	workers sync.WaitGroup
+	ctx     context.Context
 	cancel  context.CancelFunc
 }
 
@@ -70,6 +71,7 @@ func NewServer(opts Options) *Server {
 	s.handler = s.buildRouter()
 
 	ctx, cancel := context.WithCancel(context.Background())
+	s.ctx = ctx
 	s.cancel = cancel
 	for _, id := range registry.List() {
 		for i := 0; i < opts.WorkersEach; i++ {

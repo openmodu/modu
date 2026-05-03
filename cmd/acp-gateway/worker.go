@@ -23,7 +23,7 @@ func runWorker(ctx context.Context, agentID string, store *Store, reg *Registry)
 		select {
 		case <-ctx.Done():
 			return
-		case id, ok := <-store.Queue():
+		case id, ok := <-store.Queue(agentID):
 			if !ok {
 				return
 			}
@@ -32,8 +32,7 @@ func runWorker(ctx context.Context, agentID string, store *Store, reg *Registry)
 				continue
 			}
 			if t.Agent != agentID {
-				// Re-queue for the matching worker.
-				go func() { store.queue <- id }()
+				store.FailTurn(t.ID, fmt.Sprintf("turn queued for %q but belongs to %q", agentID, t.Agent))
 				continue
 			}
 			runner, ok := reg.Get(t.Agent)

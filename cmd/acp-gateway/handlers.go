@@ -1,9 +1,9 @@
 package main
 
 import (
-	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -21,6 +21,8 @@ import (
 
 //go:embed web/index.html
 var webFS embed.FS
+
+var errPathOutsideRoot = errors.New("path outside root")
 
 // buildRouter wires all HTTP routes + auth middleware.
 func (s *Server) buildRouter() http.Handler {
@@ -232,14 +234,10 @@ func (s *Server) handleAddAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	s.registry.Register(newACPRunner(body.ID, s.mgr))
 	_ = s.saveConfig()
-	// Workers run under the server's lifetime context stored via cancel;
-	// use a background context here since we don't have access to the
-	// server's root ctx. Dynamic agents run until server shutdown.
-	workerCtx := context.Background()
 	s.workers.Add(1)
 	go func() {
 		defer s.workers.Done()
-		runWorker(workerCtx, body.ID, s.store, s.registry)
+		runWorker(s.ctx, body.ID, s.store, s.registry)
 	}()
 	d, _ := s.agentDetail(body.ID)
 	writeJSON(w, http.StatusCreated, d)
@@ -426,9 +424,17 @@ func (s *Server) handleProjectFiles(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) listFilesIn(w http.ResponseWriter, r *http.Request, root string) {
 	rel := r.URL.Query().Get("path")
-	target := filepath.Clean(filepath.Join(root, filepath.FromSlash(rel)))
-	if !strings.HasPrefix(target, root) {
+	target, err := resolveInsideRoot(root, rel)
+	if errors.Is(err, errPathOutsideRoot) {
 		http.Error(w, "path outside root", http.StatusBadRequest)
+		return
+	}
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "not found", http.StatusNotFound)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 		return
 	}
 	entries, err := os.ReadDir(target)
@@ -463,6 +469,30 @@ func (s *Server) listFilesIn(w http.ResponseWriter, r *http.Request, root string
 		"path":  filepath.ToSlash(rel),
 		"files": files,
 	})
+}
+
+func resolveInsideRoot(root, rel string) (string, error) {
+	absRoot, err := filepath.Abs(filepath.Clean(root))
+	if err != nil {
+		return "", err
+	}
+	evalRoot, err := filepath.EvalSymlinks(absRoot)
+	if err != nil {
+		return "", err
+	}
+	target := filepath.Clean(filepath.Join(evalRoot, filepath.FromSlash(rel)))
+	evalTarget, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		return "", err
+	}
+	pathRel, err := filepath.Rel(evalRoot, evalTarget)
+	if err != nil {
+		return "", err
+	}
+	if pathRel == ".." || strings.HasPrefix(pathRel, ".."+string(os.PathSeparator)) || filepath.IsAbs(pathRel) {
+		return "", errPathOutsideRoot
+	}
+	return evalTarget, nil
 }
 
 // ---------- projects ----------
@@ -675,8 +705,13 @@ func (s *Server) handleCancelSession(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAddTurn(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("id")
-	if _, ok := s.store.GetSession(sessionID); !ok {
+	sess, ok := s.store.GetSession(sessionID)
+	if !ok {
 		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+	if !slices.Contains(s.registry.List(), sess.Agent) {
+		http.Error(w, fmt.Sprintf("unknown agent %q", sess.Agent), http.StatusBadRequest)
 		return
 	}
 	var body struct {

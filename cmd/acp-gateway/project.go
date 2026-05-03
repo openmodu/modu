@@ -62,12 +62,24 @@ func (s *Store) ListProjects() []*Project {
 func (s *Store) DeleteProject(id string) bool {
 	s.mu.Lock()
 	_, ok := s.projects[id]
+	var cancels []func()
+	var subs []chan SSEEvent
+	var perms []chan string
 	if ok {
 		delete(s.projects, id)
 		// Remove all sessions (and their turns) that belong to this project.
 		for sid, e := range s.sessions {
 			if e.session.ProjectID == id {
 				for _, tid := range e.turns {
+					if te, ok := s.turns[tid]; ok {
+						permChans := s.collectPermissionChannelsLocked(tid + "|")
+						cancelFn, subChans, permChans := collectTurnCleanup(te, permChans)
+						if cancelFn != nil {
+							cancels = append(cancels, cancelFn)
+						}
+						subs = append(subs, subChans...)
+						perms = append(perms, permChans...)
+					}
 					delete(s.turns, tid)
 				}
 				delete(s.sessions, sid)
@@ -76,6 +88,7 @@ func (s *Store) DeleteProject(id string) bool {
 	}
 	s.mu.Unlock()
 	if ok {
+		finishTurnCleanup(cancels, subs, perms)
 		dbDeleteProject(s.db, id)
 	}
 	return ok

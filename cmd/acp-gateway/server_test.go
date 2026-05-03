@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -340,6 +342,30 @@ func TestListAgents(t *testing.T) {
 	}
 }
 
+func TestAddAgent_WorkerStopsOnClose(t *testing.T) {
+	h := newHarness(t, "")
+	resp := h.do(t, "POST", "/api/agents", "", map[string]any{
+		"id":      "dynamic",
+		"name":    "dynamic",
+		"command": "ignored",
+	})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("add agent status = %d, want 201", resp.StatusCode)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- h.srv.Close() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("close: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("server close hung after adding dynamic agent")
+	}
+}
+
 func TestProject_CRUD(t *testing.T) {
 	h := newHarness(t, "")
 
@@ -376,6 +402,57 @@ func TestProject_CRUD(t *testing.T) {
 	}
 }
 
+func TestProjectFiles_RejectsSiblingPrefixEscape(t *testing.T) {
+	h := newHarness(t, "")
+	base := t.TempDir()
+	root := filepath.Join(base, "root")
+	sibling := filepath.Join(base, "root-evil")
+	if err := os.Mkdir(root, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(sibling, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := h.do(t, "POST", "/api/projects", "", map[string]any{"name": "p", "path": root})
+	var proj Project
+	_ = json.NewDecoder(resp.Body).Decode(&proj)
+	resp.Body.Close()
+
+	resp = h.do(t, "GET", "/api/projects/"+proj.ID+"/files?path=../root-evil", "", nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestProjectFiles_RejectsSymlinkEscape(t *testing.T) {
+	h := newHarness(t, "")
+	base := t.TempDir()
+	root := filepath.Join(base, "root")
+	outside := filepath.Join(base, "outside")
+	if err := os.Mkdir(root, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(outside, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := h.do(t, "POST", "/api/projects", "", map[string]any{"name": "p", "path": root})
+	var proj Project
+	_ = json.NewDecoder(resp.Body).Decode(&proj)
+	resp.Body.Close()
+
+	resp = h.do(t, "GET", "/api/projects/"+proj.ID+"/files?path=link", "", nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
 func TestSession_CreateAndGet(t *testing.T) {
 	h := newHarness(t, "")
 	h.agents["claude"].promptResponder = func(_ *jsonrpc.Message, _ func(map[string]any)) (string, error) {
@@ -393,6 +470,77 @@ func TestSession_CreateAndGet(t *testing.T) {
 	_ = json.NewDecoder(resp.Body).Decode(&detail)
 	if detail.ID != pt.SessionID {
 		t.Errorf("session id = %q", detail.ID)
+	}
+}
+
+func TestDeleteSession_CleansRunningTurnResources(t *testing.T) {
+	store := NewStore(8, nil)
+	proj, err := store.CreateProject("p", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := store.CreateSession(proj.ID, "claude", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn, err := store.AddTurn(sess.ID, "needs approval")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cancelled := make(chan struct{})
+	store.StartTurn(turn.ID, func() { close(cancelled) })
+	sub, cancelSub, ok := store.Subscribe(turn.ID)
+	if !ok {
+		t.Fatal("subscribe failed")
+	}
+	defer cancelSub()
+
+	permissionResult := make(chan string, 1)
+	go func() {
+		permissionResult <- store.AwaitPermission(turn.ID, PermissionPrompt{
+			ToolCallID: "tc-1",
+			Options: []client.PermissionOption{
+				{OptionID: "deny", Kind: "reject_once"},
+			},
+		})
+	}()
+	waitFor(t, func() bool {
+		events, _ := store.Events(turn.ID)
+		return len(events) > 0 && events[len(events)-1].Type == "permission"
+	}, time.Second)
+
+	if !store.DeleteSession(sess.ID) {
+		t.Fatal("delete session failed")
+	}
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("running turn was not cancelled")
+	}
+	select {
+	case <-time.After(time.Second):
+		t.Fatal("subscription did not close")
+	default:
+		for {
+			select {
+			case _, ok := <-sub:
+				if !ok {
+					goto subscriptionClosed
+				}
+			case <-time.After(time.Second):
+				t.Fatal("subscription did not close")
+			}
+		}
+	}
+subscriptionClosed:
+	select {
+	case got := <-permissionResult:
+		if got != "deny" {
+			t.Fatalf("permission result = %q, want deny", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("permission wait did not unblock")
 	}
 }
 
@@ -431,6 +579,38 @@ func TestAddTurn_UnknownAgent(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestAddTurn_AgentDeleted(t *testing.T) {
+	h := newHarness(t, "")
+
+	resp := h.do(t, "POST", "/api/projects", "", map[string]any{"name": "p", "path": t.TempDir()})
+	var proj Project
+	_ = json.NewDecoder(resp.Body).Decode(&proj)
+	resp.Body.Close()
+
+	resp = h.do(t, "POST", "/api/sessions", "", map[string]any{
+		"projectId": proj.ID,
+		"agent":     "claude",
+	})
+	var sess Session
+	_ = json.NewDecoder(resp.Body).Decode(&sess)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create session status = %d", resp.StatusCode)
+	}
+
+	resp = h.do(t, "DELETE", "/api/agents/claude", "", nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete agent status = %d", resp.StatusCode)
+	}
+
+	resp = h.do(t, "POST", "/api/sessions/"+sess.ID+"/turns", "", map[string]any{"prompt": "hi"})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("add turn status = %d, want 400", resp.StatusCode)
 	}
 }
 

@@ -3,10 +3,12 @@ package provider
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/openmodu/modu/pkg/acp/client"
 	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/types"
 )
@@ -114,6 +116,35 @@ func TestStream_InitializeError(t *testing.T) {
 	// Provider must not have created a session.
 	if got := a.countCalls("session/new"); got != 0 {
 		t.Errorf("session/new called %d times, want 0", got)
+	}
+}
+
+func TestStream_ContextFileWriteError(t *testing.T) {
+	a := newMockAgent()
+	a.run()
+
+	cwdFile := t.TempDir() + "/not-a-dir"
+	if err := os.WriteFile(cwdFile, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	c := client.New(client.Config{Transport: a.tx})
+	p := New(Options{
+		ID:           "acp:claude",
+		Client:       c,
+		Cwd:          cwdFile,
+		Name:         "test-client",
+		SystemPrompt: "be precise",
+	})
+
+	_, err := p.Stream(context.Background(), makeReq("hi"))
+	if err == nil {
+		t.Fatal("expected context file write error")
+	}
+	if !strings.Contains(err.Error(), "write context file") {
+		t.Fatalf("err = %v, want write context file", err)
+	}
+	if got := a.countCalls("initialize"); got != 0 {
+		t.Fatalf("initialize called %d times, want 0", got)
 	}
 }
 

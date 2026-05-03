@@ -56,9 +56,9 @@ type PermissionOption struct {
 }
 
 // PermissionHandler decides how to answer a permission prompt. It must
-// return the OptionID of the chosen option. By convention an OptionID
-// starting with "reject" is surfaced to the agent as outcome="rejected";
-// anything else maps to outcome="selected".
+// return the OptionID of the chosen option. Options whose Kind is reject,
+// reject_once, or reject_always are surfaced as outcome="rejected";
+// everything else maps to outcome="selected".
 type PermissionHandler func(req *PermissionRequest) string
 
 // FSHandler services reverse-RPC file read/write requests from the agent.

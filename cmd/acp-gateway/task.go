@@ -100,9 +100,10 @@ type Store struct {
 	turns    map[string]*turnEntry
 	profiles map[string]*Profile
 
-	queue  chan string            // turn IDs ready to execute
-	perms  map[string]chan string // key = turnID|toolCallID
-	active map[string]string      // agentID|cwd → turnID (for permission routing)
+	queueCap int
+	queues   map[string]chan string // agentID -> turn IDs ready to execute
+	perms    map[string]chan string // key = turnID|toolCallID
+	active   map[string]string      // agentID|cwd → turnID (for permission routing)
 
 	db *sql.DB // nil = no persistence
 }
@@ -117,15 +118,30 @@ func NewStore(cap int, db *sql.DB) *Store {
 		sessions: make(map[string]*sessionEntry),
 		turns:    make(map[string]*turnEntry),
 		profiles: make(map[string]*Profile),
-		queue:    make(chan string, cap),
+		queueCap: cap,
+		queues:   make(map[string]chan string),
 		perms:    make(map[string]chan string),
 		active:   make(map[string]string),
 		db:       db,
 	}
 }
 
-// Queue returns the channel workers pull turn IDs from.
-func (s *Store) Queue() <-chan string { return s.queue }
+// EnsureQueue returns the work queue for an agent, creating it if needed.
+func (s *Store) EnsureQueue(agentID string) chan string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if q := s.queues[agentID]; q != nil {
+		return q
+	}
+	q := make(chan string, s.queueCap)
+	s.queues[agentID] = q
+	return q
+}
+
+// Queue returns the channel workers pull turn IDs from for one agent.
+func (s *Store) Queue(agentID string) <-chan string {
+	return s.EnsureQueue(agentID)
+}
 
 // GetTurn returns a copy of the turn.
 func (s *Store) GetTurn(id string) (*Turn, bool) {
@@ -301,19 +317,19 @@ func (s *Store) AgentStats(agentID string) (activeTurns, totalSessions, totalTur
 
 // AgentUsageStat is per-agent aggregated usage returned by GET /api/stats.
 type AgentUsageStat struct {
-	Agent           string  `json:"agent"`
-	Sessions        int     `json:"sessions"`
-	Turns           int     `json:"turns"`
-	CompletedTurns  int     `json:"completedTurns"`
-	FailedTurns     int     `json:"failedTurns"`
-	ActiveTurns     int     `json:"activeTurns"`
-	TotalTokens     int     `json:"totalTokens"`
-	InputTokens     int     `json:"inputTokens"`
-	OutputTokens    int     `json:"outputTokens"`
-	CostTotal       float64 `json:"costTotal"`
-	WeeklyTurns     int     `json:"weeklyTurns"`     // completed turns since week start
-	WeeklyLimit     int     `json:"weeklyLimit"`     // 0 = unlimited; set from AgentConfig
-	ResetAt         string  `json:"resetAt"`         // RFC3339 of next quota reset
+	Agent          string  `json:"agent"`
+	Sessions       int     `json:"sessions"`
+	Turns          int     `json:"turns"`
+	CompletedTurns int     `json:"completedTurns"`
+	FailedTurns    int     `json:"failedTurns"`
+	ActiveTurns    int     `json:"activeTurns"`
+	TotalTokens    int     `json:"totalTokens"`
+	InputTokens    int     `json:"inputTokens"`
+	OutputTokens   int     `json:"outputTokens"`
+	CostTotal      float64 `json:"costTotal"`
+	WeeklyTurns    int     `json:"weeklyTurns"` // completed turns since week start
+	WeeklyLimit    int     `json:"weeklyLimit"` // 0 = unlimited; set from AgentConfig
+	ResetAt        string  `json:"resetAt"`     // RFC3339 of next quota reset
 }
 
 // weekStart returns Monday 00:00:00 UTC of the week containing t.
@@ -557,18 +573,48 @@ func (s *Store) Approve(turnID, toolCallID, optionID string) bool {
 func (s *Store) closePendingPermissions(turnID string) {
 	prefix := turnID + "|"
 	s.mu.Lock()
-	var keys []string
-	for k := range s.perms {
-		if len(k) >= len(prefix) && k[:len(prefix)] == prefix {
-			keys = append(keys, k)
-		}
-	}
-	for _, k := range keys {
-		ch := s.perms[k]
-		delete(s.perms, k)
+	chs := s.collectPermissionChannelsLocked(prefix)
+	s.mu.Unlock()
+	for _, ch := range chs {
 		close(ch)
 	}
-	s.mu.Unlock()
+}
+
+func (s *Store) collectPermissionChannelsLocked(prefix string) []chan string {
+	var chs []chan string
+	for k := range s.perms {
+		if len(k) >= len(prefix) && k[:len(prefix)] == prefix {
+			chs = append(chs, s.perms[k])
+			delete(s.perms, k)
+		}
+	}
+	return chs
+}
+
+func collectTurnCleanup(te *turnEntry, perms []chan string) (func(), []chan SSEEvent, []chan string) {
+	var cancelFn func()
+	if te.cancel != nil && te.turn.Status == TurnRunning {
+		cancelFn = te.cancel
+	}
+	subs := make([]chan SSEEvent, 0, len(te.subs))
+	for _, ch := range te.subs {
+		subs = append(subs, ch)
+	}
+	te.subs = map[int]chan SSEEvent{}
+	te.done = true
+	return cancelFn, subs, perms
+}
+
+func finishTurnCleanup(cancels []func(), subs []chan SSEEvent, perms []chan string) {
+	for _, cancelFn := range cancels {
+		cancelFn()
+	}
+	for _, ch := range subs {
+		close(ch)
+	}
+	for _, ch := range perms {
+		close(ch)
+	}
 }
 
 func streamEventPayload(ev types.StreamEvent) map[string]any {

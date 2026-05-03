@@ -270,9 +270,11 @@ func (p *Provider) ensureReady() error {
 
 	if !p.started {
 		if p.systemPrompt != "" {
-			// Best-effort: write agent context file before the subprocess
-			// starts so the agent picks it up on session initialisation.
-			_ = p.writeContextFile()
+			// Write the context file before the subprocess starts so the
+			// agent picks it up on session initialisation.
+			if err := p.writeContextFile(); err != nil {
+				return fmt.Errorf("acp/provider: write context file: %w", err)
+			}
 		}
 		if err := p.client.Start(); err != nil {
 			return fmt.Errorf("acp/provider: start client: %w", err)

@@ -53,8 +53,8 @@ func (f *fakeTransport) Write(line []byte) error {
 	return nil
 }
 
-func (f *fakeTransport) Lines() <-chan []byte    { return f.lines }
-func (f *fakeTransport) Done() <-chan struct{}   { return f.done }
+func (f *fakeTransport) Lines() <-chan []byte  { return f.lines }
+func (f *fakeTransport) Done() <-chan struct{} { return f.done }
 
 // agentSend delivers a line to the client as if it came from the agent.
 func (f *fakeTransport) agentSend(line []byte) {
@@ -319,6 +319,36 @@ func TestReversePermission_Rejected(t *testing.T) {
 	_ = resp.ParseResult(&r)
 	if r.Outcome.Outcome != "rejected" {
 		t.Errorf("outcome = %q, want rejected", r.Outcome.Outcome)
+	}
+}
+
+func TestReversePermission_RejectedByKind(t *testing.T) {
+	tx := newFakeTransport()
+	c := New(Config{
+		Transport:    tx,
+		OnPermission: func(req *PermissionRequest) string { return "deny" },
+	})
+	mustStart(t, c)
+	t.Cleanup(func() { _ = c.Stop() })
+
+	req := jsonrpc.NewRequest(1, "session/request_permission", map[string]any{
+		"sessionId": "s",
+		"toolCall":  map[string]any{"toolCallId": "x"},
+		"options":   []map[string]string{{"optionId": "deny", "name": "No", "kind": "reject_once"}},
+	})
+	b, _ := json.Marshal(req)
+	tx.agentSend(b)
+
+	resp := tx.agentRecv(t)
+	var r struct {
+		Outcome struct {
+			Outcome  string `json:"outcome"`
+			OptionID string `json:"optionId"`
+		} `json:"outcome"`
+	}
+	_ = resp.ParseResult(&r)
+	if r.Outcome.Outcome != "rejected" || r.Outcome.OptionID != "deny" {
+		t.Errorf("got outcome=%+v, want rejected deny", r.Outcome)
 	}
 }
 

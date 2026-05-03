@@ -131,10 +131,23 @@ func (s *Store) DeleteSession(id string) bool {
 	}
 	turnIDs := append([]string(nil), e.turns...)
 	delete(s.sessions, id)
+	var cancels []func()
+	var subs []chan SSEEvent
+	var perms []chan string
 	for _, tid := range turnIDs {
+		if te, ok := s.turns[tid]; ok {
+			permChans := s.collectPermissionChannelsLocked(tid + "|")
+			cancelFn, subChans, permChans := collectTurnCleanup(te, permChans)
+			if cancelFn != nil {
+				cancels = append(cancels, cancelFn)
+			}
+			subs = append(subs, subChans...)
+			perms = append(perms, permChans...)
+		}
 		delete(s.turns, tid)
 	}
 	s.mu.Unlock()
+	finishTurnCleanup(cancels, subs, perms)
 	dbDeleteSession(s.db, id)
 	return true
 }
@@ -213,8 +226,9 @@ func (s *Store) AddTurn(sessionID, prompt string) (*Turn, error) {
 
 	dbInsertTurn(s.db, turn)
 
+	q := s.EnsureQueue(turn.Agent)
 	select {
-	case s.queue <- turn.ID:
+	case q <- turn.ID:
 	default:
 		s.FailTurn(turn.ID, "queue full")
 		return nil, errors.New("queue full")

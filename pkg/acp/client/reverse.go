@@ -35,8 +35,11 @@ func (c *Client) handlePermission(id int, msg *jsonrpc.Message) {
 	}
 	optionID := c.onPermission(&req)
 	outcome := "selected"
-	if strings.HasPrefix(optionID, "reject") {
-		outcome = "rejected"
+	for _, opt := range req.Options {
+		if opt.OptionID == optionID && isRejectOptionKind(opt.Kind) {
+			outcome = "rejected"
+			break
+		}
 	}
 	c.sendResponse(id, map[string]any{
 		"outcome": map[string]any{
@@ -44,6 +47,15 @@ func (c *Client) handlePermission(id int, msg *jsonrpc.Message) {
 			"optionId": optionID,
 		},
 	})
+}
+
+func isRejectOptionKind(kind string) bool {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "reject", "reject_once", "reject_always":
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *Client) handleReadFile(id int, msg *jsonrpc.Message) {
