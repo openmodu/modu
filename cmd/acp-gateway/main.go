@@ -8,10 +8,11 @@
 //	GET  /api/agents
 //	GET  /api/workdir                return current default working directory
 //	GET  /api/files?path=subdir      list files/dirs relative to workdir
-//	POST /api/tasks                  {agent, prompt, cwd}  → {id, status, ...}
-//	GET  /api/tasks/{id}
-//	GET  /api/tasks/{id}/stream      Server-Sent Events
-//	POST /api/tasks/{id}/approve     {toolCallId, optionId}
+//	POST /api/projects               {name, path}
+//	POST /api/sessions               {projectId, agent, profileId, title}
+//	POST /api/sessions/{id}/turns    {prompt} → {id, status, ...}
+//	GET  /api/sessions/{id}/turns/{turnId}/stream
+//	POST /api/sessions/{id}/turns/{turnId}/approve {toolCallId, optionId}
 package main
 
 import (
