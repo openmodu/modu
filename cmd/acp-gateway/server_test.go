@@ -402,6 +402,60 @@ func TestProject_CRUD(t *testing.T) {
 	}
 }
 
+func TestListProfiles_SortsByCreatedAt(t *testing.T) {
+	store := NewStore(8, nil)
+	first, err := store.CreateProfile("first", "claude", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.CreateProfile("second", "claude", "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store.mu.Lock()
+	store.profiles[first.ID].CreatedAt = time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
+	store.profiles[second.ID].CreatedAt = time.Date(2026, 5, 1, 11, 0, 0, 0, time.UTC)
+	store.mu.Unlock()
+
+	got := store.ListProfiles()
+	if len(got) != 2 {
+		t.Fatalf("profiles len = %d, want 2", len(got))
+	}
+	if got[0].ID != first.ID || got[1].ID != second.ID {
+		t.Fatalf("profile order = %s, %s; want %s, %s", got[0].ID, got[1].ID, first.ID, second.ID)
+	}
+}
+
+func TestListSessions_SortsByUpdatedAtDesc(t *testing.T) {
+	store := NewStore(8, nil)
+	proj, err := store.CreateProject("p", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	older, err := store.CreateSession(proj.ID, "claude", "older", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer, err := store.CreateSession(proj.ID, "claude", "newer", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store.mu.Lock()
+	store.sessions[older.ID].session.UpdatedAt = time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
+	store.sessions[newer.ID].session.UpdatedAt = time.Date(2026, 5, 1, 11, 0, 0, 0, time.UTC)
+	store.mu.Unlock()
+
+	got := store.ListSessions(proj.ID)
+	if len(got) != 2 {
+		t.Fatalf("sessions len = %d, want 2", len(got))
+	}
+	if got[0].ID != newer.ID || got[1].ID != older.ID {
+		t.Fatalf("session order = %s, %s; want %s, %s", got[0].ID, got[1].ID, newer.ID, older.ID)
+	}
+}
+
 func TestProjectFiles_RejectsSiblingPrefixEscape(t *testing.T) {
 	h := newHarness(t, "")
 	base := t.TempDir()

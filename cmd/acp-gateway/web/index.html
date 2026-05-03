@@ -674,6 +674,7 @@ function allSessionsForProfile(profileId) {
   const out = [];
   for (const sessions of Object.values(S.byProj))
     for (const s of sessions) if (s.profileId === profileId) out.push(s);
+  out.sort((a,b) => Date.parse(b.updatedAt||b.createdAt||0) - Date.parse(a.updatedAt||a.createdAt||0));
   return out;
 }
 
