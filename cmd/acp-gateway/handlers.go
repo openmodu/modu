@@ -285,7 +285,12 @@ func (s *Server) handleRestartAgent(w http.ResponseWriter, r *http.Request) {
 // ---------- usage stats ----------
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
-	stats := s.store.UsageStats()
+	cfg := s.mgr.Config()
+	resetDays := make(map[string]time.Weekday, len(cfg.Agents))
+	for _, ac := range cfg.Agents {
+		resetDays[ac.ID] = parseResetDay(ac.ResetDay)
+	}
+	stats := s.store.UsageStats(resetDays)
 	// Ensure every registered agent has an entry, even with no data yet.
 	seen := make(map[string]bool, len(stats))
 	for _, st := range stats {
@@ -297,7 +302,6 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Inject WeeklyLimit, ResetAt, and external quota data.
-	cfg := s.mgr.Config()
 	now := time.Now()
 	for i := range stats {
 		ac, ok := cfg.Agent(stats[i].Agent)

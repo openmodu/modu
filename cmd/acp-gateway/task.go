@@ -390,14 +390,13 @@ type AgentUsageStat struct {
 	ResetAt        string  `json:"resetAt"`     // RFC3339 of next quota reset
 }
 
-// weekStart returns Monday 00:00:00 UTC of the week containing t.
-func weekStart(t time.Time) time.Time {
+// weekStart returns the configured reset weekday at 00:00:00 UTC for the
+// current quota window containing t.
+func weekStart(t time.Time, resetDay time.Weekday) time.Time {
 	t = t.UTC()
-	wd := int(t.Weekday())
-	if wd == 0 {
-		wd = 7 // Sunday → 7 so Monday is always offset 1
-	}
-	return time.Date(t.Year(), t.Month(), t.Day()-wd+1, 0, 0, 0, 0, time.UTC)
+	d := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+	daysSinceReset := int(d.Weekday()-resetDay+7) % 7
+	return d.AddDate(0, 0, -daysSinceReset)
 }
 
 // nextWeekday returns the next occurrence of wd at 00:00 UTC after now.
@@ -432,11 +431,13 @@ func parseResetDay(s string) time.Weekday {
 }
 
 // UsageStats returns per-agent aggregated usage across all turns and sessions.
-func (s *Store) UsageStats() []AgentUsageStat {
+func (s *Store) UsageStats(resetDays map[string]time.Weekday) []AgentUsageStat {
+	return s.usageStats(time.Now().UTC(), resetDays)
+}
+
+func (s *Store) usageStats(now time.Time, resetDays map[string]time.Weekday) []AgentUsageStat {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	now := time.Now().UTC()
-	wk := weekStart(now)
 	stats := map[string]*AgentUsageStat{}
 	ensure := func(agent string) *AgentUsageStat {
 		if st := stats[agent]; st != nil {
@@ -449,6 +450,13 @@ func (s *Store) UsageStats() []AgentUsageStat {
 	for _, te := range s.turns {
 		t := te.turn
 		st := ensure(t.Agent)
+		resetDay := time.Monday
+		if resetDays != nil {
+			if rd, ok := resetDays[t.Agent]; ok {
+				resetDay = rd
+			}
+		}
+		wk := weekStart(now, resetDay)
 		st.Turns++
 		switch t.Status {
 		case TurnCompleted:

@@ -660,6 +660,47 @@ func TestAwaitPermission_ContextCancelRejectsAndCleansPending(t *testing.T) {
 	}
 }
 
+func TestUsageStats_WeeklyTurnsUseResetDay(t *testing.T) {
+	store := NewStore(8, nil)
+	proj, err := store.CreateProject("p", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := store.CreateSession(proj.ID, "claude", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldTurn, err := store.AddTurn(sess.ID, "old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	newTurn, err := store.AddTurn(sess.ID, "new")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Date(2026, 5, 3, 12, 0, 0, 0, time.UTC) // Sunday
+	store.mu.Lock()
+	store.turns[oldTurn.ID].turn.Status = TurnCompleted
+	store.turns[oldTurn.ID].turn.CreatedAt = time.Date(2026, 4, 30, 23, 0, 0, 0, time.UTC) // Thursday, before Friday reset
+	store.turns[newTurn.ID].turn.Status = TurnCompleted
+	store.turns[newTurn.ID].turn.CreatedAt = time.Date(2026, 5, 1, 1, 0, 0, 0, time.UTC) // Friday, after reset
+	store.mu.Unlock()
+
+	stats := store.usageStats(now, map[string]time.Weekday{"claude": time.Friday})
+	if len(stats) != 1 {
+		t.Fatalf("stats len = %d, want 1", len(stats))
+	}
+	if stats[0].WeeklyTurns != 1 {
+		t.Fatalf("weeklyTurns = %d, want 1", stats[0].WeeklyTurns)
+	}
+
+	stats = store.usageStats(now, map[string]time.Weekday{"claude": time.Monday})
+	if stats[0].WeeklyTurns != 2 {
+		t.Fatalf("monday weeklyTurns = %d, want 2", stats[0].WeeklyTurns)
+	}
+}
+
 func TestAddTurn_Publishes(t *testing.T) {
 	h := newHarness(t, "")
 	h.agents["claude"].promptResponder = func(msg *jsonrpc.Message, emit func(map[string]any)) (string, error) {
