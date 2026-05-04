@@ -37,6 +37,12 @@ func main() {
 		workers = flag.Int("workers", 1, "workers per agent")
 		dbPath  = flag.String("db", "acp-gateway.db", "SQLite database path (empty = no persistence)")
 		cwd     = flag.String("cwd", "", "default working directory for tasks (overrides config workdir)")
+
+		tokenkitSyncInterval = flag.Duration("tokenkit-sync-interval", 5*time.Minute, "background tokenkit sync interval (0 disables)")
+		tokenkitTimezone     = flag.String("tokenkit-timezone", "", "IANA timezone for tokenkit local dates (empty = local timezone)")
+		tokenkitCodexHome    = flag.String("tokenkit-codex-home", "", "Codex home for tokenkit sync (empty = ~/.codex)")
+		tokenkitClaudeHome   = flag.String("tokenkit-claude-home", "", "Claude home for tokenkit sync (empty = ~/.claude)")
+		tokenkitGeminiLog    = flag.String("tokenkit-gemini-log", "", "Gemini telemetry log for tokenkit sync (empty = auto-detect)")
 	)
 	flag.Parse()
 
@@ -83,6 +89,14 @@ func main() {
 	if workdir == "" {
 		workdir, _ = os.Getwd()
 	}
+	var tokenkitLocation *time.Location
+	if *tokenkitTimezone != "" {
+		var tzErr error
+		tokenkitLocation, tzErr = time.LoadLocation(*tokenkitTimezone)
+		if tzErr != nil {
+			log.Fatalf("acp-gateway: invalid tokenkit timezone: %v", tzErr)
+		}
+	}
 
 	mgr := manager.New(cfg, hooksFor(store))
 	srv := NewServer(Options{
@@ -93,6 +107,13 @@ func main() {
 		WorkersEach: *workers,
 		Workdir:     workdir,
 		ConfigPath:  resolvedConfig,
+		TokenkitScannerOptions: tokenkit.ScannerOptions{
+			CodexHome:          *tokenkitCodexHome,
+			ClaudeHome:         *tokenkitClaudeHome,
+			GeminiTelemetryLog: *tokenkitGeminiLog,
+			Location:           tokenkitLocation,
+		},
+		TokenkitScanInterval: *tokenkitSyncInterval,
 	})
 
 	httpSrv := &http.Server{

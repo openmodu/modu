@@ -29,6 +29,12 @@ type Server struct {
 	connections atomic.Int64 // active SSE connections
 	startTime   time.Time
 
+	tokenkitScannerOptions tokenkit.ScannerOptions
+	tokenkitScanInterval   time.Duration
+	tokenkitScanMu         sync.Mutex
+	tokenkitStatusMu       sync.RWMutex
+	tokenkitSyncStatus     TokenkitSyncStatus
+
 	handler http.Handler
 	workers sync.WaitGroup
 	ctx     context.Context
@@ -45,6 +51,9 @@ type Options struct {
 	ExtraRunners []Runner // native (non-ACP) runners to register alongside ACP agents
 	Workdir      string   // default cwd for tasks; empty = process cwd
 	ConfigPath   string   // path to the loaded config file (for dynamic updates)
+
+	TokenkitScannerOptions tokenkit.ScannerOptions
+	TokenkitScanInterval   time.Duration // <=0 disables background tokenkit sync
 }
 
 // NewServer wires the router and starts worker goroutines. Call Close to
@@ -71,6 +80,13 @@ func NewServer(opts Options) *Server {
 		workdir:    opts.Workdir,
 		configPath: opts.ConfigPath,
 		startTime:  time.Now(),
+
+		tokenkitScannerOptions: opts.TokenkitScannerOptions,
+		tokenkitScanInterval:   opts.TokenkitScanInterval,
+	}
+	if s.tokenkit != nil {
+		s.tokenkitSyncStatus.Enabled = opts.TokenkitScanInterval > 0
+		s.tokenkitSyncStatus.IntervalSeconds = opts.TokenkitScanInterval.Seconds()
 	}
 	s.handler = s.buildRouter()
 
@@ -85,6 +101,13 @@ func NewServer(opts Options) *Server {
 				runWorker(ctx, agentID, s.store, s.registry)
 			}(id)
 		}
+	}
+	if s.tokenkit != nil && opts.TokenkitScanInterval > 0 {
+		s.workers.Add(1)
+		go func() {
+			defer s.workers.Done()
+			s.runTokenkitSyncLoop(ctx, opts.TokenkitScanInterval)
+		}()
 	}
 	return s
 }

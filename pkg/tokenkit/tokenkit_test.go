@@ -216,6 +216,65 @@ func TestNormalizeAndEstimateCost(t *testing.T) {
 	}
 }
 
+func TestDailyUsageGroupsByDateAndApp(t *testing.T) {
+	ctx := context.Background()
+	store := testStore(t)
+	records := []UsageRecord{
+		{
+			Source:            "codex:cli",
+			App:               AppCodex,
+			ExternalID:        "codex-1",
+			StartedAt:         time.Date(2026, 5, 4, 10, 0, 0, 0, time.UTC),
+			LocalDate:         "2026-05-04",
+			MeasurementMethod: MethodExact,
+			InputTokens:       10,
+			OutputTokens:      5,
+			TotalTokens:       15,
+		},
+		{
+			Source:            "codex:cli",
+			App:               AppCodex,
+			ExternalID:        "codex-2",
+			StartedAt:         time.Date(2026, 5, 4, 11, 0, 0, 0, time.UTC),
+			LocalDate:         "2026-05-04",
+			MeasurementMethod: MethodExact,
+			InputTokens:       20,
+			OutputTokens:      7,
+			TotalTokens:       27,
+		},
+		{
+			Source:            "claude-code:cli",
+			App:               AppClaudeCode,
+			ExternalID:        "claude-1",
+			StartedAt:         time.Date(2026, 5, 3, 9, 0, 0, 0, time.UTC),
+			LocalDate:         "2026-05-03",
+			MeasurementMethod: MethodExact,
+			InputTokens:       3,
+			OutputTokens:      4,
+			TotalTokens:       7,
+		},
+	}
+	for _, record := range records {
+		if err := store.UpsertUsageRecord(ctx, record); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rows, err := store.DailyUsage(ctx, SummaryFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d: %+v", len(rows), rows)
+	}
+	if rows[0].LocalDate != "2026-05-04" || rows[0].App != AppCodex || rows[0].TotalTokens != 42 || rows[0].Records != 2 {
+		t.Fatalf("unexpected first row: %+v", rows[0])
+	}
+	if rows[1].LocalDate != "2026-05-03" || rows[1].App != AppClaudeCode || rows[1].TotalTokens != 7 || rows[1].Records != 1 {
+		t.Fatalf("unexpected second row: %+v", rows[1])
+	}
+}
+
 func TestParseAndStoreCodexStatus(t *testing.T) {
 	ctx := context.Background()
 	store := testStore(t)

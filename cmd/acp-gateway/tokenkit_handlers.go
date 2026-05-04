@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"time"
 
@@ -20,9 +18,73 @@ func (s *Server) requireTokenkit(w http.ResponseWriter) (*tokenkit.Store, bool) 
 	return s.tokenkit, true
 }
 
-func (s *Server) handleTokenkitScan(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleTokenkitSyncStatus(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireTokenkit(w); !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, s.currentTokenkitSyncStatus())
+}
+
+func (s *Server) handleTokenkitOverview(w http.ResponseWriter, r *http.Request) {
 	store, ok := s.requireTokenkit(w)
 	if !ok {
+		return
+	}
+	apps := []string{tokenkit.AppCodex, tokenkit.AppClaudeCode, tokenkit.AppGemini}
+	totals := make(map[string]tokenkit.SummaryRow, len(apps))
+	for _, app := range apps {
+		total, err := store.Totals(r.Context(), tokenkit.SummaryFilter{
+			StartDate: q(r, "start"),
+			EndDate:   q(r, "end"),
+			App:       app,
+		})
+		if err != nil {
+			http.Error(w, fmt.Sprintf("query tokenkit totals: %v", err), http.StatusInternalServerError)
+			return
+		}
+		totals[app] = total
+	}
+
+	records, err := store.UsageRecords(r.Context(), tokenkit.UsageRecordFilter{
+		StartDate: q(r, "start"),
+		EndDate:   q(r, "end"),
+	})
+	if err != nil {
+		http.Error(w, fmt.Sprintf("query tokenkit records: %v", err), http.StatusInternalServerError)
+		return
+	}
+	projects, sessions := buildTokenkitScopedUsage(records, s.store.TokenkitScopeSnapshot())
+	timeline, err := store.DailyUsage(r.Context(), tokenkit.SummaryFilter{
+		StartDate: q(r, "start"),
+		EndDate:   q(r, "end"),
+	})
+	if err != nil {
+		http.Error(w, fmt.Sprintf("query tokenkit timeline: %v", err), http.StatusInternalServerError)
+		return
+	}
+	limit := intQuery(r, "limit", 20)
+	if limit > 0 && len(records) > limit {
+		records = records[:limit]
+	}
+	codexStatus, err := store.LatestCodexStatus(r.Context())
+	if err != nil {
+		http.Error(w, fmt.Sprintf("query codex status: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"sync":        s.currentTokenkitSyncStatus(),
+		"totals":      totals,
+		"projects":    projects,
+		"sessions":    sessions,
+		"timeline":    timeline,
+		"records":     records,
+		"codexStatus": codexStatus,
+	})
+}
+
+func (s *Server) handleTokenkitScan(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireTokenkit(w); !ok {
 		return
 	}
 	q := r.URL.Query()
@@ -30,48 +92,36 @@ func (s *Server) handleTokenkitScan(w http.ResponseWriter, r *http.Request) {
 	if target == "" {
 		target = "all"
 	}
-	loc := time.Local
+	opts := s.tokenkitScannerOptions
 	if tz := q.Get("timezone"); tz != "" {
 		loaded, err := time.LoadLocation(tz)
 		if err != nil {
 			http.Error(w, "invalid timezone", http.StatusBadRequest)
 			return
 		}
-		loc = loaded
+		opts.Location = loaded
 	}
-	home, _ := os.UserHomeDir()
-	opts := tokenkit.ScannerOptions{
-		CodexHome:          firstNonEmpty(q.Get("codexHome"), filepath.Join(home, ".codex")),
-		ClaudeHome:         firstNonEmpty(q.Get("claudeHome"), filepath.Join(home, ".claude")),
-		GeminiTelemetryLog: q.Get("geminiTelemetryLog"),
-		Location:           loc,
+	if value := q.Get("codexHome"); value != "" {
+		opts.CodexHome = value
 	}
-	scanner := tokenkit.NewScanner(store, opts)
+	if value := q.Get("claudeHome"); value != "" {
+		opts.ClaudeHome = value
+	}
+	if value := q.Get("geminiTelemetryLog"); value != "" {
+		opts.GeminiTelemetryLog = value
+	}
 
-	ctx := r.Context()
-	stats := map[string]tokenkit.ScanStats{}
-	var err error
-	switch target {
-	case "all":
-		stats["codex"], err = scanner.ScanCodex(ctx)
-		if err == nil {
-			stats["claude-code"], err = scanner.ScanClaudeCode(ctx)
+	stats, err := s.runTokenkitScan(r.Context(), target, opts)
+	if err != nil {
+		if err.Error() == "target must be all, codex, claude-code, or gemini" {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
-		if err == nil {
-			stats["gemini"], err = scanner.ScanGemini(ctx)
-		}
-	case tokenkit.AppCodex:
-		stats["codex"], err = scanner.ScanCodex(ctx)
-	case tokenkit.AppClaudeCode, "claude":
-		stats["claude-code"], err = scanner.ScanClaudeCode(ctx)
-	case tokenkit.AppGemini:
-		stats["gemini"], err = scanner.ScanGemini(ctx)
-	default:
-		http.Error(w, "target must be all, codex, claude-code, or gemini", http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("scan tokenkit: %v", err), http.StatusInternalServerError)
 		return
 	}
-	if err != nil {
-		http.Error(w, fmt.Sprintf("scan tokenkit: %v", err), http.StatusInternalServerError)
+	if len(stats) == 0 {
+		http.Error(w, "target must be all, codex, claude-code, or gemini", http.StatusBadRequest)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"target": target, "stats": stats})
@@ -136,6 +186,25 @@ func (s *Server) handleTokenkitSummaries(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"summaries": summaries})
+}
+
+func (s *Server) handleTokenkitTimeline(w http.ResponseWriter, r *http.Request) {
+	store, ok := s.requireTokenkit(w)
+	if !ok {
+		return
+	}
+	timeline, err := store.DailyUsage(r.Context(), tokenkit.SummaryFilter{
+		StartDate: q(r, "start"),
+		EndDate:   q(r, "end"),
+		App:       q(r, "app"),
+		Source:    q(r, "source"),
+		Model:     q(r, "model"),
+	})
+	if err != nil {
+		http.Error(w, fmt.Sprintf("query tokenkit timeline: %v", err), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"timeline": timeline})
 }
 
 func (s *Server) handleTokenkitSaveCodexStatus(w http.ResponseWriter, r *http.Request) {

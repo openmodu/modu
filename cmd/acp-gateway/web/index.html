@@ -24,6 +24,7 @@
   --warn: #ffcf6a;
   --warn-dim: rgba(255,207,106,.10);
   --sidebar: 256px;
+  --usagebar: 320px;
   --hh: 46px;
 }
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -66,26 +67,17 @@ aside{
   background:var(--panel);border-right:1px solid var(--border);
   display:flex;flex-direction:column;overflow:hidden
 }
+.right-rail{
+  width:var(--usagebar);flex-shrink:0;
+  background:var(--panel);border-left:1px solid var(--border);border-right:0;
+  display:flex;flex-direction:column;overflow:hidden
+}
 .sb-scroll{flex:1;overflow-y:auto;min-height:0}
 .sb-usage{
-  flex-shrink:0;border-top:1px solid var(--border);
-  padding:9px 10px 10px
+  flex:1;min-height:0;overflow-y:auto;
+  padding:10px 12px 12px
 }
-.sb-usage .stats-title{margin-bottom:7px}
-.sb-stats-row{
-  display:flex;flex-direction:column;gap:4px
-}
-.sb-stat-item{
-  display:flex;align-items:center;gap:6px;
-  padding:5px 6px;border-radius:6px;background:var(--elevated)
-}
-.sb-stat-icon{font-size:11px;color:var(--muted);flex-shrink:0;width:12px;text-align:center}
-.sb-stat-name{font-size:11px;font-weight:600;color:var(--fg);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sb-stat-nums{display:flex;gap:7px;flex-shrink:0;align-items:center}
-.sb-stat-num{font-size:10px;color:var(--muted)}
-.sb-stat-num.ok{color:var(--ok)}
-.sb-stat-num.accent{color:var(--accent)}
-.sb-stat-live{width:5px;height:5px;border-radius:50%;background:var(--accent);animation:pulse 1.5s infinite;flex-shrink:0}
+.sb-usage .stats-title{margin-bottom:7px;display:flex;align-items:center;justify-content:space-between;gap:8px}
 .sb-head{
   padding:9px 12px 8px;display:flex;align-items:center;justify-content:space-between;
   border-bottom:1px solid var(--border);flex-shrink:0;
@@ -113,6 +105,7 @@ aside{
 .tri.open{transform:rotate(90deg)}
 .proj-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:500}
 .proj-cnt{font-size:10px;color:var(--subtle);background:var(--elevated);padding:1px 5px;border-radius:3px}
+.token-badge{font-size:10px;color:var(--accent);background:var(--accent-dim);padding:1px 5px;border-radius:3px;flex-shrink:0}
 .proj-sess{display:none}
 .proj-sess.open{display:block}
 
@@ -145,11 +138,36 @@ main{flex:1;overflow:hidden;display:flex;flex-direction:column}
 
 /* ── Sidebar usage stats ── */
 .stats-title{font:600 10px/1 sans-serif;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
-.sb-stat-reset{font-size:10px;color:var(--subtle);margin-top:2px}
-.sb-quota-bar{height:3px;border-radius:2px;background:var(--border);margin-top:5px;overflow:hidden}
-.sb-quota-fill{height:100%;border-radius:2px;background:var(--accent);transition:width .3s}
-.sb-quota-fill.warn{background:var(--warn)}
-.sb-quota-fill.crit{background:var(--err)}
+.usage-sync-btn{
+  background:none;border:1px solid var(--border);border-radius:5px;color:var(--muted);
+  cursor:pointer;font-size:10px;line-height:1;padding:3px 6px
+}
+.usage-sync-btn:hover{background:var(--elevated);color:var(--fg)}
+.usage-sync-btn:disabled{opacity:.45;cursor:wait}
+.tk-status{font-size:10px;color:var(--subtle);margin-bottom:6px;min-height:15px}
+.tk-list{display:flex;flex-direction:column;gap:4px}
+.tk-row{
+  display:grid;grid-template-columns:18px 1fr auto;align-items:center;gap:6px;
+  padding:6px;border-radius:6px;background:var(--elevated)
+}
+.tk-icon{font-size:11px;color:var(--muted);text-align:center}
+.tk-name{font-size:11px;font-weight:600;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tk-meta{font-size:10px;color:var(--subtle);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tk-total{font-size:11px;font-weight:700;color:var(--accent);font-variant-numeric:tabular-nums;text-align:right}
+.tk-cost{font-size:10px;color:var(--muted);text-align:right;min-height:15px}
+.tk-days{margin-top:7px;border-top:1px solid var(--border);padding-top:6px;display:flex;flex-direction:column;gap:6px}
+.tk-day{display:flex;flex-direction:column;gap:4px;font-size:10px;color:var(--muted)}
+.tk-day-head{display:grid;grid-template-columns:44px 1fr auto;align-items:center;gap:6px}
+.tk-day-bar{height:4px;background:var(--accent-dim);border-radius:2px;overflow:hidden}
+.tk-day-fill{height:100%;background:var(--accent)}
+.tk-day-total{font-variant-numeric:tabular-nums;color:var(--subtle);text-align:right}
+.tk-day-apps{display:grid;grid-template-columns:1fr;gap:3px}
+.tk-day-app{display:grid;grid-template-columns:16px 70px 1fr auto;align-items:center;gap:5px;color:var(--subtle)}
+.tk-app-bar{height:3px;background:var(--elevated);border-radius:2px;overflow:hidden}
+.tk-app-fill{height:100%;background:var(--accent)}
+.tk-app-fill.claude-code{background:var(--warn)}
+.tk-app-fill.gemini{background:var(--ok)}
+.tk-app-total{font-variant-numeric:tabular-nums;text-align:right}
 
 /* ── Session pane ── */
 .spane{display:flex;flex-direction:column;height:100%;overflow:hidden}
@@ -355,12 +373,6 @@ textarea.prompt::placeholder{color:var(--subtle)}
       </div>
       <div id="projList"></div>
     </div>
-    <div class="sb-usage">
-      <div class="stats-title">CLI Usage</div>
-      <div class="sb-stats-row" id="sbStatsRow">
-        <div style="font-size:11px;color:var(--subtle);padding:2px 0">No usage data yet</div>
-      </div>
-    </div>
   </aside>
 
   <!-- Main -->
@@ -389,6 +401,19 @@ textarea.prompt::placeholder{color:var(--subtle)}
     </div>
 
   </main>
+
+  <!-- Token usage -->
+  <aside class="right-rail">
+    <div class="sb-usage">
+      <div class="stats-title">
+        <span>Token Usage</span>
+        <button class="usage-sync-btn" id="tkSyncBtn" title="Scan now">Sync</button>
+      </div>
+      <div class="tk-status" id="tkStatus">Loading…</div>
+      <div class="tk-list" id="tkList"></div>
+      <div class="tk-days" id="tkTimeline"></div>
+    </div>
+  </aside>
 </div>
 
 <!-- New Project modal -->
@@ -475,7 +500,15 @@ const S = {
   agents: [],
   profiles: [],
   projects: [],
-  stats: [],
+  tokenkit: {
+    available: true,
+    syncing: false,
+    status: null,
+    totals: {},
+    projects: [],
+    sessions: [],
+    timeline: [],
+  },
   byProj: {},         // pid → Session[]
   expanded: new Set(JSON.parse(localStorage.getItem('acp_exp') || '[]')),
   sessId: localStorage.getItem('acp_sess') || null,
@@ -572,14 +605,43 @@ async function loadProfiles() {
   }
 }
 
-async function loadStats() {
+async function loadTokenkitUsage() {
   try {
-    const d = await api('GET', '/api/stats');
-    S.stats = d.stats || [];
+    const overview = await api('GET', '/api/tokenkit/overview');
+    S.tokenkit.available = true;
+    S.tokenkit.status = overview.sync || null;
+    S.tokenkit.totals = overview.totals || {};
+    S.tokenkit.projects = overview.projects || [];
+    S.tokenkit.sessions = overview.sessions || [];
+    S.tokenkit.timeline = overview.timeline || [];
   } catch {
-    S.stats = [];
+    S.tokenkit.available = false;
+    S.tokenkit.status = null;
+    S.tokenkit.totals = {};
+    S.tokenkit.projects = [];
+    S.tokenkit.sessions = [];
+    S.tokenkit.timeline = [];
   }
-  renderStats();
+  renderTokenkitUsage();
+  renderSidebar();
+}
+
+async function syncTokenkitNow() {
+  const btn = document.getElementById('tkSyncBtn');
+  if (btn) btn.disabled = true;
+  S.tokenkit.syncing = true;
+  renderTokenkitUsage();
+  try {
+    await api('POST', '/api/tokenkit/scan?target=all');
+    await loadTokenkitUsage();
+    toast('Token usage synced');
+  } catch(e) {
+    toast('Token sync: ' + e.message, true);
+  } finally {
+    S.tokenkit.syncing = false;
+    if (btn) btn.disabled = false;
+    renderTokenkitUsage();
+  }
 }
 
 function agentIcon(a) {
@@ -595,66 +657,125 @@ function fmtTokens(n) {
 }
 
 function fmtCost(v) {
-  if (!v) return '—';
+  if (!v) return '';
   return '$' + v.toFixed(4);
 }
 
-function fmtDuration(ms) {
-  if (!ms) return '—';
-  if (ms < 1000) return ms + 'ms';
-  return (ms / 1000).toFixed(1) + 's';
+function appLabel(app) {
+  return {
+    codex: 'Codex',
+    'claude-code': 'Claude Code',
+    gemini: 'Gemini',
+  }[app] || app;
 }
 
-function fmtResetAt(iso) {
-  if (!iso) return '';
-  const diff = new Date(iso) - Date.now();
-  const days = Math.ceil(diff / 86400000);
-  if (days <= 0) return 'resets today';
-  if (days === 1) return 'resets tomorrow';
-  return `resets in ${days}d`;
+function tokenkitStatusText() {
+  if (!S.tokenkit.available) return 'Disabled: start acp-gateway with -db to persist token usage';
+  const st = S.tokenkit.status || {};
+  if (S.tokenkit.syncing || st.running) return 'Syncing local usage…';
+  if (st.lastError) return 'Last sync failed: ' + st.lastError;
+  if (st.lastErrors && Object.keys(st.lastErrors).length) return 'Synced with source warnings';
+  if (st.lastFinishedAt) return 'Synced ' + reltime(st.lastFinishedAt);
+  if (st.enabled) return 'Waiting for first background sync';
+  return 'Background sync disabled';
 }
 
-function renderStats() {
-  const row = document.getElementById('sbStatsRow');
-  if (!row) return;
-  if (!S.stats.length) {
-    row.innerHTML = '<div style="font-size:11px;color:var(--subtle);padding:2px 0">No usage data yet</div>';
+function renderTokenkitUsage() {
+  const statusEl = document.getElementById('tkStatus');
+  const list = document.getElementById('tkList');
+  const timelineEl = document.getElementById('tkTimeline');
+  const btn = document.getElementById('tkSyncBtn');
+  if (!statusEl || !list) return;
+
+  statusEl.textContent = tokenkitStatusText();
+  if (btn) btn.disabled = S.tokenkit.syncing || !S.tokenkit.available;
+
+  if (!S.tokenkit.available) {
+    list.innerHTML = '';
+    if (timelineEl) timelineEl.innerHTML = '';
     return;
   }
-  const sorted = [...S.stats].sort((a, b) => b.turns - a.turns);
-  row.innerHTML = '';
-  for (const st of sorted) {
-    const item = document.createElement('div');
-    item.className = 'sb-stat-item';
-    const liveHtml = st.activeTurns > 0 ? `<span class="sb-stat-live"></span>` : '';
 
-    // weekly capacity bar
-    let quotaHtml = '';
-    if (st.weeklyLimit > 0) {
-      const pct = Math.min(100, Math.round(st.weeklyTurns / st.weeklyLimit * 100));
-      const cls = pct >= 90 ? 'crit' : pct >= 70 ? 'warn' : '';
-      quotaHtml =
-        `<div class="sb-quota-bar"><div class="sb-quota-fill ${cls}" style="width:${pct}%"></div></div>` +
-        `<div class="sb-stat-reset">${st.weeklyTurns}/${st.weeklyLimit} this week · ${fmtResetAt(st.resetAt)}</div>`;
-    } else {
-      quotaHtml = `<div class="sb-stat-reset">${st.weeklyTurns} this week · ${fmtResetAt(st.resetAt)}</div>`;
-    }
-
-    item.innerHTML =
-      `<div style="flex:1;min-width:0">` +
-        `<div style="display:flex;align-items:center;gap:5px">` +
-          `<span class="sb-stat-icon">${agentIcon(st.agent)}</span>` +
-          `<span class="sb-stat-name">${esc(st.agent)}</span>` +
-          liveHtml +
-          `<span class="sb-stat-nums">` +
-            `<span class="sb-stat-num ok" title="completed turns">${st.completedTurns}✓</span>` +
-            (st.failedTurns > 0 ? `<span class="sb-stat-num" style="color:var(--err)" title="failed">${st.failedTurns}✗</span>` : '') +
-          `</span>` +
-        `</div>` +
-        quotaHtml +
-      `</div>`;
-    row.appendChild(item);
+  const apps = ['codex', 'claude-code', 'gemini'];
+  list.innerHTML = '';
+  for (const app of apps) {
+    const total = S.tokenkit.totals[app] || {};
+    const records = total.records || 0;
+    const cost = total.estimatedCostUsd === null || total.estimatedCostUsd === undefined
+      ? ''
+      : fmtCost(total.estimatedCostUsd);
+    const row = document.createElement('div');
+    row.className = 'tk-row';
+    row.innerHTML = `
+      <div class="tk-icon">${agentIcon(app === 'claude-code' ? 'claude' : app)}</div>
+      <div style="min-width:0">
+        <div class="tk-name">${esc(appLabel(app))}</div>
+        <div class="tk-meta">${records} records · in ${fmtTokens(total.inputTokens)} · out ${fmtTokens(total.outputTokens)}</div>
+      </div>
+      <div>
+        <div class="tk-total">${fmtTokens(total.totalTokens)}</div>
+        <div class="tk-cost">${esc(cost)}</div>
+      </div>`;
+    list.appendChild(row);
   }
+  renderTokenkitTimeline(timelineEl);
+}
+
+function renderTokenkitTimeline(el) {
+  if (!el) return;
+  const byDate = new Map();
+  for (const row of S.tokenkit.timeline || []) {
+    const date = row.localDate || '';
+    if (!date) continue;
+    const cur = byDate.get(date) || { total: 0, apps: {} };
+    const app = row.app || 'unknown';
+    const tokens = row.totalTokens || 0;
+    cur.total += tokens;
+    cur.apps[app] = (cur.apps[app] || 0) + tokens;
+    byDate.set(date, cur);
+  }
+  const days = [...byDate.entries()]
+    .sort((a,b) => b[0].localeCompare(a[0]))
+    .slice(0, 7);
+  if (!days.length) {
+    el.innerHTML = '';
+    return;
+  }
+  const apps = ['codex', 'claude-code', 'gemini'];
+  const max = Math.max(...days.map(([, day]) => day.total), 1);
+  el.innerHTML = days.map(([date, day]) => {
+    const pct = Math.max(2, Math.round(day.total / max * 100));
+    const appRows = apps
+      .filter(app => day.apps[app] > 0)
+      .map(app => {
+        const tokens = day.apps[app];
+        const appPct = Math.max(2, Math.round(tokens / Math.max(day.total, 1) * 100));
+        return `
+          <div class="tk-day-app">
+            <span>${agentIcon(app === 'claude-code' ? 'claude' : app)}</span>
+            <span>${esc(appLabel(app))}</span>
+            <span class="tk-app-bar"><span class="tk-app-fill ${esc(app)}" style="width:${appPct}%"></span></span>
+            <span class="tk-app-total">${fmtTokens(tokens)}</span>
+          </div>`;
+      }).join('');
+    return `
+      <div class="tk-day">
+        <div class="tk-day-head">
+          <span>${esc(date.slice(5))}</span>
+          <span class="tk-day-bar"><span class="tk-day-fill" style="width:${pct}%"></span></span>
+          <span class="tk-day-total">${fmtTokens(day.total)}</span>
+        </div>
+        <div class="tk-day-apps">${appRows}</div>
+      </div>`;
+  }).join('');
+}
+
+function tokenUsageForProject(id) {
+  return S.tokenkit.projects.find(p => p.id === id)?.totals?.totalTokens || 0;
+}
+
+function tokenUsageForSession(id) {
+  return S.tokenkit.sessions.find(s => s.id === id)?.totals?.totalTokens || 0;
 }
 
 // ── Sidebar ────────────────────────────────────────────────────────────────
@@ -709,7 +830,8 @@ function renderProfilesSide() {
       const row = document.createElement('div');
       row.className = 'sess-row'+(active?' active':'');
       row.dataset.sid = sess.id;
-      row.innerHTML = `<span class="sdot ${dc}"></span><span class="sess-title">${esc(sess.title||'Session')}</span><button class="sess-del" title="Delete session">✕</button>`;
+      const tokens = tokenUsageForSession(sess.id);
+      row.innerHTML = `<span class="sdot ${dc}"></span><span class="sess-title">${esc(sess.title||'Session')}</span>${tokens?`<span class="token-badge">${fmtTokens(tokens)}</span>`:''}<button class="sess-del" title="Delete session">✕</button>`;
       row.querySelector('.sess-del').onclick = e => { e.stopPropagation(); deleteSession(sess); };
       row.onclick = () => openSession(sess.id);
       sessEl.appendChild(row);
@@ -739,10 +861,12 @@ function renderProjectsSide() {
     const open = S.expanded.has(proj.id);
     const wrap = document.createElement('div');
     const name = esc(proj.name || base(proj.path));
+    const projectTokens = tokenUsageForProject(proj.id);
     wrap.innerHTML = `
       <div class="proj-hd" data-pid="${proj.id}">
         <span class="tri${open?' open':''}">▶</span>
         <span class="proj-name" title="${esc(proj.path)}">📁 ${name}</span>
+        ${projectTokens?`<span class="token-badge">${fmtTokens(projectTokens)}</span>`:''}
         <span class="proj-cnt">${sessions.length}</span>
         <button class="icon-btn prof-edit" title="Delete project" style="font-size:11px">🗑</button>
       </div>
@@ -756,7 +880,8 @@ function renderProjectsSide() {
       const row = document.createElement('div');
       row.className = 'sess-row'+(active?' active':'');
       row.dataset.sid = sess.id;
-      row.innerHTML = `<span class="sdot ${dc}"></span><span class="sess-title">${esc(sess.title||'Session')}</span><span class="sess-agent">${esc(sess.agent)}</span><button class="sess-del" title="Delete session">✕</button>`;
+      const tokens = tokenUsageForSession(sess.id);
+      row.innerHTML = `<span class="sdot ${dc}"></span><span class="sess-title">${esc(sess.title||'Session')}</span>${tokens?`<span class="token-badge">${fmtTokens(tokens)}</span>`:''}<span class="sess-agent">${esc(sess.agent)}</span><button class="sess-del" title="Delete session">✕</button>`;
       row.querySelector('.sess-del').onclick = e => { e.stopPropagation(); deleteSession(sess); };
       row.onclick = () => openSession(sess.id);
       sessEl.appendChild(row);
@@ -845,6 +970,7 @@ function renderPane() {
   const proj = S.projects.find(p=>p.id===d.projectId);
   const pname = proj ? (proj.name||base(proj.path)) : d.projectId;
   const prof = profileById(d.profileId);
+  const sessionTokens = tokenUsageForSession(d.id);
   const profHtml = prof
     ? `<span style="color:var(--subtle);font-size:10px;margin-left:6px">${esc(prof.icon||'🤖')} ${esc(prof.name)}</span>`
     : '';
@@ -853,6 +979,7 @@ function renderPane() {
     `<span class="sep">›</span>`+
     `<span class="last">${esc(d.title||'Session')}</span>`+
     `<span style="color:var(--subtle);font-size:10px;margin-left:6px">${esc(d.agent)}</span>`+
+    (sessionTokens ? `<span class="token-badge" style="margin-left:6px">${fmtTokens(sessionTokens)}</span>` : '') +
     profHtml;
 
   const hasRun = d.turns?.some(t=>t.status==='running'||t.status==='pending');
@@ -1211,7 +1338,7 @@ function wire() {
   tok.onchange = () => {
     S.token = tok.value.trim();
     localStorage.setItem('acp_tok', S.token);
-    loadAgents(); loadProfiles(); loadAll();
+    loadAgents(); loadProfiles(); loadAll(); loadTokenkitUsage();
   };
   document.getElementById('tokEye').onclick = () => {
     tok.type = tok.type==='password' ? 'text' : 'password';
@@ -1221,6 +1348,7 @@ function wire() {
   document.getElementById('newProfileSideBtn').onclick = () => openProfileForm(null);
   document.getElementById('newProjBtn').onclick = showNewProj;
   document.getElementById('emptyNew').onclick = showNewProj;
+  document.getElementById('tkSyncBtn').onclick = syncTokenkitNow;
 
   // New project modal
   document.getElementById('browseOpen').onclick = () => browseTo(document.getElementById('pPath').value.trim()||null);
@@ -1279,7 +1407,7 @@ function wire() {
 // ── Init ───────────────────────────────────────────────────────────────────
 async function init() {
   wire();
-  await Promise.all([checkHealth(), loadAgents(), loadProfiles(), loadAll(), loadStats()]);
+  await Promise.all([checkHealth(), loadAgents(), loadProfiles(), loadAll(), loadTokenkitUsage()]);
 
   if (S.sessId) {
     const exists = Object.values(S.byProj).flat().some(s=>s.id===S.sessId);
@@ -1288,7 +1416,7 @@ async function init() {
   }
 
   // Periodic refresh
-  setInterval(() => { checkHealth(); loadAgents(); loadStats(); }, 20000);
+  setInterval(() => { checkHealth(); loadAgents(); loadTokenkitUsage(); }, 20000);
 }
 
 init();

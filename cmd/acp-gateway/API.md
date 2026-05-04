@@ -64,10 +64,13 @@ Project ──► Session ──► Turn
 | DELETE   | `/api/sessions/{id}`                                | yes  | delete session |
 | POST     | `/api/sessions/{id}/cancel`                         | yes  | cancel running turn (session-level) |
 | GET      | `/api/turns?status=&agent=&sessionId=&limit=`       | yes  | global turn list with filtering |
-| POST     | `/api/tokenkit/scan?target=`                        | yes  | scan local Codex / Claude Code / Gemini token usage |
+| GET      | `/api/tokenkit/sync`                                | yes  | tokenkit background sync status |
+| GET      | `/api/tokenkit/overview?start=&end=`                | yes  | tokenkit sync state, app totals, and recent records for dashboards |
+| POST     | `/api/tokenkit/scan?target=`                        | yes  | manually scan local Codex / Claude Code / Gemini token usage |
 | GET      | `/api/tokenkit/records?app=&start=&end=&limit=`     | yes  | list raw tokenkit usage records |
 | GET      | `/api/tokenkit/totals?app=&start=&end=`             | yes  | aggregate tokenkit totals |
 | GET      | `/api/tokenkit/summaries?app=&start=&end=`          | yes  | grouped tokenkit summaries |
+| GET      | `/api/tokenkit/timeline?app=&start=&end=`           | yes  | token usage grouped by local date |
 | POST     | `/api/tokenkit/codex-status`                        | yes  | parse and save Codex `/status` text |
 | GET      | `/api/tokenkit/codex-status/latest`                 | yes  | get latest saved Codex status snapshot |
 | POST     | `/api/sessions/{id}/turns`                          | yes  | add a turn (send prompt) |
@@ -230,6 +233,23 @@ No auth. Returns `{"status": "ok"}`.
 Scans local AI coding usage into the gateway SQLite database. Requires gateway
 persistence (`-db`) because tokenkit stores its own tables in that DB.
 
+The gateway also runs this sync automatically when tokenkit is enabled. By
+default it scans Codex, Claude Code, and Gemini every 5 minutes. Configure it
+with:
+
+```
+acp-gateway -tokenkit-sync-interval=5m
+acp-gateway -tokenkit-sync-interval=0      # disable background sync
+acp-gateway -tokenkit-timezone=Asia/Shanghai
+acp-gateway -tokenkit-codex-home=/path/to/.codex
+acp-gateway -tokenkit-claude-home=/path/to/.claude
+acp-gateway -tokenkit-gemini-log=/path/to/telemetry.log
+```
+
+The embedded web console shows the latest sync state plus aggregate Codex,
+Claude Code, and Gemini token totals in the sidebar. Its `Sync` button calls
+this same endpoint with `target=all`.
+
 Optional query params:
 
 - `target` — `all`, `codex`, `claude-code`, or `gemini`. Default `all`.
@@ -248,6 +268,69 @@ Response:
   }
 }
 ```
+
+### `GET /api/tokenkit/sync`
+
+Returns the latest background or manual sync status:
+
+```json
+{
+  "enabled": true,
+  "running": false,
+  "intervalSeconds": 300,
+  "lastStartedAt": "2026-05-04T08:00:00Z",
+  "lastFinishedAt": "2026-05-04T08:00:02Z",
+  "lastStats": {
+    "codex": {"filesScanned": 12, "recordsSeen": 345},
+    "claude-code": {"filesScanned": 3, "recordsSeen": 20},
+    "gemini": {"filesScanned": 0, "recordsSeen": 0}
+  }
+}
+```
+
+### `GET /api/tokenkit/overview`
+
+Returns one dashboard-friendly payload for external pages or clients. Query
+params: `start`, `end`, `limit`.
+
+```json
+{
+  "sync": {"enabled": true, "running": false},
+  "totals": {
+    "codex": {"totalTokens": 107, "records": 1},
+    "claude-code": {"totalTokens": 0, "records": 0},
+    "gemini": {"totalTokens": 0, "records": 0}
+  },
+  "projects": [
+    {
+      "id": "proj-1",
+      "name": "repo",
+      "path": "/repo",
+      "match": "workspace",
+      "totals": {"totalTokens": 107, "records": 1}
+    }
+  ],
+  "sessions": [
+    {
+      "id": "sess-1",
+      "projectId": "proj-1",
+      "agent": "codex",
+      "match": "session-id",
+      "totals": {"totalTokens": 107, "records": 1}
+    }
+  ],
+  "timeline": [
+    {"localDate": "2026-05-04", "app": "codex", "totalTokens": 107, "records": 1}
+  ],
+  "records": [],
+  "codexStatus": null
+}
+```
+
+Project totals are matched from `UsageRecord.workspace` to the project path.
+Session totals first use provider session metadata when it equals a gateway
+session id, then fall back to `workspace + agent + turn time window`. The
+`match` field shows which path was used.
 
 ### `GET /api/tokenkit/records`
 
@@ -289,6 +372,12 @@ Query params: `app`, `source`, `model`, `start`, `end`.
 ### `GET /api/tokenkit/summaries`
 
 Returns grouped rows by local date, app, source, model, and measurement method.
+
+Query params: `app`, `source`, `model`, `start`, `end`.
+
+### `GET /api/tokenkit/timeline`
+
+Returns daily token usage buckets grouped by `localDate + app`.
 
 Query params: `app`, `source`, `model`, `start`, `end`.
 

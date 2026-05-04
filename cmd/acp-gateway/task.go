@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -399,117 +398,6 @@ func (s *Store) AgentStats(agentID string) (activeTurns, totalSessions, totalTur
 		}
 	}
 	return
-}
-
-// AgentUsageStat is per-agent aggregated usage returned by GET /api/stats.
-type AgentUsageStat struct {
-	Agent          string  `json:"agent"`
-	Sessions       int     `json:"sessions"`
-	Turns          int     `json:"turns"`
-	CompletedTurns int     `json:"completedTurns"`
-	FailedTurns    int     `json:"failedTurns"`
-	ActiveTurns    int     `json:"activeTurns"`
-	TotalTokens    int     `json:"totalTokens"`
-	InputTokens    int     `json:"inputTokens"`
-	OutputTokens   int     `json:"outputTokens"`
-	CostTotal      float64 `json:"costTotal"`
-	WeeklyTurns    int     `json:"weeklyTurns"` // completed turns since week start
-	WeeklyLimit    int     `json:"weeklyLimit"` // 0 = unlimited; set from AgentConfig
-	ResetAt        string  `json:"resetAt"`     // RFC3339 of next quota reset
-}
-
-// weekStart returns the configured reset weekday at 00:00:00 UTC for the
-// current quota window containing t.
-func weekStart(t time.Time, resetDay time.Weekday) time.Time {
-	t = t.UTC()
-	d := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
-	daysSinceReset := int(d.Weekday()-resetDay+7) % 7
-	return d.AddDate(0, 0, -daysSinceReset)
-}
-
-// nextWeekday returns the next occurrence of wd at 00:00 UTC after now.
-func nextWeekday(now time.Time, wd time.Weekday) time.Time {
-	now = now.UTC()
-	d := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-	days := int(wd-d.Weekday()+7) % 7
-	if days == 0 {
-		days = 7 // already that weekday → next week
-	}
-	return d.AddDate(0, 0, days)
-}
-
-// parseResetDay maps a reset-day string to time.Weekday (default Monday).
-func parseResetDay(s string) time.Weekday {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "tuesday":
-		return time.Tuesday
-	case "wednesday":
-		return time.Wednesday
-	case "thursday":
-		return time.Thursday
-	case "friday":
-		return time.Friday
-	case "saturday":
-		return time.Saturday
-	case "sunday":
-		return time.Sunday
-	default:
-		return time.Monday
-	}
-}
-
-// UsageStats returns per-agent aggregated usage across all turns and sessions.
-func (s *Store) UsageStats(resetDays map[string]time.Weekday) []AgentUsageStat {
-	return s.usageStats(time.Now().UTC(), resetDays)
-}
-
-func (s *Store) usageStats(now time.Time, resetDays map[string]time.Weekday) []AgentUsageStat {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	stats := map[string]*AgentUsageStat{}
-	ensure := func(agent string) *AgentUsageStat {
-		if st := stats[agent]; st != nil {
-			return st
-		}
-		st := &AgentUsageStat{Agent: agent}
-		stats[agent] = st
-		return st
-	}
-	for _, te := range s.turns {
-		t := te.turn
-		st := ensure(t.Agent)
-		resetDay := time.Monday
-		if resetDays != nil {
-			if rd, ok := resetDays[t.Agent]; ok {
-				resetDay = rd
-			}
-		}
-		wk := weekStart(now, resetDay)
-		st.Turns++
-		switch t.Status {
-		case TurnCompleted:
-			st.CompletedTurns++
-			if !t.CreatedAt.Before(wk) {
-				st.WeeklyTurns++
-			}
-		case TurnFailed:
-			st.FailedTurns++
-		case TurnRunning, TurnPending:
-			st.ActiveTurns++
-		}
-		st.TotalTokens += t.TotalTokens
-		st.InputTokens += t.InputTokens
-		st.OutputTokens += t.OutputTokens
-		st.CostTotal += t.CostTotal
-	}
-	for _, se := range s.sessions {
-		ensure(se.session.Agent).Sessions++
-	}
-	out := make([]AgentUsageStat, 0, len(stats))
-	for _, v := range stats {
-		out = append(out, *v)
-	}
-	return out
 }
 
 func (s *Store) markTurnStatus(id string, status TurnStatus, errStr, result string) {

@@ -723,47 +723,6 @@ func TestAwaitPermission_ContextCancelRejectsAndCleansPending(t *testing.T) {
 	}
 }
 
-func TestUsageStats_WeeklyTurnsUseResetDay(t *testing.T) {
-	store := NewStore(8, nil)
-	proj, err := store.CreateProject("p", t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	sess, err := store.CreateSession(proj.ID, "claude", "", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	oldTurn, err := store.AddTurn(sess.ID, "old")
-	if err != nil {
-		t.Fatal(err)
-	}
-	newTurn, err := store.AddTurn(sess.ID, "new")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	now := time.Date(2026, 5, 3, 12, 0, 0, 0, time.UTC) // Sunday
-	store.mu.Lock()
-	store.turns[oldTurn.ID].turn.Status = TurnCompleted
-	store.turns[oldTurn.ID].turn.CreatedAt = time.Date(2026, 4, 30, 23, 0, 0, 0, time.UTC) // Thursday, before Friday reset
-	store.turns[newTurn.ID].turn.Status = TurnCompleted
-	store.turns[newTurn.ID].turn.CreatedAt = time.Date(2026, 5, 1, 1, 0, 0, 0, time.UTC) // Friday, after reset
-	store.mu.Unlock()
-
-	stats := store.usageStats(now, map[string]time.Weekday{"claude": time.Friday})
-	if len(stats) != 1 {
-		t.Fatalf("stats len = %d, want 1", len(stats))
-	}
-	if stats[0].WeeklyTurns != 1 {
-		t.Fatalf("weeklyTurns = %d, want 1", stats[0].WeeklyTurns)
-	}
-
-	stats = store.usageStats(now, map[string]time.Weekday{"claude": time.Monday})
-	if stats[0].WeeklyTurns != 2 {
-		t.Fatalf("monday weeklyTurns = %d, want 2", stats[0].WeeklyTurns)
-	}
-}
-
 func TestAddTurn_Publishes(t *testing.T) {
 	h := newHarness(t, "")
 	h.agents["claude"].promptResponder = func(msg *jsonrpc.Message, emit func(map[string]any)) (string, error) {
@@ -1009,6 +968,15 @@ func TestTokenkitAPIRecordsTotalsAndStatus(t *testing.T) {
 	t.Cleanup(func() { _ = tk.Close() })
 	h.srv.tokenkit = tk
 
+	proj, err := h.store.CreateProject("repo", "/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := h.store.CreateSession(proj.ID, "codex", "codex work", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	startedAt := time.Date(2026, 5, 4, 10, 0, 0, 0, time.UTC)
 	if err := tk.UpsertUsageRecord(context.Background(), tokenkit.UsageRecord{
 		Source:            "codex:cli",
@@ -1022,6 +990,7 @@ func TestTokenkitAPIRecordsTotalsAndStatus(t *testing.T) {
 		OutputTokens:      7,
 		TotalTokens:       107,
 		Workspace:         "/repo",
+		Metadata:          map[string]any{"session_id": sess.ID},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1054,6 +1023,49 @@ func TestTokenkitAPIRecordsTotalsAndStatus(t *testing.T) {
 		t.Fatalf("unexpected records: %+v", recordsBody.Records)
 	}
 
+	resp = h.do(t, "GET", "/api/tokenkit/overview?start=2026-05-04&end=2026-05-04", "", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("overview status = %d", resp.StatusCode)
+	}
+	var overviewBody struct {
+		Totals   map[string]tokenkit.SummaryRow `json:"totals"`
+		Projects []TokenkitScopedUsage          `json:"projects"`
+		Sessions []TokenkitScopedUsage          `json:"sessions"`
+		Timeline []tokenkit.TimeBucketRow       `json:"timeline"`
+		Records  []tokenkit.UsageRecord         `json:"records"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&overviewBody); err != nil {
+		t.Fatal(err)
+	}
+	if overviewBody.Totals[tokenkit.AppCodex].TotalTokens != 107 || len(overviewBody.Records) != 1 {
+		t.Fatalf("unexpected overview: %+v", overviewBody)
+	}
+	if len(overviewBody.Projects) != 1 || overviewBody.Projects[0].Totals.TotalTokens != 107 {
+		t.Fatalf("unexpected overview projects: %+v", overviewBody.Projects)
+	}
+	if len(overviewBody.Sessions) != 1 || overviewBody.Sessions[0].Totals.TotalTokens != 107 || overviewBody.Sessions[0].Match != "session-id" {
+		t.Fatalf("unexpected overview sessions: %+v", overviewBody.Sessions)
+	}
+	if len(overviewBody.Timeline) != 1 || overviewBody.Timeline[0].LocalDate != "2026-05-04" || overviewBody.Timeline[0].TotalTokens != 107 {
+		t.Fatalf("unexpected overview timeline: %+v", overviewBody.Timeline)
+	}
+
+	resp = h.do(t, "GET", "/api/tokenkit/timeline?app=codex&start=2026-05-04&end=2026-05-04", "", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("timeline status = %d", resp.StatusCode)
+	}
+	var timelineBody struct {
+		Timeline []tokenkit.TimeBucketRow `json:"timeline"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&timelineBody); err != nil {
+		t.Fatal(err)
+	}
+	if len(timelineBody.Timeline) != 1 || timelineBody.Timeline[0].TotalTokens != 107 {
+		t.Fatalf("unexpected timeline: %+v", timelineBody.Timeline)
+	}
+
 	rawStatus := `>_ OpenAI Codex (v0.128.0)
 │  Model:                       gpt-5.5 (reasoning medium, summaries auto)
 │  Account:                     test@example.com (Pro Lite)
@@ -1082,7 +1094,140 @@ func TestTokenkitAPIRecordsTotalsAndStatus(t *testing.T) {
 	}
 }
 
+func TestTokenkitOverviewAssignsWorkspaceAgentSessionFallback(t *testing.T) {
+	h := newHarness(t, "", "codex")
+	tk, err := tokenkit.OpenStore(filepath.Join(t.TempDir(), "tokenkit.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tk.Close() })
+	h.srv.tokenkit = tk
+
+	proj, err := h.store.CreateProject("repo", "/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.store.CreateSession(proj.ID, "codex", "codex work", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := tk.UpsertUsageRecord(context.Background(), tokenkit.UsageRecord{
+		Source:            "codex:cli",
+		App:               tokenkit.AppCodex,
+		ExternalID:        "codex-native-session:2026-05-04T10:00:00Z",
+		StartedAt:         time.Date(2026, 5, 4, 10, 0, 0, 0, time.UTC),
+		LocalDate:         "2026-05-04",
+		MeasurementMethod: tokenkit.MethodExact,
+		InputTokens:       10,
+		OutputTokens:      5,
+		TotalTokens:       15,
+		Workspace:         "/repo",
+		Metadata:          map[string]any{"session_id": "codex-native-session"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := h.do(t, "GET", "/api/tokenkit/overview", "", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("overview status = %d", resp.StatusCode)
+	}
+	var body struct {
+		Sessions []TokenkitScopedUsage `json:"sessions"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Sessions) != 1 || body.Sessions[0].Totals.TotalTokens != 15 || body.Sessions[0].Match != "workspace-agent" {
+		t.Fatalf("unexpected sessions: %+v", body.Sessions)
+	}
+}
+
+func TestTokenkitManualScanUpdatesSyncStatus(t *testing.T) {
+	h := newHarness(t, "")
+	tk, err := tokenkit.OpenStore(filepath.Join(t.TempDir(), "tokenkit.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tk.Close() })
+	h.srv.tokenkit = tk
+
+	codexHome := writeTokenkitCodexFixture(t)
+	resp := h.do(t, "POST", "/api/tokenkit/scan?target=codex&codexHome="+codexHome+"&timezone=UTC", "", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("scan status = %d", resp.StatusCode)
+	}
+
+	resp = h.do(t, "GET", "/api/tokenkit/sync", "", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("sync status = %d", resp.StatusCode)
+	}
+	var status TokenkitSyncStatus
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status.Running || status.LastFinishedAt == "" || status.LastStats[tokenkit.AppCodex].RecordsSeen != 1 {
+		t.Fatalf("unexpected sync status: %+v", status)
+	}
+}
+
+func TestTokenkitAutoSyncScansConfiguredHomes(t *testing.T) {
+	codexHome := writeTokenkitCodexFixture(t)
+	claudeHome := t.TempDir()
+	geminiLog := filepath.Join(t.TempDir(), "missing-gemini.log")
+	tk, err := tokenkit.OpenStore(filepath.Join(t.TempDir(), "tokenkit.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tk.Close() })
+
+	cfg := &manager.Config{}
+	store := NewStore(8, nil)
+	mgr := manager.New(cfg, hooksFor(store))
+	srv := NewServer(Options{
+		Manager:  mgr,
+		Store:    store,
+		Tokenkit: tk,
+		TokenkitScannerOptions: tokenkit.ScannerOptions{
+			CodexHome:          codexHome,
+			ClaudeHome:         claudeHome,
+			GeminiTelemetryLog: geminiLog,
+			Location:           time.UTC,
+		},
+		TokenkitScanInterval: 20 * time.Millisecond,
+	})
+	t.Cleanup(func() { _ = srv.Close() })
+
+	waitFor(t, func() bool {
+		totals, err := tk.Totals(context.Background(), tokenkit.SummaryFilter{App: tokenkit.AppCodex})
+		return err == nil && totals.Records == 1 && totals.TotalTokens == 107
+	}, 2*time.Second)
+
+	status := srv.currentTokenkitSyncStatus()
+	if !status.Enabled || status.LastFinishedAt == "" || status.LastStats[tokenkit.AppCodex].RecordsSeen != 1 {
+		t.Fatalf("unexpected auto sync status: %+v", status)
+	}
+}
+
 // ---------- helpers ----------
+
+func writeTokenkitCodexFixture(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	sessionFile := filepath.Join(home, "sessions", "2026", "05", "04", "rollout.jsonl")
+	if err := os.MkdirAll(filepath.Dir(sessionFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lines := `{"type":"session_meta","payload":{"id":"sess-1","source":"cli","cwd":"/repo"}}
+{"type":"turn_context","payload":{"model":"gpt-5.5"}}
+{"timestamp":"2026-05-04T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"output_tokens":7,"total_tokens":107}}}}
+`
+	if err := os.WriteFile(sessionFile, []byte(lines), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return home
+}
 
 func waitFor(t *testing.T, cond func() bool, timeout time.Duration) {
 	t.Helper()

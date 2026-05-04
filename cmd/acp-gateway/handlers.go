@@ -67,12 +67,14 @@ func (s *Server) buildRouter() http.Handler {
 	mux.HandleFunc("DELETE /api/sessions/{id}", s.handleDeleteSession)
 	mux.HandleFunc("POST /api/sessions/{id}/cancel", s.handleCancelSession)
 
-	// Usage stats
-	mux.HandleFunc("GET /api/stats", s.handleStats)
+	// Token usage
+	mux.HandleFunc("GET /api/tokenkit/sync", s.handleTokenkitSyncStatus)
+	mux.HandleFunc("GET /api/tokenkit/overview", s.handleTokenkitOverview)
 	mux.HandleFunc("POST /api/tokenkit/scan", s.handleTokenkitScan)
 	mux.HandleFunc("GET /api/tokenkit/records", s.handleTokenkitRecords)
 	mux.HandleFunc("GET /api/tokenkit/totals", s.handleTokenkitTotals)
 	mux.HandleFunc("GET /api/tokenkit/summaries", s.handleTokenkitSummaries)
+	mux.HandleFunc("GET /api/tokenkit/timeline", s.handleTokenkitTimeline)
 	mux.HandleFunc("POST /api/tokenkit/codex-status", s.handleTokenkitSaveCodexStatus)
 	mux.HandleFunc("GET /api/tokenkit/codex-status/latest", s.handleTokenkitLatestCodexStatus)
 
@@ -286,42 +288,6 @@ func (s *Server) handleRestartAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mgr.RestartAgent(id)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "restarted"})
-}
-
-// ---------- usage stats ----------
-
-func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
-	cfg := s.mgr.Config()
-	resetDays := make(map[string]time.Weekday, len(cfg.Agents))
-	for _, ac := range cfg.Agents {
-		resetDays[ac.ID] = parseResetDay(ac.ResetDay)
-	}
-	stats := s.store.UsageStats(resetDays)
-	// Ensure every registered agent has an entry, even with no data yet.
-	seen := make(map[string]bool, len(stats))
-	for _, st := range stats {
-		seen[st.Agent] = true
-	}
-	for _, id := range s.registry.List() {
-		if !seen[id] {
-			stats = append(stats, AgentUsageStat{Agent: id})
-		}
-	}
-	// Inject WeeklyLimit, ResetAt, and external quota data.
-	now := time.Now()
-	for i := range stats {
-		ac, ok := cfg.Agent(stats[i].Agent)
-		if ok {
-			stats[i].WeeklyLimit = ac.WeeklyLimit
-		}
-		rd := parseResetDay("")
-		if ok {
-			rd = parseResetDay(ac.ResetDay)
-		}
-		stats[i].ResetAt = nextWeekday(now, rd).Format(time.RFC3339)
-
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"stats": stats})
 }
 
 // ---------- global turn list ----------
