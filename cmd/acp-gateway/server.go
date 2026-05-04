@@ -9,6 +9,7 @@ import (
 
 	"github.com/openmodu/modu/pkg/acp/client"
 	"github.com/openmodu/modu/pkg/acp/manager"
+	"github.com/openmodu/modu/pkg/tokenkit"
 )
 
 // Version is the gateway build version. Override with -ldflags "-X main.Version=x.y.z".
@@ -18,6 +19,7 @@ var Version = "dev"
 type Server struct {
 	mgr      *manager.Manager
 	store    *Store
+	tokenkit *tokenkit.Store
 	registry *Registry
 
 	token      string
@@ -37,6 +39,7 @@ type Server struct {
 type Options struct {
 	Manager      *manager.Manager
 	Store        *Store
+	Tokenkit     *tokenkit.Store
 	Token        string   // empty = auth disabled (dev/test)
 	WorkersEach  int      // workers per agent id (default 1)
 	ExtraRunners []Runner // native (non-ACP) runners to register alongside ACP agents
@@ -62,6 +65,7 @@ func NewServer(opts Options) *Server {
 	s := &Server{
 		mgr:        opts.Manager,
 		store:      opts.Store,
+		tokenkit:   opts.Tokenkit,
 		registry:   registry,
 		token:      opts.Token,
 		workdir:    opts.Workdir,

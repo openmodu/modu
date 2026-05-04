@@ -64,6 +64,12 @@ Project ──► Session ──► Turn
 | DELETE   | `/api/sessions/{id}`                                | yes  | delete session |
 | POST     | `/api/sessions/{id}/cancel`                         | yes  | cancel running turn (session-level) |
 | GET      | `/api/turns?status=&agent=&sessionId=&limit=`       | yes  | global turn list with filtering |
+| POST     | `/api/tokenkit/scan?target=`                        | yes  | scan local Codex / Claude Code / Gemini token usage |
+| GET      | `/api/tokenkit/records?app=&start=&end=&limit=`     | yes  | list raw tokenkit usage records |
+| GET      | `/api/tokenkit/totals?app=&start=&end=`             | yes  | aggregate tokenkit totals |
+| GET      | `/api/tokenkit/summaries?app=&start=&end=`          | yes  | grouped tokenkit summaries |
+| POST     | `/api/tokenkit/codex-status`                        | yes  | parse and save Codex `/status` text |
+| GET      | `/api/tokenkit/codex-status/latest`                 | yes  | get latest saved Codex status snapshot |
 | POST     | `/api/sessions/{id}/turns`                          | yes  | add a turn (send prompt) |
 | GET      | `/api/sessions/{id}/turns/{turnId}/stream`          | yes  | SSE event stream for turn |
 | POST     | `/api/sessions/{id}/turns/{turnId}/approve`         | yes  | approve a tool call |
@@ -216,6 +222,113 @@ pending ──► running ──► completed
 ### `GET /healthz`
 
 No auth. Returns `{"status": "ok"}`.
+
+---
+
+### `POST /api/tokenkit/scan?target=all|codex|claude-code|gemini`
+
+Scans local AI coding usage into the gateway SQLite database. Requires gateway
+persistence (`-db`) because tokenkit stores its own tables in that DB.
+
+Optional query params:
+
+- `target` — `all`, `codex`, `claude-code`, or `gemini`. Default `all`.
+- `timezone` — IANA timezone used for `localDate`.
+- `codexHome` — defaults to `~/.codex`.
+- `claudeHome` — defaults to `~/.claude`.
+- `geminiTelemetryLog` — explicit Gemini telemetry log path.
+
+Response:
+
+```json
+{
+  "target": "codex",
+  "stats": {
+    "codex": {"filesScanned": 12, "recordsSeen": 345}
+  }
+}
+```
+
+### `GET /api/tokenkit/records`
+
+Returns raw usage records.
+
+Query params:
+
+- `app` — `codex`, `claude-code`, or `gemini`
+- `source`, `model`, `workspace`
+- `start`, `end` — local dates in `YYYY-MM-DD`
+- `limit`, `offset`, `asc`
+
+Response:
+
+```json
+{
+  "records": [
+    {
+      "source": "codex:cli",
+      "app": "codex",
+      "externalId": "session:timestamp",
+      "localDate": "2026-05-04",
+      "model": "gpt-5.5",
+      "inputTokens": 100,
+      "outputTokens": 7,
+      "unsplitTokens": 0,
+      "totalTokens": 107
+    }
+  ]
+}
+```
+
+### `GET /api/tokenkit/totals`
+
+Returns one aggregate row for the filter.
+
+Query params: `app`, `source`, `model`, `start`, `end`.
+
+### `GET /api/tokenkit/summaries`
+
+Returns grouped rows by local date, app, source, model, and measurement method.
+
+Query params: `app`, `source`, `model`, `start`, `end`.
+
+### `POST /api/tokenkit/codex-status`
+
+Parses and saves text copied from Codex `/status`.
+
+Request:
+
+```json
+{
+  "text": ">_ OpenAI Codex (v0.128.0)\n│  Model: gpt-5.5 ...",
+  "capturedAt": "2026-05-04T12:00:00Z"
+}
+```
+
+`capturedAt` is optional.
+
+### `GET /api/tokenkit/codex-status/latest`
+
+Returns the latest saved parsed Codex status snapshot:
+
+```json
+{
+  "status": {
+    "version": "0.128.0",
+    "model": "gpt-5.5",
+    "accountEmail": "user@example.com",
+    "accountPlan": "Pro Lite",
+    "contextWindow": {
+      "percentLeft": 66,
+      "usedTokens": 95100,
+      "maxTokens": 258000
+    },
+    "limits": [
+      {"model": "gpt-5.5", "window": "5h limit", "percentLeft": 99}
+    ]
+  }
+}
+```
 
 ---
 

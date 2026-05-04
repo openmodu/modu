@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/openmodu/modu/pkg/acp/manager"
+	"github.com/openmodu/modu/pkg/tokenkit"
 )
 
 func main() {
@@ -67,6 +68,13 @@ func main() {
 	if err := dbLoadAll(db, store); err != nil {
 		log.Printf("[acp-gateway] warn: load data: %v", err)
 	}
+	var tokenkitStore *tokenkit.Store
+	if db != nil {
+		tokenkitStore = tokenkit.NewStore(db)
+		if err := tokenkitStore.Init(context.Background()); err != nil {
+			log.Fatalf("acp-gateway: init tokenkit: %v", err)
+		}
+	}
 	// Resolve workdir: CLI flag > config file > process cwd.
 	workdir := *cwd
 	if workdir == "" {
@@ -80,6 +88,7 @@ func main() {
 	srv := NewServer(Options{
 		Manager:     mgr,
 		Store:       store,
+		Tokenkit:    tokenkitStore,
 		Token:       os.Getenv("MODU_ACP_TOKEN"),
 		WorkersEach: *workers,
 		Workdir:     workdir,

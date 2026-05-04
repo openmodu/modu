@@ -20,6 +20,7 @@ import (
 	"github.com/openmodu/modu/pkg/acp/client"
 	"github.com/openmodu/modu/pkg/acp/jsonrpc"
 	"github.com/openmodu/modu/pkg/acp/manager"
+	"github.com/openmodu/modu/pkg/tokenkit"
 )
 
 // ---------- fake ACP agent transport ----------
@@ -996,6 +997,88 @@ func TestApprove_NoPending(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusConflict {
 		t.Errorf("status = %d, want 409", resp.StatusCode)
+	}
+}
+
+func TestTokenkitAPIRecordsTotalsAndStatus(t *testing.T) {
+	h := newHarness(t, "")
+	tk, err := tokenkit.OpenStore(filepath.Join(t.TempDir(), "tokenkit.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tk.Close() })
+	h.srv.tokenkit = tk
+
+	startedAt := time.Date(2026, 5, 4, 10, 0, 0, 0, time.UTC)
+	if err := tk.UpsertUsageRecord(context.Background(), tokenkit.UsageRecord{
+		Source:            "codex:cli",
+		App:               tokenkit.AppCodex,
+		ExternalID:        "codex-test-1",
+		StartedAt:         startedAt,
+		LocalDate:         "2026-05-04",
+		MeasurementMethod: tokenkit.MethodExact,
+		Model:             "gpt-5.5",
+		InputTokens:       100,
+		OutputTokens:      7,
+		TotalTokens:       107,
+		Workspace:         "/repo",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := h.do(t, "GET", "/api/tokenkit/totals?app=codex&start=2026-05-04&end=2026-05-04", "", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("totals status = %d", resp.StatusCode)
+	}
+	var totals tokenkit.SummaryRow
+	if err := json.NewDecoder(resp.Body).Decode(&totals); err != nil {
+		t.Fatal(err)
+	}
+	if totals.Records != 1 || totals.TotalTokens != 107 || totals.InputTokens != 100 {
+		t.Fatalf("unexpected totals: %+v", totals)
+	}
+
+	resp = h.do(t, "GET", "/api/tokenkit/records?app=codex&limit=10", "", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("records status = %d", resp.StatusCode)
+	}
+	var recordsBody struct {
+		Records []tokenkit.UsageRecord `json:"records"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&recordsBody); err != nil {
+		t.Fatal(err)
+	}
+	if len(recordsBody.Records) != 1 || recordsBody.Records[0].ExternalID != "codex-test-1" {
+		t.Fatalf("unexpected records: %+v", recordsBody.Records)
+	}
+
+	rawStatus := `>_ OpenAI Codex (v0.128.0)
+│  Model:                       gpt-5.5 (reasoning medium, summaries auto)
+│  Account:                     test@example.com (Pro Lite)
+│  Session:                     sess-1
+│  Context window:              66% left (95.1K used / 258K)
+│  5h limit:                    [████████████████████] 99% left (resets 20:26)`
+	resp = h.do(t, "POST", "/api/tokenkit/codex-status", "", map[string]string{"text": rawStatus})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("codex-status status = %d", resp.StatusCode)
+	}
+
+	resp = h.do(t, "GET", "/api/tokenkit/codex-status/latest", "", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("latest status = %d", resp.StatusCode)
+	}
+	var latestBody struct {
+		Status *tokenkit.CodexStatusSnapshot `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&latestBody); err != nil {
+		t.Fatal(err)
+	}
+	if latestBody.Status == nil || latestBody.Status.AccountEmail != "test@example.com" || latestBody.Status.ContextWindow.UsedTokens != 95100 {
+		t.Fatalf("unexpected latest status: %+v", latestBody.Status)
 	}
 }
 

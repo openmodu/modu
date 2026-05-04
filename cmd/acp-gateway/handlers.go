@@ -69,6 +69,12 @@ func (s *Server) buildRouter() http.Handler {
 
 	// Usage stats
 	mux.HandleFunc("GET /api/stats", s.handleStats)
+	mux.HandleFunc("POST /api/tokenkit/scan", s.handleTokenkitScan)
+	mux.HandleFunc("GET /api/tokenkit/records", s.handleTokenkitRecords)
+	mux.HandleFunc("GET /api/tokenkit/totals", s.handleTokenkitTotals)
+	mux.HandleFunc("GET /api/tokenkit/summaries", s.handleTokenkitSummaries)
+	mux.HandleFunc("POST /api/tokenkit/codex-status", s.handleTokenkitSaveCodexStatus)
+	mux.HandleFunc("GET /api/tokenkit/codex-status/latest", s.handleTokenkitLatestCodexStatus)
 
 	// Global turn list
 	mux.HandleFunc("GET /api/turns", s.handleListTurns)
