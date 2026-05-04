@@ -147,12 +147,15 @@ main{flex:1;overflow:hidden;display:flex;flex-direction:column}
 .tk-status{font-size:10px;color:var(--subtle);margin-bottom:6px;min-height:15px}
 .tk-list{display:flex;flex-direction:column;gap:4px}
 .tk-row{
-  display:grid;grid-template-columns:18px 1fr auto;align-items:center;gap:6px;
+  display:grid;grid-template-columns:18px 1fr auto;align-items:start;gap:6px;
   padding:6px;border-radius:6px;background:var(--elevated)
 }
 .tk-icon{font-size:11px;color:var(--muted);text-align:center}
 .tk-name{font-size:11px;font-weight:600;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tk-meta{font-size:10px;color:var(--subtle);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tk-detail{grid-column:2/4;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px 7px;margin-top:4px}
+.tk-detail span{font-size:10px;color:var(--subtle);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tk-detail b{color:var(--muted);font-weight:500}
 .tk-total{font-size:11px;font-weight:700;color:var(--accent);font-variant-numeric:tabular-nums;text-align:right}
 .tk-cost{font-size:10px;color:var(--muted);text-align:right;min-height:15px}
 .tk-days{margin-top:7px;border-top:1px solid var(--border);padding-top:6px;display:flex;flex-direction:column;gap:6px}
@@ -161,8 +164,12 @@ main{flex:1;overflow:hidden;display:flex;flex-direction:column}
 .tk-day-bar{height:4px;background:var(--accent-dim);border-radius:2px;overflow:hidden}
 .tk-day-fill{height:100%;background:var(--accent)}
 .tk-day-total{font-variant-numeric:tabular-nums;color:var(--subtle);text-align:right}
-.tk-day-apps{display:grid;grid-template-columns:1fr;gap:3px}
-.tk-day-app{display:grid;grid-template-columns:16px 70px 1fr auto;align-items:center;gap:5px;color:var(--subtle)}
+.tk-day-apps{display:grid;grid-template-columns:58px repeat(3,minmax(0,1fr));gap:2px 5px;align-items:center}
+.tk-day-metric,.tk-day-app-head,.tk-day-app-cell{font-size:10px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tk-day-metric{color:var(--subtle)}
+.tk-day-app-head{color:var(--muted);font-weight:600;text-align:right}
+.tk-day-app-cell{color:var(--subtle);text-align:right}
+.tk-day-app-cell.total{color:var(--accent);font-weight:600}
 .tk-app-bar{height:3px;background:var(--elevated);border-radius:2px;overflow:hidden}
 .tk-app-fill{height:100%;background:var(--accent)}
 .tk-app-fill.claude-code{background:var(--warn)}
@@ -669,6 +676,32 @@ function appLabel(app) {
   }[app] || app;
 }
 
+function tokenDetailHtml(row) {
+  return `
+    <span><b>in</b> ${fmtTokens(row.inputTokens)}</span>
+    <span><b>out</b> ${fmtTokens(row.outputTokens)}</span>
+    <span><b>cache</b> ${fmtTokens(row.cachedInputTokens)}</span>
+    <span><b>reason</b> ${fmtTokens(row.reasoningTokens)}</span>
+    <span><b>tool</b> ${fmtTokens(row.toolTokens)}</span>
+    <span><b>records</b> ${row.records || 0}</span>`;
+}
+
+function tokenDetailText(row) {
+  return `in ${fmtTokens(row.inputTokens)} · out ${fmtTokens(row.outputTokens)} · cache ${fmtTokens(row.cachedInputTokens)} · reason ${fmtTokens(row.reasoningTokens)} · tool ${fmtTokens(row.toolTokens)}`;
+}
+
+function emptyTokenRow() {
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    cachedInputTokens: 0,
+    reasoningTokens: 0,
+    toolTokens: 0,
+    totalTokens: 0,
+    records: 0,
+  };
+}
+
 function tokenkitStatusText() {
   if (!S.tokenkit.available) return 'Disabled: start acp-gateway with -db to persist token usage';
   const st = S.tokenkit.status || {};
@@ -710,12 +743,13 @@ function renderTokenkitUsage() {
       <div class="tk-icon">${agentIcon(app === 'claude-code' ? 'claude' : app)}</div>
       <div style="min-width:0">
         <div class="tk-name">${esc(appLabel(app))}</div>
-        <div class="tk-meta">${records} records · in ${fmtTokens(total.inputTokens)} · out ${fmtTokens(total.outputTokens)}</div>
+        <div class="tk-meta">${records} records</div>
       </div>
       <div>
         <div class="tk-total">${fmtTokens(total.totalTokens)}</div>
         <div class="tk-cost">${esc(cost)}</div>
-      </div>`;
+      </div>
+      <div class="tk-detail">${tokenDetailHtml(total)}</div>`;
     list.appendChild(row);
   }
   renderTokenkitTimeline(timelineEl);
@@ -729,9 +763,16 @@ function renderTokenkitTimeline(el) {
     if (!date) continue;
     const cur = byDate.get(date) || { total: 0, apps: {} };
     const app = row.app || 'unknown';
-    const tokens = row.totalTokens || 0;
-    cur.total += tokens;
-    cur.apps[app] = (cur.apps[app] || 0) + tokens;
+    const appRow = cur.apps[app] || emptyTokenRow();
+    appRow.inputTokens += row.inputTokens || 0;
+    appRow.outputTokens += row.outputTokens || 0;
+    appRow.cachedInputTokens += row.cachedInputTokens || 0;
+    appRow.reasoningTokens += row.reasoningTokens || 0;
+    appRow.toolTokens += row.toolTokens || 0;
+    appRow.totalTokens += row.totalTokens || 0;
+    appRow.records += row.records || 0;
+    cur.total += row.totalTokens || 0;
+    cur.apps[app] = appRow;
     byDate.set(date, cur);
   }
   const days = [...byDate.entries()]
@@ -742,22 +783,29 @@ function renderTokenkitTimeline(el) {
     return;
   }
   const apps = ['codex', 'claude-code', 'gemini'];
+  const metrics = [
+    ['in', 'inputTokens'],
+    ['out', 'outputTokens'],
+    ['cache', 'cachedInputTokens'],
+    ['reason', 'reasoningTokens'],
+    ['tool', 'toolTokens'],
+    ['total', 'totalTokens'],
+  ];
   const max = Math.max(...days.map(([, day]) => day.total), 1);
   el.innerHTML = days.map(([date, day]) => {
     const pct = Math.max(2, Math.round(day.total / max * 100));
-    const appRows = apps
-      .filter(app => day.apps[app] > 0)
-      .map(app => {
-        const tokens = day.apps[app];
-        const appPct = Math.max(2, Math.round(tokens / Math.max(day.total, 1) * 100));
-        return `
-          <div class="tk-day-app">
-            <span>${agentIcon(app === 'claude-code' ? 'claude' : app)}</span>
-            <span>${esc(appLabel(app))}</span>
-            <span class="tk-app-bar"><span class="tk-app-fill ${esc(app)}" style="width:${appPct}%"></span></span>
-            <span class="tk-app-total">${fmtTokens(tokens)}</span>
-          </div>`;
-      }).join('');
+    const appCells = apps.map(app => ({
+      app,
+      label: appLabel(app),
+      row: day.apps[app] || emptyTokenRow(),
+    }));
+    const appRows = `
+      <span></span>
+      ${appCells.map(({ app, label }) => `<span class="tk-day-app-head">${agentIcon(app === 'claude-code' ? 'claude' : app)} ${esc(label)}</span>`).join('')}
+      ${metrics.map(([label, key]) => `
+        <span class="tk-day-metric">${esc(label)}</span>
+        ${appCells.map(({ row }) => `<span class="tk-day-app-cell${key === 'totalTokens' ? ' total' : ''}">${fmtTokens(row[key])}</span>`).join('')}
+      `).join('')}`;
     return `
       <div class="tk-day">
         <div class="tk-day-head">

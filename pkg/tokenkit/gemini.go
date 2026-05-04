@@ -6,9 +6,64 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
+
+func ScanGemini(ctx context.Context, store *Store, geminiHome, telemetryLog string, loc *time.Location) (ScanStats, error) {
+	var total ScanStats
+	if telemetryLog != "" {
+		stats, err := ScanGeminiTelemetry(ctx, store, telemetryLog, loc)
+		if err != nil {
+			return total, err
+		}
+		total = total.Add(stats)
+	}
+
+	files, err := geminiChatFiles(geminiHome)
+	if err != nil {
+		return total, err
+	}
+	for _, file := range files {
+		stats, err := ScanGeminiChat(ctx, store, file, loc)
+		if err != nil {
+			return total, err
+		}
+		total = total.Add(stats)
+	}
+	return total, nil
+}
+
+func geminiChatFiles(geminiHome string) ([]string, error) {
+	if geminiHome == "" {
+		return nil, nil
+	}
+	root := filepath.Join(geminiHome, "tmp")
+	var files []string
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			if isNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if d == nil || d.IsDir() || filepath.Ext(path) != ".jsonl" {
+			return nil
+		}
+		if filepath.Base(filepath.Dir(path)) != "chats" {
+			return nil
+		}
+		if strings.HasPrefix(filepath.Base(path), "session-") {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if err != nil && !isNotExist(err) {
+		return nil, err
+	}
+	return files, nil
+}
 
 func ScanGeminiTelemetry(ctx context.Context, store *Store, telemetryLog string, loc *time.Location) (ScanStats, error) {
 	info, err := os.Stat(telemetryLog)
@@ -74,6 +129,129 @@ func ScanGeminiTelemetry(ctx context.Context, store *Store, telemetryLog string,
 		return ScanStats{}, err
 	}
 	return ScanStats{FilesScanned: 1, RecordsSeen: seen}, nil
+}
+
+func ScanGeminiChat(ctx context.Context, store *Store, chatFile string, loc *time.Location) (ScanStats, error) {
+	info, err := os.Stat(chatFile)
+	if err != nil {
+		if isNotExist(err) {
+			return ScanStats{}, nil
+		}
+		return ScanStats{}, err
+	}
+	stateKey := stateKeyForFile(AppGemini, chatFile)
+	previous, err := store.GetFileScanState(ctx, stateKey)
+	if err != nil {
+		return ScanStats{}, err
+	}
+	if sameFileState(previous, info) {
+		return ScanStats{}, nil
+	}
+	var startOffset int64
+	if previous != nil && canContinueFromOffset(previous, info) {
+		startOffset = previous.Offset
+	} else if previous != nil {
+		if err := store.DeleteUsageRecordsForFile(ctx, AppGemini, chatFile); err != nil {
+			return ScanStats{}, err
+		}
+	}
+
+	file, err := os.Open(chatFile)
+	if err != nil {
+		return ScanStats{}, err
+	}
+	defer file.Close()
+	if startOffset > 0 {
+		if _, err := file.Seek(startOffset, io.SeekStart); err != nil {
+			return ScanStats{}, err
+		}
+	}
+
+	reader := bufio.NewReader(file)
+	seen := 0
+	for {
+		offset, _ := file.Seek(0, io.SeekCurrent)
+		offset -= int64(reader.Buffered())
+		line, err := reader.ReadString('\n')
+		if len(line) > 0 {
+			if record, ok := parseGeminiChatLine(line, chatFile, offset, loc); ok {
+				if err := store.UpsertUsageRecord(ctx, record); err != nil {
+					return ScanStats{}, err
+				}
+				seen++
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return ScanStats{}, err
+		}
+	}
+	lastOffset, _ := file.Seek(0, io.SeekCurrent)
+	if err := store.UpsertFileScanState(ctx, newFileState(AppGemini, chatFile, lastOffset, info, nil)); err != nil {
+		return ScanStats{}, err
+	}
+	return ScanStats{FilesScanned: 1, RecordsSeen: seen}, nil
+}
+
+func parseGeminiChatLine(line, filePath string, offset int64, loc *time.Location) (UsageRecord, bool) {
+	var entry map[string]any
+	decoder := json.NewDecoder(strings.NewReader(strings.TrimSpace(line)))
+	decoder.UseNumber()
+	if err := decoder.Decode(&entry); err != nil {
+		return UsageRecord{}, false
+	}
+	if cleanString(entry["type"]) != "gemini" {
+		return UsageRecord{}, false
+	}
+	tokens, _ := entry["tokens"].(map[string]any)
+	if len(tokens) == 0 {
+		return UsageRecord{}, false
+	}
+	total := intValue(tokens["total"])
+	input := intValue(tokens["input"])
+	output := intValue(tokens["output"])
+	cached := intValue(tokens["cached"])
+	reasoning := intValue(tokens["thoughts"])
+	tool := intValue(tokens["tool"])
+	if total == 0 {
+		total = input + output + cached + reasoning + tool
+	}
+	if total <= 0 {
+		return UsageRecord{}, false
+	}
+	startedAt, ok := parseTime(cleanString(entry["timestamp"]))
+	if !ok {
+		startedAt = time.Now().UTC()
+	}
+	sessionID := strings.TrimSuffix(filepath.Base(filePath), filepath.Ext(filePath))
+	messageID := cleanString(entry["id"])
+	externalID := resolvePath(filePath) + ":" + messageID
+	if messageID == "" {
+		externalID = resolvePath(filePath) + ":" + int64String(offset)
+	}
+	return UsageRecord{
+		Source:            "gemini:chat",
+		App:               AppGemini,
+		ExternalID:        externalID,
+		StartedAt:         startedAt,
+		LocalDate:         localDate(startedAt, loc),
+		MeasurementMethod: MethodExact,
+		Model:             cleanString(entry["model"]),
+		InputTokens:       input,
+		OutputTokens:      output,
+		CachedInputTokens: cached,
+		ReasoningTokens:   reasoning,
+		ToolTokens:        tool,
+		TotalTokens:       total,
+		Category:          "chat",
+		Metadata: map[string]any{
+			"session_id":   sessionID,
+			"session_file": resolvePath(filePath),
+			"message_id":   messageID,
+		},
+	}, true
 }
 
 func parseGeminiTelemetryLine(line, filePath string, offset int64, loc *time.Location) []UsageRecord {

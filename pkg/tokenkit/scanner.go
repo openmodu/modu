@@ -53,17 +53,15 @@ func (s *Scanner) ScanClaudeCode(ctx context.Context) (ScanStats, error) {
 }
 
 func (s *Scanner) ScanGemini(ctx context.Context) (ScanStats, error) {
+	home := filepath.Join(userHomeDir(), ".gemini")
 	path := s.opts.GeminiTelemetryLog
 	if path == "" {
 		path = firstExistingPath(
 			filepath.Join(".gemini", "telemetry.log"),
-			filepath.Join(userHomeDir(), ".gemini", "telemetry.log"),
+			filepath.Join(home, "telemetry.log"),
 		)
 	}
-	if path == "" {
-		return ScanStats{}, nil
-	}
-	return ScanGeminiTelemetry(ctx, s.store, path, defaultLocation(s.opts.Location))
+	return ScanGemini(ctx, s.store, home, path, defaultLocation(s.opts.Location))
 }
 
 func userHomeDir() string {

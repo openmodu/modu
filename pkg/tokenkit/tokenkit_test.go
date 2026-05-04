@@ -170,6 +170,45 @@ func TestScanGeminiTelemetryLog(t *testing.T) {
 	}
 }
 
+func TestScanGeminiChatFile(t *testing.T) {
+	ctx := context.Background()
+	store := testStore(t)
+	home := t.TempDir()
+	chatFile := filepath.Join(home, "tmp", "modu", "chats", "session-2026-05-04T13-19-demo.jsonl")
+	if err := os.MkdirAll(filepath.Dir(chatFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lines := `{"id":"user-1","timestamp":"2026-05-04T13:20:08.315Z","type":"user","content":[{"text":"hi"}]}
+{"id":"gemini-1","timestamp":"2026-05-04T13:20:13.379Z","type":"gemini","content":"","tokens":{"input":100,"output":20,"cached":30,"thoughts":4,"tool":2,"total":126},"model":"gemini-3-flash-preview"}
+{"id":"gemini-1","timestamp":"2026-05-04T13:20:13.379Z","type":"gemini","content":"","tokens":{"input":100,"output":20,"cached":30,"thoughts":4,"tool":2,"total":126},"model":"gemini-3-flash-preview","toolCalls":[]}
+`
+	if err := os.WriteFile(chatFile, []byte(lines), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stats, err := ScanGemini(ctx, store, home, "", time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.FilesScanned != 1 || stats.RecordsSeen != 2 {
+		t.Fatalf("unexpected stats: %+v", stats)
+	}
+	totals, err := store.Totals(ctx, SummaryFilter{App: AppGemini})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if totals.Records != 1 || totals.TotalTokens != 126 || totals.InputTokens != 100 || totals.OutputTokens != 20 || totals.CachedInputTokens != 30 || totals.ReasoningTokens != 4 || totals.ToolTokens != 2 {
+		t.Fatalf("unexpected totals: %+v", totals)
+	}
+	records, err := store.UsageRecords(ctx, UsageRecordFilter{App: AppGemini, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Source != "gemini:chat" || records[0].Metadata["session_id"] != "session-2026-05-04T13-19-demo" {
+		t.Fatalf("unexpected records: %+v", records)
+	}
+}
+
 func TestParseGeminiOTLPMetricShape(t *testing.T) {
 	records := parseGeminiTelemetryLine(`{
 		"name":"gemini_cli.token.usage",
