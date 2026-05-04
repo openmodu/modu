@@ -1,6 +1,9 @@
 package tokenkit
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 const (
 	AppCodex      = "codex"
@@ -120,12 +123,56 @@ type CodexLimit struct {
 	Raw         string  `json:"raw,omitempty"`
 }
 
+func (r UsageRecord) SessionID() string {
+	if r.Metadata == nil {
+		return ""
+	}
+	for _, key := range []string{"gateway_session_id", "session_id"} {
+		if v, ok := r.Metadata[key]; ok {
+			if s, ok := v.(string); ok {
+				s = strings.TrimSpace(s)
+				if s != "" {
+					return s
+				}
+			}
+		}
+	}
+	return ""
+}
+
 type SummaryRow struct {
 	LocalDate         string   `json:"localDate,omitempty"`
 	App               string   `json:"app,omitempty"`
 	Source            string   `json:"source,omitempty"`
 	Model             string   `json:"model,omitempty"`
 	MeasurementMethod string   `json:"measurementMethod,omitempty"`
+	InputTokens       int      `json:"inputTokens"`
+	OutputTokens      int      `json:"outputTokens"`
+	CachedInputTokens int      `json:"cachedInputTokens"`
+	ReasoningTokens   int      `json:"reasoningTokens"`
+	ToolTokens        int      `json:"toolTokens"`
+	UnsplitTokens     int      `json:"unsplitTokens"`
+	TotalTokens       int      `json:"totalTokens"`
+	Credits           float64  `json:"credits,omitempty"`
+	Records           int      `json:"records"`
+	EstimatedCostUSD  *float64 `json:"estimatedCostUsd,omitempty"`
+}
+
+func (r *SummaryRow) Accumulate(rec UsageRecord) {
+	r.InputTokens += rec.InputTokens
+	r.OutputTokens += rec.OutputTokens
+	r.CachedInputTokens += rec.CachedInputTokens
+	r.ReasoningTokens += rec.ReasoningTokens
+	r.ToolTokens += rec.ToolTokens
+	r.UnsplitTokens += rec.UnsplitTokens
+	r.TotalTokens += rec.TotalTokens
+	r.Credits += rec.Credits
+	r.Records++
+}
+
+type TimeBucketRow struct {
+	LocalDate         string   `json:"localDate"`
+	App               string   `json:"app,omitempty"`
 	InputTokens       int      `json:"inputTokens"`
 	OutputTokens      int      `json:"outputTokens"`
 	CachedInputTokens int      `json:"cachedInputTokens"`

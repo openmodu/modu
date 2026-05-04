@@ -44,6 +44,27 @@ totals, err := store.Totals(ctx, tokenkit.SummaryFilter{
 })
 ```
 
+## Aggregating Records
+
+`SummaryRow.Accumulate` accumulates a single `UsageRecord` into an in-memory summary without a database round-trip:
+
+```go
+var totals tokenkit.SummaryRow
+for _, record := range records {
+    totals.Accumulate(record)
+}
+```
+
+## Extracting Metadata
+
+`UsageRecord.SessionID` reads the `gateway_session_id` or `session_id` key from a record's metadata map:
+
+```go
+if id := record.SessionID(); id != "" {
+    // correlate record to a known session
+}
+```
+
 ## Codex Status
 
 Codex does not currently expose a non-interactive `codex status` command in the local CLI. The first supported path is parsing the text shown by `/status`:
