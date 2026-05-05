@@ -3,12 +3,16 @@ package tokenkit
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 type codexCursor struct {
@@ -27,15 +31,27 @@ func ScanCodex(ctx context.Context, store *Store, codexHome string, loc *time.Lo
 	if err != nil {
 		return stats, err
 	}
+
+	var mu sync.Mutex
+	g, ctx := errgroup.WithContext(ctx)
 	for _, file := range files {
-		scanned, seen, err := scanCodexFile(ctx, store, file, loc)
-		if err != nil {
-			return stats, err
-		}
-		if scanned {
-			stats.FilesScanned++
-			stats.RecordsSeen += seen
-		}
+		filePath := file
+		g.Go(func() error {
+			scanned, seen, err := scanCodexFile(ctx, store, filePath, loc)
+			if err != nil {
+				return err
+			}
+			if scanned {
+				mu.Lock()
+				stats.FilesScanned++
+				stats.RecordsSeen += seen
+				mu.Unlock()
+			}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return stats, err
 	}
 	return stats, nil
 }
@@ -116,7 +132,7 @@ func scanCodexFile(ctx context.Context, store *Store, filePath string, loc *time
 
 	reader := bufio.NewReader(file)
 	lastOffset := startOffset
-	seen := 0
+	var records []UsageRecord
 	for {
 		line, err := reader.ReadString('\n')
 		if len(line) > 0 {
@@ -126,33 +142,43 @@ func scanCodexFile(ctx context.Context, store *Store, filePath string, loc *time
 			}
 			record, ok := parseCodexLine(line, filePath, &cursor, loc)
 			if ok {
-				if err := store.UpsertUsageRecord(ctx, record); err != nil {
-					return false, seen, err
-				}
-				seen++
+				records = append(records, record)
 			}
 		}
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			return false, seen, err
+			return false, 0, err
 		}
 	}
 	if pos, err := file.Seek(0, io.SeekCurrent); err == nil {
 		lastOffset = pos
 	}
 
-	err = store.UpsertFileScanState(ctx, newFileState(AppCodex, filePath, lastOffset, info, map[string]any{
-		"session_id":      cursor.SessionID,
-		"session_source":  cursor.SessionSource,
-		"cwd":             cursor.CWD,
-		"originator":      cursor.Originator,
-		"model_provider":  cursor.ModelProvider,
-		"current_model":   cursor.CurrentModel,
-		"current_turn_id": cursor.CurrentTurnID,
-	}))
-	return true, seen, err
+	err = store.WithTx(ctx, func(tx *sql.Tx) error {
+		if fullReset {
+			if err := deleteUsageRecordsForFile(ctx, tx, AppCodex, filePath); err != nil {
+				return err
+			}
+		}
+		for _, record := range records {
+			if err := upsertUsageRecord(ctx, tx, record); err != nil {
+				return err
+			}
+		}
+		return upsertFileScanState(ctx, tx, newFileState(AppCodex, filePath, lastOffset, info, map[string]any{
+			"session_id":      cursor.SessionID,
+			"session_source":  cursor.SessionSource,
+			"cwd":             cursor.CWD,
+			"originator":      cursor.Originator,
+			"model_provider":  cursor.ModelProvider,
+			"current_model":   cursor.CurrentModel,
+			"current_turn_id": cursor.CurrentTurnID,
+		}))
+	})
+
+	return true, len(records), err
 }
 
 func parseCodexLine(line, filePath string, cursor *codexCursor, loc *time.Location) (UsageRecord, bool) {

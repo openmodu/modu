@@ -3,13 +3,17 @@ package tokenkit
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 var claudeEntrypointRE = regexp.MustCompile(`(?i)cc_entrypoint=([a-z0-9-]+)`)
@@ -44,15 +48,27 @@ func ScanClaudeCode(ctx context.Context, store *Store, claudeHome string, loc *t
 	if err != nil && !isNotExist(err) {
 		return stats, err
 	}
+
+	var mu sync.Mutex
+	g, ctx := errgroup.WithContext(ctx)
 	for _, file := range files {
-		scanned, seen, err := scanClaudeFile(ctx, store, file, claudeHome, loc)
-		if err != nil {
-			return stats, err
-		}
-		if scanned {
-			stats.FilesScanned++
-			stats.RecordsSeen += seen
-		}
+		filePath := file
+		g.Go(func() error {
+			scanned, seen, err := scanClaudeFile(ctx, store, filePath, claudeHome, loc)
+			if err != nil {
+				return err
+			}
+			if scanned {
+				mu.Lock()
+				stats.FilesScanned++
+				stats.RecordsSeen += seen
+				mu.Unlock()
+			}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return stats, err
 	}
 	return stats, nil
 }
@@ -83,9 +99,7 @@ func scanClaudeFile(ctx context.Context, store *Store, filePath, claudeHome stri
 		startOffset = previous.Offset
 	}
 	if fullReset {
-		if _, err := store.db.ExecContext(ctx, "DELETE FROM tokenkit_usage_records WHERE app = ? AND external_id LIKE ?", AppClaudeCode, sessionID+":%"); err != nil {
-			return false, 0, err
-		}
+		// Handled in transaction below
 	}
 
 	file, err := os.Open(filePath)
@@ -120,17 +134,27 @@ func scanClaudeFile(ctx context.Context, store *Store, filePath, claudeHome stri
 	}
 	lastOffset, _ := file.Seek(0, io.SeekCurrent)
 
-	seen := 0
-	for _, candidate := range best {
-		if err := store.UpsertUsageRecord(ctx, candidate.Record); err != nil {
-			return false, seen, err
+	err = store.WithTx(ctx, func(tx *sql.Tx) error {
+		if fullReset {
+			if _, err := tx.ExecContext(ctx, "DELETE FROM tokenkit_usage_records WHERE app = ? AND external_id LIKE ?", AppClaudeCode, sessionID+":%"); err != nil {
+				return err
+			}
 		}
-		seen++
-	}
-	err = store.UpsertFileScanState(ctx, newFileState(AppClaudeCode, filePath, lastOffset, info, map[string]any{
-		"session_id": sessionID,
-		"entrypoint": entrypoint,
-	}))
+
+		seen := 0
+		for _, candidate := range best {
+			if err := upsertUsageRecord(ctx, tx, candidate.Record); err != nil {
+				return err
+			}
+			seen++
+		}
+		return upsertFileScanState(ctx, tx, newFileState(AppClaudeCode, filePath, lastOffset, info, map[string]any{
+			"session_id": sessionID,
+			"entrypoint": entrypoint,
+		}))
+	})
+
+	seen := len(best)
 	return true, seen, err
 }
 

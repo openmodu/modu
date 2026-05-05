@@ -14,6 +14,12 @@ type Store struct {
 	db *sql.DB
 }
 
+type dbExecutor interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
 func OpenStore(path string) (*Store, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -25,6 +31,18 @@ func OpenStore(path string) (*Store, error) {
 		return nil, err
 	}
 	return store, nil
+}
+
+func (s *Store) WithTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	if err := fn(tx); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
 }
 
 func NewStore(db *sql.DB) *Store {
@@ -144,13 +162,31 @@ func (s *Store) ensureUsageRecordColumns(ctx context.Context) error {
 }
 
 func (s *Store) UpsertUsageRecord(ctx context.Context, record UsageRecord) error {
+	return upsertUsageRecord(ctx, s.db, record)
+}
+
+func (s *Store) UpsertUsageRecords(ctx context.Context, records []UsageRecord) error {
+	if len(records) == 0 {
+		return nil
+	}
+	return s.WithTx(ctx, func(tx *sql.Tx) error {
+		for _, record := range records {
+			if err := upsertUsageRecord(ctx, tx, record); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func upsertUsageRecord(ctx context.Context, exec dbExecutor, record UsageRecord) error {
 	if record.MeasurementMethod == "" {
 		record.MeasurementMethod = MethodExact
 	}
 	if record.LocalDate == "" && !record.StartedAt.IsZero() {
 		record.LocalDate = localDate(record.StartedAt, time.Local)
 	}
-	_, err := s.db.ExecContext(ctx, `
+	_, err := exec.ExecContext(ctx, `
 INSERT INTO tokenkit_usage_records (
 	source, app, external_id, started_at, local_date, measurement_method, model,
 	input_tokens, output_tokens, cached_input_tokens, reasoning_tokens, tool_tokens,
@@ -197,8 +233,12 @@ ON CONFLICT(source, external_id) DO UPDATE SET
 }
 
 func (s *Store) DeleteUsageRecordsForFile(ctx context.Context, app, filePath string) error {
+	return deleteUsageRecordsForFile(ctx, s.db, app, filePath)
+}
+
+func deleteUsageRecordsForFile(ctx context.Context, exec dbExecutor, app, filePath string) error {
 	pattern := fmt.Sprintf("%%\"session_file\":\"%s\"%%", escapeLike(resolvePath(filePath)))
-	_, err := s.db.ExecContext(ctx, `
+	_, err := exec.ExecContext(ctx, `
 DELETE FROM tokenkit_usage_records
 WHERE app = ? AND metadata_json LIKE ? ESCAPE '\'
 `, app, pattern)
@@ -206,7 +246,11 @@ WHERE app = ? AND metadata_json LIKE ? ESCAPE '\'
 }
 
 func (s *Store) GetFileScanState(ctx context.Context, stateKey string) (*FileScanState, error) {
-	row := s.db.QueryRowContext(ctx, `
+	return getFileScanState(ctx, s.db, stateKey)
+}
+
+func getFileScanState(ctx context.Context, exec dbExecutor, stateKey string) (*FileScanState, error) {
+	row := exec.QueryRowContext(ctx, `
 SELECT state_key, app, file_path, offset, file_size, mtime_ns, last_scanned_at, metadata_json
 FROM tokenkit_file_scan_state
 WHERE state_key = ?
@@ -237,10 +281,14 @@ WHERE state_key = ?
 }
 
 func (s *Store) UpsertFileScanState(ctx context.Context, state FileScanState) error {
+	return upsertFileScanState(ctx, s.db, state)
+}
+
+func upsertFileScanState(ctx context.Context, exec dbExecutor, state FileScanState) error {
 	if state.LastScannedAt.IsZero() {
 		state.LastScannedAt = time.Now().UTC()
 	}
-	_, err := s.db.ExecContext(ctx, `
+	_, err := exec.ExecContext(ctx, `
 INSERT INTO tokenkit_file_scan_state (
 	state_key, app, file_path, offset, file_size, mtime_ns, last_scanned_at, metadata_json
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -264,6 +312,7 @@ ON CONFLICT(state_key) DO UPDATE SET
 	)
 	return err
 }
+
 
 func escapeLike(value string) string {
 	value = strings.ReplaceAll(value, `\`, `\\`)
