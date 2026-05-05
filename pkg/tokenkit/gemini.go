@@ -3,12 +3,16 @@ package tokenkit
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 func ScanGemini(ctx context.Context, store *Store, geminiHome, telemetryLog string, loc *time.Location) (ScanStats, error) {
@@ -25,12 +29,24 @@ func ScanGemini(ctx context.Context, store *Store, geminiHome, telemetryLog stri
 	if err != nil {
 		return total, err
 	}
+
+	var mu sync.Mutex
+	g, ctx := errgroup.WithContext(ctx)
 	for _, file := range files {
-		stats, err := ScanGeminiChat(ctx, store, file, loc)
-		if err != nil {
-			return total, err
-		}
-		total = total.Add(stats)
+		chatFile := file
+		g.Go(func() error {
+			stats, err := ScanGeminiChat(ctx, store, chatFile, loc)
+			if err != nil {
+				return err
+			}
+			mu.Lock()
+			total = total.Add(stats)
+			mu.Unlock()
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return total, err
 	}
 	return total, nil
 }
@@ -102,19 +118,14 @@ func ScanGeminiTelemetry(ctx context.Context, store *Store, telemetryLog string,
 	}
 
 	reader := bufio.NewReader(file)
-	seen := 0
+	var records []UsageRecord
 	for {
 		offset, _ := file.Seek(0, io.SeekCurrent)
 		offset -= int64(reader.Buffered())
 		line, err := reader.ReadString('\n')
 		if len(line) > 0 {
-			if records := parseGeminiTelemetryLine(line, telemetryLog, offset, loc); len(records) > 0 {
-				for _, record := range records {
-					if err := store.UpsertUsageRecord(ctx, record); err != nil {
-						return ScanStats{}, err
-					}
-					seen++
-				}
+			if items := parseGeminiTelemetryLine(line, telemetryLog, offset, loc); len(items) > 0 {
+				records = append(records, items...)
 			}
 		}
 		if err == io.EOF {
@@ -125,10 +136,19 @@ func ScanGeminiTelemetry(ctx context.Context, store *Store, telemetryLog string,
 		}
 	}
 	lastOffset, _ := file.Seek(0, io.SeekCurrent)
-	if err := store.UpsertFileScanState(ctx, newFileState(AppGemini, telemetryLog, lastOffset, info, nil)); err != nil {
+
+	err = store.WithTx(ctx, func(tx *sql.Tx) error {
+		for _, record := range records {
+			if err := upsertUsageRecord(ctx, tx, record); err != nil {
+				return err
+			}
+		}
+		return upsertFileScanState(ctx, tx, newFileState(AppGemini, telemetryLog, lastOffset, info, nil))
+	})
+	if err != nil {
 		return ScanStats{}, err
 	}
-	return ScanStats{FilesScanned: 1, RecordsSeen: seen}, nil
+	return ScanStats{FilesScanned: 1, RecordsSeen: len(records)}, nil
 }
 
 func ScanGeminiChat(ctx context.Context, store *Store, chatFile string, loc *time.Location) (ScanStats, error) {
@@ -148,12 +168,11 @@ func ScanGeminiChat(ctx context.Context, store *Store, chatFile string, loc *tim
 		return ScanStats{}, nil
 	}
 	var startOffset int64
+	fullReset := false
 	if previous != nil && canContinueFromOffset(previous, info) {
 		startOffset = previous.Offset
 	} else if previous != nil {
-		if err := store.DeleteUsageRecordsForFile(ctx, AppGemini, chatFile); err != nil {
-			return ScanStats{}, err
-		}
+		fullReset = true
 	}
 
 	file, err := os.Open(chatFile)
@@ -168,17 +187,14 @@ func ScanGeminiChat(ctx context.Context, store *Store, chatFile string, loc *tim
 	}
 
 	reader := bufio.NewReader(file)
-	seen := 0
+	var records []UsageRecord
 	for {
 		offset, _ := file.Seek(0, io.SeekCurrent)
 		offset -= int64(reader.Buffered())
 		line, err := reader.ReadString('\n')
 		if len(line) > 0 {
 			if record, ok := parseGeminiChatLine(line, chatFile, offset, loc); ok {
-				if err := store.UpsertUsageRecord(ctx, record); err != nil {
-					return ScanStats{}, err
-				}
-				seen++
+				records = append(records, record)
 			}
 		}
 		if err == io.EOF {
@@ -189,10 +205,24 @@ func ScanGeminiChat(ctx context.Context, store *Store, chatFile string, loc *tim
 		}
 	}
 	lastOffset, _ := file.Seek(0, io.SeekCurrent)
-	if err := store.UpsertFileScanState(ctx, newFileState(AppGemini, chatFile, lastOffset, info, nil)); err != nil {
+
+	err = store.WithTx(ctx, func(tx *sql.Tx) error {
+		if fullReset {
+			if err := deleteUsageRecordsForFile(ctx, tx, AppGemini, chatFile); err != nil {
+				return err
+			}
+		}
+		for _, record := range records {
+			if err := upsertUsageRecord(ctx, tx, record); err != nil {
+				return err
+			}
+		}
+		return upsertFileScanState(ctx, tx, newFileState(AppGemini, chatFile, lastOffset, info, nil))
+	})
+	if err != nil {
 		return ScanStats{}, err
 	}
-	return ScanStats{FilesScanned: 1, RecordsSeen: seen}, nil
+	return ScanStats{FilesScanned: 1, RecordsSeen: len(records)}, nil
 }
 
 func parseGeminiChatLine(line, filePath string, offset int64, loc *time.Location) (UsageRecord, bool) {

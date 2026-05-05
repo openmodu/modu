@@ -4,7 +4,10 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 type Scanner struct {
@@ -18,20 +21,41 @@ func NewScanner(store *Store, opts ScannerOptions) *Scanner {
 
 func (s *Scanner) ScanAll(ctx context.Context) (ScanStats, error) {
 	var total ScanStats
-	if stats, err := s.ScanCodex(ctx); err != nil {
+	var mu sync.Mutex
+	g, ctx := errgroup.WithContext(ctx)
+
+	g.Go(func() error {
+		stats, err := s.ScanCodex(ctx)
+		if err == nil {
+			mu.Lock()
+			total = total.Add(stats)
+			mu.Unlock()
+		}
+		return err
+	})
+
+	g.Go(func() error {
+		stats, err := s.ScanClaudeCode(ctx)
+		if err == nil {
+			mu.Lock()
+			total = total.Add(stats)
+			mu.Unlock()
+		}
+		return err
+	})
+
+	g.Go(func() error {
+		stats, err := s.ScanGemini(ctx)
+		if err == nil {
+			mu.Lock()
+			total = total.Add(stats)
+			mu.Unlock()
+		}
+		return err
+	})
+
+	if err := g.Wait(); err != nil {
 		return total, err
-	} else {
-		total = total.Add(stats)
-	}
-	if stats, err := s.ScanClaudeCode(ctx); err != nil {
-		return total, err
-	} else {
-		total = total.Add(stats)
-	}
-	if stats, err := s.ScanGemini(ctx); err != nil {
-		return total, err
-	} else {
-		total = total.Add(stats)
 	}
 	return total, nil
 }

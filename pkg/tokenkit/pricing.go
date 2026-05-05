@@ -3,6 +3,7 @@ package tokenkit
 import (
 	"regexp"
 	"strings"
+	"sync"
 )
 
 type ModelPrice struct {
@@ -52,6 +53,11 @@ var (
 	geminiRE      = regexp.MustCompile(`(?i)^gemini[- ]?([0-9.]+)(?:[- ]?(pro|flash|flash-lite))?(.*)$`)
 )
 
+var (
+	normCache = make(map[string]string)
+	normMu    sync.RWMutex
+)
+
 func price(input, cachedInput, output float64) ModelPrice {
 	return ModelPrice{InputPerMillion: input, CachedInputPerMillion: &cachedInput, OutputPerMillion: output}
 }
@@ -97,6 +103,24 @@ func NormalizeModelDisplay(model string) string {
 	if raw == "" {
 		return "unknown"
 	}
+
+	normMu.RLock()
+	if cached, ok := normCache[raw]; ok {
+		normMu.RUnlock()
+		return cached
+	}
+	normMu.RUnlock()
+
+	normalized := normalizeModel(raw)
+
+	normMu.Lock()
+	normCache[raw] = normalized
+	normMu.Unlock()
+
+	return normalized
+}
+
+func normalizeModel(raw string) string {
 	suffix := ""
 	if match := parenSuffixRE.FindString(raw); match != "" {
 		suffix = " " + strings.TrimSpace(match)
@@ -122,7 +146,7 @@ func NormalizeModelDisplay(model string) string {
 		}
 		return strings.TrimSpace(label+match[3]) + suffix
 	}
-	return model
+	return raw
 }
 
 func usesDisjointCachedInput(provider, model string) bool {
