@@ -36,11 +36,7 @@ func (s *Server) handleTokenkitOverview(w http.ResponseWriter, r *http.Request) 
 	totals := make(map[string]tokenkit.SummaryRow, len(apps))
 	startDate, endDate := tokenkitOverviewDateRange(r)
 	for _, app := range apps {
-		total, err := store.Totals(r.Context(), tokenkit.SummaryFilter{
-			StartDate: startDate,
-			EndDate:   endDate,
-			App:       app,
-		})
+		total, err := store.Totals(r.Context(), tokenkit.SummaryFilter{StartDate: startDate, EndDate: endDate, App: app})
 		if err != nil {
 			http.Error(w, fmt.Sprintf("query tokenkit totals: %v", err), http.StatusInternalServerError)
 			return
@@ -155,17 +151,7 @@ func (s *Server) handleTokenkitRecords(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	records, err := store.UsageRecords(r.Context(), tokenkit.UsageRecordFilter{
-		StartDate: q(r, "start"),
-		EndDate:   q(r, "end"),
-		App:       q(r, "app"),
-		Source:    q(r, "source"),
-		Model:     q(r, "model"),
-		Workspace: q(r, "workspace"),
-		Limit:     intQuery(r, "limit", 100),
-		Offset:    intQuery(r, "offset", 0),
-		Ascending: boolQuery(r, "asc"),
-	})
+	records, err := store.UsageRecords(r.Context(), tokenkitUsageRecordFilter(r))
 	if err != nil {
 		http.Error(w, fmt.Sprintf("query tokenkit records: %v", err), http.StatusInternalServerError)
 		return
@@ -178,13 +164,7 @@ func (s *Server) handleTokenkitTotals(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	totals, err := store.Totals(r.Context(), tokenkit.SummaryFilter{
-		StartDate: q(r, "start"),
-		EndDate:   q(r, "end"),
-		App:       q(r, "app"),
-		Source:    q(r, "source"),
-		Model:     q(r, "model"),
-	})
+	totals, err := store.Totals(r.Context(), tokenkitSummaryFilter(r))
 	if err != nil {
 		http.Error(w, fmt.Sprintf("query tokenkit totals: %v", err), http.StatusInternalServerError)
 		return
@@ -197,13 +177,7 @@ func (s *Server) handleTokenkitSummaries(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	summaries, err := store.Summaries(r.Context(), tokenkit.SummaryFilter{
-		StartDate: q(r, "start"),
-		EndDate:   q(r, "end"),
-		App:       q(r, "app"),
-		Source:    q(r, "source"),
-		Model:     q(r, "model"),
-	})
+	summaries, err := store.Summaries(r.Context(), tokenkitSummaryFilter(r))
 	if err != nil {
 		http.Error(w, fmt.Sprintf("query tokenkit summaries: %v", err), http.StatusInternalServerError)
 		return
@@ -216,13 +190,7 @@ func (s *Server) handleTokenkitTimeline(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	timeline, err := store.DailyUsage(r.Context(), tokenkit.SummaryFilter{
-		StartDate: q(r, "start"),
-		EndDate:   q(r, "end"),
-		App:       q(r, "app"),
-		Source:    q(r, "source"),
-		Model:     q(r, "model"),
-	})
+	timeline, err := store.DailyUsage(r.Context(), tokenkitSummaryFilter(r))
 	if err != nil {
 		http.Error(w, fmt.Sprintf("query tokenkit timeline: %v", err), http.StatusInternalServerError)
 		return
@@ -281,6 +249,30 @@ func (s *Server) handleTokenkitLatestCodexStatus(w http.ResponseWriter, r *http.
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": snapshot})
+}
+
+func tokenkitSummaryFilter(r *http.Request) tokenkit.SummaryFilter {
+	return tokenkit.SummaryFilter{
+		StartDate: q(r, "start"),
+		EndDate:   q(r, "end"),
+		App:       q(r, "app"),
+		Source:    q(r, "source"),
+		Model:     q(r, "model"),
+	}
+}
+
+func tokenkitUsageRecordFilter(r *http.Request) tokenkit.UsageRecordFilter {
+	return tokenkit.UsageRecordFilter{
+		StartDate: q(r, "start"),
+		EndDate:   q(r, "end"),
+		App:       q(r, "app"),
+		Source:    q(r, "source"),
+		Model:     q(r, "model"),
+		Workspace: q(r, "workspace"),
+		Limit:     intQuery(r, "limit", 100),
+		Offset:    intQuery(r, "offset", 0),
+		Ascending: boolQuery(r, "asc"),
+	}
 }
 
 func q(r *http.Request, key string) string {
