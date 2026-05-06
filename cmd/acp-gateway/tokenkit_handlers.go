@@ -10,6 +10,8 @@ import (
 	"github.com/openmodu/modu/pkg/tokenkit"
 )
 
+var tokenkitNow = time.Now
+
 func (s *Server) requireTokenkit(w http.ResponseWriter) (*tokenkit.Store, bool) {
 	if s.tokenkit == nil {
 		http.Error(w, "tokenkit is disabled because gateway persistence is disabled", http.StatusServiceUnavailable)
@@ -32,10 +34,11 @@ func (s *Server) handleTokenkitOverview(w http.ResponseWriter, r *http.Request) 
 	}
 	apps := []string{tokenkit.AppCodex, tokenkit.AppClaudeCode, tokenkit.AppGemini}
 	totals := make(map[string]tokenkit.SummaryRow, len(apps))
+	startDate, endDate := tokenkitOverviewDateRange(r)
 	for _, app := range apps {
 		total, err := store.Totals(r.Context(), tokenkit.SummaryFilter{
-			StartDate: q(r, "start"),
-			EndDate:   q(r, "end"),
+			StartDate: startDate,
+			EndDate:   endDate,
 			App:       app,
 		})
 		if err != nil {
@@ -46,8 +49,8 @@ func (s *Server) handleTokenkitOverview(w http.ResponseWriter, r *http.Request) 
 	}
 
 	records, err := store.UsageRecords(r.Context(), tokenkit.UsageRecordFilter{
-		StartDate: q(r, "start"),
-		EndDate:   q(r, "end"),
+		StartDate: startDate,
+		EndDate:   endDate,
 	})
 	if err != nil {
 		http.Error(w, fmt.Sprintf("query tokenkit records: %v", err), http.StatusInternalServerError)
@@ -55,8 +58,8 @@ func (s *Server) handleTokenkitOverview(w http.ResponseWriter, r *http.Request) 
 	}
 	projects, sessions := buildTokenkitScopedUsage(records, s.store.TokenkitScopeSnapshot())
 	timeline, err := store.DailyUsage(r.Context(), tokenkit.SummaryFilter{
-		StartDate: q(r, "start"),
-		EndDate:   q(r, "end"),
+		StartDate: startDate,
+		EndDate:   endDate,
 	})
 	if err != nil {
 		http.Error(w, fmt.Sprintf("query tokenkit timeline: %v", err), http.StatusInternalServerError)
@@ -81,6 +84,26 @@ func (s *Server) handleTokenkitOverview(w http.ResponseWriter, r *http.Request) 
 		"records":     records,
 		"codexStatus": codexStatus,
 	})
+}
+
+func tokenkitOverviewDateRange(r *http.Request) (string, string) {
+	startDate := q(r, "start")
+	endDate := q(r, "end")
+	days := intQuery(r, "days", 0)
+	if days <= 0 {
+		return startDate, endDate
+	}
+	if days > 366 {
+		days = 366
+	}
+	today := tokenkitNow()
+	if endDate == "" {
+		endDate = today.Format(time.DateOnly)
+	}
+	if startDate == "" {
+		startDate = today.AddDate(0, 0, -(days - 1)).Format(time.DateOnly)
+	}
+	return startDate, endDate
 }
 
 func (s *Server) handleTokenkitScan(w http.ResponseWriter, r *http.Request) {

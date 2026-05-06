@@ -1066,6 +1066,58 @@ func TestTokenkitAPIRecordsTotalsAndStatus(t *testing.T) {
 		t.Fatalf("unexpected timeline: %+v", timelineBody.Timeline)
 	}
 
+	if err := tk.UpsertUsageRecord(context.Background(), tokenkit.UsageRecord{
+		Source:            "codex:cli",
+		App:               tokenkit.AppCodex,
+		ExternalID:        "codex-old",
+		StartedAt:         time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC),
+		LocalDate:         "2026-04-20",
+		MeasurementMethod: tokenkit.MethodExact,
+		Model:             "gpt-5.5",
+		InputTokens:       40,
+		OutputTokens:      10,
+		TotalTokens:       50,
+		Workspace:         "/repo",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	oldTokenkitNow := tokenkitNow
+	tokenkitNow = func() time.Time { return time.Date(2026, 5, 5, 12, 0, 0, 0, time.UTC) }
+	t.Cleanup(func() { tokenkitNow = oldTokenkitNow })
+
+	resp = h.do(t, "GET", "/api/tokenkit/overview?days=7", "", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("overview days=7 status = %d", resp.StatusCode)
+	}
+	var weekOverview struct {
+		Totals   map[string]tokenkit.SummaryRow `json:"totals"`
+		Timeline []tokenkit.TimeBucketRow       `json:"timeline"`
+		Records  []tokenkit.UsageRecord         `json:"records"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&weekOverview); err != nil {
+		t.Fatal(err)
+	}
+	if weekOverview.Totals[tokenkit.AppCodex].TotalTokens != 107 || len(weekOverview.Timeline) != 1 || len(weekOverview.Records) != 1 {
+		t.Fatalf("unexpected 7 day overview: %+v", weekOverview)
+	}
+
+	resp = h.do(t, "GET", "/api/tokenkit/overview?days=30", "", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("overview days=30 status = %d", resp.StatusCode)
+	}
+	var monthOverview struct {
+		Totals   map[string]tokenkit.SummaryRow `json:"totals"`
+		Timeline []tokenkit.TimeBucketRow       `json:"timeline"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&monthOverview); err != nil {
+		t.Fatal(err)
+	}
+	if monthOverview.Totals[tokenkit.AppCodex].TotalTokens != 157 || len(monthOverview.Timeline) != 2 {
+		t.Fatalf("unexpected 30 day overview: %+v", monthOverview)
+	}
+
 	rawStatus := `>_ OpenAI Codex (v0.128.0)
 │  Model:                       gpt-5.5 (reasoning medium, summaries auto)
 │  Account:                     test@example.com (Pro Lite)

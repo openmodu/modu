@@ -291,7 +291,13 @@ Returns the latest background or manual sync status:
 ### `GET /api/tokenkit/overview`
 
 Returns one dashboard-friendly payload for external pages or clients. Query
-params: `start`, `end`, `limit`.
+params: `days`, `start`, `end`, `limit`.
+
+- `days` — recent local-day window, such as `7` or `30`. It defaults `end` to
+  today and `start` to `days - 1` days before today. Explicit `start` or `end`
+  values override that side of the derived range.
+- `start`, `end` — local dates in `YYYY-MM-DD`.
+- `limit` — max raw records in the embedded `records` list, default `20`.
 
 ```json
 {
