@@ -2,7 +2,6 @@
 package anthropic
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -125,19 +124,7 @@ func (p *anthropicProvider) readSSE(body io.ReadCloser, model string, stream *ty
 	var textBuf strings.Builder
 	started := false
 
-	sc := bufio.NewScanner(body)
-	sc.Buffer(make([]byte, 0, 64*1024), 1*1024*1024)
-
-	for sc.Scan() {
-		line := sc.Text()
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-		data := strings.TrimPrefix(line, "data: ")
-		if data == "[DONE]" {
-			break
-		}
-
+	if err := providers.ScanSSEData(body, func(data string) bool {
 		var ev struct {
 			Type  string `json:"type"`
 			Delta *struct {
@@ -150,7 +137,7 @@ func (p *anthropicProvider) readSSE(body io.ReadCloser, model string, stream *ty
 			} `json:"error"`
 		}
 		if err := json.Unmarshal([]byte(data), &ev); err != nil {
-			continue
+			return true
 		}
 
 		switch ev.Type {
@@ -178,12 +165,11 @@ func (p *anthropicProvider) readSSE(body io.ReadCloser, model string, stream *ty
 				err := fmt.Errorf("%s", ev.Error.Message)
 				stream.Push(types.StreamEvent{Type: types.EventError, Error: err})
 				stream.Resolve(partial, err)
-				return
+				return false
 			}
 		}
-	}
-
-	if err := sc.Err(); err != nil {
+		return true
+	}); err != nil {
 		stream.Push(types.StreamEvent{Type: types.EventError, Error: err})
 		stream.Resolve(partial, err)
 		return

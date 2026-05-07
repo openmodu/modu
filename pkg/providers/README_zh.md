@@ -89,7 +89,9 @@ pkg/providers/
 ├── provider.go         # 核心接口
 ├── registry.go         # 全局提供商注册表
 ├── provider_types.go   # 选项和类型
+├── sse.go              # 流式 provider 复用的 SSE data 扫描器
 ├── models.go           # 模型定义和辅助函数
 ├── openai/             # 兼容 OpenAI 的实现
+├── anthropic/          # Anthropic 实现
 └── deepseek/           # DeepSeek 实现
 ```

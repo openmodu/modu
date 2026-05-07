@@ -258,7 +258,7 @@ func (s *CodingSession) refreshToolsForCwd(cwd string) {
 		case "spawn_subagent":
 			updated = append(updated, tools.NewSpawnSubagentTool(cwd, s.agentDir, s.subagentLoader, updated, s.model, s.getAPIKey, s.streamFn, func(def *subagent.SubagentDefinition) *subagent.SubagentDefinition {
 				return prepareSubagentDefinition(def, s.skillManager, s.memoryStore)
-			}, taskStoreAdapter{manager: s.taskManager}, s))
+			}, s.taskManager, s))
 		default:
 			updated = append(updated, tool)
 		}

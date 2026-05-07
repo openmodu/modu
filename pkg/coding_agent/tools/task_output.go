@@ -7,25 +7,12 @@ import (
 	"strings"
 
 	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/coding_agent/taskoutput"
 	"github.com/openmodu/modu/pkg/types"
 )
 
-type BackgroundTask struct {
-	ID      string
-	Kind    string
-	Status  string
-	Summary string
-	Output  string
-	Error   string
-}
-
-type BackgroundTaskStore interface {
-	Create(kind, summary string) string
-	Complete(id, output string)
-	Fail(id, errMsg string)
-	Get(id string) (BackgroundTask, bool)
-	List() []BackgroundTask
-}
+type BackgroundTask = taskoutput.Task
+type BackgroundTaskStore = taskoutput.Store
 
 type TaskOutputTool struct {
 	store BackgroundTaskStore

@@ -1,0 +1,22 @@
+package taskoutput
+
+// Task tracks an asynchronous background run.
+type Task struct {
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`
+	Status    string `json:"status"`
+	Summary   string `json:"summary"`
+	Output    string `json:"output,omitempty"`
+	Error     string `json:"error,omitempty"`
+	CreatedAt int64  `json:"createdAt,omitempty"`
+	UpdatedAt int64  `json:"updatedAt,omitempty"`
+}
+
+// Store manages background task lifecycle and snapshots.
+type Store interface {
+	Create(kind, summary string) string
+	Complete(id, output string)
+	Fail(id, errMsg string)
+	Get(id string) (Task, bool)
+	List() []Task
+}

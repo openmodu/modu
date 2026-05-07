@@ -4,38 +4,23 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/openmodu/modu/pkg/coding_agent/taskoutput"
 )
 
-// BackgroundTask tracks an asynchronous subagent run.
-type BackgroundTask struct {
-	ID        string `json:"id"`
-	Kind      string `json:"kind"`
-	Status    string `json:"status"`
-	Summary   string `json:"summary"`
-	Output    string `json:"output,omitempty"`
-	Error     string `json:"error,omitempty"`
-	CreatedAt int64  `json:"createdAt"`
-	UpdatedAt int64  `json:"updatedAt"`
-}
-
-type BackgroundTaskStore interface {
-	Create(kind, summary string) string
-	Complete(id, output string)
-	Fail(id, errMsg string)
-	Get(id string) (BackgroundTask, bool)
-	List() []BackgroundTask
-}
+type BackgroundTask = taskoutput.Task
+type BackgroundTaskStore = taskoutput.Store
 
 type backgroundTaskManager struct {
 	mu       sync.RWMutex
 	nextID   int64
-	tasks    map[string]BackgroundTask
+	tasks    map[string]taskoutput.Task
 	onChange func()
 }
 
 func newBackgroundTaskManager() *backgroundTaskManager {
 	return &backgroundTaskManager{
-		tasks: make(map[string]BackgroundTask),
+		tasks: make(map[string]taskoutput.Task),
 	}
 }
 
@@ -50,7 +35,7 @@ func (m *backgroundTaskManager) Create(kind, summary string) string {
 	m.nextID++
 	id := fmt.Sprintf("task-%d", m.nextID)
 	now := time.Now().UnixMilli()
-	m.tasks[id] = BackgroundTask{
+	m.tasks[id] = taskoutput.Task{
 		ID:        id,
 		Kind:      kind,
 		Status:    "running",
@@ -102,17 +87,17 @@ func (m *backgroundTaskManager) Fail(id, errMsg string) {
 	}
 }
 
-func (m *backgroundTaskManager) Get(id string) (BackgroundTask, bool) {
+func (m *backgroundTaskManager) Get(id string) (taskoutput.Task, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	task, ok := m.tasks[id]
 	return task, ok
 }
 
-func (m *backgroundTaskManager) List() []BackgroundTask {
+func (m *backgroundTaskManager) List() []taskoutput.Task {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	out := make([]BackgroundTask, 0, len(m.tasks))
+	out := make([]taskoutput.Task, 0, len(m.tasks))
 	for _, task := range m.tasks {
 		out = append(out, task)
 	}

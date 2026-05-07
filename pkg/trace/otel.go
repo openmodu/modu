@@ -10,6 +10,7 @@ import (
 
 	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/types"
+	"github.com/openmodu/modu/pkg/utils"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
@@ -118,7 +119,7 @@ func newTracerProvider(ctx context.Context, opts OTelOptions) (*sdktrace.TracerP
 			otlpOpts = append(otlpOpts, otlptracehttp.WithEndpoint(endpoint))
 		}
 		if len(opts.Headers) > 0 {
-			otlpOpts = append(otlpOpts, otlptracehttp.WithHeaders(copyStringMap(opts.Headers)))
+			otlpOpts = append(otlpOpts, otlptracehttp.WithHeaders(utils.CopyMap(opts.Headers)))
 		}
 		if opts.Insecure {
 			otlpOpts = append(otlpOpts, otlptracehttp.WithInsecure())
@@ -459,15 +460,4 @@ func marshalJSON(value any) string {
 		return ""
 	}
 	return string(data)
-}
-
-func copyStringMap(in map[string]string) map[string]string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
-	return out
 }

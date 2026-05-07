@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/utils"
 )
 
 // SubagentDefinition holds the parsed metadata and system prompt for a subagent.
@@ -47,36 +48,17 @@ func ParseDefinition(path, source string) (*SubagentDefinition, error) {
 		Source:   source,
 	}
 
-	// Parse YAML frontmatter if present.
-	if strings.HasPrefix(content, "---\n") || strings.HasPrefix(content, "---\r\n") {
-		normalized := strings.ReplaceAll(content, "\r\n", "\n")
-		normalized = strings.ReplaceAll(normalized, "\r", "\n")
-		end := strings.Index(normalized[4:], "\n---")
-		if end >= 0 {
-			frontmatter := normalized[4 : 4+end]
-			def.SystemPrompt = strings.TrimSpace(normalized[4+end+4:])
-			parseFrontmatter(frontmatter, def)
-		}
-	} else {
-		def.SystemPrompt = strings.TrimSpace(content)
+	fields, body, ok := utils.ParseFrontmatter(content)
+	def.SystemPrompt = body
+	if ok {
+		applyFrontmatter(fields, def)
 	}
 
 	return def, nil
 }
 
-func parseFrontmatter(fm string, def *SubagentDefinition) {
-	for _, line := range strings.Split(fm, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
-
+func applyFrontmatter(fields map[string]string, def *SubagentDefinition) {
+	for key, value := range fields {
 		switch key {
 		case "name":
 			def.Name = value
