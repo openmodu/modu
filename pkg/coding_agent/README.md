@@ -455,6 +455,8 @@ session, _ := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
   - 记录 resolved 输出目标和每个 category 的最新事件
 - `runtime state`
   - 记录统一 session 状态快照，包括 mode、feature gate、permission rules、todo、background task、tool count 和 runtime paths
+- `pkg/coding_agent/taskoutput`
+  - 复用 background task 的公开类型和 store 接口，供 session runtime 与 task_output tool 共用
 - `action status artifact`
   - 记录 host action 的执行状态、`stdout`、`stderr`、合并 `output`、错误、重试次数和 timeout 标记
 

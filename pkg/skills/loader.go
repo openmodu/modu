@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/openmodu/modu/pkg/utils"
 )
 
 var namePattern = regexp.MustCompile(`^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$`)
@@ -247,7 +249,7 @@ func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {
 	}
 
 	// Fall back to simple YAML parsing
-	yamlMeta := sl.parseSimpleYAML(frontmatter)
+	yamlMeta := utils.ParseKeyValueLines(frontmatter)
 	disable := false
 	if v, ok := yamlMeta["disable-model-invocation"]; ok {
 		disable = v == "true"
@@ -259,45 +261,20 @@ func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {
 	}
 }
 
-// parseSimpleYAML parses simple key: value YAML format.
-// Normalizes line endings to handle \n (Unix), \r\n (Windows), and \r (classic Mac).
-func (sl *SkillsLoader) parseSimpleYAML(content string) map[string]string {
-	result := make(map[string]string)
-
-	normalized := strings.ReplaceAll(content, "\r\n", "\n")
-	normalized = strings.ReplaceAll(normalized, "\r", "\n")
-
-	for _, line := range strings.Split(normalized, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) == 2 {
-			key := strings.TrimSpace(parts[0])
-			value := strings.TrimSpace(parts[1])
-			// Remove quotes if present
-			value = strings.Trim(value, "\"'")
-			result[key] = value
-		}
-	}
-
-	return result
-}
-
 func (sl *SkillsLoader) extractFrontmatter(content string) string {
-	re := regexp.MustCompile(`(?s)^---(?:\r\n|\n|\r)(.*?)(?:\r\n|\n|\r)---`)
-	match := re.FindStringSubmatch(content)
-	if len(match) > 1 {
-		return match[1]
+	front, _, ok := utils.SplitFrontmatter(content)
+	if !ok {
+		return ""
 	}
-	return ""
+	return front
 }
 
 func (sl *SkillsLoader) stripFrontmatter(content string) string {
-	re := regexp.MustCompile(`(?s)^---(?:\r\n|\n|\r)(.*?)(?:\r\n|\n|\r)---(?:\r\n|\n|\r)*`)
-	return re.ReplaceAllString(content, "")
+	_, body, ok := utils.SplitFrontmatter(content)
+	if !ok {
+		return content
+	}
+	return body
 }
 
 func escapeXML(s string) string {

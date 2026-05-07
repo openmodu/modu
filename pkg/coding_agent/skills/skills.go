@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/openmodu/modu/pkg/utils"
 )
 
 // Skill represents a discovered skill with its metadata and content.
@@ -244,18 +246,10 @@ func (m *Manager) loadSkillFile(path, source string) (*Skill, error) {
 		Metadata: make(map[string]string),
 	}
 
-	// Parse YAML frontmatter if present
-	if strings.HasPrefix(content, "---\n") || strings.HasPrefix(content, "---\r\n") {
-		// Normalize line endings
-		normalized := strings.ReplaceAll(content, "\r\n", "\n")
-		normalized = strings.ReplaceAll(normalized, "\r", "\n")
-
-		end := strings.Index(normalized[4:], "\n---")
-		if end >= 0 {
-			frontmatter := normalized[4 : 4+end]
-			skill.Content = strings.TrimSpace(normalized[4+end+4:])
-			parseFrontmatter(frontmatter, skill)
-		}
+	fields, body, ok := utils.ParseFrontmatter(content)
+	if ok {
+		skill.Content = body
+		applyFrontmatter(fields, skill)
 	}
 
 	// Replace relative paths that exist on disk with absolute paths,
@@ -326,19 +320,8 @@ func resolveRelativePaths(content, baseDir string) string {
 	})
 }
 
-func parseFrontmatter(fm string, skill *Skill) {
-	for _, line := range strings.Split(fm, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
-
+func applyFrontmatter(fields map[string]string, skill *Skill) {
+	for key, value := range fields {
 		switch key {
 		case "name":
 			skill.Name = value

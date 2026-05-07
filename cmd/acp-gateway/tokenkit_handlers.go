@@ -20,13 +20,6 @@ func (s *Server) requireTokenkit(w http.ResponseWriter) (*tokenkit.Store, bool) 
 	return s.tokenkit, true
 }
 
-func (s *Server) handleTokenkitSyncStatus(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.requireTokenkit(w); !ok {
-		return
-	}
-	writeJSON(w, http.StatusOK, s.currentTokenkitSyncStatus())
-}
-
 func (s *Server) handleTokenkitOverview(w http.ResponseWriter, r *http.Request) {
 	store, ok := s.requireTokenkit(w)
 	if !ok {
@@ -157,45 +150,6 @@ func (s *Server) handleTokenkitRecords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"records": records})
-}
-
-func (s *Server) handleTokenkitTotals(w http.ResponseWriter, r *http.Request) {
-	store, ok := s.requireTokenkit(w)
-	if !ok {
-		return
-	}
-	totals, err := store.Totals(r.Context(), tokenkitSummaryFilter(r))
-	if err != nil {
-		http.Error(w, fmt.Sprintf("query tokenkit totals: %v", err), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, totals)
-}
-
-func (s *Server) handleTokenkitSummaries(w http.ResponseWriter, r *http.Request) {
-	store, ok := s.requireTokenkit(w)
-	if !ok {
-		return
-	}
-	summaries, err := store.Summaries(r.Context(), tokenkitSummaryFilter(r))
-	if err != nil {
-		http.Error(w, fmt.Sprintf("query tokenkit summaries: %v", err), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"summaries": summaries})
-}
-
-func (s *Server) handleTokenkitTimeline(w http.ResponseWriter, r *http.Request) {
-	store, ok := s.requireTokenkit(w)
-	if !ok {
-		return
-	}
-	timeline, err := store.DailyUsage(r.Context(), tokenkitSummaryFilter(r))
-	if err != nil {
-		http.Error(w, fmt.Sprintf("query tokenkit timeline: %v", err), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"timeline": timeline})
 }
 
 func (s *Server) handleTokenkitSaveCodexStatus(w http.ResponseWriter, r *http.Request) {

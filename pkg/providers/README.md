@@ -89,7 +89,9 @@ pkg/providers/
 ├── provider.go         # Core interface
 ├── registry.go         # Global provider registry
 ├── provider_types.go   # Options and types
+├── sse.go              # Shared SSE data scanner for streaming providers
 ├── models.go           # Model definitions and helpers
 ├── openai/             # OpenAI-compatible implementation
+├── anthropic/          # Anthropic implementation
 └── deepseek/           # DeepSeek implementation
 ```

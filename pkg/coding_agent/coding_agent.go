@@ -26,6 +26,7 @@ import (
 	"github.com/openmodu/modu/pkg/providers"
 	sessiontrace "github.com/openmodu/modu/pkg/trace"
 	"github.com/openmodu/modu/pkg/types"
+	"github.com/openmodu/modu/pkg/utils"
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
@@ -168,7 +169,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		activeTools = append(activeTools, tools.NewTodoWriteTool(todoStoreAdapter{session: nil}))
 	}
 	if cfg.FeatureTaskOutputTool() {
-		activeTools = append(activeTools, tools.NewTaskOutputTool(taskStoreAdapter{manager: nil}))
+		activeTools = append(activeTools, tools.NewTaskOutputTool(nil))
 	}
 	if cfg.FeaturePlanMode() {
 		activeTools = append(activeTools, tools.NewEnterPlanModeTool(planModeAdapter{session: nil}))
@@ -252,7 +253,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	if cfg.FeatureSpawnSubagentTool() && subagentLoader.Count() > 0 {
 		activeTools = append(activeTools, tools.NewSpawnSubagentTool(opts.Cwd, agentDir, subagentLoader, activeTools, opts.Model, getAPIKey, streamFn, func(def *subagent.SubagentDefinition) *subagent.SubagentDefinition {
 			return prepareSubagentDefinition(def, skillMgr, memoryStore)
-		}, taskStoreAdapter{manager: taskMgr}, nil))
+		}, taskMgr, nil))
 		if subagentsPrompt := formatSubagentsForPrompt(subagentLoader.List()); subagentsPrompt != "" {
 			promptBuilder.AppendPrompt(subagentsPrompt)
 		}
@@ -1077,7 +1078,7 @@ func (s *CodingSession) otelOptions(opts CodingSessionOptions) (sessiontrace.OTe
 		Provider:       opts.OTelTracerProvider,
 		Exporter:       s.config.Tracing.OTel.Exporter,
 		Endpoint:       s.config.Tracing.OTel.Endpoint,
-		Headers:        copyStringMap(s.config.Tracing.OTel.Headers),
+		Headers:        utils.CopyMap(s.config.Tracing.OTel.Headers),
 		Insecure:       s.config.TracingOTelInsecure(),
 		ServiceName:    serviceName,
 		ServiceVersion: strings.TrimSpace(s.config.Tracing.OTel.ServiceVersion),
@@ -1148,17 +1149,6 @@ func sessionEventMeta(event SessionEvent) map[string]any {
 		return nil
 	}
 	return meta
-}
-
-func copyStringMap(in map[string]string) map[string]string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(in))
-	for key, value := range in {
-		out[key] = value
-	}
-	return out
 }
 
 // GetSessionFile returns the session file path.

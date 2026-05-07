@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/openmodu/modu/pkg/utils"
 )
 
 // SkillInfo is a loaded skill's metadata.
@@ -114,26 +116,12 @@ func LoadSkillsInChatDir(chatDir, sandboxChatPath string) []SkillInfo {
 	return skills
 }
 
-// parseSkillFrontmatter extracts name and description from SKILL.md YAML frontmatter.
 func parseSkillFrontmatter(content string) (name, description string) {
-	if !strings.HasPrefix(content, "---") {
+	fields, _, ok := utils.ParseFrontmatter(content)
+	if !ok {
 		return
 	}
-	end := strings.Index(content[3:], "---")
-	if end < 0 {
-		return
-	}
-	front := content[3 : end+3]
-	for _, line := range strings.Split(front, "\n") {
-		line = strings.TrimSpace(line)
-		if after, ok := strings.CutPrefix(line, "name:"); ok {
-			name = strings.TrimSpace(after)
-		}
-		if after, ok := strings.CutPrefix(line, "description:"); ok {
-			description = strings.TrimSpace(after)
-		}
-	}
-	return
+	return fields["name"], fields["description"]
 }
 
 // EnsureSkillPrepared runs prepare.sh if it exists and hasn't been run.

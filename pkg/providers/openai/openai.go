@@ -4,7 +4,6 @@
 package openai
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -157,19 +156,7 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *types.EventStreamIm
 	}
 	toolAccs := map[int]*tcAcc{}
 
-	sc := bufio.NewScanner(body)
-	sc.Buffer(make([]byte, 0, 64*1024), 1*1024*1024)
-
-	for sc.Scan() {
-		line := sc.Text()
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-		data := strings.TrimPrefix(line, "data: ")
-		if data == "[DONE]" {
-			break
-		}
-
+	if err := providers.ScanSSEData(body, func(data string) bool {
 		var chunk struct {
 			ID    string `json:"id"`
 			Model string `json:"model"`
@@ -199,7 +186,7 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *types.EventStreamIm
 			} `json:"error"`
 		}
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			continue
+			return true
 		}
 
 		if chunk.Error != nil {
@@ -213,7 +200,7 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *types.EventStreamIm
 				Error:        err,
 			})
 			stream.Resolve(partial, err)
-			return
+			return false
 		}
 
 		if partial.Model == "" && chunk.Model != "" {
@@ -227,7 +214,7 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *types.EventStreamIm
 			}
 		}
 		if len(chunk.Choices) == 0 {
-			continue
+			return true
 		}
 		choice := chunk.Choices[0]
 		if choice.FinishReason != "" {
@@ -336,9 +323,8 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *types.EventStreamIm
 				}
 			}
 		}
-	}
-
-	if err := sc.Err(); err != nil {
+		return true
+	}); err != nil {
 		partial.ErrorMessage = err.Error()
 		partial.StopReason = "error"
 		stream.Push(types.StreamEvent{

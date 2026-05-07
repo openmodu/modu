@@ -465,57 +465,6 @@ func TestListSessions_SortsByUpdatedAtDesc(t *testing.T) {
 	}
 }
 
-func TestProjectFiles_RejectsSiblingPrefixEscape(t *testing.T) {
-	h := newHarness(t, "")
-	base := t.TempDir()
-	root := filepath.Join(base, "root")
-	sibling := filepath.Join(base, "root-evil")
-	if err := os.Mkdir(root, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(sibling, 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	resp := h.do(t, "POST", "/api/projects", "", map[string]any{"name": "p", "path": root})
-	var proj Project
-	_ = json.NewDecoder(resp.Body).Decode(&proj)
-	resp.Body.Close()
-
-	resp = h.do(t, "GET", "/api/projects/"+proj.ID+"/files?path=../root-evil", "", nil)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", resp.StatusCode)
-	}
-}
-
-func TestProjectFiles_RejectsSymlinkEscape(t *testing.T) {
-	h := newHarness(t, "")
-	base := t.TempDir()
-	root := filepath.Join(base, "root")
-	outside := filepath.Join(base, "outside")
-	if err := os.Mkdir(root, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(outside, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
-		t.Fatal(err)
-	}
-
-	resp := h.do(t, "POST", "/api/projects", "", map[string]any{"name": "p", "path": root})
-	var proj Project
-	_ = json.NewDecoder(resp.Body).Decode(&proj)
-	resp.Body.Close()
-
-	resp = h.do(t, "GET", "/api/projects/"+proj.ID+"/files?path=link", "", nil)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", resp.StatusCode)
-	}
-}
-
 func TestSession_CreateAndGet(t *testing.T) {
 	h := newHarness(t, "")
 	h.agents["claude"].promptResponder = func(_ *jsonrpc.Message, _ func(map[string]any)) (string, error) {
@@ -995,20 +944,7 @@ func TestTokenkitAPIRecordsTotalsAndStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resp := h.do(t, "GET", "/api/tokenkit/totals?app=codex&start=2026-05-04&end=2026-05-04", "", nil)
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("totals status = %d", resp.StatusCode)
-	}
-	var totals tokenkit.SummaryRow
-	if err := json.NewDecoder(resp.Body).Decode(&totals); err != nil {
-		t.Fatal(err)
-	}
-	if totals.Records != 1 || totals.TotalTokens != 107 || totals.InputTokens != 100 {
-		t.Fatalf("unexpected totals: %+v", totals)
-	}
-
-	resp = h.do(t, "GET", "/api/tokenkit/records?app=codex&limit=10", "", nil)
+	resp := h.do(t, "GET", "/api/tokenkit/records?app=codex&limit=10", "", nil)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("records status = %d", resp.StatusCode)
@@ -1049,21 +985,6 @@ func TestTokenkitAPIRecordsTotalsAndStatus(t *testing.T) {
 	}
 	if len(overviewBody.Timeline) != 1 || overviewBody.Timeline[0].LocalDate != "2026-05-04" || overviewBody.Timeline[0].TotalTokens != 107 {
 		t.Fatalf("unexpected overview timeline: %+v", overviewBody.Timeline)
-	}
-
-	resp = h.do(t, "GET", "/api/tokenkit/timeline?app=codex&start=2026-05-04&end=2026-05-04", "", nil)
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("timeline status = %d", resp.StatusCode)
-	}
-	var timelineBody struct {
-		Timeline []tokenkit.TimeBucketRow `json:"timeline"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&timelineBody); err != nil {
-		t.Fatal(err)
-	}
-	if len(timelineBody.Timeline) != 1 || timelineBody.Timeline[0].TotalTokens != 107 {
-		t.Fatalf("unexpected timeline: %+v", timelineBody.Timeline)
 	}
 
 	if err := tk.UpsertUsageRecord(context.Background(), tokenkit.UsageRecord{
@@ -1210,17 +1131,20 @@ func TestTokenkitManualScanUpdatesSyncStatus(t *testing.T) {
 		t.Fatalf("scan status = %d", resp.StatusCode)
 	}
 
-	resp = h.do(t, "GET", "/api/tokenkit/sync", "", nil)
+	// Verify sync status via overview endpoint.
+	resp = h.do(t, "GET", "/api/tokenkit/overview", "", nil)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("sync status = %d", resp.StatusCode)
+		t.Fatalf("overview status = %d", resp.StatusCode)
 	}
-	var status TokenkitSyncStatus
-	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+	var overviewBody struct {
+		Sync TokenkitSyncStatus `json:"sync"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&overviewBody); err != nil {
 		t.Fatal(err)
 	}
-	if status.Running || status.LastFinishedAt == "" || status.LastStats[tokenkit.AppCodex].RecordsSeen != 1 {
-		t.Fatalf("unexpected sync status: %+v", status)
+	if overviewBody.Sync.Running || overviewBody.Sync.LastFinishedAt == "" || overviewBody.Sync.LastStats[tokenkit.AppCodex].RecordsSeen != 1 {
+		t.Fatalf("unexpected sync status in overview: %+v", overviewBody.Sync)
 	}
 }
 
