@@ -3,7 +3,6 @@ package main
 import (
 	"embed"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -22,8 +21,6 @@ import (
 //go:embed web/index.html
 var webFS embed.FS
 
-var errPathOutsideRoot = errors.New("path outside root")
-
 // buildRouter wires all HTTP routes + auth middleware.
 func (s *Server) buildRouter() http.Handler {
 	mux := http.NewServeMux()
@@ -33,17 +30,14 @@ func (s *Server) buildRouter() http.Handler {
 
 	// Gateway info
 	mux.HandleFunc("GET /api/info", s.handleInfo)
-	mux.HandleFunc("GET /api/system", s.handleSystem)
 
-	// Agents + workspace
+	// Agents + file browsing
 	mux.HandleFunc("GET /api/agents", s.handleListAgents)
 	mux.HandleFunc("POST /api/agents", s.handleAddAgent)
 	mux.HandleFunc("GET /api/agents/{id}", s.handleGetAgent)
 	mux.HandleFunc("PUT /api/agents/{id}", s.handleUpdateAgent)
 	mux.HandleFunc("DELETE /api/agents/{id}", s.handleDeleteAgent)
 	mux.HandleFunc("POST /api/agents/{id}/restart", s.handleRestartAgent)
-	mux.HandleFunc("GET /api/workdir", s.handleGetWorkdir)
-	mux.HandleFunc("GET /api/files", s.handleListFiles)
 	mux.HandleFunc("GET /api/browse", s.handleBrowse)
 
 	// Projects
@@ -51,7 +45,6 @@ func (s *Server) buildRouter() http.Handler {
 	mux.HandleFunc("POST /api/projects", s.handleCreateProject)
 	mux.HandleFunc("GET /api/projects/{id}", s.handleGetProject)
 	mux.HandleFunc("DELETE /api/projects/{id}", s.handleDeleteProject)
-	mux.HandleFunc("GET /api/projects/{id}/files", s.handleProjectFiles)
 
 	// Profiles
 	mux.HandleFunc("GET /api/profiles", s.handleListProfiles)
@@ -68,25 +61,18 @@ func (s *Server) buildRouter() http.Handler {
 	mux.HandleFunc("POST /api/sessions/{id}/cancel", s.handleCancelSession)
 
 	// Token usage
-	mux.HandleFunc("GET /api/tokenkit/sync", s.handleTokenkitSyncStatus)
 	mux.HandleFunc("GET /api/tokenkit/overview", s.handleTokenkitOverview)
 	mux.HandleFunc("POST /api/tokenkit/scan", s.handleTokenkitScan)
 	mux.HandleFunc("GET /api/tokenkit/records", s.handleTokenkitRecords)
-	mux.HandleFunc("GET /api/tokenkit/totals", s.handleTokenkitTotals)
-	mux.HandleFunc("GET /api/tokenkit/summaries", s.handleTokenkitSummaries)
-	mux.HandleFunc("GET /api/tokenkit/timeline", s.handleTokenkitTimeline)
 	mux.HandleFunc("POST /api/tokenkit/codex-status", s.handleTokenkitSaveCodexStatus)
 	mux.HandleFunc("GET /api/tokenkit/codex-status/latest", s.handleTokenkitLatestCodexStatus)
-
-	// Global turn list
-	mux.HandleFunc("GET /api/turns", s.handleListTurns)
 
 	// Turns (within a session)
 	mux.HandleFunc("POST /api/sessions/{id}/turns", s.handleAddTurn)
 	mux.HandleFunc("GET /api/sessions/{id}/turns/{turnId}/stream", s.handleStreamTurn)
 	mux.HandleFunc("POST /api/sessions/{id}/turns/{turnId}/stream", s.handleStreamTurn) // EventSource workaround
 	mux.HandleFunc("POST /api/sessions/{id}/turns/{turnId}/approve", s.handleApproveTurn)
-	mux.HandleFunc("POST /api/sessions/{id}/turns/{turnId}/cancel", s.handleCancelTurn)
+
 	mux.HandleFunc("GET /api/sessions/{id}/turns/{turnId}/events", s.handleTurnEvents)
 
 	exempt := map[string]bool{"/healthz": true, "/": true}
@@ -112,24 +98,16 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 
 // GatewayInfo is returned by GET /api/info.
 type GatewayInfo struct {
-	Version     string  `json:"version"`
-	StartTime   string  `json:"startTime"`
-	UptimeSec   float64 `json:"uptimeSec"`
-	Connections int64   `json:"connections"`
-	Agents      int     `json:"agents"`
+	Version     string     `json:"version"`
+	StartTime   string     `json:"startTime"`
+	UptimeSec   float64    `json:"uptimeSec"`
+	Connections int64      `json:"connections"`
+	Agents      int        `json:"agents"`
+	Workdir     string     `json:"workdir"`
+	System      SystemInfo `json:"system"`
 }
 
-func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, GatewayInfo{
-		Version:     Version,
-		StartTime:   s.startTime.UTC().Format(time.RFC3339),
-		UptimeSec:   time.Since(s.startTime).Seconds(),
-		Connections: s.connections.Load(),
-		Agents:      len(s.registry.List()),
-	})
-}
-
-// SystemInfo is returned by GET /api/system.
+// SystemInfo holds process and disk metrics, embedded in GatewayInfo.
 type SystemInfo struct {
 	Goroutines  int     `json:"goroutines"`
 	HeapMB      uint64  `json:"heapMB"`
@@ -139,10 +117,10 @@ type SystemInfo struct {
 	DiskUsedPct float64 `json:"diskUsedPct"`
 }
 
-func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
-	info := SystemInfo{
+	sys := SystemInfo{
 		Goroutines: runtime.NumGoroutine(),
 		HeapMB:     ms.HeapSys / 1024 / 1024,
 		AllocMB:    ms.Alloc / 1024 / 1024,
@@ -151,13 +129,21 @@ func (s *Server) handleSystem(w http.ResponseWriter, r *http.Request) {
 	if err := syscall.Statfs(s.workdir, &stat); err == nil {
 		total := float64(stat.Blocks) * float64(stat.Bsize)
 		free := float64(stat.Bavail) * float64(stat.Bsize)
-		info.DiskTotalGB = total / 1e9
-		info.DiskFreeGB = free / 1e9
+		sys.DiskTotalGB = total / 1e9
+		sys.DiskFreeGB = free / 1e9
 		if total > 0 {
-			info.DiskUsedPct = (total - free) / total * 100
+			sys.DiskUsedPct = (total - free) / total * 100
 		}
 	}
-	writeJSON(w, http.StatusOK, info)
+	writeJSON(w, http.StatusOK, GatewayInfo{
+		Version:     Version,
+		StartTime:   s.startTime.UTC().Format(time.RFC3339),
+		UptimeSec:   time.Since(s.startTime).Seconds(),
+		Connections: s.connections.Load(),
+		Agents:      len(s.registry.List()),
+		Workdir:     s.workdir,
+		System:      sys,
+	})
 }
 
 // ---------- agents ----------
@@ -290,38 +276,15 @@ func (s *Server) handleRestartAgent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "restarted"})
 }
 
-// ---------- global turn list ----------
-
-func (s *Server) handleListTurns(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	limit := 50
-	fmt.Sscan(q.Get("limit"), &limit)
-	turns := s.store.ListTurns(TurnFilter{
-		Status:    q.Get("status"),
-		Agent:     q.Get("agent"),
-		SessionID: q.Get("sessionId"),
-		Limit:     limit,
-	})
-	writeJSON(w, http.StatusOK, map[string]any{"turns": turns})
-}
-
-func (s *Server) handleGetWorkdir(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"workdir": s.workdir})
-}
-
 // ---------- files ----------
 
-// FileEntry is one item returned by GET /api/files or /api/projects/{id}/files.
+// FileEntry is one item returned by GET /api/browse.
 type FileEntry struct {
 	Name    string    `json:"name"`
 	Path    string    `json:"path"`
 	IsDir   bool      `json:"isDir"`
 	Size    int64     `json:"size,omitempty"`
 	ModTime time.Time `json:"modTime"`
-}
-
-func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
-	s.listFilesIn(w, r, s.workdir)
 }
 
 // handleBrowse lists any absolute path on the machine so remote clients can
@@ -387,89 +350,6 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		"parent": filepath.ToSlash(filepath.Dir(target)),
 		"files":  files,
 	})
-}
-
-func (s *Server) handleProjectFiles(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	proj, ok := s.store.GetProject(id)
-	if !ok {
-		http.Error(w, "project not found", http.StatusNotFound)
-		return
-	}
-	s.listFilesIn(w, r, proj.Path)
-}
-
-func (s *Server) listFilesIn(w http.ResponseWriter, r *http.Request, root string) {
-	rel := r.URL.Query().Get("path")
-	target, err := resolveInsideRoot(root, rel)
-	if errors.Is(err, errPathOutsideRoot) {
-		http.Error(w, "path outside root", http.StatusBadRequest)
-		return
-	}
-	if err != nil {
-		if os.IsNotExist(err) {
-			http.Error(w, "not found", http.StatusNotFound)
-		} else {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
-		return
-	}
-	entries, err := os.ReadDir(target)
-	if err != nil {
-		if os.IsNotExist(err) {
-			http.Error(w, "not found", http.StatusNotFound)
-		} else {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-		}
-		return
-	}
-	files := make([]FileEntry, 0, len(entries))
-	for _, e := range entries {
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		entryRel, _ := filepath.Rel(root, filepath.Join(target, e.Name()))
-		fe := FileEntry{
-			Name:    e.Name(),
-			Path:    filepath.ToSlash(entryRel),
-			IsDir:   e.IsDir(),
-			ModTime: info.ModTime(),
-		}
-		if !e.IsDir() {
-			fe.Size = info.Size()
-		}
-		files = append(files, fe)
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"root":  root,
-		"path":  filepath.ToSlash(rel),
-		"files": files,
-	})
-}
-
-func resolveInsideRoot(root, rel string) (string, error) {
-	absRoot, err := filepath.Abs(filepath.Clean(root))
-	if err != nil {
-		return "", err
-	}
-	evalRoot, err := filepath.EvalSymlinks(absRoot)
-	if err != nil {
-		return "", err
-	}
-	target := filepath.Clean(filepath.Join(evalRoot, filepath.FromSlash(rel)))
-	evalTarget, err := filepath.EvalSymlinks(target)
-	if err != nil {
-		return "", err
-	}
-	pathRel, err := filepath.Rel(evalRoot, evalTarget)
-	if err != nil {
-		return "", err
-	}
-	if pathRel == ".." || strings.HasPrefix(pathRel, ".."+string(os.PathSeparator)) || filepath.IsAbs(pathRel) {
-		return "", errPathOutsideRoot
-	}
-	return evalTarget, nil
 }
 
 // ---------- projects ----------
@@ -744,15 +624,6 @@ func (s *Server) handleStreamTurn(w http.ResponseWriter, r *http.Request) {
 			writeSSE(w, flusher, ev.Type, ev.Data)
 		}
 	}
-}
-
-func (s *Server) handleCancelTurn(w http.ResponseWriter, r *http.Request) {
-	turnID := r.PathValue("turnId")
-	if !s.store.CancelTurn(turnID) {
-		http.Error(w, "turn not running or not found", http.StatusConflict)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "cancel requested"})
 }
 
 func (s *Server) handleTurnEvents(w http.ResponseWriter, r *http.Request) {
