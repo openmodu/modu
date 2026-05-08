@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	tea "github.com/charmbracelet/bubbletea"
+	gotui "github.com/grindlemire/go-tui"
 
 	"github.com/openmodu/modu/pkg/agent"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
@@ -23,6 +23,7 @@ func Run(ctx context.Context, session *coding_agent.CodingSession, model *types.
 	if n, err := session.RestoreMessages(); err == nil && n > 0 {
 		_ = n
 	}
+
 	histFile := session.InputHistoryFile()
 	var approvalCh chan tui.ApprovalRequest
 	if !noApprove {
@@ -30,12 +31,19 @@ func Run(ctx context.Context, session *coding_agent.CodingSession, model *types.
 	}
 	var promptMu sync.Mutex
 
-	uiM := newUIModel(ctx, session, model, rt, histFile, approvalCh, &promptMu, "")
+	root := newGoTUIRoot(ctx, session, model, rt, histFile, approvalCh, &promptMu)
 	if history, err := loadHistoryFile(histFile); err == nil {
-		uiM.input.SetHistory(history)
+		root.history = history
 	}
 
-	program := tea.NewProgram(uiM, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	app, err := gotui.NewApp(
+		gotui.WithRootComponent(root),
+		gotui.WithInlineHeight(5),
+	)
+	if err != nil {
+		return err
+	}
+	defer app.Close()
 
 	if approvalCh != nil {
 		session.SetToolApprovalCallback(func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
@@ -51,17 +59,20 @@ func Run(ctx context.Context, session *coding_agent.CodingSession, model *types.
 	}
 
 	unsub := session.Subscribe(func(ev agent.AgentEvent) {
-		program.Send(uiAgentEventMsg{event: ev})
+		app.QueueUpdate(func() {
+			root.handleAgentEvent(ev)
+		})
 	})
 	defer unsub()
 
 	unsubSession := session.SubscribeSession(func(ev coding_agent.SessionEvent) {
-		program.Send(uiSessionEventMsg{event: ev})
+		app.QueueUpdate(func() {
+			root.handleSessionEvent(ev)
+		})
 	})
 	defer unsubSession()
 
-	printer := &uiBridgePrinter{program: program}
-
+	printer := &goTUIBridgePrinter{root: root}
 	token := os.Getenv("MOMS_TG_TOKEN")
 	if tgCfg, err := tgbot.LoadConfig(); err == nil && tgCfg.Token != "" {
 		token = tgCfg.Token
@@ -69,15 +80,14 @@ func Run(ctx context.Context, session *coding_agent.CodingSession, model *types.
 	if token != "" {
 		attachDir := os.TempDir() + "/modu_code_tg"
 		if username, err := tgbot.Start(ctx, token, attachDir, session, printer, &promptMu, approvalCh); err == nil {
-			uiM.tgUsername = username
+			root.tgUsername = username
 		}
 	}
 
-	finalModel, err := program.Run()
-	if uiFinal, ok := finalModel.(*uiModel); ok && uiFinal != nil {
-		if transcript := strings.TrimSpace(uiFinal.renderExitTranscript()); transcript != "" {
-			fmt.Printf("\n%s\n", transcript)
-		}
+	err = app.Run()
+	// In inline mode the conversation stays in the terminal scrollback; just print session stats.
+	if meta := strings.TrimSpace(root.model.renderExitSessionMeta()); meta != "" {
+		fmt.Println(meta)
 	}
 	return err
 }
