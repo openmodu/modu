@@ -384,16 +384,14 @@ func (r *goTUIRoot) runPrompt(line string) {
 
 	go func() {
 		defer queryCancel()
-		if !r.promptMu.TryLock() {
-			r.queue(func() {
-				r.model.errMsg = "session is busy"
-				r.model.queryActive = false
-				r.model.state = uiStateInput
-				r.bump()
-			})
-			return
-		}
+		r.promptMu.Lock()
 		defer r.promptMu.Unlock()
+		// Bail if context was cancelled while waiting for the lock.
+		select {
+		case <-queryCtx.Done():
+			return
+		default:
+		}
 		err := r.session.Prompt(queryCtx, line)
 		r.queue(func() {
 			if err != nil && err != context.Canceled {
