@@ -38,6 +38,7 @@ type uiBlock struct {
 	Streaming bool // true while LLM is still streaming this block; skip glamour render
 	Tools     []*uiToolState
 	Timestamp time.Time
+	pushed    bool // set after being pushed to terminal scrollback; prevents double-push
 }
 
 type uiToolState struct {

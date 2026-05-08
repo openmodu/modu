@@ -481,27 +481,42 @@ func (r *goTUIRoot) handleAgentEvent(ev agent.AgentEvent) {
 	r.model.handleAgentEvent(ev)
 
 	switch ev.Type {
+	case agent.EventTypeAgentEnd:
+		// model already cleared queryActive; also reset UI state so the
+		// working indicator stops before session.Prompt() returns.
+		r.model.state = uiStateInput
+
 	case agent.EventTypeMessageEnd:
-		// Push the completed (glamour-rendered) assistant block to scrollback.
+		// Push the completed assistant block to scrollback (at most once per block).
 		for i := len(r.model.blocks) - 1; i >= 0; i-- {
 			if r.model.blocks[i].Kind == "assistant" {
-				r.pushBlockAbove(r.model.blocks[i])
+				if !r.model.blocks[i].pushed {
+					r.model.blocks[i].pushed = true
+					r.pushBlockAbove(r.model.blocks[i])
+				}
 				break
 			}
 		}
 	case agent.EventTypeToolExecutionEnd:
-		// Push each completed tool result individually.
+		// Push the specific completed tool by ToolCallID only (name-based matching
+		// would re-match already-printed tools with the same name).
 		for i := len(r.model.blocks) - 1; i >= 0; i-- {
 			if r.model.blocks[i].Kind != "tool" {
 				continue
 			}
 			for _, tool := range r.model.blocks[i].Tools {
-				if (tool.ID == ev.ToolCallID || tool.Name == ev.ToolName) &&
-					(tool.Status == "done" || tool.Status == "error") {
+				var matched bool
+				if ev.ToolCallID != "" {
+					matched = tool.ID == ev.ToolCallID
+				} else {
+					matched = tool.Name == ev.ToolName && (tool.Status == "done" || tool.Status == "error")
+				}
+				if matched {
 					s := strings.TrimRight(renderUITool(tool, r.model.transcriptMode, r.model.viewportContentWidth()), "\n")
 					if strings.TrimSpace(stripANSIForGoTUI(s)) != "" {
 						r.printAbove(s)
 					}
+					break
 				}
 			}
 			break
