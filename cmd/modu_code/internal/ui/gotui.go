@@ -40,6 +40,10 @@ type goTUIRoot struct {
 	historyIndex int
 	historyDraft string // draft saved when entering history navigation
 	tgUsername   string
+
+	slashMatches      []slashCommandDef
+	slashMatchIdx     int
+	slashScrollOffset int
 }
 
 func newGoTUIRoot(ctx context.Context, session *coding_agent.CodingSession, modelInfo *types.Model, mailboxRuntime *mailboxrt.Runtime, histFile string, approvalCh <-chan tui.ApprovalRequest, promptMu *sync.Mutex) *goTUIRoot {
@@ -124,6 +128,12 @@ func (r *goTUIRoot) KeyMap() gotui.KeyMap {
 			r.handleInputKey(ke)
 		}),
 		gotui.OnStop(gotui.KeyEscape, func(ke gotui.KeyEvent) {
+			if len(r.slashMatches) > 0 {
+				r.slashMatches = nil
+				r.slashMatchIdx = 0
+				r.bump()
+				return
+			}
 			if r.model.state == uiStateQuerying || r.model.state == uiStatePermission {
 				r.abortQuery()
 				return
@@ -154,6 +164,9 @@ func (r *goTUIRoot) KeyMap() gotui.KeyMap {
 			r.handleInputKey(ke)
 		}),
 		gotui.OnStop(gotui.KeyDown, func(ke gotui.KeyEvent) {
+			r.handleInputKey(ke)
+		}),
+		gotui.OnStop(gotui.KeyTab, func(ke gotui.KeyEvent) {
 			r.handleInputKey(ke)
 		}),
 		gotui.OnStop(gotui.KeyEnter, func(ke gotui.KeyEvent) {
@@ -209,6 +222,7 @@ func (r *goTUIRoot) handleInputKey(ke gotui.KeyEvent) {
 		rs = append(rs[:r.cursor], append([]rune{ke.Rune}, rs[r.cursor:]...)...)
 		r.cursor++
 		r.draft.Set(string(rs))
+		r.updateSlashMatches()
 	case gotui.KeyBackspace:
 		if r.cursor == 0 {
 			return
@@ -216,12 +230,16 @@ func (r *goTUIRoot) handleInputKey(ke gotui.KeyEvent) {
 		rs = append(rs[:r.cursor-1], rs[r.cursor:]...)
 		r.cursor--
 		r.draft.Set(string(rs))
+		r.updateSlashMatches()
 	case gotui.KeyDelete:
 		if r.cursor >= len(rs) {
 			return
 		}
 		rs = append(rs[:r.cursor], rs[r.cursor+1:]...)
 		r.draft.Set(string(rs))
+		r.updateSlashMatches()
+	case gotui.KeyTab:
+		r.completeSlashMatch()
 	case gotui.KeyLeft:
 		if r.cursor > 0 {
 			r.cursor--
@@ -239,22 +257,88 @@ func (r *goTUIRoot) handleInputKey(ke gotui.KeyEvent) {
 		r.cursor = inputLineEnd(rs, r.cursor)
 		r.bump()
 	case gotui.KeyUp:
-		if moved := moveInputCursorVertical(rs, r.cursor, -1); moved != r.cursor {
+		if len(r.slashMatches) > 0 {
+			r.slashMatchIdx = (r.slashMatchIdx - 1 + len(r.slashMatches)) % len(r.slashMatches)
+			r.adjustSlashScroll()
+			r.bump()
+		} else if moved := moveInputCursorVertical(rs, r.cursor, -1); moved != r.cursor {
 			r.cursor = moved
 			r.bump()
 		} else {
 			r.navigateHistory(-1)
 		}
 	case gotui.KeyDown:
-		if moved := moveInputCursorVertical(rs, r.cursor, 1); moved != r.cursor {
+		if len(r.slashMatches) > 0 {
+			r.slashMatchIdx = (r.slashMatchIdx + 1) % len(r.slashMatches)
+			r.adjustSlashScroll()
+			r.bump()
+		} else if moved := moveInputCursorVertical(rs, r.cursor, 1); moved != r.cursor {
 			r.cursor = moved
 			r.bump()
 		} else {
 			r.navigateHistory(1)
 		}
 	case gotui.KeyEnter:
+		// If suggestions are visible, complete + submit the highlighted command.
+		if len(r.slashMatches) > 0 {
+			chosen := r.slashMatches[r.slashMatchIdx].Name
+			r.slashMatches = nil
+			r.slashMatchIdx = 0
+			r.submit(chosen)
+			return
+		}
 		r.submit(r.draft.Get())
 	}
+}
+
+func (r *goTUIRoot) updateSlashMatches() {
+	draft := r.draft.Get()
+	if !strings.HasPrefix(draft, "/") || strings.ContainsRune(draft, ' ') {
+		r.slashMatches = nil
+		r.slashMatchIdx = 0
+		return
+	}
+	r.slashMatches = matchSlashCommands(draft)
+	if r.slashMatchIdx >= len(r.slashMatches) {
+		r.slashMatchIdx = 0
+	}
+	r.adjustSlashScroll()
+}
+
+// slashVisibleRows is the maximum number of suggestion rows shown at once.
+const slashVisibleRows = 10
+
+// adjustSlashScroll keeps slashMatchIdx within the visible window.
+func (r *goTUIRoot) adjustSlashScroll() {
+	if len(r.slashMatches) <= slashVisibleRows {
+		r.slashScrollOffset = 0
+		return
+	}
+	if r.slashMatchIdx < r.slashScrollOffset {
+		r.slashScrollOffset = r.slashMatchIdx
+	} else if r.slashMatchIdx >= r.slashScrollOffset+slashVisibleRows {
+		r.slashScrollOffset = r.slashMatchIdx - slashVisibleRows + 1
+	}
+	if r.slashScrollOffset < 0 {
+		r.slashScrollOffset = 0
+	}
+	if max := len(r.slashMatches) - slashVisibleRows; r.slashScrollOffset > max {
+		r.slashScrollOffset = max
+	}
+}
+
+// completeSlashMatch fills the draft with the currently highlighted suggestion
+// (without cycling). Recomputes matches afterward so the list reduces to the
+// chosen prefix.
+func (r *goTUIRoot) completeSlashMatch() {
+	if len(r.slashMatches) == 0 {
+		return
+	}
+	chosen := r.slashMatches[r.slashMatchIdx].Name
+	r.draft.Set(chosen)
+	r.cursor = len([]rune(chosen))
+	r.updateSlashMatches()
+	r.bump()
 }
 
 func inputLineStart(rs []rune, cursor int) int {
@@ -731,11 +815,20 @@ func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 		return root
 	}
 
-	// Normal input mode: sep / input / sep / status / meta
+	// Normal input mode: sep / input / sep / [suggestions | status] / meta
 	draftLines := strings.Count(r.draft.Get(), "\n") + 1
 	neededH := draftLines + 3 // sep + input + sep + status
 	if meta != "" {
 		neededH++
+	}
+	visibleSuggestions := len(r.slashMatches)
+	if visibleSuggestions > slashVisibleRows {
+		visibleSuggestions = slashVisibleRows
+	}
+	if visibleSuggestions > 0 {
+		// Suggestions replace the single status line; add the extra rows.
+		neededH += visibleSuggestions - 1
+		neededH++ // detail line for selected command
 	}
 	if neededH < 5 {
 		neededH = 5
@@ -746,12 +839,66 @@ func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 	addSep(root)
 	root.AddChild(r.renderInput(width))
 	addSep(root)
-	bottomText, bottomStyle := r.bottomLine()
-	root.AddChild(gotui.New(
-		gotui.WithText(bottomText),
-		gotui.WithTextStyle(bottomStyle),
-		gotui.WithFlexShrink(0),
-	))
+	if len(r.slashMatches) > 0 {
+		nameWidth := 0
+		for _, m := range r.slashMatches {
+			if w := len([]rune(m.Name)); w > nameWidth {
+				nameWidth = w
+			}
+		}
+		end := r.slashScrollOffset + slashVisibleRows
+		if end > len(r.slashMatches) {
+			end = len(r.slashMatches)
+		}
+		for i := r.slashScrollOffset; i < end; i++ {
+			m := r.slashMatches[i]
+			selected := i == r.slashMatchIdx
+			prefix := "  "
+			if selected {
+				prefix = "❯ "
+			}
+			padded := m.Name + strings.Repeat(" ", nameWidth-len([]rune(m.Name)))
+			text := prefix + padded
+			if m.Description != "" {
+				text += "  " + m.Description
+			}
+			// Scroll indicator on first/last visible row when more exist outside.
+			if i == r.slashScrollOffset && r.slashScrollOffset > 0 {
+				text += "  ↑"
+			} else if i == end-1 && end < len(r.slashMatches) {
+				text += "  ↓"
+			}
+			style := gotui.NewStyle().Dim()
+			if selected {
+				style = gotui.NewStyle().Foreground(gotui.Cyan).Bold()
+			}
+			root.AddChild(gotui.New(
+				gotui.WithText(text),
+				gotui.WithTextStyle(style),
+				gotui.WithFlexShrink(0),
+			))
+		}
+		// Detail row: full info for the highlighted command.
+		if r.slashMatchIdx < len(r.slashMatches) {
+			sel := r.slashMatches[r.slashMatchIdx]
+			detail := "  " + sel.Name
+			if sel.Description != "" {
+				detail += " — " + sel.Description
+			}
+			root.AddChild(gotui.New(
+				gotui.WithText(detail),
+				gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Yellow).Italic()),
+				gotui.WithFlexShrink(0),
+			))
+		}
+	} else {
+		bottomText, bottomStyle := r.bottomLine()
+		root.AddChild(gotui.New(
+			gotui.WithText(bottomText),
+			gotui.WithTextStyle(bottomStyle),
+			gotui.WithFlexShrink(0),
+		))
+	}
 	addMeta(root)
 	return root
 }
