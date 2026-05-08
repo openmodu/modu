@@ -10,6 +10,7 @@ import (
 	"time"
 
 	gotui "github.com/grindlemire/go-tui"
+	runewidth "github.com/mattn/go-runewidth"
 	"golang.org/x/term"
 
 	"github.com/openmodu/modu/cmd/modu_code/internal/mailboxrt"
@@ -37,6 +38,7 @@ type goTUIRoot struct {
 
 	history      []string
 	historyIndex int
+	historyDraft string // draft saved when entering history navigation
 	tgUsername   string
 }
 
@@ -237,11 +239,19 @@ func (r *goTUIRoot) handleInputKey(ke gotui.KeyEvent) {
 		r.cursor = inputLineEnd(rs, r.cursor)
 		r.bump()
 	case gotui.KeyUp:
-		r.cursor = moveInputCursorVertical(rs, r.cursor, -1)
-		r.bump()
+		if moved := moveInputCursorVertical(rs, r.cursor, -1); moved != r.cursor {
+			r.cursor = moved
+			r.bump()
+		} else {
+			r.navigateHistory(-1)
+		}
 	case gotui.KeyDown:
-		r.cursor = moveInputCursorVertical(rs, r.cursor, 1)
-		r.bump()
+		if moved := moveInputCursorVertical(rs, r.cursor, 1); moved != r.cursor {
+			r.cursor = moved
+			r.bump()
+		} else {
+			r.navigateHistory(1)
+		}
 	case gotui.KeyEnter:
 		r.submit(r.draft.Get())
 	}
@@ -317,9 +327,40 @@ func (r *goTUIRoot) submit(text string) {
 func (r *goTUIRoot) appendHistory(line string) {
 	r.history = append(r.history, line)
 	r.historyIndex = len(r.history)
+	r.historyDraft = ""
 	if r.histFile != "" {
 		_ = saveHistoryFile(r.histFile, r.history)
 	}
+}
+
+// navigateHistory browses the input history. delta=-1 goes to older entries,
+// delta=+1 goes to newer. The current draft is saved and restored when
+// navigating back past the newest entry.
+func (r *goTUIRoot) navigateHistory(delta int) {
+	if len(r.history) == 0 {
+		return
+	}
+	// Save current draft before entering history navigation.
+	if r.historyIndex == len(r.history) {
+		r.historyDraft = r.draft.Get()
+	}
+	newIndex := r.historyIndex + delta
+	if newIndex < 0 {
+		newIndex = 0
+	}
+	if newIndex > len(r.history) {
+		newIndex = len(r.history)
+	}
+	r.historyIndex = newIndex
+	var text string
+	if r.historyIndex == len(r.history) {
+		text = r.historyDraft
+	} else {
+		text = r.history[r.historyIndex]
+	}
+	r.draft.Set(text)
+	r.cursor = len([]rune(text))
+	r.bump()
 }
 
 func (r *goTUIRoot) runShell(shellCmd string) {
@@ -428,11 +469,6 @@ func (r *goTUIRoot) handleApprovalRequest(req tui.ApprovalRequest) {
 	r.model.pendingPerm = &req
 	r.model.state = uiStatePermission
 	r.model.statusMsg = "permission required"
-	// Push the permission box to scrollback so it stays visible.
-	if r.app != nil {
-		width, _ := r.app.Size()
-		r.app.PrintAboveElement(r.renderPermission(width))
-	}
 	r.setInlineHeight(5)
 	r.bump()
 	if req.Cancel != nil {
@@ -582,6 +618,7 @@ func (r *goTUIRoot) pushBlockAbove(block uiBlock) {
 		return
 	}
 	r.app.PrintAboveStyledln("%s", s)
+	r.app.PrintAboveln("") // blank line between blocks
 }
 
 // printAbove prints a pre-rendered ANSI string to the inline scrollback.
@@ -590,6 +627,7 @@ func (r *goTUIRoot) printAbove(s string) {
 		return
 	}
 	r.app.PrintAboveStyledln("%s", s)
+	r.app.PrintAboveln("") // blank line after tool output
 }
 
 func (r *goTUIRoot) setInlineHeight(h int) {
@@ -606,6 +644,39 @@ func (r *goTUIRoot) queue(fn func()) {
 	r.app.QueueUpdate(fn)
 }
 
+// positionCursor moves the real terminal cursor to the text-input position
+// so the OS knows where to anchor the IME candidate window.
+// Must be called after each app.Render().
+func (r *goTUIRoot) positionCursor(app *gotui.App) {
+	if app == nil {
+		return
+	}
+	_, termHeight := app.Terminal().Size()
+	inlineHeight := app.InlineHeight()
+	if inlineHeight <= 0 {
+		return
+	}
+	inlineStartRow := termHeight - inlineHeight
+
+	rs := []rune(r.draft.Get())
+	cursor := clampInt(r.cursor, 0, len(rs))
+
+	// Row 0 of widget = top separator; row 1 = first input line.
+	widgetRow := 1
+	col := 2 // after "> " (2 chars)
+	for i := 0; i < cursor; i++ {
+		ch := rs[i]
+		if ch == '\n' {
+			widgetRow++
+			col = 2 // continuation indent "  "
+		} else {
+			col += runewidth.RuneWidth(ch)
+		}
+	}
+
+	app.Terminal().SetCursor(col, inlineStartRow+widgetRow)
+}
+
 // Render builds the inline widget: input box + meta + status.
 func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 	_ = r.refresh.Get()
@@ -616,14 +687,25 @@ func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 	r.model.width = max(20, width-2)
 	r.model.tgUsername = r.tgUsername
 
-	// Dynamically resize widget to fit input lines.
-	draftLines := strings.Count(r.draft.Get(), "\n") + 1
-	neededH := draftLines + 4 // border(2) + meta(1) + status(1)
-	if neededH < 5 {
-		neededH = 5
+	sep := strings.Repeat("─", width)
+	sepStyle := gotui.NewStyle().Dim()
+	meta := strings.TrimSpace(stripANSIForGoTUI(r.model.renderInputMeta()))
+
+	addSep := func(root *gotui.Element) {
+		root.AddChild(gotui.New(
+			gotui.WithText(sep),
+			gotui.WithTextStyle(sepStyle),
+			gotui.WithFlexShrink(0),
+		))
 	}
-	if neededH != app.InlineHeight() {
-		app.SetInlineHeight(neededH)
+	addMeta := func(root *gotui.Element) {
+		if meta != "" {
+			root.AddChild(gotui.New(
+				gotui.WithText(meta),
+				gotui.WithTextStyle(gotui.NewStyle().Dim()),
+				gotui.WithFlexShrink(0),
+			))
+		}
 	}
 
 	root := gotui.New(
@@ -632,31 +714,108 @@ func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 		gotui.WithHeightPercent(100),
 	)
 
-	root.AddChild(r.renderInput(width))
+	if r.model.pendingPerm != nil {
+		// Permission mode: replace input area with approval dialog.
+		// Layout: sep / tool-line / hint-line / sep / meta
+		neededH := 4 // sep + tool + hints + sep
+		if meta != "" {
+			neededH++
+		}
+		if neededH != app.InlineHeight() {
+			app.SetInlineHeight(neededH)
+		}
+		addSep(root)
+		root.AddChild(r.renderApprovalWidget())
+		addSep(root)
+		addMeta(root)
+		return root
+	}
 
-	if meta := strings.TrimSpace(stripANSIForGoTUI(r.model.renderInputMeta())); meta != "" {
-		root.AddChild(gotui.New(
-			gotui.WithText(meta),
+	// Normal input mode: sep / input / sep / status / meta
+	draftLines := strings.Count(r.draft.Get(), "\n") + 1
+	neededH := draftLines + 3 // sep + input + sep + status
+	if meta != "" {
+		neededH++
+	}
+	if neededH < 5 {
+		neededH = 5
+	}
+	if neededH != app.InlineHeight() {
+		app.SetInlineHeight(neededH)
+	}
+	addSep(root)
+	root.AddChild(r.renderInput(width))
+	addSep(root)
+	bottomText, bottomStyle := r.bottomLine()
+	root.AddChild(gotui.New(
+		gotui.WithText(bottomText),
+		gotui.WithTextStyle(bottomStyle),
+		gotui.WithFlexShrink(0),
+	))
+	addMeta(root)
+	return root
+}
+
+// renderApprovalWidget builds the permission dialog that replaces the input area:
+//
+//	⏺ toolName(args)
+//	  [Y]es  [N]o  [A]lways allow  [D]eny always
+func (r *goTUIRoot) renderApprovalWidget() *gotui.Element {
+	perm := r.model.pendingPerm
+	container := gotui.New(
+		gotui.WithDisplay(gotui.DisplayFlex),
+		gotui.WithDirection(gotui.Column),
+		gotui.WithFlexShrink(0),
+	)
+
+	// Tool line: ⏺ name(args)
+	toolRow := gotui.New(
+		gotui.WithDisplay(gotui.DisplayFlex),
+		gotui.WithDirection(gotui.Row),
+		gotui.WithFlexShrink(0),
+	)
+	toolRow.AddChild(gotui.New(
+		gotui.WithText("⏺ "),
+		gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Yellow)),
+		gotui.WithFlexShrink(0),
+	))
+	toolRow.AddChild(gotui.New(
+		gotui.WithText(perm.ToolName),
+		gotui.WithTextStyle(gotui.NewStyle().Bold()),
+		gotui.WithFlexShrink(0),
+	))
+	if args := formatToolInput(perm.ToolName, perm.Args); args != "" {
+		if len(args) > 80 {
+			args = args[:80] + "…"
+		}
+		toolRow.AddChild(gotui.New(
+			gotui.WithText("("+args+")"),
 			gotui.WithTextStyle(gotui.NewStyle().Dim()),
 			gotui.WithFlexShrink(0),
 		))
 	}
+	container.AddChild(toolRow)
 
-	if status := r.statusLine(); status != "" {
-		statusStyle := gotui.NewStyle().Dim()
-		if r.model.pendingPerm != nil {
-			statusStyle = gotui.NewStyle().Foreground(gotui.Yellow)
-		} else if r.model.errMsg != "" {
-			statusStyle = gotui.NewStyle().Foreground(gotui.Red)
-		}
-		root.AddChild(gotui.New(
-			gotui.WithText(status),
-			gotui.WithTextStyle(statusStyle),
-			gotui.WithFlexShrink(0),
-		))
+	// Hint line: [Y]es  [N]o  [A]lways allow  [D]eny always
+	hintRow := gotui.New(
+		gotui.WithDisplay(gotui.DisplayFlex),
+		gotui.WithDirection(gotui.Row),
+		gotui.WithFlexShrink(0),
+	)
+	sp := func() *gotui.Element {
+		return gotui.New(gotui.WithText("  "), gotui.WithFlexShrink(0))
 	}
+	hintRow.AddChild(gotui.New(gotui.WithText("  "), gotui.WithFlexShrink(0)))
+	hintRow.AddChild(gotui.New(gotui.WithText("[Y]es"), gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Green).Bold()), gotui.WithFlexShrink(0)))
+	hintRow.AddChild(sp())
+	hintRow.AddChild(gotui.New(gotui.WithText("[N]o"), gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Red).Bold()), gotui.WithFlexShrink(0)))
+	hintRow.AddChild(sp())
+	hintRow.AddChild(gotui.New(gotui.WithText("[A]lways allow"), gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Yellow).Bold()), gotui.WithFlexShrink(0)))
+	hintRow.AddChild(sp())
+	hintRow.AddChild(gotui.New(gotui.WithText("[D]eny always"), gotui.WithTextStyle(gotui.NewStyle().Dim()), gotui.WithFlexShrink(0)))
+	container.AddChild(hintRow)
 
-	return root
+	return container
 }
 
 func (r *goTUIRoot) statusLine() string {
@@ -679,8 +838,32 @@ func (r *goTUIRoot) statusLine() string {
 	return strings.Join(parts, " · ")
 }
 
-func (r *goTUIRoot) renderPermission(width int) *gotui.Element {
-	perm := r.model.pendingPerm
+// bottomLine returns the text and style for the bottom hint row.
+func (r *goTUIRoot) bottomLine() (string, gotui.Style) {
+	if r.model.state == uiStateQuerying {
+		if activity := r.model.renderActivityLine(); strings.TrimSpace(stripANSIForGoTUI(activity)) != "" {
+			return strings.TrimSpace(stripANSIForGoTUI(activity)), gotui.NewStyle().Dim()
+		}
+		return "working...", gotui.NewStyle().Dim()
+	}
+	if r.model.errMsg != "" {
+		return "! " + r.model.errMsg, gotui.NewStyle().Foreground(gotui.Red)
+	}
+	if r.model.statusMsg != "" && r.model.statusMsg != "thinking" {
+		return r.model.statusMsg, gotui.NewStyle().Dim()
+	}
+	// Idle: show keyboard hints like Claude Code.
+	return "ctrl+j new line  /help  ctrl+c exit", gotui.NewStyle().Dim()
+}
+
+
+func (r *goTUIRoot) renderInput(width int) *gotui.Element {
+	_ = width
+	rs := []rune(r.draft.Get())
+	r.cursor = clampInt(r.cursor, 0, len(rs))
+
+	const promptStr = "> "
+	const promptIndent = "  " // aligns continuation lines with text after "> "
 
 	container := gotui.New(
 		gotui.WithDisplay(gotui.DisplayFlex),
@@ -688,106 +871,65 @@ func (r *goTUIRoot) renderPermission(width int) *gotui.Element {
 		gotui.WithFlexShrink(0),
 	)
 
-	// Header: ⏺ ToolName(args) — same visual pattern as a running tool call.
-	header := gotui.New(
-		gotui.WithDisplay(gotui.DisplayFlex),
-		gotui.WithDirection(gotui.Row),
-		gotui.WithFlexShrink(0),
-	)
-	header.AddChild(gotui.New(
-		gotui.WithText("⏺ "),
-		gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Yellow)),
-		gotui.WithFlexShrink(0),
-	))
-	header.AddChild(gotui.New(
-		gotui.WithText(perm.ToolName),
-		gotui.WithTextStyle(gotui.NewStyle().Bold()),
-		gotui.WithFlexShrink(0),
-	))
-	if input := formatToolInput(perm.ToolName, perm.Args); input != "" {
-		if len(input) > 200 {
-			input = input[:200] + "..."
-		}
-		header.AddChild(gotui.New(
-			gotui.WithText("("+input+")"),
-			gotui.WithTextStyle(gotui.NewStyle().Dim()),
+	// eolCursor is the block shown when the cursor is past all text (no char to underline).
+	eolCursor := func() *gotui.Element {
+		return gotui.New(
+			gotui.WithText("▋"),
+			gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Green)),
 			gotui.WithFlexShrink(0),
-		))
+		)
 	}
-	container.AddChild(header)
 
-	// Action hints indented under the bullet.
-	actions := gotui.New(
-		gotui.WithDisplay(gotui.DisplayFlex),
-		gotui.WithDirection(gotui.Row),
-		gotui.WithFlexShrink(0),
-		gotui.WithPaddingTRBL(0, 0, 0, 2),
-	)
-	addAction := func(label string, style gotui.Style) {
-		actions.AddChild(gotui.New(
-			gotui.WithText(label+"  "),
-			gotui.WithTextStyle(style),
-			gotui.WithFlexShrink(0),
-		))
-	}
-	addAction("[Y]es", gotui.NewStyle().Foreground(gotui.Green).Bold())
-	addAction("[N]o", gotui.NewStyle().Foreground(gotui.Red).Bold())
-	addAction("[A]lways allow", gotui.NewStyle().Foreground(gotui.Yellow).Bold())
-	actions.AddChild(gotui.New(
-		gotui.WithText("[D]eny always"),
-		gotui.WithTextStyle(gotui.NewStyle().Dim()),
-		gotui.WithFlexShrink(0),
-	))
-	container.AddChild(actions)
-	return container
-}
-
-func (r *goTUIRoot) renderInput(width int) *gotui.Element {
-	rs := []rune(r.draft.Get())
-	r.cursor = clampInt(r.cursor, 0, len(rs))
-	box := gotui.New(
-		gotui.WithDisplay(gotui.DisplayFlex),
-		gotui.WithDirection(gotui.Column),
-		gotui.WithWidth(max(20, width-4)),
-		gotui.WithFlexShrink(0),
-		gotui.WithBorder(gotui.BorderRounded),
-		gotui.WithBorderStyle(gotui.NewStyle().Foreground(gotui.Cyan)),
-		gotui.WithPaddingTRBL(0, 1, 0, 1),
-	)
 	if len(rs) == 0 {
-		row := gotui.New(gotui.WithDisplay(gotui.DisplayFlex), gotui.WithDirection(gotui.Row))
+		row := gotui.New(
+			gotui.WithDisplay(gotui.DisplayFlex),
+			gotui.WithDirection(gotui.Row),
+			gotui.WithFlexShrink(0),
+		)
 		row.AddChild(gotui.New(
-			gotui.WithText("Ask modu_code..."),
-			gotui.WithTextStyle(gotui.NewStyle().Dim()),
+			gotui.WithText(promptStr),
+			gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Green)),
 			gotui.WithFlexShrink(0),
 		))
-		row.AddChild(gotui.New(
-			gotui.WithText(" "),
-			gotui.WithTextStyle(gotui.NewStyle().Reverse()),
-			gotui.WithFlexShrink(0),
-		))
-		box.AddChild(row)
-		return box
+		row.AddChild(eolCursor())
+		container.AddChild(row)
+		return container
 	}
 
-	line := gotui.New(gotui.WithDisplay(gotui.DisplayFlex), gotui.WithDirection(gotui.Row))
-	box.AddChild(line)
+	line := gotui.New(
+		gotui.WithDisplay(gotui.DisplayFlex),
+		gotui.WithDirection(gotui.Row),
+		gotui.WithFlexShrink(0),
+	)
+	line.AddChild(gotui.New(
+		gotui.WithText(promptStr),
+		gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Green)),
+		gotui.WithFlexShrink(0),
+	))
+	container.AddChild(line)
+
 	for i, ch := range rs {
 		if ch == '\n' {
 			if i == r.cursor {
-				line.AddChild(gotui.New(
-					gotui.WithText(" "),
-					gotui.WithTextStyle(gotui.NewStyle().Reverse()),
-					gotui.WithFlexShrink(0),
-				))
+				line.AddChild(eolCursor())
 			}
-			line = gotui.New(gotui.WithDisplay(gotui.DisplayFlex), gotui.WithDirection(gotui.Row))
-			box.AddChild(line)
+			line = gotui.New(
+				gotui.WithDisplay(gotui.DisplayFlex),
+				gotui.WithDirection(gotui.Row),
+				gotui.WithFlexShrink(0),
+			)
+			line.AddChild(gotui.New(
+				gotui.WithText(promptIndent),
+				gotui.WithFlexShrink(0),
+			))
+			container.AddChild(line)
 			continue
 		}
+		// Underline the character at cursor position — no extra element inserted,
+		// so CJK wide characters are not pushed sideways.
 		style := gotui.NewStyle()
 		if i == r.cursor {
-			style = style.Reverse()
+			style = gotui.NewStyle().Underline()
 		}
 		line.AddChild(gotui.New(
 			gotui.WithText(string(ch)),
@@ -796,13 +938,9 @@ func (r *goTUIRoot) renderInput(width int) *gotui.Element {
 		))
 	}
 	if r.cursor == len(rs) {
-		line.AddChild(gotui.New(
-			gotui.WithText(" "),
-			gotui.WithTextStyle(gotui.NewStyle().Reverse()),
-			gotui.WithFlexShrink(0),
-		))
+		line.AddChild(eolCursor())
 	}
-	return box
+	return container
 }
 
 func stripANSIForGoTUI(s string) string {

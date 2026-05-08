@@ -624,14 +624,13 @@ func fullResultText(ev agent.AgentEvent) string {
 	if ev.Result == nil {
 		return ""
 	}
+	// Primary path: AgentToolResult carries a typed content slice.
+	if r, ok := ev.Result.(agent.AgentToolResult); ok {
+		return contentBlocksText(r.Content)
+	}
+	// Fallback paths for legacy or third-party tool implementations.
 	if texts, ok := ev.Result.([]types.ContentBlock); ok {
-		var parts []string
-		for _, block := range texts {
-			if t, ok := block.(*types.TextContent); ok && t != nil {
-				parts = append(parts, t.Text)
-			}
-		}
-		return strings.TrimSpace(strings.Join(parts, "\n"))
+		return contentBlocksText(texts)
 	}
 	switch v := ev.Result.(type) {
 	case string:
@@ -640,6 +639,18 @@ func fullResultText(ev agent.AgentEvent) string {
 		raw, _ := json.Marshal(v)
 		return strings.TrimSpace(string(raw))
 	}
+}
+
+func contentBlocksText(blocks []types.ContentBlock) string {
+	var parts []string
+	for _, block := range blocks {
+		if t, ok := block.(*types.TextContent); ok && t != nil {
+			if s := strings.TrimSpace(t.Text); s != "" {
+				parts = append(parts, s)
+			}
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
 // ─── Utility ─────────────────────────────────────

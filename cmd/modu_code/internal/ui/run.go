@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	gotui "github.com/grindlemire/go-tui"
 
@@ -34,11 +35,13 @@ func Run(ctx context.Context, session *coding_agent.CodingSession, model *types.
 	root := newGoTUIRoot(ctx, session, model, rt, histFile, approvalCh, &promptMu)
 	if history, err := loadHistoryFile(histFile); err == nil {
 		root.history = history
+		root.historyIndex = len(history)
 	}
 
 	app, err := gotui.NewApp(
 		gotui.WithRootComponent(root),
 		gotui.WithInlineHeight(5),
+		gotui.WithCursor(),
 	)
 	if err != nil {
 		return err
@@ -84,10 +87,55 @@ func Run(ctx context.Context, session *coding_agent.CodingSession, model *types.
 		}
 	}
 
-	err = app.Run()
+	err = runLoop(app, root)
 	// In inline mode the conversation stays in the terminal scrollback; just print session stats.
 	if meta := strings.TrimSpace(root.model.renderExitSessionMeta()); meta != "" {
 		fmt.Println(meta)
 	}
 	return err
+}
+
+// runLoop drives the go-tui event loop and positions the terminal cursor at
+// the text-input location after each frame so the OS knows where to anchor
+// the IME candidate window. Mirrors app.Run() but adds the positionCursor call.
+func runLoop(app *gotui.App, root *goTUIRoot) error {
+	if err := app.Open(); err != nil {
+		return err
+	}
+	const frameDuration = 16 * time.Millisecond
+	resized := false
+	for {
+		frameStart := time.Now()
+		deadline := frameStart.Add(frameDuration / 2)
+	drain:
+		for time.Now().Before(deadline) {
+			select {
+			case ev := <-app.Events():
+				if _, ok := ev.(gotui.ResizeEvent); ok {
+					resized = true
+				}
+				app.Dispatch(ev)
+			case <-app.StopCh():
+				return nil
+			default:
+				break drain
+			}
+		}
+		if resized {
+			// Clear the visible screen (not scrollback) to remove ghost widget
+			// frames that terminal emulators can leave behind on resize.
+			_, _ = app.Terminal().WriteDirect([]byte("\033[H\033[2J"))
+			resized = false
+		}
+		app.Render()
+		root.positionCursor(app)
+		elapsed := time.Since(frameStart)
+		if remaining := frameDuration - elapsed; remaining > 0 {
+			select {
+			case <-time.After(remaining):
+			case <-app.StopCh():
+				return nil
+			}
+		}
+	}
 }
