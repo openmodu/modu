@@ -8,36 +8,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-
-	"github.com/openmodu/modu/pkg/agent"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/tui"
 	"github.com/openmodu/modu/pkg/types"
 
 	"github.com/openmodu/modu/cmd/modu_code/internal/mailboxrt"
 )
-
-// ─── Tea messages ────────────────────────────────
-
-type uiAgentEventMsg struct{ event agent.AgentEvent }
-type uiSessionEventMsg struct{ event coding_agent.SessionEvent }
-type uiPromptDoneMsg struct{ err error }
-type uiStreamTickMsg struct{}
-type uiApprovalRequestMsg struct{ req tui.ApprovalRequest }
-type uiApprovalCancelMsg struct{ toolCallID string }
-type uiExternalInfoMsg struct{ text string }
-type uiExternalUserMsg struct{ text string }
-type uiShellResultMsg struct {
-	cmd    string
-	output string
-	err    error
-}
-type uiClearScreenMsg struct{}
-type uiQuitMsg struct{}
 
 // ─── UI states ───────────────────────────────────
 
@@ -62,6 +38,7 @@ type uiBlock struct {
 	Streaming bool // true while LLM is still streaming this block; skip glamour render
 	Tools     []*uiToolState
 	Timestamp time.Time
+	pushed    bool // set after being pushed to terminal scrollback; prevents double-push
 }
 
 type uiToolState struct {
@@ -92,16 +69,6 @@ var uiSlashCommands = []slashCommandDef{
 	{"/agents", "list subagents"},
 	{"/todos", "show todo list"},
 	{"/tasks", "show background tasks"},
-	{"/hints", "show harness hints"},
-	{"/runtime", "show runtime paths"},
-	{"/dashboard", "runtime summary"},
-	{"/state", "runtime state snapshot"},
-	{"/config", "show effective config"},
-	{"/config-template", "default config template"},
-	{"/logs", "harness JSONL log paths"},
-	{"/artifacts", "harness artifact paths"},
-	{"/bridge", "harness event bridge dirs"},
-	{"/actions", "harness action statuses"},
 	{"/plan", "toggle plan mode"},
 	{"/worktree", "toggle worktree mode"},
 	{"/skills", "list skills"},
@@ -118,7 +85,7 @@ func matchSlashCommands(prefix string) []slashCommandDef {
 	return out
 }
 
-// ─── Printer implementations ─────────────────────
+// ─── Printer implementation ─────────────────────
 
 type uiSlashPrinter struct {
 	lines []string
@@ -137,28 +104,6 @@ func (p *uiSlashPrinter) PrintSection(title string, lines []string) {
 }
 func (p *uiSlashPrinter) ClearScreen() { p.clear = true }
 
-type uiBridgePrinter struct {
-	program *tea.Program
-}
-
-func (p *uiBridgePrinter) PrintInfo(msg string) {
-	if p.program != nil {
-		p.program.Send(uiExternalInfoMsg{text: msg})
-	}
-}
-func (p *uiBridgePrinter) PrintError(err error) {
-	if err == nil || p.program == nil {
-		return
-	}
-	p.program.Send(uiExternalInfoMsg{text: "error: " + err.Error()})
-}
-func (p *uiBridgePrinter) PrintUser(msg string) {
-	if p.program != nil {
-		p.program.Send(uiExternalUserMsg{text: msg})
-	}
-}
-func (p *uiBridgePrinter) ClearLine() {}
-
 // ─── Model ───────────────────────────────────────
 
 type uiModel struct {
@@ -166,90 +111,50 @@ type uiModel struct {
 	model          *types.Model
 	mailboxRuntime *mailboxrt.Runtime
 	histFile       string
-	approvalCh     chan tui.ApprovalRequest
 	promptMu       *sync.Mutex
 	ctx            context.Context
 	tgUsername     string
 
-	width    int
-	height   int
-	ready    bool
-	state    uiState
-	viewport viewport.Model
-	input    *uiInputModel
-	spinner  spinner.Model
+	width  int
+	height int
+	ready  bool
+	state  uiState
 
-	blocks             []uiBlock
-	queryActive        bool
-	userScrolled       bool
-	errMsg             string
-	statusMsg          string
-	pendingPerm        *tui.ApprovalRequest
-	sessionStart       time.Time
-	approvalCmdStarted bool
+	blocks      []uiBlock
+	queryActive bool
+	errMsg      string
+	statusMsg   string
+	pendingPerm *tui.ApprovalRequest
 
 	// Query tracking
-	spinnerVerb    string
 	queryStartTime time.Time
 	thinkingStart  time.Time
 
 	// Per-query cancellation
 	queryCancel context.CancelFunc
 
-	// Streaming viewport batching
-	viewportDirty bool // set by streaming deltas; cleared by stream tick
-
 	// Toggle modes
 	transcriptMode bool
-	mouseMode      bool   // true = mouse scroll active, false = terminal text selection
-	pendingKey     string // vim multi-key prefix (g, y)
-
-	// Slash autocomplete
-	slashMatches []slashCommandDef
-	showSlash    bool
 }
 
 func newUIModel(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, mailboxRuntime *mailboxrt.Runtime, histFile string, approvalCh chan tui.ApprovalRequest, promptMu *sync.Mutex, tgUsername string) *uiModel {
-	sp := spinner.New()
-	sp.Spinner = spinner.MiniDot
-	sp.Style = lipgloss.NewStyle().Foreground(uiPrimary)
-
-	vp := viewport.New(0, 0)
-	vp.Style = lipgloss.NewStyle().PaddingLeft(1).PaddingRight(1)
-
+	_ = approvalCh
 	return &uiModel{
 		session:        session,
 		model:          model,
 		mailboxRuntime: mailboxRuntime,
 		histFile:       histFile,
-		approvalCh:     approvalCh,
 		promptMu:       promptMu,
 		ctx:            ctx,
 		tgUsername:     tgUsername,
-		viewport:       vp,
-		input:          newUIInputModel(),
-		spinner:        sp,
 		state:          uiStateInit,
-		sessionStart:   time.Now(),
-		spinnerVerb:    randomSpinnerVerb(),
-		mouseMode:      true,
 	}
-}
-
-func (m *uiModel) Init() tea.Cmd {
-	return tea.Batch(m.spinner.Tick, streamTickCmd())
-}
-
-// streamTickCmd schedules the next stream viewport refresh tick (50ms).
-func streamTickCmd() tea.Cmd {
-	return tea.Tick(50*time.Millisecond, func(time.Time) tea.Msg { return uiStreamTickMsg{} })
 }
 
 // ─── Block helpers ───────────────────────────────
 
 func (m *uiModel) appendBlock(block uiBlock) {
 	m.blocks = append(m.blocks, block)
-	m.refreshViewport()
 }
 
 func (m *uiModel) currentAssistantBlock() *uiBlock {
@@ -264,36 +169,6 @@ func (m *uiModel) currentToolBlock() *uiBlock {
 		m.blocks = append(m.blocks, uiBlock{Kind: "tool", Timestamp: time.Now()})
 	}
 	return &m.blocks[len(m.blocks)-1]
-}
-
-// ─── Approval ────────────────────────────────────
-
-func (m *uiModel) waitApprovalCmd() tea.Cmd {
-	if m.approvalCh == nil {
-		return nil
-	}
-	return func() tea.Msg {
-		req := <-m.approvalCh
-		return uiApprovalRequestMsg{req: req}
-	}
-}
-
-func (m *uiModel) waitApprovalCancelCmd(toolCallID string, cancel <-chan struct{}) tea.Cmd {
-	return func() tea.Msg {
-		<-cancel
-		return uiApprovalCancelMsg{toolCallID: toolCallID}
-	}
-}
-
-func (m *uiModel) resolveApproval(decision string) {
-	if m.pendingPerm == nil {
-		return
-	}
-	m.pendingPerm.Response <- decision
-	m.pendingPerm = nil
-	m.state = uiStateQuerying
-	m.statusMsg = ""
-	m.refreshViewport()
 }
 
 // ─── History persistence ─────────────────────────

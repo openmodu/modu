@@ -6,8 +6,9 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	gotui "github.com/grindlemire/go-tui"
 
 	"github.com/openmodu/modu/pkg/agent"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
@@ -23,6 +24,7 @@ func Run(ctx context.Context, session *coding_agent.CodingSession, model *types.
 	if n, err := session.RestoreMessages(); err == nil && n > 0 {
 		_ = n
 	}
+
 	histFile := session.InputHistoryFile()
 	var approvalCh chan tui.ApprovalRequest
 	if !noApprove {
@@ -30,12 +32,21 @@ func Run(ctx context.Context, session *coding_agent.CodingSession, model *types.
 	}
 	var promptMu sync.Mutex
 
-	uiM := newUIModel(ctx, session, model, rt, histFile, approvalCh, &promptMu, "")
+	root := newGoTUIRoot(ctx, session, model, rt, histFile, approvalCh, &promptMu)
 	if history, err := loadHistoryFile(histFile); err == nil {
-		uiM.input.SetHistory(history)
+		root.history = history
+		root.historyIndex = len(history)
 	}
 
-	program := tea.NewProgram(uiM, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	app, err := gotui.NewApp(
+		gotui.WithRootComponent(root),
+		gotui.WithInlineHeight(5),
+		gotui.WithCursor(),
+	)
+	if err != nil {
+		return err
+	}
+	defer app.Close()
 
 	if approvalCh != nil {
 		session.SetToolApprovalCallback(func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
@@ -51,17 +62,20 @@ func Run(ctx context.Context, session *coding_agent.CodingSession, model *types.
 	}
 
 	unsub := session.Subscribe(func(ev agent.AgentEvent) {
-		program.Send(uiAgentEventMsg{event: ev})
+		app.QueueUpdate(func() {
+			root.handleAgentEvent(ev)
+		})
 	})
 	defer unsub()
 
 	unsubSession := session.SubscribeSession(func(ev coding_agent.SessionEvent) {
-		program.Send(uiSessionEventMsg{event: ev})
+		app.QueueUpdate(func() {
+			root.handleSessionEvent(ev)
+		})
 	})
 	defer unsubSession()
 
-	printer := &uiBridgePrinter{program: program}
-
+	printer := &goTUIBridgePrinter{root: root}
 	token := os.Getenv("MOMS_TG_TOKEN")
 	if tgCfg, err := tgbot.LoadConfig(); err == nil && tgCfg.Token != "" {
 		token = tgCfg.Token
@@ -69,15 +83,59 @@ func Run(ctx context.Context, session *coding_agent.CodingSession, model *types.
 	if token != "" {
 		attachDir := os.TempDir() + "/modu_code_tg"
 		if username, err := tgbot.Start(ctx, token, attachDir, session, printer, &promptMu, approvalCh); err == nil {
-			uiM.tgUsername = username
+			root.tgUsername = username
 		}
 	}
 
-	finalModel, err := program.Run()
-	if uiFinal, ok := finalModel.(*uiModel); ok && uiFinal != nil {
-		if transcript := strings.TrimSpace(uiFinal.renderExitTranscript()); transcript != "" {
-			fmt.Printf("\n%s\n", transcript)
-		}
+	err = runLoop(app, root)
+	// In inline mode the conversation stays in the terminal scrollback; just print session stats.
+	if meta := strings.TrimSpace(root.model.renderExitSessionMeta()); meta != "" {
+		fmt.Println(meta)
 	}
 	return err
+}
+
+// runLoop drives the go-tui event loop and positions the terminal cursor at
+// the text-input location after each frame so the OS knows where to anchor
+// the IME candidate window. Mirrors app.Run() but adds the positionCursor call.
+func runLoop(app *gotui.App, root *goTUIRoot) error {
+	if err := app.Open(); err != nil {
+		return err
+	}
+	const frameDuration = 16 * time.Millisecond
+	resized := false
+	for {
+		frameStart := time.Now()
+		deadline := frameStart.Add(frameDuration / 2)
+	drain:
+		for time.Now().Before(deadline) {
+			select {
+			case ev := <-app.Events():
+				if _, ok := ev.(gotui.ResizeEvent); ok {
+					resized = true
+				}
+				app.Dispatch(ev)
+			case <-app.StopCh():
+				return nil
+			default:
+				break drain
+			}
+		}
+		if resized {
+			// Clear the visible screen (not scrollback) to remove ghost widget
+			// frames that terminal emulators can leave behind on resize.
+			_, _ = app.Terminal().WriteDirect([]byte("\033[H\033[2J"))
+			resized = false
+		}
+		app.Render()
+		root.positionCursor(app)
+		elapsed := time.Since(frameStart)
+		if remaining := frameDuration - elapsed; remaining > 0 {
+			select {
+			case <-time.After(remaining):
+			case <-app.StopCh():
+				return nil
+			}
+		}
+	}
 }

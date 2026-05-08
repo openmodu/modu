@@ -41,81 +41,7 @@ var hookPad = uiDimText.Render(hookStr)
 // content character after the leading "● ".
 var assistantPad = strings.Repeat(" ", dotPadW)
 
-// ─── View ────────────────────────────────────────
-
-func (m *uiModel) View() string {
-	if !m.ready {
-		return "  " + m.spinner.View() + " loading modu_code..."
-	}
-
-	footer := m.renderFooter()
-	if footer == "" {
-		return m.viewport.View()
-	}
-	return m.viewport.View() + "\n" + footer
-}
-
-func (m *uiModel) renderHeader() string {
-	return ""
-}
-
-func (m *uiModel) renderSessionMeta() string {
-	return ""
-}
-
-func (m *uiModel) renderFooter() string {
-	var parts []string
-	switch m.state {
-	case uiStatePermission:
-		parts = append(parts, m.renderInputArea())
-	case uiStateQuerying:
-		parts = append(parts, m.renderActivityLine())
-		if m.showSlash && len(m.slashMatches) > 0 {
-			parts = append(parts, m.renderSlashSuggestions())
-		}
-		parts = append(parts, m.renderInputArea())
-	case uiStateNormal:
-		parts = append(parts, m.renderInputArea())
-	case uiStateInit:
-		parts = append(parts, "  "+m.spinner.View()+" Initializing...")
-	default:
-		if m.showSlash && len(m.slashMatches) > 0 {
-			parts = append(parts, m.renderSlashSuggestions())
-		}
-		parts = append(parts, m.renderInputArea())
-	}
-	if sb := m.renderStatusBar(); sb != "" {
-		parts = append(parts, sb)
-	}
-	return strings.Join(parts, "\n")
-}
-
-func (m *uiModel) renderStatusBar() string {
-	var parts []string
-
-	// Vim mode indicator
-	switch m.state {
-	case uiStateNormal:
-		pending := ""
-		if m.pendingKey != "" {
-			pending = m.pendingKey
-		}
-		parts = append(parts, uiPrimaryText.Bold(true).Render("NORMAL"+pending))
-	case uiStateInput:
-		parts = append(parts, uiDimText.Render("INSERT"))
-	}
-
-	if m.statusMsg != "" && m.statusMsg != "thinking" {
-		parts = append(parts, uiPrimaryText.Render(m.statusMsg))
-	}
-	if m.errMsg != "" {
-		parts = append(parts, uiErrorText.Render(m.errMsg))
-	}
-	if len(parts) == 0 {
-		return ""
-	}
-	return " " + strings.Join(parts, uiDimText.Render(" · "))
-}
+// ─── View fragments ──────────────────────────────
 
 func (m *uiModel) renderActivityLine() string {
 	hint := "esc to interrupt"
@@ -126,24 +52,6 @@ func (m *uiModel) renderActivityLine() string {
 		}
 	}
 	return "  " + uiDimText.Render("Working ("+hint+")")
-}
-
-func (m *uiModel) renderInputArea() string {
-	box := m.input.View()
-	meta := strings.TrimSpace(m.renderInputMeta())
-	rule := uiDimText.Render(strings.Repeat("─", max(10, m.width)))
-	if m.errMsg != "" {
-		if meta == "" {
-			return rule + "\n" + uiErrorText.Render("  ! "+m.errMsg) + "\n" + box + "\n" + rule
-		}
-		hintText := uiDimText.Render(truncateUI(meta, max(8, m.width)))
-		return rule + "\n" + uiErrorText.Render("  ! "+m.errMsg) + "\n" + box + "\n" + rule + "\n" + hintText
-	}
-	if meta == "" {
-		return rule + "\n" + box + "\n" + rule
-	}
-	hintText := uiDimText.Render(truncateUI(meta, max(8, m.width)))
-	return rule + "\n" + box + "\n" + rule + "\n" + hintText
 }
 
 func (m *uiModel) renderInputMeta() string {
@@ -178,61 +86,23 @@ func (m *uiModel) renderPermissionInline(width int) string {
 		return ""
 	}
 
-	// lipgloss Width = content width; total rendered = Width + 2 (border) + 2 (padding) = Width+4
-	// so Width must be <= viewWidth-4 to avoid horizontal overflow.
-	boxWidth := max(8, min(width-4, 80))
-
 	input := formatToolInput(m.pendingPerm.ToolName, m.pendingPerm.Args)
-	if len(input) > 300 {
-		input = input[:300] + "..."
+	if len(input) > 200 {
+		input = input[:200] + "..."
 	}
-	input = wrap.String(input, max(4, boxWidth))
 
-	titleStyle := uiWarningText.Bold(true)
-	boxStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(uiWarning).
-		Padding(0, 1).
-		Width(boxWidth)
-
-	var body strings.Builder
-	body.WriteString(titleStyle.Render(m.pendingPerm.ToolName))
+	var b strings.Builder
+	b.WriteString(uiWarningText.Render("⏺") + " " + lipgloss.NewStyle().Bold(true).Render(m.pendingPerm.ToolName))
 	if input != "" {
-		body.WriteString("\n")
-		body.WriteString(uiDimText.Render(input))
+		b.WriteString(uiMutedText.Render("(" + input + ")"))
 	}
-
-	box := boxStyle.Render(body.String())
-
-	actions := "  " +
+	b.WriteString("\n")
+	b.WriteString("  " +
 		uiSuccessText.Bold(true).Render("[Y]es") + "  " +
 		uiErrorText.Bold(true).Render("[N]o") + "  " +
 		uiWarningText.Bold(true).Render("[A]lways allow") + "  " +
-		uiMutedText.Render("[D]eny always")
-
-	return box + "\n" + actions
-}
-
-func (m *uiModel) renderSlashSuggestions() string {
-	maxShow := 8
-	if len(m.slashMatches) < maxShow {
-		maxShow = len(m.slashMatches)
-	}
-	var inner strings.Builder
-	for i := 0; i < maxShow; i++ {
-		cmd := m.slashMatches[i]
-		name := lipgloss.NewStyle().Bold(true).Foreground(uiSecondary).Render(cmd.Name)
-		desc := uiDimText.Render("  " + cmd.Description)
-		prefix := "  " + uiDimText.Render("·") + " "
-		inner.WriteString(prefix + name + desc)
-		if i < maxShow-1 {
-			inner.WriteString("\n")
-		}
-	}
-	if len(m.slashMatches) > maxShow {
-		inner.WriteString(fmt.Sprintf("\n  %s", uiDimText.Render(fmt.Sprintf("+%d more", len(m.slashMatches)-maxShow))))
-	}
-	return inner.String()
+		uiMutedText.Render("[D]eny always"))
+	return b.String()
 }
 
 // ─── Conversation rendering ───────────────────────
@@ -354,24 +224,21 @@ func renderUITool(tool *uiToolState, expanded bool, width int) string {
 	var b strings.Builder
 	w := width
 
-	dot := uiWhiteText.Render("●")
-	nameStyle := uiPrimaryText.Bold(true)
+	dot := uiDimText.Render("⏺")
 	if tool.Status == "done" {
-		dot = uiSuccessText.Render("●")
-		nameStyle = uiSuccessText.Bold(true)
+		dot = uiSuccessText.Render("⏺")
 	} else if tool.IsError || tool.Status == "error" {
-		dot = uiErrorText.Render("●")
-		nameStyle = uiErrorText
+		dot = uiErrorText.Render("⏺")
 	}
+	boldName := lipgloss.NewStyle().Bold(true)
 
 	args := ""
 	if tool.Input != "" {
 		args = uiMutedText.Render("(" + truncateUI(tool.Input, 80) + ")")
 	}
-	b.WriteString(fmt.Sprintf("%s %s%s\n", dot, nameStyle.Render(tool.Name), args))
+	b.WriteString(fmt.Sprintf("%s %s%s\n", dot, boldName.Render(tool.Name), args))
 
 	if tool.Status == "running" {
-		b.WriteString(hookPad + uiDimText.Render("running") + "\n")
 		return b.String()
 	}
 
@@ -538,6 +405,61 @@ func (m *uiModel) renderWelcome() string {
 	return ""
 }
 
+func (m *uiModel) renderSingleBlock(block uiBlock) string {
+	viewWidth := m.viewportContentWidth()
+	contentWidth := max(20, viewWidth-max(dotPadW, hookPadW))
+	noMargin := uint(0)
+	style := glamourstyles.DarkStyleConfig
+	style.Document = glamouransi.StyleBlock{
+		StylePrimitive: style.Document.StylePrimitive,
+		Margin:         &noMargin,
+	}
+	renderer, _ := glamour.NewTermRenderer(
+		glamour.WithStyles(style),
+		glamour.WithWordWrap(contentWidth),
+	)
+	var s string
+	switch block.Kind {
+	case "user":
+		s = renderUIUserBlock(block.Content, viewWidth)
+	case "assistant":
+		var ab strings.Builder
+		if block.Thinking != "" {
+			ab.WriteString(renderUIThinking(block.Thinking, viewWidth))
+		}
+		if strings.TrimSpace(block.Content) != "" {
+			if renderer != nil {
+				if md, err := renderer.Render(block.Content); err == nil {
+					ab.WriteString(renderUIAssistantMarkdownBlock(normalizeRenderedMarkdown(md), viewWidth))
+				} else {
+					ab.WriteString(renderUIAssistantBlock(wrap.String(block.Content, contentWidth), viewWidth))
+				}
+			} else {
+				ab.WriteString(renderUIAssistantBlock(wrap.String(block.Content, contentWidth), viewWidth))
+			}
+		}
+		s = ab.String()
+	case "tool":
+		var tb strings.Builder
+		for _, tool := range block.Tools {
+			tb.WriteString(renderUITool(tool, m.transcriptMode, viewWidth))
+		}
+		s = tb.String()
+	case "section":
+		s = renderUISection(block.Title, block.Content, viewWidth)
+	default:
+		var db strings.Builder
+		for _, line := range strings.Split(block.Content, "\n") {
+			var lb strings.Builder
+			writeWrappedStyledLines(&lb, line, max(12, viewWidth-lipgloss.Width("  ")), "  ", "  ", uiDimText)
+			db.WriteString(lb.String())
+		}
+		s = db.String()
+	}
+	s = strings.TrimRight(s, "\n")
+	return hardWrapRenderedText(s, viewWidth)
+}
+
 // ─── Exit rendering ───────────────────────────────
 
 func (m *uiModel) renderExitSessionMeta() string {
@@ -702,14 +624,13 @@ func fullResultText(ev agent.AgentEvent) string {
 	if ev.Result == nil {
 		return ""
 	}
+	// Primary path: AgentToolResult carries a typed content slice.
+	if r, ok := ev.Result.(agent.AgentToolResult); ok {
+		return contentBlocksText(r.Content)
+	}
+	// Fallback paths for legacy or third-party tool implementations.
 	if texts, ok := ev.Result.([]types.ContentBlock); ok {
-		var parts []string
-		for _, block := range texts {
-			if t, ok := block.(*types.TextContent); ok && t != nil {
-				parts = append(parts, t.Text)
-			}
-		}
-		return strings.TrimSpace(strings.Join(parts, "\n"))
+		return contentBlocksText(texts)
 	}
 	switch v := ev.Result.(type) {
 	case string:
@@ -720,6 +641,18 @@ func fullResultText(ev agent.AgentEvent) string {
 	}
 }
 
+func contentBlocksText(blocks []types.ContentBlock) string {
+	var parts []string
+	for _, block := range blocks {
+		if t, ok := block.(*types.TextContent); ok && t != nil {
+			if s := strings.TrimSpace(t.Text); s != "" {
+				parts = append(parts, s)
+			}
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n"))
+}
+
 // ─── Utility ─────────────────────────────────────
 
 func widthForPrefix(totalWidth int) int {
@@ -727,7 +660,7 @@ func widthForPrefix(totalWidth int) int {
 }
 
 func (m *uiModel) viewportContentWidth() int {
-	return max(20, m.width-m.viewport.Style.GetHorizontalFrameSize())
+	return max(20, m.width-2)
 }
 
 func hardWrapRenderedText(text string, width int) string {

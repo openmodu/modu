@@ -8,160 +8,237 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	gotui "github.com/grindlemire/go-tui"
 
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
+	"github.com/openmodu/modu/pkg/tui"
 	"github.com/openmodu/modu/pkg/types"
 )
 
-func TestUIQueryingKeepsDraftOnEnter(t *testing.T) {
-	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
-	m.state = uiStateQuerying
-	m.input.Focus()
+func TestGoTUIApprovalUsesCoreDecisionNames(t *testing.T) {
+	responseCh := make(chan string, 1)
+	root := newGoTUIRoot(context.Background(), nil, nil, nil, "", nil, nil)
+	root.handleApprovalRequest(tui.ApprovalRequest{
+		ToolName:   "bash",
+		ToolCallID: "call-1",
+		Response:   responseCh,
+	})
 
-	for _, r := range []rune("draft") {
-		m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
-	}
-	if got := m.input.RawValue(); got != "draft" {
-		t.Fatalf("expected draft input, got %q", got)
-	}
+	root.approve("allow")
 
-	m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
-
-	if got := m.input.RawValue(); got != "draft" {
-		t.Fatalf("expected enter during querying to keep draft, got %q", got)
+	select {
+	case got := <-responseCh:
+		if got != "allow" {
+			t.Fatalf("expected core allow decision, got %q", got)
+		}
+	default:
+		t.Fatal("expected approval response")
 	}
-	if m.state != uiStateQuerying {
-		t.Fatalf("expected to remain in querying state, got %v", m.state)
-	}
-	if m.statusMsg != "busy: press ctrl+c to interrupt" {
-		t.Fatalf("expected busy hint, got %q", m.statusMsg)
+	if root.model.pendingPerm != nil {
+		t.Fatal("expected pending approval to be cleared")
 	}
 }
 
-func TestUISubmitLineKeepsInputFocusedDuringQuery(t *testing.T) {
-	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
-	m.input.Blur()
+func TestGoTUIApprovalKeyMapCapturesApprovalKeys(t *testing.T) {
+	responseCh := make(chan string, 1)
+	root := newGoTUIRoot(context.Background(), nil, nil, nil, "", nil, nil)
+	root.draft.Set("draft")
+	root.handleApprovalRequest(tui.ApprovalRequest{
+		ToolName:   "bash",
+		ToolCallID: "call-1",
+		Response:   responseCh,
+	})
 
-	_ = m.submitLineCmd("hello")
+	if !dispatchFirstGoTUIKey(root.KeyMap(), gotui.KeyEvent{Key: gotui.KeyRune, Rune: 'y'}) {
+		t.Fatal("expected y key to be handled")
+	}
 
-	if m.state != uiStateQuerying {
-		t.Fatalf("expected querying state, got %v", m.state)
+	select {
+	case got := <-responseCh:
+		if got != "allow" {
+			t.Fatalf("expected y to allow, got %q", got)
+		}
+	default:
+		t.Fatal("expected approval response from y key")
 	}
-	if !m.input.focused {
-		t.Fatal("expected input to stay focused while querying")
-	}
-	if m.statusMsg != "thinking" {
-		t.Fatalf("expected thinking status, got %q", m.statusMsg)
+	if got := root.draft.Get(); got != "draft" {
+		t.Fatalf("expected approval key not to edit draft, got %q", got)
 	}
 }
 
-func TestUIQueryingEscInterrupts(t *testing.T) {
-	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
-	m.state = uiStateQuerying
-	m.statusMsg = "thinking"
+func TestGoTUIApprovalKeyMapEnterAllows(t *testing.T) {
+	responseCh := make(chan string, 1)
+	root := newGoTUIRoot(context.Background(), nil, nil, nil, "", nil, nil)
+	root.handleApprovalRequest(tui.ApprovalRequest{
+		ToolName:   "bash",
+		ToolCallID: "call-1",
+		Response:   responseCh,
+	})
 
-	m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
-
-	if m.state != uiStateInput {
-		t.Fatalf("expected input state after esc interrupt, got %v", m.state)
+	if !dispatchFirstGoTUIKey(root.KeyMap(), gotui.KeyEvent{Key: gotui.KeyEnter}) {
+		t.Fatal("expected enter key to be handled")
 	}
-	if m.statusMsg != "interrupted" {
-		t.Fatalf("expected interrupted status, got %q", m.statusMsg)
+
+	select {
+	case got := <-responseCh:
+		if got != "allow" {
+			t.Fatalf("expected enter to allow, got %q", got)
+		}
+	default:
+		t.Fatal("expected approval response from enter key")
 	}
 }
 
-func TestUIEscIntoNormalDisablesMouseCapture(t *testing.T) {
-	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
-	m.state = uiStateInput
-	m.mouseMode = true
+func TestGoTUIInputUsesCursorEditing(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, nil, "", nil, nil)
 
-	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	for _, r := range []rune("hello") {
+		dispatchFirstGoTUIKey(root.KeyMap(), gotui.KeyEvent{Key: gotui.KeyRune, Rune: r})
+	}
+	dispatchFirstGoTUIKey(root.KeyMap(), gotui.KeyEvent{Key: gotui.KeyLeft})
+	dispatchFirstGoTUIKey(root.KeyMap(), gotui.KeyEvent{Key: gotui.KeyLeft})
+	dispatchFirstGoTUIKey(root.KeyMap(), gotui.KeyEvent{Key: gotui.KeyRune, Rune: 'X'})
 
-	if m.state != uiStateNormal {
-		t.Fatalf("expected normal state after esc, got %v", m.state)
-	}
-	if m.mouseMode {
-		t.Fatal("expected mouse capture to be disabled in normal mode")
-	}
-	if cmd == nil {
-		t.Fatal("expected esc into normal mode to disable mouse")
+	if got := root.draft.Get(); got != "helXlo" {
+		t.Fatalf("expected cursor insert to edit draft, got %q", got)
 	}
 }
 
-func TestUINormalModeHomeAndEndKeys(t *testing.T) {
-	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
-	m.state = uiStateNormal
-	m.viewport.Width = 80
-	m.viewport.Height = 6
-	m.viewport.SetContent(strings.Repeat("line\n", 40))
-	m.viewport.GotoBottom()
+func TestGoTUIInputBackspaceUsesCursor(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, nil, "", nil, nil)
 
-	if m.viewport.YOffset == 0 {
-		t.Fatal("expected initial viewport to start near the bottom")
+	for _, r := range []rune("abcd") {
+		dispatchFirstGoTUIKey(root.KeyMap(), gotui.KeyEvent{Key: gotui.KeyRune, Rune: r})
 	}
+	dispatchFirstGoTUIKey(root.KeyMap(), gotui.KeyEvent{Key: gotui.KeyLeft})
+	dispatchFirstGoTUIKey(root.KeyMap(), gotui.KeyEvent{Key: gotui.KeyLeft})
+	dispatchFirstGoTUIKey(root.KeyMap(), gotui.KeyEvent{Key: gotui.KeyBackspace})
 
-	m.handleKey(tea.KeyMsg{Type: tea.KeyHome})
-	if m.viewport.YOffset != 0 {
-		t.Fatalf("expected home to jump to top, got offset %d", m.viewport.YOffset)
-	}
-	if !m.userScrolled {
-		t.Fatal("expected home to keep scroll lock away from the bottom")
-	}
-
-	m.handleKey(tea.KeyMsg{Type: tea.KeyEnd})
-	if !m.viewport.AtBottom() {
-		t.Fatalf("expected end to jump to bottom, got offset %d", m.viewport.YOffset)
-	}
-	if m.userScrolled {
-		t.Fatal("expected end to clear manual scroll state at the bottom")
+	if got := root.draft.Get(); got != "acd" {
+		t.Fatalf("expected cursor backspace to edit draft, got %q", got)
 	}
 }
 
-func TestUINormalModePageKeys(t *testing.T) {
-	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
-	m.state = uiStateNormal
-	m.viewport.Width = 80
-	m.viewport.Height = 6
-	m.viewport.SetContent(strings.Repeat("line\n", 40))
-	m.viewport.GotoBottom()
+func TestGoTUIInputCtrlJInsertsNewline(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, nil, "", nil, nil)
 
-	bottomOffset := m.viewport.YOffset
-	m.handleKey(tea.KeyMsg{Type: tea.KeyPgUp})
-	if m.viewport.YOffset >= bottomOffset {
-		t.Fatalf("expected pgup to move upward from %d, got %d", bottomOffset, m.viewport.YOffset)
+	for _, r := range []rune("hello") {
+		dispatchFirstGoTUIKey(root.KeyMap(), gotui.KeyEvent{Key: gotui.KeyRune, Rune: r})
 	}
-	if !m.userScrolled {
-		t.Fatal("expected pgup to mark the viewport as manually scrolled")
-	}
+	dispatchFirstGoTUIKey(root.KeyMap(), gotui.KeyEvent{Key: gotui.KeyRune, Rune: 'j', Mod: gotui.ModCtrl})
 
-	afterPgUp := m.viewport.YOffset
-	m.handleKey(tea.KeyMsg{Type: tea.KeyPgDown})
-	if m.viewport.YOffset <= afterPgUp {
-		t.Fatalf("expected pgdown to move downward from %d, got %d", afterPgUp, m.viewport.YOffset)
+	if got := root.draft.Get(); got != "hello\n" {
+		t.Fatalf("expected ctrl+j to insert newline, got %q", got)
 	}
 }
 
-func TestUIRenderInputAreaUsesQueryingHint(t *testing.T) {
-	session := newUITestSession(t)
-	model := testUIModel()
-	m := newUIModel(context.Background(), session, model, nil, "", nil, nil, "")
-	m.state = uiStateQuerying
+func TestGoTUIInputRendersChineseCursorWithoutInsertedGlyph(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, nil, "", nil, nil)
+	root.draft.Set("中文")
+	root.cursor = 1
 
-	got := m.renderInputArea()
-	if strings.Contains(got, "enter send") {
-		t.Fatalf("did not expect old shortcut hint, got %q", got)
+	got := collectGoTUIText(root.renderInput(80))
+	if strings.Contains(got, "▌") {
+		t.Fatalf("did not expect inserted cursor glyph in CJK input, got %q", got)
 	}
-	if !strings.Contains(got, "…") && !strings.Contains(got, model.Name) {
-		t.Fatalf("expected meta footer or truncated footer, got %q", got)
+	if !strings.Contains(got, "中文") {
+		t.Fatalf("expected original Chinese text to remain contiguous, got %q", got)
 	}
+}
 
-	m.state = uiStateInput
-	got = m.renderInputArea()
-	if strings.Contains(got, "enter send") {
-		t.Fatalf("did not expect old shortcut hint, got %q", got)
+func TestGoTUIApprovalCancelClearsPending(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cancelCh := make(chan struct{})
+	root := newGoTUIRoot(ctx, nil, nil, nil, "", nil, nil)
+	root.handleApprovalRequest(tui.ApprovalRequest{
+		ToolName:   "bash",
+		ToolCallID: "call-1",
+		Response:   make(chan string, 1),
+		Cancel:     cancelCh,
+	})
+
+	close(cancelCh)
+
+	deadline := time.After(time.Second)
+	for {
+		if root.model.pendingPerm == nil {
+			if root.model.statusMsg != "approval dismissed" {
+				t.Fatalf("expected dismissed status, got %q", root.model.statusMsg)
+			}
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("expected approval cancel to clear pending request")
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
+}
+
+func TestParseGoTUIANSITextPreservesStyledSegments(t *testing.T) {
+	segments := parseGoTUIANSIText("plain \x1b[31;1mred\x1b[0m tail")
+	if len(segments) != 3 {
+		t.Fatalf("expected 3 segments, got %#v", segments)
+	}
+	if segments[0].Text != "plain " || segments[1].Text != "red" || segments[2].Text != " tail" {
+		t.Fatalf("unexpected segment text: %#v", segments)
+	}
+	if !segments[1].Style.Fg.Equal(gotui.Red) {
+		t.Fatalf("expected red foreground, got %#v", segments[1].Style.Fg)
+	}
+	if !segments[1].Style.HasAttr(gotui.AttrBold) {
+		t.Fatal("expected bold segment")
+	}
+	if !segments[2].Style.Equal(gotui.NewStyle()) {
+		t.Fatalf("expected reset style for tail, got %#v", segments[2].Style)
+	}
+}
+
+func TestParseGoTUIANSITextPreservesTrueColor(t *testing.T) {
+	segments := parseGoTUIANSIText("\x1b[38;2;12;34;56mcode")
+	if len(segments) != 1 {
+		t.Fatalf("expected one segment, got %#v", segments)
+	}
+	if !segments[0].Style.Fg.Equal(gotui.RGBColor(12, 34, 56)) {
+		t.Fatalf("expected truecolor foreground, got %#v", segments[0].Style.Fg)
+	}
+}
+
+func dispatchFirstGoTUIKey(km gotui.KeyMap, ev gotui.KeyEvent) bool {
+	for _, binding := range km {
+		if !goTUIKeyPatternMatches(binding.Pattern, ev) {
+			continue
+		}
+		binding.Handler(ev)
+		return true
+	}
+	return false
+}
+
+func goTUIKeyPatternMatches(pattern gotui.KeyPattern, ev gotui.KeyEvent) bool {
+	if pattern.AnyKey {
+		return true
+	}
+	if pattern.ExcludeMods != 0 && ev.Mod&pattern.ExcludeMods != 0 {
+		return false
+	}
+	if pattern.Mod != 0 && ev.Mod != pattern.Mod {
+		return false
+	}
+	if pattern.AnyRune && ev.Key == gotui.KeyRune {
+		return true
+	}
+	if pattern.Rune != 0 && ev.Key == gotui.KeyRune && ev.Rune == pattern.Rune {
+		return true
+	}
+	return pattern.Key != 0 && ev.Key == pattern.Key
+}
+
+func collectGoTUIText(el *gotui.Element) string {
+	return uiANSIPattern.ReplaceAllString(gotui.Sprint(el, gotui.WithPrintWidth(80)), "")
 }
 
 func TestUIRenderExitTranscriptIncludesConversation(t *testing.T) {
@@ -235,20 +312,6 @@ func TestNormalizeRenderedMarkdownStripsANSIPadding(t *testing.T) {
 	}
 	if strings.Count(got, "\n") > 1 {
 		t.Fatalf("expected normalized markdown without extra filler lines, got %q", got)
-	}
-}
-
-func TestUIInputCtrlJInsertsNewline(t *testing.T) {
-	input := newUIInputModel()
-	input.Focus()
-	input.ta.InsertString("hello")
-
-	submitted, _ := input.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})
-	if submitted {
-		t.Fatal("expected ctrl+j to insert newline, not submit")
-	}
-	if got := input.RawValue(); got != "hello\n" {
-		t.Fatalf("expected newline inserted, got %q", got)
 	}
 }
 
@@ -326,87 +389,6 @@ func TestRenderInputMetaDoesNotDuplicateProvider(t *testing.T) {
 	}
 }
 
-func TestRenderInputAreaOmitsTrailingEmptyMetaLine(t *testing.T) {
-	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
-	got := m.renderInputArea()
-	if strings.HasSuffix(got, "\n") {
-		t.Fatalf("expected no trailing empty line, got %q", got)
-	}
-}
-
-func TestWindowResizeUsesRenderedInputHeight(t *testing.T) {
-	session := newUITestSession(t)
-	model := testUIModel()
-	m := newUIModel(context.Background(), session, model, nil, "", nil, nil, "")
-	m.ready = true
-	m.state = uiStateInput
-
-	m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-	if m.viewport.Height <= 12 {
-		t.Fatalf("expected viewport height to use rendered footer space, got %d", m.viewport.Height)
-	}
-}
-
-func TestUIViewDoesNotExceedWindowHeightWhileQuerying(t *testing.T) {
-	session := newUITestSession(t)
-	model := testUIModel()
-	m := newUIModel(context.Background(), session, model, nil, "", nil, nil, "")
-	m.state = uiStateQuerying
-	m.statusMsg = "thinking"
-	m.ready = true
-	m.blocks = []uiBlock{
-		{Kind: "assistant", Content: strings.Repeat("line\n", 40)},
-	}
-
-	m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-
-	if got := lipgloss.Height(m.View()); got > 20 {
-		t.Fatalf("expected rendered view to fit window height, got %d", got)
-	}
-}
-
-func TestUIViewDoesNotExceedWindowHeightWhileStreamingMarkdown(t *testing.T) {
-	session := newUITestSession(t)
-	model := testUIModel()
-	m := newUIModel(context.Background(), session, model, nil, "", nil, nil, "")
-	m.state = uiStateQuerying
-	m.statusMsg = "thinking"
-	m.ready = true
-	m.blocks = []uiBlock{
-		{
-			Kind:      "assistant",
-			Streaming: true,
-			Content:   "## Title\n\n- item 1\n- item 2\n\n```go\nfmt.Println(\"hi\")\n```",
-		},
-	}
-
-	m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
-
-	if got := lipgloss.Height(m.View()); got > 20 {
-		t.Fatalf("expected rendered streaming markdown view to fit window height, got %d", got)
-	}
-}
-
-func TestUIViewDoesNotExceedWindowHeightWithLongMarkdownLines(t *testing.T) {
-	session := newUITestSession(t)
-	model := testUIModel()
-	m := newUIModel(context.Background(), session, model, nil, "", nil, nil, "")
-	m.state = uiStateInput
-	m.ready = true
-	m.blocks = []uiBlock{
-		{
-			Kind:    "assistant",
-			Content: "```go\n" + strings.Repeat("veryLongIdentifierWithoutSpaces", 8) + "\n```",
-		},
-	}
-
-	m.Update(tea.WindowSizeMsg{Width: 60, Height: 18})
-
-	if got := lipgloss.Height(m.View()); got > 18 {
-		t.Fatalf("expected rendered long-markdown view to fit window height, got %d", got)
-	}
-}
-
 func TestViewportConversationWrapsWithinViewportWidth(t *testing.T) {
 	session := newUITestSession(t)
 	model := testUIModel()
@@ -415,8 +397,6 @@ func TestViewportConversationWrapsWithinViewportWidth(t *testing.T) {
 	m.state = uiStateInput
 	m.width = 60
 	m.height = 18
-	m.viewport.Width = 60
-	m.viewport.Height = 10
 	m.blocks = []uiBlock{
 		{
 			Kind:    "assistant",
@@ -433,41 +413,6 @@ func TestViewportConversationWrapsWithinViewportWidth(t *testing.T) {
 	}
 	if maxLineWidth > m.viewportContentWidth() {
 		t.Fatalf("expected wrapped conversation lines to fit viewport width, got line width %d > %d", maxLineWidth, m.viewportContentWidth())
-	}
-}
-
-func TestRenderInputAreaTruncatesMetaWhenNarrow(t *testing.T) {
-	session := newUITestSession(t)
-	model := &types.Model{
-		ID:         "qwen/qwen3.6-35b-a3b",
-		Name:       "qwen/qwen3.6-35b-a3b",
-		ProviderID: "lmstudio",
-	}
-	m := newUIModel(context.Background(), session, model, nil, "", nil, nil, "")
-	m.width = 20
-	got := m.renderInputArea()
-	if !strings.Contains(got, "...") {
-		t.Fatalf("expected truncated meta with ellipsis, got %q", got)
-	}
-}
-
-func TestRenderStatusBarHidesThinkingDuringQuery(t *testing.T) {
-	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
-	m.width = 80
-	m.state = uiStateQuerying
-	m.statusMsg = "thinking"
-	if got := m.renderStatusBar(); strings.Contains(got, "thinking") {
-		t.Fatalf("expected querying status bar to hide duplicate thinking text, got %q", got)
-	}
-}
-
-func TestRenderStatusBarOmitsScrollPercentage(t *testing.T) {
-	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
-	m.width = 80
-	m.state = uiStateInput
-	m.statusMsg = "ready"
-	if got := m.renderStatusBar(); strings.Contains(got, "%") {
-		t.Fatalf("expected status bar without scroll percentage, got %q", got)
 	}
 }
 
