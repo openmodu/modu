@@ -1,4 +1,4 @@
-package ui
+package tui
 
 import (
 	"encoding/json"
@@ -81,105 +81,7 @@ func (m *uiModel) renderInputMeta() string {
 	return strings.Join(parts, "  ·  ")
 }
 
-func (m *uiModel) renderPermissionInline(width int) string {
-	if m.pendingPerm == nil {
-		return ""
-	}
-
-	input := formatToolInput(m.pendingPerm.ToolName, m.pendingPerm.Args)
-	if len(input) > 200 {
-		input = input[:200] + "..."
-	}
-
-	var b strings.Builder
-	b.WriteString(uiWarningText.Render("⏺") + " " + lipgloss.NewStyle().Bold(true).Render(m.pendingPerm.ToolName))
-	if input != "" {
-		b.WriteString(uiMutedText.Render("(" + input + ")"))
-	}
-	b.WriteString("\n")
-	b.WriteString("  " +
-		uiSuccessText.Bold(true).Render("[Y]es") + "  " +
-		uiErrorText.Bold(true).Render("[N]o") + "  " +
-		uiWarningText.Bold(true).Render("[A]lways allow") + "  " +
-		uiMutedText.Render("[D]eny always"))
-	return b.String()
-}
-
 // ─── Conversation rendering ───────────────────────
-
-func (m *uiModel) renderConversation() string {
-	if len(m.blocks) == 0 {
-		return m.renderWelcome()
-	}
-	viewWidth := m.viewportContentWidth()
-	// Build a glamour style with zero document margin so we control all
-	// indentation ourselves. We pass a large word wrap and re-wrap ourselves
-	// using reflow/wrap which is display-width-aware (handles CJK correctly).
-	contentWidth := max(20, viewWidth-max(dotPadW, hookPadW))
-	noMargin := uint(0)
-	style := glamourstyles.DarkStyleConfig
-	style.Document = glamouransi.StyleBlock{
-		StylePrimitive: style.Document.StylePrimitive,
-		Margin:         &noMargin,
-	}
-	renderer, _ := glamour.NewTermRenderer(
-		glamour.WithStyles(style),
-		glamour.WithWordWrap(contentWidth),
-	)
-	var rendered []string
-	for _, block := range m.blocks {
-		var s string
-		switch block.Kind {
-		case "user":
-			s = renderUIUserBlock(block.Content, viewWidth)
-		case "assistant":
-			var ab strings.Builder
-			if block.Thinking != "" {
-				ab.WriteString(renderUIThinking(block.Thinking, viewWidth))
-			}
-			if strings.TrimSpace(block.Content) != "" {
-				if !block.Streaming && renderer != nil {
-					if md, err := renderer.Render(block.Content); err == nil {
-						ab.WriteString(renderUIAssistantMarkdownBlock(normalizeRenderedMarkdown(md), viewWidth))
-					} else {
-						content := wrap.String(block.Content, contentWidth)
-						ab.WriteString(renderUIAssistantBlock(content, viewWidth))
-					}
-				} else {
-					content := wrap.String(block.Content, contentWidth)
-					ab.WriteString(renderUIAssistantBlock(content, viewWidth))
-				}
-			}
-			s = ab.String()
-		case "tool":
-			var tb strings.Builder
-			for _, tool := range block.Tools {
-				tb.WriteString(renderUITool(tool, m.transcriptMode, viewWidth))
-			}
-			s = tb.String()
-		case "section":
-			s = renderUISection(block.Title, block.Content, viewWidth)
-		default:
-			var db strings.Builder
-			for _, line := range strings.Split(block.Content, "\n") {
-				var lb strings.Builder
-				writeWrappedStyledLines(&lb, line, max(12, viewWidth-lipgloss.Width("  ")), "  ", "  ", uiDimText)
-				db.WriteString(lb.String())
-			}
-			s = db.String()
-		}
-		s = strings.TrimRight(s, "\n")
-		if s != "" {
-			rendered = append(rendered, s)
-		}
-	}
-	if m.pendingPerm != nil {
-		if s := strings.TrimRight(m.renderPermissionInline(viewWidth), "\n"); s != "" {
-			rendered = append(rendered, s)
-		}
-	}
-	return strings.TrimRight(hardWrapRenderedText(strings.Join(rendered, "\n\n"), viewWidth), "\n")
-}
 
 func renderUIUserBlock(content string, width int) string {
 	var b strings.Builder
@@ -401,10 +303,6 @@ func renderUISection(title, content string, width int) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func (m *uiModel) renderWelcome() string {
-	return ""
-}
-
 func (m *uiModel) renderSingleBlock(block uiBlock) string {
 	viewWidth := m.viewportContentWidth()
 	contentWidth := max(20, viewWidth-max(dotPadW, hookPadW))
@@ -485,20 +383,6 @@ func (m *uiModel) renderExitSessionMeta() string {
 	return "session: " + strings.Join(parts, " | ")
 }
 
-func (m *uiModel) renderExitTranscript() string {
-	var parts []string
-	if meta := m.renderExitSessionMeta(); meta != "" {
-		parts = append(parts, meta)
-	}
-	if conv := m.renderConversation(); conv != "" {
-		parts = append(parts, conv)
-	}
-	if m.errMsg != "" {
-		parts = append(parts, uiErrorText.Render("  ! "+m.errMsg))
-	}
-	return strings.TrimSpace(strings.Join(parts, "\n\n"))
-}
-
 // ─── Block helpers ───────────────────────────────
 
 func assistantMessageFromEvent(msg agent.AgentMessage) (types.AssistantMessage, bool) {
@@ -511,17 +395,6 @@ func assistantMessageFromEvent(msg agent.AgentMessage) (types.AssistantMessage, 
 		}
 	}
 	return types.AssistantMessage{}, false
-}
-
-func (m *uiModel) latestRunningTool() *uiToolState {
-	for i := len(m.blocks) - 1; i >= 0; i-- {
-		for j := len(m.blocks[i].Tools) - 1; j >= 0; j-- {
-			if m.blocks[i].Tools[j].Status == "running" {
-				return m.blocks[i].Tools[j]
-			}
-		}
-	}
-	return nil
 }
 
 // ─── Tool input formatting ───────────────────────

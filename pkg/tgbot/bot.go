@@ -10,7 +10,7 @@ import (
 	"github.com/openmodu/modu/pkg/channels"
 	"github.com/openmodu/modu/pkg/channels/telegram"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
-	"github.com/openmodu/modu/pkg/tui"
+	"github.com/openmodu/modu/pkg/approval"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -31,7 +31,7 @@ func Start(
 	session *coding_agent.CodingSession,
 	renderer Printer,
 	promptMu *sync.Mutex,
-	approvalCh chan tui.ApprovalRequest,
+	approvalCh chan approval.Request,
 ) (string, error) {
 	var bot *telegram.Bot
 
@@ -100,7 +100,7 @@ func Start(
 
 			tuiApprovalFn := func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
 				respCh := make(chan string, 1)
-				approvalCh <- tui.ApprovalRequest{
+				approvalCh <- approval.Request{
 					ToolName:   toolName,
 					ToolCallID: toolCallID,
 					Args:       args,
@@ -122,7 +122,7 @@ func Start(
 				cancelCh := make(chan struct{})
 				respCh := make(chan string, 1)
 
-				approvalCh <- tui.ApprovalRequest{
+				approvalCh <- approval.Request{
 					ToolName:   toolName,
 					ToolCallID: toolCallID,
 					Args:       args,

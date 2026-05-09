@@ -1,4 +1,4 @@
-package ui
+package tui
 
 import (
 	"context"
@@ -11,12 +11,11 @@ import (
 	gotui "github.com/grindlemire/go-tui"
 
 	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/approval"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
-	"github.com/openmodu/modu/pkg/tui"
+	"github.com/openmodu/modu/pkg/mailboxrt"
+	"github.com/openmodu/modu/pkg/tgbot"
 	"github.com/openmodu/modu/pkg/types"
-
-	"github.com/openmodu/modu/cmd/modu_code/internal/mailboxrt"
-	"github.com/openmodu/modu/cmd/modu_code/internal/tgbot"
 )
 
 // Run starts the interactive TUI session.
@@ -26,9 +25,9 @@ func Run(ctx context.Context, session *coding_agent.CodingSession, model *types.
 	}
 
 	histFile := session.InputHistoryFile()
-	var approvalCh chan tui.ApprovalRequest
+	var approvalCh chan approval.Request
 	if !noApprove {
-		approvalCh = make(chan tui.ApprovalRequest)
+		approvalCh = make(chan approval.Request)
 	}
 	var promptMu sync.Mutex
 
@@ -51,7 +50,7 @@ func Run(ctx context.Context, session *coding_agent.CodingSession, model *types.
 	if approvalCh != nil {
 		session.SetToolApprovalCallback(func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
 			respCh := make(chan string, 1)
-			approvalCh <- tui.ApprovalRequest{
+			approvalCh <- approval.Request{
 				ToolName:   toolName,
 				ToolCallID: toolCallID,
 				Args:       args,

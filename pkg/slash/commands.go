@@ -9,8 +9,8 @@ import (
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/types"
 
-	"github.com/openmodu/modu/cmd/modu_code/internal/mailboxrt"
-	"github.com/openmodu/modu/cmd/modu_code/internal/tgbot"
+	"github.com/openmodu/modu/pkg/mailboxrt"
+	"github.com/openmodu/modu/pkg/tgbot"
 )
 
 // Printer is implemented by the caller (TUI or stdout) to surface command output.

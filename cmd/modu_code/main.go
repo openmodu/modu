@@ -31,9 +31,9 @@ import (
 	"github.com/openmodu/modu/pkg/coding_agent/modes/rpc"
 
 	"github.com/openmodu/modu/cmd/modu_code/internal/acp"
-	"github.com/openmodu/modu/cmd/modu_code/internal/mailboxrt"
 	"github.com/openmodu/modu/cmd/modu_code/internal/provider"
-	"github.com/openmodu/modu/cmd/modu_code/internal/ui"
+	"github.com/openmodu/modu/pkg/mailboxrt"
+	"github.com/openmodu/modu/pkg/tui"
 )
 
 func main() {
@@ -143,7 +143,7 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if err := ui.Run(ctx, session, model, rt, *noApprove); err != nil {
+	if err := tui.Run(ctx, session, model, rt, *noApprove); err != nil {
 		fmt.Fprintf(os.Stderr, "ui error: %v\n", err)
 		os.Exit(1)
 	}
