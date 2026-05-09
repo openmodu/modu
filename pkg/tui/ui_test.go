@@ -1,4 +1,4 @@
-package ui
+package tui
 
 import (
 	"context"
@@ -11,15 +11,15 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	gotui "github.com/grindlemire/go-tui"
 
+	"github.com/openmodu/modu/pkg/approval"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
-	"github.com/openmodu/modu/pkg/tui"
 	"github.com/openmodu/modu/pkg/types"
 )
 
 func TestGoTUIApprovalUsesCoreDecisionNames(t *testing.T) {
 	responseCh := make(chan string, 1)
 	root := newGoTUIRoot(context.Background(), nil, nil, nil, "", nil, nil)
-	root.handleApprovalRequest(tui.ApprovalRequest{
+	root.handleApprovalRequest(approval.Request{
 		ToolName:   "bash",
 		ToolCallID: "call-1",
 		Response:   responseCh,
@@ -44,7 +44,7 @@ func TestGoTUIApprovalKeyMapCapturesApprovalKeys(t *testing.T) {
 	responseCh := make(chan string, 1)
 	root := newGoTUIRoot(context.Background(), nil, nil, nil, "", nil, nil)
 	root.draft.Set("draft")
-	root.handleApprovalRequest(tui.ApprovalRequest{
+	root.handleApprovalRequest(approval.Request{
 		ToolName:   "bash",
 		ToolCallID: "call-1",
 		Response:   responseCh,
@@ -70,7 +70,7 @@ func TestGoTUIApprovalKeyMapCapturesApprovalKeys(t *testing.T) {
 func TestGoTUIApprovalKeyMapEnterAllows(t *testing.T) {
 	responseCh := make(chan string, 1)
 	root := newGoTUIRoot(context.Background(), nil, nil, nil, "", nil, nil)
-	root.handleApprovalRequest(tui.ApprovalRequest{
+	root.handleApprovalRequest(approval.Request{
 		ToolName:   "bash",
 		ToolCallID: "call-1",
 		Response:   responseCh,
@@ -152,7 +152,7 @@ func TestGoTUIApprovalCancelClearsPending(t *testing.T) {
 	defer cancel()
 	cancelCh := make(chan struct{})
 	root := newGoTUIRoot(ctx, nil, nil, nil, "", nil, nil)
-	root.handleApprovalRequest(tui.ApprovalRequest{
+	root.handleApprovalRequest(approval.Request{
 		ToolName:   "bash",
 		ToolCallID: "call-1",
 		Response:   make(chan string, 1),
@@ -241,7 +241,19 @@ func collectGoTUIText(el *gotui.Element) string {
 	return uiANSIPattern.ReplaceAllString(gotui.Sprint(el, gotui.WithPrintWidth(80)), "")
 }
 
-func TestUIRenderExitTranscriptIncludesConversation(t *testing.T) {
+// renderAllBlocks joins per-block scrollback renders the way pkg/tui pushes
+// them at runtime, so tests can exercise the same path as production.
+func renderAllBlocks(m *uiModel) string {
+	var parts []string
+	for _, b := range m.blocks {
+		if s := strings.TrimRight(m.renderSingleBlock(b), "\n"); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func TestUIRenderBlocksIncludesUserAndAssistantContent(t *testing.T) {
 	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
 	m.width = 100
 	m.ready = true
@@ -249,25 +261,17 @@ func TestUIRenderExitTranscriptIncludesConversation(t *testing.T) {
 		{Kind: "user", Content: "hello"},
 		{Kind: "assistant", Content: "world"},
 	}
-	m.statusMsg = "thinking"
-	m.errMsg = "boom"
 
-	got := m.renderExitTranscript()
+	got := renderAllBlocks(m)
 	if !strings.Contains(got, "hello") {
-		t.Fatalf("expected user content in transcript, got %q", got)
+		t.Fatalf("expected user content, got %q", got)
 	}
 	if !strings.Contains(got, "world") {
-		t.Fatalf("expected assistant content in transcript, got %q", got)
-	}
-	if !strings.Contains(got, "! boom") {
-		t.Fatalf("expected error line in transcript, got %q", got)
-	}
-	if strings.Contains(got, "thinking") {
-		t.Fatalf("did not expect live status in exit transcript, got %q", got)
+		t.Fatalf("expected assistant content, got %q", got)
 	}
 }
 
-func TestUIRenderConversationUsesBulletPrefixes(t *testing.T) {
+func TestUIRenderBlocksUsesBulletPrefixes(t *testing.T) {
 	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
 	m.width = 100
 	m.blocks = []uiBlock{
@@ -275,7 +279,7 @@ func TestUIRenderConversationUsesBulletPrefixes(t *testing.T) {
 		{Kind: "tool", Tools: []*uiToolState{{Name: "read", Status: "running"}}},
 	}
 
-	got := m.renderConversation()
+	got := renderAllBlocks(m)
 	if !strings.Contains(got, "●") {
 		t.Fatalf("expected bullet markers, got %q", got)
 	}
@@ -287,15 +291,14 @@ func TestUIRenderConversationUsesBulletPrefixes(t *testing.T) {
 	}
 }
 
-func TestUIRenderConversationMarkdownDoesNotDuplicateHeadings(t *testing.T) {
+func TestUIRenderBlocksMarkdownDoesNotDuplicateHeadings(t *testing.T) {
 	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
 	m.width = 72
 	m.blocks = []uiBlock{
 		{Kind: "assistant", Content: "### render.go (+39 -1)\n\n- first item\n- second item"},
 	}
 
-	got := m.renderConversation()
-	got = ansiPattern.ReplaceAllString(got, "")
+	got := ansiPattern.ReplaceAllString(renderAllBlocks(m), "")
 	if strings.Count(got, "render.go (+39 -1)") != 1 {
 		t.Fatalf("expected markdown heading once, got %q", got)
 	}
@@ -404,7 +407,7 @@ func TestViewportConversationWrapsWithinViewportWidth(t *testing.T) {
 		},
 	}
 
-	got := m.renderConversation()
+	got := renderAllBlocks(m)
 	maxLineWidth := 0
 	for _, line := range strings.Split(got, "\n") {
 		if w := lipgloss.Width(ansiPattern.ReplaceAllString(line, "")); w > maxLineWidth {

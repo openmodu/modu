@@ -1,136 +1,169 @@
-// Package tui provides terminal UI components for building CLI AI applications.
-// It renders agent events using ANSI escape codes with no external dependencies.
 package tui
 
 import (
-	"io"
-	"os"
 	"strconv"
 	"strings"
-	"syscall"
-	"unsafe"
 
-	"golang.org/x/term"
+	gotui "github.com/grindlemire/go-tui"
 )
 
-// ANSI escape code constants.
-const (
-	ansiReset  = "\033[0m"
-	ansiBold   = "\033[1m"
-	ansiDim    = "\033[2m"
-	ansiItalic = "\033[3m"
-
-	ansiRed     = "\033[31m"
-	ansiGreen   = "\033[32m"
-	ansiYellow  = "\033[33m"
-	ansiOrange  = "\033[38;5;208m"
-	ansiBlue    = "\033[34m"
-	ansiMagenta = "\033[35m"
-	ansiCyan    = "\033[36m"
-
-	ansiBrightBlack  = "\033[90m"
-	ansiBrightGreen  = "\033[92m"
-	ansiBrightYellow = "\033[93m"
-	ansiBrightBlue   = "\033[94m"
-	ansiBrightCyan   = "\033[96m"
-	ansiBrightWhite  = "\033[97m"
-
-	// Cursor and screen control.
-	ansiSaveCursor    = "\033[s"
-	ansiRestoreCursor = "\033[u"
-	ansiHideCursor    = "\033[?25l"
-	ansiShowCursor    = "\033[?25h"
-	ansiAltScreenOn   = "\033[?1049h"
-	ansiAltScreenOff  = "\033[?1049l"
-	ansiEraseLine     = "\033[2K"
-	ansiEraseDown     = "\033[J"
-
-	// Mouse tracking (SGR extended mode).
-	ansiMouseOn  = "\033[?1000h\033[?1006h"
-	ansiMouseOff = "\033[?1000l\033[?1006l"
-)
-
-// styled wraps text with ANSI codes. Returns plain text if noColor is true.
-func styled(noColor bool, codes string, text string) string {
-	if noColor || text == "" {
-		return text
-	}
-	return codes + text + ansiReset
+// stripANSIForGoTUI removes SGR escape sequences from s. go-tui's text layout
+// is column-aware, and embedded escape codes confuse its width math, so any
+// pre-rendered ANSI string must be stripped before being passed to a go-tui
+// element's text content.
+func stripANSIForGoTUI(s string) string {
+	return uiANSIPattern.ReplaceAllString(s, "")
 }
 
-// shouldDisableColor returns true when colors should be suppressed.
-func shouldDisableColor(w io.Writer) bool {
-	// Respect the NO_COLOR standard (https://no-color.org/).
-	if os.Getenv("NO_COLOR") != "" {
-		return true
-	}
-	if os.Getenv("TERM") == "dumb" {
-		return true
-	}
-	// Disable color when writing to a non-terminal.
-	f, ok := w.(*os.File)
-	if !ok {
-		return true
-	}
-	return !isTerminalFd(uintptr(f.Fd()))
+// ansiSegment is a stretch of text plus the go-tui style derived from any
+// preceding SGR escape codes.
+type ansiSegment struct {
+	Text  string
+	Style gotui.Style
 }
 
-// isTerminalFd returns true if fd is a terminal.
-func isTerminalFd(fd uintptr) bool {
-	return term.IsTerminal(int(fd))
-}
-
-// winsize holds the terminal dimensions from TIOCGWINSZ.
-type winsize struct {
-	Row    uint16
-	Col    uint16
-	Xpixel uint16
-	Ypixel uint16
-}
-
-// termSize returns (width, height) of the terminal.
-func termSize() (int, int) {
-	var ws winsize
-	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL,
-		os.Stdout.Fd(), syscall.TIOCGWINSZ,
-		uintptr(unsafe.Pointer(&ws))); errno == 0 {
-		w, h := int(ws.Col), int(ws.Row)
-		if w <= 0 {
-			w = 80
+// parseGoTUIANSIText splits s into styled segments, applying SGR sequences
+// (CSI ... m) into a running gotui.Style. Used by tests and any future
+// embedder that wants to feed pre-styled text into a go-tui layout.
+func parseGoTUIANSIText(text string) []ansiSegment {
+	var segments []ansiSegment
+	style := gotui.NewStyle()
+	for len(text) > 0 {
+		idx := strings.Index(text, "\x1b[")
+		if idx < 0 {
+			if text != "" {
+				segments = append(segments, ansiSegment{Text: text, Style: style})
+			}
+			break
 		}
-		if h <= 0 {
-			h = 24
+		if idx > 0 {
+			segments = append(segments, ansiSegment{Text: text[:idx], Style: style})
+			text = text[idx:]
+			continue
 		}
-		return w, h
+		end := strings.IndexByte(text, 'm')
+		if end < 0 {
+			segments = append(segments, ansiSegment{Text: text, Style: style})
+			break
+		}
+		applyGoTUISGR(&style, text[2:end])
+		text = text[end+1:]
 	}
-	w, h := 80, 24
-	if col := os.Getenv("COLUMNS"); col != "" {
-		if n, err := strconv.Atoi(col); err == nil && n > 0 {
-			w = n
+	return segments
+}
+
+func applyGoTUISGR(style *gotui.Style, params string) {
+	if params == "" {
+		*style = gotui.NewStyle()
+		return
+	}
+	codes := parseSGRCodes(params)
+	for i := 0; i < len(codes); i++ {
+		switch code := codes[i]; code {
+		case 0:
+			*style = gotui.NewStyle()
+		case 1:
+			*style = style.Bold()
+		case 2:
+			*style = style.Dim()
+		case 3:
+			*style = style.Italic()
+		case 4:
+			*style = style.Underline()
+		case 22:
+			style.Attrs &^= gotui.AttrBold | gotui.AttrDim
+		case 23:
+			style.Attrs &^= gotui.AttrItalic
+		case 24:
+			style.Attrs &^= gotui.AttrUnderline
+		case 39:
+			style.Fg = gotui.DefaultColor()
+		case 38:
+			if i+1 >= len(codes) {
+				continue
+			}
+			switch codes[i+1] {
+			case 2:
+				if i+4 < len(codes) {
+					*style = style.Foreground(gotui.RGBColor(uint8(clampSGRByte(codes[i+2])), uint8(clampSGRByte(codes[i+3])), uint8(clampSGRByte(codes[i+4]))))
+					i += 4
+				}
+			case 5:
+				if i+2 < len(codes) {
+					*style = style.Foreground(gotui.ANSIColor(uint8(clampSGRByte(codes[i+2]))))
+					i += 2
+				}
+			}
+		default:
+			if color, ok := goTUIANSIColor(code); ok {
+				*style = style.Foreground(color)
+			}
 		}
 	}
-	if lines := os.Getenv("LINES"); lines != "" {
-		if n, err := strconv.Atoi(lines); err == nil && n > 0 {
-			h = n
+}
+
+func parseSGRCodes(params string) []int {
+	parts := strings.Split(params, ";")
+	codes := make([]int, 0, len(parts))
+	for _, part := range parts {
+		if part == "" {
+			codes = append(codes, 0)
+			continue
 		}
+		code, err := strconv.Atoi(part)
+		if err != nil {
+			continue
+		}
+		codes = append(codes, code)
 	}
-	return w, h
+	return codes
 }
 
-// termWidth returns the current terminal width.
-func termWidth() int {
-	w, _ := termSize()
-	return w
+func goTUIANSIColor(code int) (gotui.Color, bool) {
+	switch code {
+	case 30:
+		return gotui.ANSIColor(0), true
+	case 31:
+		return gotui.Red, true
+	case 32:
+		return gotui.Green, true
+	case 33:
+		return gotui.Yellow, true
+	case 34:
+		return gotui.Blue, true
+	case 35:
+		return gotui.Magenta, true
+	case 36:
+		return gotui.Cyan, true
+	case 37:
+		return gotui.White, true
+	case 90:
+		return gotui.BrightBlack, true
+	case 91:
+		return gotui.BrightRed, true
+	case 92:
+		return gotui.BrightGreen, true
+	case 93:
+		return gotui.BrightYellow, true
+	case 94:
+		return gotui.BrightBlue, true
+	case 95:
+		return gotui.BrightMagenta, true
+	case 96:
+		return gotui.BrightCyan, true
+	case 97:
+		return gotui.BrightWhite, true
+	default:
+		return gotui.DefaultColor(), false
+	}
 }
 
-// termHeight returns the current terminal height.
-func termHeight() int {
-	_, h := termSize()
-	return h
-}
-
-// separator returns a horizontal line of dashes.
-func separator(noColor bool, width int) string {
-	line := strings.Repeat("─", width)
-	return styled(noColor, ansiBrightBlack, line)
+func clampSGRByte(value int) int {
+	if value < 0 {
+		return 0
+	}
+	if value > 255 {
+		return 255
+	}
+	return value
 }
