@@ -33,7 +33,6 @@ func (r *goTUIRoot) handleApprovalRequest(req approval.Request) {
 	r.model.pendingPerm = &req
 	r.model.state = uiStatePermission
 	r.model.statusMsg = "permission required"
-	r.setInlineHeight(5)
 	r.bump()
 	if req.Cancel != nil {
 		r.watchApprovalCancel(req.ToolCallID, req.Cancel)
@@ -102,7 +101,6 @@ func (r *goTUIRoot) abortQuery() {
 	r.resolvePendingApproval("deny")
 	r.model.state = uiStateInput
 	r.model.statusMsg = "interrupted"
-	r.setInlineHeight(5)
 	r.bump()
 }
 

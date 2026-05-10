@@ -138,6 +138,10 @@ func runLoop(app *gotui.App, root *goTUIRoot) error {
 			// Clear the visible screen (not scrollback) to remove ghost widget
 			// frames that terminal emulators can leave behind on resize.
 			_, _ = app.Terminal().WriteDirect([]byte("\033[H\033[2J"))
+			// The widget never shrinks at runtime (commitInlineHeight). With
+			// a fresh screen we can safely reset to the baseline so the next
+			// Render recomputes the size from the current state.
+			root.resetInlineHeight()
 			resized = false
 		}
 		app.Render()
