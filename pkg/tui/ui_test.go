@@ -330,17 +330,20 @@ func TestUIRenderBlocksMarkdownDoesNotDuplicateHeadings(t *testing.T) {
 	}
 }
 
-func TestNormalizeRenderedMarkdownStripsANSIPadding(t *testing.T) {
-	raw := "\x1b[38;5;39m### title   \x1b[0m\n\x1b[38;5;252m     \x1b[0m\n"
+func TestNormalizeRenderedMarkdownPreservesStylingCollapsesBlanks(t *testing.T) {
+	raw := "\x1b[38;5;39mtitle\x1b[0m\n\x1b[38;5;252m     \x1b[0m\n"
 	got := normalizeRenderedMarkdown(raw)
-	if strings.Contains(got, "\x1b[") {
-		t.Fatalf("expected ansi to be stripped, got %q", got)
+	// glamour's heading colors must survive — losing them was the original
+	// bug that turned styled markdown into plain text.
+	if !strings.Contains(got, "\x1b[38;5;39m") {
+		t.Fatalf("expected ANSI styling preserved, got %q", got)
 	}
-	if strings.Contains(got, "title   ") {
-		t.Fatalf("expected trailing padding to be removed, got %q", got)
+	if !strings.Contains(got, "title") {
+		t.Fatalf("expected heading text preserved, got %q", got)
 	}
+	// The ANSI-padded whitespace-only line collapses to a single blank.
 	if strings.Count(got, "\n") > 1 {
-		t.Fatalf("expected normalized markdown without extra filler lines, got %q", got)
+		t.Fatalf("expected one separator newline, got %q", got)
 	}
 }
 

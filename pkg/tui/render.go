@@ -101,16 +101,20 @@ func renderUIAssistantMarkdownBlock(content string, width int) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// normalizeRenderedMarkdown collapses ANSI-padded blank lines that glamour
+// emits between blocks into a single empty line, but preserves ANSI styling
+// on lines that carry visible content. Stripping styling here would throw
+// away glamour's heading/code/emphasis colors and reduce the agent's reply
+// to plain text.
 func normalizeRenderedMarkdown(content string) string {
 	var lines []string
 	for _, line := range strings.Split(strings.TrimRight(content, "\n"), "\n") {
-		stripped := uiANSIPattern.ReplaceAllString(line, "")
-		trimmed := strings.TrimRight(stripped, " \t")
-		if strings.TrimSpace(trimmed) == "" {
+		visible := strings.TrimSpace(uiANSIPattern.ReplaceAllString(line, ""))
+		if visible == "" {
 			lines = append(lines, "")
 			continue
 		}
-		lines = append(lines, trimmed)
+		lines = append(lines, line)
 	}
 	return strings.TrimRight(strings.Join(lines, "\n"), "\n")
 }
