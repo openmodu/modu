@@ -74,7 +74,7 @@ type CodingSession struct {
 	subagentLoader   *subagent.Loader
 	cwd              string
 	agentDir         string
-	baseSystemPrompt string
+	promptBuilder    *SystemPromptBuilder
 	model            *types.Model
 	activeTools      []agent.AgentTool
 	slashCommands    map[string]SlashCommand
@@ -295,7 +295,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		subagentLoader:   subagentLoader,
 		cwd:              opts.Cwd,
 		agentDir:         agentDir,
-		baseSystemPrompt: systemPrompt,
+		promptBuilder:    promptBuilder,
 		model:            opts.Model,
 		activeTools:      activeTools,
 		slashCommands:    make(map[string]SlashCommand),
@@ -495,6 +495,10 @@ func (s *CodingSession) Prompt(ctx context.Context, text string) error {
 		Role:    agent.RoleUser,
 		Content: text,
 	}))
+
+	// Hot-reload skills (and other dynamic context) so the agent sees any
+	// changes the user made on disk since the last turn.
+	s.refreshDynamicSystemPrompt()
 
 	err := s.agent.Prompt(ctx, text)
 	if err != nil {

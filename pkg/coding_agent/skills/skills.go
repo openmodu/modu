@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/openmodu/modu/pkg/utils"
 )
@@ -25,11 +26,15 @@ type Skill struct {
 
 var ignoreFileNames = []string{".gitignore", ".ignore", ".fdignore"}
 
-// Manager handles skill discovery and loading.
+// Manager handles skill discovery and loading. All public accessors rediscover
+// from disk before reading the skill map, so changes to skill files are picked
+// up without restarting the session.
 type Manager struct {
 	agentDir string
 	cwd      string
-	skills   map[string]*Skill
+
+	mu     sync.RWMutex
+	skills map[string]*Skill
 }
 
 // NewManager creates a new skill manager.
@@ -41,39 +46,49 @@ func NewManager(agentDir, cwd string) *Manager {
 	}
 }
 
-// Discover finds and loads all skills from global and project directories.
+// Discover scans the global and project skill directories and atomically
+// replaces the in-memory map with the result. Safe to call repeatedly — each
+// call reflects the current filesystem state, so removed/edited/added skills
+// are picked up.
+//
 // Discovery rules:
-//   - Direct .md files in the skills directory root
+//   - Direct .md files at the skills directory root
 //   - Recursive SKILL.md files under subdirectories
+//   - Project skills override global skills with the same name
 func (m *Manager) Discover() error {
-	// Global skills
+	fresh := make(map[string]*Skill)
+
 	globalDir := filepath.Join(m.agentDir, "skills")
-	if err := m.loadFromDir(globalDir, "user"); err != nil {
-		// Non-fatal if dir doesn't exist
-		if !os.IsNotExist(err) {
-			return err
-		}
+	if err := loadIntoMap(fresh, globalDir, "user"); err != nil && !os.IsNotExist(err) {
+		return err
 	}
 
-	// Project skills (override global)
 	projectDir := filepath.Join(m.cwd, ".coding_agent", "skills")
-	if err := m.loadFromDir(projectDir, "project"); err != nil {
-		if !os.IsNotExist(err) {
-			return err
-		}
+	if err := loadIntoMap(fresh, projectDir, "project"); err != nil && !os.IsNotExist(err) {
+		return err
 	}
 
+	m.mu.Lock()
+	m.skills = fresh
+	m.mu.Unlock()
 	return nil
 }
 
-// Get returns a skill by name.
+// Get returns a skill by name. Triggers a Discover() on each call so renamed
+// or newly added skills resolve without a session restart.
 func (m *Manager) Get(name string) (*Skill, bool) {
+	_ = m.Discover()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	s, ok := m.skills[name]
 	return s, ok
 }
 
-// List returns all discovered skills.
+// List returns all discovered skills (re-scanning disk first).
 func (m *Manager) List() []*Skill {
+	_ = m.Discover()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	result := make([]*Skill, 0, len(m.skills))
 	for _, s := range m.skills {
 		result = append(result, s)
@@ -83,6 +98,9 @@ func (m *Manager) List() []*Skill {
 
 // GetDescriptions returns formatted descriptions for system prompt inclusion.
 func (m *Manager) GetDescriptions() []string {
+	_ = m.Discover()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	var descs []string
 	for _, s := range m.skills {
 		desc := "- /" + s.Name
@@ -99,6 +117,9 @@ func (m *Manager) GetDescriptions() []string {
 // Skills with DisableModelInvocation=true are excluded (they can only be
 // invoked explicitly via /skill:name commands).
 func (m *Manager) FormatForPrompt() string {
+	_ = m.Discover()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	var visible []*Skill
 	for _, s := range m.skills {
 		if !s.DisableModelInvocation {
@@ -132,14 +153,16 @@ func (m *Manager) FormatForPrompt() string {
 	return strings.Join(lines, "\n")
 }
 
-func (m *Manager) loadFromDir(dir, source string) error {
-	return m.loadFromDirInternal(dir, source, true, nil, "")
+// loadIntoMap is the package-level entry that Discover uses to populate a
+// fresh skills map without touching Manager state.
+func loadIntoMap(dst map[string]*Skill, dir, source string) error {
+	return loadFromDirInternal(dst, dir, source, true, nil, "")
 }
 
 // loadFromDirInternal recursively discovers skills.
 // At the root level (includeRootFiles=true), any .md file is treated as a skill.
 // In subdirectories (includeRootFiles=false), only SKILL.md files are loaded.
-func (m *Manager) loadFromDirInternal(dir, source string, includeRootFiles bool, ignorePatterns []string, rootDir string) error {
+func loadFromDirInternal(dst map[string]*Skill, dir, source string, includeRootFiles bool, ignorePatterns []string, rootDir string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
@@ -194,7 +217,7 @@ func (m *Manager) loadFromDirInternal(dir, source string, includeRootFiles bool,
 
 		if info.IsDir() {
 			// Recurse into subdirectories
-			_ = m.loadFromDirInternal(fullPath, source, false, ignorePatterns, rootDir)
+			_ = loadFromDirInternal(dst, fullPath, source, false, ignorePatterns, rootDir)
 			continue
 		}
 
@@ -208,21 +231,21 @@ func (m *Manager) loadFromDirInternal(dir, source string, includeRootFiles bool,
 			continue
 		}
 
-		skill, err := m.loadSkillFile(fullPath, source)
+		skill, err := loadSkillFile(fullPath, source)
 		if err != nil {
 			continue // Skip malformed skills
 		}
 
 		// First registered wins (project overrides global via call order)
-		if _, exists := m.skills[skill.Name]; !exists {
-			m.skills[skill.Name] = skill
+		if _, exists := dst[skill.Name]; !exists {
+			dst[skill.Name] = skill
 		}
 	}
 
 	return nil
 }
 
-func (m *Manager) loadSkillFile(path, source string) (*Skill, error) {
+func loadSkillFile(path, source string) (*Skill, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
