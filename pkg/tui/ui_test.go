@@ -330,6 +330,46 @@ func TestUIRenderBlocksMarkdownDoesNotDuplicateHeadings(t *testing.T) {
 	}
 }
 
+func TestAddOuterTableBordersWrapsBlock(t *testing.T) {
+	in := strings.Join([]string{
+		"some prose",
+		"",
+		" Col1 │ Col2 ",
+		"──────┼──────",
+		" a    │ b    ",
+		" c    │ d    ",
+		"",
+		"after",
+	}, "\n")
+
+	got := addOuterTableBorders(in)
+
+	mustContain := []string{
+		"┌──────┬──────┐",
+		"│ Col1 │ Col2 │",
+		"├──────┼──────┤",
+		"│ a    │ b    │",
+		"│ c    │ d    │",
+		"└──────┴──────┘",
+	}
+	for _, want := range mustContain {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected %q in output, got:\n%s", want, got)
+		}
+	}
+	// Non-table lines must pass through.
+	if !strings.Contains(got, "some prose") || !strings.Contains(got, "after") {
+		t.Fatalf("expected surrounding text preserved, got:\n%s", got)
+	}
+}
+
+func TestAddOuterTableBordersIgnoresNonTableContent(t *testing.T) {
+	in := "just text\nno tables here"
+	if got := addOuterTableBorders(in); got != in {
+		t.Fatalf("unexpected mutation of non-table content: %q -> %q", in, got)
+	}
+}
+
 func TestNormalizeRenderedMarkdownPreservesStylingCollapsesBlanks(t *testing.T) {
 	raw := "\x1b[38;5;39mtitle\x1b[0m\n\x1b[38;5;252m     \x1b[0m\n"
 	got := normalizeRenderedMarkdown(raw)

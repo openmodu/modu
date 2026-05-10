@@ -119,6 +119,94 @@ func normalizeRenderedMarkdown(content string) string {
 	return strings.TrimRight(strings.Join(lines, "\n"), "\n")
 }
 
+// addOuterTableBorders post-processes glamour's table output to add the
+// missing outer borders. glamour's tablewriter style hard-codes
+// OuterHline/OuterVline to "" so it only emits inner column separators
+// (`│`) and a single header rule (`─...┼...─`). This pass detects those
+// lines and wraps the block with `┌─...┬─...┐` / `└─...┴─...┘` plus a
+// `│` on each row's left and right edge.
+func addOuterTableBorders(content string) string {
+	lines := strings.Split(content, "\n")
+	var out []string
+	i := 0
+	for i < len(lines) {
+		if !isTableLine(lines[i]) {
+			out = append(out, lines[i])
+			i++
+			continue
+		}
+		start := i
+		for i < len(lines) && isTableLine(lines[i]) {
+			i++
+		}
+		out = append(out, wrapTableBlock(lines[start:i])...)
+	}
+	return strings.Join(out, "\n")
+}
+
+func isTableLine(line string) bool {
+	return isTableRowLine(line) || isTableSeparatorLine(line)
+}
+
+func isTableRowLine(line string) bool {
+	return strings.Contains(uiANSIPattern.ReplaceAllString(line, ""), "│")
+}
+
+func isTableSeparatorLine(line string) bool {
+	stripped := strings.TrimRight(uiANSIPattern.ReplaceAllString(line, ""), " \t")
+	if stripped == "" {
+		return false
+	}
+	for _, r := range stripped {
+		if r != '─' && r != '┼' {
+			return false
+		}
+	}
+	return strings.ContainsRune(stripped, '┼')
+}
+
+func wrapTableBlock(block []string) []string {
+	// Use the separator line as the geometry template — its `┼` positions
+	// are exactly where top/bottom corner glyphs go, and its visible width
+	// matches each padded row that glamour emitted.
+	sepIdx := -1
+	for j, line := range block {
+		if isTableSeparatorLine(line) {
+			sepIdx = j
+			break
+		}
+	}
+	if sepIdx < 0 {
+		return block
+	}
+	sepStripped := strings.TrimRight(uiANSIPattern.ReplaceAllString(block[sepIdx], ""), " \t")
+	if sepStripped == "" {
+		return block
+	}
+
+	top := "┌" + strings.ReplaceAll(sepStripped, "┼", "┬") + "┐"
+	bottom := "└" + strings.ReplaceAll(sepStripped, "┼", "┴") + "┘"
+	middle := "├" + sepStripped + "┤"
+	targetW := lipgloss.Width(sepStripped)
+
+	out := make([]string, 0, len(block)+2)
+	out = append(out, top)
+	for j, line := range block {
+		if j == sepIdx {
+			out = append(out, middle)
+			continue
+		}
+		stripped := uiANSIPattern.ReplaceAllString(line, "")
+		currentW := lipgloss.Width(stripped)
+		if currentW < targetW {
+			line = line + strings.Repeat(" ", targetW-currentW)
+		}
+		out = append(out, "│"+line+"│")
+	}
+	out = append(out, bottom)
+	return out
+}
+
 func renderUIThinking(content string, width int) string {
 	var b strings.Builder
 	b.WriteString(uiSecondaryText.Render("●") + " " + uiMutedText.Render("thinking") + "\n")
@@ -332,7 +420,8 @@ func (m *uiModel) renderSingleBlock(block uiBlock) string {
 		if strings.TrimSpace(block.Content) != "" {
 			if renderer != nil {
 				if md, err := renderer.Render(block.Content); err == nil {
-					ab.WriteString(renderUIAssistantMarkdownBlock(normalizeRenderedMarkdown(md), viewWidth))
+					md = addOuterTableBorders(normalizeRenderedMarkdown(md))
+					ab.WriteString(renderUIAssistantMarkdownBlock(md, viewWidth))
 				} else {
 					ab.WriteString(renderUIAssistantBlock(wrap.String(block.Content, contentWidth), viewWidth))
 				}
