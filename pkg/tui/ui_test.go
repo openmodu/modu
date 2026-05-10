@@ -331,21 +331,23 @@ func TestUIRenderBlocksMarkdownDoesNotDuplicateHeadings(t *testing.T) {
 }
 
 func TestAddOuterTableBordersWrapsBlock(t *testing.T) {
+	// glamour-style padded input: rows have trailing spaces, separator
+	// spans the full padded width.
 	in := strings.Join([]string{
 		"some prose",
 		"",
-		" Col1 │ Col2 ",
-		"──────┼──────",
-		" a    │ b    ",
-		" c    │ d    ",
+		" Col1   │ Col2   ",
+		"────────┼────────",
+		" a      │ b      ",
+		" c      │ d      ",
 		"",
 		"after",
 	}, "\n")
 
-	got := addOuterTableBorders(in)
+	got := addOuterTableBorders(in, 0)
 
 	mustContain := []string{
-		"┌──────┬──────┐",
+		"┌──────┬──────┐", // columns shrink to fit content (Col1/Col2 = 6 wide)
 		"│ Col1 │ Col2 │",
 		"├──────┼──────┤",
 		"│ a    │ b    │",
@@ -357,7 +359,6 @@ func TestAddOuterTableBordersWrapsBlock(t *testing.T) {
 			t.Fatalf("expected %q in output, got:\n%s", want, got)
 		}
 	}
-	// Non-table lines must pass through.
 	if !strings.Contains(got, "some prose") || !strings.Contains(got, "after") {
 		t.Fatalf("expected surrounding text preserved, got:\n%s", got)
 	}
@@ -365,8 +366,37 @@ func TestAddOuterTableBordersWrapsBlock(t *testing.T) {
 
 func TestAddOuterTableBordersIgnoresNonTableContent(t *testing.T) {
 	in := "just text\nno tables here"
-	if got := addOuterTableBorders(in); got != in {
+	if got := addOuterTableBorders(in, 0); got != in {
 		t.Fatalf("unexpected mutation of non-table content: %q -> %q", in, got)
+	}
+}
+
+func TestAddOuterTableBordersShrinksToFit(t *testing.T) {
+	// A wide table that won't fit — the long second column must shrink and
+	// its content gets ellipsis-truncated, but every visual row including
+	// borders must end exactly at the maxWidth bound.
+	in := strings.Join([]string{
+		" k    │ description                                     ",
+		"──────┼─────────────────────────────────────────────────",
+		" a    │ a long description that obviously will not fit  ",
+		" b    │ another long description                        ",
+	}, "\n")
+
+	const maxWidth = 30
+	got := addOuterTableBorders(in, maxWidth)
+
+	for _, line := range strings.Split(got, "\n") {
+		if w := lipgloss.Width(line); w > maxWidth {
+			t.Fatalf("expected every line ≤ %d wide, got %d for %q", maxWidth, w, line)
+		}
+	}
+	if !strings.Contains(got, "…") {
+		t.Fatalf("expected ellipsis in truncated cell, got:\n%s", got)
+	}
+	// Borders should still close cleanly.
+	first := strings.Split(got, "\n")[0]
+	if !strings.HasPrefix(first, "┌") || !strings.HasSuffix(first, "┐") {
+		t.Fatalf("expected `┌...┐` top border, got %q", first)
 	}
 }
 

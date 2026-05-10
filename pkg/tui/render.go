@@ -14,6 +14,7 @@ import (
 	glamourstyles "github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
+	runewidth "github.com/mattn/go-runewidth"
 	"github.com/muesli/reflow/wrap"
 
 	"github.com/openmodu/modu/pkg/agent"
@@ -119,13 +120,17 @@ func normalizeRenderedMarkdown(content string) string {
 	return strings.TrimRight(strings.Join(lines, "\n"), "\n")
 }
 
-// addOuterTableBorders post-processes glamour's table output to add the
-// missing outer borders. glamour's tablewriter style hard-codes
-// OuterHline/OuterVline to "" so it only emits inner column separators
-// (`│`) and a single header rule (`─...┼...─`). This pass detects those
-// lines and wraps the block with `┌─...┬─...┐` / `└─...┴─...┘` plus a
-// `│` on each row's left and right edge.
-func addOuterTableBorders(content string) string {
+// addOuterTableBorders post-processes glamour's table output:
+//   - draws the missing outer borders (glamour hard-codes them to "")
+//   - recomputes column widths from actual cell content, so a 2-char value
+//     no longer occupies half the screen
+//   - if the resulting table would still exceed maxWidth (e.g. one cell is
+//     a long sentence), shrinks the widest columns and truncates content
+//     with an ellipsis so borders stay aligned with the terminal edge
+//
+// maxWidth is the total visual width budget for the table including the
+// outer `│` borders. Pass 0 to skip the width clamp.
+func addOuterTableBorders(content string, maxWidth int) string {
 	lines := strings.Split(content, "\n")
 	var out []string
 	i := 0
@@ -139,7 +144,7 @@ func addOuterTableBorders(content string) string {
 		for i < len(lines) && isTableLine(lines[i]) {
 			i++
 		}
-		out = append(out, wrapTableBlock(lines[start:i])...)
+		out = append(out, wrapTableBlock(lines[start:i], maxWidth)...)
 	}
 	return strings.Join(out, "\n")
 }
@@ -165,10 +170,12 @@ func isTableSeparatorLine(line string) bool {
 	return strings.ContainsRune(stripped, '┼')
 }
 
-func wrapTableBlock(block []string) []string {
-	// Use the separator line as the geometry template — its `┼` positions
-	// are exactly where top/bottom corner glyphs go, and its visible width
-	// matches each padded row that glamour emitted.
+// minTableColWidth is the absolute minimum width of any column after
+// shrink-to-fit (1 padding + 1 content + 1 padding). Below this the table
+// becomes unreadable, so we stop shrinking.
+const minTableColWidth = 3
+
+func wrapTableBlock(block []string, maxWidth int) []string {
 	sepIdx := -1
 	for j, line := range block {
 		if isTableSeparatorLine(line) {
@@ -179,32 +186,159 @@ func wrapTableBlock(block []string) []string {
 	if sepIdx < 0 {
 		return block
 	}
+
 	sepStripped := strings.TrimRight(uiANSIPattern.ReplaceAllString(block[sepIdx], ""), " \t")
 	if sepStripped == "" {
 		return block
 	}
+	numCols := strings.Count(sepStripped, "┼") + 1
+	if numCols < 1 {
+		return block
+	}
 
-	top := "┌" + strings.ReplaceAll(sepStripped, "┼", "┬") + "┐"
-	bottom := "└" + strings.ReplaceAll(sepStripped, "┼", "┴") + "┘"
-	middle := "├" + sepStripped + "┤"
-	targetW := lipgloss.Width(sepStripped)
+	// Extract per-row cell content (visible only — drop ANSI styling inside
+	// cells; the outer borders we're about to draw don't carry any styling
+	// and re-emitting a styled compact cell would require ANSI-aware
+	// truncation that's not worth the complexity for the table use case).
+	rows := make([][]string, len(block))
+	for j, line := range block {
+		if j == sepIdx {
+			continue
+		}
+		stripped := uiANSIPattern.ReplaceAllString(line, "")
+		cells := strings.Split(stripped, "│")
+		for k := range cells {
+			cells[k] = strings.TrimSpace(cells[k])
+		}
+		for len(cells) < numCols {
+			cells = append(cells, "")
+		}
+		rows[j] = cells[:numCols]
+	}
+
+	// Per-column width = max(content width) over all rows + 2 for left/right
+	// padding inside the cell (`│ content │`).
+	colW := make([]int, numCols)
+	for _, row := range rows {
+		for k, cell := range row {
+			if k >= numCols {
+				break
+			}
+			if w := lipgloss.Width(cell); w > colW[k] {
+				colW[k] = w
+			}
+		}
+	}
+	for k := range colW {
+		colW[k] += 2
+		if colW[k] < minTableColWidth {
+			colW[k] = minTableColWidth
+		}
+	}
+
+	tableWidth := func() int {
+		// 2 outer borders + sum(col widths) + (numCols-1) inner separators
+		w := 2 + (numCols - 1)
+		for _, c := range colW {
+			w += c
+		}
+		return w
+	}
+
+	// Shrink to fit: peel one cell width off the widest column at a time
+	// until either we fit or no column can shrink further.
+	if maxWidth > 0 {
+		for tableWidth() > maxWidth {
+			maxIdx := 0
+			for k := 1; k < numCols; k++ {
+				if colW[k] > colW[maxIdx] {
+					maxIdx = k
+				}
+			}
+			if colW[maxIdx] <= minTableColWidth {
+				break
+			}
+			colW[maxIdx]--
+		}
+	}
+
+	// Build the new separator using the chosen column widths.
+	var sepBuf strings.Builder
+	for k, w := range colW {
+		if k > 0 {
+			sepBuf.WriteString("┼")
+		}
+		sepBuf.WriteString(strings.Repeat("─", w))
+	}
+	newSep := sepBuf.String()
+	top := "┌" + strings.ReplaceAll(newSep, "┼", "┬") + "┐"
+	bottom := "└" + strings.ReplaceAll(newSep, "┼", "┴") + "┘"
+	middle := "├" + newSep + "┤"
 
 	out := make([]string, 0, len(block)+2)
 	out = append(out, top)
-	for j, line := range block {
+	for j := range block {
 		if j == sepIdx {
 			out = append(out, middle)
 			continue
 		}
-		stripped := uiANSIPattern.ReplaceAllString(line, "")
-		currentW := lipgloss.Width(stripped)
-		if currentW < targetW {
-			line = line + strings.Repeat(" ", targetW-currentW)
+		if rows[j] == nil {
+			continue
 		}
-		out = append(out, "│"+line+"│")
+		var rb strings.Builder
+		rb.WriteString("│")
+		for k, cell := range rows[j] {
+			if k > 0 {
+				rb.WriteString("│")
+			}
+			inner := colW[k] - 2
+			if inner < 1 {
+				inner = 1
+			}
+			content := truncateCellContent(cell, inner)
+			pad := inner - lipgloss.Width(content)
+			if pad < 0 {
+				pad = 0
+			}
+			rb.WriteString(" ")
+			rb.WriteString(content)
+			rb.WriteString(strings.Repeat(" ", pad))
+			rb.WriteString(" ")
+		}
+		rb.WriteString("│")
+		out = append(out, rb.String())
 	}
 	out = append(out, bottom)
 	return out
+}
+
+// truncateCellContent shortens s to at most width visible columns, ending
+// in `…` if truncation happened. Width counts CJK runes as 2.
+func truncateCellContent(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= width {
+		return s
+	}
+	if width == 1 {
+		return "…"
+	}
+	var b strings.Builder
+	used := 0
+	for _, r := range s {
+		rw := runewidth.RuneWidth(r)
+		if rw == 0 {
+			rw = 1
+		}
+		if used+rw+1 > width { // leave room for the ellipsis
+			break
+		}
+		b.WriteRune(r)
+		used += rw
+	}
+	b.WriteRune('…')
+	return b.String()
 }
 
 func renderUIThinking(content string, width int) string {
@@ -420,7 +554,7 @@ func (m *uiModel) renderSingleBlock(block uiBlock) string {
 		if strings.TrimSpace(block.Content) != "" {
 			if renderer != nil {
 				if md, err := renderer.Render(block.Content); err == nil {
-					md = addOuterTableBorders(normalizeRenderedMarkdown(md))
+					md = addOuterTableBorders(normalizeRenderedMarkdown(md), widthForPrefix(viewWidth))
 					ab.WriteString(renderUIAssistantMarkdownBlock(md, viewWidth))
 				} else {
 					ab.WriteString(renderUIAssistantBlock(wrap.String(block.Content, contentWidth), viewWidth))
