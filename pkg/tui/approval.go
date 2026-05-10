@@ -50,7 +50,7 @@ func (r *goTUIRoot) watchApprovalCancel(toolCallID string, cancel <-chan struct{
 				if r.model.pendingPerm == nil || r.model.pendingPerm.ToolCallID != toolCallID {
 					return
 				}
-				r.model.pendingPerm = nil
+				r.dismissPendingApproval()
 				r.model.state = uiStateQuerying
 				r.model.statusMsg = "approval dismissed"
 				r.bump()
@@ -60,15 +60,32 @@ func (r *goTUIRoot) watchApprovalCancel(toolCallID string, cancel <-chan struct{
 	}()
 }
 
-func (r *goTUIRoot) approve(decision string) {
+func (r *goTUIRoot) resolvePendingApproval(decision string) bool {
 	if r.model.pendingPerm == nil {
-		return
+		return false
 	}
 	req := r.model.pendingPerm
 	r.model.pendingPerm = nil
+	if req.Response != nil {
+		req.Response <- decision
+	}
+	return true
+}
+
+func (r *goTUIRoot) dismissPendingApproval() bool {
+	if r.model.pendingPerm == nil {
+		return false
+	}
+	r.model.pendingPerm = nil
+	return true
+}
+
+func (r *goTUIRoot) approve(decision string) {
+	if !r.resolvePendingApproval(decision) {
+		return
+	}
 	r.model.state = uiStateQuerying
 	r.model.statusMsg = "thinking"
-	req.Response <- decision
 	r.bump()
 }
 
@@ -82,7 +99,7 @@ func (r *goTUIRoot) abortQuery() {
 		r.session.AbortBash()
 	}
 	r.model.queryActive = false
-	r.model.pendingPerm = nil
+	r.resolvePendingApproval("deny")
 	r.model.state = uiStateInput
 	r.model.statusMsg = "interrupted"
 	r.setInlineHeight(5)

@@ -50,13 +50,27 @@ func Run(ctx context.Context, session *coding_agent.CodingSession, model *types.
 	if approvalCh != nil {
 		session.SetToolApprovalCallback(func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
 			respCh := make(chan string, 1)
-			approvalCh <- approval.Request{
+			req := approval.Request{
 				ToolName:   toolName,
 				ToolCallID: toolCallID,
 				Args:       args,
 				Response:   respCh,
 			}
-			return agent.ToolApprovalDecision(<-respCh), nil
+			select {
+			case approvalCh <- req:
+			case <-ctx.Done():
+				return agent.ToolApprovalDeny, ctx.Err()
+			case <-app.StopCh():
+				return agent.ToolApprovalDeny, context.Canceled
+			}
+			select {
+			case decision := <-respCh:
+				return agent.ToolApprovalDecision(decision), nil
+			case <-ctx.Done():
+				return agent.ToolApprovalDeny, ctx.Err()
+			case <-app.StopCh():
+				return agent.ToolApprovalDeny, context.Canceled
+			}
 		})
 	}
 

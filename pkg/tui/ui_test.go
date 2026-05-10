@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	gotui "github.com/grindlemire/go-tui"
 
+	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/approval"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/types"
@@ -175,6 +176,31 @@ func TestGoTUIApprovalCancelClearsPending(t *testing.T) {
 		default:
 			time.Sleep(10 * time.Millisecond)
 		}
+	}
+}
+
+func TestGoTUIAbortPendingApprovalDeniesResponse(t *testing.T) {
+	responseCh := make(chan string, 1)
+	root := newGoTUIRoot(context.Background(), nil, nil, nil, "", nil, nil)
+	root.model.state = uiStatePermission
+	root.handleApprovalRequest(approval.Request{
+		ToolName:   "bash",
+		ToolCallID: "call-1",
+		Response:   responseCh,
+	})
+
+	root.abortQuery()
+
+	select {
+	case got := <-responseCh:
+		if got != "deny" {
+			t.Fatalf("expected abort to deny pending approval, got %q", got)
+		}
+	default:
+		t.Fatal("expected abort to resolve pending approval")
+	}
+	if root.model.pendingPerm != nil {
+		t.Fatal("expected pending approval to be cleared")
 	}
 }
 
@@ -362,6 +388,27 @@ func TestRenderToolOutputCollapsedShowsExpandHintForWrappedSingleLine(t *testing
 	got := renderUIToolOutput("bash", "this is one extremely long output line that should wrap into many terminal rows and still show the expand hint", false, 24)
 	if !strings.Contains(got, "ctrl+o to expand") {
 		t.Fatalf("expected expand hint for wrapped single line, got %q", got)
+	}
+}
+
+func TestHandleToolExecutionEndUpdatesByToolCallID(t *testing.T) {
+	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
+	m.handleAgentEvent(agent.AgentEvent{Type: agent.EventTypeToolExecutionStart, ToolCallID: "call-1", ToolName: "bash"})
+	m.handleAgentEvent(agent.AgentEvent{Type: agent.EventTypeToolExecutionStart, ToolCallID: "call-2", ToolName: "bash"})
+
+	m.handleAgentEvent(agent.AgentEvent{
+		Type:       agent.EventTypeToolExecutionEnd,
+		ToolCallID: "call-2",
+		ToolName:   "bash",
+		Result:     "done",
+	})
+
+	tools := m.blocks[0].Tools
+	if tools[0].Status != "running" {
+		t.Fatalf("expected first same-name tool to remain running, got %q", tools[0].Status)
+	}
+	if tools[1].Status != "done" || tools[1].Output != "done" {
+		t.Fatalf("expected second tool to be completed, got status=%q output=%q", tools[1].Status, tools[1].Output)
 	}
 }
 

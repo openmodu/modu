@@ -7,10 +7,10 @@ import (
 	"sync"
 
 	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/approval"
 	"github.com/openmodu/modu/pkg/channels"
 	"github.com/openmodu/modu/pkg/channels/telegram"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
-	"github.com/openmodu/modu/pkg/approval"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -100,13 +100,23 @@ func Start(
 
 			tuiApprovalFn := func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
 				respCh := make(chan string, 1)
-				approvalCh <- approval.Request{
+				req := approval.Request{
 					ToolName:   toolName,
 					ToolCallID: toolCallID,
 					Args:       args,
 					Response:   respCh,
 				}
-				return agent.ToolApprovalDecision(<-respCh), nil
+				select {
+				case approvalCh <- req:
+				case <-hCtx.Done():
+					return agent.ToolApprovalDeny, hCtx.Err()
+				}
+				select {
+				case decision := <-respCh:
+					return agent.ToolApprovalDecision(decision), nil
+				case <-hCtx.Done():
+					return agent.ToolApprovalDeny, hCtx.Err()
+				}
 			}
 
 			session.SetToolApprovalCallback(func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
@@ -122,12 +132,17 @@ func Start(
 				cancelCh := make(chan struct{})
 				respCh := make(chan string, 1)
 
-				approvalCh <- approval.Request{
+				req := approval.Request{
 					ToolName:   toolName,
 					ToolCallID: toolCallID,
 					Args:       args,
 					Response:   respCh,
 					Cancel:     cancelCh,
+				}
+				select {
+				case approvalCh <- req:
+				case <-hCtx.Done():
+					return agent.ToolApprovalDeny, hCtx.Err()
 				}
 
 				kbd, kbdErr := bot.SendApprovalKeyboard(chatID, toolName)
@@ -155,6 +170,13 @@ func Start(
 					case "d":
 						decision = "deny_always"
 					}
+				case <-hCtx.Done():
+					close(cancelCh)
+					bot.CancelApproval(chatID)
+					if kbdErr == nil {
+						bot.RemoveKeyboard(chatID, kbd.MessageID)
+					}
+					return agent.ToolApprovalDeny, hCtx.Err()
 				}
 
 				d := agent.ToolApprovalDecision(decision)

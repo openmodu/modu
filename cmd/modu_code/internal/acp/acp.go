@@ -186,17 +186,8 @@ func (s *Server) requestPermission(ctx context.Context, toolName, toolCallID str
 		{"optionId": "allow_once", "name": "Allow once", "kind": "allow_once"},
 		{"optionId": "allow_always", "name": "Always allow", "kind": "allow_always"},
 		{"optionId": "reject_once", "name": "Reject once", "kind": "reject_once"},
+		{"optionId": "reject_always", "name": "Always reject", "kind": "reject_always"},
 	}
-	s.notify("session/request_permission", map[string]any{
-		"toolCall": map[string]any{
-			"toolCallId": toolCallID,
-			"title":      toolName,
-			"kind":       "execute",
-			"arguments":  args,
-		},
-		"options": options,
-	})
-	// Also send as a proper reverse RPC so the client can reply.
 	s.writeFrame(rpcMsg{
 		JSONRPC: "2.0",
 		ID:      &reqID,
@@ -230,16 +221,20 @@ func (s *Server) requestPermission(ctx context.Context, toolName, toolCallID str
 				OptionID string `json:"optionId"`
 			} `json:"outcome"`
 		}
-		_ = json.Unmarshal(resp.Result, &result)
+		if err := json.Unmarshal(resp.Result, &result); err != nil {
+			return agent.ToolApprovalDeny, nil
+		}
 		switch result.Outcome.OptionID {
+		case "allow_once", "allow":
+			return agent.ToolApprovalAllow, nil
 		case "allow_always":
 			return agent.ToolApprovalAllowAlways, nil
-		case "reject_once":
+		case "reject_once", "deny", "deny_once":
 			return agent.ToolApprovalDeny, nil
-		case "reject_always":
+		case "reject_always", "deny_always":
 			return agent.ToolApprovalDenyAlways, nil
 		default:
-			return agent.ToolApprovalAllow, nil
+			return agent.ToolApprovalDeny, nil
 		}
 	}
 }
