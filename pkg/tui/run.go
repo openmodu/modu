@@ -50,13 +50,27 @@ func Run(ctx context.Context, session *coding_agent.CodingSession, model *types.
 	if approvalCh != nil {
 		session.SetToolApprovalCallback(func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
 			respCh := make(chan string, 1)
-			approvalCh <- approval.Request{
+			req := approval.Request{
 				ToolName:   toolName,
 				ToolCallID: toolCallID,
 				Args:       args,
 				Response:   respCh,
 			}
-			return agent.ToolApprovalDecision(<-respCh), nil
+			select {
+			case approvalCh <- req:
+			case <-ctx.Done():
+				return agent.ToolApprovalDeny, ctx.Err()
+			case <-app.StopCh():
+				return agent.ToolApprovalDeny, context.Canceled
+			}
+			select {
+			case decision := <-respCh:
+				return agent.ToolApprovalDecision(decision), nil
+			case <-ctx.Done():
+				return agent.ToolApprovalDeny, ctx.Err()
+			case <-app.StopCh():
+				return agent.ToolApprovalDeny, context.Canceled
+			}
 		})
 	}
 
@@ -124,6 +138,10 @@ func runLoop(app *gotui.App, root *goTUIRoot) error {
 			// Clear the visible screen (not scrollback) to remove ghost widget
 			// frames that terminal emulators can leave behind on resize.
 			_, _ = app.Terminal().WriteDirect([]byte("\033[H\033[2J"))
+			// The widget never shrinks at runtime (commitInlineHeight). With
+			// a fresh screen we can safely reset to the baseline so the next
+			// Render recomputes the size from the current state.
+			root.resetInlineHeight()
 			resized = false
 		}
 		app.Render()

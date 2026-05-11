@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	gotui "github.com/grindlemire/go-tui"
 
+	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/approval"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/types"
@@ -178,6 +179,31 @@ func TestGoTUIApprovalCancelClearsPending(t *testing.T) {
 	}
 }
 
+func TestGoTUIAbortPendingApprovalDeniesResponse(t *testing.T) {
+	responseCh := make(chan string, 1)
+	root := newGoTUIRoot(context.Background(), nil, nil, nil, "", nil, nil)
+	root.model.state = uiStatePermission
+	root.handleApprovalRequest(approval.Request{
+		ToolName:   "bash",
+		ToolCallID: "call-1",
+		Response:   responseCh,
+	})
+
+	root.abortQuery()
+
+	select {
+	case got := <-responseCh:
+		if got != "deny" {
+			t.Fatalf("expected abort to deny pending approval, got %q", got)
+		}
+	default:
+		t.Fatal("expected abort to resolve pending approval")
+	}
+	if root.model.pendingPerm != nil {
+		t.Fatal("expected pending approval to be cleared")
+	}
+}
+
 func TestParseGoTUIANSITextPreservesStyledSegments(t *testing.T) {
 	segments := parseGoTUIANSIText("plain \x1b[31;1mred\x1b[0m tail")
 	if len(segments) != 3 {
@@ -304,17 +330,92 @@ func TestUIRenderBlocksMarkdownDoesNotDuplicateHeadings(t *testing.T) {
 	}
 }
 
-func TestNormalizeRenderedMarkdownStripsANSIPadding(t *testing.T) {
-	raw := "\x1b[38;5;39m### title   \x1b[0m\n\x1b[38;5;252m     \x1b[0m\n"
+func TestFlattenMarkdownTablesStripsBordersAndKeepsAlignment(t *testing.T) {
+	in := strings.Join([]string{
+		"some prose",
+		"",
+		" Col1   │ Col2   ",
+		"────────┼────────",
+		" a      │ b      ",
+		" c      │ d      ",
+		"",
+		"after",
+	}, "\n")
+
+	got := flattenMarkdownTables(in)
+
+	if strings.Contains(got, "│") {
+		t.Fatalf("expected `│` separators stripped, got:\n%s", got)
+	}
+	if strings.Contains(got, "─") || strings.Contains(got, "┼") {
+		t.Fatalf("expected `─┼─` separator row dropped, got:\n%s", got)
+	}
+	if !strings.Contains(got, "some prose") || !strings.Contains(got, "after") {
+		t.Fatalf("expected surrounding text preserved, got:\n%s", got)
+	}
+
+	// Column alignment must survive: Col1, "a", "c" all start at the same
+	// column index; same for Col2, "b", "d".
+	lines := strings.Split(got, "\n")
+	idx := func(needle string) int {
+		for _, line := range lines {
+			if i := strings.Index(line, needle); i >= 0 {
+				return i
+			}
+		}
+		return -1
+	}
+	if i, ia, ic := idx("Col1"), idx("a "), idx("c "); i != ia || i != ic {
+		t.Fatalf("expected first column aligned (Col1@%d, a@%d, c@%d):\n%s", i, ia, ic, got)
+	}
+	if i, ib, id := idx("Col2"), idx("b "), idx("d "); i != ib || i != id {
+		t.Fatalf("expected second column aligned (Col2@%d, b@%d, d@%d):\n%s", i, ib, id, got)
+	}
+}
+
+func TestFlattenMarkdownTablesIgnoresNonTableContent(t *testing.T) {
+	in := "just text\nno tables here"
+	if got := flattenMarkdownTables(in); got != in {
+		t.Fatalf("unexpected mutation of non-table content: %q -> %q", in, got)
+	}
+}
+
+func TestFlattenMarkdownTablesPreservesANSI(t *testing.T) {
+	// glamour wraps cell content in SGR escapes. The flatten step must
+	// leave them untouched — losing color was the bug that originally
+	// motivated normalizeRenderedMarkdown.
+	in := strings.Join([]string{
+		" \x1b[1mCol1\x1b[0m   │ \x1b[1mCol2\x1b[0m   ",
+		"────────┼────────",
+		" \x1b[31mred\x1b[0m    │ \x1b[32mgreen\x1b[0m  ",
+	}, "\n")
+
+	got := flattenMarkdownTables(in)
+
+	for _, want := range []string{"\x1b[1m", "\x1b[31m", "\x1b[32m"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected ANSI %q preserved, got %q", want, got)
+		}
+	}
+	if strings.Contains(got, "│") || strings.Contains(got, "─") {
+		t.Fatalf("expected box-drawing chars stripped, got %q", got)
+	}
+}
+
+func TestNormalizeRenderedMarkdownPreservesStylingCollapsesBlanks(t *testing.T) {
+	raw := "\x1b[38;5;39mtitle\x1b[0m\n\x1b[38;5;252m     \x1b[0m\n"
 	got := normalizeRenderedMarkdown(raw)
-	if strings.Contains(got, "\x1b[") {
-		t.Fatalf("expected ansi to be stripped, got %q", got)
+	// glamour's heading colors must survive — losing them was the original
+	// bug that turned styled markdown into plain text.
+	if !strings.Contains(got, "\x1b[38;5;39m") {
+		t.Fatalf("expected ANSI styling preserved, got %q", got)
 	}
-	if strings.Contains(got, "title   ") {
-		t.Fatalf("expected trailing padding to be removed, got %q", got)
+	if !strings.Contains(got, "title") {
+		t.Fatalf("expected heading text preserved, got %q", got)
 	}
+	// The ANSI-padded whitespace-only line collapses to a single blank.
 	if strings.Count(got, "\n") > 1 {
-		t.Fatalf("expected normalized markdown without extra filler lines, got %q", got)
+		t.Fatalf("expected one separator newline, got %q", got)
 	}
 }
 
@@ -362,6 +463,27 @@ func TestRenderToolOutputCollapsedShowsExpandHintForWrappedSingleLine(t *testing
 	got := renderUIToolOutput("bash", "this is one extremely long output line that should wrap into many terminal rows and still show the expand hint", false, 24)
 	if !strings.Contains(got, "ctrl+o to expand") {
 		t.Fatalf("expected expand hint for wrapped single line, got %q", got)
+	}
+}
+
+func TestHandleToolExecutionEndUpdatesByToolCallID(t *testing.T) {
+	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
+	m.handleAgentEvent(agent.AgentEvent{Type: agent.EventTypeToolExecutionStart, ToolCallID: "call-1", ToolName: "bash"})
+	m.handleAgentEvent(agent.AgentEvent{Type: agent.EventTypeToolExecutionStart, ToolCallID: "call-2", ToolName: "bash"})
+
+	m.handleAgentEvent(agent.AgentEvent{
+		Type:       agent.EventTypeToolExecutionEnd,
+		ToolCallID: "call-2",
+		ToolName:   "bash",
+		Result:     "done",
+	})
+
+	tools := m.blocks[0].Tools
+	if tools[0].Status != "running" {
+		t.Fatalf("expected first same-name tool to remain running, got %q", tools[0].Status)
+	}
+	if tools[1].Status != "done" || tools[1].Output != "done" {
+		t.Fatalf("expected second tool to be completed, got status=%q output=%q", tools[1].Status, tools[1].Output)
 	}
 }
 

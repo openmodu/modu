@@ -214,11 +214,21 @@ func (s *CodingSession) ExitWorktree() error {
 	return nil
 }
 
+// refreshDynamicSystemPrompt rebuilds the system prompt from scratch every
+// turn. The skills XML block, context files, and memory are all regenerated
+// against the current filesystem so edits to skill files (or new skills
+// dropped into the skills dir) are reflected without restarting the session.
 func (s *CodingSession) refreshDynamicSystemPrompt() {
+	if s.promptBuilder != nil && s.skillManager != nil {
+		// FormatForPrompt rediscovers under the hood, so the XML block
+		// always reflects what's on disk right now.
+		s.promptBuilder.SetSkillsPrompt(s.skillManager.FormatForPrompt())
+	}
+
 	var parts []string
-	// baseSystemPrompt is set once in NewCodingSession and never modified after
-	// initialization, so it is safe to read without a lock here.
-	parts = append(parts, s.baseSystemPrompt)
+	if s.promptBuilder != nil {
+		parts = append(parts, s.promptBuilder.Build())
+	}
 
 	s.planMu.RLock()
 	planMode := s.planMode

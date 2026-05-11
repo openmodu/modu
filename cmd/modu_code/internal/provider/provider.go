@@ -22,7 +22,7 @@ type Config struct {
 }
 
 // Resolve returns the model and GetAPIKey function based on env vars.
-// Priority: ANTHROPIC_API_KEY > OPENAI_API_KEY > DEEPSEEK_API_KEY > OLLAMA_HOST > LMSTUDIO > config file > built-in default.
+// Priority: ANTHROPIC_API_KEY > OPENAI_API_KEY > DEEPSEEK_API_KEY > OLLAMA_HOST > LMSTUDIO > config file.
 func Resolve() (*types.Model, func(string) (string, error)) {
 	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
 		modelID := os.Getenv("ANTHROPIC_MODEL")
@@ -107,12 +107,7 @@ func Resolve() (*types.Model, func(string) (string, error)) {
 		return registerConfig(cfg)
 	}
 
-	return registerConfig(Config{
-		Provider: "lmstudio",
-		Model:    "qwen/qwen3.6-27b",
-		BaseURL:  "http://192.168.5.149:1234/v1",
-		APIKey:   "lm-studio",
-	})
+	return nil, nil
 }
 
 // ResolveThinkingLevel maps the THINKING_LEVEL env var to an agent.ThinkingLevel.

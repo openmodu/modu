@@ -101,18 +101,65 @@ func renderUIAssistantMarkdownBlock(content string, width int) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
+// normalizeRenderedMarkdown collapses ANSI-padded blank lines that glamour
+// emits between blocks into a single empty line, but preserves ANSI styling
+// on lines that carry visible content. Stripping styling here would throw
+// away glamour's heading/code/emphasis colors and reduce the agent's reply
+// to plain text.
 func normalizeRenderedMarkdown(content string) string {
 	var lines []string
 	for _, line := range strings.Split(strings.TrimRight(content, "\n"), "\n") {
-		stripped := uiANSIPattern.ReplaceAllString(line, "")
-		trimmed := strings.TrimRight(stripped, " \t")
-		if strings.TrimSpace(trimmed) == "" {
+		visible := strings.TrimSpace(uiANSIPattern.ReplaceAllString(line, ""))
+		if visible == "" {
 			lines = append(lines, "")
 			continue
 		}
-		lines = append(lines, trimmed)
+		lines = append(lines, line)
 	}
 	return strings.TrimRight(strings.Join(lines, "\n"), "\n")
+}
+
+// flattenMarkdownTables converts glamour's box-drawing table output into a
+// plain aligned text block: each `│` column separator becomes a single space
+// and the `─┼─` separator row is dropped. Column alignment survives because
+// glamour already padded every cell to a fixed width, and ANSI styling on
+// cell content is left untouched.
+//
+// Why flatten instead of redrawing prettier borders: pre-rendered ANSI tables
+// never reflow on terminal resize — the right-edge `│` ends up at the wrong
+// column and the whole table cracks apart. Plain aligned text lets the
+// terminal soft-wrap naturally.
+func flattenMarkdownTables(content string) string {
+	lines := strings.Split(content, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if isTableSeparatorLine(line) {
+			continue
+		}
+		if isTableRowLine(line) {
+			out = append(out, strings.ReplaceAll(line, "│", " "))
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}
+
+func isTableRowLine(line string) bool {
+	return strings.Contains(uiANSIPattern.ReplaceAllString(line, ""), "│")
+}
+
+func isTableSeparatorLine(line string) bool {
+	stripped := strings.TrimRight(uiANSIPattern.ReplaceAllString(line, ""), " \t")
+	if stripped == "" {
+		return false
+	}
+	for _, r := range stripped {
+		if r != '─' && r != '┼' {
+			return false
+		}
+	}
+	return strings.ContainsRune(stripped, '┼')
 }
 
 func renderUIThinking(content string, width int) string {
@@ -328,7 +375,8 @@ func (m *uiModel) renderSingleBlock(block uiBlock) string {
 		if strings.TrimSpace(block.Content) != "" {
 			if renderer != nil {
 				if md, err := renderer.Render(block.Content); err == nil {
-					ab.WriteString(renderUIAssistantMarkdownBlock(normalizeRenderedMarkdown(md), viewWidth))
+					md = flattenMarkdownTables(normalizeRenderedMarkdown(md))
+					ab.WriteString(renderUIAssistantMarkdownBlock(md, viewWidth))
 				} else {
 					ab.WriteString(renderUIAssistantBlock(wrap.String(block.Content, contentWidth), viewWidth))
 				}

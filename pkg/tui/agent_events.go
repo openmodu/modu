@@ -52,9 +52,12 @@ func (m *uiModel) handleAgentEvent(ev agent.AgentEvent) {
 		})
 
 	case agent.EventTypeToolExecutionEnd:
+		if ev.ToolCallID == "" {
+			break
+		}
 		block := m.currentToolBlock()
 		for _, tool := range block.Tools {
-			if tool.ID == ev.ToolCallID || tool.Name == ev.ToolName {
+			if tool.ID == ev.ToolCallID {
 				tool.Status = "done"
 				tool.IsError = ev.IsError
 				tool.Output = fullResultText(ev)

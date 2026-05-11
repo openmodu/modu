@@ -131,9 +131,36 @@ func (r *goTUIRoot) appStopCh() <-chan struct{} {
 	return r.app.StopCh()
 }
 
-func (r *goTUIRoot) setInlineHeight(h int) {
-	if r.app != nil {
-		r.app.SetInlineHeight(h)
+// commitInlineHeight applies neededH to the inline widget but never shrinks
+// at runtime. go-tui's clearWidgetArea zeroes the entire OLD widget area on
+// resize, and there is no way to repaint the freed rows from terminal
+// scrollback — shrinking would leave a visible blank gap above the new
+// (smaller) widget. Letting the widget grow monotonically keeps scrollback
+// content snug against the widget; the cost is a permanently larger inline
+// area once the user has, e.g., used a long slash-suggestion list. Ctrl+L
+// (and resize) reset the watermark by clearing the screen.
+func (r *goTUIRoot) commitInlineHeight(app *gotui.App, neededH int) {
+	if app == nil {
+		return
+	}
+	current := app.InlineHeight()
+	if neededH < current {
+		neededH = current
+	}
+	if neededH != current {
+		app.SetInlineHeight(neededH)
+	}
+}
+
+// resetInlineHeight is called on actions that intentionally clear the
+// terminal (Ctrl+L, /clear, terminal resize) — at that point shrinking is
+// safe because there is no scrollback gap to expose.
+func (r *goTUIRoot) resetInlineHeight() {
+	if r.app == nil {
+		return
+	}
+	if r.app.InlineHeight() != 5 {
+		r.app.SetInlineHeight(5)
 	}
 }
 
@@ -204,6 +231,13 @@ func (r *goTUIRoot) KeyMap() gotui.KeyMap {
 			r.model.blocks = nil
 			r.model.errMsg = ""
 			r.model.statusMsg = "cleared"
+			// Wipe terminal scrollback area + restart the inline widget at
+			// its baseline. Without this Ctrl+L only clears in-memory state
+			// while the widget keeps whatever inflated size it had grown to.
+			if app := ke.App(); app != nil {
+				_, _ = app.Terminal().WriteDirect([]byte("\033[H\033[2J"))
+			}
+			r.resetInlineHeight()
 			r.bump()
 		}),
 		gotui.OnStop(gotui.KeyCtrlO, func(ke gotui.KeyEvent) {
@@ -288,9 +322,8 @@ func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 		if meta != "" {
 			neededH++
 		}
-		if neededH != app.InlineHeight() {
-			app.SetInlineHeight(neededH)
-		}
+		// Never shrink the widget at runtime — see commitInlineHeight.
+		r.commitInlineHeight(app, neededH)
 		addSep(root)
 		root.AddChild(r.renderApprovalWidget())
 		addSep(root)
@@ -317,9 +350,7 @@ func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 	if neededH < 5 {
 		neededH = 5
 	}
-	if neededH != app.InlineHeight() {
-		app.SetInlineHeight(neededH)
-	}
+	r.commitInlineHeight(app, neededH)
 
 	addSep(root)
 	root.AddChild(r.renderInput(width))
