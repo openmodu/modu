@@ -330,9 +330,7 @@ func TestUIRenderBlocksMarkdownDoesNotDuplicateHeadings(t *testing.T) {
 	}
 }
 
-func TestAddOuterTableBordersWrapsBlock(t *testing.T) {
-	// glamour-style padded input: rows have trailing spaces, separator
-	// spans the full padded width.
+func TestFlattenMarkdownTablesStripsBordersAndKeepsAlignment(t *testing.T) {
 	in := strings.Join([]string{
 		"some prose",
 		"",
@@ -344,59 +342,63 @@ func TestAddOuterTableBordersWrapsBlock(t *testing.T) {
 		"after",
 	}, "\n")
 
-	got := addOuterTableBorders(in, 0)
+	got := flattenMarkdownTables(in)
 
-	mustContain := []string{
-		"┌──────┬──────┐", // columns shrink to fit content (Col1/Col2 = 6 wide)
-		"│ Col1 │ Col2 │",
-		"├──────┼──────┤",
-		"│ a    │ b    │",
-		"│ c    │ d    │",
-		"└──────┴──────┘",
+	if strings.Contains(got, "│") {
+		t.Fatalf("expected `│` separators stripped, got:\n%s", got)
 	}
-	for _, want := range mustContain {
-		if !strings.Contains(got, want) {
-			t.Fatalf("expected %q in output, got:\n%s", want, got)
-		}
+	if strings.Contains(got, "─") || strings.Contains(got, "┼") {
+		t.Fatalf("expected `─┼─` separator row dropped, got:\n%s", got)
 	}
 	if !strings.Contains(got, "some prose") || !strings.Contains(got, "after") {
 		t.Fatalf("expected surrounding text preserved, got:\n%s", got)
 	}
+
+	// Column alignment must survive: Col1, "a", "c" all start at the same
+	// column index; same for Col2, "b", "d".
+	lines := strings.Split(got, "\n")
+	idx := func(needle string) int {
+		for _, line := range lines {
+			if i := strings.Index(line, needle); i >= 0 {
+				return i
+			}
+		}
+		return -1
+	}
+	if i, ia, ic := idx("Col1"), idx("a "), idx("c "); i != ia || i != ic {
+		t.Fatalf("expected first column aligned (Col1@%d, a@%d, c@%d):\n%s", i, ia, ic, got)
+	}
+	if i, ib, id := idx("Col2"), idx("b "), idx("d "); i != ib || i != id {
+		t.Fatalf("expected second column aligned (Col2@%d, b@%d, d@%d):\n%s", i, ib, id, got)
+	}
 }
 
-func TestAddOuterTableBordersIgnoresNonTableContent(t *testing.T) {
+func TestFlattenMarkdownTablesIgnoresNonTableContent(t *testing.T) {
 	in := "just text\nno tables here"
-	if got := addOuterTableBorders(in, 0); got != in {
+	if got := flattenMarkdownTables(in); got != in {
 		t.Fatalf("unexpected mutation of non-table content: %q -> %q", in, got)
 	}
 }
 
-func TestAddOuterTableBordersShrinksToFit(t *testing.T) {
-	// A wide table that won't fit — the long second column must shrink and
-	// its content gets ellipsis-truncated, but every visual row including
-	// borders must end exactly at the maxWidth bound.
+func TestFlattenMarkdownTablesPreservesANSI(t *testing.T) {
+	// glamour wraps cell content in SGR escapes. The flatten step must
+	// leave them untouched — losing color was the bug that originally
+	// motivated normalizeRenderedMarkdown.
 	in := strings.Join([]string{
-		" k    │ description                                     ",
-		"──────┼─────────────────────────────────────────────────",
-		" a    │ a long description that obviously will not fit  ",
-		" b    │ another long description                        ",
+		" \x1b[1mCol1\x1b[0m   │ \x1b[1mCol2\x1b[0m   ",
+		"────────┼────────",
+		" \x1b[31mred\x1b[0m    │ \x1b[32mgreen\x1b[0m  ",
 	}, "\n")
 
-	const maxWidth = 30
-	got := addOuterTableBorders(in, maxWidth)
+	got := flattenMarkdownTables(in)
 
-	for _, line := range strings.Split(got, "\n") {
-		if w := lipgloss.Width(line); w > maxWidth {
-			t.Fatalf("expected every line ≤ %d wide, got %d for %q", maxWidth, w, line)
+	for _, want := range []string{"\x1b[1m", "\x1b[31m", "\x1b[32m"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected ANSI %q preserved, got %q", want, got)
 		}
 	}
-	if !strings.Contains(got, "…") {
-		t.Fatalf("expected ellipsis in truncated cell, got:\n%s", got)
-	}
-	// Borders should still close cleanly.
-	first := strings.Split(got, "\n")[0]
-	if !strings.HasPrefix(first, "┌") || !strings.HasSuffix(first, "┐") {
-		t.Fatalf("expected `┌...┐` top border, got %q", first)
+	if strings.Contains(got, "│") || strings.Contains(got, "─") {
+		t.Fatalf("expected box-drawing chars stripped, got %q", got)
 	}
 }
 
