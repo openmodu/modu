@@ -23,9 +23,8 @@ import (
 var uiANSIPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 // blockIndent is the left margin applied to every top-level scrollback
-// glyph (>, ●, ⏺) so block prefixes don't hug column 0 and stay visually
-// aligned with section/default blocks (which already start at col 2).
-const blockIndent = "  "
+// glyph (>, ●, ⏺) so block prefixes don't hug column 0.
+const blockIndent = " "
 
 // dotPadW is the visual cell-width of "● " (● may be 2 cells in CJK terminals).
 var dotPadW = lipgloss.Width("● ")
