@@ -202,14 +202,10 @@ func (r *goTUIRoot) renderInput(width int) *gotui.Element {
 	const promptStr = "> "
 	const promptIndent = "  " // aligns continuation lines with text after "> "
 
-	// The 1-cell left margin matches blockIndent on scrollback glyphs (●, >, ⏺).
-	// Margin lives at the layout level, so go-tui's text wrapper can't strip
-	// it the way strings.Fields would strip a leading space in the prompt text.
 	container := gotui.New(
 		gotui.WithDisplay(gotui.DisplayFlex),
 		gotui.WithDirection(gotui.Column),
 		gotui.WithFlexShrink(0),
-		gotui.WithMarginTRBL(0, 0, 0, 1),
 	)
 
 	eolCursor := func() *gotui.Element {
