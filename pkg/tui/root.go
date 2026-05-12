@@ -193,12 +193,12 @@ func (r *goTUIRoot) positionCursor(app *gotui.App) {
 
 	// Row 0 of widget = top separator; row 1 = first input line.
 	widgetRow := 1
-	col := 2 // after "> " (2 chars)
+	col := 4 // after "  > " (4 chars)
 	for i := 0; i < cursor; i++ {
 		ch := rs[i]
 		if ch == '\n' {
 			widgetRow++
-			col = 2 // continuation indent "  "
+			col = 4 // continuation indent "    "
 		} else {
 			col += runewidth.RuneWidth(ch)
 		}

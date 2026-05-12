@@ -22,24 +22,30 @@ import (
 
 var uiANSIPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
+// blockIndent is the left margin applied to every top-level scrollback
+// glyph (>, ●, ⏺) so block prefixes don't hug column 0 and stay visually
+// aligned with section/default blocks (which already start at col 2).
+const blockIndent = "  "
+
 // dotPadW is the visual cell-width of "● " (● may be 2 cells in CJK terminals).
 var dotPadW = lipgloss.Width("● ")
 
-// hookStr is the raw connector string: 2 spaces + ⎿ + 1 space.
-const hookStr = "  ⎿ "
+// hookStr is the raw connector string: blockIndent + 2 spaces + ⎿ + 1 space.
+// The extra 2 spaces nest the hook glyph one step under the parent dot.
+const hookStr = blockIndent + "  ⎿ "
 
 // hookPadW is the visual width of hookStr.
 var hookPadW = lipgloss.Width(hookStr)
 
 // dotPad aligns continuation lines to the widest of the two prefixes.
-var dotPad = strings.Repeat(" ", max(dotPadW, hookPadW))
+var dotPad = strings.Repeat(" ", max(lipgloss.Width(blockIndent)+dotPadW, hookPadW))
 
 // hookPad renders the ⎿ connector at fixed width.
 var hookPad = uiDimText.Render(hookStr)
 
 // assistantPad keeps assistant continuation lines aligned with the first
-// content character after the leading "● ".
-var assistantPad = strings.Repeat(" ", dotPadW)
+// content character after the leading "blockIndent ● ".
+var assistantPad = strings.Repeat(" ", lipgloss.Width(blockIndent)+dotPadW)
 
 // ─── View fragments ──────────────────────────────
 
@@ -85,19 +91,20 @@ func (m *uiModel) renderInputMeta() string {
 
 func renderUIUserBlock(content string, width int) string {
 	var b strings.Builder
-	writeWrappedStyledLines(&b, content, max(20, width-lipgloss.Width("> ")), uiSecondaryText.Render(">")+" ", strings.Repeat(" ", lipgloss.Width("> ")), lipgloss.NewStyle())
+	prefixW := lipgloss.Width(blockIndent + "> ")
+	writeWrappedStyledLines(&b, content, max(20, width-prefixW), blockIndent+uiSecondaryText.Render(">")+" ", strings.Repeat(" ", prefixW), lipgloss.NewStyle())
 	return b.String()
 }
 
 func renderUIAssistantBlock(content string, width int) string {
 	var b strings.Builder
-	writeWrappedStyledLines(&b, content, max(12, width-dotPadW), uiWhiteText.Render("●")+" ", assistantPad, lipgloss.NewStyle())
+	writeWrappedStyledLines(&b, content, max(12, width-lipgloss.Width(assistantPad)), blockIndent+uiWhiteText.Render("●")+" ", assistantPad, lipgloss.NewStyle())
 	return b.String()
 }
 
 func renderUIAssistantMarkdownBlock(content string, width int) string {
 	var b strings.Builder
-	writeWrappedStyledLines(&b, content, widthForPrefix(width), uiWhiteText.Render("●")+" ", assistantPad, lipgloss.NewStyle())
+	writeWrappedStyledLines(&b, content, widthForPrefix(width), blockIndent+uiWhiteText.Render("●")+" ", assistantPad, lipgloss.NewStyle())
 	return strings.TrimRight(b.String(), "\n")
 }
 
@@ -119,52 +126,9 @@ func normalizeRenderedMarkdown(content string) string {
 	return strings.TrimRight(strings.Join(lines, "\n"), "\n")
 }
 
-// flattenMarkdownTables converts glamour's box-drawing table output into a
-// plain aligned text block: each `│` column separator becomes a single space
-// and the `─┼─` separator row is dropped. Column alignment survives because
-// glamour already padded every cell to a fixed width, and ANSI styling on
-// cell content is left untouched.
-//
-// Why flatten instead of redrawing prettier borders: pre-rendered ANSI tables
-// never reflow on terminal resize — the right-edge `│` ends up at the wrong
-// column and the whole table cracks apart. Plain aligned text lets the
-// terminal soft-wrap naturally.
-func flattenMarkdownTables(content string) string {
-	lines := strings.Split(content, "\n")
-	out := make([]string, 0, len(lines))
-	for _, line := range lines {
-		if isTableSeparatorLine(line) {
-			continue
-		}
-		if isTableRowLine(line) {
-			out = append(out, strings.ReplaceAll(line, "│", " "))
-			continue
-		}
-		out = append(out, line)
-	}
-	return strings.Join(out, "\n")
-}
-
-func isTableRowLine(line string) bool {
-	return strings.Contains(uiANSIPattern.ReplaceAllString(line, ""), "│")
-}
-
-func isTableSeparatorLine(line string) bool {
-	stripped := strings.TrimRight(uiANSIPattern.ReplaceAllString(line, ""), " \t")
-	if stripped == "" {
-		return false
-	}
-	for _, r := range stripped {
-		if r != '─' && r != '┼' {
-			return false
-		}
-	}
-	return strings.ContainsRune(stripped, '┼')
-}
-
 func renderUIThinking(content string, width int) string {
 	var b strings.Builder
-	b.WriteString(uiSecondaryText.Render("●") + " " + uiMutedText.Render("thinking") + "\n")
+	b.WriteString(blockIndent + uiSecondaryText.Render("●") + " " + uiMutedText.Render("thinking") + "\n")
 	writeWrappedStyledLines(&b, content, widthForPrefix(width), hookPad, dotPad, uiMutedText)
 	return b.String()
 }
@@ -185,7 +149,7 @@ func renderUITool(tool *uiToolState, expanded bool, width int) string {
 	if tool.Input != "" {
 		args = uiMutedText.Render("(" + truncateUI(tool.Input, 80) + ")")
 	}
-	b.WriteString(fmt.Sprintf("%s %s%s\n", dot, boldName.Render(tool.Name), args))
+	b.WriteString(fmt.Sprintf("%s%s %s%s\n", blockIndent, dot, boldName.Render(tool.Name), args))
 
 	if tool.Status == "running" {
 		return b.String()
@@ -375,7 +339,7 @@ func (m *uiModel) renderSingleBlock(block uiBlock) string {
 		if strings.TrimSpace(block.Content) != "" {
 			if renderer != nil {
 				if md, err := renderer.Render(block.Content); err == nil {
-					md = flattenMarkdownTables(normalizeRenderedMarkdown(md))
+					md = normalizeRenderedMarkdown(md)
 					ab.WriteString(renderUIAssistantMarkdownBlock(md, viewWidth))
 				} else {
 					ab.WriteString(renderUIAssistantBlock(wrap.String(block.Content, contentWidth), viewWidth))

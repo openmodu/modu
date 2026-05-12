@@ -92,7 +92,7 @@ func Resolve() (*types.Model, func(string) (string, error)) {
 	if lmModel, lmURL := os.Getenv("LMSTUDIO_MODEL"), os.Getenv("LMSTUDIO_BASE_URL"); lmModel != "" || lmURL != "" {
 		modelName := lmModel
 		if modelName == "" {
-			modelName = "qwen/qwen3.6-27b"
+			modelName = "qwen/qwen3.6-35b-a3b"
 		}
 		baseURL := lmURL
 		if baseURL == "" {
