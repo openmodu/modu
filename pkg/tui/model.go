@@ -41,12 +41,13 @@ type uiBlock struct {
 }
 
 type uiToolState struct {
-	ID      string
-	Name    string
-	Input   string
-	Status  string
-	Output  string
-	IsError bool
+	ID       string
+	Name     string
+	Input    string
+	FilePath string // raw file_path arg for read/write/edit; drives diff syntax highlighting
+	Status   string
+	Output   string
+	IsError  bool
 }
 
 // ─── Slash autocomplete ──────────────────────────

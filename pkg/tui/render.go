@@ -174,11 +174,11 @@ func renderUITool(tool *uiToolState, expanded bool, width int) string {
 		return b.String()
 	}
 
-	b.WriteString(renderUIToolOutput(tool.Name, tool.Output, expanded, w))
+	b.WriteString(renderUIToolOutput(tool.Name, tool.Output, tool.FilePath, expanded, w))
 	return b.String()
 }
 
-func renderUIToolOutput(toolName, output string, expanded bool, w int) string {
+func renderUIToolOutput(toolName, output, filePath string, expanded bool, w int) string {
 	var b strings.Builder
 	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
 
@@ -227,18 +227,14 @@ func renderUIToolOutput(toolName, output string, expanded bool, w int) string {
 		if len(lines) == 0 || (len(lines) == 1 && lines[0] == "") {
 			b.WriteString(hookPad + uiSuccessText.Render("updated") + "\n")
 		} else {
+			lexer := lexerForPath(filePath)
 			usedRows := 0
 			remaining := 0
 			for lineIdx := 0; lineIdx < len(lines) && usedRows < maxRows; lineIdx++ {
 				pad := padAt(lineIdx)
 				line := lines[lineIdx]
-				style := uiDimText
-				if strings.HasPrefix(line, "+") {
-					style = uiSuccessText
-				} else if strings.HasPrefix(line, "-") {
-					style = uiErrorText
-				}
-				used, complete, hidden := writeSingleWrappedRowBudget(&b, line, rowWidth, pad, dotPad, style, maxRows-usedRows)
+				styled := styleEditDiffLine(line, lexer)
+				used, complete, hidden := writeSingleWrappedRowBudget(&b, styled, rowWidth, pad, dotPad, lipgloss.NewStyle(), maxRows-usedRows)
 				usedRows += used
 				if !complete {
 					remaining += hidden
