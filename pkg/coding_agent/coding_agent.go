@@ -1484,7 +1484,10 @@ func (s *CodingSession) executeSkill(ctx context.Context, originalInput string, 
 		Timestamp:  time.Now().UnixMilli(),
 	}
 	s.agent.AppendMessage(assistant)
-	s.handleMessageEnd(assistant)
+	s.agent.Emit(agent.AgentEvent{Type: agent.EventTypeMessageStart, Message: assistant})
+	s.agent.Emit(agent.AgentEvent{Type: agent.EventTypeMessageEnd, Message: assistant})
+	s.agent.Emit(agent.AgentEvent{Type: agent.EventTypeTurnEnd, Message: assistant})
+	s.agent.Emit(agent.AgentEvent{Type: agent.EventTypeAgentEnd, Messages: []agent.AgentMessage{assistant}})
 
 	return nil
 }

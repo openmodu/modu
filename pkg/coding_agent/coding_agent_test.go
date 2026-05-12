@@ -1458,6 +1458,12 @@ You are a summarizer. Reply with a concise summary of the user's request.`
 		t.Fatal(err)
 	}
 
+	var events []agent.AgentEvent
+	unsub := session.Subscribe(func(event agent.AgentEvent) {
+		events = append(events, event)
+	})
+	defer unsub()
+
 	if err := session.Prompt(context.Background(), "/summarize hello world"); err != nil {
 		t.Fatal(err)
 	}
@@ -1466,6 +1472,39 @@ You are a summarizer. Reply with a concise summary of the user's request.`
 	if got != "skill-result: hello world" {
 		t.Fatalf("expected isolated skill result, got %q", got)
 	}
+	if !hasAssistantMessageEnd(events, "skill-result: hello world") {
+		t.Fatalf("expected slash skill result to emit assistant message_end, got %#v", events)
+	}
+	if !hasAgentEnd(events) {
+		t.Fatalf("expected slash skill result to emit agent_end, got %#v", events)
+	}
+}
+
+func hasAssistantMessageEnd(events []agent.AgentEvent, text string) bool {
+	for _, event := range events {
+		if event.Type != agent.EventTypeMessageEnd {
+			continue
+		}
+		msg, ok := event.Message.(types.AssistantMessage)
+		if !ok {
+			continue
+		}
+		for _, block := range msg.Content {
+			if tc, ok := block.(*types.TextContent); ok && tc.Text == text {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasAgentEnd(events []agent.AgentEvent) bool {
+	for _, event := range events {
+		if event.Type == agent.EventTypeAgentEnd {
+			return true
+		}
+	}
+	return false
 }
 
 func TestPrepareSubagentDefinitionInjectsSkillsAndMemory(t *testing.T) {

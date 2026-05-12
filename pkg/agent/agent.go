@@ -239,6 +239,12 @@ func (a *Agent) AppendMessage(msg AgentMessage) {
 	a.state.Messages = append(a.state.Messages, msg)
 }
 
+// Emit publishes an AgentEvent to subscribers. Callers that synthesize agent
+// work outside runLoop should update state first, then emit the matching event.
+func (a *Agent) Emit(event AgentEvent) {
+	a.emit(event)
+}
+
 func (a *Agent) ClearSteeringQueue() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
