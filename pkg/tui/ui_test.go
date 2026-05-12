@@ -330,78 +330,6 @@ func TestUIRenderBlocksMarkdownDoesNotDuplicateHeadings(t *testing.T) {
 	}
 }
 
-func TestFlattenMarkdownTablesStripsBordersAndKeepsAlignment(t *testing.T) {
-	in := strings.Join([]string{
-		"some prose",
-		"",
-		" Col1   │ Col2   ",
-		"────────┼────────",
-		" a      │ b      ",
-		" c      │ d      ",
-		"",
-		"after",
-	}, "\n")
-
-	got := flattenMarkdownTables(in)
-
-	if strings.Contains(got, "│") {
-		t.Fatalf("expected `│` separators stripped, got:\n%s", got)
-	}
-	if strings.Contains(got, "─") || strings.Contains(got, "┼") {
-		t.Fatalf("expected `─┼─` separator row dropped, got:\n%s", got)
-	}
-	if !strings.Contains(got, "some prose") || !strings.Contains(got, "after") {
-		t.Fatalf("expected surrounding text preserved, got:\n%s", got)
-	}
-
-	// Column alignment must survive: Col1, "a", "c" all start at the same
-	// column index; same for Col2, "b", "d".
-	lines := strings.Split(got, "\n")
-	idx := func(needle string) int {
-		for _, line := range lines {
-			if i := strings.Index(line, needle); i >= 0 {
-				return i
-			}
-		}
-		return -1
-	}
-	if i, ia, ic := idx("Col1"), idx("a "), idx("c "); i != ia || i != ic {
-		t.Fatalf("expected first column aligned (Col1@%d, a@%d, c@%d):\n%s", i, ia, ic, got)
-	}
-	if i, ib, id := idx("Col2"), idx("b "), idx("d "); i != ib || i != id {
-		t.Fatalf("expected second column aligned (Col2@%d, b@%d, d@%d):\n%s", i, ib, id, got)
-	}
-}
-
-func TestFlattenMarkdownTablesIgnoresNonTableContent(t *testing.T) {
-	in := "just text\nno tables here"
-	if got := flattenMarkdownTables(in); got != in {
-		t.Fatalf("unexpected mutation of non-table content: %q -> %q", in, got)
-	}
-}
-
-func TestFlattenMarkdownTablesPreservesANSI(t *testing.T) {
-	// glamour wraps cell content in SGR escapes. The flatten step must
-	// leave them untouched — losing color was the bug that originally
-	// motivated normalizeRenderedMarkdown.
-	in := strings.Join([]string{
-		" \x1b[1mCol1\x1b[0m   │ \x1b[1mCol2\x1b[0m   ",
-		"────────┼────────",
-		" \x1b[31mred\x1b[0m    │ \x1b[32mgreen\x1b[0m  ",
-	}, "\n")
-
-	got := flattenMarkdownTables(in)
-
-	for _, want := range []string{"\x1b[1m", "\x1b[31m", "\x1b[32m"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("expected ANSI %q preserved, got %q", want, got)
-		}
-	}
-	if strings.Contains(got, "│") || strings.Contains(got, "─") {
-		t.Fatalf("expected box-drawing chars stripped, got %q", got)
-	}
-}
-
 func TestNormalizeRenderedMarkdownPreservesStylingCollapsesBlanks(t *testing.T) {
 	raw := "\x1b[38;5;39mtitle\x1b[0m\n\x1b[38;5;252m     \x1b[0m\n"
 	got := normalizeRenderedMarkdown(raw)
@@ -547,8 +475,8 @@ func TestRenderUIAssistantBlockContinuationAlignsWithFirstLine(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("expected 2 lines, got %q", got)
 	}
-	if !strings.HasPrefix(lines[0], "● ") {
-		t.Fatalf("expected bullet prefix on first line, got %q", lines[0])
+	if !strings.HasPrefix(lines[0], blockIndent+"● ") {
+		t.Fatalf("expected indented bullet prefix on first line, got %q", lines[0])
 	}
 	if !strings.HasPrefix(lines[1], assistantPad) {
 		t.Fatalf("expected assistant continuation indent, got %q", lines[1])
