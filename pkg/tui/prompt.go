@@ -59,6 +59,14 @@ func (r *goTUIRoot) runSlash(line string) {
 	go func() {
 		printer := &uiSlashPrinter{}
 		handled, exit := slash.Handle(r.ctx, line, r.session, printer, r.modelInfo, r.mailboxRuntime)
+		if !handled && r.isSkillSlash(line) {
+			// Not a built-in slash command, but a known skill — delegate to the
+			// session, which has its own /skill-name → executeSkill dispatch.
+			r.queue(func() {
+				r.runPrompt(line)
+			})
+			return
+		}
 		r.queue(func() {
 			switch {
 			case !handled:
@@ -78,6 +86,46 @@ func (r *goTUIRoot) runSlash(line string) {
 			}
 		})
 	}()
+}
+
+// isSkillSlash reports whether line is `/<name>[ args]` where <name> matches
+// a discovered skill. Skill names are case-sensitive (mirrors what the session
+// does — built-in slash commands lowercase, but skill names from frontmatter
+// are taken as-is).
+func (r *goTUIRoot) isSkillSlash(line string) bool {
+	cmd := strings.TrimPrefix(strings.TrimSpace(line), "/")
+	if i := strings.IndexAny(cmd, " \t"); i >= 0 {
+		cmd = cmd[:i]
+	}
+	if cmd == "" || r.session == nil {
+		return false
+	}
+	for _, s := range r.session.GetSkills() {
+		if s.Name == cmd {
+			return true
+		}
+	}
+	return false
+}
+
+// skillSlashCommands snapshots the current skills into slash-suggestion entries
+// so /<skill-name> auto-completes alongside the built-ins.
+func (r *goTUIRoot) skillSlashCommands() []slashCommandDef {
+	if r.session == nil {
+		return nil
+	}
+	list := r.session.GetSkills()
+	if len(list) == 0 {
+		return nil
+	}
+	out := make([]slashCommandDef, 0, len(list))
+	for _, s := range list {
+		out = append(out, slashCommandDef{
+			Name:        "/" + s.Name,
+			Description: s.Description,
+		})
+	}
+	return out
 }
 
 func (r *goTUIRoot) runPrompt(line string) {

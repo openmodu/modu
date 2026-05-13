@@ -394,6 +394,37 @@ func TestRenderToolOutputCollapsedShowsExpandHintForWrappedSingleLine(t *testing
 	}
 }
 
+func TestMatchSlashCommandsMergesBuiltinsAndSkills(t *testing.T) {
+	// Built-ins win the top spots; skill entries fill in below, only when
+	// they match the prefix.
+	extras := []slashCommandDef{
+		{Name: "/git-commit", Description: "create a commit"},
+		{Name: "/git-branch", Description: "create a branch"},
+		{Name: "/security-review", Description: "review for vulns"},
+	}
+
+	all := matchSlashCommands("/", extras)
+	gotNames := make(map[string]bool, len(all))
+	for _, c := range all {
+		gotNames[c.Name] = true
+	}
+	for _, want := range []string{"/help", "/skills", "/git-commit", "/git-branch", "/security-review"} {
+		if !gotNames[want] {
+			t.Fatalf("expected %q in merged matches, got %v", want, gotNames)
+		}
+	}
+
+	gitOnly := matchSlashCommands("/git", extras)
+	if len(gitOnly) != 2 {
+		t.Fatalf("expected 2 /git matches (skills only), got %d: %v", len(gitOnly), gitOnly)
+	}
+
+	// Prefix that matches neither built-ins nor skills returns empty.
+	if got := matchSlashCommands("/zzz", extras); len(got) != 0 {
+		t.Fatalf("expected no matches for /zzz, got %v", got)
+	}
+}
+
 func TestRenderEditToolOutputSyntaxHighlightsWhenFilePathKnown(t *testing.T) {
 	// A Go-flavored diff. With a .go file path the keyword `func` should
 	// receive chroma's monokai keyword color (an SGR sequence). Without a

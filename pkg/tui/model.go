@@ -75,9 +75,18 @@ var uiSlashCommands = []slashCommandDef{
 	{"/telegram", "Telegram bot config"},
 }
 
-func matchSlashCommands(prefix string) []slashCommandDef {
+// matchSlashCommands returns all suggestions whose Name has the given prefix.
+// extras lets the caller mix in dynamic commands (e.g. skill names) on top of
+// the static built-ins. Built-ins are listed first so they win visually when a
+// skill name shadows a built-in.
+func matchSlashCommands(prefix string, extras []slashCommandDef) []slashCommandDef {
 	var out []slashCommandDef
 	for _, cmd := range uiSlashCommands {
+		if strings.HasPrefix(cmd.Name, prefix) {
+			out = append(out, cmd)
+		}
+	}
+	for _, cmd := range extras {
 		if strings.HasPrefix(cmd.Name, prefix) {
 			out = append(out, cmd)
 		}
