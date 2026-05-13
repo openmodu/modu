@@ -1422,7 +1422,9 @@ You are a summarizer. Reply with a concise summary of the user's request.`
 	}
 
 	model := newTestModel()
+	var capturedSystemPrompt string
 	streamFn := func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+		capturedSystemPrompt = llmCtx.SystemPrompt
 		stream := types.NewEventStream()
 		go func() {
 			last := llmCtx.Messages[len(llmCtx.Messages)-1]
@@ -1458,14 +1460,64 @@ You are a summarizer. Reply with a concise summary of the user's request.`
 		t.Fatal(err)
 	}
 
+	var events []agent.AgentEvent
+	unsub := session.Subscribe(func(event agent.AgentEvent) {
+		events = append(events, event)
+	})
+	defer unsub()
+
 	if err := session.Prompt(context.Background(), "/summarize hello world"); err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(capturedSystemPrompt, "Working directory: "+dir) {
+		t.Fatalf("expected slash skill system prompt to include cwd %q, got %q", dir, capturedSystemPrompt)
 	}
 
 	got := session.GetLastAssistantText()
 	if got != "skill-result: hello world" {
 		t.Fatalf("expected isolated skill result, got %q", got)
 	}
+	if !hasAssistantMessageEnd(events, "skill-result: hello world") {
+		t.Fatalf("expected slash skill result to emit assistant message_end, got %#v", events)
+	}
+	if !hasAgentEnd(events) {
+		t.Fatalf("expected slash skill result to emit agent_end, got %#v", events)
+	}
+
+	if err := session.Prompt(context.Background(), " \t/summarize spaced task\n"); err != nil {
+		t.Fatal(err)
+	}
+	got = session.GetLastAssistantText()
+	if got != "skill-result: spaced task" {
+		t.Fatalf("expected trimmed slash skill invocation, got %q", got)
+	}
+}
+
+func hasAssistantMessageEnd(events []agent.AgentEvent, text string) bool {
+	for _, event := range events {
+		if event.Type != agent.EventTypeMessageEnd {
+			continue
+		}
+		msg, ok := event.Message.(types.AssistantMessage)
+		if !ok {
+			continue
+		}
+		for _, block := range msg.Content {
+			if tc, ok := block.(*types.TextContent); ok && tc.Text == text {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasAgentEnd(events []agent.AgentEvent) bool {
+	for _, event := range events {
+		if event.Type == agent.EventTypeAgentEnd {
+			return true
+		}
+	}
+	return false
 }
 
 func TestPrepareSubagentDefinitionInjectsSkillsAndMemory(t *testing.T) {

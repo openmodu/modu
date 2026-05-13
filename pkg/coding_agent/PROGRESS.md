@@ -91,6 +91,8 @@ High-priority gaps identified before this round:
 - Added `examples/modu_code` command-level tests that exercise `/runtime`, `/logs`, `/artifacts`, and `/bridge` through the real slash-command path.
 - Added `examples/modu_code` smoke tests for print-mode output and rpc-mode request/response flow.
 - Added an integration-style regression that runs a real prompt through tool execution and verifies harness artifact emission end-to-end.
+- Fixed explicit `/skill prompt` execution so isolated skill results emit normal agent events for TUI, print, and RPC subscribers.
+- Added working-directory context to isolated slash-skill prompts so git-oriented skills inspect the active project instead of guessing the home directory.
 - Added focused tests for:
   session persistence after prompt/tool execution
   isolated slash-skill execution

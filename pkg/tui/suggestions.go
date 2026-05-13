@@ -20,7 +20,7 @@ func (r *goTUIRoot) updateSlashMatches() {
 		r.slashMatchIdx = 0
 		return
 	}
-	r.slashMatches = matchSlashCommands(draft)
+	r.slashMatches = matchSlashCommands(draft, r.skillSlashCommands())
 	if r.slashMatchIdx >= len(r.slashMatches) {
 		r.slashMatchIdx = 0
 	}

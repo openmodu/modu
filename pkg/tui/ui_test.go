@@ -368,7 +368,7 @@ func TestExtractThinkTextHidesIncompleteThinkBlock(t *testing.T) {
 }
 
 func TestRenderToolOutputWrapsWhenNarrow(t *testing.T) {
-	got := renderUIToolOutput("bash", "this is a long line that should wrap instead of disappearing", true, 24)
+	got := renderUIToolOutput("bash", "this is a long line that should wrap instead of disappearing", "", true, 24)
 	if !strings.Contains(got, "this is a") {
 		t.Fatalf("expected first wrapped segment, got %q", got)
 	}
@@ -378,7 +378,7 @@ func TestRenderToolOutputWrapsWhenNarrow(t *testing.T) {
 }
 
 func TestRenderToolOutputCollapsedShowsExpandHint(t *testing.T) {
-	got := renderUIToolOutput("read", "l1\nl2\nl3\nl4\nl5", false, 80)
+	got := renderUIToolOutput("read", "l1\nl2\nl3\nl4\nl5", "", false, 80)
 	if !strings.Contains(got, "ctrl+o to expand") {
 		t.Fatalf("expected expand hint, got %q", got)
 	}
@@ -388,9 +388,66 @@ func TestRenderToolOutputCollapsedShowsExpandHint(t *testing.T) {
 }
 
 func TestRenderToolOutputCollapsedShowsExpandHintForWrappedSingleLine(t *testing.T) {
-	got := renderUIToolOutput("bash", "this is one extremely long output line that should wrap into many terminal rows and still show the expand hint", false, 24)
+	got := renderUIToolOutput("bash", "this is one extremely long output line that should wrap into many terminal rows and still show the expand hint", "", false, 24)
 	if !strings.Contains(got, "ctrl+o to expand") {
 		t.Fatalf("expected expand hint for wrapped single line, got %q", got)
+	}
+}
+
+func TestMatchSlashCommandsMergesBuiltinsAndSkills(t *testing.T) {
+	// Built-ins win the top spots; skill entries fill in below, only when
+	// they match the prefix.
+	extras := []slashCommandDef{
+		{Name: "/git-commit", Description: "create a commit"},
+		{Name: "/git-branch", Description: "create a branch"},
+		{Name: "/security-review", Description: "review for vulns"},
+	}
+
+	all := matchSlashCommands("/", extras)
+	gotNames := make(map[string]bool, len(all))
+	for _, c := range all {
+		gotNames[c.Name] = true
+	}
+	for _, want := range []string{"/help", "/skills", "/git-commit", "/git-branch", "/security-review"} {
+		if !gotNames[want] {
+			t.Fatalf("expected %q in merged matches, got %v", want, gotNames)
+		}
+	}
+
+	gitOnly := matchSlashCommands("/git", extras)
+	if len(gitOnly) != 2 {
+		t.Fatalf("expected 2 /git matches (skills only), got %d: %v", len(gitOnly), gitOnly)
+	}
+
+	// Prefix that matches neither built-ins nor skills returns empty.
+	if got := matchSlashCommands("/zzz", extras); len(got) != 0 {
+		t.Fatalf("expected no matches for /zzz, got %v", got)
+	}
+}
+
+func TestRenderEditToolOutputSyntaxHighlightsWhenFilePathKnown(t *testing.T) {
+	// A Go-flavored diff. With a .go file path the keyword `func` should
+	// receive chroma's monokai keyword color (an SGR sequence). Without a
+	// file path the line should fall back to a single dim style with no
+	// per-token coloring.
+	diff := "- func old() {}\n+ func new() {}"
+
+	withPath := renderUIToolOutput("edit", diff, "main.go", true, 120)
+	if !strings.Contains(withPath, "\x1b[38;5;") {
+		t.Fatalf("expected chroma SGR colors when file path is known, got %q", withPath)
+	}
+	// The `+` and `-` diff markers must still be visible.
+	if !strings.Contains(ansiPattern.ReplaceAllString(withPath, ""), "+ func new()") {
+		t.Fatalf("expected `+` marker preserved on added line, got %q", withPath)
+	}
+	if !strings.Contains(ansiPattern.ReplaceAllString(withPath, ""), "- func old()") {
+		t.Fatalf("expected `-` marker preserved on removed line, got %q", withPath)
+	}
+
+	withoutPath := renderUIToolOutput("edit", diff, "", true, 120)
+	// Strip ANSI to confirm the visible content still has the diff markers.
+	if !strings.Contains(ansiPattern.ReplaceAllString(withoutPath, ""), "+ func new()") {
+		t.Fatalf("expected `+` marker preserved without file path, got %q", withoutPath)
 	}
 }
 

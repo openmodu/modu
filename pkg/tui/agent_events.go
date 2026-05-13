@@ -44,11 +44,21 @@ func (m *uiModel) handleAgentEvent(ev agent.AgentEvent) {
 			args = margs
 		}
 		block := m.currentToolBlock()
+		var filePath string
+		if args != nil {
+			switch ev.ToolName {
+			case "edit", "write", "read":
+				if fp, ok := args["file_path"].(string); ok {
+					filePath = fp
+				}
+			}
+		}
 		block.Tools = append(block.Tools, &uiToolState{
-			ID:     ev.ToolCallID,
-			Name:   ev.ToolName,
-			Input:  formatToolInput(ev.ToolName, args),
-			Status: "running",
+			ID:       ev.ToolCallID,
+			Name:     ev.ToolName,
+			Input:    formatToolInput(ev.ToolName, args),
+			FilePath: filePath,
+			Status:   "running",
 		})
 
 	case agent.EventTypeToolExecutionEnd:
