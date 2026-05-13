@@ -1422,7 +1422,9 @@ You are a summarizer. Reply with a concise summary of the user's request.`
 	}
 
 	model := newTestModel()
+	var capturedSystemPrompt string
 	streamFn := func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+		capturedSystemPrompt = llmCtx.SystemPrompt
 		stream := types.NewEventStream()
 		go func() {
 			last := llmCtx.Messages[len(llmCtx.Messages)-1]
@@ -1467,6 +1469,9 @@ You are a summarizer. Reply with a concise summary of the user's request.`
 	if err := session.Prompt(context.Background(), "/summarize hello world"); err != nil {
 		t.Fatal(err)
 	}
+	if !strings.Contains(capturedSystemPrompt, "Working directory: "+dir) {
+		t.Fatalf("expected slash skill system prompt to include cwd %q, got %q", dir, capturedSystemPrompt)
+	}
 
 	got := session.GetLastAssistantText()
 	if got != "skill-result: hello world" {
@@ -1477,6 +1482,14 @@ You are a summarizer. Reply with a concise summary of the user's request.`
 	}
 	if !hasAgentEnd(events) {
 		t.Fatalf("expected slash skill result to emit agent_end, got %#v", events)
+	}
+
+	if err := session.Prompt(context.Background(), " \t/summarize spaced task\n"); err != nil {
+		t.Fatal(err)
+	}
+	got = session.GetLastAssistantText()
+	if got != "skill-result: spaced task" {
+		t.Fatalf("expected trimmed slash skill invocation, got %q", got)
 	}
 }
 

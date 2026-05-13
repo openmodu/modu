@@ -462,9 +462,11 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 
 // Prompt sends a user message and starts processing.
 func (s *CodingSession) Prompt(ctx context.Context, text string) error {
+	input := strings.TrimSpace(text)
+
 	// Check for slash commands
-	if strings.HasPrefix(text, "/") {
-		parts := strings.SplitN(text[1:], " ", 2)
+	if strings.HasPrefix(input, "/") {
+		parts := strings.SplitN(input[1:], " ", 2)
 		cmdName := parts[0]
 		cmdArgs := ""
 		if len(parts) > 1 {
@@ -476,13 +478,13 @@ func (s *CodingSession) Prompt(ctx context.Context, text string) error {
 		}
 
 		// Check template expansion
-		if expanded, ok := s.templateMgr.Expand(text); ok {
+		if expanded, ok := s.templateMgr.Expand(input); ok {
 			text = expanded
 		}
 
 		// Check skills
 		if skill, ok := s.skillManager.Get(cmdName); ok {
-			return s.executeSkill(ctx, text, skill, cmdArgs)
+			return s.executeSkill(ctx, input, skill, cmdArgs)
 		}
 	}
 
@@ -1470,7 +1472,7 @@ func (s *CodingSession) executeSkill(ctx context.Context, originalInput string, 
 	result, err := subagent.Run(ctx, &subagent.SubagentDefinition{
 		Name:         skill.Name,
 		Description:  skill.Description,
-		SystemPrompt: skill.Content,
+		SystemPrompt: s.skillSystemPrompt(skill),
 	}, task, s.agent.GetState().Tools, s.model, s.getAPIKey, s.streamFn)
 	if err != nil {
 		return err
@@ -1490,6 +1492,13 @@ func (s *CodingSession) executeSkill(ctx context.Context, originalInput string, 
 	s.agent.Emit(agent.AgentEvent{Type: agent.EventTypeAgentEnd, Messages: []agent.AgentMessage{assistant}})
 
 	return nil
+}
+
+func (s *CodingSession) skillSystemPrompt(skill *skills.Skill) string {
+	var parts []string
+	parts = append(parts, skill.Content)
+	parts = append(parts, fmt.Sprintf("# Environment\n- Working directory: %s\n- All file and shell tools are already bound to this working directory.", s.cwd))
+	return strings.Join(parts, "\n\n---\n\n")
 }
 
 func (s *CodingSession) handleMessageEnd(msg agent.AgentMessage) {
