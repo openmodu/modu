@@ -1405,7 +1405,7 @@ func TestPromptPersistsAssistantAndToolMessages(t *testing.T) {
 	}
 }
 
-func TestPromptSlashSkillRunsInIsolatedAgent(t *testing.T) {
+func TestPromptSlashSkillPinsSkillForMainAgentTurn(t *testing.T) {
 	dir := t.TempDir()
 	agentDir := filepath.Join(dir, ".coding_agent")
 
@@ -1422,9 +1422,9 @@ You are a summarizer. Reply with a concise summary of the user's request.`
 	}
 
 	model := newTestModel()
-	var capturedSystemPrompt string
+	var capturedMessages []agent.AgentMessage
 	streamFn := func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
-		capturedSystemPrompt = llmCtx.SystemPrompt
+		capturedMessages = append([]agent.AgentMessage{}, llmCtx.Messages...)
 		stream := types.NewEventStream()
 		go func() {
 			last := llmCtx.Messages[len(llmCtx.Messages)-1]
@@ -1469,8 +1469,11 @@ You are a summarizer. Reply with a concise summary of the user's request.`
 	if err := session.Prompt(context.Background(), "/summarize hello world"); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(capturedSystemPrompt, "Working directory: "+dir) {
-		t.Fatalf("expected slash skill system prompt to include cwd %q, got %q", dir, capturedSystemPrompt)
+	if !messagesContainText(capturedMessages, "explicitly invoked the \"summarize\" skill") {
+		t.Fatalf("expected slash skill invocation to inject skill context, got %#v", capturedMessages)
+	}
+	if !messagesContainText(capturedMessages, "Working directory: "+dir) {
+		t.Fatalf("expected slash skill context to include cwd %q, got %#v", dir, capturedMessages)
 	}
 
 	got := session.GetLastAssistantText()
@@ -1490,6 +1493,43 @@ You are a summarizer. Reply with a concise summary of the user's request.`
 	got = session.GetLastAssistantText()
 	if got != "skill-result: spaced task" {
 		t.Fatalf("expected trimmed slash skill invocation, got %q", got)
+	}
+}
+
+func messagesContainText(messages []agent.AgentMessage, text string) bool {
+	for _, msg := range messages {
+		if strings.Contains(agentMessageText(msg), text) {
+			return true
+		}
+	}
+	return false
+}
+
+func agentMessageText(msg agent.AgentMessage) string {
+	switch m := msg.(type) {
+	case types.UserMessage:
+		return contentText(m.Content)
+	case *types.UserMessage:
+		return contentText(m.Content)
+	default:
+		return ""
+	}
+}
+
+func contentText(content any) string {
+	switch c := content.(type) {
+	case string:
+		return c
+	case []types.ContentBlock:
+		var parts []string
+		for _, block := range c {
+			if tc, ok := block.(*types.TextContent); ok && tc != nil {
+				parts = append(parts, tc.Text)
+			}
+		}
+		return strings.Join(parts, "\n")
+	default:
+		return ""
 	}
 }
 

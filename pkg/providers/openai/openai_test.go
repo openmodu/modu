@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -11,26 +12,29 @@ import (
 )
 
 const (
-	lmStudioBaseURL = "http://192.168.5.149:1234/v1"
-	lmStudioModel   = "qwen/qwen3.6-35b-a3b"
-
 	lmStudioTimeout = 3 * time.Minute
 )
 
-func newLMStudioProvider() providers.Provider {
+func newLMStudioProvider(t *testing.T) (providers.Provider, string) {
+	t.Helper()
+	baseURL := os.Getenv("LMSTUDIO_BASE_URL")
+	model := os.Getenv("LMSTUDIO_MODEL")
+	if baseURL == "" || model == "" {
+		t.Skip("set LMSTUDIO_BASE_URL and LMSTUDIO_MODEL to run LM Studio integration tests")
+	}
 	return New("lmstudio",
-		WithBaseURL(lmStudioBaseURL),
-	)
+		WithBaseURL(baseURL),
+	), model
 }
 
 func TestLMStudio_Chat(t *testing.T) {
-	p := newLMStudioProvider()
+	p, model := newLMStudioProvider(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), lmStudioTimeout)
 	defer cancel()
 
 	resp, err := p.Chat(ctx, &providers.ChatRequest{
-		Model: lmStudioModel,
+		Model: model,
 		Messages: []providers.Message{
 			{Role: providers.RoleUser, Content: "Reply with the single word: pong"},
 		},
@@ -48,13 +52,13 @@ func TestLMStudio_Chat(t *testing.T) {
 
 // TestLMStudio_Stream verifies streaming output for a thinking model.
 func TestLMStudio_Stream(t *testing.T) {
-	p := newLMStudioProvider()
+	p, model := newLMStudioProvider(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), lmStudioTimeout)
 	defer cancel()
 
 	stream, err := p.Stream(ctx, &providers.ChatRequest{
-		Model: lmStudioModel,
+		Model: model,
 		Messages: []providers.Message{
 			{Role: providers.RoleUser, Content: "What is 17 * 23?"},
 		},

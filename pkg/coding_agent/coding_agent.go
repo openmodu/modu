@@ -1461,41 +1461,38 @@ func memoryContextForScope(store *MemoryStore, scope string) string {
 func (s *CodingSession) executeSkill(ctx context.Context, originalInput string, skill *skills.Skill, args string) error {
 	task := strings.TrimSpace(args)
 	if task == "" {
-		task = "Execute this skill for the user and provide the best possible result."
+		task = "Use this skill for the user's request."
 	}
 
-	_ = s.sessionManager.Append(session.NewEntry(session.EntryTypeMessage, "", session.MessageData{
-		Role:    agent.RoleUser,
-		Content: originalInput,
-	}))
-
-	result, err := subagent.Run(ctx, &subagent.SubagentDefinition{
-		Name:         skill.Name,
-		Description:  skill.Description,
-		SystemPrompt: s.skillSystemPrompt(skill),
-	}, task, s.agent.GetState().Tools, s.model, s.getAPIKey, s.streamFn)
-	if err != nil {
+	if err := s.runHarnessUserPromptSubmit(originalInput); err != nil {
 		return err
 	}
 
-	assistant := types.AssistantMessage{
-		Role:       "assistant",
-		ProviderID: s.model.ProviderID,
-		Model:      s.model.ID,
-		Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: result}},
-		Timestamp:  time.Now().UnixMilli(),
-	}
-	s.agent.AppendMessage(assistant)
-	s.agent.Emit(agent.AgentEvent{Type: agent.EventTypeMessageStart, Message: assistant})
-	s.agent.Emit(agent.AgentEvent{Type: agent.EventTypeMessageEnd, Message: assistant})
-	s.agent.Emit(agent.AgentEvent{Type: agent.EventTypeTurnEnd, Message: assistant})
-	s.agent.Emit(agent.AgentEvent{Type: agent.EventTypeAgentEnd, Messages: []agent.AgentMessage{assistant}})
+	s.refreshDynamicSystemPrompt()
 
+	messages := []agent.AgentMessage{
+		(&CustomMessage{
+			Source: explicitSkillSource,
+			Text:   s.skillPrompt(skill),
+		}).ToLlmMessage(),
+		types.UserMessage{
+			Role:      "user",
+			Content:   task,
+			Timestamp: time.Now().UnixMilli(),
+		},
+	}
+
+	err := s.agent.Prompt(ctx, messages)
+	if err != nil {
+		return err
+	}
+	s.maybeAutoCompact(ctx)
 	return nil
 }
 
-func (s *CodingSession) skillSystemPrompt(skill *skills.Skill) string {
+func (s *CodingSession) skillPrompt(skill *skills.Skill) string {
 	var parts []string
+	parts = append(parts, fmt.Sprintf("The user explicitly invoked the %q skill. Use the instructions below for this turn.", skill.Name))
 	parts = append(parts, skill.Content)
 	parts = append(parts, fmt.Sprintf("# Environment\n- Working directory: %s\n- All file and shell tools are already bound to this working directory.", s.cwd))
 	return strings.Join(parts, "\n\n---\n\n")
