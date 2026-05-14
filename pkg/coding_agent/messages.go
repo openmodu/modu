@@ -78,6 +78,7 @@ type CustomMessage struct {
 }
 
 const nestedContextSource = "nested_context"
+const explicitSkillSource = "explicit_skill"
 
 // ToLlmMessage converts a CustomMessage to a UserMessage.
 func (m *CustomMessage) ToLlmMessage() types.UserMessage {
@@ -96,9 +97,9 @@ func (m *CustomMessage) ToLlmMessage() types.UserMessage {
 func isTransientContextMessage(msg agent.AgentMessage) bool {
 	switch m := msg.(type) {
 	case types.UserMessage:
-		return customMessageHasSource(m.Content, nestedContextSource)
+		return customMessageHasSource(m.Content, nestedContextSource) || customMessageHasSource(m.Content, explicitSkillSource)
 	case *types.UserMessage:
-		return customMessageHasSource(m.Content, nestedContextSource)
+		return customMessageHasSource(m.Content, nestedContextSource) || customMessageHasSource(m.Content, explicitSkillSource)
 	default:
 		return false
 	}
