@@ -30,7 +30,6 @@ import (
 
 	"github.com/openmodu/modu/pkg/approval"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
-	"github.com/openmodu/modu/pkg/mailboxrt"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -38,13 +37,12 @@ import (
 // shared UI state and routes events to the per-component method receivers
 // defined in this package's other files.
 type goTUIRoot struct {
-	ctx            context.Context
-	session        *coding_agent.CodingSession
-	modelInfo      *types.Model
-	mailboxRuntime *mailboxrt.Runtime
-	histFile       string
-	approvalCh     <-chan approval.Request
-	promptMu       *sync.Mutex
+	ctx        context.Context
+	session    *coding_agent.CodingSession
+	modelInfo  *types.Model
+	histFile   string
+	approvalCh <-chan approval.Request
+	promptMu   *sync.Mutex
 
 	app     *gotui.App
 	model   *uiModel
@@ -66,7 +64,6 @@ func newGoTUIRoot(
 	ctx context.Context,
 	session *coding_agent.CodingSession,
 	modelInfo *types.Model,
-	mailboxRuntime *mailboxrt.Runtime,
 	histFile string,
 	approvalCh <-chan approval.Request,
 	promptMu *sync.Mutex,
@@ -75,23 +72,22 @@ func newGoTUIRoot(
 	if err != nil || width <= 0 {
 		width = 80
 	}
-	m := newUIModel(ctx, session, modelInfo, mailboxRuntime, histFile, nil, promptMu, "")
+	m := newUIModel(ctx, session, modelInfo, histFile, nil, promptMu, "")
 	m.ready = true
 	m.state = uiStateInput
 	m.width = width
 	m.height = 24
 
 	return &goTUIRoot{
-		ctx:            ctx,
-		session:        session,
-		modelInfo:      modelInfo,
-		mailboxRuntime: mailboxRuntime,
-		histFile:       histFile,
-		approvalCh:     approvalCh,
-		promptMu:       promptMu,
-		model:          m,
-		draft:          gotui.NewState(""),
-		refresh:        gotui.NewState(0),
+		ctx:        ctx,
+		session:    session,
+		modelInfo:  modelInfo,
+		histFile:   histFile,
+		approvalCh: approvalCh,
+		promptMu:   promptMu,
+		model:      m,
+		draft:      gotui.NewState(""),
+		refresh:    gotui.NewState(0),
 	}
 }
 

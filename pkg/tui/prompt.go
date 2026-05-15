@@ -58,7 +58,7 @@ func (r *goTUIRoot) runShell(shellCmd string) {
 func (r *goTUIRoot) runSlash(line string) {
 	go func() {
 		printer := &uiSlashPrinter{}
-		handled, exit := slash.Handle(r.ctx, line, r.session, printer, r.modelInfo, r.mailboxRuntime)
+		handled, exit := slash.Handle(r.ctx, line, r.session, printer, r.modelInfo)
 		if !handled && r.isSkillSlash(line) {
 			// Not a built-in slash command, but a known skill — delegate to the
 			// session, which has its own /skill-name → executeSkill dispatch.

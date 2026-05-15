@@ -9,7 +9,6 @@ import (
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/types"
 
-	"github.com/openmodu/modu/pkg/mailboxrt"
 	"github.com/openmodu/modu/pkg/tgbot"
 )
 
@@ -26,7 +25,7 @@ type Clearer interface {
 }
 
 // Handle processes built-in /commands. Returns (handled, shouldExit).
-func Handle(ctx context.Context, line string, session *coding_agent.CodingSession, r Printer, model *types.Model, rt *mailboxrt.Runtime) (bool, bool) {
+func Handle(ctx context.Context, line string, session *coding_agent.CodingSession, r Printer, model *types.Model) (bool, bool) {
 	if !strings.HasPrefix(line, "/") {
 		return false, false
 	}
@@ -105,9 +104,6 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 				line += " [" + sg.Source + "]"
 				r.PrintInfo(line)
 			}
-		}
-		if rt != nil && len(rt.AgentIDs()) > 0 {
-			r.PrintInfo("mailbox workers: " + strings.Join(rt.AgentIDs(), ", "))
 		}
 		return true, false
 
@@ -305,4 +301,3 @@ func PrintHelp(r Printer) {
 	}
 	r.PrintSection("Help", lines)
 }
-

@@ -13,13 +13,12 @@ import (
 	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/approval"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
-	"github.com/openmodu/modu/pkg/mailboxrt"
 	"github.com/openmodu/modu/pkg/tgbot"
 	"github.com/openmodu/modu/pkg/types"
 )
 
 // Run starts the interactive TUI session.
-func Run(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, rt *mailboxrt.Runtime, noApprove bool) error {
+func Run(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool) error {
 	if n, err := session.RestoreMessages(); err == nil && n > 0 {
 		_ = n
 	}
@@ -31,7 +30,7 @@ func Run(ctx context.Context, session *coding_agent.CodingSession, model *types.
 	}
 	var promptMu sync.Mutex
 
-	root := newGoTUIRoot(ctx, session, model, rt, histFile, approvalCh, &promptMu)
+	root := newGoTUIRoot(ctx, session, model, histFile, approvalCh, &promptMu)
 	if history, err := loadHistoryFile(histFile); err == nil {
 		root.history = history
 		root.historyIndex = len(history)

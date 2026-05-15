@@ -10,7 +10,6 @@ import (
 
 	"github.com/openmodu/modu/pkg/approval"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
-	"github.com/openmodu/modu/pkg/mailboxrt"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -116,13 +115,12 @@ func (p *uiSlashPrinter) ClearScreen() { p.clear = true }
 // ─── Model ───────────────────────────────────────
 
 type uiModel struct {
-	session        *coding_agent.CodingSession
-	model          *types.Model
-	mailboxRuntime *mailboxrt.Runtime
-	histFile       string
-	promptMu       *sync.Mutex
-	ctx            context.Context
-	tgUsername     string
+	session    *coding_agent.CodingSession
+	model      *types.Model
+	histFile   string
+	promptMu   *sync.Mutex
+	ctx        context.Context
+	tgUsername string
 
 	width  int
 	height int
@@ -146,17 +144,16 @@ type uiModel struct {
 	transcriptMode bool
 }
 
-func newUIModel(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, mailboxRuntime *mailboxrt.Runtime, histFile string, approvalCh chan approval.Request, promptMu *sync.Mutex, tgUsername string) *uiModel {
+func newUIModel(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, histFile string, approvalCh chan approval.Request, promptMu *sync.Mutex, tgUsername string) *uiModel {
 	_ = approvalCh
 	return &uiModel{
-		session:        session,
-		model:          model,
-		mailboxRuntime: mailboxRuntime,
-		histFile:       histFile,
-		promptMu:       promptMu,
-		ctx:            ctx,
-		tgUsername:     tgUsername,
-		state:          uiStateInit,
+		session:    session,
+		model:      model,
+		histFile:   histFile,
+		promptMu:   promptMu,
+		ctx:        ctx,
+		tgUsername: tgUsername,
+		state:      uiStateInit,
 	}
 }
 

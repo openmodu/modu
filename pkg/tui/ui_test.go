@@ -19,7 +19,7 @@ import (
 
 func TestGoTUIApprovalUsesCoreDecisionNames(t *testing.T) {
 	responseCh := make(chan string, 1)
-	root := newGoTUIRoot(context.Background(), nil, nil, nil, "", nil, nil)
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 	root.handleApprovalRequest(approval.Request{
 		ToolName:   "bash",
 		ToolCallID: "call-1",
@@ -43,7 +43,7 @@ func TestGoTUIApprovalUsesCoreDecisionNames(t *testing.T) {
 
 func TestGoTUIApprovalKeyMapCapturesApprovalKeys(t *testing.T) {
 	responseCh := make(chan string, 1)
-	root := newGoTUIRoot(context.Background(), nil, nil, nil, "", nil, nil)
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 	root.draft.Set("draft")
 	root.handleApprovalRequest(approval.Request{
 		ToolName:   "bash",
@@ -70,7 +70,7 @@ func TestGoTUIApprovalKeyMapCapturesApprovalKeys(t *testing.T) {
 
 func TestGoTUIApprovalKeyMapEnterAllows(t *testing.T) {
 	responseCh := make(chan string, 1)
-	root := newGoTUIRoot(context.Background(), nil, nil, nil, "", nil, nil)
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 	root.handleApprovalRequest(approval.Request{
 		ToolName:   "bash",
 		ToolCallID: "call-1",
@@ -92,7 +92,7 @@ func TestGoTUIApprovalKeyMapEnterAllows(t *testing.T) {
 }
 
 func TestGoTUIInputUsesCursorEditing(t *testing.T) {
-	root := newGoTUIRoot(context.Background(), nil, nil, nil, "", nil, nil)
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 
 	for _, r := range []rune("hello") {
 		dispatchFirstGoTUIKey(root.KeyMap(), gotui.KeyEvent{Key: gotui.KeyRune, Rune: r})
@@ -107,7 +107,7 @@ func TestGoTUIInputUsesCursorEditing(t *testing.T) {
 }
 
 func TestGoTUIInputBackspaceUsesCursor(t *testing.T) {
-	root := newGoTUIRoot(context.Background(), nil, nil, nil, "", nil, nil)
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 
 	for _, r := range []rune("abcd") {
 		dispatchFirstGoTUIKey(root.KeyMap(), gotui.KeyEvent{Key: gotui.KeyRune, Rune: r})
@@ -122,7 +122,7 @@ func TestGoTUIInputBackspaceUsesCursor(t *testing.T) {
 }
 
 func TestGoTUIInputCtrlJInsertsNewline(t *testing.T) {
-	root := newGoTUIRoot(context.Background(), nil, nil, nil, "", nil, nil)
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 
 	for _, r := range []rune("hello") {
 		dispatchFirstGoTUIKey(root.KeyMap(), gotui.KeyEvent{Key: gotui.KeyRune, Rune: r})
@@ -135,7 +135,7 @@ func TestGoTUIInputCtrlJInsertsNewline(t *testing.T) {
 }
 
 func TestGoTUIInputRendersChineseCursorWithoutInsertedGlyph(t *testing.T) {
-	root := newGoTUIRoot(context.Background(), nil, nil, nil, "", nil, nil)
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 	root.draft.Set("中文")
 	root.cursor = 1
 
@@ -152,7 +152,7 @@ func TestGoTUIApprovalCancelClearsPending(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cancelCh := make(chan struct{})
-	root := newGoTUIRoot(ctx, nil, nil, nil, "", nil, nil)
+	root := newGoTUIRoot(ctx, nil, nil, "", nil, nil)
 	root.handleApprovalRequest(approval.Request{
 		ToolName:   "bash",
 		ToolCallID: "call-1",
@@ -181,7 +181,7 @@ func TestGoTUIApprovalCancelClearsPending(t *testing.T) {
 
 func TestGoTUIAbortPendingApprovalDeniesResponse(t *testing.T) {
 	responseCh := make(chan string, 1)
-	root := newGoTUIRoot(context.Background(), nil, nil, nil, "", nil, nil)
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 	root.model.state = uiStatePermission
 	root.handleApprovalRequest(approval.Request{
 		ToolName:   "bash",
@@ -280,7 +280,7 @@ func renderAllBlocks(m *uiModel) string {
 }
 
 func TestUIRenderBlocksIncludesUserAndAssistantContent(t *testing.T) {
-	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
+	m := newUIModel(context.Background(), nil, nil, "", nil, nil, "")
 	m.width = 100
 	m.ready = true
 	m.blocks = []uiBlock{
@@ -298,7 +298,7 @@ func TestUIRenderBlocksIncludesUserAndAssistantContent(t *testing.T) {
 }
 
 func TestUIRenderBlocksUsesBulletPrefixes(t *testing.T) {
-	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
+	m := newUIModel(context.Background(), nil, nil, "", nil, nil, "")
 	m.width = 100
 	m.blocks = []uiBlock{
 		{Kind: "assistant", Thinking: "step one", Content: "answer"},
@@ -318,7 +318,7 @@ func TestUIRenderBlocksUsesBulletPrefixes(t *testing.T) {
 }
 
 func TestUIRenderBlocksMarkdownDoesNotDuplicateHeadings(t *testing.T) {
-	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
+	m := newUIModel(context.Background(), nil, nil, "", nil, nil, "")
 	m.width = 72
 	m.blocks = []uiBlock{
 		{Kind: "assistant", Content: "### render.go (+39 -1)\n\n- first item\n- second item"},
@@ -452,7 +452,7 @@ func TestRenderEditToolOutputSyntaxHighlightsWhenFilePathKnown(t *testing.T) {
 }
 
 func TestHandleToolExecutionEndUpdatesByToolCallID(t *testing.T) {
-	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
+	m := newUIModel(context.Background(), nil, nil, "", nil, nil, "")
 	m.handleAgentEvent(agent.AgentEvent{Type: agent.EventTypeToolExecutionStart, ToolCallID: "call-1", ToolName: "bash"})
 	m.handleAgentEvent(agent.AgentEvent{Type: agent.EventTypeToolExecutionStart, ToolCallID: "call-2", ToolName: "bash"})
 
@@ -475,7 +475,7 @@ func TestHandleToolExecutionEndUpdatesByToolCallID(t *testing.T) {
 func TestRenderInputMetaUsesShortenedCwd(t *testing.T) {
 	session := newUITestSession(t)
 	model := testUIModel()
-	m := newUIModel(context.Background(), session, model, nil, "", nil, nil, "")
+	m := newUIModel(context.Background(), session, model, "", nil, nil, "")
 	got := m.renderInputMeta()
 	if !strings.Contains(got, model.Name) || !strings.Contains(got, "("+model.ProviderID+")") {
 		t.Fatalf("expected model in meta, got %q", got)
@@ -492,7 +492,7 @@ func TestRenderInputMetaDoesNotDuplicateProvider(t *testing.T) {
 		Name:       "qwen/qwen3.6-35b-a3b (lmstudio)",
 		ProviderID: "lmstudio",
 	}
-	m := newUIModel(context.Background(), session, model, nil, "", nil, nil, "")
+	m := newUIModel(context.Background(), session, model, "", nil, nil, "")
 	got := m.renderInputMeta()
 	if strings.Count(strings.ToLower(got), "lmstudio") != 1 {
 		t.Fatalf("expected provider to appear once, got %q", got)
@@ -502,7 +502,7 @@ func TestRenderInputMetaDoesNotDuplicateProvider(t *testing.T) {
 func TestViewportConversationWrapsWithinViewportWidth(t *testing.T) {
 	session := newUITestSession(t)
 	model := testUIModel()
-	m := newUIModel(context.Background(), session, model, nil, "", nil, nil, "")
+	m := newUIModel(context.Background(), session, model, "", nil, nil, "")
 	m.ready = true
 	m.state = uiStateInput
 	m.width = 60
