@@ -76,6 +76,47 @@ func TestRunRespectsToolFilteringAndThinkingLevel(t *testing.T) {
 	}
 }
 
+func TestWithWorkingDirectoryAnnotatesCopy(t *testing.T) {
+	def := &SubagentDefinition{
+		Name:         "helper",
+		SystemPrompt: "Base prompt.",
+	}
+
+	got := WithWorkingDirectory(def, "/tmp/project")
+	if got == def {
+		t.Fatal("expected a copied definition")
+	}
+	if def.SystemPrompt != "Base prompt." {
+		t.Fatalf("expected original prompt unchanged, got %q", def.SystemPrompt)
+	}
+	if !strings.Contains(got.SystemPrompt, "Base prompt.") {
+		t.Fatalf("expected base prompt retained, got %q", got.SystemPrompt)
+	}
+	if !strings.Contains(got.SystemPrompt, "Working directory: /tmp/project") {
+		t.Fatalf("expected cwd annotation, got %q", got.SystemPrompt)
+	}
+
+	again := WithWorkingDirectory(got, "/tmp/project")
+	if strings.Count(again.SystemPrompt, "Working directory: /tmp/project") != 1 {
+		t.Fatalf("expected cwd annotation once, got %q", again.SystemPrompt)
+	}
+}
+
+func TestWithWorkingDirectoryPreservesDefaultPrompt(t *testing.T) {
+	def := &SubagentDefinition{
+		Name:        "helper",
+		Description: "helps with tests",
+	}
+
+	got := WithWorkingDirectory(def, "/tmp/project")
+	if !strings.Contains(got.SystemPrompt, `specialized assistant named "helper"`) {
+		t.Fatalf("expected default subagent prompt, got %q", got.SystemPrompt)
+	}
+	if !strings.Contains(got.SystemPrompt, "Working directory: /tmp/project") {
+		t.Fatalf("expected cwd annotation, got %q", got.SystemPrompt)
+	}
+}
+
 func TestParseDefinitionSupportsExtendedFrontmatter(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/agent.md"

@@ -395,8 +395,12 @@ Run pwd in bash and return the tool output.`
 
 	model := newTestModel()
 	callCount := 0
+	var capturedSystemPrompt string
 	streamFn := func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
 		callCount++
+		if callCount == 1 {
+			capturedSystemPrompt = llmCtx.SystemPrompt
+		}
 		stream := types.NewEventStream()
 		go func() {
 			if callCount == 1 {
@@ -473,6 +477,9 @@ Run pwd in bash and return the tool output.`
 	}
 	if strings.Contains(output, dir) && !strings.Contains(output, filepath.Join(agentDir, "worktrees")) {
 		t.Fatalf("expected worktree path instead of repo root, got %q", output)
+	}
+	if !strings.Contains(capturedSystemPrompt, filepath.Join(agentDir, "worktrees")) {
+		t.Fatalf("expected system prompt to include worktree cwd, got %q", capturedSystemPrompt)
 	}
 }
 

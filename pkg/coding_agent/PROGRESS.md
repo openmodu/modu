@@ -42,7 +42,6 @@ High-priority gaps identified before this round:
 - Refreshed the session system prompt dynamically when plan mode or worktree mode changes.
 - Added exported session accessors for discovered subagents, current todos, background tasks, plan mode, and active worktree so external frontends can inspect agent state.
 - Wired `examples/modu_code` to use its local `agents/` directory by default.
-- Added a local in-process mailbox runtime to `examples/modu_code` so `spawn_agent` is exercised during example runs instead of remaining disconnected.
 - Added manual validation slash commands to `examples/modu_code` for `/agents`, `/todos`, `/tasks`, `/plan`, and `/worktree`.
 - Optimized context loading so project instruction files are discovered hierarchically from repo root to the active working directory.
 - Added prompt-level context deduplication and size budgeting to reduce token waste from repeated or oversized instruction files.
@@ -69,6 +68,8 @@ High-priority gaps identified before this round:
 - Added harness-managed action status artifacts under the runtime tree so action failures are observable.
 - Added `timeoutMs` support for harness `exec` actions.
 - Added stdout/stderr capture into harness action status artifacts.
+- Added working-directory annotations to subagent prompts so delegated agents see the same cwd that their bound tools use.
+- Removed the `modu_code` local mailbox runtime path so user-facing delegation is centered on `spawn_subagent`.
 - Added README usage documentation for harness runtime outputs and action configuration.
 - Added safe harness output defaults so logs/artifacts/bridge work without manual settings.
 - Added automatic global `settings.json` bootstrap when no config exists.

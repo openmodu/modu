@@ -67,6 +67,28 @@ func Run(
 	return extractLastAssistantText(ag.GetState().Messages), nil
 }
 
+// WithWorkingDirectory returns a copy of def whose prompt explicitly names the
+// directory used by cwd-bound tools.
+func WithWorkingDirectory(def *SubagentDefinition, cwd string) *SubagentDefinition {
+	if def == nil || strings.TrimSpace(cwd) == "" {
+		return def
+	}
+
+	clone := *def
+	base := strings.TrimSpace(clone.SystemPrompt)
+	if base == "" {
+		base = fmt.Sprintf("You are a specialized assistant named %q. %s", clone.Name, clone.Description)
+	}
+
+	env := fmt.Sprintf("# Environment\n- Working directory: %s\n- All file and shell tools are already bound to this working directory.", cwd)
+	if strings.Contains(base, "Working directory: "+cwd) {
+		clone.SystemPrompt = base
+		return &clone
+	}
+	clone.SystemPrompt = base + "\n\n---\n\n" + env
+	return &clone
+}
+
 // filterTools returns the subset of allTools whose Name() matches wantNames.
 // Unrecognised names are logged and skipped.
 func filterTools(wantNames, disallowedNames []string, allTools []agent.AgentTool) []agent.AgentTool {

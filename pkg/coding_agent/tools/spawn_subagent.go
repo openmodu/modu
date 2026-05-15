@@ -177,7 +177,7 @@ func (t *SpawnSubagentTool) runSubagent(ctx context.Context, def *subagent.Subag
 		}
 		return result, err
 	}
-	result, err := subagent.Run(ctx, def, task, t.allTools, t.model, t.getAPIKey, t.streamFn)
+	result, err := subagent.Run(ctx, subagent.WithWorkingDirectory(def, t.cwd), task, t.allTools, t.model, t.getAPIKey, t.streamFn)
 	if t.observer != nil && def != nil && !def.Background {
 		t.observer.OnSubagentStop(def.Name, task, false, result, err)
 	}
@@ -202,7 +202,7 @@ func (t *SpawnSubagentTool) runInWorktree(ctx context.Context, def *subagent.Sub
 	}()
 
 	rebound := rebindToolsForCwd(t.allTools, path)
-	return subagent.Run(ctx, def, task, rebound, t.model, t.getAPIKey, t.streamFn)
+	return subagent.Run(ctx, subagent.WithWorkingDirectory(def, path), task, rebound, t.model, t.getAPIKey, t.streamFn)
 }
 
 func rebindToolsForCwd(allTools []agent.AgentTool, cwd string) []agent.AgentTool {
