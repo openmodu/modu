@@ -23,6 +23,7 @@ const (
 	uiStateNormal // vim normal mode
 	uiStateQuerying
 	uiStatePermission
+	uiStateModelSelect
 )
 
 // ─── Display blocks ──────────────────────────────
@@ -60,7 +61,7 @@ var uiSlashCommands = []slashCommandDef{
 	{"/help", "show help"},
 	{"/quit", "exit"},
 	{"/clear", "clear screen and session"},
-	{"/model", "show current model"},
+	{"/model", "show or switch model"},
 	{"/compact", "compact context"},
 	{"/tokens", "show token usage"},
 	{"/tools", "list active tools"},

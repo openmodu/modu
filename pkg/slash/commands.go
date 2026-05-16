@@ -43,7 +43,7 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		return true, false
 
 	case "clear":
-		if err := session.ClearSavedMessages(); err != nil {
+		if err := session.ClearConversation(); err != nil {
 			r.PrintError(fmt.Errorf("clear session: %w", err))
 		} else {
 			r.PrintInfo("session cleared")
@@ -56,8 +56,11 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		return true, false
 
 	case "model":
-		r.PrintInfo(fmt.Sprintf("current model: %s (%s / %s)", model.Name, model.ProviderID, model.ID))
-		r.PrintInfo("restart with a different env var to switch models")
+		arg := ""
+		if len(parts) > 1 {
+			arg = strings.TrimSpace(parts[1])
+		}
+		handleModel(arg, session, r, model)
 		return true, false
 
 	case "compact":
@@ -221,6 +224,57 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 	}
 }
 
+func handleModel(arg string, session *coding_agent.CodingSession, r Printer, fallback *types.Model) {
+	current := session.GetModel()
+	if current == nil {
+		current = fallback
+	}
+	if arg == "" || arg == "status" {
+		if current == nil {
+			r.PrintInfo("current model: none")
+			return
+		}
+		r.PrintInfo(fmt.Sprintf("current model: %s (%s / %s)", current.Name, current.ProviderID, current.ID))
+		r.PrintInfo("usage: /model list | /model <name> | /model <provider> <modelId>")
+		return
+	}
+	if arg == "list" || arg == "ls" {
+		models := session.GetAvailableModels()
+		sort.Slice(models, func(i, j int) bool {
+			if models[i].ProviderID == models[j].ProviderID {
+				return models[i].ID < models[j].ID
+			}
+			return models[i].ProviderID < models[j].ProviderID
+		})
+		if len(models) == 0 {
+			r.PrintInfo("no models configured")
+			return
+		}
+		r.PrintInfo(fmt.Sprintf("available models (%d):", len(models)))
+		for _, m := range models {
+			prefix := "  "
+			if current != nil && current.ProviderID == m.ProviderID && current.ID == m.ID {
+				prefix = "* "
+			}
+			r.PrintInfo(fmt.Sprintf("%s%s (%s / %s)", prefix, m.Name, m.ProviderID, m.ID))
+		}
+		return
+	}
+	fields := strings.Fields(arg)
+	var err error
+	if len(fields) == 2 {
+		err = session.SetModelByID(fields[0], fields[1])
+	} else {
+		err = session.SetModelByName(arg)
+	}
+	if err != nil {
+		r.PrintError(err)
+		return
+	}
+	current = session.GetModel()
+	r.PrintInfo(fmt.Sprintf("switched model: %s (%s / %s)", current.Name, current.ProviderID, current.ID))
+}
+
 func handleTelegram(arg string, r Printer) {
 	configPath := tgbot.ConfigPath()
 
@@ -270,7 +324,8 @@ func PrintHelp(r Printer) {
 		"/help, /h           — show this help",
 		"/quit, /exit        — exit",
 		"/clear              — clear the screen",
-		"/model              — show current model",
+		"/model              — show or switch model",
+		"/model list         — list configured models",
 		"/compact            — compact the conversation context",
 		"/tokens             — show total token usage",
 		"/tools              — list active tools",

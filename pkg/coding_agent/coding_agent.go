@@ -53,6 +53,8 @@ type CodingSessionOptions struct {
 	StreamFn agent.StreamFn
 	// ExtraSubagentDirs adds extra directories to scan for subagent definitions.
 	ExtraSubagentDirs []string
+	// ScopedModels limits model listing/cycling to these model IDs.
+	ScopedModels []string
 	// OTelTracerProvider reuses an existing OpenTelemetry tracer provider when set.
 	OTelTracerProvider oteltrace.TracerProvider
 }
@@ -196,6 +198,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 
 	// Build system prompt
 	promptBuilder := NewSystemPromptBuilder(opts.Cwd)
+	promptBuilder.SetModel(opts.Model)
 	promptBuilder.SetMemoryStore(memoryStore)
 	promptBuilder.SetTools(activeTools)
 	for _, ctxFile := range loader.LoadContextFiles() {
@@ -289,7 +292,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		streamFn:        streamFn,
 		retryManager:    NewRetryManager(cfg.RetrySettings, cfg.AutoRetry),
 		eventBus:        eventbus.NewEventBus(),
-		scopedModels:    cfg.ScopedModels,
+		scopedModels:    resolveScopedModels(cfg.ScopedModels, opts.ScopedModels),
 		thinkingLevel:   cfg.ThinkingLevel,
 		sessionStarted:  time.Now().UnixMilli(),
 		taskManager:     taskMgr,
@@ -443,6 +446,13 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	cs.writeRuntimeState()
 
 	return cs, nil
+}
+
+func resolveScopedModels(configured, explicit []string) []string {
+	if len(explicit) > 0 {
+		return append([]string(nil), explicit...)
+	}
+	return append([]string(nil), configured...)
 }
 
 // Prompt sends a user message and starts processing.
@@ -774,14 +784,27 @@ func (s *CodingSession) pruneTransientContextMessages() {
 
 // SetModel changes the active model.
 func (s *CodingSession) SetModel(model *types.Model) {
+	changed := s.model == nil || s.model.ProviderID != model.ProviderID || s.model.ID != model.ID
 	s.model = model
 	s.agent.SetModel(model)
+	if s.promptBuilder != nil {
+		s.promptBuilder.SetModel(model)
+	}
+	if changed {
+		_ = s.ClearConversation()
+	}
+	s.refreshDynamicSystemPrompt()
 
 	_ = s.sessionManager.Append(session.NewEntry(session.EntryTypeModelChange, "", session.ModelChangeData{
 		Provider: model.ProviderID,
 		ModelID:  model.ID,
 	}))
 	s.writeRuntimeState()
+	s.emitSessionEvent(SessionEvent{
+		Type:     SessionEventModelChange,
+		Provider: model.ProviderID,
+		ModelID:  model.ID,
+	})
 }
 
 // SetModelByID changes the active model by provider and model ID.
@@ -791,6 +814,28 @@ func (s *CodingSession) SetModelByID(provider, modelID string) error {
 		return fmt.Errorf("model not found: %s/%s", provider, modelID)
 	}
 	s.SetModel(llmModel)
+	return nil
+}
+
+// SetModelByName changes the active model by configured display name or model ID.
+func (s *CodingSession) SetModelByName(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("model name is required")
+	}
+	var matches []*types.Model
+	for _, model := range s.GetAvailableModels() {
+		if model.Name == name || model.ID == name || model.ProviderID+"/"+model.ID == name || model.ProviderID+":"+model.ID == name {
+			matches = append(matches, model)
+		}
+	}
+	if len(matches) == 0 {
+		return fmt.Errorf("model not found: %s", name)
+	}
+	if len(matches) > 1 {
+		return fmt.Errorf("model %q is ambiguous; use /model <provider> <modelId>", name)
+	}
+	s.SetModel(matches[0])
 	return nil
 }
 
@@ -936,11 +981,6 @@ func (s *CodingSession) CycleModel() *types.Model {
 	}
 
 	s.SetModel(model)
-	s.emitSessionEvent(SessionEvent{
-		Type:     SessionEventModelChange,
-		Provider: model.ProviderID,
-		ModelID:  model.ID,
-	})
 	return model
 }
 
@@ -1230,6 +1270,15 @@ func (s *CodingSession) GetSessionStats() SessionStats {
 
 // GetAvailableModels returns all registered models from all providers.
 func (s *CodingSession) GetAvailableModels() []*types.Model {
+	if len(s.scopedModels) > 0 {
+		result := make([]*types.Model, 0, len(s.scopedModels))
+		for _, id := range s.scopedModels {
+			if model := providers.GetModel("", id); model != nil {
+				result = append(result, model)
+			}
+		}
+		return result
+	}
 	var result []*types.Model
 	for _, p := range providers.GetAllProviders() {
 		result = append(result, providers.GetModels(p)...)

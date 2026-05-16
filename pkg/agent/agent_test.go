@@ -321,6 +321,20 @@ func TestAgentThinkingBudgetsGetterSetter(t *testing.T) {
 	}
 }
 
+func TestAssistantProviderMessagePreservesReasoningContent(t *testing.T) {
+	msg := assistantProviderMessage([]types.ContentBlock{
+		&types.ThinkingContent{Type: "thinking", Thinking: "hidden reasoning"},
+		&types.TextContent{Type: "text", Text: "visible answer"},
+	})
+
+	if msg.ReasoningContent != "hidden reasoning" {
+		t.Fatalf("reasoning_content = %q", msg.ReasoningContent)
+	}
+	if msg.Content != "visible answer" {
+		t.Fatalf("content = %q", msg.Content)
+	}
+}
+
 func TestAgentMaxRetryDelayMsGetterSetter(t *testing.T) {
 	agent := NewAgent(AgentConfig{MaxRetryDelayMs: 5000})
 	if agent.GetMaxRetryDelayMs() != 5000 {

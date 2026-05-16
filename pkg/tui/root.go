@@ -58,6 +58,10 @@ type goTUIRoot struct {
 	slashMatches      []slashCommandDef
 	slashMatchIdx     int
 	slashScrollOffset int
+
+	modelChoices      []*types.Model
+	modelSelectIdx    int
+	modelSelectScroll int
 }
 
 func newGoTUIRoot(
@@ -177,6 +181,9 @@ func (r *goTUIRoot) positionCursor(app *gotui.App) {
 	if app == nil {
 		return
 	}
+	if r.model.state == uiStateModelSelect || r.model.state == uiStatePermission {
+		return
+	}
 	_, termHeight := app.Terminal().Size()
 	inlineHeight := app.InlineHeight()
 	if inlineHeight <= 0 {
@@ -210,6 +217,9 @@ func (r *goTUIRoot) positionCursor(app *gotui.App) {
 // ─── KeyMap ──────────────────────────────────────────────────────────────────
 
 func (r *goTUIRoot) KeyMap() gotui.KeyMap {
+	if r.model.state == uiStateModelSelect {
+		return r.modelSelectKeyMap()
+	}
 	if r.model.pendingPerm != nil {
 		return r.permissionKeyMap()
 	}
@@ -279,6 +289,7 @@ func (r *goTUIRoot) KeyMap() gotui.KeyMap {
 
 // Render builds the inline widget. Two layouts:
 //   - Permission mode: sep / approval-dialog / sep / meta
+//   - Model select   : sep / model-picker / sep / meta
 //   - Normal mode    : [activity] / sep / input / sep / [suggestions | status] / meta
 func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 	_ = r.refresh.Get()
@@ -338,6 +349,26 @@ func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 		r.commitInlineHeight(app, neededH)
 		addSep(root)
 		root.AddChild(r.renderApprovalWidget())
+		addSep(root)
+		addMeta(root)
+		return root
+	}
+
+	if r.model.state == uiStateModelSelect {
+		visible := len(r.modelChoices)
+		if visible > modelSelectVisibleRows {
+			visible = modelSelectVisibleRows
+		}
+		neededH := visible + 4 // sep + title + choices + hints + sep
+		if meta != "" {
+			neededH++
+		}
+		if neededH < 5 {
+			neededH = 5
+		}
+		r.commitInlineHeight(app, neededH)
+		addSep(root)
+		root.AddChild(r.renderModelSelectWidget())
 		addSep(root)
 		addMeta(root)
 		return root

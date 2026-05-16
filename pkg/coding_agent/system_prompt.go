@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 const (
@@ -83,6 +84,7 @@ type SystemPromptBuilder struct {
 	appendPrompts []string
 	cwd           string
 	memoryStore   *MemoryStore
+	model         *types.Model
 }
 
 // NewSystemPromptBuilder creates a new system prompt builder.
@@ -123,6 +125,12 @@ func (b *SystemPromptBuilder) AppendPrompt(prompt string) *SystemPromptBuilder {
 // SetMemoryStore sets the persistent memory store.
 func (b *SystemPromptBuilder) SetMemoryStore(store *MemoryStore) *SystemPromptBuilder {
 	b.memoryStore = store
+	return b
+}
+
+// SetModel sets the model currently connected to the session.
+func (b *SystemPromptBuilder) SetModel(model *types.Model) *SystemPromptBuilder {
+	b.model = model
 	return b
 }
 
@@ -178,8 +186,6 @@ func (b *SystemPromptBuilder) Build() string {
 		"USER.md",
 		"IDENTITY.md",
 		".agents.md",
-		"CLAUDE.md",
-		".claude.md",
 	}
 
 	for _, name := range bootstrapFiles {
@@ -212,9 +218,22 @@ func (b *SystemPromptBuilder) Build() string {
 	}
 
 	// 7. Environment info
-	envInfo := fmt.Sprintf("# Environment\n- Current date: %s\n- Working directory: %s",
-		time.Now().Format("2006-01-02"),
-		b.cwd)
+	envLines := []string{
+		"# Environment",
+		fmt.Sprintf("- Current date: %s", time.Now().Format("2006-01-02")),
+		fmt.Sprintf("- Working directory: %s", b.cwd),
+	}
+	if b.model != nil && b.model.ID != "" {
+		connectedModel := b.model.ID
+		if b.model.ProviderID != "" {
+			connectedModel = b.model.ProviderID + "/" + connectedModel
+		}
+		envLines = append(envLines, fmt.Sprintf("- Connected model: %s", connectedModel))
+		if b.model.Name != "" && b.model.Name != b.model.ID {
+			envLines = append(envLines, fmt.Sprintf("- Connected model display name: %s", b.model.Name))
+		}
+	}
+	envInfo := strings.Join(envLines, "\n")
 	parts = append(parts, envInfo)
 
 	return strings.Join(parts, "\n\n---\n\n")

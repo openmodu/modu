@@ -1,10 +1,10 @@
-// modu_code is a Claude Code-style interactive coding assistant built on
-// modu's CodingAgent and pkg/tui. It provides a REPL where the AI can read,
-// write, and search files in the current working directory.
+// modu_code is an interactive coding assistant built on modu's CodingAgent and
+// pkg/tui. It provides a REPL where the AI can read, write, and search files in
+// the current working directory.
 //
 // Provider selection (first matching wins):
 //
-//	ANTHROPIC_API_KEY  → Anthropic Claude via OpenAI-compat endpoint
+//	ANTHROPIC_API_KEY  → Anthropic via OpenAI-compatible endpoint
 //	OPENAI_API_KEY     → OpenAI (model: $OPENAI_MODEL or gpt-4o)
 //	DEEPSEEK_API_KEY   → DeepSeek (model: $DEEPSEEK_MODEL or deepseek-chat)
 //	OLLAMA_HOST        → Ollama (model: $OLLAMA_MODEL, required)
@@ -52,7 +52,7 @@ func main() {
 	model, getAPIKey := provider.Resolve()
 	if model == nil {
 		fmt.Fprintln(os.Stderr, "no provider configured")
-		fmt.Fprintln(os.Stderr, "set one of: ANTHROPIC_API_KEY, OPENAI_API_KEY, DEEPSEEK_API_KEY, OLLAMA_HOST+OLLAMA_MODEL")
+		fmt.Fprintf(os.Stderr, "configure models in %s or set one of: ANTHROPIC_API_KEY, OPENAI_API_KEY, DEEPSEEK_API_KEY, OLLAMA_HOST+OLLAMA_MODEL\n", provider.ConfigPath())
 		os.Exit(1)
 	}
 
@@ -65,11 +65,7 @@ func main() {
 		Model:         model,
 		ThinkingLevel: thinkingLevel,
 		GetAPIKey:     getAPIKey,
-	}
-	if *acpMode {
-		sessionOpts.CustomSystemPrompt = "You are Modu Code, an AI coding assistant. " +
-			"Do not refer to yourself as Claude, GPT, Gemini, or any other model name. " +
-			"You are Modu Code."
+		ScopedModels:  provider.ConfiguredModelIDs(),
 	}
 	session, err := coding_agent.NewCodingSession(sessionOpts)
 	if err != nil {
@@ -77,6 +73,13 @@ func main() {
 		os.Exit(1)
 	}
 	defer session.Close("prompt_input_exit")
+	unsubModelPersist := session.SubscribeSession(func(ev coding_agent.SessionEvent) {
+		if ev.Type != coding_agent.SessionEventModelChange || ev.Provider == "" || ev.ModelID == "" {
+			return
+		}
+		_ = provider.SaveActiveModel(ev.Provider, ev.ModelID)
+	})
+	defer unsubModelPersist()
 
 	if *printPrompt != "" {
 		printMode := modes.PrintModeText

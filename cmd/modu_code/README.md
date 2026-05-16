@@ -12,6 +12,36 @@ go run ./cmd/modu_code
 
 ---
 
+## 模型配置
+
+`modu_code` 优先读取 `~/.coding_agent/config.json` 中的模型配置。支持配置多个模型，并通过 `active` 指定默认使用的模型：
+
+```json
+{
+  "active": "local-qwen",
+  "models": [
+    {
+      "name": "local-qwen",
+      "provider": "lmstudio",
+      "model": "qwen/qwen3.6-35b-a3b",
+      "baseUrl": "http://127.0.0.1:1234/v1",
+      "apiKey": "lm-studio"
+    },
+    {
+      "name": "deepseek",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "baseUrl": "https://api.deepseek.com/v1",
+      "apiKey": "..."
+    }
+  ]
+}
+```
+
+运行中输入 `/model` 会打开模型选择器，可用方向键选择、`Enter` 确认、`Esc` 取消。也可以用 `/model list` 查看模型，用 `/model <name>` 或 `/model <provider> <modelId>` 快速切换。切换后会写回 `active`，下次启动继续使用该模型。
+
+---
+
 ## 键盘快捷键
 
 | 按键 | 说明 |

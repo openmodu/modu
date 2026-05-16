@@ -15,6 +15,7 @@ import (
 	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/session"
 	"github.com/openmodu/modu/pkg/coding_agent/skills"
 	"github.com/openmodu/modu/pkg/coding_agent/subagent"
+	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/types"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -1285,6 +1286,61 @@ func TestGetModel(t *testing.T) {
 	got := session.GetModel()
 	if got.ID != "my-model" {
 		t.Fatalf("expected 'my-model', got %s", got.ID)
+	}
+}
+
+func TestSetModelByName(t *testing.T) {
+	providers.Models["test-provider"] = map[string]*types.Model{
+		"model-a": {ID: "model-a", Name: "friendly-a", ProviderID: "test-provider"},
+	}
+	session := newTestSession(t, newTestModel())
+
+	if err := session.SetModelByName("friendly-a"); err != nil {
+		t.Fatalf("SetModelByName: %v", err)
+	}
+	got := session.GetModel()
+	if got.ProviderID != "test-provider" || got.ID != "model-a" {
+		t.Fatalf("unexpected model: %#v", got)
+	}
+}
+
+func TestSetModelClearsConversationContextWhenModelChanges(t *testing.T) {
+	session := newTestSession(t, newTestModel())
+	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "old context"})
+	if len(session.GetMessages()) == 0 {
+		t.Fatal("expected setup message")
+	}
+
+	session.SetModel(&types.Model{ID: "next-model", ProviderID: "next-provider"})
+
+	if got := len(session.GetMessages()); got != 0 {
+		t.Fatalf("expected model switch to clear conversation context, got %d messages", got)
+	}
+}
+
+func TestSetModelRefreshesConnectedModelPrompt(t *testing.T) {
+	session := newTestSession(t, &types.Model{ID: "old-model", ProviderID: "old-provider"})
+
+	session.SetModel(&types.Model{ID: "next-model", Name: "Next Model", ProviderID: "next-provider"})
+
+	prompt := session.GetAgent().GetState().SystemPrompt
+	if !strings.Contains(prompt, "- Connected model: next-provider/next-model") {
+		t.Fatalf("expected refreshed connected model in prompt, got:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "- Connected model: old-provider/old-model") {
+		t.Fatalf("expected old connected model to be removed, got:\n%s", prompt)
+	}
+}
+
+func TestClearConversationClearsInMemoryMessages(t *testing.T) {
+	session := newTestSession(t, newTestModel())
+	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "old context"})
+
+	if err := session.ClearConversation(); err != nil {
+		t.Fatalf("ClearConversation: %v", err)
+	}
+	if got := len(session.GetMessages()); got != 0 {
+		t.Fatalf("expected clear conversation to clear in-memory messages, got %d", got)
 	}
 }
 

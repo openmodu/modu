@@ -1,6 +1,6 @@
 # Coding Agent Progress
 
-This file tracks the parity work for `pkg/coding_agent` against the Claude Code reference tree.
+This file tracks the parity work for `pkg/coding_agent` against the coding-agent reference tree.
 
 ## Current Assessment
 
@@ -16,6 +16,8 @@ High-priority gaps identified before this round:
 
 ## Completed In This Round
 
+- Added file-backed multi-model configuration for `cmd/modu_code`, runtime `/model` switching, and active-model persistence.
+- Added a TUI model picker for `cmd/modu_code` so `/model` opens an arrow-key selection flow.
 - Wired discovered context files into the system prompt build path.
 - Wired agent `message_end` events into persistence so assistant and tool-result messages are recorded.
 - Hooked `SaveMessages()` into the live session flow so `messages.jsonl` is generated from real prompts.
@@ -47,7 +49,7 @@ High-priority gaps identified before this round:
 - Extended dynamic context triggers beyond `read/edit/write` to include `grep`, `find`, and `ls` path discovery.
 - Marked dynamic nested-context messages as transient so they do not persist into long-term session history or saved transcripts.
 - Added a lightweight session-scoped harness hook layer around tool execution.
-- Added a harness-only hint side channel by stripping `<claude-code-hint .../>` tags from tool-visible text output while recording them for the host runtime.
+- Added a harness-only hint side channel by stripping `<modu-code-hint .../>` tags from tool-visible text output while recording them for the host runtime.
 - Added harness-managed runtime path exposure through a new `harness_paths` tool and session API.
 - Persisted the latest recorded plan to a harness-managed plan file under the runtime `plans/` tree.
 - Extended harness hooks with compaction lifecycle callbacks (`PreCompact` / `PostCompact`).

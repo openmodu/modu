@@ -27,6 +27,10 @@ func (r *goTUIRoot) submit(text string) {
 		return
 	}
 	if strings.HasPrefix(line, "/") {
+		if line == "/model" {
+			r.openModelSelect()
+			return
+		}
 		r.runSlash(line)
 		return
 	}

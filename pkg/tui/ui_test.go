@@ -14,6 +14,7 @@ import (
 	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/approval"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
+	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -533,6 +534,30 @@ func TestActivityLinePersistsCompletedTurn(t *testing.T) {
 	}
 	if bottom, _ := root.bottomLine(); strings.Contains(bottom, "Completed") {
 		t.Fatalf("expected completed activity above input, not in bottom line: %q", bottom)
+	}
+}
+
+func TestModelSelectEnterSwitchesModel(t *testing.T) {
+	providers.Models["ui-model-select"] = map[string]*types.Model{
+		"model-a": {ID: "model-a", Name: "Model A", ProviderID: "ui-model-select"},
+		"model-b": {ID: "model-b", Name: "Model B", ProviderID: "ui-model-select"},
+	}
+	session := newUITestSession(t)
+	session.SetModel(providers.Models["ui-model-select"]["model-a"])
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, nil)
+
+	root.openModelSelect()
+	if root.model.state != uiStateModelSelect {
+		t.Fatalf("expected model select state, got %v", root.model.state)
+	}
+	root.moveModelSelect(1)
+	root.confirmModelSelect()
+
+	if got := session.GetModel(); got.ID != "model-b" {
+		t.Fatalf("expected model-b, got %#v", got)
+	}
+	if root.model.state != uiStateInput {
+		t.Fatalf("expected input state after confirm, got %v", root.model.state)
 	}
 }
 
