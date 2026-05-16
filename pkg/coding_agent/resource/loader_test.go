@@ -27,7 +27,7 @@ func TestLoadContextFilesIncludesNestedProjectContexts(t *testing.T) {
 
 	write(filepath.Join(project, "AGENTS.md"), "root instructions")
 	write(filepath.Join(project, "pkg", "AGENTS.md"), "pkg instructions")
-	write(filepath.Join(cwd, "CLAUDE.md"), "feature instructions")
+	write(filepath.Join(cwd, ".agents.md"), "feature instructions")
 	write(filepath.Join(agentDir, "context.md"), "global context")
 
 	loader := NewLoader(agentDir, cwd)
@@ -47,7 +47,7 @@ func TestLoadContextFilesIncludesNestedProjectContexts(t *testing.T) {
 	if got[filepath.Join("..", "AGENTS.md")] != "pkg instructions" {
 		t.Fatalf("missing nested package context: %#v", got)
 	}
-	if got["CLAUDE.md"] != "feature instructions" {
+	if got[".agents.md"] != "feature instructions" {
 		t.Fatalf("missing cwd context: %#v", got)
 	}
 	if got["global/context.md"] != "global context" {

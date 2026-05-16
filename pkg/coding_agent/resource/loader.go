@@ -31,8 +31,8 @@ type ContextFile struct {
 	Content string
 }
 
-// LoadContextFiles discovers and loads all context files
-// (AGENTS.md, .agents.md, CLAUDE.md, .claude.md) from the project directory.
+// LoadContextFiles discovers and loads all project context files from the
+// project directory.
 func (l *Loader) LoadContextFiles() []ContextFile {
 	var files []ContextFile
 	seen := make(map[string]struct{})
@@ -56,7 +56,7 @@ func (l *Loader) LoadContextFilesForPath(targetPath string) []ContextFile {
 func (l *Loader) loadContextFilesFromDirs(dirs []string, seen map[string]struct{}) []ContextFile {
 	var files []ContextFile
 	for _, dir := range dirs {
-		for _, name := range []string{"AGENTS.md", ".agents.md", "CLAUDE.md", ".claude.md"} {
+		for _, name := range []string{"AGENTS.md", ".agents.md"} {
 			path := filepath.Join(dir, name)
 			if _, ok := seen[path]; ok {
 				continue

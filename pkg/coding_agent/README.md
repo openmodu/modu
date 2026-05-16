@@ -350,7 +350,7 @@ session, _ := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
 - `blockTools`
   - 在工具执行前直接阻断指定工具
 - `captureHints`
-  - 是否剥离并缓存 `<claude-code-hint .../>`
+  - 是否剥离并缓存 `<modu-code-hint .../>`
 - `persistToolResults`
   - 是否把工具文本结果写到 runtime `tool-results/`
 - `logFiles`

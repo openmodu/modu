@@ -58,7 +58,7 @@ func (t *testHintTool) Execute(ctx context.Context, toolCallID string, args map[
 	return agent.AgentToolResult{
 		Content: []types.ContentBlock{&types.TextContent{
 			Type: "text",
-			Text: "visible output\n<claude-code-hint v=1 type=plugin value=test@local />",
+			Text: "visible output\n<modu-code-hint v=1 type=plugin value=test@local />",
 		}},
 	}, nil
 }
@@ -1955,7 +1955,7 @@ func TestHarnessHintStrippedAndStored(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := result.Content[0].(*types.TextContent).Text
-	if strings.Contains(text, "claude-code-hint") {
+	if strings.Contains(text, "modu-code-hint") {
 		t.Fatalf("expected hint tag to be stripped, got %q", text)
 	}
 	hints := session.GetPendingHarnessHints()
@@ -2234,7 +2234,7 @@ func TestHarnessConfigCanDisableHintCaptureAndArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := extractTextBlocks(result.Content)
-	if !strings.Contains(text, "<claude-code-hint") {
+	if !strings.Contains(text, "<modu-code-hint") {
 		t.Fatalf("expected hint tag to remain visible when capture is disabled, got %q", text)
 	}
 	if hints := session.GetPendingHarnessHints(); len(hints) != 0 {
