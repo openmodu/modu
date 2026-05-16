@@ -13,6 +13,7 @@ func (m *uiModel) handleAgentEvent(ev agent.AgentEvent) {
 	case agent.EventTypeAgentStart:
 		m.queryActive = true
 		m.statusMsg = "thinking"
+		m.lastActivity = ""
 
 	case agent.EventTypeMessageUpdate:
 		if ev.StreamEvent == nil {

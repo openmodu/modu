@@ -11,12 +11,6 @@ import (
 // the latest error/status message when one is set, or a static set of key
 // hints when idle.
 func (r *goTUIRoot) bottomLine() (string, gotui.Style) {
-	if r.model.state == uiStateQuerying {
-		if activity := r.model.renderActivityLine(); strings.TrimSpace(stripANSIForGoTUI(activity)) != "" {
-			return strings.TrimSpace(stripANSIForGoTUI(activity)), gotui.NewStyle().Dim()
-		}
-		return "working...", gotui.NewStyle().Dim()
-	}
 	if r.model.errMsg != "" {
 		return "! " + r.model.errMsg, gotui.NewStyle().Foreground(gotui.Red)
 	}
@@ -24,4 +18,17 @@ func (r *goTUIRoot) bottomLine() (string, gotui.Style) {
 		return r.model.statusMsg, gotui.NewStyle().Dim()
 	}
 	return "ctrl+j new line  /help  ctrl+c exit", gotui.NewStyle().Dim()
+}
+
+func (r *goTUIRoot) activityLine() (string, bool) {
+	if r.model.state == uiStateQuerying {
+		if activity := r.model.renderActivityLine(); strings.TrimSpace(stripANSIForGoTUI(activity)) != "" {
+			return strings.TrimSpace(stripANSIForGoTUI(activity)), true
+		}
+		return "Working (esc to interrupt)", true
+	}
+	if strings.TrimSpace(stripANSIForGoTUI(r.model.lastActivity)) != "" {
+		return strings.TrimSpace(stripANSIForGoTUI(r.model.lastActivity)), true
+	}
+	return "", false
 }

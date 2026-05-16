@@ -49,14 +49,56 @@ var assistantPad = strings.Repeat(" ", lipgloss.Width(blockIndent)+dotPadW)
 // ─── View fragments ──────────────────────────────
 
 func (m *uiModel) renderActivityLine() string {
+	spinner := activitySpinner(time.Now())
 	hint := "esc to interrupt"
 	if !m.queryStartTime.IsZero() {
-		secs := int(time.Since(m.queryStartTime).Seconds())
-		if secs > 0 {
-			hint = fmt.Sprintf("%ds • esc to interrupt", secs)
+		elapsed := formatActivityDuration(time.Since(m.queryStartTime))
+		if elapsed != "" {
+			hint = fmt.Sprintf("%s • esc to interrupt", elapsed)
 		}
 	}
-	return "  " + uiDimText.Render("Working ("+hint+")")
+	return "  " + uiDimText.Render(spinner+" Working ("+hint+")")
+}
+
+func (m *uiModel) finishActivity(err error) string {
+	if m.queryStartTime.IsZero() {
+		m.lastActivity = ""
+		return ""
+	}
+	elapsed := formatActivityDuration(time.Since(m.queryStartTime))
+	if elapsed == "" {
+		elapsed = "0s"
+	}
+	var summary string
+	if err != nil {
+		summary = "× Interrupted (" + elapsed + ")"
+	} else {
+		summary = "✓ Completed (" + elapsed + ")"
+	}
+	m.lastActivity = "  " + uiDimText.Render(summary)
+	return summary
+}
+
+func activitySpinner(now time.Time) string {
+	frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	idx := int(now.UnixMilli()/120) % len(frames)
+	return frames[idx]
+}
+
+func formatActivityDuration(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	seconds := int(d.Round(time.Second).Seconds())
+	if seconds < 60 {
+		return fmt.Sprintf("%ds", seconds)
+	}
+	minutes := seconds / 60
+	seconds %= 60
+	if seconds == 0 {
+		return fmt.Sprintf("%dmin", minutes)
+	}
+	return fmt.Sprintf("%dmin %02ds", minutes, seconds)
 }
 
 func (m *uiModel) renderInputMeta() string {

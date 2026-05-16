@@ -127,11 +127,12 @@ type uiModel struct {
 	ready  bool
 	state  uiState
 
-	blocks      []uiBlock
-	queryActive bool
-	errMsg      string
-	statusMsg   string
-	pendingPerm *approval.Request
+	blocks       []uiBlock
+	queryActive  bool
+	errMsg       string
+	statusMsg    string
+	pendingPerm  *approval.Request
+	lastActivity string
 
 	// Query tracking
 	queryStartTime time.Time

@@ -499,6 +499,43 @@ func TestRenderInputMetaDoesNotDuplicateProvider(t *testing.T) {
 	}
 }
 
+func TestFormatActivityDurationUsesMinutes(t *testing.T) {
+	tests := []struct {
+		name string
+		in   time.Duration
+		want string
+	}{
+		{name: "seconds", in: 42 * time.Second, want: "42s"},
+		{name: "whole minute", in: time.Minute, want: "1min"},
+		{name: "minute and seconds", in: 75 * time.Second, want: "1min 15s"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatActivityDuration(tt.in); got != tt.want {
+				t.Fatalf("formatActivityDuration(%s) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestActivityLinePersistsCompletedTurn(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+	root.model.queryStartTime = time.Now().Add(-75 * time.Second)
+	root.model.finishActivity(nil)
+
+	got, ok := root.activityLine()
+	if !ok {
+		t.Fatal("expected completed activity line")
+	}
+	got = uiANSIPattern.ReplaceAllString(got, "")
+	if !strings.Contains(got, "Completed") || !strings.Contains(got, "1min 15s") {
+		t.Fatalf("expected persistent completed duration, got %q", got)
+	}
+	if bottom, _ := root.bottomLine(); strings.Contains(bottom, "Completed") {
+		t.Fatalf("expected completed activity above input, not in bottom line: %q", bottom)
+	}
+}
+
 func TestViewportConversationWrapsWithinViewportWidth(t *testing.T) {
 	session := newUITestSession(t)
 	model := testUIModel()

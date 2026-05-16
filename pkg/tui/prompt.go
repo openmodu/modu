@@ -135,6 +135,7 @@ func (r *goTUIRoot) runPrompt(line string) {
 	r.model.queryActive = true
 	r.model.state = uiStateQuerying
 	r.model.statusMsg = "thinking"
+	r.model.lastActivity = ""
 	r.model.queryStartTime = time.Now()
 	r.model.thinkingStart = time.Time{}
 	queryCtx, queryCancel := context.WithCancel(r.ctx)
@@ -156,6 +157,7 @@ func (r *goTUIRoot) runPrompt(line string) {
 			if err != nil && err != context.Canceled {
 				r.model.errMsg = err.Error()
 			}
+			r.model.finishActivity(err)
 			r.model.queryActive = false
 			if r.model.statusMsg != "interrupted" {
 				r.model.statusMsg = ""
