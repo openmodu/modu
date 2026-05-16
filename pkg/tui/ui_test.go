@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -575,7 +576,7 @@ func TestPromptErrorCollapsesRepeatsAndOffersActions(t *testing.T) {
 	line, _ := root.bottomLine()
 	for _, want := range []string{
 		"repeated 2x",
-		"resubmit",
+		"/retry",
 		"/model",
 		"/doctor",
 		"ctrl+c",
@@ -593,9 +594,45 @@ func TestPromptErrorCompactsLongMultilineText(t *testing.T) {
 	if strings.Contains(root.model.errMsg, "\n") {
 		t.Fatalf("expected single-line error, got %q", root.model.errMsg)
 	}
-	maxWithHint := maxInlineErrorChars + len(" | try: resubmit, /model, /doctor, ctrl+c")
+	maxWithHint := maxInlineErrorChars + len(" | try: /retry, /model, /doctor, ctrl+c")
 	if len(root.model.errMsg) > maxWithHint {
 		t.Fatalf("expected compact error, got %d chars: %q", len(root.model.errMsg), root.model.errMsg)
+	}
+}
+
+func TestRetryWithoutFailedPromptSetsStatus(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+
+	root.submit("/retry")
+
+	if root.model.statusMsg != "no failed prompt to retry" {
+		t.Fatalf("unexpected retry status: %q", root.model.statusMsg)
+	}
+}
+
+func TestRetrySubmitsLastFailedPrompt(t *testing.T) {
+	session := newUITestSession(t)
+	var promptMu sync.Mutex
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, &promptMu)
+	root.lastFailedPrompt = "hello again"
+
+	root.submit("/retry")
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if !root.model.queryActive && len(session.GetMessages()) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if root.model.queryActive {
+		t.Fatal("expected retry prompt to finish")
+	}
+	if root.lastFailedPrompt != "" {
+		t.Fatalf("expected successful retry to clear lastFailedPrompt, got %q", root.lastFailedPrompt)
+	}
+	if got := len(session.GetMessages()); got == 0 {
+		t.Fatal("expected retry to submit a prompt")
 	}
 }
 

@@ -66,6 +66,7 @@ var uiSlashCommands = []slashCommandDef{
 	{"/tokens", "show token usage"},
 	{"/context", "show context sources"},
 	{"/doctor", "show runtime diagnostics"},
+	{"/retry", "retry last failed prompt"},
 	{"/tools", "list active tools"},
 	{"/allow", "clear deny decision for a tool"},
 	{"/agents", "list subagents"},

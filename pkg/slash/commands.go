@@ -85,6 +85,10 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		handleDoctor(ctx, session, r)
 		return true, false
 
+	case "retry":
+		r.PrintInfo("retry is available in the interactive TUI after a failed prompt")
+		return true, false
+
 	case "tools":
 		names := session.GetActiveToolNames()
 		r.PrintInfo("active tools: " + strings.Join(names, ", "))
@@ -470,6 +474,7 @@ func PrintHelp(r Printer) {
 		"/tokens             — show total token usage",
 		"/context            — show current prompt/context sources",
 		"/doctor             — show runtime diagnostics",
+		"/retry              — retry last failed prompt in interactive TUI",
 		"/tools              — list active tools",
 		"/allow <tool>       — clear always-deny so the tool is asked again",
 		"/agents             — list discovered subagents",

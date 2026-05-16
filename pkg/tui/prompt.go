@@ -27,6 +27,10 @@ func (r *goTUIRoot) submit(text string) {
 		return
 	}
 	if strings.HasPrefix(line, "/") {
+		if line == "/retry" {
+			r.retryLastFailedPrompt()
+			return
+		}
 		if line == "/model" {
 			r.openModelSelect()
 			return
@@ -159,8 +163,10 @@ func (r *goTUIRoot) runPrompt(line string) {
 		err := r.session.Prompt(queryCtx, line)
 		r.queue(func() {
 			if err != nil && err != context.Canceled {
+				r.lastFailedPrompt = line
 				r.model.setPromptError(err)
 			} else if err == nil {
+				r.lastFailedPrompt = ""
 				r.model.clearPromptError()
 			}
 			r.model.finishActivity(err)
@@ -172,4 +178,15 @@ func (r *goTUIRoot) runPrompt(line string) {
 			r.bump()
 		})
 	}()
+}
+
+func (r *goTUIRoot) retryLastFailedPrompt() {
+	prompt := strings.TrimSpace(r.lastFailedPrompt)
+	if prompt == "" {
+		r.model.statusMsg = "no failed prompt to retry"
+		r.bump()
+		return
+	}
+	r.model.statusMsg = "retrying last prompt"
+	r.runPrompt(prompt)
 }

@@ -62,6 +62,7 @@ type goTUIRoot struct {
 	modelChoices      []*types.Model
 	modelSelectIdx    int
 	modelSelectScroll int
+	lastFailedPrompt  string
 }
 
 func newGoTUIRoot(

@@ -33,11 +33,12 @@ enough to implement, verify, and commit independently.
   counter, compact long multiline errors, and show recovery actions.
 - `modu_code config example|init|validate` provides CLI helpers for creating
   and checking multi-model config files.
+- `/retry` retries the last failed prompt in the interactive TUI and clears the
+  failed prompt marker after a successful retry.
 
 ## Next
 
-1. Add a real `/retry` command for the last failed prompt.
-2. Add interactive `/config` shortcuts for config example/init/validate.
+1. Add interactive `/config` shortcuts for config example/init/validate.
 
 ## Validation Log
 
@@ -55,3 +56,5 @@ enough to implement, verify, and commit independently.
   passed for collapsed API failure messages.
 - 2026-05-16: `go test ./cmd/modu_code ./cmd/modu_code/internal/provider ./pkg/coding_agent ./pkg/tui ./pkg/slash ./pkg/providers/openai ./pkg/agent`
   passed for config helper commands.
+- 2026-05-16: `go test ./cmd/modu_code ./cmd/modu_code/internal/provider ./pkg/coding_agent ./pkg/tui ./pkg/slash ./pkg/providers/openai ./pkg/agent`
+  passed for `/retry`.

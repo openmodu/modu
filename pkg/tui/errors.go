@@ -23,7 +23,7 @@ func (m *uiModel) setPromptError(err error) {
 	if m.errRepeat > 1 {
 		msg = fmt.Sprintf("%s (repeated %dx)", text, m.errRepeat)
 	}
-	m.errMsg = msg + " | try: resubmit, /model, /doctor, ctrl+c"
+	m.errMsg = msg + " | try: /retry, /model, /doctor, ctrl+c"
 }
 
 func (m *uiModel) clearPromptError() {
