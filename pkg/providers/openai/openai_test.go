@@ -50,6 +50,48 @@ func TestLMStudio_Chat(t *testing.T) {
 		resp.Usage.PromptTokens, resp.Usage.CompletionTokens, resp.Usage.TotalTokens)
 }
 
+func TestRequestWithoutReasoninglessAssistant(t *testing.T) {
+	req := &providers.ChatRequest{
+		Model: "test",
+		Messages: []providers.Message{
+			{Role: providers.RoleUser, Content: "one"},
+			{Role: providers.RoleAssistant, Content: "old answer"},
+			{Role: providers.RoleUser, Content: "two"},
+			{
+				Role:             providers.RoleAssistant,
+				Content:          "thinking answer",
+				ReasoningContent: "reasoning",
+			},
+			{
+				Role: providers.RoleAssistant,
+				ToolCalls: []providers.ToolCall{{
+					ID: "call-1", Type: "function",
+					Function: providers.FuncCall{Name: "read", Arguments: "{}"},
+				}},
+			},
+			{Role: providers.RoleTool, ToolCallID: "call-1", Content: "tool output"},
+			{Role: providers.RoleUser, Content: "three"},
+		},
+	}
+
+	got, changed := requestWithoutReasoninglessAssistant(req)
+	if !changed {
+		t.Fatal("expected request to change")
+	}
+	if len(got.Messages) != 4 {
+		t.Fatalf("expected 4 messages after filtering, got %d: %#v", len(got.Messages), got.Messages)
+	}
+	if got.Messages[1].Role != providers.RoleUser || got.Messages[1].Content != "two" {
+		t.Fatalf("expected user message preserved after old assistant, got %#v", got.Messages[1])
+	}
+	if got.Messages[2].ReasoningContent != "reasoning" {
+		t.Fatalf("expected reasoning assistant preserved, got %#v", got.Messages[2])
+	}
+	if got.Messages[3].Content != "three" {
+		t.Fatalf("expected trailing user preserved, got %#v", got.Messages[3])
+	}
+}
+
 // TestLMStudio_Stream verifies streaming output for a thinking model.
 func TestLMStudio_Stream(t *testing.T) {
 	p, model := newLMStudioProvider(t)
