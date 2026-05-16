@@ -42,6 +42,12 @@ go run ./cmd/modu_code
 
 ---
 
+## 运行检查
+
+输入 `/context` 可以查看当前 prompt/context 来源摘要，包括当前模型、工作目录、会话消息数、系统 prompt 大小、memory 是否为空、计划模式、worktree 状态、项目上下文文件和已发现 skills。
+
+---
+
 ## 键盘快捷键
 
 | 按键 | 说明 |

@@ -77,6 +77,10 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		r.PrintInfo(fmt.Sprintf("tokens used this session: %d", stats.TotalTokens))
 		return true, false
 
+	case "context":
+		handleContext(session, r)
+		return true, false
+
 	case "tools":
 		names := session.GetActiveToolNames()
 		r.PrintInfo("active tools: " + strings.Join(names, ", "))
@@ -275,6 +279,67 @@ func handleModel(arg string, session *coding_agent.CodingSession, r Printer, fal
 	r.PrintInfo(fmt.Sprintf("switched model: %s (%s / %s)", current.Name, current.ProviderID, current.ID))
 }
 
+func handleContext(session *coding_agent.CodingSession, r Printer) {
+	info := session.GetContextInfo()
+	model := "none"
+	if info.ModelID != "" {
+		model = fmt.Sprintf("%s (%s / %s)", info.ModelName, info.ModelProvider, info.ModelID)
+	}
+
+	lines := []string{
+		"model: " + model,
+		"cwd: " + info.Cwd,
+		"agent dir: " + info.AgentDir,
+		fmt.Sprintf("messages: %d", info.MessageCount),
+		fmt.Sprintf("system prompt: %d bytes", info.PromptByteCount),
+		fmt.Sprintf("memory: %s", bytePresence(info.MemoryBytes)),
+		fmt.Sprintf("plan mode: %s", onOff(info.PlanMode)),
+	}
+	if info.ActiveWorktree != "" {
+		lines = append(lines, "worktree: "+info.ActiveWorktree)
+	} else {
+		lines = append(lines, "worktree: none")
+	}
+
+	if len(info.ContextFiles) == 0 {
+		lines = append(lines, "context files: none")
+	} else {
+		lines = append(lines, fmt.Sprintf("context files (%d):", len(info.ContextFiles)))
+		for _, file := range info.ContextFiles {
+			lines = append(lines, fmt.Sprintf("  %s - %s (%d bytes)", file.Name, file.Path, file.Bytes))
+		}
+	}
+
+	if len(info.Skills) == 0 {
+		lines = append(lines, "skills: none")
+	} else {
+		lines = append(lines, fmt.Sprintf("skills (%d):", len(info.Skills)))
+		for _, skill := range info.Skills {
+			line := "  " + skill.Name
+			if skill.Source != "" {
+				line += " [" + skill.Source + "]"
+			}
+			lines = append(lines, line)
+		}
+	}
+
+	r.PrintSection("Context", lines)
+}
+
+func bytePresence(n int) string {
+	if n <= 0 {
+		return "empty"
+	}
+	return fmt.Sprintf("present (%d bytes)", n)
+}
+
+func onOff(v bool) string {
+	if v {
+		return "on"
+	}
+	return "off"
+}
+
 func handleTelegram(arg string, r Printer) {
 	configPath := tgbot.ConfigPath()
 
@@ -328,6 +393,7 @@ func PrintHelp(r Printer) {
 		"/model list         — list configured models",
 		"/compact            — compact the conversation context",
 		"/tokens             — show total token usage",
+		"/context            — show current prompt/context sources",
 		"/tools              — list active tools",
 		"/allow <tool>       — clear always-deny so the tool is asked again",
 		"/agents             — list discovered subagents",

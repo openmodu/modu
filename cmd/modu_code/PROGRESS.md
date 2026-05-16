@@ -21,24 +21,26 @@ enough to implement, verify, and commit independently.
   failures by dropping assistant history entries that cannot satisfy the API.
 - modu_code-owned comments, harness hint tags, and context discovery no longer
   use Claude-specific naming.
+- `/context` shows the current prompt/context sources without changing session
+  state, including model, cwd, messages, prompt size, memory, context files,
+  skills, plan mode, and worktree mode.
 
 ## Next
 
-1. Add `/context` to show active prompt/context sources:
-   model, cwd, loaded project context files, memory status, skills, plan mode,
-   and worktree mode.
-2. Add `/doctor` for config and runtime checks:
+1. Add `/doctor` for config and runtime checks:
    config path, active model, provider registration, base URL reachability,
    API key presence, and current context files.
-3. Improve model-switch feedback:
+2. Improve model-switch feedback:
    show that the old context was cleared and which config entry became active.
-4. Improve API failure UX:
+3. Improve API failure UX:
    collapse repeated timeout errors and offer retry, switch model, edit config,
    or abort.
-5. Add config commands:
+4. Add config commands:
    initialize, validate, and print examples for multi-model config.
 
 ## Validation Log
 
 - 2026-05-16: `go test ./pkg/coding_agent ./pkg/tui ./cmd/modu_code ./pkg/providers/openai ./pkg/agent`
   passed for the completed model/status/provider fixes.
+- 2026-05-16: `go test ./cmd/modu_code ./pkg/coding_agent ./pkg/tui ./pkg/slash ./pkg/providers/openai ./pkg/agent`
+  passed for `/context`.
