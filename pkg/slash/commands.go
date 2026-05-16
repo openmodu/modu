@@ -82,7 +82,7 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		return true, false
 
 	case "doctor":
-		handleDoctor(session, r)
+		handleDoctor(ctx, session, r)
 		return true, false
 
 	case "tools":
@@ -344,8 +344,8 @@ func onOff(v bool) string {
 	return "off"
 }
 
-func handleDoctor(session *coding_agent.CodingSession, r Printer) {
-	info := session.GetDoctorInfo()
+func handleDoctor(ctx context.Context, session *coding_agent.CodingSession, r Printer) {
+	info := session.GetDoctorInfo(ctx)
 	model := "none"
 	if info.ModelID != "" {
 		model = fmt.Sprintf("%s (%s / %s)", info.ModelName, info.ModelProvider, info.ModelID)
@@ -365,6 +365,7 @@ func handleDoctor(session *coding_agent.CodingSession, r Printer) {
 		"model config: " + configPath,
 		"model: " + model,
 		"baseUrl: " + baseURL,
+		"baseUrl status: " + info.BaseURLStatus,
 		"provider registered: " + yesNo(info.ProviderRegistered),
 		"api key: " + info.APIKeyStatus,
 		fmt.Sprintf("context files: %d", info.ContextFileCount),

@@ -1,6 +1,15 @@
 package coding_agent
 
-import "github.com/openmodu/modu/pkg/providers"
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"time"
+
+	"github.com/openmodu/modu/pkg/providers"
+)
+
+const doctorReachabilityTimeout = 800 * time.Millisecond
 
 // DoctorInfo describes basic runtime health checks for a session.
 type DoctorInfo struct {
@@ -13,18 +22,24 @@ type DoctorInfo struct {
 	ModelBaseURL       string
 	ProviderRegistered bool
 	APIKeyStatus       string
+	BaseURLStatus      string
+	BaseURLReachable   bool
 	ContextFileCount   int
 	Problems           []string
 }
 
 // GetDoctorInfo returns a read-only snapshot of basic runtime health.
-func (s *CodingSession) GetDoctorInfo() DoctorInfo {
+func (s *CodingSession) GetDoctorInfo(ctx context.Context) DoctorInfo {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	state := s.agent.GetState()
 	info := DoctorInfo{
 		Cwd:             s.cwd,
 		AgentDir:        s.agentDir,
 		ModelConfigPath: s.modelConfigPath,
 		APIKeyStatus:    "not checked",
+		BaseURLStatus:   "not checked",
 	}
 	if state.Model == nil {
 		info.Problems = append(info.Problems, "model is not configured")
@@ -48,6 +63,12 @@ func (s *CodingSession) GetDoctorInfo() DoctorInfo {
 	}
 	if info.ModelBaseURL == "" {
 		info.Problems = append(info.Problems, "model baseUrl is empty")
+		info.BaseURLStatus = "empty"
+	} else {
+		info.BaseURLReachable, info.BaseURLStatus = checkBaseURLReachable(ctx, info.ModelBaseURL)
+		if !info.BaseURLReachable {
+			info.Problems = append(info.Problems, "baseUrl not reachable: "+info.BaseURLStatus)
+		}
 	}
 
 	if s.getAPIKey != nil && info.ModelProvider != "" {
@@ -67,4 +88,22 @@ func (s *CodingSession) GetDoctorInfo() DoctorInfo {
 		info.ContextFileCount = len(s.resources.LoadContextFiles())
 	}
 	return info
+}
+
+func checkBaseURLReachable(ctx context.Context, baseURL string) (bool, string) {
+	ctx, cancel := context.WithTimeout(ctx, doctorReachabilityTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL, nil)
+	if err != nil {
+		return false, err.Error()
+	}
+	client := &http.Client{Timeout: doctorReachabilityTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, err.Error()
+	}
+	defer resp.Body.Close()
+
+	return true, fmt.Sprintf("reachable (HTTP %d)", resp.StatusCode)
 }

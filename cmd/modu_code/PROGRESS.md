@@ -24,19 +24,18 @@ enough to implement, verify, and commit independently.
 - `/context` shows the current prompt/context sources without changing session
   state, including model, cwd, messages, prompt size, memory, context files,
   skills, plan mode, and worktree mode.
-- `/doctor` shows basic runtime diagnostics without changing session state or
-  making network calls, including config path, model, baseUrl, provider
-  registration, API key status, context file count, and detected problems.
+- `/doctor` shows runtime diagnostics without changing session state, including
+  config path, model, baseUrl reachability, provider registration, API key
+  status, context file count, and detected problems.
 
 ## Next
 
-1. Add `/doctor` network reachability checks for model baseUrl.
-2. Improve model-switch feedback:
+1. Improve model-switch feedback:
    show that the old context was cleared and which config entry became active.
-3. Improve API failure UX:
+2. Improve API failure UX:
    collapse repeated timeout errors and offer retry, switch model, edit config,
    or abort.
-4. Add config commands:
+3. Add config commands:
    initialize, validate, and print examples for multi-model config.
 
 ## Validation Log
@@ -47,3 +46,5 @@ enough to implement, verify, and commit independently.
   passed for `/context`.
 - 2026-05-16: `go test ./cmd/modu_code ./cmd/modu_code/internal/provider ./pkg/coding_agent ./pkg/tui ./pkg/slash ./pkg/providers/openai ./pkg/agent`
   passed for basic `/doctor`.
+- 2026-05-16: `go test ./cmd/modu_code ./cmd/modu_code/internal/provider ./pkg/coding_agent ./pkg/tui ./pkg/slash ./pkg/providers/openai ./pkg/agent`
+  passed for `/doctor` baseUrl reachability checks.

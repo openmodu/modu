@@ -151,7 +151,7 @@ Agent 完成回复 → 累加 token 用量 → 超过阈值？→ 调用 Compact
 
 `GetContextInfo()` 返回当前运行时可见的 prompt/context 来源摘要，包括当前模型、工作目录、消息数、系统 prompt 大小、项目上下文文件、memory 是否为空、skills、plan mode 和 worktree 状态。`modu_code` 的 `/context` 命令基于这份只读摘要渲染，便于确认模型为什么会看到某些上下文。
 
-`GetDoctorInfo()` 返回基础运行诊断摘要，包括模型配置路径、当前模型、baseURL、provider 注册状态、API key 状态、上下文文件数量和问题列表。`modu_code` 的 `/doctor` 命令基于这份只读摘要渲染，不会发起网络请求。
+`GetDoctorInfo()` 返回基础运行诊断摘要，包括模型配置路径、当前模型、baseURL 连通性、provider 注册状态、API key 状态、上下文文件数量和问题列表。`modu_code` 的 `/doctor` 命令基于这份只读摘要渲染。
 
 ### 6. 自动重试（Auto Retry）
 
