@@ -20,8 +20,10 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
@@ -34,6 +36,14 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "config" {
+		if err := runConfigCommand(os.Args[2:], os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintf(os.Stderr, "config: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	var (
 		printPrompt = flag.String("p", "", "run in print mode: send prompt and output result to stdout")
 		printJSON   = flag.Bool("json", false, "with -p: output NDJSON event stream instead of plain text")
@@ -134,5 +144,49 @@ func main() {
 	if err := tui.Run(ctx, session, model, *noApprove); err != nil {
 		fmt.Fprintf(os.Stderr, "ui error: %v\n", err)
 		os.Exit(1)
+	}
+}
+
+func runConfigCommand(args []string, stdout, stderr io.Writer) error {
+	_ = stderr
+	if len(args) == 0 {
+		return fmt.Errorf("usage: modu_code config <example|init|validate>")
+	}
+	switch args[0] {
+	case "example":
+		_, err := fmt.Fprint(stdout, provider.ExampleConfigJSON())
+		return err
+	case "init":
+		force := len(args) > 1 && args[1] == "--force"
+		if len(args) > 2 || (len(args) == 2 && !force) {
+			return fmt.Errorf("usage: modu_code config init [--force]")
+		}
+		path, err := provider.InitConfig(force)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(stdout, "wrote config: %s\n", path)
+		return err
+	case "validate":
+		if len(args) != 1 {
+			return fmt.Errorf("usage: modu_code config validate")
+		}
+		result := provider.ValidateConfig()
+		fmt.Fprintf(stdout, "config: %s\n", result.Path)
+		fmt.Fprintf(stdout, "models: %d\n", result.ModelCount)
+		if result.Active != "" {
+			fmt.Fprintf(stdout, "active: %s\n", result.Active)
+		}
+		if len(result.Problems) == 0 {
+			_, err := fmt.Fprintln(stdout, "status: ok")
+			return err
+		}
+		fmt.Fprintf(stdout, "problems (%d):\n", len(result.Problems))
+		for _, problem := range result.Problems {
+			fmt.Fprintf(stdout, "  - %s\n", problem)
+		}
+		return fmt.Errorf("config validation failed")
+	default:
+		return fmt.Errorf("unknown config command %q; expected example, init, or validate", strings.TrimSpace(args[0]))
 	}
 }

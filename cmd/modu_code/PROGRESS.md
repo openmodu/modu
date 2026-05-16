@@ -31,12 +31,13 @@ enough to implement, verify, and commit independently.
   whether the conversation context was cleared.
 - API failure messages in the TUI now collapse repeated identical errors into a
   counter, compact long multiline errors, and show recovery actions.
+- `modu_code config example|init|validate` provides CLI helpers for creating
+  and checking multi-model config files.
 
 ## Next
 
-1. Add config commands:
-   initialize, validate, and print examples for multi-model config.
-2. Add a real `/retry` command for the last failed prompt.
+1. Add a real `/retry` command for the last failed prompt.
+2. Add interactive `/config` shortcuts for config example/init/validate.
 
 ## Validation Log
 
@@ -52,3 +53,5 @@ enough to implement, verify, and commit independently.
   passed for model-switch feedback.
 - 2026-05-16: `go test ./cmd/modu_code ./cmd/modu_code/internal/provider ./pkg/coding_agent ./pkg/tui ./pkg/slash ./pkg/providers/openai ./pkg/agent`
   passed for collapsed API failure messages.
+- 2026-05-16: `go test ./cmd/modu_code ./cmd/modu_code/internal/provider ./pkg/coding_agent ./pkg/tui ./pkg/slash ./pkg/providers/openai ./pkg/agent`
+  passed for config helper commands.

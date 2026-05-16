@@ -83,6 +83,54 @@ func TestSaveActiveModelUpdatesConfig(t *testing.T) {
 	}
 }
 
+func TestInitAndValidateConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	path, err := InitConfig(false)
+	if err != nil {
+		t.Fatalf("InitConfig: %v", err)
+	}
+	if path != filepath.Join(home, ".coding_agent", "config.json") {
+		t.Fatalf("unexpected path: %s", path)
+	}
+	result := ValidateConfig()
+	if len(result.Problems) != 0 {
+		t.Fatalf("expected valid example config, got %#v", result.Problems)
+	}
+	if result.ModelCount != 2 || result.Active != "local-qwen" {
+		t.Fatalf("unexpected validation result: %#v", result)
+	}
+	if _, err := InitConfig(false); err == nil {
+		t.Fatal("expected init without force to refuse existing config")
+	}
+}
+
+func TestValidateConfigReportsProblems(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeConfig(t, home, `{
+  "active": "missing",
+  "models": [
+    {"name": "broken", "provider": "", "model": "qwen", "baseUrl": "127.0.0.1:1234/v1"},
+    {"name": "broken", "provider": "deepseek", "model": "", "baseUrl": ""}
+  ]
+}`)
+
+	result := ValidateConfig()
+	for _, want := range []string{
+		"models[0].provider is required",
+		"models[1].model is required",
+		"models[1].baseUrl is required",
+		"models[1].name duplicates \"broken\"",
+		"active model does not match any configured model",
+	} {
+		if !containsString(result.Problems, want) {
+			t.Fatalf("expected problem %q in %#v", want, result.Problems)
+		}
+	}
+}
+
 func writeConfig(t *testing.T, home, content string) {
 	t.Helper()
 	dir := filepath.Join(home, ".coding_agent")
@@ -92,4 +140,13 @@ func writeConfig(t *testing.T, home, content string) {
 	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func containsString(values []string, needle string) bool {
+	for _, value := range values {
+		if value == needle {
+			return true
+		}
+	}
+	return false
 }

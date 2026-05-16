@@ -36,6 +36,33 @@ type ModelConfig struct {
 	Headers  map[string]string `json:"headers,omitempty"`
 }
 
+type ConfigValidation struct {
+	Path       string
+	Active     string
+	ModelCount int
+	Problems   []string
+}
+
+const exampleConfigJSON = `{
+  "active": "local-qwen",
+  "models": [
+    {
+      "name": "local-qwen",
+      "provider": "lmstudio",
+      "model": "qwen/qwen3.6-35b-a3b",
+      "baseUrl": "http://127.0.0.1:1234/v1",
+      "apiKey": "lm-studio"
+    },
+    {
+      "name": "deepseek",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "baseUrl": "https://api.deepseek.com/v1",
+      "apiKey": "..."
+    }
+  ]
+}`
+
 // Resolve returns the model and GetAPIKey function based on env vars.
 // Priority: config file > ANTHROPIC_API_KEY > OPENAI_API_KEY > DEEPSEEK_API_KEY > OLLAMA_HOST > LMSTUDIO.
 func Resolve() (*types.Model, func(string) (string, error)) {
@@ -147,6 +174,61 @@ func ConfigPath() string {
 	return filepath.Join(coding_agent.DefaultAgentDir(), "config.json")
 }
 
+func ExampleConfigJSON() string {
+	return exampleConfigJSON + "\n"
+}
+
+func InitConfig(force bool) (string, error) {
+	path := ConfigPath()
+	if _, err := os.Stat(path); err == nil && !force {
+		return path, fmt.Errorf("config already exists: %s", path)
+	} else if err != nil && !os.IsNotExist(err) {
+		return path, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return path, err
+	}
+	return path, os.WriteFile(path, []byte(ExampleConfigJSON()), 0o600)
+}
+
+func ValidateConfig() ConfigValidation {
+	path := ConfigPath()
+	result := ConfigValidation{Path: path}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		result.Problems = append(result.Problems, err.Error())
+		return result
+	}
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		result.Problems = append(result.Problems, "invalid JSON: "+err.Error())
+		return result
+	}
+	normalizeConfig(&cfg)
+	result.Active = cfg.Active
+	result.ModelCount = len(cfg.modelConfigs())
+	if result.ModelCount == 0 {
+		result.Problems = append(result.Problems, "no valid models configured")
+	}
+	if len(cfg.Models) > 0 {
+		seenNames := make(map[string]struct{}, len(cfg.Models))
+		for i, model := range cfg.Models {
+			validateModelConfig(i, model, &result)
+			if model.Name == "" {
+				continue
+			}
+			if _, ok := seenNames[model.Name]; ok {
+				result.Problems = append(result.Problems, fmt.Sprintf("models[%d].name duplicates %q", i, model.Name))
+			}
+			seenNames[model.Name] = struct{}{}
+		}
+	}
+	if cfg.Active != "" && !activeMatchesAny(cfg) {
+		result.Problems = append(result.Problems, "active model does not match any configured model")
+	}
+	return result
+}
+
 func LoadConfig() (Config, bool) {
 	path := ConfigPath()
 	data, err := os.ReadFile(path)
@@ -232,6 +314,28 @@ func (cfg Config) modelConfigs() []ModelConfig {
 		APIKey:   cfg.APIKey,
 		Headers:  cfg.Headers,
 	}}
+}
+
+func validateModelConfig(i int, model ModelConfig, result *ConfigValidation) {
+	prefix := fmt.Sprintf("models[%d]", i)
+	if model.Provider == "" {
+		result.Problems = append(result.Problems, prefix+".provider is required")
+	}
+	if model.Model == "" {
+		result.Problems = append(result.Problems, prefix+".model is required")
+	}
+	if model.BaseURL == "" {
+		result.Problems = append(result.Problems, prefix+".baseUrl is required")
+	}
+}
+
+func activeMatchesAny(cfg Config) bool {
+	for _, model := range cfg.modelConfigs() {
+		if modelMatchesActive(model, cfg.Active) {
+			return true
+		}
+	}
+	return false
 }
 
 func (cfg Config) activeModel() (ModelConfig, bool) {
