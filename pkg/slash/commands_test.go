@@ -74,3 +74,46 @@ func TestHandleContextShowsPromptSources(t *testing.T) {
 		}
 	}
 }
+
+func TestHandleDoctorShowsDiagnostics(t *testing.T) {
+	cwd := t.TempDir()
+	agentDir := filepath.Join(cwd, ".coding_agent")
+	model := &types.Model{
+		ID:         "mimo-v2.5-pro",
+		Name:       "MiMo V2.5 Pro",
+		ProviderID: "xiaomi-mimo",
+		BaseURL:    "http://127.0.0.1:1234/v1",
+	}
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:             cwd,
+		AgentDir:        agentDir,
+		Model:           model,
+		ModelConfigPath: filepath.Join(agentDir, "config.json"),
+		GetAPIKey:       func(string) (string, error) { return "secret", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	printer := &capturePrinter{}
+	handled, exit := Handle(context.Background(), "/doctor", session, printer, model)
+
+	if !handled || exit {
+		t.Fatalf("expected /doctor to be handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	output := printer.String()
+	for _, want := range []string{
+		"Doctor",
+		"model config: " + filepath.Join(agentDir, "config.json"),
+		"model: MiMo V2.5 Pro (xiaomi-mimo / mimo-v2.5-pro)",
+		"baseUrl: http://127.0.0.1:1234/v1",
+		"provider registered: no",
+		"api key: set",
+		"problems (1):",
+		"provider is not registered: xiaomi-mimo",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected output to contain %q, got:\n%s", want, output)
+		}
+	}
+}

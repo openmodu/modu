@@ -43,6 +43,7 @@ pkg/coding_agent/
 ├── coding_agent.go           # CodingSession 主入口，串联所有子系统
 ├── config.go                 # 配置管理（全局 + 项目级 settings.json）
 ├── context_info.go           # 当前 prompt/context 来源摘要
+├── doctor_info.go            # 基础运行诊断摘要
 ├── system_prompt.go          # 系统提示词组装器
 ├── messages.go               # 自定义消息类型（Bash/Compaction/Branch/Custom）
 ├── slash_commands.go         # 内置斜杠命令（/model, /compact, /tree 等）
@@ -150,6 +151,8 @@ Agent 完成回复 → 累加 token 用量 → 超过阈值？→ 调用 Compact
 
 `GetContextInfo()` 返回当前运行时可见的 prompt/context 来源摘要，包括当前模型、工作目录、消息数、系统 prompt 大小、项目上下文文件、memory 是否为空、skills、plan mode 和 worktree 状态。`modu_code` 的 `/context` 命令基于这份只读摘要渲染，便于确认模型为什么会看到某些上下文。
 
+`GetDoctorInfo()` 返回基础运行诊断摘要，包括模型配置路径、当前模型、baseURL、provider 注册状态、API key 状态、上下文文件数量和问题列表。`modu_code` 的 `/doctor` 命令基于这份只读摘要渲染，不会发起网络请求。
+
 ### 6. 自动重试（Auto Retry）
 
 内置在 Agent 循环中的指数退避重试机制：
@@ -219,6 +222,7 @@ type Extension interface {
 |------|------|
 | `/model <provider> <id>` | 切换模型 |
 | `/context` | 显示当前 prompt/context 来源 |
+| `/doctor` | 显示基础运行诊断 |
 | `/compact` | 手动触发上下文压缩 |
 | `/tree` | 显示会话分支结构 |
 | `/fork <id>` | 从指定条目创建分支 |

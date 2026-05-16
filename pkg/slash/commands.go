@@ -81,6 +81,10 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		handleContext(session, r)
 		return true, false
 
+	case "doctor":
+		handleDoctor(session, r)
+		return true, false
+
 	case "tools":
 		names := session.GetActiveToolNames()
 		r.PrintInfo("active tools: " + strings.Join(names, ", "))
@@ -340,6 +344,49 @@ func onOff(v bool) string {
 	return "off"
 }
 
+func handleDoctor(session *coding_agent.CodingSession, r Printer) {
+	info := session.GetDoctorInfo()
+	model := "none"
+	if info.ModelID != "" {
+		model = fmt.Sprintf("%s (%s / %s)", info.ModelName, info.ModelProvider, info.ModelID)
+	}
+	configPath := info.ModelConfigPath
+	if configPath == "" {
+		configPath = "(not provided)"
+	}
+	baseURL := info.ModelBaseURL
+	if baseURL == "" {
+		baseURL = "(empty)"
+	}
+
+	lines := []string{
+		"cwd: " + info.Cwd,
+		"agent dir: " + info.AgentDir,
+		"model config: " + configPath,
+		"model: " + model,
+		"baseUrl: " + baseURL,
+		"provider registered: " + yesNo(info.ProviderRegistered),
+		"api key: " + info.APIKeyStatus,
+		fmt.Sprintf("context files: %d", info.ContextFileCount),
+	}
+	if len(info.Problems) == 0 {
+		lines = append(lines, "problems: none")
+	} else {
+		lines = append(lines, fmt.Sprintf("problems (%d):", len(info.Problems)))
+		for _, problem := range info.Problems {
+			lines = append(lines, "  "+problem)
+		}
+	}
+	r.PrintSection("Doctor", lines)
+}
+
+func yesNo(v bool) string {
+	if v {
+		return "yes"
+	}
+	return "no"
+}
+
 func handleTelegram(arg string, r Printer) {
 	configPath := tgbot.ConfigPath()
 
@@ -394,6 +441,7 @@ func PrintHelp(r Printer) {
 		"/compact            — compact the conversation context",
 		"/tokens             — show total token usage",
 		"/context            — show current prompt/context sources",
+		"/doctor             — show runtime diagnostics",
 		"/tools              — list active tools",
 		"/allow <tool>       — clear always-deny so the tool is asked again",
 		"/agents             — list discovered subagents",

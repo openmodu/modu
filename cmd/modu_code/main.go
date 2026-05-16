@@ -60,12 +60,13 @@ func main() {
 	agentDir := coding_agent.DefaultAgentDir()
 
 	sessionOpts := coding_agent.CodingSessionOptions{
-		Cwd:           cwd,
-		AgentDir:      agentDir,
-		Model:         model,
-		ThinkingLevel: thinkingLevel,
-		GetAPIKey:     getAPIKey,
-		ScopedModels:  provider.ConfiguredModelIDs(),
+		Cwd:             cwd,
+		AgentDir:        agentDir,
+		Model:           model,
+		ThinkingLevel:   thinkingLevel,
+		GetAPIKey:       getAPIKey,
+		ScopedModels:    provider.ConfiguredModelIDs(),
+		ModelConfigPath: provider.ConfigPath(),
 	}
 	session, err := coding_agent.NewCodingSession(sessionOpts)
 	if err != nil {

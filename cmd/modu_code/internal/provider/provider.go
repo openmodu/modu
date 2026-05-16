@@ -49,13 +49,14 @@ func Resolve() (*types.Model, func(string) (string, error)) {
 			fmt.Fprintln(os.Stderr, "ANTHROPIC_API_KEY set but ANTHROPIC_MODEL is empty")
 			return nil, nil
 		}
+		baseURL := "https://api.anthropic.com/v1"
 		providers.Register(openai.New(
 			"anthropic",
-			openai.WithBaseURL("https://api.anthropic.com/v1"),
+			openai.WithBaseURL(baseURL),
 			openai.WithAPIKey(key),
 			openai.WithHeaders(map[string]string{"anthropic-version": "2023-06-01"}),
 		))
-		model := &types.Model{ID: modelID, Name: modelID + " (Anthropic)", ProviderID: "anthropic"}
+		model := &types.Model{ID: modelID, Name: modelID + " (Anthropic)", ProviderID: "anthropic", BaseURL: baseURL}
 		return model, func(p string) (string, error) {
 			if p == "anthropic" {
 				return key, nil
@@ -74,7 +75,7 @@ func Resolve() (*types.Model, func(string) (string, error)) {
 			baseURL = "https://api.openai.com/v1"
 		}
 		providers.Register(openai.New("openai", openai.WithBaseURL(baseURL), openai.WithAPIKey(key)))
-		model := &types.Model{ID: modelID, Name: "OpenAI " + modelID, ProviderID: "openai"}
+		model := &types.Model{ID: modelID, Name: "OpenAI " + modelID, ProviderID: "openai", BaseURL: baseURL}
 		return model, func(p string) (string, error) {
 			if p == "openai" {
 				return key, nil
@@ -88,8 +89,9 @@ func Resolve() (*types.Model, func(string) (string, error)) {
 		if modelID == "" {
 			modelID = "deepseek-chat"
 		}
-		providers.Register(openai.New("deepseek", openai.WithBaseURL("https://api.deepseek.com/v1"), openai.WithAPIKey(key)))
-		model := &types.Model{ID: modelID, Name: "DeepSeek " + modelID, ProviderID: "deepseek"}
+		baseURL := "https://api.deepseek.com/v1"
+		providers.Register(openai.New("deepseek", openai.WithBaseURL(baseURL), openai.WithAPIKey(key)))
+		model := &types.Model{ID: modelID, Name: "DeepSeek " + modelID, ProviderID: "deepseek", BaseURL: baseURL}
 		return model, func(p string) (string, error) {
 			if p == "deepseek" {
 				return key, nil
@@ -104,8 +106,9 @@ func Resolve() (*types.Model, func(string) (string, error)) {
 			fmt.Fprintln(os.Stderr, "OLLAMA_HOST set but OLLAMA_MODEL is empty")
 			return nil, nil
 		}
-		providers.Register(openai.New("ollama", openai.WithBaseURL(strings.TrimRight(host, "/")+"/v1")))
-		model := &types.Model{ID: modelID, Name: modelID + " (Ollama)", ProviderID: "ollama"}
+		baseURL := strings.TrimRight(host, "/") + "/v1"
+		providers.Register(openai.New("ollama", openai.WithBaseURL(baseURL)))
+		model := &types.Model{ID: modelID, Name: modelID + " (Ollama)", ProviderID: "ollama", BaseURL: baseURL}
 		return model, func(string) (string, error) { return "", nil }
 	}
 

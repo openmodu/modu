@@ -46,6 +46,8 @@ go run ./cmd/modu_code
 
 输入 `/context` 可以查看当前 prompt/context 来源摘要，包括当前模型、工作目录、会话消息数、系统 prompt 大小、memory 是否为空、计划模式、worktree 状态、项目上下文文件和已发现 skills。
 
+输入 `/doctor` 可以查看基础运行诊断，包括模型配置路径、当前模型、baseURL、provider 是否注册、API key 状态、上下文文件数量和已发现的问题。该命令不会发起网络请求。
+
 ---
 
 ## 键盘快捷键

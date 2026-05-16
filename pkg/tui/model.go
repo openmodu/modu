@@ -64,6 +64,8 @@ var uiSlashCommands = []slashCommandDef{
 	{"/model", "show or switch model"},
 	{"/compact", "compact context"},
 	{"/tokens", "show token usage"},
+	{"/context", "show context sources"},
+	{"/doctor", "show runtime diagnostics"},
 	{"/tools", "list active tools"},
 	{"/allow", "clear deny decision for a tool"},
 	{"/agents", "list subagents"},

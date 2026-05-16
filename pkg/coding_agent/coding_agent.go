@@ -55,6 +55,8 @@ type CodingSessionOptions struct {
 	ExtraSubagentDirs []string
 	// ScopedModels limits model listing/cycling to these model IDs.
 	ScopedModels []string
+	// ModelConfigPath records the model config file path for diagnostics.
+	ModelConfigPath string
 	// OTelTracerProvider reuses an existing OpenTelemetry tracer provider when set.
 	OTelTracerProvider oteltrace.TracerProvider
 }
@@ -80,11 +82,12 @@ type CodingSession struct {
 	streamFn       agent.StreamFn
 	lastSavedIndex int
 	// totalTokens tracks accumulated token usage for auto-compaction.
-	totalTokens   int
-	retryManager  *RetryManager
-	eventBus      eventbus.EventBusController
-	scopedModels  []string
-	thinkingLevel agent.ThinkingLevel
+	totalTokens     int
+	retryManager    *RetryManager
+	eventBus        eventbus.EventBusController
+	scopedModels    []string
+	modelConfigPath string
+	thinkingLevel   agent.ThinkingLevel
 
 	// RPC parity fields
 	sessionName    string
@@ -293,6 +296,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		retryManager:    NewRetryManager(cfg.RetrySettings, cfg.AutoRetry),
 		eventBus:        eventbus.NewEventBus(),
 		scopedModels:    resolveScopedModels(cfg.ScopedModels, opts.ScopedModels),
+		modelConfigPath: opts.ModelConfigPath,
 		thinkingLevel:   cfg.ThinkingLevel,
 		sessionStarted:  time.Now().UnixMilli(),
 		taskManager:     taskMgr,
