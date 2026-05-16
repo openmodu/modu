@@ -133,6 +133,8 @@ type uiModel struct {
 	blocks       []uiBlock
 	queryActive  bool
 	errMsg       string
+	lastErrText  string
+	errRepeat    int
 	statusMsg    string
 	pendingPerm  *approval.Request
 	lastActivity string

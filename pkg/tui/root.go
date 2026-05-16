@@ -239,7 +239,7 @@ func (r *goTUIRoot) KeyMap() gotui.KeyMap {
 		}),
 		gotui.OnStop(gotui.KeyCtrlL, func(ke gotui.KeyEvent) {
 			r.model.blocks = nil
-			r.model.errMsg = ""
+			r.model.clearPromptError()
 			r.model.statusMsg = "cleared"
 			// Wipe terminal scrollback area + restart the inline widget at
 			// its baseline. Without this Ctrl+L only clears in-memory state

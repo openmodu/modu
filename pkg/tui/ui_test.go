@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -561,6 +562,40 @@ func TestModelSelectEnterSwitchesModel(t *testing.T) {
 	}
 	if !strings.Contains(root.model.statusMsg, "context cleared") {
 		t.Fatalf("expected model switch status to mention cleared context, got %q", root.model.statusMsg)
+	}
+}
+
+func TestPromptErrorCollapsesRepeatsAndOffersActions(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+	err := errors.New("max retries (3) exceeded: dial tcp 127.0.0.1:1234: connect: operation timed out")
+
+	root.model.setPromptError(err)
+	root.model.setPromptError(err)
+
+	line, _ := root.bottomLine()
+	for _, want := range []string{
+		"repeated 2x",
+		"resubmit",
+		"/model",
+		"/doctor",
+		"ctrl+c",
+	} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("expected bottom line to contain %q, got %q", want, line)
+		}
+	}
+}
+
+func TestPromptErrorCompactsLongMultilineText(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+	root.model.setPromptError(errors.New(strings.Repeat("long line\n", 80)))
+
+	if strings.Contains(root.model.errMsg, "\n") {
+		t.Fatalf("expected single-line error, got %q", root.model.errMsg)
+	}
+	maxWithHint := maxInlineErrorChars + len(" | try: resubmit, /model, /doctor, ctrl+c")
+	if len(root.model.errMsg) > maxWithHint {
+		t.Fatalf("expected compact error, got %d chars: %q", len(root.model.errMsg), root.model.errMsg)
 	}
 }
 

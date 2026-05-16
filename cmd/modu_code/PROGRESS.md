@@ -29,14 +29,14 @@ enough to implement, verify, and commit independently.
   status, context file count, and detected problems.
 - Model switching feedback now shows the active entry/name and explicitly says
   whether the conversation context was cleared.
+- API failure messages in the TUI now collapse repeated identical errors into a
+  counter, compact long multiline errors, and show recovery actions.
 
 ## Next
 
-1. Improve API failure UX:
-   collapse repeated timeout errors and offer retry, switch model, edit config,
-   or abort.
-2. Add config commands:
+1. Add config commands:
    initialize, validate, and print examples for multi-model config.
+2. Add a real `/retry` command for the last failed prompt.
 
 ## Validation Log
 
@@ -50,3 +50,5 @@ enough to implement, verify, and commit independently.
   passed for `/doctor` baseUrl reachability checks.
 - 2026-05-16: `go test ./cmd/modu_code ./cmd/modu_code/internal/provider ./pkg/coding_agent ./pkg/tui ./pkg/slash ./pkg/providers/openai ./pkg/agent`
   passed for model-switch feedback.
+- 2026-05-16: `go test ./cmd/modu_code ./cmd/modu_code/internal/provider ./pkg/coding_agent ./pkg/tui ./pkg/slash ./pkg/providers/openai ./pkg/agent`
+  passed for collapsed API failure messages.

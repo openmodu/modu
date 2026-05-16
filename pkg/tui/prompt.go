@@ -159,7 +159,9 @@ func (r *goTUIRoot) runPrompt(line string) {
 		err := r.session.Prompt(queryCtx, line)
 		r.queue(func() {
 			if err != nil && err != context.Canceled {
-				r.model.errMsg = err.Error()
+				r.model.setPromptError(err)
+			} else if err == nil {
+				r.model.clearPromptError()
 			}
 			r.model.finishActivity(err)
 			r.model.queryActive = false
