@@ -105,12 +105,17 @@ func (r *goTUIRoot) confirmModelSelect() {
 		return
 	}
 	choice := r.modelChoices[r.modelSelectIdx]
+	before := r.session.GetModel()
 	if err := r.session.SetModelByID(choice.ProviderID, choice.ID); err != nil {
 		r.model.errMsg = err.Error()
 		r.closeModelSelect("model unchanged")
 		return
 	}
-	r.closeModelSelect("model changed")
+	if sameTUIModel(before, choice) {
+		r.closeModelSelect("model unchanged")
+	} else {
+		r.closeModelSelect("model changed; context cleared")
+	}
 }
 
 func (r *goTUIRoot) closeModelSelect(status string) {
@@ -184,4 +189,11 @@ func modelChoiceLine(model *types.Model, selected, active bool) string {
 		name = model.ID
 	}
 	return fmt.Sprintf("%s%s %s (%s / %s)", prefix, marker, name, model.ProviderID, model.ID)
+}
+
+func sameTUIModel(a, b *types.Model) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.ProviderID == b.ProviderID && a.ID == b.ID
 }

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
+	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -162,5 +163,45 @@ func TestHandleDoctorReportsUnreachableBaseURL(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Fatalf("expected output to contain %q, got:\n%s", want, output)
 		}
+	}
+}
+
+func TestHandleModelSwitchReportsClearedContext(t *testing.T) {
+	cwd := t.TempDir()
+	agentDir := filepath.Join(cwd, ".coding_agent")
+	providers.Models["slash-model-feedback"] = map[string]*types.Model{
+		"model-a": {ID: "model-a", Name: "Slash Model A", ProviderID: "slash-model-feedback"},
+		"model-b": {ID: "model-b", Name: "Slash Model B", ProviderID: "slash-model-feedback"},
+	}
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:          cwd,
+		AgentDir:     agentDir,
+		Model:        providers.Models["slash-model-feedback"]["model-a"],
+		ScopedModels: []string{"model-a", "model-b"},
+		GetAPIKey:    func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "old context"})
+
+	printer := &capturePrinter{}
+	handled, exit := Handle(context.Background(), "/model Slash Model B", session, printer, session.GetModel())
+
+	if !handled || exit {
+		t.Fatalf("expected /model to be handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	output := printer.String()
+	for _, want := range []string{
+		"switched model: Slash Model B (slash-model-feedback / model-b)",
+		"active entry: Slash Model B",
+		"conversation context cleared",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected output to contain %q, got:\n%s", want, output)
+		}
+	}
+	if got := len(session.GetMessages()); got != 0 {
+		t.Fatalf("expected model switch to clear messages, got %d", got)
 	}
 }

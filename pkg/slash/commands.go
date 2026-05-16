@@ -270,6 +270,7 @@ func handleModel(arg string, session *coding_agent.CodingSession, r Printer, fal
 	}
 	fields := strings.Fields(arg)
 	var err error
+	before := session.GetModel()
 	if len(fields) == 2 {
 		err = session.SetModelByID(fields[0], fields[1])
 	} else {
@@ -281,6 +282,32 @@ func handleModel(arg string, session *coding_agent.CodingSession, r Printer, fal
 	}
 	current = session.GetModel()
 	r.PrintInfo(fmt.Sprintf("switched model: %s (%s / %s)", current.Name, current.ProviderID, current.ID))
+	r.PrintInfo("active entry: " + modelDisplayName(current))
+	if sameModel(before, current) {
+		r.PrintInfo("conversation context unchanged")
+	} else {
+		r.PrintInfo("conversation context cleared")
+	}
+}
+
+func sameModel(a, b *types.Model) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.ProviderID == b.ProviderID && a.ID == b.ID
+}
+
+func modelDisplayName(model *types.Model) string {
+	if model == nil {
+		return "none"
+	}
+	if strings.TrimSpace(model.Name) != "" {
+		return model.Name
+	}
+	if model.ProviderID != "" {
+		return model.ProviderID + "/" + model.ID
+	}
+	return model.ID
 }
 
 func handleContext(session *coding_agent.CodingSession, r Printer) {

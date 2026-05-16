@@ -38,7 +38,7 @@ go run ./cmd/modu_code
 }
 ```
 
-运行中输入 `/model` 会打开模型选择器，可用方向键选择、`Enter` 确认、`Esc` 取消。也可以用 `/model list` 查看模型，用 `/model <name>` 或 `/model <provider> <modelId>` 快速切换。切换后会写回 `active`，下次启动继续使用该模型。
+运行中输入 `/model` 会打开模型选择器，可用方向键选择、`Enter` 确认、`Esc` 取消。也可以用 `/model list` 查看模型，用 `/model <name>` 或 `/model <provider> <modelId>` 快速切换。切换后会写回 `active`，下次启动继续使用该模型；如果实际切换到了另一个模型，会清空旧对话上下文并在状态里明确提示。
 
 ---
 

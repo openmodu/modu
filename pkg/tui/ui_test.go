@@ -559,6 +559,9 @@ func TestModelSelectEnterSwitchesModel(t *testing.T) {
 	if root.model.state != uiStateInput {
 		t.Fatalf("expected input state after confirm, got %v", root.model.state)
 	}
+	if !strings.Contains(root.model.statusMsg, "context cleared") {
+		t.Fatalf("expected model switch status to mention cleared context, got %q", root.model.statusMsg)
+	}
 }
 
 func TestViewportConversationWrapsWithinViewportWidth(t *testing.T) {

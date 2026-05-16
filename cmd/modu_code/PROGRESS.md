@@ -27,15 +27,15 @@ enough to implement, verify, and commit independently.
 - `/doctor` shows runtime diagnostics without changing session state, including
   config path, model, baseUrl reachability, provider registration, API key
   status, context file count, and detected problems.
+- Model switching feedback now shows the active entry/name and explicitly says
+  whether the conversation context was cleared.
 
 ## Next
 
-1. Improve model-switch feedback:
-   show that the old context was cleared and which config entry became active.
-2. Improve API failure UX:
+1. Improve API failure UX:
    collapse repeated timeout errors and offer retry, switch model, edit config,
    or abort.
-3. Add config commands:
+2. Add config commands:
    initialize, validate, and print examples for multi-model config.
 
 ## Validation Log
@@ -48,3 +48,5 @@ enough to implement, verify, and commit independently.
   passed for basic `/doctor`.
 - 2026-05-16: `go test ./cmd/modu_code ./cmd/modu_code/internal/provider ./pkg/coding_agent ./pkg/tui ./pkg/slash ./pkg/providers/openai ./pkg/agent`
   passed for `/doctor` baseUrl reachability checks.
+- 2026-05-16: `go test ./cmd/modu_code ./cmd/modu_code/internal/provider ./pkg/coding_agent ./pkg/tui ./pkg/slash ./pkg/providers/openai ./pkg/agent`
+  passed for model-switch feedback.
