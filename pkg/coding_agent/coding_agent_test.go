@@ -15,7 +15,6 @@ import (
 	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/session"
 	"github.com/openmodu/modu/pkg/coding_agent/skills"
 	"github.com/openmodu/modu/pkg/coding_agent/subagent"
-	"github.com/openmodu/modu/pkg/mailbox/client"
 	"github.com/openmodu/modu/pkg/types"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -98,25 +97,6 @@ func TestNewCodingSession(t *testing.T) {
 	cfg := session.GetConfig()
 	if cfg == nil {
 		t.Fatal("config should not be nil")
-	}
-}
-
-func TestNewCodingSessionRegistersSpawnAgentToolWhenMailboxConfigured(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd:           dir,
-		AgentDir:      agentDir,
-		Model:         newTestModel(),
-		MailboxClient: client.NewMailboxClient("orchestrator", "127.0.0.1:9999"),
-		GetAPIKey:     func(provider string) (string, error) { return "", nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !containsTool(session.GetActiveToolNames(), "spawn_agent") {
-		t.Fatalf("expected spawn_agent in active tools, got %v", session.GetActiveToolNames())
 	}
 }
 
@@ -1485,7 +1465,7 @@ You are a summarizer. Reply with a concise summary of the user's request.`
 
 	got := session.GetLastAssistantText()
 	if got != "skill-result: hello world" {
-		t.Fatalf("expected isolated skill result, got %q", got)
+		t.Fatalf("expected explicit skill result, got %q", got)
 	}
 	if !hasAssistantMessageEnd(events, "skill-result: hello world") {
 		t.Fatalf("expected slash skill result to emit assistant message_end, got %#v", events)

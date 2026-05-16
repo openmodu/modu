@@ -22,7 +22,6 @@ import (
 	"github.com/openmodu/modu/pkg/coding_agent/skills"
 	"github.com/openmodu/modu/pkg/coding_agent/subagent"
 	"github.com/openmodu/modu/pkg/coding_agent/tools"
-	"github.com/openmodu/modu/pkg/mailbox/client"
 	"github.com/openmodu/modu/pkg/providers"
 	sessiontrace "github.com/openmodu/modu/pkg/trace"
 	"github.com/openmodu/modu/pkg/types"
@@ -52,8 +51,6 @@ type CodingSessionOptions struct {
 	GetAPIKey func(provider string) (string, error)
 	// StreamFn overrides the default stream function.
 	StreamFn agent.StreamFn
-	// MailboxClient enables the spawn_agent tool when provided.
-	MailboxClient *client.MailboxClient
 	// ExtraSubagentDirs adds extra directories to scan for subagent definitions.
 	ExtraSubagentDirs []string
 	// OTelTracerProvider reuses an existing OpenTelemetry tracer provider when set.
@@ -62,26 +59,24 @@ type CodingSessionOptions struct {
 
 // CodingSession is the main entry point for the coding agent system.
 type CodingSession struct {
-	agent            *agent.Agent
-	sessionManager   *session.Manager
-	sessionTree      *session.Tree
-	config           *Config
-	extensions       *extension.Runner
-	skillManager     *skills.Manager
-	templateMgr      *skills.TemplateManager
-	resources        *resource.Loader
-	memoryStore      *MemoryStore
-	subagentLoader   *subagent.Loader
-	cwd              string
-	agentDir         string
-	promptBuilder    *SystemPromptBuilder
-	model            *types.Model
-	activeTools      []agent.AgentTool
-	slashCommands    map[string]SlashCommand
-	getAPIKey        func(provider string) (string, error)
-	streamFn         agent.StreamFn
-	mailboxClient    *client.MailboxClient
-	lastSavedIndex   int
+	agent          *agent.Agent
+	sessionManager *session.Manager
+	sessionTree    *session.Tree
+	config         *Config
+	extensions     *extension.Runner
+	skillManager   *skills.Manager
+	resources      *resource.Loader
+	memoryStore    *MemoryStore
+	subagentLoader *subagent.Loader
+	cwd            string
+	agentDir       string
+	promptBuilder  *SystemPromptBuilder
+	model          *types.Model
+	activeTools    []agent.AgentTool
+	slashCommands  map[string]SlashCommand
+	getAPIKey      func(provider string) (string, error)
+	streamFn       agent.StreamFn
+	lastSavedIndex int
 	// totalTokens tracks accumulated token usage for auto-compaction.
 	totalTokens   int
 	retryManager  *RetryManager
@@ -199,9 +194,6 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	skillMgr := skills.NewManager(agentDir, opts.Cwd)
 	_ = skillMgr.Discover()
 
-	templateMgr := skills.NewTemplateManager(agentDir, opts.Cwd)
-	_ = templateMgr.Discover()
-
 	// Build system prompt
 	promptBuilder := NewSystemPromptBuilder(opts.Cwd)
 	promptBuilder.SetMemoryStore(memoryStore)
@@ -258,11 +250,6 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 			promptBuilder.AppendPrompt(subagentsPrompt)
 		}
 	}
-	if opts.MailboxClient != nil {
-		activeTools = append(activeTools, NewSpawnAgentTool(opts.MailboxClient))
-		promptBuilder.AppendPrompt("\nThe spawn_agent tool is available for delegating work to mailbox-registered agents.")
-	}
-
 	systemPrompt := promptBuilder.Build()
 
 	// Create approval manager
@@ -283,34 +270,32 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	})
 
 	cs := &CodingSession{
-		agent:            ag,
-		sessionManager:   sessionMgr,
-		sessionTree:      session.NewTree(sessionMgr),
-		config:           cfg,
-		extensions:       extRunner,
-		skillManager:     skillMgr,
-		templateMgr:      templateMgr,
-		resources:        loader,
-		memoryStore:      memoryStore,
-		subagentLoader:   subagentLoader,
-		cwd:              opts.Cwd,
-		agentDir:         agentDir,
-		promptBuilder:    promptBuilder,
-		model:            opts.Model,
-		activeTools:      activeTools,
-		slashCommands:    make(map[string]SlashCommand),
-		getAPIKey:        getAPIKey,
-		streamFn:         streamFn,
-		mailboxClient:    opts.MailboxClient,
-		retryManager:     NewRetryManager(cfg.RetrySettings, cfg.AutoRetry),
-		eventBus:         eventbus.NewEventBus(),
-		scopedModels:     cfg.ScopedModels,
-		thinkingLevel:    cfg.ThinkingLevel,
-		sessionStarted:   time.Now().UnixMilli(),
-		taskManager:      taskMgr,
-		loadedContexts:   make(map[string]struct{}),
-		harness:          newHarnessState(),
-		approvalManager:  approvalMgr,
+		agent:           ag,
+		sessionManager:  sessionMgr,
+		sessionTree:     session.NewTree(sessionMgr),
+		config:          cfg,
+		extensions:      extRunner,
+		skillManager:    skillMgr,
+		resources:       loader,
+		memoryStore:     memoryStore,
+		subagentLoader:  subagentLoader,
+		cwd:             opts.Cwd,
+		agentDir:        agentDir,
+		promptBuilder:   promptBuilder,
+		model:           opts.Model,
+		activeTools:     activeTools,
+		slashCommands:   make(map[string]SlashCommand),
+		getAPIKey:       getAPIKey,
+		streamFn:        streamFn,
+		retryManager:    NewRetryManager(cfg.RetrySettings, cfg.AutoRetry),
+		eventBus:        eventbus.NewEventBus(),
+		scopedModels:    cfg.ScopedModels,
+		thinkingLevel:   cfg.ThinkingLevel,
+		sessionStarted:  time.Now().UnixMilli(),
+		taskManager:     taskMgr,
+		loadedContexts:  make(map[string]struct{}),
+		harness:         newHarnessState(),
+		approvalManager: approvalMgr,
 	}
 	if cfg.TracingRecorderEnabled() {
 		tracePaths := cs.RuntimePaths()
@@ -475,11 +460,6 @@ func (s *CodingSession) Prompt(ctx context.Context, text string) error {
 
 		if cmd, ok := s.slashCommands[cmdName]; ok {
 			return cmd.Handler(s, cmdArgs)
-		}
-
-		// Check template expansion
-		if expanded, ok := s.templateMgr.Expand(input); ok {
-			text = expanded
 		}
 
 		// Check skills

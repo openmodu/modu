@@ -22,8 +22,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"runtime"
 	"syscall"
 
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
@@ -60,7 +58,6 @@ func main() {
 
 	thinkingLevel := provider.ResolveThinkingLevel()
 	agentDir := coding_agent.DefaultAgentDir()
-	exampleAgentsDir := filepath.Join(locateCmdDir(), "agents")
 
 	sessionOpts := coding_agent.CodingSessionOptions{
 		Cwd:           cwd,
@@ -68,9 +65,6 @@ func main() {
 		Model:         model,
 		ThinkingLevel: thinkingLevel,
 		GetAPIKey:     getAPIKey,
-		ExtraSubagentDirs: []string{
-			exampleAgentsDir,
-		},
 	}
 	if *acpMode {
 		sessionOpts.CustomSystemPrompt = "You are Modu Code, an AI coding assistant. " +
@@ -137,14 +131,4 @@ func main() {
 		fmt.Fprintf(os.Stderr, "ui error: %v\n", err)
 		os.Exit(1)
 	}
-}
-
-// locateCmdDir returns the directory of this source file at build time,
-// used to locate the bundled agents/, prompts/, skills/ directories.
-func locateCmdDir() string {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		return ""
-	}
-	return filepath.Dir(file)
 }

@@ -8,7 +8,7 @@ import (
 	"sync"
 )
 
-// Loader handles unified loading of extensions, skills, prompts, and context files.
+// Loader handles agent-directory setup and project context-file discovery.
 type Loader struct {
 	agentDir        string
 	cwd             string
@@ -200,7 +200,6 @@ func (l *Loader) EnsureAgentDir() error {
 		filepath.Join(l.agentDir, "plans"),
 		filepath.Join(l.agentDir, "skills"),
 		filepath.Join(l.agentDir, "agents"),
-		filepath.Join(l.agentDir, "prompts"),
 		filepath.Join(l.agentDir, "tool-results"),
 		filepath.Join(l.agentDir, "worktrees"),
 	}

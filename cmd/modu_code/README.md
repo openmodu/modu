@@ -7,7 +7,7 @@
 ## 快速开始
 
 ```bash
-go run ./examples/modu_code
+go run ./cmd/modu_code
 ```
 
 ---

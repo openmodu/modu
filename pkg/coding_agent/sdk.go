@@ -6,7 +6,6 @@ import (
 
 	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/extension"
-	"github.com/openmodu/modu/pkg/mailbox/client"
 	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/types"
 )
@@ -24,7 +23,6 @@ type CreateSessionOptions struct {
 	SystemPrompt   string
 	GetAPIKey      func(provider string) (string, error)
 	StreamFn       agent.StreamFn
-	MailboxClient  *client.MailboxClient
 	SessionFile    string // path to restore an existing session
 	AutoCompaction *bool
 	AutoRetry      *bool
@@ -76,7 +74,6 @@ func CreateSession(opts CreateSessionOptions) (*CreateSessionResult, error) {
 		CustomSystemPrompt: opts.SystemPrompt,
 		GetAPIKey:          opts.GetAPIKey,
 		StreamFn:           opts.StreamFn,
-		MailboxClient:      opts.MailboxClient,
 	})
 	if err != nil {
 		return nil, err

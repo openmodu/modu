@@ -240,7 +240,7 @@ func handleTelegram(arg string, r Printer) {
 			return
 		}
 		r.PrintInfo("Telegram token saved to " + configPath)
-		r.PrintInfo("Run with --telegram to start the bot.")
+		r.PrintInfo("Restart modu_code to start the bot.")
 		return
 	}
 
@@ -262,7 +262,7 @@ func handleTelegram(arg string, r Printer) {
 		r.PrintInfo("  token: (not set)")
 		r.PrintInfo("  set with: /telegram token <bot_token>")
 	}
-	r.PrintInfo("  start with: modu_code --telegram")
+	r.PrintInfo("  start: automatic on modu_code startup when a token is set")
 }
 
 func PrintHelp(r Printer) {
@@ -275,7 +275,7 @@ func PrintHelp(r Printer) {
 		"/tokens             — show total token usage",
 		"/tools              — list active tools",
 		"/allow <tool>       — clear always-deny so the tool is asked again",
-		"/agents             — list discovered subagents and mailbox workers",
+		"/agents             — list discovered subagents",
 		"/todos              — show current todo list",
 		"/tasks              — show background subagent tasks",
 		"/plan [on|off]      — inspect or toggle plan mode",

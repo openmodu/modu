@@ -12,7 +12,6 @@ High-priority gaps identified before this round:
 - Skills were loaded and injected as plain prompt text into the main session.
   They were not executed in an isolated sub-agent context.
 - Context file discovery existed in `resource.Loader`, but the discovered files were not fed into `SystemPromptBuilder`.
-- `spawn_agent_tool.go` existed, but was not integrated into `NewCodingSession`.
 - Test coverage around `skills`, `subagent`, `resource`, and persistence behavior was thin.
 
 ## Completed In This Round
@@ -20,11 +19,10 @@ High-priority gaps identified before this round:
 - Wired discovered context files into the system prompt build path.
 - Wired agent `message_end` events into persistence so assistant and tool-result messages are recorded.
 - Hooked `SaveMessages()` into the live session flow so `messages.jsonl` is generated from real prompts.
-- Added isolated skill execution for explicit `/skill` invocations using `subagent.Run`.
+- Added explicit `/skill` handling that pins the named skill instructions onto the main agent turn.
 - Recorded thinking-level changes into the session timeline.
-- Ensured `~/.coding_agent/agents` is created alongside skills/prompts/sessions.
+- Ensured `~/.coding_agent/agents` is created alongside skills and sessions.
 - Fixed the failing `read` tool offset formatting test by using tab-separated line numbers.
-- Integrated `spawn_agent` into `CodingSession` and the SDK factory when a mailbox client is supplied.
 - Expanded subagent frontmatter support with `disallowed_tools`, `thinking`, and `max_turns` parsing.
 - Applied `disallowed_tools` and `thinking` during subagent execution.
 - Expanded subagent frontmatter support with `skills` and `memory`.
@@ -41,8 +39,7 @@ High-priority gaps identified before this round:
 - Added `isolation: worktree` support for subagents by running them inside temporary git worktrees with cwd-bound tools.
 - Refreshed the session system prompt dynamically when plan mode or worktree mode changes.
 - Added exported session accessors for discovered subagents, current todos, background tasks, plan mode, and active worktree so external frontends can inspect agent state.
-- Wired `examples/modu_code` to use its local `agents/` directory by default.
-- Added manual validation slash commands to `examples/modu_code` for `/agents`, `/todos`, `/tasks`, `/plan`, and `/worktree`.
+- Added manual validation slash commands to `cmd/modu_code` for `/agents`, `/todos`, `/tasks`, `/plan`, and `/worktree`.
 - Optimized context loading so project instruction files are discovered hierarchically from repo root to the active working directory.
 - Added prompt-level context deduplication and size budgeting to reduce token waste from repeated or oversized instruction files.
 - Flattened prior conversation summaries during compaction so repeated compaction does not recursively summarize old summary envelopes.
@@ -76,7 +73,7 @@ High-priority gaps identified before this round:
 - Changed harness actions to auto-enable by default, while still allowing explicit `enableActions: false` opt-out.
 - Added config validation for harness action policy, including default absolute-command enforcement.
 - Extended harness action policy with directory-prefix checks and max-timeout limits.
-- Added effective merged-config export for sessions and surfaced it in `examples/modu_code`.
+- Added effective merged-config export for sessions and surfaced it in `cmd/modu_code`.
 - Added a default config template exporter so frontends can show the generated baseline configuration.
 - Split harness action status output into explicit `stdout` and `stderr` fields while keeping merged `output`.
 - Added per-action retry semantics with configurable attempt count and delay.
@@ -85,19 +82,18 @@ High-priority gaps identified before this round:
 - Added top-level feature gates for core runtime capabilities such as memory, todos, task output, plan mode, worktree mode, subagents, and harness actions.
 - Added top-level permission rules for tool allow/deny and bash command prefix allow/deny.
 - Extended harness events and outputs with `session` and `permission` categories.
-- Added a dashboard view in `examples/modu_code` that summarizes runtime state, latest events, and action statuses.
+- Added a dashboard view in `cmd/modu_code` that summarizes runtime state, latest events, and action statuses.
 - Added subagent frontmatter support for `harness_block_tools` and merged it into effective tool blocking.
-- Added `examples/modu_code` inspection commands for harness hints and runtime paths.
-- Added `examples/modu_code` inspection commands for configured harness logs, latest artifacts, and bridge directories.
-- Added `examples/modu_code` command-level tests that exercise `/runtime`, `/logs`, `/artifacts`, and `/bridge` through the real slash-command path.
-- Added `examples/modu_code` smoke tests for print-mode output and rpc-mode request/response flow.
+- Added `cmd/modu_code` inspection commands for harness hints and runtime paths.
+- Added `cmd/modu_code` inspection commands for configured harness logs, latest artifacts, and bridge directories.
+- Added `cmd/modu_code` command-level tests that exercise `/runtime`, `/logs`, `/artifacts`, and `/bridge` through the real slash-command path.
+- Added `cmd/modu_code` smoke tests for print-mode output and rpc-mode request/response flow.
 - Added an integration-style regression that runs a real prompt through tool execution and verifies harness artifact emission end-to-end.
-- Fixed explicit `/skill prompt` execution so isolated skill results emit normal agent events for TUI, print, and RPC subscribers.
-- Added working-directory context to isolated slash-skill prompts so git-oriented skills inspect the active project instead of guessing the home directory.
+- Fixed explicit `/skill prompt` execution so skill-pinned turns emit normal agent events for TUI, print, and RPC subscribers.
+- Added working-directory context to explicit slash-skill prompts so git-oriented skills inspect the active project instead of guessing the home directory.
 - Added focused tests for:
   session persistence after prompt/tool execution
-  isolated slash-skill execution
-  spawn_agent tool registration
+  explicit slash-skill execution
   subagent tool filtering and thinking behavior
   subagent skill and memory prompt augmentation
   subagent read-only permission mode filtering
@@ -144,7 +140,7 @@ High-priority gaps identified before this round:
 
 ## Still Missing
 
-- Broader end-to-end coverage for the `examples/modu_code` interactive path
+- Broader end-to-end coverage for the `cmd/modu_code` interactive path
 - Deeper plan-mode semantics beyond the current state/prompt toggle
 - Richer worktree lifecycle controls and cleanup introspection
 

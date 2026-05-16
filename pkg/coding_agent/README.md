@@ -65,12 +65,10 @@ pkg/coding_agent/
 │   └── branch_summary.go    #   分支跳转上下文摘要
 ├── extension/                # 扩展系统
 │   ├── types.go              #   Extension/ExtensionAPI 接口、ToolHook
-│   ├── loader.go             #   扩展注册
 │   ├── runner.go             #   扩展生命周期管理（实现 ExtensionAPI）
 │   └── wrapper.go            #   WrappedTool 透明包装（Before/After/Transform）
 ├── skills/                   # 技能系统
-│   ├── skills.go             #   技能发现与加载（Markdown + YAML frontmatter）
-│   └── prompt_templates.go   #   提示模板展开（{{args}} 替换）
+│   └── skills.go             #   技能发现与加载（Markdown + YAML frontmatter）
 └── resource/                 # 资源加载
     └── loader.go             #   上下文文件发现（AGENTS.md 等）+ 目录初始化
 ```
@@ -196,11 +194,9 @@ type Extension interface {
 - 控制工具开关（`SetActiveTools`）
 - 切换模型（`SetModel`）
 
-### 8. 技能与模板系统
+### 8. 技能系统
 
 **技能**（Skills）：从 `~/.coding_agent/skills/` 和 `.coding_agent/skills/` 目录发现 Markdown/Text 文件，支持 YAML frontmatter 定义名称、描述、标签，注入系统提示词。
-
-**模板**（Templates）：从 `~/.coding_agent/prompts/` 和 `.coding_agent/prompts/` 加载，通过 `/templatename args` 调用，自动展开 `{{args}}` 占位符。
 
 ### 9. 输出截断
 
@@ -492,9 +488,7 @@ Prompt(text)
     │
     ├─ 斜杠命令？ ──→ 执行命令 handler ──→ 返回
     │
-    ├─ 模板展开？ ──→ 替换 text
-    │
-    ├─ 技能匹配？ ──→ 替换 text
+    ├─ 技能匹配？ ──→ 注入本轮 skill 指令并提交 task
     │
     ├─ 记录到 session.Manager (JSONL)
     │
