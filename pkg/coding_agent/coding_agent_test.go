@@ -304,30 +304,77 @@ func TestPlanModeTools(t *testing.T) {
 		t.Fatal("expected plan mode enabled")
 	}
 
-	_, err = exitTool.Execute(context.Background(), "plan-2", map[string]any{"plan": "do work"}, nil)
+	_, err = exitTool.Execute(context.Background(), "plan-2", map[string]any{
+		"plan":  "do work",
+		"steps": []any{"step one", "step two"},
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if session.planMode {
 		t.Fatal("expected plan mode disabled")
 	}
+	todos := session.GetTodos()
+	if len(todos) != 2 {
+		t.Fatalf("expected approved steps to become 2 todos, got %v", todos)
+	}
+	if todos[0].Content != "step one" || todos[0].Status != "pending" {
+		t.Fatalf("unexpected first todo: %+v", todos[0])
+	}
 }
 
-func TestPlanModeBlocksWriteAndEditTools(t *testing.T) {
+// TestExitPlanModeAlwaysPrompts verifies the plan approval gate cannot be
+// silently auto-approved: exit_plan_mode bypasses the always-allow cache and
+// permission rules and always calls the interactive callback. With no callback
+// (headless) it is allowed so non-interactive runs are not blocked.
+func TestExitPlanModeAlwaysPrompts(t *testing.T) {
+	m := NewApprovalManager()
+
+	// No callback => headless => auto allow.
+	if d, _ := m.Approve("exit_plan_mode", "c0", nil); d != agent.ToolApprovalAllow {
+		t.Fatalf("headless exit_plan_mode should allow, got %v", d)
+	}
+
+	// Even with a cached always-allow, the callback must still run.
+	m.AllowAlways("exit_plan_mode")
+	called := false
+	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
+		called = true
+		return agent.ToolApprovalDeny, nil
+	})
+	d, _ := m.Approve("exit_plan_mode", "c1", nil)
+	if !called {
+		t.Fatal("expected exit_plan_mode to invoke the approval callback despite always-allow")
+	}
+	if d != agent.ToolApprovalDeny {
+		t.Fatalf("expected callback decision to win, got %v", d)
+	}
+
+	// A normal tool still honours the always-allow cache (no callback hit).
+	m.AllowAlways("read")
+	called = false
+	if d, _ := m.Approve("read", "c2", nil); d != agent.ToolApprovalAllow || called {
+		t.Fatalf("read should use cached allow without callback, got %v called=%v", d, called)
+	}
+}
+
+func TestPlanModeBlocksMutatingTools(t *testing.T) {
 	session := newTestSession(t, newTestModel())
 	session.EnterPlanMode()
 
-	var writeTool, editTool agent.AgentTool
+	var writeTool, editTool, bashTool agent.AgentTool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		switch tool.Name() {
 		case "write":
 			writeTool = tool
 		case "edit":
 			editTool = tool
+		case "bash":
+			bashTool = tool
 		}
 	}
-	if writeTool == nil || editTool == nil {
-		t.Fatalf("expected write and edit tools, got %v", session.GetActiveToolNames())
+	if writeTool == nil || editTool == nil || bashTool == nil {
+		t.Fatalf("expected write, edit, and bash tools, got %v", session.GetActiveToolNames())
 	}
 
 	writeResult, err := writeTool.Execute(context.Background(), "write-plan", map[string]any{
@@ -365,6 +412,19 @@ func TestPlanModeBlocksWriteAndEditTools(t *testing.T) {
 	}
 	if string(data) != "before" {
 		t.Fatalf("expected edit tool not to mutate file, got %q", data)
+	}
+
+	bashResult, err := bashTool.Execute(context.Background(), "bash-plan", map[string]any{
+		"command": "cat > bash-created.txt <<'EOF'\ncreated\nEOF",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(extractTextBlocks(bashResult.Content), "blocked while plan mode is active") {
+		t.Fatalf("expected plan mode block, got %#v", bashResult.Content)
+	}
+	if _, err := os.Stat(filepath.Join(session.cwd, "bash-created.txt")); !os.IsNotExist(err) {
+		t.Fatalf("expected bash tool not to create file, stat err=%v", err)
 	}
 }
 
@@ -2052,7 +2112,7 @@ func TestHarnessPathsToolAndPlanFile(t *testing.T) {
 		t.Fatalf("expected harness_paths and read tools, got %v", session.GetActiveToolNames())
 	}
 
-	session.ExitPlanMode("ship feature safely")
+	session.ExitPlanMode("ship feature safely", nil)
 	paths := session.RuntimePaths()
 	if _, err := os.Stat(paths.PlanFile); err != nil {
 		t.Fatalf("expected plan file to exist: %v", err)

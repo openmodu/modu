@@ -517,7 +517,7 @@ func (s *CodingSession) planModeBlocksTool(toolName string) bool {
 		return false
 	}
 	switch toolName {
-	case "write", "edit":
+	case "write", "edit", "bash":
 		return true
 	default:
 		return false

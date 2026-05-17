@@ -281,6 +281,7 @@ func (r *goTUIRoot) KeyMap() gotui.KeyMap {
 		gotui.OnStop(gotui.KeyUp, dispatch),
 		gotui.OnStop(gotui.KeyDown, dispatch),
 		gotui.OnStop(gotui.KeyTab, dispatch),
+		gotui.OnStop(gotui.KeyTab.Shift(), func(ke gotui.KeyEvent) { r.togglePlanMode() }),
 		gotui.OnStop(gotui.KeyEnter, dispatch),
 		gotui.OnStop(gotui.AnyRune, dispatch),
 	}

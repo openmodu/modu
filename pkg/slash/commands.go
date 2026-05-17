@@ -167,7 +167,7 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 			session.EnterPlanMode()
 			r.PrintInfo("plan mode enabled")
 		case "off":
-			session.ExitPlanMode("manually exited from /plan off")
+			session.ExitPlanMode("manually exited from /plan off", nil)
 			r.PrintInfo("plan mode disabled")
 		default:
 			r.PrintInfo("usage: /plan [status|on|off]")

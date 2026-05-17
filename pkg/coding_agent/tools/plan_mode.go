@@ -9,7 +9,9 @@ import (
 
 type PlanModeManager interface {
 	EnterPlanMode()
-	ExitPlanMode(plan string)
+	// ExitPlanMode is only invoked after the user approves the plan. steps are
+	// the ordered sub-tasks to execute and are turned into a todo list.
+	ExitPlanMode(plan string, steps []string)
 	IsPlanMode() bool
 }
 
@@ -47,23 +49,49 @@ func NewExitPlanModeTool(manager PlanModeManager) *ExitPlanModeTool {
 func (t *ExitPlanModeTool) Name() string  { return "exit_plan_mode" }
 func (t *ExitPlanModeTool) Label() string { return "Exit Plan Mode" }
 func (t *ExitPlanModeTool) Description() string {
-	return "Exit planning mode and record the prepared plan summary."
+	return "Present the finished implementation plan to the user for approval. " +
+		"Call this only after research is complete. The user must approve before " +
+		"any changes are made: on approval plan mode is exited, the steps become " +
+		"the todo list, and you execute them in order. If the user rejects, you " +
+		"remain in plan mode — revise the plan from their feedback and call this again."
 }
 func (t *ExitPlanModeTool) Parameters() any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"plan": map[string]any{"type": "string", "description": "The plan summary to record"},
+			"plan": map[string]any{
+				"type":        "string",
+				"description": "The plan summary in markdown, shown to the user for approval",
+			},
+			"steps": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "Ordered sub-tasks to execute after approval; each becomes a todo item",
+			},
 		},
 		"required": []string{"plan"},
 	}
 }
 func (t *ExitPlanModeTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
 	plan, _ := args["plan"].(string)
-	if t.manager != nil {
-		t.manager.ExitPlanMode(plan)
+	var steps []string
+	if raw, ok := args["steps"].([]any); ok {
+		for _, s := range raw {
+			if str, ok := s.(string); ok && str != "" {
+				steps = append(steps, str)
+			}
+		}
 	}
-	return planToolResult("plan mode disabled"), nil
+	if t.manager != nil {
+		t.manager.ExitPlanMode(plan, steps)
+	}
+	msg := "Plan approved. Plan mode is now off."
+	if len(steps) > 0 {
+		msg += " The plan steps are now your todo list — execute them in order, marking each in_progress when you start it and completed when done."
+	} else {
+		msg += " Proceed to implement the plan."
+	}
+	return planToolResult(msg), nil
 }
 
 func planToolResult(text string) agent.AgentToolResult {
