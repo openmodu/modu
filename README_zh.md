@@ -22,6 +22,84 @@
 go get github.com/openmodu/modu
 ```
 
+## 🚀 快速开始
+
+### 前置条件
+
+- Go 1.21+
+- LLM 服务（如 [Ollama](https://ollama.ai)、[LM Studio](https://lmstudio.ai) 或任意 OpenAI 兼容 API）
+
+### 最简示例
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+
+	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/providers"
+	"github.com/openmodu/modu/pkg/providers/openai"
+	"github.com/openmodu/modu/pkg/types"
+)
+
+func main() {
+	// 1. 注册 LLM Provider
+	providers.Register(openai.New(
+		"ollama",
+		openai.WithBaseURL("http://localhost:11434/v1"),
+	))
+
+	model := &types.Model{
+		ID:         "llama3.2",
+		Name:       "Llama 3.2",
+		ProviderID: "ollama",
+	}
+
+	// 2. 创建 Agent
+	a := agent.NewAgent(agent.AgentConfig{
+		InitialState: &agent.AgentState{
+			SystemPrompt: "You are a helpful assistant.",
+			Model:        model,
+		},
+	})
+
+	// 3. 发送 Prompt
+	err := a.Prompt(context.Background(), "法国的首都是哪里？")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	// 4. 获取响应
+	state := a.GetState()
+	for _, msg := range state.Messages {
+		if assistant, ok := msg.(types.AssistantMessage); ok {
+			for _, c := range assistant.Content {
+				if tc, ok := c.(*types.TextContent); ok {
+					fmt.Println(tc.Text)
+				}
+			}
+		}
+	}
+}
+```
+
+### 运行示例
+
+```bash
+# 基础 Agent 演示
+go run ./examples/agent_demo
+
+# 带文件工具的编程 Agent
+go run ./examples/coding_agent
+
+# 多 Agent 协作
+go run ./examples/agent_teams
+```
+
 ## 🗂 项目结构
 
 ```

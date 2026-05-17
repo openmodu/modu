@@ -22,6 +22,84 @@
 go get github.com/openmodu/modu
 ```
 
+## 🚀 Quick Start
+
+### Prerequisites
+
+- Go 1.21+
+- An LLM service (e.g., [Ollama](https://ollama.ai), [LM Studio](https://lmstudio.ai), or any OpenAI-compatible API)
+
+### Minimal Example
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+
+	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/providers"
+	"github.com/openmodu/modu/pkg/providers/openai"
+	"github.com/openmodu/modu/pkg/types"
+)
+
+func main() {
+	// 1. Register LLM provider
+	providers.Register(openai.New(
+		"ollama",
+		openai.WithBaseURL("http://localhost:11434/v1"),
+	))
+
+	model := &types.Model{
+		ID:         "llama3.2",
+		Name:       "Llama 3.2",
+		ProviderID: "ollama",
+	}
+
+	// 2. Create agent with tools
+	a := agent.NewAgent(agent.AgentConfig{
+		InitialState: &agent.AgentState{
+			SystemPrompt: "You are a helpful assistant.",
+			Model:        model,
+		},
+	})
+
+	// 3. Send a prompt
+	err := a.Prompt(context.Background(), "What is the capital of France?")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	// 4. Get response
+	state := a.GetState()
+	for _, msg := range state.Messages {
+		if assistant, ok := msg.(types.AssistantMessage); ok {
+			for _, c := range assistant.Content {
+				if tc, ok := c.(*types.TextContent); ok {
+					fmt.Println(tc.Text)
+				}
+			}
+		}
+	}
+}
+```
+
+### Run Examples
+
+```bash
+# Basic agent demo
+go run ./examples/agent_demo
+
+# Coding agent with file tools
+go run ./examples/coding_agent
+
+# Multi-agent teams
+go run ./examples/agent_teams
+```
+
 ## 🗂 Project Structure
 
 ```
