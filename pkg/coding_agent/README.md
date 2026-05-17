@@ -153,7 +153,11 @@ Agent 完成回复 → 累加 token 用量 → 超过阈值？→ 调用 Compact
 
 `GetDoctorInfo()` 返回基础运行诊断摘要，包括模型配置路径、当前模型、baseURL 连通性、provider 注册状态、API key 状态、上下文文件数量和问题列表。`modu_code` 的 `/doctor` 命令基于这份只读摘要渲染。
 
-### 6. 自动重试（Auto Retry）
+### 6. 计划模式（Plan Mode）
+
+启用 plan mode 后，系统 prompt 会标记当前处于规划状态，要求优先做方案、顺序和验证策略。执行层同时会阻断 `write` 和 `edit` 工具，避免计划阶段直接修改项目文件；如需落地修改，先退出 plan mode。
+
+### 7. 自动重试（Auto Retry）
 
 内置在 Agent 循环中的指数退避重试机制：
 

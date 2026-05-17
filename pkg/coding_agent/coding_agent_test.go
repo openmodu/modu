@@ -313,6 +313,61 @@ func TestPlanModeTools(t *testing.T) {
 	}
 }
 
+func TestPlanModeBlocksWriteAndEditTools(t *testing.T) {
+	session := newTestSession(t, newTestModel())
+	session.EnterPlanMode()
+
+	var writeTool, editTool agent.AgentTool
+	for _, tool := range session.GetAgent().GetState().Tools {
+		switch tool.Name() {
+		case "write":
+			writeTool = tool
+		case "edit":
+			editTool = tool
+		}
+	}
+	if writeTool == nil || editTool == nil {
+		t.Fatalf("expected write and edit tools, got %v", session.GetActiveToolNames())
+	}
+
+	writeResult, err := writeTool.Execute(context.Background(), "write-plan", map[string]any{
+		"path":    "planned.txt",
+		"content": "should not write",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(extractTextBlocks(writeResult.Content), "blocked while plan mode is active") {
+		t.Fatalf("expected plan mode block, got %#v", writeResult.Content)
+	}
+	if _, err := os.Stat(filepath.Join(session.cwd, "planned.txt")); !os.IsNotExist(err) {
+		t.Fatalf("expected write tool not to create file, stat err=%v", err)
+	}
+
+	path := filepath.Join(session.cwd, "existing.txt")
+	if err := os.WriteFile(path, []byte("before"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	editResult, err := editTool.Execute(context.Background(), "edit-plan", map[string]any{
+		"path":     "existing.txt",
+		"old_text": "before",
+		"new_text": "after",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(extractTextBlocks(editResult.Content), "blocked while plan mode is active") {
+		t.Fatalf("expected plan mode block, got %#v", editResult.Content)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "before" {
+		t.Fatalf("expected edit tool not to mutate file, got %q", data)
+	}
+}
+
 func TestEnterAndExitWorktree(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")

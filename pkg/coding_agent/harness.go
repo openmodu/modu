@@ -483,9 +483,19 @@ func (w *HarnessWrappedTool) Parameters() any     { return w.inner.Parameters() 
 
 func (w *HarnessWrappedTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
 	call := HarnessToolCall{ToolName: w.inner.Name(), Args: args}
+	if w.session != nil && w.session.planModeBlocksTool(call.ToolName) {
+		return agent.AgentToolResult{
+			Content: []types.ContentBlock{&types.TextContent{
+				Type: "text",
+				Text: fmt.Sprintf("%s is blocked while plan mode is active; exit plan mode before making changes", call.ToolName),
+			}},
+			Details: map[string]any{"isError": true, "blockedBy": "plan_mode"},
+		}, nil
+	}
 	if err := w.session.runHarnessPreToolHooks(call); err != nil {
 		return agent.AgentToolResult{
 			Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: err.Error()}},
+			Details: map[string]any{"isError": true},
 		}, nil
 	}
 
@@ -500,6 +510,18 @@ func (w *HarnessWrappedTool) Parallel() bool {
 		return p.Parallel()
 	}
 	return false
+}
+
+func (s *CodingSession) planModeBlocksTool(toolName string) bool {
+	if s == nil || !s.IsPlanMode() {
+		return false
+	}
+	switch toolName {
+	case "write", "edit":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *CodingSession) runHarnessPreToolHooks(call HarnessToolCall) error {
