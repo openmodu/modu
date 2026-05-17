@@ -17,7 +17,10 @@ func (r *goTUIRoot) bottomLine() (string, gotui.Style) {
 	if r.model.statusMsg != "" && r.model.statusMsg != "thinking" {
 		return r.model.statusMsg, gotui.NewStyle().Dim()
 	}
-	return "ctrl+j new line  /help  ctrl+c exit", gotui.NewStyle().Dim()
+	if r.session != nil && r.session.IsPlanMode() {
+		return "⏸ plan mode — research only, shift+tab to exit", gotui.NewStyle().Foreground(gotui.Yellow)
+	}
+	return "ctrl+j new line  shift+tab plan mode  /help  ctrl+c exit", gotui.NewStyle().Dim()
 }
 
 func (r *goTUIRoot) activityLine() (string, bool) {

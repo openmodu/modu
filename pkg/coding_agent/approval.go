@@ -55,6 +55,35 @@ func (m *ApprovalManager) SetObserver(observer ApprovalObserver) {
 
 // Approve is the AgentConfig.ApproveTool implementation.
 func (m *ApprovalManager) Approve(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
+	// exit_plan_mode is the plan approval gate: it must always ask the user
+	// before the prepared plan is accepted. Skip the always-allow/deny cache
+	// and permission rules so the prompt cannot be silently auto-approved.
+	// With no interactive callback (headless / --no-approve) the plan is
+	// accepted automatically so non-interactive runs are not blocked.
+	if toolName == "exit_plan_mode" {
+		m.mu.RLock()
+		cb := m.callback
+		observer := m.observer
+		m.mu.RUnlock()
+		if cb == nil {
+			return agent.ToolApprovalAllow, nil
+		}
+		if observer != nil {
+			observer.OnPermissionRequest(toolName, toolCallID, args)
+		}
+		decision, err := cb(toolName, toolCallID, args)
+		if err != nil {
+			if observer != nil {
+				observer.OnPermissionDenied(toolName, toolCallID, args, err.Error())
+			}
+			return agent.ToolApprovalDeny, err
+		}
+		if !decision.IsAllow() && observer != nil {
+			observer.OnPermissionDenied(toolName, toolCallID, args, string(decision))
+		}
+		return decision, nil
+	}
+
 	m.mu.RLock()
 	if m.alwaysAllow[toolName] {
 		m.mu.RUnlock()

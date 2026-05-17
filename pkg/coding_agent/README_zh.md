@@ -153,7 +153,18 @@ Agent 完成回复 → 累加 token 用量 → 超过阈值？→ 调用 Compact
 
 `GetDoctorInfo()` 返回基础运行诊断摘要，包括模型配置路径、当前模型、baseURL 连通性、provider 注册状态、API key 状态、上下文文件数量和问题列表。`modu_code` 的 `/doctor` 命令基于这份只读摘要渲染。
 
-### 6. 自动重试（Auto Retry）
+### 6. 计划模式（Plan Mode）
+
+启用 plan mode 后，系统 prompt 会标记当前处于规划状态，要求只做只读调研、先产出方案。执行层同时会阻断 `write`、`edit` 和 `bash` 工具，避免计划阶段直接修改项目文件或通过 shell 绕过。
+
+进入方式：`/plan on`、模型自调 `enter_plan_mode`，或在 `modu_code` TUI 中按 `Shift+Tab` 一键切换。
+
+审批门（对齐 Claude Code）：模型完成调研后调用 `exit_plan_mode`，传入 `plan`（markdown 方案）和 `steps`（有序子任务数组）。该调用**强制**弹出用户审批，绕过 always-allow 缓存与权限规则，不会被静默放行（无交互回调的 headless 场景才自动放行）：
+
+- 用户**批准**：退出 plan mode，`steps` 转为 todo 列表，模型按子任务逐项执行；
+- 用户**拒绝**：`exit_plan_mode` 不执行，会话保持在 plan mode，模型根据反馈修订方案后再次提交。
+
+### 7. 自动重试（Auto Retry）
 
 内置在 Agent 循环中的指数退避重试机制：
 

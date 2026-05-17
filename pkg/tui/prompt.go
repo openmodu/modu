@@ -41,6 +41,24 @@ func (r *goTUIRoot) submit(text string) {
 	r.runPrompt(line)
 }
 
+// togglePlanMode flips plan mode on/off. Bound to Shift+Tab so the user can
+// switch into planning before describing a task (mirrors Claude Code). Only
+// acts while the input box is active — toggling mid-query or mid-approval is
+// ignored to avoid racing the running turn.
+func (r *goTUIRoot) togglePlanMode() {
+	if r.session == nil || r.model.state != uiStateInput {
+		return
+	}
+	if r.session.IsPlanMode() {
+		r.session.ExitPlanMode("manually exited via shift+tab", nil)
+		r.model.statusMsg = "plan mode off"
+	} else {
+		r.session.EnterPlanMode()
+		r.model.statusMsg = "plan mode on — describe the task; I'll plan first"
+	}
+	r.bump()
+}
+
 func (r *goTUIRoot) runShell(shellCmd string) {
 	block := uiBlock{Kind: "system", Content: "$ " + shellCmd, Timestamp: time.Now()}
 	r.model.appendBlock(block)

@@ -33,7 +33,7 @@ func (a planModeAdapter) EnterPlanMode() {
 	a.session.writeRuntimeState()
 }
 
-func (a planModeAdapter) ExitPlanMode(plan string) {
+func (a planModeAdapter) ExitPlanMode(plan string, steps []string) {
 	if a.session == nil {
 		return
 	}
@@ -47,6 +47,21 @@ func (a planModeAdapter) ExitPlanMode(plan string) {
 	}()
 	if strings.TrimSpace(plan) != "" {
 		_ = a.session.writeLatestPlan(plan)
+	}
+	// Approved steps become the execution todo list so the agent works
+	// through the plan sub-task by sub-task.
+	if len(steps) > 0 {
+		items := make([]TodoItem, 0, len(steps))
+		for _, step := range steps {
+			step = strings.TrimSpace(step)
+			if step == "" {
+				continue
+			}
+			items = append(items, TodoItem{Content: step, Status: "pending"})
+		}
+		if len(items) > 0 {
+			a.session.SetTodos(items)
+		}
 	}
 	a.session.refreshDynamicSystemPrompt()
 	a.session.writeRuntimeState()
@@ -73,9 +88,10 @@ func (s *CodingSession) EnterPlanMode() {
 	planModeAdapter{session: s}.EnterPlanMode()
 }
 
-// ExitPlanMode disables plan mode for the current session.
-func (s *CodingSession) ExitPlanMode(plan string) {
-	planModeAdapter{session: s}.ExitPlanMode(plan)
+// ExitPlanMode disables plan mode for the current session. steps, when
+// provided, replace the todo list so execution follows the approved plan.
+func (s *CodingSession) ExitPlanMode(plan string, steps []string) {
+	planModeAdapter{session: s}.ExitPlanMode(plan, steps)
 }
 
 func (s *CodingSession) replacePlanTools() {
@@ -237,7 +253,17 @@ func (s *CodingSession) refreshDynamicSystemPrompt() {
 	worktreePath := s.worktreePath
 	s.worktreeMu.Unlock()
 	if planMode {
-		parts = append(parts, "## Active Mode\nThe session is currently in plan mode. Focus on planning, sequencing, and validation strategy before making changes.")
+		parts = append(parts, "## Active Mode: Plan\n"+
+			"You are in plan mode. Research the codebase thoroughly using read-only "+
+			"tools, but DO NOT make any changes — write, edit, and bash are blocked.\n\n"+
+			"When the plan is ready, call `exit_plan_mode` with a markdown `plan` "+
+			"summary and an ordered `steps` array of concrete sub-tasks. This asks "+
+			"the user to approve the plan.\n\n"+
+			"- If the user APPROVES: plan mode exits, the steps become your todo "+
+			"list, and you implement them in order.\n"+
+			"- If the user REJECTS (the exit_plan_mode call is denied): you are "+
+			"still in plan mode. Do not make changes. Ask what they want changed, "+
+			"revise the plan, and call `exit_plan_mode` again.")
 	}
 	if worktreePath != "" {
 		parts = append(parts, "## Active Worktree\nThe session is currently operating inside an isolated git worktree at: "+worktreePath)

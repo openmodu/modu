@@ -1,6 +1,9 @@
 package tui
 
 import (
+	"fmt"
+	"strings"
+
 	gotui "github.com/grindlemire/go-tui"
 
 	"github.com/openmodu/modu/pkg/approval"
@@ -117,6 +120,10 @@ func (r *goTUIRoot) renderApprovalWidget() *gotui.Element {
 		gotui.WithFlexShrink(0),
 	)
 
+	if perm.ToolName == "exit_plan_mode" {
+		return r.renderPlanApprovalWidget(perm, container)
+	}
+
 	toolRow := gotui.New(
 		gotui.WithDisplay(gotui.DisplayFlex),
 		gotui.WithDirection(gotui.Row),
@@ -160,6 +167,50 @@ func (r *goTUIRoot) renderApprovalWidget() *gotui.Element {
 	hintRow.AddChild(gotui.New(gotui.WithText("[A]lways allow"), gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Yellow).Bold()), gotui.WithFlexShrink(0)))
 	hintRow.AddChild(sp())
 	hintRow.AddChild(gotui.New(gotui.WithText("[D]eny always"), gotui.WithTextStyle(gotui.NewStyle().Dim()), gotui.WithFlexShrink(0)))
+	container.AddChild(hintRow)
+
+	return container
+}
+
+// renderPlanApprovalWidget renders the plan-approval gate: the full plan plus
+// the ordered steps, with a tailored hint. Approving exits plan mode and turns
+// the steps into the todo list; rejecting keeps the session in plan mode.
+func (r *goTUIRoot) renderPlanApprovalWidget(perm *approval.Request, container *gotui.Element) *gotui.Element {
+	textRow := func(text string, style gotui.Style) {
+		container.AddChild(gotui.New(
+			gotui.WithText(text),
+			gotui.WithTextStyle(style),
+			gotui.WithFlexShrink(0),
+		))
+	}
+
+	textRow("⏺ Ready to code? Review the plan:", gotui.NewStyle().Foreground(gotui.Yellow).Bold())
+
+	plan, _ := perm.Args["plan"].(string)
+	for _, line := range strings.Split(strings.TrimRight(plan, "\n"), "\n") {
+		textRow("  "+line, gotui.NewStyle())
+	}
+
+	if raw, ok := perm.Args["steps"].([]any); ok && len(raw) > 0 {
+		textRow("", gotui.NewStyle())
+		textRow("  Steps:", gotui.NewStyle().Dim())
+		for i, s := range raw {
+			if str, ok := s.(string); ok && str != "" {
+				textRow(fmt.Sprintf("  %d. %s", i+1, str), gotui.NewStyle())
+			}
+		}
+	}
+
+	textRow("", gotui.NewStyle())
+	hintRow := gotui.New(
+		gotui.WithDisplay(gotui.DisplayFlex),
+		gotui.WithDirection(gotui.Row),
+		gotui.WithFlexShrink(0),
+	)
+	hintRow.AddChild(gotui.New(gotui.WithText("  "), gotui.WithFlexShrink(0)))
+	hintRow.AddChild(gotui.New(gotui.WithText("[Y]es, start coding"), gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Green).Bold()), gotui.WithFlexShrink(0)))
+	hintRow.AddChild(gotui.New(gotui.WithText("   "), gotui.WithFlexShrink(0)))
+	hintRow.AddChild(gotui.New(gotui.WithText("[N]o, keep planning"), gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Red).Bold()), gotui.WithFlexShrink(0)))
 	container.AddChild(hintRow)
 
 	return container
