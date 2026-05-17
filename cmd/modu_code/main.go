@@ -1,10 +1,10 @@
-// modu_code is a Claude Code-style interactive coding assistant built on
-// modu's CodingAgent and pkg/tui. It provides a REPL where the AI can read,
-// write, and search files in the current working directory.
+// modu_code is an interactive coding assistant built on modu's CodingAgent and
+// pkg/tui. It provides a REPL where the AI can read, write, and search files in
+// the current working directory.
 //
 // Provider selection (first matching wins):
 //
-//	ANTHROPIC_API_KEY  → Anthropic Claude via OpenAI-compat endpoint
+//	ANTHROPIC_API_KEY  → Anthropic via OpenAI-compatible endpoint
 //	OPENAI_API_KEY     → OpenAI (model: $OPENAI_MODEL or gpt-4o)
 //	DEEPSEEK_API_KEY   → DeepSeek (model: $DEEPSEEK_MODEL or deepseek-chat)
 //	OLLAMA_HOST        → Ollama (model: $OLLAMA_MODEL, required)
@@ -20,10 +20,10 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"runtime"
+	"strings"
 	"syscall"
 
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
@@ -32,11 +32,18 @@ import (
 
 	"github.com/openmodu/modu/cmd/modu_code/internal/acp"
 	"github.com/openmodu/modu/cmd/modu_code/internal/provider"
-	"github.com/openmodu/modu/pkg/mailboxrt"
 	"github.com/openmodu/modu/pkg/tui"
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "config" {
+		if err := runConfigCommand(os.Args[2:], os.Stdout, os.Stderr); err != nil {
+			fmt.Fprintf(os.Stderr, "config: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	var (
 		printPrompt = flag.String("p", "", "run in print mode: send prompt and output result to stdout")
 		printJSON   = flag.Bool("json", false, "with -p: output NDJSON event stream instead of plain text")
@@ -55,37 +62,21 @@ func main() {
 	model, getAPIKey := provider.Resolve()
 	if model == nil {
 		fmt.Fprintln(os.Stderr, "no provider configured")
-		fmt.Fprintln(os.Stderr, "set one of: ANTHROPIC_API_KEY, OPENAI_API_KEY, DEEPSEEK_API_KEY, OLLAMA_HOST+OLLAMA_MODEL")
+		fmt.Fprintf(os.Stderr, "configure models in %s or set one of: ANTHROPIC_API_KEY, OPENAI_API_KEY, DEEPSEEK_API_KEY, OLLAMA_HOST+OLLAMA_MODEL\n", provider.ConfigPath())
 		os.Exit(1)
 	}
 
 	thinkingLevel := provider.ResolveThinkingLevel()
 	agentDir := coding_agent.DefaultAgentDir()
-	exampleAgentsDir := filepath.Join(locateCmdDir(), "agents")
-
-	rt, rtErr := mailboxrt.Start(agentDir, exampleAgentsDir, cwd, model, getAPIKey)
-	if rtErr != nil {
-		fmt.Fprintf(os.Stderr, "[mailbox] failed to start local runtime: %v\n", rtErr)
-	}
-	if rt != nil {
-		defer rt.Close()
-	}
 
 	sessionOpts := coding_agent.CodingSessionOptions{
-		Cwd:           cwd,
-		AgentDir:      agentDir,
-		Model:         model,
-		ThinkingLevel: thinkingLevel,
-		GetAPIKey:     getAPIKey,
-		MailboxClient: rt.Client(),
-		ExtraSubagentDirs: []string{
-			exampleAgentsDir,
-		},
-	}
-	if *acpMode {
-		sessionOpts.CustomSystemPrompt = "You are Modu Code, an AI coding assistant. " +
-			"Do not refer to yourself as Claude, GPT, Gemini, or any other model name. " +
-			"You are Modu Code."
+		Cwd:             cwd,
+		AgentDir:        agentDir,
+		Model:           model,
+		ThinkingLevel:   thinkingLevel,
+		GetAPIKey:       getAPIKey,
+		ScopedModels:    provider.ConfiguredModelIDs(),
+		ModelConfigPath: provider.ConfigPath(),
 	}
 	session, err := coding_agent.NewCodingSession(sessionOpts)
 	if err != nil {
@@ -93,6 +84,13 @@ func main() {
 		os.Exit(1)
 	}
 	defer session.Close("prompt_input_exit")
+	unsubModelPersist := session.SubscribeSession(func(ev coding_agent.SessionEvent) {
+		if ev.Type != coding_agent.SessionEventModelChange || ev.Provider == "" || ev.ModelID == "" {
+			return
+		}
+		_ = provider.SaveActiveModel(ev.Provider, ev.ModelID)
+	})
+	defer unsubModelPersist()
 
 	if *printPrompt != "" {
 		printMode := modes.PrintModeText
@@ -143,18 +141,52 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if err := tui.Run(ctx, session, model, rt, *noApprove); err != nil {
+	if err := tui.Run(ctx, session, model, *noApprove); err != nil {
 		fmt.Fprintf(os.Stderr, "ui error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-// locateCmdDir returns the directory of this source file at build time,
-// used to locate the bundled agents/, prompts/, skills/ directories.
-func locateCmdDir() string {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		return ""
+func runConfigCommand(args []string, stdout, stderr io.Writer) error {
+	_ = stderr
+	if len(args) == 0 {
+		return fmt.Errorf("usage: modu_code config <example|init|validate>")
 	}
-	return filepath.Dir(file)
+	switch args[0] {
+	case "example":
+		_, err := fmt.Fprint(stdout, provider.ExampleConfigJSON())
+		return err
+	case "init":
+		force := len(args) > 1 && args[1] == "--force"
+		if len(args) > 2 || (len(args) == 2 && !force) {
+			return fmt.Errorf("usage: modu_code config init [--force]")
+		}
+		path, err := provider.InitConfig(force)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(stdout, "wrote config: %s\n", path)
+		return err
+	case "validate":
+		if len(args) != 1 {
+			return fmt.Errorf("usage: modu_code config validate")
+		}
+		result := provider.ValidateConfig()
+		fmt.Fprintf(stdout, "config: %s\n", result.Path)
+		fmt.Fprintf(stdout, "models: %d\n", result.ModelCount)
+		if result.Active != "" {
+			fmt.Fprintf(stdout, "active: %s\n", result.Active)
+		}
+		if len(result.Problems) == 0 {
+			_, err := fmt.Fprintln(stdout, "status: ok")
+			return err
+		}
+		fmt.Fprintf(stdout, "problems (%d):\n", len(result.Problems))
+		for _, problem := range result.Problems {
+			fmt.Fprintf(stdout, "  - %s\n", problem)
+		}
+		return fmt.Errorf("config validation failed")
+	default:
+		return fmt.Errorf("unknown config command %q; expected example, init, or validate", strings.TrimSpace(args[0]))
+	}
 }

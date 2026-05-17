@@ -7,8 +7,8 @@ import (
 )
 
 // permissionKeyMap is active while a tool is awaiting approval. The hotkeys
-// match Claude Code: y/Y allow once, a/A always, n/N or Esc deny once,
-// d/D deny always. Enter is treated as "allow".
+// are: y/Y allow once, a/A always, n/N or Esc deny once, d/D deny always.
+// Enter is treated as "allow".
 func (r *goTUIRoot) permissionKeyMap() gotui.KeyMap {
 	return gotui.KeyMap{
 		gotui.OnStop(gotui.KeyCtrlC, func(ke gotui.KeyEvent) { r.abortQuery() }),

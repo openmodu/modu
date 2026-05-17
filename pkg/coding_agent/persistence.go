@@ -223,6 +223,12 @@ func (s *CodingSession) ClearSavedMessages() error {
 	return err
 }
 
+// ClearConversation clears both in-memory and persisted conversation context.
+func (s *CodingSession) ClearConversation() error {
+	s.agent.Reset()
+	return s.ClearSavedMessages()
+}
+
 // ── JSON marshaling ──────────────────────────────────────────────────────────
 
 func unmarshalSingleAgentMessage(raw json.RawMessage) (agent.AgentMessage, error) {

@@ -104,8 +104,8 @@ type harnessState struct {
 	pendingHints []HarnessHint
 }
 
-var claudeCodeHintRE = regexp.MustCompile(`(?m)^[ \t]*<claude-code-hint\s+([^>]*?)\s*/>[ \t]*$`)
-var claudeCodeHintAttrRE = regexp.MustCompile(`(\w+)=(?:"([^"]*)"|([^\s/>]+))`)
+var moduCodeHintRE = regexp.MustCompile(`(?m)^[ \t]*<modu-code-hint\s+([^>]*?)\s*/>[ \t]*$`)
+var moduCodeHintAttrRE = regexp.MustCompile(`(\w+)=(?:"([^"]*)"|([^\s/>]+))`)
 
 func newHarnessState() *harnessState {
 	return &harnessState{}
@@ -630,7 +630,7 @@ func (s *CodingSession) stripHarnessHints(call HarnessToolCall, result agent.Age
 	}
 	for _, block := range result.Content {
 		tc, ok := block.(*types.TextContent)
-		if !ok || tc == nil || !strings.Contains(tc.Text, "<claude-code-hint") {
+		if !ok || tc == nil || !strings.Contains(tc.Text, "<modu-code-hint") {
 			continue
 		}
 		hints, stripped := extractHarnessHints(tc.Text, call.ToolName)
@@ -648,7 +648,7 @@ func (s *CodingSession) stripHarnessHints(call HarnessToolCall, result agent.Age
 
 func extractHarnessHints(text, sourceTool string) ([]HarnessHint, string) {
 	var hints []HarnessHint
-	stripped := claudeCodeHintRE.ReplaceAllStringFunc(text, func(line string) string {
+	stripped := moduCodeHintRE.ReplaceAllStringFunc(text, func(line string) string {
 		attrs := parseHarnessHintAttrs(line)
 		if attrs["v"] != "1" || attrs["type"] == "" || attrs["value"] == "" {
 			return ""
@@ -669,7 +669,7 @@ func extractHarnessHints(text, sourceTool string) ([]HarnessHint, string) {
 
 func parseHarnessHintAttrs(tag string) map[string]string {
 	attrs := make(map[string]string)
-	for _, match := range claudeCodeHintAttrRE.FindAllStringSubmatch(tag, -1) {
+	for _, match := range moduCodeHintAttrRE.FindAllStringSubmatch(tag, -1) {
 		if len(match) >= 4 {
 			attrs[match[1]] = firstNonEmpty(match[2], match[3])
 		}

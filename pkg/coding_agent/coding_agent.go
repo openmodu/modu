@@ -22,7 +22,6 @@ import (
 	"github.com/openmodu/modu/pkg/coding_agent/skills"
 	"github.com/openmodu/modu/pkg/coding_agent/subagent"
 	"github.com/openmodu/modu/pkg/coding_agent/tools"
-	"github.com/openmodu/modu/pkg/mailbox/client"
 	"github.com/openmodu/modu/pkg/providers"
 	sessiontrace "github.com/openmodu/modu/pkg/trace"
 	"github.com/openmodu/modu/pkg/types"
@@ -52,42 +51,43 @@ type CodingSessionOptions struct {
 	GetAPIKey func(provider string) (string, error)
 	// StreamFn overrides the default stream function.
 	StreamFn agent.StreamFn
-	// MailboxClient enables the spawn_agent tool when provided.
-	MailboxClient *client.MailboxClient
 	// ExtraSubagentDirs adds extra directories to scan for subagent definitions.
 	ExtraSubagentDirs []string
+	// ScopedModels limits model listing/cycling to these model IDs.
+	ScopedModels []string
+	// ModelConfigPath records the model config file path for diagnostics.
+	ModelConfigPath string
 	// OTelTracerProvider reuses an existing OpenTelemetry tracer provider when set.
 	OTelTracerProvider oteltrace.TracerProvider
 }
 
 // CodingSession is the main entry point for the coding agent system.
 type CodingSession struct {
-	agent            *agent.Agent
-	sessionManager   *session.Manager
-	sessionTree      *session.Tree
-	config           *Config
-	extensions       *extension.Runner
-	skillManager     *skills.Manager
-	templateMgr      *skills.TemplateManager
-	resources        *resource.Loader
-	memoryStore      *MemoryStore
-	subagentLoader   *subagent.Loader
-	cwd              string
-	agentDir         string
-	promptBuilder    *SystemPromptBuilder
-	model            *types.Model
-	activeTools      []agent.AgentTool
-	slashCommands    map[string]SlashCommand
-	getAPIKey        func(provider string) (string, error)
-	streamFn         agent.StreamFn
-	mailboxClient    *client.MailboxClient
-	lastSavedIndex   int
+	agent          *agent.Agent
+	sessionManager *session.Manager
+	sessionTree    *session.Tree
+	config         *Config
+	extensions     *extension.Runner
+	skillManager   *skills.Manager
+	resources      *resource.Loader
+	memoryStore    *MemoryStore
+	subagentLoader *subagent.Loader
+	cwd            string
+	agentDir       string
+	promptBuilder  *SystemPromptBuilder
+	model          *types.Model
+	activeTools    []agent.AgentTool
+	slashCommands  map[string]SlashCommand
+	getAPIKey      func(provider string) (string, error)
+	streamFn       agent.StreamFn
+	lastSavedIndex int
 	// totalTokens tracks accumulated token usage for auto-compaction.
-	totalTokens   int
-	retryManager  *RetryManager
-	eventBus      eventbus.EventBusController
-	scopedModels  []string
-	thinkingLevel agent.ThinkingLevel
+	totalTokens     int
+	retryManager    *RetryManager
+	eventBus        eventbus.EventBusController
+	scopedModels    []string
+	modelConfigPath string
+	thinkingLevel   agent.ThinkingLevel
 
 	// RPC parity fields
 	sessionName    string
@@ -199,11 +199,9 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	skillMgr := skills.NewManager(agentDir, opts.Cwd)
 	_ = skillMgr.Discover()
 
-	templateMgr := skills.NewTemplateManager(agentDir, opts.Cwd)
-	_ = templateMgr.Discover()
-
 	// Build system prompt
 	promptBuilder := NewSystemPromptBuilder(opts.Cwd)
+	promptBuilder.SetModel(opts.Model)
 	promptBuilder.SetMemoryStore(memoryStore)
 	promptBuilder.SetTools(activeTools)
 	for _, ctxFile := range loader.LoadContextFiles() {
@@ -258,11 +256,6 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 			promptBuilder.AppendPrompt(subagentsPrompt)
 		}
 	}
-	if opts.MailboxClient != nil {
-		activeTools = append(activeTools, NewSpawnAgentTool(opts.MailboxClient))
-		promptBuilder.AppendPrompt("\nThe spawn_agent tool is available for delegating work to mailbox-registered agents.")
-	}
-
 	systemPrompt := promptBuilder.Build()
 
 	// Create approval manager
@@ -283,34 +276,33 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	})
 
 	cs := &CodingSession{
-		agent:            ag,
-		sessionManager:   sessionMgr,
-		sessionTree:      session.NewTree(sessionMgr),
-		config:           cfg,
-		extensions:       extRunner,
-		skillManager:     skillMgr,
-		templateMgr:      templateMgr,
-		resources:        loader,
-		memoryStore:      memoryStore,
-		subagentLoader:   subagentLoader,
-		cwd:              opts.Cwd,
-		agentDir:         agentDir,
-		promptBuilder:    promptBuilder,
-		model:            opts.Model,
-		activeTools:      activeTools,
-		slashCommands:    make(map[string]SlashCommand),
-		getAPIKey:        getAPIKey,
-		streamFn:         streamFn,
-		mailboxClient:    opts.MailboxClient,
-		retryManager:     NewRetryManager(cfg.RetrySettings, cfg.AutoRetry),
-		eventBus:         eventbus.NewEventBus(),
-		scopedModels:     cfg.ScopedModels,
-		thinkingLevel:    cfg.ThinkingLevel,
-		sessionStarted:   time.Now().UnixMilli(),
-		taskManager:      taskMgr,
-		loadedContexts:   make(map[string]struct{}),
-		harness:          newHarnessState(),
-		approvalManager:  approvalMgr,
+		agent:           ag,
+		sessionManager:  sessionMgr,
+		sessionTree:     session.NewTree(sessionMgr),
+		config:          cfg,
+		extensions:      extRunner,
+		skillManager:    skillMgr,
+		resources:       loader,
+		memoryStore:     memoryStore,
+		subagentLoader:  subagentLoader,
+		cwd:             opts.Cwd,
+		agentDir:        agentDir,
+		promptBuilder:   promptBuilder,
+		model:           opts.Model,
+		activeTools:     activeTools,
+		slashCommands:   make(map[string]SlashCommand),
+		getAPIKey:       getAPIKey,
+		streamFn:        streamFn,
+		retryManager:    NewRetryManager(cfg.RetrySettings, cfg.AutoRetry),
+		eventBus:        eventbus.NewEventBus(),
+		scopedModels:    resolveScopedModels(cfg.ScopedModels, opts.ScopedModels),
+		modelConfigPath: opts.ModelConfigPath,
+		thinkingLevel:   cfg.ThinkingLevel,
+		sessionStarted:  time.Now().UnixMilli(),
+		taskManager:     taskMgr,
+		loadedContexts:  make(map[string]struct{}),
+		harness:         newHarnessState(),
+		approvalManager: approvalMgr,
 	}
 	if cfg.TracingRecorderEnabled() {
 		tracePaths := cs.RuntimePaths()
@@ -460,6 +452,13 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	return cs, nil
 }
 
+func resolveScopedModels(configured, explicit []string) []string {
+	if len(explicit) > 0 {
+		return append([]string(nil), explicit...)
+	}
+	return append([]string(nil), configured...)
+}
+
 // Prompt sends a user message and starts processing.
 func (s *CodingSession) Prompt(ctx context.Context, text string) error {
 	input := strings.TrimSpace(text)
@@ -475,11 +474,6 @@ func (s *CodingSession) Prompt(ctx context.Context, text string) error {
 
 		if cmd, ok := s.slashCommands[cmdName]; ok {
 			return cmd.Handler(s, cmdArgs)
-		}
-
-		// Check template expansion
-		if expanded, ok := s.templateMgr.Expand(input); ok {
-			text = expanded
 		}
 
 		// Check skills
@@ -794,14 +788,27 @@ func (s *CodingSession) pruneTransientContextMessages() {
 
 // SetModel changes the active model.
 func (s *CodingSession) SetModel(model *types.Model) {
+	changed := s.model == nil || s.model.ProviderID != model.ProviderID || s.model.ID != model.ID
 	s.model = model
 	s.agent.SetModel(model)
+	if s.promptBuilder != nil {
+		s.promptBuilder.SetModel(model)
+	}
+	if changed {
+		_ = s.ClearConversation()
+	}
+	s.refreshDynamicSystemPrompt()
 
 	_ = s.sessionManager.Append(session.NewEntry(session.EntryTypeModelChange, "", session.ModelChangeData{
 		Provider: model.ProviderID,
 		ModelID:  model.ID,
 	}))
 	s.writeRuntimeState()
+	s.emitSessionEvent(SessionEvent{
+		Type:     SessionEventModelChange,
+		Provider: model.ProviderID,
+		ModelID:  model.ID,
+	})
 }
 
 // SetModelByID changes the active model by provider and model ID.
@@ -811,6 +818,28 @@ func (s *CodingSession) SetModelByID(provider, modelID string) error {
 		return fmt.Errorf("model not found: %s/%s", provider, modelID)
 	}
 	s.SetModel(llmModel)
+	return nil
+}
+
+// SetModelByName changes the active model by configured display name or model ID.
+func (s *CodingSession) SetModelByName(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("model name is required")
+	}
+	var matches []*types.Model
+	for _, model := range s.GetAvailableModels() {
+		if model.Name == name || model.ID == name || model.ProviderID+"/"+model.ID == name || model.ProviderID+":"+model.ID == name {
+			matches = append(matches, model)
+		}
+	}
+	if len(matches) == 0 {
+		return fmt.Errorf("model not found: %s", name)
+	}
+	if len(matches) > 1 {
+		return fmt.Errorf("model %q is ambiguous; use /model <provider> <modelId>", name)
+	}
+	s.SetModel(matches[0])
 	return nil
 }
 
@@ -956,11 +985,6 @@ func (s *CodingSession) CycleModel() *types.Model {
 	}
 
 	s.SetModel(model)
-	s.emitSessionEvent(SessionEvent{
-		Type:     SessionEventModelChange,
-		Provider: model.ProviderID,
-		ModelID:  model.ID,
-	})
 	return model
 }
 
@@ -1250,6 +1274,15 @@ func (s *CodingSession) GetSessionStats() SessionStats {
 
 // GetAvailableModels returns all registered models from all providers.
 func (s *CodingSession) GetAvailableModels() []*types.Model {
+	if len(s.scopedModels) > 0 {
+		result := make([]*types.Model, 0, len(s.scopedModels))
+		for _, id := range s.scopedModels {
+			if model := providers.GetModel("", id); model != nil {
+				result = append(result, model)
+			}
+		}
+		return result
+	}
 	var result []*types.Model
 	for _, p := range providers.GetAllProviders() {
 		result = append(result, providers.GetModels(p)...)

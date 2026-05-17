@@ -13,13 +13,12 @@ import (
 	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/approval"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
-	"github.com/openmodu/modu/pkg/mailboxrt"
 	"github.com/openmodu/modu/pkg/tgbot"
 	"github.com/openmodu/modu/pkg/types"
 )
 
 // Run starts the interactive TUI session.
-func Run(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, rt *mailboxrt.Runtime, noApprove bool) error {
+func Run(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool) error {
 	if n, err := session.RestoreMessages(); err == nil && n > 0 {
 		_ = n
 	}
@@ -31,7 +30,7 @@ func Run(ctx context.Context, session *coding_agent.CodingSession, model *types.
 	}
 	var promptMu sync.Mutex
 
-	root := newGoTUIRoot(ctx, session, model, rt, histFile, approvalCh, &promptMu)
+	root := newGoTUIRoot(ctx, session, model, histFile, approvalCh, &promptMu)
 	if history, err := loadHistoryFile(histFile); err == nil {
 		root.history = history
 		root.historyIndex = len(history)
@@ -116,7 +115,9 @@ func runLoop(app *gotui.App, root *goTUIRoot) error {
 		return err
 	}
 	const frameDuration = 16 * time.Millisecond
-	resized := false
+	_, lastTermHeight := app.Terminal().Size()
+	lastInlineHeight := app.InlineHeight()
+	clearFromRow := -1
 	for {
 		frameStart := time.Now()
 		deadline := frameStart.Add(frameDuration / 2)
@@ -125,27 +126,40 @@ func runLoop(app *gotui.App, root *goTUIRoot) error {
 			select {
 			case ev := <-app.Events():
 				if _, ok := ev.(gotui.ResizeEvent); ok {
-					resized = true
+					oldStart := lastTermHeight - lastInlineHeight
+					if oldStart < 0 {
+						oldStart = 0
+					}
+					if clearFromRow < 0 || oldStart < clearFromRow {
+						clearFromRow = oldStart
+					}
 				}
 				app.Dispatch(ev)
+				if _, ok := ev.(gotui.ResizeEvent); ok {
+					_, termHeight := app.Terminal().Size()
+					newStart := termHeight - app.InlineHeight()
+					if newStart < 0 {
+						newStart = 0
+					}
+					if clearFromRow < 0 || newStart < clearFromRow {
+						clearFromRow = newStart
+					}
+				}
 			case <-app.StopCh():
 				return nil
 			default:
 				break drain
 			}
 		}
-		if resized {
-			// Clear the visible screen (not scrollback) to remove ghost widget
-			// frames that terminal emulators can leave behind on resize.
-			_, _ = app.Terminal().WriteDirect([]byte("\033[H\033[2J"))
-			// The widget never shrinks at runtime (commitInlineHeight). With
-			// a fresh screen we can safely reset to the baseline so the next
-			// Render recomputes the size from the current state.
-			root.resetInlineHeight()
-			resized = false
+		if clearFromRow >= 0 {
+			app.Terminal().SetCursor(0, clearFromRow)
+			app.Terminal().ClearToEnd()
+			clearFromRow = -1
 		}
 		app.Render()
 		root.positionCursor(app)
+		_, lastTermHeight = app.Terminal().Size()
+		lastInlineHeight = app.InlineHeight()
 		elapsed := time.Since(frameStart)
 		if remaining := frameDuration - elapsed; remaining > 0 {
 			select {

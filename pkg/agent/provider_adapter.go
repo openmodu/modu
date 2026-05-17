@@ -141,10 +141,22 @@ func rawBlocksToParts(blocks []interface{}) []any {
 func assistantProviderMessage(content []types.ContentBlock) providers.Message {
 	msg := providers.Message{Role: providers.RoleAssistant}
 	var textBuf string
+	var reasoningBuf string
 	for _, block := range content {
-		if tc, ok := block.(*types.TextContent); ok {
+		switch tc := block.(type) {
+		case *types.ThinkingContent:
+			if tc != nil {
+				reasoningBuf += tc.Thinking
+			}
+		case *types.TextContent:
+			if tc == nil {
+				continue
+			}
 			textBuf += tc.Text
 		}
+	}
+	if reasoningBuf != "" {
+		msg.ReasoningContent = reasoningBuf
 	}
 	if textBuf != "" {
 		msg.Content = textBuf

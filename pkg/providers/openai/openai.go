@@ -68,6 +68,10 @@ func (p *openAIProvider) Chat(ctx context.Context, req *providers.ChatRequest) (
 	if err != nil {
 		return nil, err
 	}
+	resp, err = p.retryWithoutReasoninglessAssistant(ctx, req, false, resp)
+	if err != nil {
+		return nil, err
+	}
 	defer resp.Body.Close()
 
 	data, err := io.ReadAll(resp.Body)
@@ -120,6 +124,10 @@ func (p *openAIProvider) Stream(ctx context.Context, req *providers.ChatRequest)
 	if err != nil {
 		return nil, err
 	}
+	resp, err = p.retryWithoutReasoninglessAssistant(ctx, req, true, resp)
+	if err != nil {
+		return nil, err
+	}
 	if resp.StatusCode >= 400 {
 		data, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
@@ -129,6 +137,55 @@ func (p *openAIProvider) Stream(ctx context.Context, req *providers.ChatRequest)
 	stream := types.NewEventStream()
 	go p.readSSE(resp.Body, stream)
 	return stream, nil
+}
+
+func (p *openAIProvider) retryWithoutReasoninglessAssistant(ctx context.Context, req *providers.ChatRequest, stream bool, resp *http.Response) (*http.Response, error) {
+	if resp == nil || resp.StatusCode < 400 {
+		return resp, nil
+	}
+	data, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	if !strings.Contains(string(data), "reasoning_content") {
+		resp.Body = io.NopCloser(bytes.NewReader(data))
+		return resp, nil
+	}
+	retryReq, ok := requestWithoutReasoninglessAssistant(req)
+	if !ok {
+		resp.Body = io.NopCloser(bytes.NewReader(data))
+		return resp, nil
+	}
+	body, err := p.buildBody(retryReq, stream)
+	if err != nil {
+		return nil, err
+	}
+	return p.doRequest(ctx, body)
+}
+
+func requestWithoutReasoninglessAssistant(req *providers.ChatRequest) (*providers.ChatRequest, bool) {
+	if req == nil {
+		return nil, false
+	}
+	out := *req
+	out.Messages = make([]providers.Message, 0, len(req.Messages))
+	changed := false
+	skipToolResults := false
+	for _, msg := range req.Messages {
+		if msg.Role == providers.RoleAssistant && msg.ReasoningContent == "" {
+			changed = true
+			skipToolResults = len(msg.ToolCalls) > 0
+			continue
+		}
+		if skipToolResults && msg.Role == providers.RoleTool {
+			changed = true
+			continue
+		}
+		skipToolResults = false
+		out.Messages = append(out.Messages, msg)
+	}
+	return &out, changed
 }
 
 // readSSE parses an SSE stream in a separate goroutine and pushes granular events.

@@ -13,11 +13,12 @@ const (
 // Message 对话消息，兼容 OpenAI chat completions 格式。
 // Content 可以是 string（纯文本）或 []any（多模态，含图片时使用）。
 type Message struct {
-	Role       Role       `json:"role"`
-	Content    any        `json:"content,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-	Name       string     `json:"name,omitempty"`
+	Role             Role       `json:"role"`
+	Content          any        `json:"content,omitempty"`
+	ReasoningContent string     `json:"reasoning_content,omitempty"`
+	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string     `json:"tool_call_id,omitempty"`
+	Name             string     `json:"name,omitempty"`
 }
 
 // ToolCall 工具调用

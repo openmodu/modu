@@ -8,7 +8,7 @@
 //	suggestions.go   — slash-command autocomplete (state + rendering)
 //	prompt.go        — submit / shell / slash / agent prompt routing
 //	events.go        — agent + session event handling, scrollback push helpers
-//	statusbar.go     — single-line status text below the input
+//	statusbar.go     — activity/status rows around the input
 //	bridge.go        — channel-bridge (e.g. Telegram) printer adapter
 //	ansi.go          — ANSI escape stripper used when feeding text to go-tui
 //	render.go        — block / tool / markdown rendering for scrollback
@@ -30,7 +30,6 @@ import (
 
 	"github.com/openmodu/modu/pkg/approval"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
-	"github.com/openmodu/modu/pkg/mailboxrt"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -38,13 +37,12 @@ import (
 // shared UI state and routes events to the per-component method receivers
 // defined in this package's other files.
 type goTUIRoot struct {
-	ctx            context.Context
-	session        *coding_agent.CodingSession
-	modelInfo      *types.Model
-	mailboxRuntime *mailboxrt.Runtime
-	histFile       string
-	approvalCh     <-chan approval.Request
-	promptMu       *sync.Mutex
+	ctx        context.Context
+	session    *coding_agent.CodingSession
+	modelInfo  *types.Model
+	histFile   string
+	approvalCh <-chan approval.Request
+	promptMu   *sync.Mutex
 
 	app     *gotui.App
 	model   *uiModel
@@ -60,13 +58,17 @@ type goTUIRoot struct {
 	slashMatches      []slashCommandDef
 	slashMatchIdx     int
 	slashScrollOffset int
+
+	modelChoices      []*types.Model
+	modelSelectIdx    int
+	modelSelectScroll int
+	lastFailedPrompt  string
 }
 
 func newGoTUIRoot(
 	ctx context.Context,
 	session *coding_agent.CodingSession,
 	modelInfo *types.Model,
-	mailboxRuntime *mailboxrt.Runtime,
 	histFile string,
 	approvalCh <-chan approval.Request,
 	promptMu *sync.Mutex,
@@ -75,23 +77,22 @@ func newGoTUIRoot(
 	if err != nil || width <= 0 {
 		width = 80
 	}
-	m := newUIModel(ctx, session, modelInfo, mailboxRuntime, histFile, nil, promptMu, "")
+	m := newUIModel(ctx, session, modelInfo, histFile, nil, promptMu, "")
 	m.ready = true
 	m.state = uiStateInput
 	m.width = width
 	m.height = 24
 
 	return &goTUIRoot{
-		ctx:            ctx,
-		session:        session,
-		modelInfo:      modelInfo,
-		mailboxRuntime: mailboxRuntime,
-		histFile:       histFile,
-		approvalCh:     approvalCh,
-		promptMu:       promptMu,
-		model:          m,
-		draft:          gotui.NewState(""),
-		refresh:        gotui.NewState(0),
+		ctx:        ctx,
+		session:    session,
+		modelInfo:  modelInfo,
+		histFile:   histFile,
+		approvalCh: approvalCh,
+		promptMu:   promptMu,
+		model:      m,
+		draft:      gotui.NewState(""),
+		refresh:    gotui.NewState(0),
 	}
 }
 
@@ -105,7 +106,7 @@ func (r *goTUIRoot) BindApp(app *gotui.App) {
 
 func (r *goTUIRoot) Watchers() []gotui.Watcher {
 	watchers := []gotui.Watcher{
-		gotui.OnTimer(time.Second, r.tick),
+		gotui.OnTimer(120*time.Millisecond, r.tick),
 	}
 	if r.approvalCh != nil {
 		watchers = append(watchers, gotui.Watch(r.approvalCh, r.handleApprovalRequest))
@@ -181,6 +182,9 @@ func (r *goTUIRoot) positionCursor(app *gotui.App) {
 	if app == nil {
 		return
 	}
+	if r.model.state == uiStateModelSelect || r.model.state == uiStatePermission {
+		return
+	}
 	_, termHeight := app.Terminal().Size()
 	inlineHeight := app.InlineHeight()
 	if inlineHeight <= 0 {
@@ -191,8 +195,12 @@ func (r *goTUIRoot) positionCursor(app *gotui.App) {
 	rs := []rune(r.draft.Get())
 	cursor := clampInt(r.cursor, 0, len(rs))
 
-	// Row 0 of widget = top separator; row 1 = first input line.
+	// Without activity: row 0 = top separator, row 1 = first input line.
+	// With activity: row 0 = activity, row 1 = top separator, row 2 = input.
 	widgetRow := 1
+	if _, ok := r.activityLine(); ok {
+		widgetRow++
+	}
 	col := 2 // after "> " (2 chars)
 	for i := 0; i < cursor; i++ {
 		ch := rs[i]
@@ -210,6 +218,9 @@ func (r *goTUIRoot) positionCursor(app *gotui.App) {
 // ─── KeyMap ──────────────────────────────────────────────────────────────────
 
 func (r *goTUIRoot) KeyMap() gotui.KeyMap {
+	if r.model.state == uiStateModelSelect {
+		return r.modelSelectKeyMap()
+	}
 	if r.model.pendingPerm != nil {
 		return r.permissionKeyMap()
 	}
@@ -229,7 +240,7 @@ func (r *goTUIRoot) KeyMap() gotui.KeyMap {
 		}),
 		gotui.OnStop(gotui.KeyCtrlL, func(ke gotui.KeyEvent) {
 			r.model.blocks = nil
-			r.model.errMsg = ""
+			r.model.clearPromptError()
 			r.model.statusMsg = "cleared"
 			// Wipe terminal scrollback area + restart the inline widget at
 			// its baseline. Without this Ctrl+L only clears in-memory state
@@ -279,7 +290,8 @@ func (r *goTUIRoot) KeyMap() gotui.KeyMap {
 
 // Render builds the inline widget. Two layouts:
 //   - Permission mode: sep / approval-dialog / sep / meta
-//   - Normal mode    : sep / input / sep / [suggestions | status] / meta
+//   - Model select   : sep / model-picker / sep / meta
+//   - Normal mode    : [activity] / sep / input / sep / [suggestions | status] / meta
 func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 	_ = r.refresh.Get()
 	width, _ := app.Size()
@@ -309,6 +321,18 @@ func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 			))
 		}
 	}
+	addActivity := func(root *gotui.Element) bool {
+		text, ok := r.activityLine()
+		if !ok {
+			return false
+		}
+		root.AddChild(gotui.New(
+			gotui.WithText(text),
+			gotui.WithTextStyle(gotui.NewStyle().Dim()),
+			gotui.WithFlexShrink(0),
+		))
+		return true
+	}
 
 	root := gotui.New(
 		gotui.WithDisplay(gotui.DisplayFlex),
@@ -331,9 +355,32 @@ func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 		return root
 	}
 
+	if r.model.state == uiStateModelSelect {
+		visible := len(r.modelChoices)
+		if visible > modelSelectVisibleRows {
+			visible = modelSelectVisibleRows
+		}
+		neededH := visible + 4 // sep + title + choices + hints + sep
+		if meta != "" {
+			neededH++
+		}
+		if neededH < 5 {
+			neededH = 5
+		}
+		r.commitInlineHeight(app, neededH)
+		addSep(root)
+		root.AddChild(r.renderModelSelectWidget())
+		addSep(root)
+		addMeta(root)
+		return root
+	}
+
 	// Normal mode: compute height accounting for suggestion list (if any).
 	draftLines := strings.Count(r.draft.Get(), "\n") + 1
 	neededH := draftLines + 3 // sep + input + sep + status/suggestion
+	if _, ok := r.activityLine(); ok {
+		neededH++
+	}
 	if meta != "" {
 		neededH++
 	}
@@ -352,6 +399,7 @@ func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 	}
 	r.commitInlineHeight(app, neededH)
 
+	addActivity(root)
 	addSep(root)
 	root.AddChild(r.renderInput(width))
 	addSep(root)

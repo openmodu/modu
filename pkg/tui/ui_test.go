@@ -2,9 +2,11 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,12 +16,13 @@ import (
 	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/approval"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
+	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/types"
 )
 
 func TestGoTUIApprovalUsesCoreDecisionNames(t *testing.T) {
 	responseCh := make(chan string, 1)
-	root := newGoTUIRoot(context.Background(), nil, nil, nil, "", nil, nil)
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 	root.handleApprovalRequest(approval.Request{
 		ToolName:   "bash",
 		ToolCallID: "call-1",
@@ -43,7 +46,7 @@ func TestGoTUIApprovalUsesCoreDecisionNames(t *testing.T) {
 
 func TestGoTUIApprovalKeyMapCapturesApprovalKeys(t *testing.T) {
 	responseCh := make(chan string, 1)
-	root := newGoTUIRoot(context.Background(), nil, nil, nil, "", nil, nil)
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 	root.draft.Set("draft")
 	root.handleApprovalRequest(approval.Request{
 		ToolName:   "bash",
@@ -70,7 +73,7 @@ func TestGoTUIApprovalKeyMapCapturesApprovalKeys(t *testing.T) {
 
 func TestGoTUIApprovalKeyMapEnterAllows(t *testing.T) {
 	responseCh := make(chan string, 1)
-	root := newGoTUIRoot(context.Background(), nil, nil, nil, "", nil, nil)
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 	root.handleApprovalRequest(approval.Request{
 		ToolName:   "bash",
 		ToolCallID: "call-1",
@@ -92,7 +95,7 @@ func TestGoTUIApprovalKeyMapEnterAllows(t *testing.T) {
 }
 
 func TestGoTUIInputUsesCursorEditing(t *testing.T) {
-	root := newGoTUIRoot(context.Background(), nil, nil, nil, "", nil, nil)
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 
 	for _, r := range []rune("hello") {
 		dispatchFirstGoTUIKey(root.KeyMap(), gotui.KeyEvent{Key: gotui.KeyRune, Rune: r})
@@ -107,7 +110,7 @@ func TestGoTUIInputUsesCursorEditing(t *testing.T) {
 }
 
 func TestGoTUIInputBackspaceUsesCursor(t *testing.T) {
-	root := newGoTUIRoot(context.Background(), nil, nil, nil, "", nil, nil)
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 
 	for _, r := range []rune("abcd") {
 		dispatchFirstGoTUIKey(root.KeyMap(), gotui.KeyEvent{Key: gotui.KeyRune, Rune: r})
@@ -122,7 +125,7 @@ func TestGoTUIInputBackspaceUsesCursor(t *testing.T) {
 }
 
 func TestGoTUIInputCtrlJInsertsNewline(t *testing.T) {
-	root := newGoTUIRoot(context.Background(), nil, nil, nil, "", nil, nil)
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 
 	for _, r := range []rune("hello") {
 		dispatchFirstGoTUIKey(root.KeyMap(), gotui.KeyEvent{Key: gotui.KeyRune, Rune: r})
@@ -135,7 +138,7 @@ func TestGoTUIInputCtrlJInsertsNewline(t *testing.T) {
 }
 
 func TestGoTUIInputRendersChineseCursorWithoutInsertedGlyph(t *testing.T) {
-	root := newGoTUIRoot(context.Background(), nil, nil, nil, "", nil, nil)
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 	root.draft.Set("中文")
 	root.cursor = 1
 
@@ -152,7 +155,7 @@ func TestGoTUIApprovalCancelClearsPending(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	cancelCh := make(chan struct{})
-	root := newGoTUIRoot(ctx, nil, nil, nil, "", nil, nil)
+	root := newGoTUIRoot(ctx, nil, nil, "", nil, nil)
 	root.handleApprovalRequest(approval.Request{
 		ToolName:   "bash",
 		ToolCallID: "call-1",
@@ -181,7 +184,7 @@ func TestGoTUIApprovalCancelClearsPending(t *testing.T) {
 
 func TestGoTUIAbortPendingApprovalDeniesResponse(t *testing.T) {
 	responseCh := make(chan string, 1)
-	root := newGoTUIRoot(context.Background(), nil, nil, nil, "", nil, nil)
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 	root.model.state = uiStatePermission
 	root.handleApprovalRequest(approval.Request{
 		ToolName:   "bash",
@@ -280,7 +283,7 @@ func renderAllBlocks(m *uiModel) string {
 }
 
 func TestUIRenderBlocksIncludesUserAndAssistantContent(t *testing.T) {
-	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
+	m := newUIModel(context.Background(), nil, nil, "", nil, nil, "")
 	m.width = 100
 	m.ready = true
 	m.blocks = []uiBlock{
@@ -298,7 +301,7 @@ func TestUIRenderBlocksIncludesUserAndAssistantContent(t *testing.T) {
 }
 
 func TestUIRenderBlocksUsesBulletPrefixes(t *testing.T) {
-	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
+	m := newUIModel(context.Background(), nil, nil, "", nil, nil, "")
 	m.width = 100
 	m.blocks = []uiBlock{
 		{Kind: "assistant", Thinking: "step one", Content: "answer"},
@@ -318,7 +321,7 @@ func TestUIRenderBlocksUsesBulletPrefixes(t *testing.T) {
 }
 
 func TestUIRenderBlocksMarkdownDoesNotDuplicateHeadings(t *testing.T) {
-	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
+	m := newUIModel(context.Background(), nil, nil, "", nil, nil, "")
 	m.width = 72
 	m.blocks = []uiBlock{
 		{Kind: "assistant", Content: "### render.go (+39 -1)\n\n- first item\n- second item"},
@@ -452,7 +455,7 @@ func TestRenderEditToolOutputSyntaxHighlightsWhenFilePathKnown(t *testing.T) {
 }
 
 func TestHandleToolExecutionEndUpdatesByToolCallID(t *testing.T) {
-	m := newUIModel(context.Background(), nil, nil, nil, "", nil, nil, "")
+	m := newUIModel(context.Background(), nil, nil, "", nil, nil, "")
 	m.handleAgentEvent(agent.AgentEvent{Type: agent.EventTypeToolExecutionStart, ToolCallID: "call-1", ToolName: "bash"})
 	m.handleAgentEvent(agent.AgentEvent{Type: agent.EventTypeToolExecutionStart, ToolCallID: "call-2", ToolName: "bash"})
 
@@ -475,7 +478,7 @@ func TestHandleToolExecutionEndUpdatesByToolCallID(t *testing.T) {
 func TestRenderInputMetaUsesShortenedCwd(t *testing.T) {
 	session := newUITestSession(t)
 	model := testUIModel()
-	m := newUIModel(context.Background(), session, model, nil, "", nil, nil, "")
+	m := newUIModel(context.Background(), session, model, "", nil, nil, "")
 	got := m.renderInputMeta()
 	if !strings.Contains(got, model.Name) || !strings.Contains(got, "("+model.ProviderID+")") {
 		t.Fatalf("expected model in meta, got %q", got)
@@ -492,17 +495,151 @@ func TestRenderInputMetaDoesNotDuplicateProvider(t *testing.T) {
 		Name:       "qwen/qwen3.6-35b-a3b (lmstudio)",
 		ProviderID: "lmstudio",
 	}
-	m := newUIModel(context.Background(), session, model, nil, "", nil, nil, "")
+	m := newUIModel(context.Background(), session, model, "", nil, nil, "")
 	got := m.renderInputMeta()
 	if strings.Count(strings.ToLower(got), "lmstudio") != 1 {
 		t.Fatalf("expected provider to appear once, got %q", got)
 	}
 }
 
+func TestFormatActivityDurationUsesMinutes(t *testing.T) {
+	tests := []struct {
+		name string
+		in   time.Duration
+		want string
+	}{
+		{name: "seconds", in: 42 * time.Second, want: "42s"},
+		{name: "whole minute", in: time.Minute, want: "1min"},
+		{name: "minute and seconds", in: 75 * time.Second, want: "1min 15s"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatActivityDuration(tt.in); got != tt.want {
+				t.Fatalf("formatActivityDuration(%s) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestActivityLinePersistsCompletedTurn(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+	root.model.queryStartTime = time.Now().Add(-75 * time.Second)
+	root.model.finishActivity(nil)
+
+	got, ok := root.activityLine()
+	if !ok {
+		t.Fatal("expected completed activity line")
+	}
+	got = uiANSIPattern.ReplaceAllString(got, "")
+	if !strings.Contains(got, "Completed") || !strings.Contains(got, "1min 15s") {
+		t.Fatalf("expected persistent completed duration, got %q", got)
+	}
+	if bottom, _ := root.bottomLine(); strings.Contains(bottom, "Completed") {
+		t.Fatalf("expected completed activity above input, not in bottom line: %q", bottom)
+	}
+}
+
+func TestModelSelectEnterSwitchesModel(t *testing.T) {
+	providers.Models["ui-model-select"] = map[string]*types.Model{
+		"model-a": {ID: "model-a", Name: "Model A", ProviderID: "ui-model-select"},
+		"model-b": {ID: "model-b", Name: "Model B", ProviderID: "ui-model-select"},
+	}
+	session := newUITestSession(t)
+	session.SetModel(providers.Models["ui-model-select"]["model-a"])
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, nil)
+
+	root.openModelSelect()
+	if root.model.state != uiStateModelSelect {
+		t.Fatalf("expected model select state, got %v", root.model.state)
+	}
+	root.moveModelSelect(1)
+	root.confirmModelSelect()
+
+	if got := session.GetModel(); got.ID != "model-b" {
+		t.Fatalf("expected model-b, got %#v", got)
+	}
+	if root.model.state != uiStateInput {
+		t.Fatalf("expected input state after confirm, got %v", root.model.state)
+	}
+	if !strings.Contains(root.model.statusMsg, "context cleared") {
+		t.Fatalf("expected model switch status to mention cleared context, got %q", root.model.statusMsg)
+	}
+}
+
+func TestPromptErrorCollapsesRepeatsAndOffersActions(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+	err := errors.New("max retries (3) exceeded: dial tcp 127.0.0.1:1234: connect: operation timed out")
+
+	root.model.setPromptError(err)
+	root.model.setPromptError(err)
+
+	line, _ := root.bottomLine()
+	for _, want := range []string{
+		"repeated 2x",
+		"/retry",
+		"/model",
+		"/doctor",
+		"ctrl+c",
+	} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("expected bottom line to contain %q, got %q", want, line)
+		}
+	}
+}
+
+func TestPromptErrorCompactsLongMultilineText(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+	root.model.setPromptError(errors.New(strings.Repeat("long line\n", 80)))
+
+	if strings.Contains(root.model.errMsg, "\n") {
+		t.Fatalf("expected single-line error, got %q", root.model.errMsg)
+	}
+	maxWithHint := maxInlineErrorChars + len(" | try: /retry, /model, /doctor, ctrl+c")
+	if len(root.model.errMsg) > maxWithHint {
+		t.Fatalf("expected compact error, got %d chars: %q", len(root.model.errMsg), root.model.errMsg)
+	}
+}
+
+func TestRetryWithoutFailedPromptSetsStatus(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+
+	root.submit("/retry")
+
+	if root.model.statusMsg != "no failed prompt to retry" {
+		t.Fatalf("unexpected retry status: %q", root.model.statusMsg)
+	}
+}
+
+func TestRetrySubmitsLastFailedPrompt(t *testing.T) {
+	session := newUITestSession(t)
+	var promptMu sync.Mutex
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, &promptMu)
+	root.lastFailedPrompt = "hello again"
+
+	root.submit("/retry")
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if !root.model.queryActive && len(session.GetMessages()) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if root.model.queryActive {
+		t.Fatal("expected retry prompt to finish")
+	}
+	if root.lastFailedPrompt != "" {
+		t.Fatalf("expected successful retry to clear lastFailedPrompt, got %q", root.lastFailedPrompt)
+	}
+	if got := len(session.GetMessages()); got == 0 {
+		t.Fatal("expected retry to submit a prompt")
+	}
+}
+
 func TestViewportConversationWrapsWithinViewportWidth(t *testing.T) {
 	session := newUITestSession(t)
 	model := testUIModel()
-	m := newUIModel(context.Background(), session, model, nil, "", nil, nil, "")
+	m := newUIModel(context.Background(), session, model, "", nil, nil, "")
 	m.ready = true
 	m.state = uiStateInput
 	m.width = 60

@@ -61,6 +61,12 @@ func (r *goTUIRoot) handleAgentEvent(ev agent.AgentEvent) {
 
 func (r *goTUIRoot) handleSessionEvent(ev coding_agent.SessionEvent) {
 	switch ev.Type {
+	case coding_agent.SessionEventModelChange:
+		if r.session != nil {
+			r.model.model = r.session.GetModel()
+			r.modelInfo = r.model.model
+		}
+		r.model.statusMsg = "model changed; context cleared"
 	case coding_agent.SessionEventCwdChanged:
 		r.model.statusMsg = "cwd changed"
 	case coding_agent.SessionEventCompactionStart:

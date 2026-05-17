@@ -9,7 +9,6 @@ import (
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/types"
 
-	"github.com/openmodu/modu/pkg/mailboxrt"
 	"github.com/openmodu/modu/pkg/tgbot"
 )
 
@@ -26,7 +25,7 @@ type Clearer interface {
 }
 
 // Handle processes built-in /commands. Returns (handled, shouldExit).
-func Handle(ctx context.Context, line string, session *coding_agent.CodingSession, r Printer, model *types.Model, rt *mailboxrt.Runtime) (bool, bool) {
+func Handle(ctx context.Context, line string, session *coding_agent.CodingSession, r Printer, model *types.Model) (bool, bool) {
 	if !strings.HasPrefix(line, "/") {
 		return false, false
 	}
@@ -44,7 +43,7 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		return true, false
 
 	case "clear":
-		if err := session.ClearSavedMessages(); err != nil {
+		if err := session.ClearConversation(); err != nil {
 			r.PrintError(fmt.Errorf("clear session: %w", err))
 		} else {
 			r.PrintInfo("session cleared")
@@ -57,8 +56,11 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		return true, false
 
 	case "model":
-		r.PrintInfo(fmt.Sprintf("current model: %s (%s / %s)", model.Name, model.ProviderID, model.ID))
-		r.PrintInfo("restart with a different env var to switch models")
+		arg := ""
+		if len(parts) > 1 {
+			arg = strings.TrimSpace(parts[1])
+		}
+		handleModel(arg, session, r, model)
 		return true, false
 
 	case "compact":
@@ -73,6 +75,18 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 	case "tokens":
 		stats := session.GetSessionStats()
 		r.PrintInfo(fmt.Sprintf("tokens used this session: %d", stats.TotalTokens))
+		return true, false
+
+	case "context":
+		handleContext(session, r)
+		return true, false
+
+	case "doctor":
+		handleDoctor(ctx, session, r)
+		return true, false
+
+	case "retry":
+		r.PrintInfo("retry is available in the interactive TUI after a failed prompt")
 		return true, false
 
 	case "tools":
@@ -105,9 +119,6 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 				line += " [" + sg.Source + "]"
 				r.PrintInfo(line)
 			}
-		}
-		if rt != nil && len(rt.AgentIDs()) > 0 {
-			r.PrintInfo("mailbox workers: " + strings.Join(rt.AgentIDs(), ", "))
 		}
 		return true, false
 
@@ -225,6 +236,189 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 	}
 }
 
+func handleModel(arg string, session *coding_agent.CodingSession, r Printer, fallback *types.Model) {
+	current := session.GetModel()
+	if current == nil {
+		current = fallback
+	}
+	if arg == "" || arg == "status" {
+		if current == nil {
+			r.PrintInfo("current model: none")
+			return
+		}
+		r.PrintInfo(fmt.Sprintf("current model: %s (%s / %s)", current.Name, current.ProviderID, current.ID))
+		r.PrintInfo("usage: /model list | /model <name> | /model <provider> <modelId>")
+		return
+	}
+	if arg == "list" || arg == "ls" {
+		models := session.GetAvailableModels()
+		sort.Slice(models, func(i, j int) bool {
+			if models[i].ProviderID == models[j].ProviderID {
+				return models[i].ID < models[j].ID
+			}
+			return models[i].ProviderID < models[j].ProviderID
+		})
+		if len(models) == 0 {
+			r.PrintInfo("no models configured")
+			return
+		}
+		r.PrintInfo(fmt.Sprintf("available models (%d):", len(models)))
+		for _, m := range models {
+			prefix := "  "
+			if current != nil && current.ProviderID == m.ProviderID && current.ID == m.ID {
+				prefix = "* "
+			}
+			r.PrintInfo(fmt.Sprintf("%s%s (%s / %s)", prefix, m.Name, m.ProviderID, m.ID))
+		}
+		return
+	}
+	fields := strings.Fields(arg)
+	var err error
+	before := session.GetModel()
+	if len(fields) == 2 {
+		err = session.SetModelByID(fields[0], fields[1])
+	} else {
+		err = session.SetModelByName(arg)
+	}
+	if err != nil {
+		r.PrintError(err)
+		return
+	}
+	current = session.GetModel()
+	r.PrintInfo(fmt.Sprintf("switched model: %s (%s / %s)", current.Name, current.ProviderID, current.ID))
+	r.PrintInfo("active entry: " + modelDisplayName(current))
+	if sameModel(before, current) {
+		r.PrintInfo("conversation context unchanged")
+	} else {
+		r.PrintInfo("conversation context cleared")
+	}
+}
+
+func sameModel(a, b *types.Model) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.ProviderID == b.ProviderID && a.ID == b.ID
+}
+
+func modelDisplayName(model *types.Model) string {
+	if model == nil {
+		return "none"
+	}
+	if strings.TrimSpace(model.Name) != "" {
+		return model.Name
+	}
+	if model.ProviderID != "" {
+		return model.ProviderID + "/" + model.ID
+	}
+	return model.ID
+}
+
+func handleContext(session *coding_agent.CodingSession, r Printer) {
+	info := session.GetContextInfo()
+	model := "none"
+	if info.ModelID != "" {
+		model = fmt.Sprintf("%s (%s / %s)", info.ModelName, info.ModelProvider, info.ModelID)
+	}
+
+	lines := []string{
+		"model: " + model,
+		"cwd: " + info.Cwd,
+		"agent dir: " + info.AgentDir,
+		fmt.Sprintf("messages: %d", info.MessageCount),
+		fmt.Sprintf("system prompt: %d bytes", info.PromptByteCount),
+		fmt.Sprintf("memory: %s", bytePresence(info.MemoryBytes)),
+		fmt.Sprintf("plan mode: %s", onOff(info.PlanMode)),
+	}
+	if info.ActiveWorktree != "" {
+		lines = append(lines, "worktree: "+info.ActiveWorktree)
+	} else {
+		lines = append(lines, "worktree: none")
+	}
+
+	if len(info.ContextFiles) == 0 {
+		lines = append(lines, "context files: none")
+	} else {
+		lines = append(lines, fmt.Sprintf("context files (%d):", len(info.ContextFiles)))
+		for _, file := range info.ContextFiles {
+			lines = append(lines, fmt.Sprintf("  %s - %s (%d bytes)", file.Name, file.Path, file.Bytes))
+		}
+	}
+
+	if len(info.Skills) == 0 {
+		lines = append(lines, "skills: none")
+	} else {
+		lines = append(lines, fmt.Sprintf("skills (%d):", len(info.Skills)))
+		for _, skill := range info.Skills {
+			line := "  " + skill.Name
+			if skill.Source != "" {
+				line += " [" + skill.Source + "]"
+			}
+			lines = append(lines, line)
+		}
+	}
+
+	r.PrintSection("Context", lines)
+}
+
+func bytePresence(n int) string {
+	if n <= 0 {
+		return "empty"
+	}
+	return fmt.Sprintf("present (%d bytes)", n)
+}
+
+func onOff(v bool) string {
+	if v {
+		return "on"
+	}
+	return "off"
+}
+
+func handleDoctor(ctx context.Context, session *coding_agent.CodingSession, r Printer) {
+	info := session.GetDoctorInfo(ctx)
+	model := "none"
+	if info.ModelID != "" {
+		model = fmt.Sprintf("%s (%s / %s)", info.ModelName, info.ModelProvider, info.ModelID)
+	}
+	configPath := info.ModelConfigPath
+	if configPath == "" {
+		configPath = "(not provided)"
+	}
+	baseURL := info.ModelBaseURL
+	if baseURL == "" {
+		baseURL = "(empty)"
+	}
+
+	lines := []string{
+		"cwd: " + info.Cwd,
+		"agent dir: " + info.AgentDir,
+		"model config: " + configPath,
+		"model: " + model,
+		"baseUrl: " + baseURL,
+		"baseUrl status: " + info.BaseURLStatus,
+		"provider registered: " + yesNo(info.ProviderRegistered),
+		"api key: " + info.APIKeyStatus,
+		fmt.Sprintf("context files: %d", info.ContextFileCount),
+	}
+	if len(info.Problems) == 0 {
+		lines = append(lines, "problems: none")
+	} else {
+		lines = append(lines, fmt.Sprintf("problems (%d):", len(info.Problems)))
+		for _, problem := range info.Problems {
+			lines = append(lines, "  "+problem)
+		}
+	}
+	r.PrintSection("Doctor", lines)
+}
+
+func yesNo(v bool) string {
+	if v {
+		return "yes"
+	}
+	return "no"
+}
+
 func handleTelegram(arg string, r Printer) {
 	configPath := tgbot.ConfigPath()
 
@@ -244,7 +438,7 @@ func handleTelegram(arg string, r Printer) {
 			return
 		}
 		r.PrintInfo("Telegram token saved to " + configPath)
-		r.PrintInfo("Run with --telegram to start the bot.")
+		r.PrintInfo("Restart modu_code to start the bot.")
 		return
 	}
 
@@ -266,7 +460,7 @@ func handleTelegram(arg string, r Printer) {
 		r.PrintInfo("  token: (not set)")
 		r.PrintInfo("  set with: /telegram token <bot_token>")
 	}
-	r.PrintInfo("  start with: modu_code --telegram")
+	r.PrintInfo("  start: automatic on modu_code startup when a token is set")
 }
 
 func PrintHelp(r Printer) {
@@ -274,12 +468,16 @@ func PrintHelp(r Printer) {
 		"/help, /h           — show this help",
 		"/quit, /exit        — exit",
 		"/clear              — clear the screen",
-		"/model              — show current model",
+		"/model              — show or switch model",
+		"/model list         — list configured models",
 		"/compact            — compact the conversation context",
 		"/tokens             — show total token usage",
+		"/context            — show current prompt/context sources",
+		"/doctor             — show runtime diagnostics",
+		"/retry              — retry last failed prompt in interactive TUI",
 		"/tools              — list active tools",
 		"/allow <tool>       — clear always-deny so the tool is asked again",
-		"/agents             — list discovered subagents and mailbox workers",
+		"/agents             — list discovered subagents",
 		"/todos              — show current todo list",
 		"/tasks              — show background subagent tasks",
 		"/plan [on|off]      — inspect or toggle plan mode",
@@ -305,4 +503,3 @@ func PrintHelp(r Printer) {
 	}
 	r.PrintSection("Help", lines)
 }
-

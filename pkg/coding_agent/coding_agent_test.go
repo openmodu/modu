@@ -15,7 +15,7 @@ import (
 	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/session"
 	"github.com/openmodu/modu/pkg/coding_agent/skills"
 	"github.com/openmodu/modu/pkg/coding_agent/subagent"
-	"github.com/openmodu/modu/pkg/mailbox/client"
+	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/types"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -58,7 +58,7 @@ func (t *testHintTool) Execute(ctx context.Context, toolCallID string, args map[
 	return agent.AgentToolResult{
 		Content: []types.ContentBlock{&types.TextContent{
 			Type: "text",
-			Text: "visible output\n<claude-code-hint v=1 type=plugin value=test@local />",
+			Text: "visible output\n<modu-code-hint v=1 type=plugin value=test@local />",
 		}},
 	}, nil
 }
@@ -98,25 +98,6 @@ func TestNewCodingSession(t *testing.T) {
 	cfg := session.GetConfig()
 	if cfg == nil {
 		t.Fatal("config should not be nil")
-	}
-}
-
-func TestNewCodingSessionRegistersSpawnAgentToolWhenMailboxConfigured(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd:           dir,
-		AgentDir:      agentDir,
-		Model:         newTestModel(),
-		MailboxClient: client.NewMailboxClient("orchestrator", "127.0.0.1:9999"),
-		GetAPIKey:     func(provider string) (string, error) { return "", nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !containsTool(session.GetActiveToolNames(), "spawn_agent") {
-		t.Fatalf("expected spawn_agent in active tools, got %v", session.GetActiveToolNames())
 	}
 }
 
@@ -395,8 +376,12 @@ Run pwd in bash and return the tool output.`
 
 	model := newTestModel()
 	callCount := 0
+	var capturedSystemPrompt string
 	streamFn := func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
 		callCount++
+		if callCount == 1 {
+			capturedSystemPrompt = llmCtx.SystemPrompt
+		}
 		stream := types.NewEventStream()
 		go func() {
 			if callCount == 1 {
@@ -473,6 +458,9 @@ Run pwd in bash and return the tool output.`
 	}
 	if strings.Contains(output, dir) && !strings.Contains(output, filepath.Join(agentDir, "worktrees")) {
 		t.Fatalf("expected worktree path instead of repo root, got %q", output)
+	}
+	if !strings.Contains(capturedSystemPrompt, filepath.Join(agentDir, "worktrees")) {
+		t.Fatalf("expected system prompt to include worktree cwd, got %q", capturedSystemPrompt)
 	}
 }
 
@@ -1301,6 +1289,61 @@ func TestGetModel(t *testing.T) {
 	}
 }
 
+func TestSetModelByName(t *testing.T) {
+	providers.Models["test-provider"] = map[string]*types.Model{
+		"model-a": {ID: "model-a", Name: "friendly-a", ProviderID: "test-provider"},
+	}
+	session := newTestSession(t, newTestModel())
+
+	if err := session.SetModelByName("friendly-a"); err != nil {
+		t.Fatalf("SetModelByName: %v", err)
+	}
+	got := session.GetModel()
+	if got.ProviderID != "test-provider" || got.ID != "model-a" {
+		t.Fatalf("unexpected model: %#v", got)
+	}
+}
+
+func TestSetModelClearsConversationContextWhenModelChanges(t *testing.T) {
+	session := newTestSession(t, newTestModel())
+	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "old context"})
+	if len(session.GetMessages()) == 0 {
+		t.Fatal("expected setup message")
+	}
+
+	session.SetModel(&types.Model{ID: "next-model", ProviderID: "next-provider"})
+
+	if got := len(session.GetMessages()); got != 0 {
+		t.Fatalf("expected model switch to clear conversation context, got %d messages", got)
+	}
+}
+
+func TestSetModelRefreshesConnectedModelPrompt(t *testing.T) {
+	session := newTestSession(t, &types.Model{ID: "old-model", ProviderID: "old-provider"})
+
+	session.SetModel(&types.Model{ID: "next-model", Name: "Next Model", ProviderID: "next-provider"})
+
+	prompt := session.GetAgent().GetState().SystemPrompt
+	if !strings.Contains(prompt, "- Connected model: next-provider/next-model") {
+		t.Fatalf("expected refreshed connected model in prompt, got:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "- Connected model: old-provider/old-model") {
+		t.Fatalf("expected old connected model to be removed, got:\n%s", prompt)
+	}
+}
+
+func TestClearConversationClearsInMemoryMessages(t *testing.T) {
+	session := newTestSession(t, newTestModel())
+	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "old context"})
+
+	if err := session.ClearConversation(); err != nil {
+		t.Fatalf("ClearConversation: %v", err)
+	}
+	if got := len(session.GetMessages()); got != 0 {
+		t.Fatalf("expected clear conversation to clear in-memory messages, got %d", got)
+	}
+}
+
 func TestGetMessages(t *testing.T) {
 	session := newTestSession(t, newTestModel())
 	msgs := session.GetMessages()
@@ -1478,7 +1521,7 @@ You are a summarizer. Reply with a concise summary of the user's request.`
 
 	got := session.GetLastAssistantText()
 	if got != "skill-result: hello world" {
-		t.Fatalf("expected isolated skill result, got %q", got)
+		t.Fatalf("expected explicit skill result, got %q", got)
 	}
 	if !hasAssistantMessageEnd(events, "skill-result: hello world") {
 		t.Fatalf("expected slash skill result to emit assistant message_end, got %#v", events)
@@ -1912,7 +1955,7 @@ func TestHarnessHintStrippedAndStored(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := result.Content[0].(*types.TextContent).Text
-	if strings.Contains(text, "claude-code-hint") {
+	if strings.Contains(text, "modu-code-hint") {
 		t.Fatalf("expected hint tag to be stripped, got %q", text)
 	}
 	hints := session.GetPendingHarnessHints()
@@ -2191,7 +2234,7 @@ func TestHarnessConfigCanDisableHintCaptureAndArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := extractTextBlocks(result.Content)
-	if !strings.Contains(text, "<claude-code-hint") {
+	if !strings.Contains(text, "<modu-code-hint") {
 		t.Fatalf("expected hint tag to remain visible when capture is disabled, got %q", text)
 	}
 	if hints := session.GetPendingHarnessHints(); len(hints) != 0 {

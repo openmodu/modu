@@ -27,6 +27,14 @@ func (r *goTUIRoot) submit(text string) {
 		return
 	}
 	if strings.HasPrefix(line, "/") {
+		if line == "/retry" {
+			r.retryLastFailedPrompt()
+			return
+		}
+		if line == "/model" {
+			r.openModelSelect()
+			return
+		}
 		r.runSlash(line)
 		return
 	}
@@ -58,7 +66,7 @@ func (r *goTUIRoot) runShell(shellCmd string) {
 func (r *goTUIRoot) runSlash(line string) {
 	go func() {
 		printer := &uiSlashPrinter{}
-		handled, exit := slash.Handle(r.ctx, line, r.session, printer, r.modelInfo, r.mailboxRuntime)
+		handled, exit := slash.Handle(r.ctx, line, r.session, printer, r.modelInfo)
 		if !handled && r.isSkillSlash(line) {
 			// Not a built-in slash command, but a known skill — delegate to the
 			// session, which has its own /skill-name → executeSkill dispatch.
@@ -135,6 +143,7 @@ func (r *goTUIRoot) runPrompt(line string) {
 	r.model.queryActive = true
 	r.model.state = uiStateQuerying
 	r.model.statusMsg = "thinking"
+	r.model.lastActivity = ""
 	r.model.queryStartTime = time.Now()
 	r.model.thinkingStart = time.Time{}
 	queryCtx, queryCancel := context.WithCancel(r.ctx)
@@ -154,8 +163,13 @@ func (r *goTUIRoot) runPrompt(line string) {
 		err := r.session.Prompt(queryCtx, line)
 		r.queue(func() {
 			if err != nil && err != context.Canceled {
-				r.model.errMsg = err.Error()
+				r.lastFailedPrompt = line
+				r.model.setPromptError(err)
+			} else if err == nil {
+				r.lastFailedPrompt = ""
+				r.model.clearPromptError()
 			}
+			r.model.finishActivity(err)
 			r.model.queryActive = false
 			if r.model.statusMsg != "interrupted" {
 				r.model.statusMsg = ""
@@ -164,4 +178,15 @@ func (r *goTUIRoot) runPrompt(line string) {
 			r.bump()
 		})
 	}()
+}
+
+func (r *goTUIRoot) retryLastFailedPrompt() {
+	prompt := strings.TrimSpace(r.lastFailedPrompt)
+	if prompt == "" {
+		r.model.statusMsg = "no failed prompt to retry"
+		r.bump()
+		return
+	}
+	r.model.statusMsg = "retrying last prompt"
+	r.runPrompt(prompt)
 }
