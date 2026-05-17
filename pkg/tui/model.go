@@ -24,6 +24,7 @@ const (
 	uiStateQuerying
 	uiStatePermission
 	uiStateModelSelect
+	uiStatePlanReject // capturing free-form rejection feedback for a plan
 )
 
 // ─── Display blocks ──────────────────────────────
@@ -138,6 +139,7 @@ type uiModel struct {
 	errRepeat    int
 	statusMsg    string
 	pendingPerm  *approval.Request
+	planRejectBuf string // free-form rejection reason being typed
 	lastActivity string
 
 	// Query tracking

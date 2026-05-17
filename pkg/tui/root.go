@@ -221,7 +221,13 @@ func (r *goTUIRoot) KeyMap() gotui.KeyMap {
 	if r.model.state == uiStateModelSelect {
 		return r.modelSelectKeyMap()
 	}
+	if r.model.state == uiStatePlanReject {
+		return r.planRejectKeyMap()
+	}
 	if r.model.pendingPerm != nil {
+		if r.model.pendingPerm.ToolName == "exit_plan_mode" {
+			return r.planApprovalKeyMap()
+		}
 		return r.permissionKeyMap()
 	}
 	dispatch := func(ke gotui.KeyEvent) { r.handleInputKey(ke) }
@@ -340,6 +346,20 @@ func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 		gotui.WithDirection(gotui.Column),
 		gotui.WithHeightPercent(100),
 	)
+
+	if r.model.state == uiStatePlanReject {
+		// Free-form rejection feedback replaces the input area.
+		neededH := 4
+		if meta != "" {
+			neededH++
+		}
+		r.commitInlineHeight(app, neededH)
+		addSep(root)
+		root.AddChild(r.renderPlanRejectWidget())
+		addSep(root)
+		addMeta(root)
+		return root
+	}
 
 	if r.model.pendingPerm != nil {
 		// Permission mode replaces the input area with the approval dialog.

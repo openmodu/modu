@@ -323,38 +323,82 @@ func TestPlanModeTools(t *testing.T) {
 	}
 }
 
-// TestExitPlanModeAlwaysPrompts verifies the plan approval gate cannot be
-// silently auto-approved: exit_plan_mode bypasses the always-allow cache and
-// permission rules and always calls the interactive callback. With no callback
-// (headless) it is allowed so non-interactive runs are not blocked.
-func TestExitPlanModeAlwaysPrompts(t *testing.T) {
+// TestPlanGateAutoAllowed verifies the agent-level approval gate lets
+// exit_plan_mode through unconditionally — the real interactive approval is
+// driven inside the tool (so rejection feedback can reach the model).
+func TestPlanGateAutoAllowed(t *testing.T) {
 	m := NewApprovalManager()
-
-	// No callback => headless => auto allow.
-	if d, _ := m.Approve("exit_plan_mode", "c0", nil); d != agent.ToolApprovalAllow {
-		t.Fatalf("headless exit_plan_mode should allow, got %v", d)
-	}
-
-	// Even with a cached always-allow, the callback must still run.
-	m.AllowAlways("exit_plan_mode")
+	m.DenyAlways("exit_plan_mode")
+	m.SetRules(PermissionConfig{DenyTools: []string{"exit_plan_mode"}})
 	called := false
 	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
 		called = true
 		return agent.ToolApprovalDeny, nil
 	})
-	d, _ := m.Approve("exit_plan_mode", "c1", nil)
-	if !called {
-		t.Fatal("expected exit_plan_mode to invoke the approval callback despite always-allow")
+	if d, _ := m.Approve("exit_plan_mode", "c0", nil); d != agent.ToolApprovalAllow {
+		t.Fatalf("agent gate must auto-allow exit_plan_mode, got %v", d)
 	}
-	if d != agent.ToolApprovalDeny {
-		t.Fatalf("expected callback decision to win, got %v", d)
+	if called {
+		t.Fatal("exit_plan_mode must not hit the generic approval callback")
 	}
+}
 
-	// A normal tool still honours the always-allow cache (no callback hit).
-	m.AllowAlways("read")
-	called = false
-	if d, _ := m.Approve("read", "c2", nil); d != agent.ToolApprovalAllow || called {
-		t.Fatalf("read should use cached allow without callback, got %v called=%v", d, called)
+// TestSubmitPlanApprove covers the approve path: plan mode exits and the
+// steps become the todo list.
+func TestSubmitPlanApprove(t *testing.T) {
+	session := newTestSession(t, newTestModel())
+	session.EnterPlanMode()
+	session.SetPlanDecisionCallback(func(plan string, steps []string) string { return "approve" })
+
+	adapter := planModeAdapter{session: session}
+	msg := adapter.SubmitPlan(context.Background(), "do work", []string{"a", "b"})
+
+	if session.IsPlanMode() {
+		t.Fatal("expected plan mode off after approve")
+	}
+	if todos := session.GetTodos(); len(todos) != 2 || todos[0].Content != "a" {
+		t.Fatalf("expected 2 todos from steps, got %v", todos)
+	}
+	if !strings.Contains(msg, "approved") {
+		t.Fatalf("expected approval message, got %q", msg)
+	}
+}
+
+// TestSubmitPlanAutoAccept covers approve_auto: edits are auto-allowed for the
+// rest of the session.
+func TestSubmitPlanAutoAccept(t *testing.T) {
+	session := newTestSession(t, newTestModel())
+	session.EnterPlanMode()
+	session.SetPlanDecisionCallback(func(plan string, steps []string) string { return "approve_auto" })
+
+	planModeAdapter{session: session}.SubmitPlan(context.Background(), "p", []string{"x"})
+
+	for _, tool := range []string{"write", "edit", "bash"} {
+		if d, _ := session.approvalManager.Approve(tool, "t", nil); d != agent.ToolApprovalAllow {
+			t.Fatalf("%s should be auto-allowed after approve_auto, got %v", tool, d)
+		}
+	}
+}
+
+// TestSubmitPlanReject covers rejection with feedback: plan mode stays on, no
+// todos are created, and the feedback is relayed to the model.
+func TestSubmitPlanReject(t *testing.T) {
+	session := newTestSession(t, newTestModel())
+	session.EnterPlanMode()
+	session.SetPlanDecisionCallback(func(plan string, steps []string) string {
+		return "reject:use the existing helper instead"
+	})
+
+	msg := planModeAdapter{session: session}.SubmitPlan(context.Background(), "p", []string{"x"})
+
+	if !session.IsPlanMode() {
+		t.Fatal("expected to remain in plan mode after rejection")
+	}
+	if todos := session.GetTodos(); len(todos) != 0 {
+		t.Fatalf("expected no todos after rejection, got %v", todos)
+	}
+	if !strings.Contains(msg, "use the existing helper instead") || !strings.Contains(msg, "REJECTED") {
+		t.Fatalf("expected rejection feedback relayed, got %q", msg)
 	}
 }
 

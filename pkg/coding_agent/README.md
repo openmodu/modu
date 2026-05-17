@@ -161,8 +161,13 @@ Agent 完成回复 → 累加 token 用量 → 超过阈值？→ 调用 Compact
 
 审批门（对齐 Claude Code）：模型完成调研后调用 `exit_plan_mode`，传入 `plan`（markdown 方案）和 `steps`（有序子任务数组）。该调用**强制**弹出用户审批，绕过 always-allow 缓存与权限规则，不会被静默放行（无交互回调的 headless 场景才自动放行）：
 
-- 用户**批准**：退出 plan mode，`steps` 转为 todo 列表，模型按子任务逐项执行；
-- 用户**拒绝**：`exit_plan_mode` 不执行，会话保持在 plan mode，模型根据反馈修订方案后再次提交。
+在 `modu_code` TUI 中，plan 会以 markdown 块渲染进对话（glamour 高亮），审批框只保留三选项决策：
+
+- `[Y]es, start coding`（批准）：退出 plan mode，`steps` 转为 todo 列表，模型按子任务逐项执行，编辑仍逐个确认；
+- `[A] auto-accept edits`（批准并自动接受编辑）：同上，且本会话后续 `write`/`edit`/`bash` 自动放行，不再逐个弹审批；
+- `[N]o, keep planning`（拒绝）：弹出原因输入框——写了原因则回车把反馈**直接喂给模型**，空回车即纯拒绝；两种情况都保持在 plan mode，模型据此修订后再次提交。
+
+实现上，plan 审批不走 agent 工具审批门（`exit_plan_mode` 在 gate 处直接放行），而是由工具内部经独立的带原因回传通道驱动，确保拒绝反馈能完整回到模型；headless / `--no-approve` 场景自动批准。
 
 ### 7. 自动重试（Auto Retry）
 

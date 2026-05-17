@@ -71,6 +71,39 @@ func Run(ctx context.Context, session *coding_agent.CodingSession, model *types.
 				return agent.ToolApprovalDeny, context.Canceled
 			}
 		})
+
+		// Plan approval is a richer prompt (renders the plan, three-way
+		// decision, free-form rejection feedback) but rides the same
+		// approval channel. Decision strings: "approve", "approve_auto",
+		// "reject", "reject:<feedback>".
+		session.SetPlanDecisionCallback(func(plan string, steps []string) string {
+			respCh := make(chan string, 1)
+			anySteps := make([]any, len(steps))
+			for i, s := range steps {
+				anySteps[i] = s
+			}
+			req := approval.Request{
+				ToolName:   "exit_plan_mode",
+				ToolCallID: "plan",
+				Args:       map[string]any{"plan": plan, "steps": anySteps},
+				Response:   respCh,
+			}
+			select {
+			case approvalCh <- req:
+			case <-ctx.Done():
+				return "reject"
+			case <-app.StopCh():
+				return "reject"
+			}
+			select {
+			case decision := <-respCh:
+				return decision
+			case <-ctx.Done():
+				return "reject"
+			case <-app.StopCh():
+				return "reject"
+			}
+		})
 	}
 
 	unsub := session.Subscribe(func(ev agent.AgentEvent) {

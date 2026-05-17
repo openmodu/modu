@@ -100,6 +100,10 @@ type CodingSession struct {
 	taskManager    *backgroundTaskManager
 	planMode       bool
 	planMu         sync.RWMutex
+	// planDecisionCb presents the plan to the user and returns the decision:
+	// "approve", "approve_auto", "reject", or "reject:<feedback>". nil means
+	// headless — the plan is auto-approved.
+	planDecisionCb func(plan string, steps []string) string
 	worktreeMu     sync.Mutex
 	originalCwd    string
 	worktreePath   string
