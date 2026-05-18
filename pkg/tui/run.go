@@ -148,9 +148,7 @@ func runLoop(app *gotui.App, root *goTUIRoot) error {
 		return err
 	}
 	const frameDuration = 16 * time.Millisecond
-	_, lastTermHeight := app.Terminal().Size()
-	lastInlineHeight := app.InlineHeight()
-	clearFromRow := -1
+	resized := false
 	for {
 		frameStart := time.Now()
 		deadline := frameStart.Add(frameDuration / 2)
@@ -159,40 +157,35 @@ func runLoop(app *gotui.App, root *goTUIRoot) error {
 			select {
 			case ev := <-app.Events():
 				if _, ok := ev.(gotui.ResizeEvent); ok {
-					oldStart := lastTermHeight - lastInlineHeight
-					if oldStart < 0 {
-						oldStart = 0
-					}
-					if clearFromRow < 0 || oldStart < clearFromRow {
-						clearFromRow = oldStart
-					}
+					resized = true
 				}
 				app.Dispatch(ev)
-				if _, ok := ev.(gotui.ResizeEvent); ok {
-					_, termHeight := app.Terminal().Size()
-					newStart := termHeight - app.InlineHeight()
-					if newStart < 0 {
-						newStart = 0
-					}
-					if clearFromRow < 0 || newStart < clearFromRow {
-						clearFromRow = newStart
-					}
-				}
 			case <-app.StopCh():
 				return nil
 			default:
 				break drain
 			}
 		}
-		if clearFromRow >= 0 {
-			app.Terminal().SetCursor(0, clearFromRow)
-			app.Terminal().ClearToEnd()
-			clearFromRow = -1
+		if resized {
+			// On resize go-tui's inline full-redraw only clears from the new
+			// inlineStartRow down; the old frame, pushed above that row by the
+			// reflowed scrollback, is orphaned. Wipe the whole screen *and*
+			// the terminal scrollback buffer (\033[3J), then reflow the saved
+			// history to the new width before go-tui's built-in resize path
+			// (it already set needsFullRedraw when it dispatched the
+			// ResizeEvent) repaints the widget once at the bottom. We do NOT
+			// call resetInlineHeight here: SetInlineHeight drives its own
+			// inline-session scroll/redraw that double-draws against the
+			// manual clear.
+			_, _ = app.Terminal().WriteDirect([]byte("\033[3J\033[2J\033[H"))
+			if w, _ := app.Size(); w > 0 {
+				root.model.width = max(20, w-2)
+			}
+			root.repaintAbove()
+			resized = false
 		}
 		app.Render()
 		root.positionCursor(app)
-		_, lastTermHeight = app.Terminal().Size()
-		lastInlineHeight = app.InlineHeight()
 		elapsed := time.Since(frameStart)
 		if remaining := frameDuration - elapsed; remaining > 0 {
 			select {
