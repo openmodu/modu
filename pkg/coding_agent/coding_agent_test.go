@@ -343,6 +343,32 @@ func TestPlanGateAutoAllowed(t *testing.T) {
 	}
 }
 
+func TestPlanModeApprovalBlocksMutatingToolsBeforeCallback(t *testing.T) {
+	session := newTestSession(t, newTestModel())
+	session.EnterPlanMode()
+	called := false
+	session.SetToolApprovalCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
+		called = true
+		return agent.ToolApprovalAllow, nil
+	})
+
+	for _, tool := range []string{"write", "edit", "bash"} {
+		decision, err := session.approvalManager.Approve(tool, "call-"+tool, nil)
+		if decision != agent.ToolApprovalDeny {
+			t.Fatalf("%s should be denied in plan mode, got %v", tool, decision)
+		}
+		if err == nil || !strings.Contains(err.Error(), "plan mode is active") {
+			t.Fatalf("%s should return plan mode denial reason, got %v", tool, err)
+		}
+	}
+	if called {
+		t.Fatal("plan mode block should happen before interactive approval callback")
+	}
+	if decision, err := session.approvalManager.Approve("exit_plan_mode", "plan", nil); decision != agent.ToolApprovalAllow || err != nil {
+		t.Fatalf("exit_plan_mode should still be auto-allowed, got decision=%v err=%v", decision, err)
+	}
+}
+
 // TestSubmitPlanApprove covers the approve path: plan mode exits and the
 // steps become the todo list.
 func TestSubmitPlanApprove(t *testing.T) {
@@ -469,6 +495,54 @@ func TestPlanModeBlocksMutatingTools(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(session.cwd, "bash-created.txt")); !os.IsNotExist(err) {
 		t.Fatalf("expected bash tool not to create file, stat err=%v", err)
+	}
+}
+
+func TestPlanModeBlocksWriteAfterEnterWorktree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  filepath.Join(dir, ".coding_agent"),
+		Model:     newTestModel(),
+		GetAPIKey: func(provider string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.EnterPlanMode()
+	worktree, err := session.EnterWorktree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.ExitWorktree()
+
+	var writeTool agent.AgentTool
+	for _, tool := range session.GetAgent().GetState().Tools {
+		if tool.Name() == "write" {
+			writeTool = tool
+			break
+		}
+	}
+	if writeTool == nil {
+		t.Fatalf("expected write tool after entering worktree, got %v", session.GetActiveToolNames())
+	}
+	result, err := writeTool.Execute(context.Background(), "write-worktree-plan", map[string]any{
+		"path":    "worktree-plan.txt",
+		"content": "should not write",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(extractTextBlocks(result.Content), "blocked while plan mode is active") {
+		t.Fatalf("expected plan mode block after worktree refresh, got %#v", result.Content)
+	}
+	if _, err := os.Stat(filepath.Join(worktree, "worktree-plan.txt")); !os.IsNotExist(err) {
+		t.Fatalf("expected write tool not to create file in worktree, stat err=%v", err)
 	}
 }
 

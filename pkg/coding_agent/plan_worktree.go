@@ -389,6 +389,7 @@ func (s *CodingSession) refreshToolsForCwd(cwd string) {
 			updated = append(updated, tool)
 		}
 	}
+	updated = wrapHarnessTools(updated, s)
 	s.activeTools = updated
 	s.agent.SetTools(updated)
 }

@@ -347,6 +347,12 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		})
 	}
 	approvalMgr.SetObserver(cs)
+	approvalMgr.SetBlocker(func(toolName string, args map[string]any) (bool, string) {
+		if cs.planModeBlocksTool(toolName) {
+			return true, planModeBlockMessage(toolName)
+		}
+		return false, ""
+	})
 	taskMgr.SetOnChange(func() { cs.writeRuntimeState() })
 	cs.refreshToolsForCwd(cs.cwd)
 	cs.replaceTodoTool()
