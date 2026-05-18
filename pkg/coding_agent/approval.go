@@ -1,6 +1,7 @@
 package coding_agent
 
 import (
+	"errors"
 	"strings"
 	"sync"
 
@@ -16,6 +17,7 @@ type ApprovalManager struct {
 	alwaysDeny  map[string]bool
 	rules       PermissionConfig
 	observer    ApprovalObserver
+	blocker     func(toolName string, args map[string]any) (bool, string)
 	// callback is called when no cached decision exists.
 	// If nil, all tools are auto-approved.
 	callback func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error)
@@ -53,35 +55,35 @@ func (m *ApprovalManager) SetObserver(observer ApprovalObserver) {
 	m.observer = observer
 }
 
+func (m *ApprovalManager) SetBlocker(fn func(toolName string, args map[string]any) (bool, string)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.blocker = fn
+}
+
 // Approve is the AgentConfig.ApproveTool implementation.
 func (m *ApprovalManager) Approve(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
-	// exit_plan_mode is the plan approval gate: it must always ask the user
-	// before the prepared plan is accepted. Skip the always-allow/deny cache
-	// and permission rules so the prompt cannot be silently auto-approved.
-	// With no interactive callback (headless / --no-approve) the plan is
-	// accepted automatically so non-interactive runs are not blocked.
+	// exit_plan_mode runs its own interactive plan-approval gate inside the
+	// tool (so the user's rejection feedback can flow back to the model), so
+	// the agent-level gate must let it through without prompting.
 	if toolName == "exit_plan_mode" {
-		m.mu.RLock()
-		cb := m.callback
-		observer := m.observer
-		m.mu.RUnlock()
-		if cb == nil {
-			return agent.ToolApprovalAllow, nil
-		}
-		if observer != nil {
-			observer.OnPermissionRequest(toolName, toolCallID, args)
-		}
-		decision, err := cb(toolName, toolCallID, args)
-		if err != nil {
-			if observer != nil {
-				observer.OnPermissionDenied(toolName, toolCallID, args, err.Error())
+		return agent.ToolApprovalAllow, nil
+	}
+
+	m.mu.RLock()
+	blocker := m.blocker
+	observer := m.observer
+	m.mu.RUnlock()
+	if blocker != nil {
+		if blocked, reason := blocker(toolName, args); blocked {
+			if reason == "" {
+				reason = toolName + " is blocked"
 			}
-			return agent.ToolApprovalDeny, err
+			if observer != nil {
+				observer.OnPermissionDenied(toolName, toolCallID, args, reason)
+			}
+			return agent.ToolApprovalDeny, errors.New(reason)
 		}
-		if !decision.IsAllow() && observer != nil {
-			observer.OnPermissionDenied(toolName, toolCallID, args, string(decision))
-		}
-		return decision, nil
 	}
 
 	m.mu.RLock()
@@ -95,7 +97,7 @@ func (m *ApprovalManager) Approve(toolName, toolCallID string, args map[string]a
 	}
 	cb := m.callback
 	rules := m.rules
-	observer := m.observer
+	observer = m.observer
 	m.mu.RUnlock()
 
 	if decision, reason, ok := evaluatePermissionRules(rules, toolName, args); ok {

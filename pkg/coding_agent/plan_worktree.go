@@ -1,6 +1,7 @@
 package coding_agent
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -74,6 +75,83 @@ func (a planModeAdapter) IsPlanMode() bool {
 	a.session.planMu.RLock()
 	defer a.session.planMu.RUnlock()
 	return a.session.planMode
+}
+
+// SubmitPlan is the plan approval gate. It asks the user to decide, then
+// either exits plan mode and seeds the todo list (approve) or stays in plan
+// mode and relays the rejection feedback to the model.
+func (a planModeAdapter) SubmitPlan(ctx context.Context, plan string, steps []string) string {
+	if a.session == nil || !a.session.config.FeaturePlanMode() {
+		if a.session != nil {
+			a.session.ExitPlanMode(plan, steps)
+		}
+		return "Plan recorded. Proceed to implement it."
+	}
+
+	decision := a.session.requestPlanDecision(ctx, plan, steps)
+	verdict, feedback, _ := strings.Cut(decision, ":")
+	verdict = strings.TrimSpace(verdict)
+	feedback = strings.TrimSpace(feedback)
+
+	switch verdict {
+	case "approve", "approve_auto":
+		a.session.ExitPlanMode(plan, steps)
+		if verdict == "approve_auto" {
+			a.session.AllowToolAlways("write")
+			a.session.AllowToolAlways("edit")
+			a.session.AllowToolAlways("bash")
+		}
+		msg := "Plan approved. Plan mode is now off."
+		if len(steps) > 0 {
+			msg += " The plan steps are now your todo list — execute them in order, exactly one in_progress at a time, marking each completed when done."
+		} else {
+			msg += " Proceed to implement the plan."
+		}
+		if verdict == "approve_auto" {
+			msg += " The user chose auto-accept: file edits will not prompt for the rest of this session."
+		}
+		return msg
+	default: // reject / reject:<feedback>
+		if feedback == "" {
+			return "The user REJECTED the plan and is still in plan mode. " +
+				"Do not make any changes. Ask what they want changed, revise " +
+				"the plan, and call exit_plan_mode again."
+		}
+		return "The user REJECTED the plan and is still in plan mode. " +
+			"Do not make any changes. Their feedback:\n\n" + feedback +
+			"\n\nRevise the plan accordingly and call exit_plan_mode again."
+	}
+}
+
+// requestPlanDecision presents the plan to the user and returns their
+// decision. With no callback (headless / --no-approve) the plan is
+// auto-approved so non-interactive runs are not blocked.
+func (s *CodingSession) requestPlanDecision(ctx context.Context, plan string, steps []string) string {
+	s.planMu.RLock()
+	cb := s.planDecisionCb
+	s.planMu.RUnlock()
+	if cb == nil {
+		return "approve"
+	}
+	done := make(chan string, 1)
+	go func() { done <- cb(plan, steps) }()
+	select {
+	case d := <-done:
+		if strings.TrimSpace(d) == "" {
+			return "reject"
+		}
+		return d
+	case <-ctx.Done():
+		return "reject"
+	}
+}
+
+// SetPlanDecisionCallback wires the interactive plan-approval prompt. The
+// callback returns "approve", "approve_auto", "reject", or "reject:<feedback>".
+func (s *CodingSession) SetPlanDecisionCallback(fn func(plan string, steps []string) string) {
+	s.planMu.Lock()
+	s.planDecisionCb = fn
+	s.planMu.Unlock()
 }
 
 // IsPlanMode reports whether the session is currently in plan mode.
@@ -254,16 +332,28 @@ func (s *CodingSession) refreshDynamicSystemPrompt() {
 	s.worktreeMu.Unlock()
 	if planMode {
 		parts = append(parts, "## Active Mode: Plan\n"+
-			"You are in plan mode. Research the codebase thoroughly using read-only "+
-			"tools, but DO NOT make any changes — write, edit, and bash are blocked.\n\n"+
-			"When the plan is ready, call `exit_plan_mode` with a markdown `plan` "+
-			"summary and an ordered `steps` array of concrete sub-tasks. This asks "+
-			"the user to approve the plan.\n\n"+
-			"- If the user APPROVES: plan mode exits, the steps become your todo "+
-			"list, and you implement them in order.\n"+
-			"- If the user REJECTS (the exit_plan_mode call is denied): you are "+
-			"still in plan mode. Do not make changes. Ask what they want changed, "+
-			"revise the plan, and call `exit_plan_mode` again.")
+			"You are in plan mode. write, edit, and bash are blocked — you cannot "+
+			"change anything yet. Your job is to produce a plan good enough that "+
+			"the user approves it without follow-up questions.\n\n"+
+			"Investigate first, do not guess:\n"+
+			"- Read the actual files end to end, not just snippets. Trace every "+
+			"call site, type, and config the change touches.\n"+
+			"- Find existing patterns/tests to follow so the plan fits the codebase.\n"+
+			"- Identify edge cases, failure modes, and what could break.\n"+
+			"- If the request is ambiguous, ask the user before planning — do not "+
+			"pick an interpretation silently.\n\n"+
+			"Then call `exit_plan_mode` with:\n"+
+			"- `plan`: concise markdown covering Goal, Approach, Files to change "+
+			"(with paths), Validation/tests, and Risks. Reference real file paths "+
+			"and symbols you verified — no vague hand-waving.\n"+
+			"- `steps`: an ordered array of small, individually verifiable "+
+			"sub-tasks. Each step should be one focused change.\n\n"+
+			"After you submit, the user decides:\n"+
+			"- APPROVED: plan mode exits, steps become your todo list, implement "+
+			"them in order, one in_progress at a time.\n"+
+			"- REJECTED (the exit_plan_mode call is denied): you are still in plan "+
+			"mode. Make no changes. Use their feedback, revise the plan, and call "+
+			"`exit_plan_mode` again.")
 	}
 	if worktreePath != "" {
 		parts = append(parts, "## Active Worktree\nThe session is currently operating inside an isolated git worktree at: "+worktreePath)
@@ -299,6 +389,7 @@ func (s *CodingSession) refreshToolsForCwd(cwd string) {
 			updated = append(updated, tool)
 		}
 	}
+	updated = wrapHarnessTools(updated, s)
 	s.activeTools = updated
 	s.agent.SetTools(updated)
 }

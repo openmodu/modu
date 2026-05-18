@@ -323,38 +323,108 @@ func TestPlanModeTools(t *testing.T) {
 	}
 }
 
-// TestExitPlanModeAlwaysPrompts verifies the plan approval gate cannot be
-// silently auto-approved: exit_plan_mode bypasses the always-allow cache and
-// permission rules and always calls the interactive callback. With no callback
-// (headless) it is allowed so non-interactive runs are not blocked.
-func TestExitPlanModeAlwaysPrompts(t *testing.T) {
+// TestPlanGateAutoAllowed verifies the agent-level approval gate lets
+// exit_plan_mode through unconditionally — the real interactive approval is
+// driven inside the tool (so rejection feedback can reach the model).
+func TestPlanGateAutoAllowed(t *testing.T) {
 	m := NewApprovalManager()
-
-	// No callback => headless => auto allow.
-	if d, _ := m.Approve("exit_plan_mode", "c0", nil); d != agent.ToolApprovalAllow {
-		t.Fatalf("headless exit_plan_mode should allow, got %v", d)
-	}
-
-	// Even with a cached always-allow, the callback must still run.
-	m.AllowAlways("exit_plan_mode")
+	m.DenyAlways("exit_plan_mode")
+	m.SetRules(PermissionConfig{DenyTools: []string{"exit_plan_mode"}})
 	called := false
 	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
 		called = true
 		return agent.ToolApprovalDeny, nil
 	})
-	d, _ := m.Approve("exit_plan_mode", "c1", nil)
-	if !called {
-		t.Fatal("expected exit_plan_mode to invoke the approval callback despite always-allow")
+	if d, _ := m.Approve("exit_plan_mode", "c0", nil); d != agent.ToolApprovalAllow {
+		t.Fatalf("agent gate must auto-allow exit_plan_mode, got %v", d)
 	}
-	if d != agent.ToolApprovalDeny {
-		t.Fatalf("expected callback decision to win, got %v", d)
+	if called {
+		t.Fatal("exit_plan_mode must not hit the generic approval callback")
 	}
+}
 
-	// A normal tool still honours the always-allow cache (no callback hit).
-	m.AllowAlways("read")
-	called = false
-	if d, _ := m.Approve("read", "c2", nil); d != agent.ToolApprovalAllow || called {
-		t.Fatalf("read should use cached allow without callback, got %v called=%v", d, called)
+func TestPlanModeApprovalBlocksMutatingToolsBeforeCallback(t *testing.T) {
+	session := newTestSession(t, newTestModel())
+	session.EnterPlanMode()
+	called := false
+	session.SetToolApprovalCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
+		called = true
+		return agent.ToolApprovalAllow, nil
+	})
+
+	for _, tool := range []string{"write", "edit", "bash"} {
+		decision, err := session.approvalManager.Approve(tool, "call-"+tool, nil)
+		if decision != agent.ToolApprovalDeny {
+			t.Fatalf("%s should be denied in plan mode, got %v", tool, decision)
+		}
+		if err == nil || !strings.Contains(err.Error(), "plan mode is active") {
+			t.Fatalf("%s should return plan mode denial reason, got %v", tool, err)
+		}
+	}
+	if called {
+		t.Fatal("plan mode block should happen before interactive approval callback")
+	}
+	if decision, err := session.approvalManager.Approve("exit_plan_mode", "plan", nil); decision != agent.ToolApprovalAllow || err != nil {
+		t.Fatalf("exit_plan_mode should still be auto-allowed, got decision=%v err=%v", decision, err)
+	}
+}
+
+// TestSubmitPlanApprove covers the approve path: plan mode exits and the
+// steps become the todo list.
+func TestSubmitPlanApprove(t *testing.T) {
+	session := newTestSession(t, newTestModel())
+	session.EnterPlanMode()
+	session.SetPlanDecisionCallback(func(plan string, steps []string) string { return "approve" })
+
+	adapter := planModeAdapter{session: session}
+	msg := adapter.SubmitPlan(context.Background(), "do work", []string{"a", "b"})
+
+	if session.IsPlanMode() {
+		t.Fatal("expected plan mode off after approve")
+	}
+	if todos := session.GetTodos(); len(todos) != 2 || todos[0].Content != "a" {
+		t.Fatalf("expected 2 todos from steps, got %v", todos)
+	}
+	if !strings.Contains(msg, "approved") {
+		t.Fatalf("expected approval message, got %q", msg)
+	}
+}
+
+// TestSubmitPlanAutoAccept covers approve_auto: edits are auto-allowed for the
+// rest of the session.
+func TestSubmitPlanAutoAccept(t *testing.T) {
+	session := newTestSession(t, newTestModel())
+	session.EnterPlanMode()
+	session.SetPlanDecisionCallback(func(plan string, steps []string) string { return "approve_auto" })
+
+	planModeAdapter{session: session}.SubmitPlan(context.Background(), "p", []string{"x"})
+
+	for _, tool := range []string{"write", "edit", "bash"} {
+		if d, _ := session.approvalManager.Approve(tool, "t", nil); d != agent.ToolApprovalAllow {
+			t.Fatalf("%s should be auto-allowed after approve_auto, got %v", tool, d)
+		}
+	}
+}
+
+// TestSubmitPlanReject covers rejection with feedback: plan mode stays on, no
+// todos are created, and the feedback is relayed to the model.
+func TestSubmitPlanReject(t *testing.T) {
+	session := newTestSession(t, newTestModel())
+	session.EnterPlanMode()
+	session.SetPlanDecisionCallback(func(plan string, steps []string) string {
+		return "reject:use the existing helper instead"
+	})
+
+	msg := planModeAdapter{session: session}.SubmitPlan(context.Background(), "p", []string{"x"})
+
+	if !session.IsPlanMode() {
+		t.Fatal("expected to remain in plan mode after rejection")
+	}
+	if todos := session.GetTodos(); len(todos) != 0 {
+		t.Fatalf("expected no todos after rejection, got %v", todos)
+	}
+	if !strings.Contains(msg, "use the existing helper instead") || !strings.Contains(msg, "REJECTED") {
+		t.Fatalf("expected rejection feedback relayed, got %q", msg)
 	}
 }
 
@@ -425,6 +495,54 @@ func TestPlanModeBlocksMutatingTools(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(session.cwd, "bash-created.txt")); !os.IsNotExist(err) {
 		t.Fatalf("expected bash tool not to create file, stat err=%v", err)
+	}
+}
+
+func TestPlanModeBlocksWriteAfterEnterWorktree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  filepath.Join(dir, ".coding_agent"),
+		Model:     newTestModel(),
+		GetAPIKey: func(provider string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.EnterPlanMode()
+	worktree, err := session.EnterWorktree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.ExitWorktree()
+
+	var writeTool agent.AgentTool
+	for _, tool := range session.GetAgent().GetState().Tools {
+		if tool.Name() == "write" {
+			writeTool = tool
+			break
+		}
+	}
+	if writeTool == nil {
+		t.Fatalf("expected write tool after entering worktree, got %v", session.GetActiveToolNames())
+	}
+	result, err := writeTool.Execute(context.Background(), "write-worktree-plan", map[string]any{
+		"path":    "worktree-plan.txt",
+		"content": "should not write",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(extractTextBlocks(result.Content), "blocked while plan mode is active") {
+		t.Fatalf("expected plan mode block after worktree refresh, got %#v", result.Content)
+	}
+	if _, err := os.Stat(filepath.Join(worktree, "worktree-plan.txt")); !os.IsNotExist(err) {
+		t.Fatalf("expected write tool not to create file in worktree, stat err=%v", err)
 	}
 }
 

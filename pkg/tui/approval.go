@@ -3,11 +3,30 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	gotui "github.com/grindlemire/go-tui"
 
 	"github.com/openmodu/modu/pkg/approval"
 )
+
+// planMarkdown turns the exit_plan_mode args into a markdown document so the
+// plan renders with headings/lists in the transcript.
+func planMarkdown(args map[string]any) string {
+	plan, _ := args["plan"].(string)
+	var b strings.Builder
+	b.WriteString("## 📋 Proposed plan\n\n")
+	b.WriteString(strings.TrimSpace(plan))
+	if raw, ok := args["steps"].([]any); ok && len(raw) > 0 {
+		b.WriteString("\n\n### Steps\n")
+		for i, s := range raw {
+			if str, ok := s.(string); ok && str != "" {
+				fmt.Fprintf(&b, "\n%d. %s", i+1, str)
+			}
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
 
 // permissionKeyMap is active while a tool is awaiting approval. The hotkeys
 // are: y/Y allow once, a/A always, n/N or Esc deny once, d/D deny always.
@@ -32,7 +51,93 @@ func (r *goTUIRoot) permissionKeyMap() gotui.KeyMap {
 	}
 }
 
+// planApprovalKeyMap is active while a plan is awaiting approval:
+// y/Y/Enter approve, a/A approve & auto-accept edits, n/N/Esc reject (which
+// switches to free-form feedback capture).
+func (r *goTUIRoot) planApprovalKeyMap() gotui.KeyMap {
+	return gotui.KeyMap{
+		gotui.OnStop(gotui.KeyCtrlC, func(ke gotui.KeyEvent) { r.abortQuery() }),
+		gotui.OnStop(gotui.KeyCtrlO, func(ke gotui.KeyEvent) {
+			r.model.transcriptMode = !r.model.transcriptMode
+			r.bump()
+		}),
+		gotui.OnStop(gotui.KeyEnter, func(ke gotui.KeyEvent) { r.resolvePlan("approve") }),
+		gotui.OnStop(gotui.Rune('y'), func(ke gotui.KeyEvent) { r.resolvePlan("approve") }),
+		gotui.OnStop(gotui.Rune('Y'), func(ke gotui.KeyEvent) { r.resolvePlan("approve") }),
+		gotui.OnStop(gotui.Rune('a'), func(ke gotui.KeyEvent) { r.resolvePlan("approve_auto") }),
+		gotui.OnStop(gotui.Rune('A'), func(ke gotui.KeyEvent) { r.resolvePlan("approve_auto") }),
+		gotui.OnStop(gotui.Rune('n'), func(ke gotui.KeyEvent) { r.beginPlanReject() }),
+		gotui.OnStop(gotui.Rune('N'), func(ke gotui.KeyEvent) { r.beginPlanReject() }),
+		gotui.OnStop(gotui.KeyEscape, func(ke gotui.KeyEvent) { r.beginPlanReject() }),
+	}
+}
+
+// planRejectKeyMap captures the free-form rejection reason. Enter sends it
+// (empty = plain rejection), Esc cancels to a plain rejection.
+func (r *goTUIRoot) planRejectKeyMap() gotui.KeyMap {
+	return gotui.KeyMap{
+		gotui.OnStop(gotui.KeyCtrlC, func(ke gotui.KeyEvent) { r.abortQuery() }),
+		gotui.OnStop(gotui.KeyEnter, func(ke gotui.KeyEvent) {
+			reason := strings.TrimSpace(r.model.planRejectBuf)
+			if reason == "" {
+				r.resolvePlan("reject")
+			} else {
+				r.resolvePlan("reject:" + reason)
+			}
+		}),
+		gotui.OnStop(gotui.KeyEscape, func(ke gotui.KeyEvent) { r.resolvePlan("reject") }),
+		gotui.OnStop(gotui.KeyBackspace, func(ke gotui.KeyEvent) {
+			rs := []rune(r.model.planRejectBuf)
+			if len(rs) > 0 {
+				r.model.planRejectBuf = string(rs[:len(rs)-1])
+				r.bump()
+			}
+		}),
+		gotui.OnStop(gotui.AnyRune, func(ke gotui.KeyEvent) {
+			if ke.Rune == 0 || ke.Mod != 0 {
+				return
+			}
+			r.model.planRejectBuf += string(ke.Rune)
+			r.bump()
+		}),
+	}
+}
+
+// resolvePlan sends the plan decision back to the waiting callback and
+// returns the UI to its normal querying state.
+func (r *goTUIRoot) resolvePlan(decision string) {
+	r.model.planRejectBuf = ""
+	if !r.resolvePendingApproval(decision) {
+		return
+	}
+	r.model.state = uiStateQuerying
+	r.model.statusMsg = "thinking"
+	r.bump()
+}
+
+// beginPlanReject switches from the approve/reject prompt to free-form
+// feedback capture without yet resolving the request.
+func (r *goTUIRoot) beginPlanReject() {
+	if r.model.pendingPerm == nil {
+		return
+	}
+	r.model.planRejectBuf = ""
+	r.model.state = uiStatePlanReject
+	r.model.statusMsg = "rejecting plan"
+	r.bump()
+}
+
 func (r *goTUIRoot) handleApprovalRequest(req approval.Request) {
+	// For the plan gate, render the full plan as a markdown block in the
+	// transcript (glamour-formatted) instead of cramming it into the inline
+	// approval widget. The widget then only carries the decision prompt.
+	if req.ToolName == "exit_plan_mode" {
+		if md := planMarkdown(req.Args); md != "" {
+			block := uiBlock{Kind: "assistant", Content: md, Timestamp: time.Now()}
+			r.model.appendBlock(block)
+			r.pushBlockAbove(block)
+		}
+	}
 	r.model.pendingPerm = &req
 	r.model.state = uiStatePermission
 	r.model.statusMsg = "permission required"
@@ -172,36 +277,48 @@ func (r *goTUIRoot) renderApprovalWidget() *gotui.Element {
 	return container
 }
 
-// renderPlanApprovalWidget renders the plan-approval gate: the full plan plus
-// the ordered steps, with a tailored hint. Approving exits plan mode and turns
-// the steps into the todo list; rejecting keeps the session in plan mode.
+// renderPlanRejectWidget renders the free-form rejection-reason input shown
+// after the user rejects a plan.
+func (r *goTUIRoot) renderPlanRejectWidget() *gotui.Element {
+	container := gotui.New(
+		gotui.WithDisplay(gotui.DisplayFlex),
+		gotui.WithDirection(gotui.Column),
+		gotui.WithFlexShrink(0),
+	)
+	container.AddChild(gotui.New(
+		gotui.WithText("⏺ Rejecting plan — what should change? (Enter to send, empty Enter = just reject, Esc cancels)"),
+		gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Yellow).Bold()),
+		gotui.WithFlexShrink(0),
+	))
+	row := gotui.New(
+		gotui.WithDisplay(gotui.DisplayFlex),
+		gotui.WithDirection(gotui.Row),
+		gotui.WithFlexShrink(0),
+	)
+	row.AddChild(gotui.New(gotui.WithText("> "), gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Red)), gotui.WithFlexShrink(0)))
+	row.AddChild(gotui.New(gotui.WithText(r.model.planRejectBuf), gotui.WithFlexShrink(0)))
+	row.AddChild(gotui.New(gotui.WithText("▋"), gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Green)), gotui.WithFlexShrink(0)))
+	container.AddChild(row)
+	return container
+}
+
+// renderPlanApprovalWidget renders the slim plan-approval gate. The plan
+// itself is already rendered as a markdown block in the transcript, so the
+// widget only carries the three-way decision prompt:
+//
+//	⏺ Plan ready (above) — proceed?
+//	  [Y]es, start coding   [A] auto-accept edits   [N]o, keep planning
 func (r *goTUIRoot) renderPlanApprovalWidget(perm *approval.Request, container *gotui.Element) *gotui.Element {
-	textRow := func(text string, style gotui.Style) {
-		container.AddChild(gotui.New(
-			gotui.WithText(text),
-			gotui.WithTextStyle(style),
-			gotui.WithFlexShrink(0),
-		))
+	_ = perm
+	container.AddChild(gotui.New(
+		gotui.WithText("⏺ Plan ready (shown above) — proceed?"),
+		gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Yellow).Bold()),
+		gotui.WithFlexShrink(0),
+	))
+
+	sp := func() *gotui.Element {
+		return gotui.New(gotui.WithText("   "), gotui.WithFlexShrink(0))
 	}
-
-	textRow("⏺ Ready to code? Review the plan:", gotui.NewStyle().Foreground(gotui.Yellow).Bold())
-
-	plan, _ := perm.Args["plan"].(string)
-	for _, line := range strings.Split(strings.TrimRight(plan, "\n"), "\n") {
-		textRow("  "+line, gotui.NewStyle())
-	}
-
-	if raw, ok := perm.Args["steps"].([]any); ok && len(raw) > 0 {
-		textRow("", gotui.NewStyle())
-		textRow("  Steps:", gotui.NewStyle().Dim())
-		for i, s := range raw {
-			if str, ok := s.(string); ok && str != "" {
-				textRow(fmt.Sprintf("  %d. %s", i+1, str), gotui.NewStyle())
-			}
-		}
-	}
-
-	textRow("", gotui.NewStyle())
 	hintRow := gotui.New(
 		gotui.WithDisplay(gotui.DisplayFlex),
 		gotui.WithDirection(gotui.Row),
@@ -209,7 +326,9 @@ func (r *goTUIRoot) renderPlanApprovalWidget(perm *approval.Request, container *
 	)
 	hintRow.AddChild(gotui.New(gotui.WithText("  "), gotui.WithFlexShrink(0)))
 	hintRow.AddChild(gotui.New(gotui.WithText("[Y]es, start coding"), gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Green).Bold()), gotui.WithFlexShrink(0)))
-	hintRow.AddChild(gotui.New(gotui.WithText("   "), gotui.WithFlexShrink(0)))
+	hintRow.AddChild(sp())
+	hintRow.AddChild(gotui.New(gotui.WithText("[A] auto-accept edits"), gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Yellow).Bold()), gotui.WithFlexShrink(0)))
+	hintRow.AddChild(sp())
 	hintRow.AddChild(gotui.New(gotui.WithText("[N]o, keep planning"), gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Red).Bold()), gotui.WithFlexShrink(0)))
 	container.AddChild(hintRow)
 

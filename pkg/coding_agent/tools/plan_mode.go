@@ -9,10 +9,12 @@ import (
 
 type PlanModeManager interface {
 	EnterPlanMode()
-	// ExitPlanMode is only invoked after the user approves the plan. steps are
-	// the ordered sub-tasks to execute and are turned into a todo list.
-	ExitPlanMode(plan string, steps []string)
 	IsPlanMode() bool
+	// SubmitPlan presents the plan to the user for approval and returns the
+	// message to feed back to the model. On approval it exits plan mode and
+	// seeds the todo list from steps; on rejection it stays in plan mode and
+	// relays the user's feedback.
+	SubmitPlan(ctx context.Context, plan string, steps []string) string
 }
 
 type EnterPlanModeTool struct {
@@ -82,16 +84,10 @@ func (t *ExitPlanModeTool) Execute(ctx context.Context, toolCallID string, args 
 			}
 		}
 	}
-	if t.manager != nil {
-		t.manager.ExitPlanMode(plan, steps)
+	if t.manager == nil {
+		return planToolResult("plan recorded"), nil
 	}
-	msg := "Plan approved. Plan mode is now off."
-	if len(steps) > 0 {
-		msg += " The plan steps are now your todo list — execute them in order, marking each in_progress when you start it and completed when done."
-	} else {
-		msg += " Proceed to implement the plan."
-	}
-	return planToolResult(msg), nil
+	return planToolResult(t.manager.SubmitPlan(ctx, plan, steps)), nil
 }
 
 func planToolResult(text string) agent.AgentToolResult {

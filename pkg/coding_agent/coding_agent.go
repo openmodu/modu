@@ -100,6 +100,10 @@ type CodingSession struct {
 	taskManager    *backgroundTaskManager
 	planMode       bool
 	planMu         sync.RWMutex
+	// planDecisionCb presents the plan to the user and returns the decision:
+	// "approve", "approve_auto", "reject", or "reject:<feedback>". nil means
+	// headless — the plan is auto-approved.
+	planDecisionCb func(plan string, steps []string) string
 	worktreeMu     sync.Mutex
 	originalCwd    string
 	worktreePath   string
@@ -343,6 +347,12 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		})
 	}
 	approvalMgr.SetObserver(cs)
+	approvalMgr.SetBlocker(func(toolName string, args map[string]any) (bool, string) {
+		if cs.planModeBlocksTool(toolName) {
+			return true, planModeBlockMessage(toolName)
+		}
+		return false, ""
+	})
 	taskMgr.SetOnChange(func() { cs.writeRuntimeState() })
 	cs.refreshToolsForCwd(cs.cwd)
 	cs.replaceTodoTool()

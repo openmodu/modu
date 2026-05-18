@@ -487,7 +487,7 @@ func (w *HarnessWrappedTool) Execute(ctx context.Context, toolCallID string, arg
 		return agent.AgentToolResult{
 			Content: []types.ContentBlock{&types.TextContent{
 				Type: "text",
-				Text: fmt.Sprintf("%s is blocked while plan mode is active; exit plan mode before making changes", call.ToolName),
+				Text: planModeBlockMessage(call.ToolName),
 			}},
 			Details: map[string]any{"isError": true, "blockedBy": "plan_mode"},
 		}, nil
@@ -522,6 +522,10 @@ func (s *CodingSession) planModeBlocksTool(toolName string) bool {
 	default:
 		return false
 	}
+}
+
+func planModeBlockMessage(toolName string) string {
+	return fmt.Sprintf("%s is blocked while plan mode is active; exit plan mode before making changes", toolName)
 }
 
 func (s *CodingSession) runHarnessPreToolHooks(call HarnessToolCall) error {

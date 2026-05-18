@@ -128,6 +128,45 @@ func (r *goTUIRoot) pushBlockAbove(block uiBlock) {
 	r.app.PrintAboveln("") // blank line between blocks
 }
 
+// repaintAbove re-emits completed scrollback history after the screen and
+// terminal scrollback have been wiped (terminal resize), reflowed at the
+// current width. It mirrors the two push paths used during a live session —
+// pushBlockAbove for finished non-tool blocks, renderUITool for finished
+// tools — so the redrawn history matches how it was originally printed, just
+// rewrapped to the new width. The still-streaming block (not yet pushed, or a
+// tool still running) is skipped on purpose: it is shown live in the inline
+// widget and gets pushed once, as usual, when it completes.
+func (r *goTUIRoot) repaintAbove() {
+	if r.app == nil {
+		return
+	}
+	for _, b := range r.model.blocks {
+		switch b.Kind {
+		case "tool":
+			for _, t := range b.Tools {
+				if t.Status != "done" && t.Status != "error" {
+					continue
+				}
+				s := strings.TrimRight(renderUITool(t, r.model.transcriptMode, r.model.viewportContentWidth()), "\n")
+				if strings.TrimSpace(stripANSIForGoTUI(s)) != "" {
+					r.printAbove(s)
+				}
+			}
+		case "assistant":
+			// A still-streaming assistant block lives in the live inline
+			// area, not scrollback — skip it; it is pushed once when it
+			// completes. Everything else is finished history.
+			if !b.Streaming {
+				r.pushBlockAbove(b)
+			}
+		default:
+			// user / section / system blocks are printed to scrollback once
+			// at creation and never carry the pushed flag — always re-emit.
+			r.pushBlockAbove(b)
+		}
+	}
+}
+
 // printAbove prints a pre-rendered ANSI string to the inline scrollback.
 func (r *goTUIRoot) printAbove(s string) {
 	if r.app == nil {
