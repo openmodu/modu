@@ -80,6 +80,7 @@ func (r *goTUIRoot) showHotkeys() {
 		"  Enter: submit",
 		"  Ctrl+J: newline",
 		"  Tab: autocomplete or selector scope",
+		"  @file: fuzzy file reference; Tab/Enter completes",
 		"",
 		"App",
 		"  Ctrl+C: interrupt or exit",

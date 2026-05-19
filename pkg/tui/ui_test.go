@@ -700,6 +700,54 @@ func TestTreeSelectNavigatesWithBranchSummary(t *testing.T) {
 	}
 }
 
+func TestFileReferenceSuggestionsCompleteAndExpandPrompt(t *testing.T) {
+	session := newUITestSession(t)
+	cwd := session.GetContextInfo().Cwd
+	if err := os.MkdirAll(filepath.Join(cwd, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cwd, "pkg", "target.go"), []byte("package pkg\n\nconst Answer = 42\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, nil)
+	root.draft.Set("inspect @target")
+	root.cursor = len([]rune(root.draft.Get()))
+
+	root.updateInputSuggestions()
+	if len(root.fileMatches) == 0 || root.fileMatches[0].Path != "pkg/target.go" {
+		t.Fatalf("expected pkg/target.go suggestion, got %#v", root.fileMatches)
+	}
+	if !root.completeFileMatch() {
+		t.Fatal("expected file completion")
+	}
+	if got := root.draft.Get(); got != "inspect @pkg/target.go" {
+		t.Fatalf("unexpected completed draft %q", got)
+	}
+
+	expanded := root.expandFileReferencesForPrompt(root.draft.Get())
+	if !strings.Contains(expanded, "Referenced files") || !strings.Contains(expanded, "const Answer = 42") {
+		t.Fatalf("expected referenced file content, got %q", expanded)
+	}
+}
+
+func TestPathTokenCompletion(t *testing.T) {
+	session := newUITestSession(t)
+	cwd := session.GetContextInfo().Cwd
+	if err := os.MkdirAll(filepath.Join(cwd, "cmd", "tool"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, nil)
+	root.draft.Set("open ./cm")
+	root.cursor = len([]rune(root.draft.Get()))
+
+	if !root.completePathToken() {
+		t.Fatal("expected path token completion")
+	}
+	if got := root.draft.Get(); got != "open ./cmd/" {
+		t.Fatalf("unexpected completed path %q", got)
+	}
+}
+
 func TestPromptErrorCollapsesRepeatsAndOffersActions(t *testing.T) {
 	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 	err := errors.New("max retries (3) exceeded: dial tcp 127.0.0.1:1234: connect: operation timed out")

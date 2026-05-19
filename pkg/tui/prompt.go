@@ -20,6 +20,8 @@ func (r *goTUIRoot) submit(text string) {
 	}
 	r.draft.Set("")
 	r.cursor = 0
+	r.slashMatches = nil
+	r.fileMatches = nil
 	r.appendHistory(line)
 
 	if rest, ok := strings.CutPrefix(line, "! "); ok {
@@ -78,7 +80,7 @@ func (r *goTUIRoot) submit(text string) {
 		r.runSlash(line)
 		return
 	}
-	r.runPrompt(line)
+	r.runPrompt(r.expandFileReferencesForPrompt(line))
 }
 
 // togglePlanMode flips plan mode on/off. Bound to Shift+Tab so the user can

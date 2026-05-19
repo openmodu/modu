@@ -46,6 +46,8 @@ enough to implement, verify, and commit independently.
 - `/tree` now opens an interactive session-tree selector with search, current-path
   markers, branch-summary preview, Enter navigation, and Ctrl+F branched-session
   creation.
+- TUI editor now supports `@file` fuzzy references, Tab/Enter reference completion,
+  prompt-time referenced-file expansion, and Tab completion for path-like tokens.
 
 ## Next
 
@@ -76,3 +78,5 @@ enough to implement, verify, and commit independently.
   settings, hotkeys, and reload.
 - 2026-05-19: `go test ./pkg/coding_agent ./pkg/tui ./pkg/slash`
   passed for interactive session-tree navigation and branch-summary restoration.
+- 2026-05-19: `go test ./pkg/tui`
+  passed for TUI file-reference and path-token completion coverage.

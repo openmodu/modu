@@ -58,6 +58,9 @@ type goTUIRoot struct {
 	slashMatches      []slashCommandDef
 	slashMatchIdx     int
 	slashScrollOffset int
+	fileMatches       []fileSuggestion
+	fileMatchIdx      int
+	fileScrollOffset  int
 
 	modelChoices         []*types.Model
 	modelAllChoices      []*types.Model
@@ -521,10 +524,20 @@ func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 	if visibleSuggestions > slashVisibleRows {
 		visibleSuggestions = slashVisibleRows
 	}
+	visibleFileSuggestions := 0
+	if visibleSuggestions == 0 {
+		visibleFileSuggestions = len(r.fileMatches)
+		if visibleFileSuggestions > fileReferenceVisibleRows {
+			visibleFileSuggestions = fileReferenceVisibleRows
+		}
+	}
 	if visibleSuggestions > 0 {
 		// Suggestions replace the single status line; add the extra rows
 		// plus one detail row for the highlighted entry.
 		neededH += visibleSuggestions - 1
+		neededH++
+	} else if visibleFileSuggestions > 0 {
+		neededH += visibleFileSuggestions - 1
 		neededH++
 	}
 	if neededH < 5 {
@@ -537,6 +550,10 @@ func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 	root.AddChild(r.renderInput(width))
 	addSep(root)
 	if rows := r.renderSlashSuggestions(); rows != nil {
+		for _, row := range rows {
+			root.AddChild(row)
+		}
+	} else if rows := r.renderFileSuggestions(); rows != nil {
 		for _, row := range rows {
 			root.AddChild(row)
 		}
