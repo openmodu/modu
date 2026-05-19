@@ -116,13 +116,10 @@ modu/
 │   ├── tui/                # Terminal user interface library
 │   ├── types/              # Shared type definitions
 │   ├── env/                # Environment variable loader
-│   ├── playwright/         # Playwright browser automation wrapper
 │   ├── stream/             # Streaming utilities
 │   └── utils/              # General utility functions
 ├── repos/                  # Business repository layer
-│   ├── gen_image_repo/     # Image generation (Gemini, etc.)
-│   ├── notebooklm/         # Google NotebookLM unofficial SDK
-│   └── scraper/            # Web scraper
+│   └── gen_image_repo/     # Image generation (Gemini, etc.)
 ```
 
 ## 📚 Core Modules
@@ -216,9 +213,7 @@ Terminal user interface rendering and input handling library.
 
 | Module | Description |
 |------|------|
-| [`repos/notebooklm`](repos/notebooklm/README.md) | Google NotebookLM unofficial SDK supporting Notebooks, Sources, Chat, and Audio generation |
 | [`repos/gen_image_repo`](repos/gen_image_repo/README.md) | Image generation abstraction layer supporting Gemini and other providers |
-| [`repos/scraper`](repos/scraper/README.md) | Web scraper supporting Hacker News and more |
 
 ## 🔧 Supported LLM Providers
 

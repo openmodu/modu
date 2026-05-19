@@ -116,13 +116,10 @@ modu/
 │   ├── tui/                # 终端用户界面库
 │   ├── types/              # 共享类型定义
 │   ├── env/                # 环境变量加载器
-│   ├── playwright/         # Playwright 浏览器自动化包装
 │   ├── stream/             # 流处理工具
 │   └── utils/              # 通用工具函数
 ├── repos/                  # 业务仓库层
-│   ├── gen_image_repo/     # 图像生成（Gemini 等）
-│   ├── notebooklm/         # Google NotebookLM 非官方 SDK
-│   └── scraper/            # 网页爬虫
+│   └── gen_image_repo/     # 图像生成（Gemini 等）
 ```
 
 ## 📚 核心模块
@@ -216,9 +213,7 @@ Telegram、飞书等消息平台的统一接口。
 
 | 模块 | 描述 |
 |------|------|
-| [`repos/notebooklm`](repos/notebooklm/README_zh.md) | Google NotebookLM 非官方 SDK，支持 Notebooks、Sources、Chat 和音频生成 |
 | [`repos/gen_image_repo`](repos/gen_image_repo/README_zh.md) | 图像生成抽象层，支持 Gemini 和其他提供商 |
-| [`repos/scraper`](repos/scraper/README_zh.md) | 网页爬虫，支持 Hacker News 等 |
 
 ## 🔧 支持的 LLM Providers
 

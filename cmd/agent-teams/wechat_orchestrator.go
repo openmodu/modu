@@ -10,14 +10,13 @@ import (
 	"time"
 
 	"github.com/openmodu/modu/pkg/mailbox"
-	"github.com/openmodu/modu/repos/scraper"
 )
 
 // ArticleRequest is the user-facing input for starting an article workflow.
 type ArticleRequest struct {
 	Topic        string `json:"topic"`         // user-specified topic; empty = auto-discover
 	Niche        string `json:"niche"`         // content direction (e.g. "AI创业")
-	AutoDiscover bool   `json:"auto_discover"` // scrape trending topics first
+	AutoDiscover bool   `json:"auto_discover"` // deprecated: automatic topic discovery has been removed
 }
 
 // ArticleResult contains the task ID, file path, and final content.
@@ -117,22 +116,8 @@ func buildTopicContext(req ArticleRequest) string {
 	if !req.AutoDiscover {
 		return "创作方向：" + niche
 	}
-	trending := fetchTrendingTopics()
-	return "创作方向：" + niche + "\n\n今日热点（供选题参考）：\n" + trending
-}
-
-// fetchTrendingTopics scrapes TopHub for the current Chinese trending topics.
-func fetchTrendingTopics() string {
-	items, err := scraper.ScrapeTopHub(10)
-	if err != nil {
-		log.Printf("[article] fetchTrending: %v", err)
-		return "（热点获取失败，请手动指定主题）"
-	}
-	var sb strings.Builder
-	for i, item := range items {
-		fmt.Fprintf(&sb, "%d. %s\n", i+1, item.Title)
-	}
-	return strings.TrimRight(sb.String(), "\n")
+	log.Printf("[article] auto_discover ignored: automatic topic discovery has been removed")
+	return "创作方向：" + niche + "\n\n提示：自动热点抓取已移除，请在 topic 或 niche 中提供具体方向。"
 }
 
 // saveArticleFile writes the article content to workspace/articles/{ts}-{topic}.md.
