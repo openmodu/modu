@@ -223,6 +223,25 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		}
 		return true, false
 
+	case "prompts":
+		prompts := session.GetPromptTemplates()
+		if len(prompts) == 0 {
+			r.PrintInfo("no prompt templates found")
+			return true, false
+		}
+		r.PrintInfo(fmt.Sprintf("available prompt templates (%d):", len(prompts)))
+		for _, p := range prompts {
+			l := "  /" + p.Name
+			if p.Description != "" {
+				l += " — " + p.Description
+			}
+			if p.Source != "" {
+				l += " [" + p.Source + "]"
+			}
+			r.PrintInfo(l)
+		}
+		return true, false
+
 	case "telegram":
 		arg := ""
 		if len(parts) > 1 {
@@ -357,6 +376,30 @@ func handleContext(session *coding_agent.CodingSession, r Printer) {
 			lines = append(lines, line)
 		}
 	}
+	if len(info.PromptTemplates) == 0 {
+		lines = append(lines, "prompt templates: none")
+	} else {
+		lines = append(lines, fmt.Sprintf("prompt templates (%d):", len(info.PromptTemplates)))
+		for _, tmpl := range info.PromptTemplates {
+			line := "  " + tmpl.Name
+			if tmpl.Source != "" {
+				line += " [" + tmpl.Source + "]"
+			}
+			lines = append(lines, line)
+		}
+	}
+	if len(info.Packages) == 0 {
+		lines = append(lines, "resource packages: none")
+	} else {
+		lines = append(lines, fmt.Sprintf("resource packages (%d):", len(info.Packages)))
+		for _, pkg := range info.Packages {
+			status := "disabled"
+			if pkg.Enabled {
+				status = "enabled"
+			}
+			lines = append(lines, fmt.Sprintf("  %s [%s/%s] skills=%d prompts=%d - %s", pkg.Name, pkg.Source, status, pkg.Skills, pkg.Prompts, pkg.Path))
+		}
+	}
 
 	r.PrintSection("Context", lines)
 }
@@ -483,6 +526,7 @@ func PrintHelp(r Printer) {
 		"/plan [on|off]      — inspect or toggle plan mode",
 		"/worktree [on|off]  — inspect or toggle isolated worktree mode",
 		"/skills             — list available skills",
+		"/prompts            — list available prompt templates",
 		"/telegram           — show Telegram bot config",
 		"/telegram token <t> — set Telegram bot token",
 		"",

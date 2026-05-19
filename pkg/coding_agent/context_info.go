@@ -8,6 +8,22 @@ type ContextFileInfo struct {
 	Bytes int
 }
 
+type PromptTemplateInfo struct {
+	Name        string
+	Description string
+	Source      string
+	FilePath    string
+}
+
+type PackageResourceInfo struct {
+	Name    string
+	Source  string
+	Path    string
+	Enabled bool
+	Skills  int
+	Prompts int
+}
+
 // ContextInfo describes the runtime context sources that can affect prompts.
 type ContextInfo struct {
 	Cwd             string
@@ -19,6 +35,8 @@ type ContextInfo struct {
 	MemoryBytes     int
 	ContextFiles    []ContextFileInfo
 	Skills          []SkillInfo
+	PromptTemplates []PromptTemplateInfo
+	Packages        []PackageResourceInfo
 	PlanMode        bool
 	ActiveWorktree  string
 	PromptByteCount int
@@ -45,7 +63,9 @@ func (s *CodingSession) GetContextInfo() ContextInfo {
 		info.MemoryBytes = len(s.memoryStore.GetMemoryContext())
 	}
 	if s.resources != nil {
-		files := s.resources.LoadContextFiles()
+		resources := s.refreshResourcePaths()
+		info.Skills = s.GetSkills()
+		files := resources.ContextFiles
 		info.ContextFiles = make([]ContextFileInfo, 0, len(files))
 		for _, file := range files {
 			info.ContextFiles = append(info.ContextFiles, ContextFileInfo{
@@ -54,6 +74,36 @@ func (s *CodingSession) GetContextInfo() ContextInfo {
 				Bytes: len(file.Content),
 			})
 		}
+		for _, pkg := range resources.Packages {
+			info.Packages = append(info.Packages, PackageResourceInfo{
+				Name:    pkg.Name,
+				Source:  pkg.Source,
+				Path:    pkg.Path,
+				Enabled: pkg.Enabled,
+				Skills:  len(pkg.Skills),
+				Prompts: len(pkg.Prompts),
+			})
+		}
 	}
+	info.PromptTemplates = s.GetPromptTemplates()
 	return info
+}
+
+// GetPromptTemplates returns discovered prompt templates.
+func (s *CodingSession) GetPromptTemplates() []PromptTemplateInfo {
+	if s.promptManager == nil {
+		return nil
+	}
+	s.refreshResourcePaths()
+	list := s.promptManager.List()
+	out := make([]PromptTemplateInfo, 0, len(list))
+	for _, t := range list {
+		out = append(out, PromptTemplateInfo{
+			Name:        t.Name,
+			Description: t.Description,
+			Source:      t.Source,
+			FilePath:    t.FilePath,
+		})
+	}
+	return out
 }

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/openmodu/modu/pkg/coding_agent/compaction"
 	"github.com/openmodu/modu/pkg/coding_agent/eventbus"
 	"github.com/openmodu/modu/pkg/coding_agent/extension"
+	"github.com/openmodu/modu/pkg/coding_agent/prompts"
 	"github.com/openmodu/modu/pkg/coding_agent/resource"
 	"github.com/openmodu/modu/pkg/coding_agent/session"
 	"github.com/openmodu/modu/pkg/coding_agent/skills"
@@ -69,6 +71,7 @@ type CodingSession struct {
 	config         *Config
 	extensions     *extension.Runner
 	skillManager   *skills.Manager
+	promptManager  *prompts.Manager
 	resources      *resource.Loader
 	memoryStore    *MemoryStore
 	subagentLoader *subagent.Loader
@@ -190,25 +193,25 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		return nil, fmt.Errorf("failed to create session manager: %w", err)
 	}
 
-	// Record session start
-	_ = sessionMgr.Append(session.NewEntry(session.EntryTypeSessionInfo, "", session.SessionInfoData{
-		Cwd:       opts.Cwd,
-		StartTime: time.Now().UnixMilli(),
-	}))
-
 	// Create extension runner
 	extRunner := extension.NewRunner()
 
-	// Initialize skills
+	resourceSnapshot := loader.LoadResources()
+
+	// Initialize skills and prompt templates.
 	skillMgr := skills.NewManager(agentDir, opts.Cwd)
+	skillMgr.SetExtraPaths(resourceSnapshot.SkillPaths)
 	_ = skillMgr.Discover()
+	promptMgr := prompts.NewManager(agentDir, opts.Cwd)
+	promptMgr.SetExtraPaths(resourceSnapshot.PromptPaths)
+	_ = promptMgr.Discover()
 
 	// Build system prompt
 	promptBuilder := NewSystemPromptBuilder(opts.Cwd)
 	promptBuilder.SetModel(opts.Model)
 	promptBuilder.SetMemoryStore(memoryStore)
 	promptBuilder.SetTools(activeTools)
-	for _, ctxFile := range loader.LoadContextFiles() {
+	for _, ctxFile := range resourceSnapshot.ContextFiles {
 		promptBuilder.AddContextFile(ctxFile.Path)
 	}
 
@@ -286,6 +289,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		config:          cfg,
 		extensions:      extRunner,
 		skillManager:    skillMgr,
+		promptManager:   promptMgr,
 		resources:       loader,
 		memoryStore:     memoryStore,
 		subagentLoader:  subagentLoader,
@@ -360,7 +364,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	cs.replacePlanTools()
 	cs.replaceWorktreeTools()
 	cs.installConfigHarnessHooks()
-	for _, ctxFile := range loader.LoadContextFiles() {
+	for _, ctxFile := range resourceSnapshot.ContextFiles {
 		cs.loadedContexts[ctxFile.Path] = struct{}{}
 	}
 
@@ -489,9 +493,22 @@ func (s *CodingSession) Prompt(ctx context.Context, text string) error {
 			return cmd.Handler(s, cmdArgs)
 		}
 
-		// Check skills
-		if skill, ok := s.skillManager.Get(cmdName); ok {
-			return s.executeSkill(ctx, input, skill, cmdArgs)
+		s.refreshResourcePaths()
+
+		expandedTemplate := false
+		if s.promptManager != nil {
+			if template, ok := s.promptManager.Get(cmdName); ok {
+				text = template.Expand(cmdArgs)
+				input = strings.TrimSpace(text)
+				expandedTemplate = true
+			}
+		}
+
+		// Check skills when no prompt template claimed the slash command.
+		if !expandedTemplate && s.skillManager != nil {
+			if skill, ok := s.skillManager.Get(cmdName); ok {
+				return s.executeSkill(ctx, input, skill, cmdArgs)
+			}
 		}
 	}
 
@@ -574,6 +591,20 @@ func (s *CodingSession) SetActiveTools(names []string) {
 	s.writeRuntimeState()
 }
 
+func (s *CodingSession) refreshResourcePaths() resource.ResourceSnapshot {
+	if s.resources == nil {
+		return resource.ResourceSnapshot{}
+	}
+	snapshot := s.resources.LoadResources()
+	if s.skillManager != nil {
+		s.skillManager.SetExtraPaths(snapshot.SkillPaths)
+	}
+	if s.promptManager != nil {
+		s.promptManager.SetExtraPaths(snapshot.PromptPaths)
+	}
+	return snapshot
+}
+
 // SkillInfo is a minimal view of a skill for display purposes.
 type SkillInfo struct {
 	Name        string
@@ -594,6 +625,7 @@ func (s *CodingSession) GetSkills() []SkillInfo {
 	if s.skillManager == nil {
 		return nil
 	}
+	s.refreshResourcePaths()
 	list := s.skillManager.List()
 	out := make([]SkillInfo, len(list))
 	for i, sk := range list {
@@ -1052,6 +1084,9 @@ func (s *CodingSession) IsStreaming() bool {
 
 // GetSessionID returns the current session ID.
 func (s *CodingSession) GetSessionID() string {
+	if s.sessionManager != nil {
+		return s.sessionManager.SessionID()
+	}
 	return s.agent.GetSessionID()
 }
 
@@ -1202,10 +1237,16 @@ func (s *CodingSession) GetSessionFile() string {
 // SetSessionName sets the display name for this session.
 func (s *CodingSession) SetSessionName(name string) {
 	s.sessionName = name
+	if s.sessionManager != nil {
+		_ = s.sessionManager.AppendSessionInfo(name)
+	}
 }
 
 // GetSessionName returns the display name for this session.
 func (s *CodingSession) GetSessionName() string {
+	if s.sessionManager != nil {
+		return s.sessionManager.SessionName()
+	}
 	return s.sessionName
 }
 
@@ -1237,7 +1278,7 @@ func (s *CodingSession) GetLastAssistantText() string {
 
 // GetForkMessages returns user messages from the session history, suitable for forking.
 func (s *CodingSession) GetForkMessages() []ForkMessage {
-	entries := s.sessionManager.Load()
+	entries := s.sessionTree.GetCurrentPath()
 	var result []ForkMessage
 	for _, entry := range entries {
 		if entry.Type != session.EntryTypeMessage {
@@ -1407,25 +1448,23 @@ func (s *CodingSession) SwitchSession(sessionFile string) error {
 		return fmt.Errorf("failed to load session: %w", err)
 	}
 
-	entries := newMgr.Load()
 	var messages []agent.AgentMessage
-	for _, entry := range entries {
+	newTree := session.NewTree(newMgr)
+	for _, entry := range newTree.GetCurrentPath() {
 		if entry.Type != session.EntryTypeMessage {
 			continue
 		}
-		if m, ok := entry.Data.(map[string]interface{}); ok {
-			role, _ := m["role"].(string)
-			content, _ := m["content"].(string)
-			switch role {
-			case "user":
-				messages = append(messages, types.UserMessage{Role: "user", Content: content})
-			case "assistant":
-				messages = append(messages, types.AssistantMessage{Role: "assistant", Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: content}}})
-			}
+		if msg, ok := agentMessageFromSessionData(entry.Data); ok && msg != nil {
+			messages = append(messages, msg)
 		}
 	}
 
+	s.sessionManager = newMgr
+	s.sessionTree = newTree
+	s.sessionName = newMgr.SessionName()
 	s.agent.ReplaceMessages(messages)
+	s.lastSavedIndex = len(messages)
+	s.writeRuntimeState()
 	return nil
 }
 
@@ -1557,6 +1596,12 @@ func (s *CodingSession) handleMessageEnd(msg agent.AgentMessage) {
 		return
 	}
 	if role == agent.RoleUser {
+		if !s.currentLeafMessageMatches(role, content) {
+			_ = s.sessionManager.Append(session.NewEntry(session.EntryTypeMessage, "", session.MessageData{
+				Role:    role,
+				Content: content,
+			}))
+		}
 		_ = s.SaveMessages()
 		return
 	}
@@ -1566,6 +1611,25 @@ func (s *CodingSession) handleMessageEnd(msg agent.AgentMessage) {
 		Content: content,
 	}))
 	_ = s.SaveMessages()
+}
+
+func (s *CodingSession) currentLeafMessageMatches(role agent.MessageRole, content any) bool {
+	if s.sessionManager == nil {
+		return false
+	}
+	leafID := s.sessionManager.LastID()
+	if leafID == "" {
+		return false
+	}
+	entry, ok := s.sessionManager.GetEntry(leafID)
+	if !ok || entry.Type != session.EntryTypeMessage {
+		return false
+	}
+	data, ok := entry.Data.(session.MessageData)
+	if !ok {
+		return false
+	}
+	return data.Role == role && reflect.DeepEqual(data.Content, content)
 }
 
 func sessionMessageData(msg agent.AgentMessage) (agent.MessageRole, any, bool) {

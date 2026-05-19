@@ -313,6 +313,7 @@ func (s *CodingSession) ExitWorktree() error {
 // against the current filesystem so edits to skill files (or new skills
 // dropped into the skills dir) are reflected without restarting the session.
 func (s *CodingSession) refreshDynamicSystemPrompt() {
+	s.refreshResourcePaths()
 	if s.promptBuilder != nil && s.skillManager != nil {
 		// FormatForPrompt rediscovers under the hood, so the XML block
 		// always reflects what's on disk right now.

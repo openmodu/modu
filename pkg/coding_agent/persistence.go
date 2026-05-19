@@ -1,40 +1,23 @@
 package coding_agent
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
-	"github.com/google/uuid"
 	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/coding_agent/session"
 	"github.com/openmodu/modu/pkg/types"
 )
-
-// SessionHeader matches pi-mono's session header format.
-type SessionHeader struct {
-	Type      string `json:"type"`
-	Version   int    `json:"version"`
-	ID        string `json:"id"`
-	Timestamp string `json:"timestamp"`
-	Cwd       string `json:"cwd"`
-}
-
-// SessionMessageEntry matches pi-mono's message entry format.
-type SessionMessageEntry struct {
-	Type      string      `json:"type"`
-	ID        string      `json:"id"`
-	ParentID  string      `json:"parentId"`
-	Timestamp string      `json:"timestamp"`
-	Message   interface{} `json:"message"`
-}
 
 // messagesFilePath returns the path of the per-project messages snapshot.
 // We use JSONL format to align with pi-mono.
 func (s *CodingSession) messagesFilePath() string {
+	if s != nil && s.sessionManager != nil {
+		return s.sessionManager.FilePath()
+	}
 	// Convert absolute path to a safe directory name: strip leading slash,
 	// replace remaining slashes with underscores.
 	dirName := strings.ReplaceAll(strings.TrimPrefix(s.cwd, "/"), "/", "_")
@@ -47,127 +30,25 @@ func (s *CodingSession) messagesFilePath() string {
 // SaveMessages writes the current conversation messages to a JSONL file.
 // It appends only new messages since the last save.
 func (s *CodingSession) SaveMessages() error {
-	msgs := s.agent.GetState().Messages
-	if len(msgs) <= s.lastSavedIndex {
-		return nil // Nothing new to save
-	}
-
-	path := s.messagesFilePath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-
-	// Check if file exists, if not, write header
-	var file *os.File
-	var err error
-	if _, errStat := os.Stat(path); os.IsNotExist(errStat) {
-		file, err = os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-		if err != nil {
-			return err
-		}
-
-		header := SessionHeader{
-			Type:      "session",
-			Version:   3,
-			ID:        uuid.New().String(),
-			Timestamp: time.Now().Format(time.RFC3339),
-			Cwd:       s.cwd,
-		}
-		b, _ := json.Marshal(header)
-		file.Write(b)
-		file.WriteString("\n")
-	} else {
-		file, err = os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
-		if err != nil {
-			return err
-		}
-	}
-	defer file.Close()
-
-	// Append new messages
-	for i := s.lastSavedIndex; i < len(msgs); i++ {
-		msg := msgs[i]
-		if isTransientContextMessage(msg) {
-			continue
-		}
-
-		entry := SessionMessageEntry{
-			Type:      "message",
-			ID:        uuid.New().String(),
-			ParentID:  "", // keeping linear for now
-			Timestamp: time.Now().Format(time.RFC3339),
-			Message:   msg,
-		}
-		b, err := json.Marshal(entry)
-		if err != nil {
-			return fmt.Errorf("marshal entry: %w", err)
-		}
-		if _, err := file.Write(b); err != nil {
-			return err
-		}
-		if _, err := file.WriteString("\n"); err != nil {
-			return err
-		}
-	}
-
-	s.lastSavedIndex = len(msgs)
 	return nil
 }
 
 // RestoreMessages loads a previously saved message snapshot from JSONL.
 // Returns (number_of_messages, error).
 func (s *CodingSession) RestoreMessages() (int, error) {
-	path := s.messagesFilePath()
-	file, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// Try to migrate from old messages.json if it exists
-			return s.migrateOldMessagesJSON()
-		}
-		return 0, err
-	}
-	defer file.Close()
-
 	var msgs []agent.AgentMessage
-	scanner := bufio.NewScanner(file)
-
-	// Increase scanner buffer size to handle large messages
-	const maxCapacity = 10 * 1024 * 1024 // 10MB
-	buf := make([]byte, 1024*1024)
-	scanner.Buffer(buf, maxCapacity)
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		if line == "" {
+	for _, entry := range s.sessionTree.GetCurrentPath() {
+		if entry.Type != session.EntryTypeMessage {
 			continue
 		}
-
-		var peek struct {
-			Type string `json:"type"`
+		msg, ok := agentMessageFromSessionData(entry.Data)
+		if ok && msg != nil {
+			msgs = append(msgs, msg)
 		}
-		if err := json.Unmarshal([]byte(line), &peek); err != nil {
-			continue
-		}
-
-		if peek.Type == "message" {
-			var entry struct {
-				Message json.RawMessage `json:"message"`
-			}
-			if err := json.Unmarshal([]byte(line), &entry); err == nil {
-				msg, err := unmarshalSingleAgentMessage(entry.Message)
-				if err == nil && msg != nil {
-					msgs = append(msgs, msg)
-				}
-			}
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return 0, err
 	}
 
 	if len(msgs) == 0 {
-		return 0, nil
+		return s.migrateOldMessagesJSON()
 	}
 	s.agent.ReplaceMessages(msgs)
 	s.lastSavedIndex = len(msgs)
@@ -216,11 +97,10 @@ func (s *CodingSession) InputHistoryFile() string {
 // ClearSavedMessages deletes the messages snapshot for this project.
 func (s *CodingSession) ClearSavedMessages() error {
 	s.lastSavedIndex = 0
-	err := os.Remove(s.messagesFilePath())
-	if os.IsNotExist(err) {
-		return nil
+	if s.sessionManager != nil {
+		return s.sessionManager.Clear()
 	}
-	return err
+	return nil
 }
 
 // ClearConversation clears both in-memory and persisted conversation context.
@@ -250,6 +130,43 @@ func unmarshalSingleAgentMessage(raw json.RawMessage) (agent.AgentMessage, error
 		return unmarshalToolResultMessage(raw)
 	}
 	return nil, fmt.Errorf("unknown role: %s", peek.Role)
+}
+
+func agentMessageFromSessionData(data any) (agent.AgentMessage, bool) {
+	switch v := data.(type) {
+	case session.MessageData:
+		if msg, ok := v.Content.(agent.AgentMessage); ok {
+			return msg, true
+		}
+		switch v.Role {
+		case agent.RoleUser:
+			return types.UserMessage{Role: "user", Content: v.Content}, true
+		case agent.RoleAssistant:
+			if msg, ok := v.Content.(types.AssistantMessage); ok {
+				return msg, true
+			}
+			if msg, ok := v.Content.(*types.AssistantMessage); ok {
+				return msg, true
+			}
+			text, _ := v.Content.(string)
+			return types.AssistantMessage{Role: "assistant", Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: text}}}, true
+		case agent.RoleToolResult:
+			if msg, ok := v.Content.(types.ToolResultMessage); ok {
+				return msg, true
+			}
+			if msg, ok := v.Content.(*types.ToolResultMessage); ok {
+				return msg, true
+			}
+		}
+	case map[string]any:
+		raw, err := json.Marshal(v)
+		if err != nil {
+			return nil, false
+		}
+		msg, err := unmarshalSingleAgentMessage(raw)
+		return msg, err == nil
+	}
+	return nil, false
 }
 
 // unmarshalAgentMessages deserializes messages previously produced by old json array format.

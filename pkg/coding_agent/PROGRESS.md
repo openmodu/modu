@@ -21,6 +21,7 @@ High-priority gaps identified before this round:
 - Wired discovered context files into the system prompt build path.
 - Wired agent `message_end` events into persistence so assistant and tool-result messages are recorded.
 - Hooked `SaveMessages()` into the live session flow so `messages.jsonl` is generated from real prompts.
+- Replaced the split message snapshot/session timeline with a pi-style append-only JSONL session manager: versioned session header, timestamped session files, `leafId` branch navigation, display-name entries, labels, recent-session loading, and session listing metadata.
 - Added explicit `/skill` handling that pins the named skill instructions onto the main agent turn.
 - Recorded thinking-level changes into the session timeline.
 - Ensured `~/.coding_agent/agents` is created alongside skills and sessions.
@@ -142,12 +143,18 @@ High-priority gaps identified before this round:
   default core tool alignment with upstream coding-agent (`read`, `bash`, `edit`, `write`)
   full `AllTools` restoration including `ls` for explicit opt-in use
   extension API cleanup for first-class hook registration, command descriptions, event dispatch, and removal of the unused `ToolDefinition` wrapper
+  unified resource discovery for context files, skills, prompt templates, and local resource packages
+  prompt-template slash commands with `{{input}}` / `{{args}}` expansion
+  `/context` and `/prompts` visibility for resource packages and prompt templates
+  pi-style session JSONL shape and session-manager behavior for local persistence/resume/listing
 
 ## Still Missing
 
 - Broader end-to-end coverage for the `cmd/modu_code` interactive path
 - Deeper plan-mode semantics beyond the current state/prompt toggle
 - Richer worktree lifecycle controls and cleanup introspection
+- Full pi-compatible TypeScript extension/package ecosystem, including remote npm/git package install, theme resources, UI extension context, provider hooks, and hot reload
+- Full pi TUI session selector parity, including cross-project list-all UI, tree filter modes, rename/delete UI flows, and branch-summary rendering controls
 
 ## Suggested Next Steps
 

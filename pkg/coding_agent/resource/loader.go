@@ -199,6 +199,8 @@ func (l *Loader) EnsureAgentDir() error {
 		filepath.Join(l.agentDir, "sessions"),
 		filepath.Join(l.agentDir, "plans"),
 		filepath.Join(l.agentDir, "skills"),
+		filepath.Join(l.agentDir, "prompts"),
+		filepath.Join(l.agentDir, "packages"),
 		filepath.Join(l.agentDir, "agents"),
 		filepath.Join(l.agentDir, "tool-results"),
 		filepath.Join(l.agentDir, "worktrees"),

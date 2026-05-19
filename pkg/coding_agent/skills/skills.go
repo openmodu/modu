@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/openmodu/modu/pkg/coding_agent/resource"
 	"github.com/openmodu/modu/pkg/utils"
 )
 
@@ -33,8 +34,9 @@ type Manager struct {
 	agentDir string
 	cwd      string
 
-	mu     sync.RWMutex
-	skills map[string]*Skill
+	mu         sync.RWMutex
+	skills     map[string]*Skill
+	extraPaths []resource.ResourceRef
 }
 
 // NewManager creates a new skill manager.
@@ -44,6 +46,12 @@ func NewManager(agentDir, cwd string) *Manager {
 		cwd:      cwd,
 		skills:   make(map[string]*Skill),
 	}
+}
+
+func (m *Manager) SetExtraPaths(paths []resource.ResourceRef) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.extraPaths = append([]resource.ResourceRef(nil), paths...)
 }
 
 // Discover scans the global and project skill directories and atomically
@@ -66,6 +74,13 @@ func (m *Manager) Discover() error {
 	projectDir := filepath.Join(m.cwd, ".coding_agent", "skills")
 	if err := loadIntoMap(fresh, projectDir, "project"); err != nil && !os.IsNotExist(err) {
 		return err
+	}
+
+	m.mu.RLock()
+	extraPaths := append([]resource.ResourceRef(nil), m.extraPaths...)
+	m.mu.RUnlock()
+	for _, ref := range extraPaths {
+		_ = loadPathIntoMap(fresh, ref.Path, ref.Source)
 	}
 
 	m.mu.Lock()
@@ -157,6 +172,27 @@ func (m *Manager) FormatForPrompt() string {
 // fresh skills map without touching Manager state.
 func loadIntoMap(dst map[string]*Skill, dir, source string) error {
 	return loadFromDirInternal(dst, dir, source, true, nil, "")
+}
+
+func loadPathIntoMap(dst map[string]*Skill, path, source string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return loadIntoMap(dst, path, source)
+	}
+	if !info.Mode().IsRegular() || !strings.HasSuffix(filepath.Base(path), ".md") {
+		return nil
+	}
+	skill, err := loadSkillFile(path, source)
+	if err != nil {
+		return err
+	}
+	if _, exists := dst[skill.Name]; !exists {
+		dst[skill.Name] = skill
+	}
+	return nil
 }
 
 // loadFromDirInternal recursively discovers skills.

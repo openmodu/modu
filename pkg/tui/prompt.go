@@ -85,9 +85,9 @@ func (r *goTUIRoot) runSlash(line string) {
 	go func() {
 		printer := &uiSlashPrinter{}
 		handled, exit := slash.Handle(r.ctx, line, r.session, printer, r.modelInfo)
-		if !handled && r.isSkillSlash(line) {
-			// Not a built-in slash command, but a known skill — delegate to the
-			// session, which has its own /skill-name → executeSkill dispatch.
+		if !handled && r.isDynamicAgentSlash(line) {
+			// Not a built-in slash command, but a known skill or prompt
+			// template — delegate to the session for expansion/execution.
 			r.queue(func() {
 				r.runPrompt(line)
 			})
@@ -114,11 +114,9 @@ func (r *goTUIRoot) runSlash(line string) {
 	}()
 }
 
-// isSkillSlash reports whether line is `/<name>[ args]` where <name> matches
-// a discovered skill. Skill names are case-sensitive (mirrors what the session
-// does — built-in slash commands lowercase, but skill names from frontmatter
-// are taken as-is).
-func (r *goTUIRoot) isSkillSlash(line string) bool {
+// isDynamicAgentSlash reports whether line is `/<name>[ args]` where <name>
+// matches a discovered skill or prompt template.
+func (r *goTUIRoot) isDynamicAgentSlash(line string) bool {
 	cmd := strings.TrimPrefix(strings.TrimSpace(line), "/")
 	if i := strings.IndexAny(cmd, " \t"); i >= 0 {
 		cmd = cmd[:i]
@@ -131,24 +129,36 @@ func (r *goTUIRoot) isSkillSlash(line string) bool {
 			return true
 		}
 	}
+	for _, p := range r.session.GetPromptTemplates() {
+		if p.Name == cmd {
+			return true
+		}
+	}
 	return false
 }
 
-// skillSlashCommands snapshots the current skills into slash-suggestion entries
-// so /<skill-name> auto-completes alongside the built-ins.
+// skillSlashCommands snapshots the current dynamic resources into
+// slash-suggestion entries so /<name> auto-completes alongside the built-ins.
 func (r *goTUIRoot) skillSlashCommands() []slashCommandDef {
 	if r.session == nil {
 		return nil
 	}
 	list := r.session.GetSkills()
-	if len(list) == 0 {
+	prompts := r.session.GetPromptTemplates()
+	if len(list) == 0 && len(prompts) == 0 {
 		return nil
 	}
-	out := make([]slashCommandDef, 0, len(list))
+	out := make([]slashCommandDef, 0, len(list)+len(prompts))
 	for _, s := range list {
 		out = append(out, slashCommandDef{
 			Name:        "/" + s.Name,
 			Description: s.Description,
+		})
+	}
+	for _, p := range prompts {
+		out = append(out, slashCommandDef{
+			Name:        "/" + p.Name,
+			Description: p.Description,
 		})
 	}
 	return out

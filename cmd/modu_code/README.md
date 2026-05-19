@@ -53,7 +53,7 @@ go run ./cmd/modu_code config validate
 
 ## 运行检查
 
-输入 `/context` 可以查看当前 prompt/context 来源摘要，包括当前模型、工作目录、会话消息数、系统 prompt 大小、memory 是否为空、计划模式、worktree 状态、项目上下文文件和已发现 skills。
+输入 `/context` 可以查看当前 prompt/context 来源摘要，包括当前模型、工作目录、会话消息数、系统 prompt 大小、memory 是否为空、计划模式、worktree 状态、项目上下文文件、已发现 skills、prompt templates 和本地资源包。
 
 输入 `/doctor` 可以查看基础运行诊断，包括模型配置路径、当前模型、baseURL 连通性、provider 是否注册、API key 状态、上下文文件数量和已发现的问题。
 
@@ -83,6 +83,8 @@ go run ./cmd/modu_code config validate
 | `/context` | 查看当前 prompt/context 来源 |
 | `/doctor` | 查看基础运行诊断 |
 | `/retry` | 重试上一条失败的 prompt |
+| `/skills` | 查看已发现 skills |
+| `/prompts` | 查看已发现 prompt templates |
 
 ---
 
