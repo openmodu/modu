@@ -93,6 +93,11 @@ func TestNewCodingSession(t *testing.T) {
 	if len(toolNames) == 0 {
 		t.Fatal("expected tools to be initialized")
 	}
+	for _, name := range []string{"grep", "find", "ls"} {
+		if containsTool(toolNames, name) {
+			t.Fatalf("expected search/list tool %s to be opt-in, got default tools %v", name, toolNames)
+		}
+	}
 
 	// Check config
 	cfg := session.GetConfig()
@@ -1203,21 +1208,18 @@ type testHookExtension struct {
 
 func (e *testHookExtension) Name() string { return "test-hook" }
 func (e *testHookExtension) Init(api extension.ExtensionAPI) error {
-	// Register a hook via the runner's AddHook (cast to *Runner)
-	if runner, ok := api.(*extension.Runner); ok {
-		runner.AddHook(extension.ToolHook{
-			Before: func(toolName string, args map[string]any) bool {
-				if toolName == "bash" {
-					e.blocked = append(e.blocked, toolName)
-					return false // block bash tool
-				}
-				return true
-			},
-			After: func(toolName string, args map[string]any, result agent.AgentToolResult) {
-				e.afterCalls = append(e.afterCalls, toolName)
-			},
-		})
-	}
+	api.AddHook(extension.ToolHook{
+		Before: func(toolName string, args map[string]any) bool {
+			if toolName == "bash" {
+				e.blocked = append(e.blocked, toolName)
+				return false // block bash tool
+			}
+			return true
+		},
+		After: func(toolName string, args map[string]any, result agent.AgentToolResult) {
+			e.afterCalls = append(e.afterCalls, toolName)
+		},
+	})
 	return nil
 }
 
@@ -1277,6 +1279,60 @@ func TestExtensionHooksAreApplied(t *testing.T) {
 
 	if len(hookExt.blocked) != 1 || hookExt.blocked[0] != "bash" {
 		t.Fatalf("expected bash to be blocked, got: %v", hookExt.blocked)
+	}
+}
+
+type testEventExtension struct {
+	agentStartCount int
+}
+
+func (e *testEventExtension) Name() string { return "test-events" }
+func (e *testEventExtension) Init(api extension.ExtensionAPI) error {
+	api.On(string(agent.EventTypeAgentStart), func(event agent.AgentEvent) {
+		e.agentStartCount++
+	})
+	return nil
+}
+
+func TestExtensionEventHandlersReceiveAgentEvents(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	model := newTestModel()
+	streamFn := func(ctx context.Context, _ *types.Model, _ *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+		stream := types.NewEventStream()
+		go func() {
+			defer stream.Close()
+			msg := &types.AssistantMessage{
+				Role:       "assistant",
+				ProviderID: model.ProviderID,
+				Model:      model.ID,
+				StopReason: "stop",
+				Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "ok"}},
+				Timestamp:  time.Now().UnixMilli(),
+			}
+			stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+			stream.Resolve(msg, nil)
+		}()
+		return stream, nil
+	}
+	ext := &testEventExtension{}
+
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:        dir,
+		AgentDir:   agentDir,
+		Model:      model,
+		Extensions: []extension.Extension{ext},
+		GetAPIKey:  func(provider string) (string, error) { return "", nil },
+		StreamFn:   streamFn,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Prompt(context.Background(), "hello"); err != nil {
+		t.Fatal(err)
+	}
+	if ext.agentStartCount == 0 {
+		t.Fatal("expected extension event handler to receive agent_start")
 	}
 }
 

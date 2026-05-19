@@ -20,8 +20,8 @@
 │  └──────────────────┬───────────────────────────────┘   │
 │                     │                                    │
 │  ┌──────────────────▼───────────────────────────────┐   │
-│  │                 工具 (7 个)                        │   │
-│  │  read │ write │ edit │ bash │ grep │ find │ ls    │   │
+│  │                 默认工具                           │   │
+│  │              read │ bash │ edit │ write            │   │
 │  │          ▲ (如果存在 hook 则使用 WrappedTool)      │   │
 │  └──────────┼───────────────────────────────────────┘   │
 │             │                                            │
@@ -31,7 +31,7 @@
 │  └─────────────────┘  └────────────┘  └────────────┘   │
 │                                                         │
 │  ┌─────────────────┐  ┌────────────────────────────┐   │
-│  │    技能管理器   │  │   斜杠命令 (7 个)           │   │
+│  │    技能管理器   │  │   斜杠命令                  │   │
 │  └─────────────────┘  └────────────────────────────┘   │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -47,7 +47,7 @@ pkg/coding_agent/
 ├── system_prompt.go          # 系统提示词组装器
 ├── messages.go               # 自定义消息类型（Bash/Compaction/Branch/Custom）
 ├── slash_commands.go         # 内置斜杠命令（/model, /compact, /tree 等）
-├── tools/                    # 7 个内置编码工具
+├── tools/                    # 内置编码工具
 │   ├── read.go               #   文件读取（行号、分页、图片 base64）
 │   ├── write.go              #   文件写入（自动建目录）
 │   ├── edit.go               #   精确替换编辑（歧义检测、replace_all、diff）
@@ -89,24 +89,31 @@ pkg/coding_agent/
 - 直到 LLM 返回 `stop` 结束循环
 - 支持 Steer（中途注入高优先级消息）和 FollowUp（排队后续消息）
 
-### 2. 7 个内置编码工具
+### 2. 默认工具
+
+默认会话只启用 4 个核心工具，对齐上游 coding-agent 的最小工具面：
 
 | 工具 | 功能 | 关键特性 |
 |------|------|----------|
 | `read` | 文件读取 | 行号格式化、offset/limit 分页、图片自动 base64 |
-| `write` | 文件写入 | 自动创建父目录、返回写入字节数 |
-| `edit` | 精确编辑 | 精确字符串匹配替换、歧义检测、replace_all、CRLF 兼容 |
 | `bash` | 命令执行 | 可配置超时（默认 120s）、进程组级 kill、输出尾部截断 |
+| `edit` | 精确编辑 | 精确字符串匹配替换、歧义检测、replace_all、CRLF 兼容 |
+| `write` | 文件写入 | 自动创建父目录、返回写入字节数 |
+
+搜索和列目录工具保留为显式 opt-in 能力，不进入默认工具集：
+
+| 工具 | 功能 | 关键特性 |
+|------|------|----------|
 | `grep` | 内容搜索 | 优先使用 ripgrep、Go 内置正则回退、忽略 .git 等目录 |
 | `find` | 文件查找 | 优先使用 fd、Go 内置 glob 回退、尊重 .gitignore |
-| `ls` | 目录列表 | 大小写不敏感排序、目录后缀 `/`计、可限制条数 |
+| `ls` | 目录列表 | 大小写不敏感排序、目录后缀 `/`、可限制条数 |
 
 工具集合工厂函数：
 
 ```go
-tools.AllTools(cwd)       // 全部 7 个工具
-tools.CodingTools(cwd)    // read, bash, edit, write
-tools.ReadOnlyTools(cwd)  // read, grep, find, ls
+tools.CodingTools(cwd)    // 默认核心工具：read, bash, edit, write
+tools.ReadOnlyTools(cwd)  // 显式只读工具：read, grep, find, ls
+tools.AllTools(cwd)       // 显式全量工具：read, write, edit, bash, grep, find, ls
 ```
 
 ### 3. Hook 系统（扩展钩子）
@@ -212,8 +219,9 @@ type Extension interface {
 
 扩展能力：
 - 注册自定义工具（`RegisterTool`）
-- 注册斜杠命令（`RegisterCommand`）
+- 注册带描述的斜杠命令（`RegisterCommand`）
 - 注册工具钩子（`AddHook`）
+- 订阅 agent 事件（`On`）
 - 注入对话消息（`SendMessage`）
 - 控制工具开关（`SetActiveTools`）
 - 切换模型（`SetModel`）
@@ -253,13 +261,11 @@ package main
 
 import (
     "context"
-    "fmt"
 
+    "github.com/openmodu/modu/pkg/agent"
     coding_agent "github.com/openmodu/modu/pkg/coding_agent"
-    "github.com/openmodu/modu/pkg/coding_agent/tools"
     "github.com/openmodu/modu/pkg/providers"
     "github.com/openmodu/modu/pkg/types"
-    "github.com/openmodu/modu/pkg/agent"
 )
 
 func main() {
@@ -277,7 +283,6 @@ func main() {
     session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
         Cwd:   "/your/project",
         Model: model,
-        Tools: tools.AllTools("/your/project"),
         GetAPIKey: func(provider string) (string, error) {
             return "", nil
         },
@@ -307,8 +312,7 @@ type safetyExtension struct{}
 
 func (e *safetyExtension) Name() string { return "safety" }
 func (e *safetyExtension) Init(api extension.ExtensionAPI) error {
-    runner := api.(*extension.Runner)
-    runner.AddHook(extension.ToolHook{
+    api.AddHook(extension.ToolHook{
         Before: func(toolName string, args map[string]any) bool {
             if toolName == "bash" {
                 cmd, _ := args["command"].(string)

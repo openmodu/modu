@@ -39,7 +39,7 @@ type CodingSessionOptions struct {
 	Model *types.Model
 	// ThinkingLevel controls reasoning depth.
 	ThinkingLevel agent.ThinkingLevel
-	// Tools are the tools to make available. If nil, defaults to AllTools.
+	// Tools are the tools to make available. If nil, defaults to CodingTools.
 	Tools []agent.AgentTool
 	// CustomTools are additional tools provided by the caller.
 	CustomTools []agent.AgentTool
@@ -159,7 +159,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	// Set up tools
 	activeTools := opts.Tools
 	if activeTools == nil {
-		activeTools = tools.AllTools(opts.Cwd)
+		activeTools = tools.CodingTools(opts.Cwd)
 	}
 	if len(opts.CustomTools) > 0 {
 		activeTools = append(activeTools, opts.CustomTools...)
@@ -366,6 +366,9 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 
 	// Subscribe to events for token usage tracking (auto-compaction)
 	ag.Subscribe(func(event agent.AgentEvent) {
+		if cs.extensions != nil {
+			cs.extensions.EmitEvent(event)
+		}
 		if cs.traceRecorder != nil {
 			_ = cs.traceRecorder.RecordAgentEvent(event)
 		}

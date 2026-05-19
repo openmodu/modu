@@ -139,6 +139,9 @@ High-priority gaps identified before this round:
   effective config export
   default config template export
   subagent frontmatter parsing for `harness_block_tools`
+  default core tool alignment with upstream coding-agent (`read`, `bash`, `edit`, `write`)
+  full `AllTools` restoration including `ls` for explicit opt-in use
+  extension API cleanup for first-class hook registration, command descriptions, event dispatch, and removal of the unused `ToolDefinition` wrapper
 
 ## Still Missing
 
