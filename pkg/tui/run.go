@@ -40,6 +40,12 @@ func Run(ctx context.Context, session *coding_agent.CodingSession, model *types.
 		gotui.WithRootComponent(root),
 		gotui.WithInlineHeight(5),
 		gotui.WithCursor(),
+		// Soft-reset the visible viewport on launch: push whatever was in the
+		// terminal (e.g. a prior modu_code session's exit stats) up into
+		// scrollback via newline flow instead of rendering the inline widget
+		// glued directly beneath it. Non-destructive — no screen/scrollback
+		// erase — so the previous conversation stays scrollable above.
+		gotui.WithInlineStartupMode(gotui.InlineStartupSoftReset),
 	)
 	if err != nil {
 		return err
