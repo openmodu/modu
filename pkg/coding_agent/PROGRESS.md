@@ -148,6 +148,7 @@ High-priority gaps identified before this round:
   `/context` and `/prompts` visibility for resource packages and prompt templates
   pi-style session JSONL shape and session-manager behavior for local persistence/resume/listing
   reusable session list-all, fork-from-session, branch extraction, and safe delete APIs, plus `/session`, `/sessions`, `/resume`, `/fork-session`, and `/branch-session`
+  RPC commands and client helpers for listing, deleting, forking, and extracting sessions
 
 ## Still Missing
 

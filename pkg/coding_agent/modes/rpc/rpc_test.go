@@ -164,9 +164,10 @@ func TestRpcAllCommandTypes(t *testing.T) {
 		RpcCmdBash, RpcCmdAbortBash, RpcCmdGetSessionStats,
 		RpcCmdExportHTML, RpcCmdSwitchSession, RpcCmdFork,
 		RpcCmdGetForkMessages, RpcCmdGetLastAssistantText, RpcCmdSetSessionName,
+		RpcCmdListSessions, RpcCmdDeleteSession, RpcCmdForkSession, RpcCmdBranchSession,
 	}
-	if len(commands) != 28 {
-		t.Fatalf("expected 28 commands, got %d", len(commands))
+	if len(commands) != 32 {
+		t.Fatalf("expected 32 commands, got %d", len(commands))
 	}
 	for _, cmd := range commands {
 		if cmd == "" {
@@ -272,6 +273,36 @@ func TestSwitchSessionDataSerialization(t *testing.T) {
 	}
 	if parsed.SessionFile != "/path/to/session.jsonl" {
 		t.Fatalf("mismatch: %+v", parsed)
+	}
+}
+
+func TestListSessionsDataSerialization(t *testing.T) {
+	data := ListSessionsData{All: true}
+	raw, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed ListSessionsData
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if !parsed.All {
+		t.Fatal("expected all=true")
+	}
+}
+
+func TestBranchSessionDataSerialization(t *testing.T) {
+	data := BranchSessionData{EntryID: "entry-1"}
+	raw, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed BranchSessionData
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed.EntryID != "entry-1" {
+		t.Fatalf("expected entry id, got %s", parsed.EntryID)
 	}
 }
 
@@ -387,6 +418,10 @@ func TestNewCommandsRoundTrip(t *testing.T) {
 		{"get_fork_messages", `{"id":"10","type":"get_fork_messages"}`, RpcCmdGetForkMessages},
 		{"get_last_assistant_text", `{"id":"11","type":"get_last_assistant_text"}`, RpcCmdGetLastAssistantText},
 		{"set_session_name", `{"id":"12","type":"set_session_name","data":{"name":"test"}}`, RpcCmdSetSessionName},
+		{"list_sessions", `{"id":"13","type":"list_sessions","data":{"all":true}}`, RpcCmdListSessions},
+		{"delete_session", `{"id":"14","type":"delete_session","data":{"sessionFile":"/tmp/s.jsonl"}}`, RpcCmdDeleteSession},
+		{"fork_session", `{"id":"15","type":"fork_session","data":{"sessionFile":"/tmp/s.jsonl"}}`, RpcCmdForkSession},
+		{"branch_session", `{"id":"16","type":"branch_session","data":{"entryId":"e1"}}`, RpcCmdBranchSession},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
