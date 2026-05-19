@@ -283,6 +283,7 @@ type Extension interface {
 | `/tree` | 显示/跳转会话树，TUI 下支持搜索、summary 预览和 branched session 创建 |
 | `/fork <id>` | 从指定条目创建分支 |
 | `/branch-session <id>` | 抽取当前会话分支路径为新的会话文件 |
+| `/export [file]` | 导出当前会话为 HTML |
 | `/settings` | 显示当前配置 |
 | `/tools` | 显示当前活跃工具 |
 | `/skills` | 显示已发现 skills |

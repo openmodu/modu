@@ -1689,6 +1689,9 @@ func (s *CodingSession) AbortBash() {
 // ExportHTML writes the session messages as a simple HTML file.
 func (s *CodingSession) ExportHTML(path string) error {
 	msgs := s.agent.GetState().Messages
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
 
 	var buf bytes.Buffer
 	buf.WriteString("<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>Session Export</title></head><body>\n")

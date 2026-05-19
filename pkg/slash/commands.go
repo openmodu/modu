@@ -3,6 +3,7 @@ package slash
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -183,6 +184,19 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 			r.PrintError(err)
 		} else {
 			r.PrintInfo("created branched session: " + path)
+		}
+		return true, false
+
+	case "export":
+		path := ""
+		if len(parts) > 1 {
+			path = strings.TrimSpace(parts[1])
+		}
+		path = resolveExportPath(session, path)
+		if err := session.ExportHTML(path); err != nil {
+			r.PrintError(err)
+		} else {
+			r.PrintInfo("exported session: " + path)
 		}
 		return true, false
 
@@ -374,6 +388,17 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 	default:
 		return false, false
 	}
+}
+
+func resolveExportPath(session *coding_agent.CodingSession, path string) string {
+	cwd := session.GetContextInfo().Cwd
+	if strings.TrimSpace(path) == "" {
+		path = "modu_code-session.html"
+	}
+	if filepath.IsAbs(path) || cwd == "" {
+		return filepath.Clean(path)
+	}
+	return filepath.Join(cwd, path)
 }
 
 func handleTree(session *coding_agent.CodingSession, r Printer) {
@@ -768,6 +793,7 @@ func PrintHelp(r Printer) {
 		"/fork-session <file> — copy a saved session into this cwd",
 		"/tree               — show forkable messages or branch points",
 		"/fork <entry-id>    — move the session leaf to an entry",
+		"/export [file]      — export the session to HTML",
 		"/doctor             — show runtime diagnostics",
 		"/retry              — retry last failed prompt in interactive TUI",
 		"/tools              — list active tools",

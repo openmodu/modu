@@ -50,6 +50,7 @@ enough to implement, verify, and commit independently.
   prompt-time referenced-file expansion, and Tab completion for path-like tokens.
 - TUI shell shortcuts now align with pi semantics: `!cmd` sends command output to
   the model, while `!!cmd` only displays command output.
+- Added `/export [file]` for HTML session export from slash/TUI paths.
 
 ## Next
 
@@ -84,3 +85,5 @@ enough to implement, verify, and commit independently.
   passed for TUI file-reference and path-token completion coverage.
 - 2026-05-19: `go test ./pkg/tui ./cmd/modu_code`
   passed for single-bang and double-bang shell shortcut behavior.
+- 2026-05-19: `go test ./pkg/slash ./pkg/coding_agent`
+  passed for slash-driven session HTML export.

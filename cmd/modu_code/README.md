@@ -102,6 +102,7 @@ go run ./cmd/modu_code config validate
 | `/fork [entry-id]` | TUI 中无参数打开 session tree；带 entry id 时从历史位置 fork |
 | `/clone` | 从当前 session leaf 克隆一份会话 |
 | `/tree` | 在 TUI 中打开 session tree，Enter 跳转并注入 branch summary，Ctrl+F 从选中节点创建 branched session |
+| `/export [file]` | 导出当前 session 为 HTML；相对路径按当前工作目录解析 |
 | `/skills` | 查看已发现 skills |
 | `/prompts` | 查看已发现 prompt templates |
 

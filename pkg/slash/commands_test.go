@@ -259,6 +259,38 @@ func TestHandleTreeAndForkCommands(t *testing.T) {
 	}
 }
 
+func TestHandleExportCommand(t *testing.T) {
+	cwd := t.TempDir()
+	model := &types.Model{ID: "test", Name: "Test", ProviderID: "test"}
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       cwd,
+		AgentDir:  filepath.Join(cwd, ".coding_agent"),
+		Model:     model,
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "export this"})
+
+	printer := &capturePrinter{}
+	handled, exit := Handle(context.Background(), "/export exports/session.html", session, printer, model)
+	if !handled || exit {
+		t.Fatalf("expected /export to be handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	outPath := filepath.Join(cwd, "exports", "session.html")
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("expected export file: %v", err)
+	}
+	if !strings.Contains(string(data), "export this") {
+		t.Fatalf("expected exported message, got %s", string(data))
+	}
+	if !strings.Contains(printer.String(), outPath) {
+		t.Fatalf("expected output path, got %s", printer.String())
+	}
+}
+
 func TestHandleDoctorShowsDiagnostics(t *testing.T) {
 	cwd := t.TempDir()
 	agentDir := filepath.Join(cwd, ".coding_agent")
