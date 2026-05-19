@@ -115,6 +115,23 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		}
 		return true, false
 
+	case "tree":
+		handleTree(session, r)
+		return true, false
+
+	case "fork":
+		if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
+			r.PrintInfo("usage: /fork <entry-id>")
+			return true, false
+		}
+		entryID := strings.TrimSpace(parts[1])
+		if err := session.Fork(entryID); err != nil {
+			r.PrintError(err)
+		} else {
+			r.PrintInfo("forked from entry: " + entryID)
+		}
+		return true, false
+
 	case "branch-session":
 		if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
 			r.PrintInfo("usage: /branch-session <entry-id>")
@@ -300,6 +317,36 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 	default:
 		return false, false
 	}
+}
+
+func handleTree(session *coding_agent.CodingSession, r Printer) {
+	branches := session.GetSessionBranches()
+	if len(branches) == 0 {
+		forkMessages := session.GetForkMessages()
+		if len(forkMessages) == 0 {
+			r.PrintInfo("session tree: empty")
+			return
+		}
+		lines := make([]string, 0, len(forkMessages))
+		for _, msg := range forkMessages {
+			content := strings.ReplaceAll(strings.TrimSpace(msg.Content), "\n", " ")
+			if len(content) > 80 {
+				content = content[:77] + "..."
+			}
+			lines = append(lines, fmt.Sprintf("%s  %s", msg.EntryID, content))
+		}
+		r.PrintSection("Forkable Messages", lines)
+		return
+	}
+	lines := make([]string, 0, len(branches))
+	for _, branch := range branches {
+		line := fmt.Sprintf("%s parent=%s entries=%d", branch.ID, branch.ParentID, branch.EntryCount)
+		if branch.Label != "" {
+			line += " label=" + branch.Label
+		}
+		lines = append(lines, line)
+	}
+	r.PrintSection("Session Tree", lines)
 }
 
 func handleSession(parts []string, session *coding_agent.CodingSession, r Printer) {
@@ -662,6 +709,8 @@ func PrintHelp(r Printer) {
 		"/session delete <f> — delete a saved session file",
 		"/resume <file>      — switch to a saved session",
 		"/fork-session <file> — copy a saved session into this cwd",
+		"/tree               — show forkable messages or branch points",
+		"/fork <entry-id>    — move the session leaf to an entry",
 		"/doctor             — show runtime diagnostics",
 		"/retry              — retry last failed prompt in interactive TUI",
 		"/tools              — list active tools",

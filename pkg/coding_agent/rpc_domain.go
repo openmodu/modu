@@ -11,6 +11,14 @@ type ForkMessage struct {
 
 type SessionInfo = session.SessionInfo
 
+// SessionBranchInfo describes one visible branch in the session tree.
+type SessionBranchInfo struct {
+	ID         string `json:"id"`
+	ParentID   string `json:"parentId,omitempty"`
+	Label      string `json:"label,omitempty"`
+	EntryCount int    `json:"entryCount"`
+}
+
 // SessionStats contains aggregate statistics for the current session.
 type SessionStats struct {
 	TotalTokens    int   `json:"totalTokens"`

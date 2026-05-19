@@ -149,6 +149,7 @@ High-priority gaps identified before this round:
   pi-style session JSONL shape and session-manager behavior for local persistence/resume/listing
   reusable session list-all, fork-from-session, branch extraction, and safe delete APIs, plus `/session`, `/sessions`, `/resume`, `/fork-session`, and `/branch-session`
   RPC commands and client helpers for listing, deleting, forking, and extracting sessions
+  TUI slash routing for `/tree` and `/fork <entry-id>` so session tree operations are reachable interactively
 
 ## Still Missing
 

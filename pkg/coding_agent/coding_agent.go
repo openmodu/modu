@@ -961,6 +961,24 @@ func (s *CodingSession) Fork(entryID string) error {
 	return s.sessionManager.Fork(entryID)
 }
 
+// GetSessionBranches returns branch points in the current session tree.
+func (s *CodingSession) GetSessionBranches() []SessionBranchInfo {
+	if s.sessionTree == nil {
+		return nil
+	}
+	branches := s.sessionTree.GetBranches()
+	out := make([]SessionBranchInfo, 0, len(branches))
+	for _, branch := range branches {
+		out = append(out, SessionBranchInfo{
+			ID:         branch.ID,
+			ParentID:   branch.ParentID,
+			Label:      branch.Label,
+			EntryCount: len(branch.Entries),
+		})
+	}
+	return out
+}
+
 // CreateBranchedSession creates a new session file from the path to entryID.
 func (s *CodingSession) CreateBranchedSession(entryID string) (string, error) {
 	if s.sessionManager == nil {
