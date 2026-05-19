@@ -59,10 +59,13 @@ type goTUIRoot struct {
 	slashMatchIdx     int
 	slashScrollOffset int
 
-	modelChoices      []*types.Model
-	modelSelectIdx    int
-	modelSelectScroll int
-	lastFailedPrompt  string
+	modelChoices        []*types.Model
+	modelSelectIdx      int
+	modelSelectScroll   int
+	sessionChoices      []coding_agent.SessionInfo
+	sessionSelectIdx    int
+	sessionSelectScroll int
+	lastFailedPrompt    string
 }
 
 func newGoTUIRoot(
@@ -182,7 +185,7 @@ func (r *goTUIRoot) positionCursor(app *gotui.App) {
 	if app == nil {
 		return
 	}
-	if r.model.state == uiStateModelSelect || r.model.state == uiStatePermission {
+	if r.model.state == uiStateModelSelect || r.model.state == uiStateSessionSelect || r.model.state == uiStatePermission {
 		return
 	}
 	_, termHeight := app.Terminal().Size()
@@ -220,6 +223,9 @@ func (r *goTUIRoot) positionCursor(app *gotui.App) {
 func (r *goTUIRoot) KeyMap() gotui.KeyMap {
 	if r.model.state == uiStateModelSelect {
 		return r.modelSelectKeyMap()
+	}
+	if r.model.state == uiStateSessionSelect {
+		return r.sessionSelectKeyMap()
 	}
 	if r.model.state == uiStatePlanReject {
 		return r.planRejectKeyMap()
@@ -298,6 +304,7 @@ func (r *goTUIRoot) KeyMap() gotui.KeyMap {
 // Render builds the inline widget. Two layouts:
 //   - Permission mode: sep / approval-dialog / sep / meta
 //   - Model select   : sep / model-picker / sep / meta
+//   - Session select : sep / session-picker / sep / meta
 //   - Normal mode    : [activity] / sep / input / sep / [suggestions | status] / meta
 func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 	_ = r.refresh.Get()
@@ -391,6 +398,26 @@ func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 		r.commitInlineHeight(app, neededH)
 		addSep(root)
 		root.AddChild(r.renderModelSelectWidget())
+		addSep(root)
+		addMeta(root)
+		return root
+	}
+
+	if r.model.state == uiStateSessionSelect {
+		visible := len(r.sessionChoices)
+		if visible > sessionSelectVisibleRows {
+			visible = sessionSelectVisibleRows
+		}
+		neededH := visible + 4 // sep + title + choices + hints + sep
+		if meta != "" {
+			neededH++
+		}
+		if neededH < 5 {
+			neededH = 5
+		}
+		r.commitInlineHeight(app, neededH)
+		addSep(root)
+		root.AddChild(r.renderSessionSelectWidget())
 		addSep(root)
 		addMeta(root)
 		return root

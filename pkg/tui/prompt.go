@@ -35,6 +35,14 @@ func (r *goTUIRoot) submit(text string) {
 			r.openModelSelect()
 			return
 		}
+		if line == "/sessions" {
+			r.openSessionSelect(false)
+			return
+		}
+		if line == "/sessions all" {
+			r.openSessionSelect(true)
+			return
+		}
 		r.runSlash(line)
 		return
 	}

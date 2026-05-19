@@ -35,6 +35,8 @@ enough to implement, verify, and commit independently.
   and checking multi-model config files.
 - `/retry` retries the last failed prompt in the interactive TUI and clears the
   failed prompt marker after a successful retry.
+- `/sessions` opens a real TUI session picker, with keyboard actions to resume,
+  fork, and delete persisted sessions.
 
 ## Next
 
@@ -58,3 +60,5 @@ enough to implement, verify, and commit independently.
   passed for config helper commands.
 - 2026-05-16: `go test ./cmd/modu_code ./cmd/modu_code/internal/provider ./pkg/coding_agent ./pkg/tui ./pkg/slash ./pkg/providers/openai ./pkg/agent`
   passed for `/retry`.
+- 2026-05-19: `go test -count=1 ./cmd/modu_code ./pkg/tui ./pkg/slash ./pkg/coding_agent`
+  passed for the TUI session picker and cmd/modu_code session-flow coverage.

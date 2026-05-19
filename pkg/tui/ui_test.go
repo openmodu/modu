@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/approval"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
+	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/session"
 	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/types"
 )
@@ -566,6 +568,53 @@ func TestModelSelectEnterSwitchesModel(t *testing.T) {
 	}
 }
 
+func TestSessionSelectResumeForkDelete(t *testing.T) {
+	session := newUITestSession(t)
+	session.SetSessionName("active")
+	agentDir := filepath.Dir(filepath.Dir(filepath.Dir(session.GetSessionFile())))
+
+	sourceFile := writeUITestSessionFile(t, agentDir, filepath.Join(t.TempDir(), "source"), "source session", "resume from picker")
+	deleteFile := writeUITestSessionFile(t, agentDir, filepath.Join(t.TempDir(), "delete"), "delete session", "remove me")
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, nil)
+
+	root.openSessionSelect(true)
+	if root.model.state != uiStateSessionSelect {
+		t.Fatalf("expected session select state, got %v", root.model.state)
+	}
+	root.sessionSelectIdx = indexSessionChoice(t, root.sessionChoices, sourceFile)
+	root.confirmSessionSelect()
+	if got := session.GetSessionFile(); got != sourceFile {
+		t.Fatalf("expected resumed source session, got %q want %q", got, sourceFile)
+	}
+	if got := session.GetMessages(); len(got) != 1 {
+		t.Fatalf("expected resumed messages, got %#v", got)
+	}
+
+	root.openSessionSelect(true)
+	root.sessionSelectIdx = indexSessionChoice(t, root.sessionChoices, sourceFile)
+	root.forkSessionSelect()
+	forkedFile := session.GetSessionFile()
+	if forkedFile == "" || forkedFile == sourceFile {
+		t.Fatalf("expected forked session file, got %q source %q", forkedFile, sourceFile)
+	}
+	if _, err := os.Stat(forkedFile); err != nil {
+		t.Fatalf("expected forked file to exist: %v", err)
+	}
+	if got := session.GetMessages(); len(got) != 1 {
+		t.Fatalf("expected forked messages, got %#v", got)
+	}
+
+	root.openSessionSelect(true)
+	root.sessionSelectIdx = indexSessionChoice(t, root.sessionChoices, deleteFile)
+	root.deleteSessionSelect()
+	if _, err := os.Stat(deleteFile); !os.IsNotExist(err) {
+		t.Fatalf("expected deleted session file, stat err=%v", err)
+	}
+	if root.model.statusMsg != "deleted session" {
+		t.Fatalf("expected deleted status, got %q", root.model.statusMsg)
+	}
+}
+
 func TestPromptErrorCollapsesRepeatsAndOffersActions(t *testing.T) {
 	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 	err := errors.New("max retries (3) exceeded: dial tcp 127.0.0.1:1234: connect: operation timed out")
@@ -730,4 +779,36 @@ func newUITestSession(t *testing.T) *coding_agent.CodingSession {
 		t.Fatal(err)
 	}
 	return session
+}
+
+func writeUITestSessionFile(t *testing.T, agentDir, cwd, name, prompt string) string {
+	t.Helper()
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mgr, err := sessionpkg.NewManager(agentDir, cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Append(sessionpkg.NewEntry(sessionpkg.EntryTypeMessage, "", sessionpkg.MessageData{
+		Role:    agent.RoleUser,
+		Content: prompt,
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.AppendSessionInfo(name); err != nil {
+		t.Fatal(err)
+	}
+	return mgr.FilePath()
+}
+
+func indexSessionChoice(t *testing.T, choices []coding_agent.SessionInfo, path string) int {
+	t.Helper()
+	for i, choice := range choices {
+		if sameSessionPath(choice.Path, path) {
+			return i
+		}
+	}
+	t.Fatalf("session %q not found in choices %#v", path, choices)
+	return 0
 }

@@ -2,10 +2,17 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"flag"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
+	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/session"
+	"github.com/openmodu/modu/pkg/slash"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 func TestRunConfigCommandExample(t *testing.T) {
@@ -62,4 +69,141 @@ func TestRunConfigCommandValidateFailsInvalidConfig(t *testing.T) {
 	if !strings.Contains(out.String(), "problems") {
 		t.Fatalf("expected problems output, got:\n%s", out.String())
 	}
+}
+
+func TestMainTUISessionFlows(t *testing.T) {
+	home := t.TempDir()
+	project := filepath.Join(t.TempDir(), "project")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	var initOut bytes.Buffer
+	if err := runConfigCommand([]string{"init"}, &initOut, nil); err != nil {
+		t.Fatalf("runConfigCommand init: %v", err)
+	}
+
+	oldArgs := os.Args
+	oldCommandLine := flag.CommandLine
+	oldRunTUI := runTUI
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		os.Args = oldArgs
+		flag.CommandLine = oldCommandLine
+		runTUI = oldRunTUI
+		if err := os.Chdir(oldwd); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+	if err := os.Chdir(project); err != nil {
+		t.Fatal(err)
+	}
+
+	called := false
+	runTUI = func(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool) error {
+		called = true
+		if noApprove {
+			t.Fatal("expected noApprove false")
+		}
+		session.SetSessionName("active")
+		agentDir := filepath.Dir(filepath.Dir(filepath.Dir(session.GetSessionFile())))
+		sourceFile := writeMainTestSessionFile(t, agentDir, filepath.Join(project, "source"), "source session", "resume from main tui")
+		deleteFile := writeMainTestSessionFile(t, agentDir, filepath.Join(project, "delete"), "delete session", "delete from main tui")
+
+		printer := &mainCapturePrinter{}
+		runSlash := func(line string) {
+			t.Helper()
+			handled, exit := slash.Handle(ctx, line, session, printer, model)
+			if !handled || exit {
+				t.Fatalf("slash %q handled=%v exit=%v output=%s", line, handled, exit, printer.String())
+			}
+		}
+
+		runSlash("/sessions all")
+		if output := printer.String(); !strings.Contains(output, sourceFile) || !strings.Contains(output, "Sessions") {
+			t.Fatalf("expected /sessions all to include source file, got:\n%s", output)
+		}
+
+		runSlash("/fork-session " + sourceFile)
+		forkedFile := session.GetSessionFile()
+		if forkedFile == sourceFile {
+			t.Fatalf("expected fork to switch to a new file, got source %q", sourceFile)
+		}
+		if _, err := os.Stat(forkedFile); err != nil {
+			t.Fatalf("expected forked file to exist: %v", err)
+		}
+
+		runSlash("/resume " + sourceFile)
+		if got := session.GetSessionFile(); got != sourceFile {
+			t.Fatalf("expected resumed source file, got %q want %q", got, sourceFile)
+		}
+		if got := session.GetMessages(); len(got) != 1 {
+			t.Fatalf("expected resumed messages, got %#v", got)
+		}
+
+		runSlash("/tree")
+		forkMessages := session.GetForkMessages()
+		if len(forkMessages) != 1 {
+			t.Fatalf("expected one forkable message, got %#v", forkMessages)
+		}
+		runSlash("/fork " + forkMessages[0].EntryID)
+
+		runSlash("/session delete " + deleteFile)
+		if _, err := os.Stat(deleteFile); !os.IsNotExist(err) {
+			t.Fatalf("expected delete file removed, stat err=%v", err)
+		}
+		return nil
+	}
+
+	os.Args = []string{"modu_code"}
+	flag.CommandLine = flag.NewFlagSet("modu_code", flag.ContinueOnError)
+	main()
+	if !called {
+		t.Fatal("expected TUI runner to be called")
+	}
+}
+
+type mainCapturePrinter struct {
+	lines []string
+}
+
+func (p *mainCapturePrinter) PrintInfo(s string) {
+	p.lines = append(p.lines, s)
+}
+
+func (p *mainCapturePrinter) PrintError(err error) {
+	p.lines = append(p.lines, err.Error())
+}
+
+func (p *mainCapturePrinter) PrintSection(title string, lines []string) {
+	p.lines = append(p.lines, title)
+	p.lines = append(p.lines, lines...)
+}
+
+func (p *mainCapturePrinter) String() string {
+	return strings.Join(p.lines, "\n")
+}
+
+func writeMainTestSessionFile(t *testing.T, agentDir, cwd, name, prompt string) string {
+	t.Helper()
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mgr, err := sessionpkg.NewManager(agentDir, cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Append(sessionpkg.NewEntry(sessionpkg.EntryTypeMessage, "", sessionpkg.MessageData{
+		Role:    "user",
+		Content: prompt,
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.AppendSessionInfo(name); err != nil {
+		t.Fatal(err)
+	}
+	return mgr.FilePath()
 }
