@@ -25,6 +25,7 @@ const (
 	uiStatePermission
 	uiStateModelSelect
 	uiStateSessionSelect
+	uiStateSettingsSelect
 	uiStatePlanReject // capturing free-form rejection feedback for a plan
 )
 
@@ -63,7 +64,10 @@ var uiSlashCommands = []slashCommandDef{
 	{"/help", "show help"},
 	{"/quit", "exit"},
 	{"/clear", "clear screen and session"},
+	{"/new", "start a new session"},
 	{"/model", "show or switch model"},
+	{"/scoped-models", "enable models for cycling"},
+	{"/settings", "open settings"},
 	{"/compact", "compact context"},
 	{"/tokens", "show token usage"},
 	{"/context", "show context sources"},
@@ -76,7 +80,19 @@ var uiSlashCommands = []slashCommandDef{
 	{"/tasks", "show background tasks"},
 	{"/plan", "toggle plan mode"},
 	{"/worktree", "toggle worktree mode"},
+	{"/session", "show or name current session"},
+	{"/sessions", "open session selector"},
+	{"/resume", "resume a session"},
+	{"/fork", "fork from a previous message"},
+	{"/fork-session", "copy an existing session"},
+	{"/branch-session", "create a branched session"},
+	{"/tree", "show session tree"},
 	{"/skills", "list skills"},
+	{"/prompts", "list prompt templates"},
+	{"/name", "set session name"},
+	{"/clone", "clone current session point"},
+	{"/hotkeys", "show keyboard shortcuts"},
+	{"/reload", "reload resources"},
 	{"/telegram", "Telegram bot config"},
 }
 

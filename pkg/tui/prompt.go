@@ -31,16 +31,44 @@ func (r *goTUIRoot) submit(text string) {
 			r.retryLastFailedPrompt()
 			return
 		}
-		if line == "/model" {
-			r.openModelSelect()
+		if line == "/settings" {
+			r.openSettingsSelect()
 			return
 		}
-		if line == "/sessions" {
+		if line == "/model" || strings.HasPrefix(line, "/model ") {
+			r.openModelSelect(strings.TrimSpace(strings.TrimPrefix(line, "/model")))
+			return
+		}
+		if line == "/scoped-models" {
+			r.openScopedModelsSelect()
+			return
+		}
+		if line == "/sessions" || line == "/resume" {
 			r.openSessionSelect(false)
 			return
 		}
-		if line == "/sessions all" {
+		if line == "/sessions all" || line == "/resume all" {
 			r.openSessionSelect(true)
+			return
+		}
+		if line == "/new" {
+			r.runNewSessionCommand()
+			return
+		}
+		if line == "/clone" {
+			r.runCloneCommand()
+			return
+		}
+		if line == "/hotkeys" {
+			r.showHotkeys()
+			return
+		}
+		if line == "/reload" {
+			r.runReloadCommand()
+			return
+		}
+		if line == "/name" || strings.HasPrefix(line, "/name ") {
+			r.runNameCommand(strings.TrimSpace(strings.TrimPrefix(line, "/name")))
 			return
 		}
 		r.runSlash(line)

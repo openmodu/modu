@@ -68,6 +68,7 @@ go run ./cmd/modu_code config validate
 | `ctrl+d` | 退出（输入框为空时） |
 | `ctrl+l` | 清屏 |
 | `ctrl+o` | 切换工具调用展开模式 |
+| `ctrl+p` / `ctrl+n` | 向前 / 向后切换可用模型 |
 | `esc` | 中断当前请求 / 返回输入 |
 | `PageUp` / `PageDown` | 滚动对话 |
 | `Home` / `End` | 跳到顶部 / 底部 |
@@ -79,15 +80,24 @@ go run ./cmd/modu_code config validate
 
 | 命令 | 说明 |
 |------|------|
-| `/model` | 打开模型选择器 |
+| `/settings` | 打开 TUI 设置面板 |
+| `/model [query]` | 打开带搜索的模型选择器 |
+| `/scoped-models` | 打开模型范围选择器，用于控制模型循环范围 |
 | `/context` | 查看当前 prompt/context 来源 |
 | `/doctor` | 查看基础运行诊断 |
 | `/retry` | 重试上一条失败的 prompt |
+| `/hotkeys` | 查看快捷键 |
+| `/reload` | 重新加载 keybindings 之外的动态资源：skills、prompts、context |
+| `/new` | 清空当前会话上下文 |
 | `/session` | 查看或命名当前会话 |
+| `/name <name>` | 设置当前会话名称 |
 | `/session delete <file>` | 删除非当前会话文件 |
 | `/sessions [all]` | 在 TUI 中打开当前项目或全部项目的会话选择器；非 TUI 模式列出会话 |
-| `/resume <file>` | 切换到指定会话文件 |
+| `/resume [all]` | 在 TUI 中打开会话选择器；非 TUI 模式需要传入 `<file>` |
 | `/fork-session <file>` | 从已有会话复制一份到当前项目 |
+| `/fork <entry-id>` | 从历史用户消息位置 fork |
+| `/clone` | 从当前 session leaf 克隆一份会话 |
+| `/tree` | 查看 session tree |
 | `/skills` | 查看已发现 skills |
 | `/prompts` | 查看已发现 prompt templates |
 

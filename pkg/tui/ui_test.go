@@ -554,7 +554,8 @@ func TestModelSelectEnterSwitchesModel(t *testing.T) {
 	if root.model.state != uiStateModelSelect {
 		t.Fatalf("expected model select state, got %v", root.model.state)
 	}
-	root.moveModelSelect(1)
+	root.modelSearch = "model-b"
+	root.filterModelChoices()
 	root.confirmModelSelect()
 
 	if got := session.GetModel(); got.ID != "model-b" {
@@ -581,6 +582,14 @@ func TestSessionSelectResumeForkDelete(t *testing.T) {
 	if root.model.state != uiStateSessionSelect {
 		t.Fatalf("expected session select state, got %v", root.model.state)
 	}
+	for _, r := range "resume" {
+		root.appendSessionText(r)
+	}
+	if got := len(root.sessionChoices); got == 0 {
+		t.Fatal("expected search to keep matching session")
+	}
+	root.sessionSearch = ""
+	root.filterSessionChoices()
 	root.sessionSelectIdx = indexSessionChoice(t, root.sessionChoices, sourceFile)
 	root.confirmSessionSelect()
 	if got := session.GetSessionFile(); got != sourceFile {
@@ -606,12 +615,49 @@ func TestSessionSelectResumeForkDelete(t *testing.T) {
 
 	root.openSessionSelect(true)
 	root.sessionSelectIdx = indexSessionChoice(t, root.sessionChoices, deleteFile)
+	root.startSessionRename()
+	root.sessionRenameText = "renamed delete session"
+	root.confirmSessionRename()
+	root.sessionSelectIdx = indexSessionChoice(t, root.sessionChoices, deleteFile)
+	if got := root.sessionChoices[root.sessionSelectIdx].Name; got != "renamed delete session" {
+		t.Fatalf("expected renamed session, got %q", got)
+	}
+	root.startDeleteSessionSelect()
+	if root.sessionConfirmDelete == "" {
+		t.Fatal("expected delete confirmation")
+	}
 	root.deleteSessionSelect()
 	if _, err := os.Stat(deleteFile); !os.IsNotExist(err) {
 		t.Fatalf("expected deleted session file, stat err=%v", err)
 	}
 	if root.model.statusMsg != "deleted session" {
 		t.Fatalf("expected deleted status, got %q", root.model.statusMsg)
+	}
+}
+
+func TestScopedModelsSelectorTogglesSessionScope(t *testing.T) {
+	providers.Models["ui-scoped-models"] = map[string]*types.Model{
+		"scoped-a": {ID: "scoped-a", Name: "Scoped A", ProviderID: "ui-scoped-models"},
+		"scoped-b": {ID: "scoped-b", Name: "Scoped B", ProviderID: "ui-scoped-models"},
+	}
+	session := newUITestSession(t)
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, nil)
+
+	root.openScopedModelsSelect()
+	root.modelSearch = "scoped-b"
+	root.filterModelChoices()
+	if len(root.modelChoices) != 1 || root.modelChoices[0].ID != "scoped-b" {
+		t.Fatalf("expected scoped-b search result, got %#v", root.modelChoices)
+	}
+	root.toggleScopedModelSelection()
+
+	for _, id := range session.GetScopedModelIDs() {
+		if id == "scoped-b" {
+			t.Fatalf("expected scoped-b removed from scope, got %v", session.GetScopedModelIDs())
+		}
+	}
+	if len(session.GetScopedModelIDs()) == 0 {
+		t.Fatal("expected remaining scoped model ids")
 	}
 }
 

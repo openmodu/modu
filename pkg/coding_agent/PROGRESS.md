@@ -150,14 +150,14 @@ High-priority gaps identified before this round:
   reusable session list-all, fork-from-session, branch extraction, and safe delete APIs, plus `/session`, `/sessions`, `/resume`, `/fork-session`, and `/branch-session`
   RPC commands and client helpers for listing, deleting, forking, and extracting sessions
   TUI slash routing for `/tree` and `/fork <entry-id>` so session tree operations are reachable interactively
+  session APIs for all-model listing, session-scoped model ranges, leaf-id cloning, and dynamic resource reloads used by the TUI parity work
 
 ## Still Missing
 
-- Broader end-to-end coverage for the `cmd/modu_code` interactive path
 - Deeper plan-mode semantics beyond the current state/prompt toggle
 - Richer worktree lifecycle controls and cleanup introspection
 - Full pi-compatible TypeScript extension/package ecosystem, including remote npm/git package install, theme resources, UI extension context, provider hooks, and hot reload
-- Full pi TUI session selector parity, including interactive picker UI, tree filter modes, and branch-summary rendering controls
+- Remaining pi TUI tree parity, including branch-summary rendering controls
 
 ## Suggested Next Steps
 

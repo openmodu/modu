@@ -59,13 +59,29 @@ type goTUIRoot struct {
 	slashMatchIdx     int
 	slashScrollOffset int
 
-	modelChoices        []*types.Model
-	modelSelectIdx      int
-	modelSelectScroll   int
-	sessionChoices      []coding_agent.SessionInfo
-	sessionSelectIdx    int
-	sessionSelectScroll int
-	lastFailedPrompt    string
+	modelChoices         []*types.Model
+	modelAllChoices      []*types.Model
+	modelSelectIdx       int
+	modelSelectScroll    int
+	modelSearch          string
+	modelScopedOnly      bool
+	modelScopeEdit       bool
+	modelScopedIDs       map[string]bool
+	sessionChoices       []coding_agent.SessionInfo
+	sessionAllChoices    []coding_agent.SessionInfo
+	sessionSelectIdx     int
+	sessionSelectScroll  int
+	sessionSearch        string
+	sessionAllScope      bool
+	sessionSortMode      string
+	sessionNamedOnly     bool
+	sessionShowPath      bool
+	sessionConfirmDelete string
+	sessionRenameMode    bool
+	sessionRenameText    string
+	settingsChoices      []settingsChoice
+	settingsSelectIdx    int
+	lastFailedPrompt     string
 }
 
 func newGoTUIRoot(
@@ -185,7 +201,10 @@ func (r *goTUIRoot) positionCursor(app *gotui.App) {
 	if app == nil {
 		return
 	}
-	if r.model.state == uiStateModelSelect || r.model.state == uiStateSessionSelect || r.model.state == uiStatePermission {
+	if r.model.state == uiStateModelSelect ||
+		r.model.state == uiStateSessionSelect ||
+		r.model.state == uiStateSettingsSelect ||
+		r.model.state == uiStatePermission {
 		return
 	}
 	_, termHeight := app.Terminal().Size()
@@ -227,6 +246,9 @@ func (r *goTUIRoot) KeyMap() gotui.KeyMap {
 	if r.model.state == uiStateSessionSelect {
 		return r.sessionSelectKeyMap()
 	}
+	if r.model.state == uiStateSettingsSelect {
+		return r.settingsSelectKeyMap()
+	}
 	if r.model.state == uiStatePlanReject {
 		return r.planRejectKeyMap()
 	}
@@ -267,6 +289,8 @@ func (r *goTUIRoot) KeyMap() gotui.KeyMap {
 			r.model.transcriptMode = !r.model.transcriptMode
 			r.bump()
 		}),
+		gotui.OnStop(gotui.KeyCtrlP, func(ke gotui.KeyEvent) { r.cycleModel("forward") }),
+		gotui.OnStop(gotui.KeyCtrlN, func(ke gotui.KeyEvent) { r.cycleModel("backward") }),
 		gotui.OnStop(gotui.KeyEscape, func(ke gotui.KeyEvent) {
 			if len(r.slashMatches) > 0 {
 				r.slashMatches = nil
@@ -305,6 +329,7 @@ func (r *goTUIRoot) KeyMap() gotui.KeyMap {
 //   - Permission mode: sep / approval-dialog / sep / meta
 //   - Model select   : sep / model-picker / sep / meta
 //   - Session select : sep / session-picker / sep / meta
+//   - Settings select: sep / settings / sep / meta
 //   - Normal mode    : [activity] / sep / input / sep / [suggestions | status] / meta
 func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 	_ = r.refresh.Get()
@@ -388,7 +413,10 @@ func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 		if visible > modelSelectVisibleRows {
 			visible = modelSelectVisibleRows
 		}
-		neededH := visible + 4 // sep + title + choices + hints + sep
+		if visible == 0 {
+			visible = 1
+		}
+		neededH := visible + 5 // sep + title + search + choices + hints + sep
 		if meta != "" {
 			neededH++
 		}
@@ -408,7 +436,10 @@ func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 		if visible > sessionSelectVisibleRows {
 			visible = sessionSelectVisibleRows
 		}
-		neededH := visible + 4 // sep + title + choices + hints + sep
+		if visible == 0 {
+			visible = 1
+		}
+		neededH := visible + 5 // sep + title + search + choices + hints + sep
 		if meta != "" {
 			neededH++
 		}
@@ -418,6 +449,26 @@ func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 		r.commitInlineHeight(app, neededH)
 		addSep(root)
 		root.AddChild(r.renderSessionSelectWidget())
+		addSep(root)
+		addMeta(root)
+		return root
+	}
+
+	if r.model.state == uiStateSettingsSelect {
+		visible := len(r.settingsChoices)
+		if visible > settingsSelectVisibleRows {
+			visible = settingsSelectVisibleRows
+		}
+		neededH := visible + 4 // sep + title + choices + hints + sep
+		if meta != "" {
+			neededH++
+		}
+		if neededH < 5 {
+			neededH = 5
+		}
+		r.commitInlineHeight(app, neededH)
+		addSep(root)
+		root.AddChild(r.renderSettingsSelectWidget())
 		addSep(root)
 		addMeta(root)
 		return root

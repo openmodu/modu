@@ -42,16 +42,22 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		PrintHelp(r)
 		return true, false
 
-	case "clear":
+	case "clear", "new":
 		if err := session.ClearConversation(); err != nil {
 			r.PrintError(fmt.Errorf("clear session: %w", err))
 		} else {
-			r.PrintInfo("session cleared")
+			if cmd == "new" {
+				r.PrintInfo("new session")
+			} else {
+				r.PrintInfo("session cleared")
+			}
 		}
-		if clearer, ok := r.(Clearer); ok {
-			clearer.ClearScreen()
-		} else {
-			fmt.Print("\033[2J\033[H")
+		if cmd == "clear" {
+			if clearer, ok := r.(Clearer); ok {
+				clearer.ClearScreen()
+			} else {
+				fmt.Print("\033[2J\033[H")
+			}
 		}
 		return true, false
 
@@ -61,6 +67,14 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 			arg = strings.TrimSpace(parts[1])
 		}
 		handleModel(arg, session, r, model)
+		return true, false
+
+	case "settings":
+		r.PrintInfo("settings are available in the interactive TUI via /settings")
+		return true, false
+
+	case "scoped-models":
+		r.PrintInfo("model scope editing is available in the interactive TUI via /scoped-models")
 		return true, false
 
 	case "compact":
@@ -83,6 +97,19 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 
 	case "session":
 		handleSession(parts, session, r)
+		return true, false
+
+	case "name":
+		arg := ""
+		if len(parts) > 1 {
+			arg = strings.TrimSpace(parts[1])
+		}
+		session.SetSessionName(arg)
+		if arg == "" {
+			r.PrintInfo("session name cleared")
+		} else {
+			r.PrintInfo("session name: " + arg)
+		}
 		return true, false
 
 	case "sessions":
@@ -132,6 +159,20 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		}
 		return true, false
 
+	case "clone":
+		leafID := session.GetSessionLeafID()
+		if leafID == "" {
+			r.PrintInfo("nothing to clone")
+			return true, false
+		}
+		path, err := session.CreateBranchedSession(leafID)
+		if err != nil {
+			r.PrintError(err)
+		} else {
+			r.PrintInfo("cloned session: " + path)
+		}
+		return true, false
+
 	case "branch-session":
 		if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
 			r.PrintInfo("usage: /branch-session <entry-id>")
@@ -151,6 +192,22 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 
 	case "retry":
 		r.PrintInfo("retry is available in the interactive TUI after a failed prompt")
+		return true, false
+
+	case "hotkeys":
+		r.PrintSection("Hotkeys", []string{
+			"Ctrl+C interrupt/exit",
+			"Ctrl+L clear screen",
+			"Ctrl+O expand/collapse tool output",
+			"Ctrl+P/Ctrl+N cycle models",
+			"Shift+Tab toggle plan mode",
+			"/settings, /model, /sessions, /tree, /fork",
+		})
+		return true, false
+
+	case "reload":
+		session.ReloadResources()
+		r.PrintInfo("reloaded resources")
 		return true, false
 
 	case "tools":

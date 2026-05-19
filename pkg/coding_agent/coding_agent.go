@@ -961,6 +961,14 @@ func (s *CodingSession) Fork(entryID string) error {
 	return s.sessionManager.Fork(entryID)
 }
 
+// GetSessionLeafID returns the current persisted session leaf entry ID.
+func (s *CodingSession) GetSessionLeafID() string {
+	if s.sessionManager == nil {
+		return ""
+	}
+	return s.sessionManager.LastID()
+}
+
 // GetSessionBranches returns branch points in the current session tree.
 func (s *CodingSession) GetSessionBranches() []SessionBranchInfo {
 	if s.sessionTree == nil {
@@ -1418,6 +1426,33 @@ func (s *CodingSession) GetAvailableModels() []*types.Model {
 		result = append(result, providers.GetModels(p)...)
 	}
 	return result
+}
+
+// GetAllAvailableModels returns all registered models, ignoring session scope.
+func (s *CodingSession) GetAllAvailableModels() []*types.Model {
+	var result []*types.Model
+	for _, p := range providers.GetAllProviders() {
+		result = append(result, providers.GetModels(p)...)
+	}
+	return result
+}
+
+// GetScopedModelIDs returns the session-local model scope used for cycling.
+func (s *CodingSession) GetScopedModelIDs() []string {
+	return append([]string(nil), s.scopedModels...)
+}
+
+// SetScopedModelIDs updates the session-local model scope used for cycling.
+func (s *CodingSession) SetScopedModelIDs(ids []string) {
+	s.scopedModels = resolveScopedModels(nil, ids)
+	s.writeRuntimeState()
+}
+
+// ReloadResources reloads dynamic resources and refreshes the prompt.
+func (s *CodingSession) ReloadResources() {
+	s.refreshResourcePaths()
+	s.refreshDynamicSystemPrompt()
+	s.writeRuntimeState()
 }
 
 // ExecuteBash executes a shell command and returns the result.
