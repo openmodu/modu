@@ -317,6 +317,19 @@ func handleSession(parts []string, session *coding_agent.CodingSession, r Printe
 		}
 		return
 	}
+	if strings.HasPrefix(arg, "delete ") || arg == "delete" {
+		path := strings.TrimSpace(strings.TrimPrefix(arg, "delete"))
+		if path == "" {
+			r.PrintInfo("usage: /session delete <session-file>")
+			return
+		}
+		if err := session.DeleteSession(path); err != nil {
+			r.PrintError(err)
+		} else {
+			r.PrintInfo("deleted session: " + path)
+		}
+		return
+	}
 	name := session.GetSessionName()
 	if name == "" {
 		name = "(unnamed)"
@@ -331,10 +344,24 @@ func handleSession(parts []string, session *coding_agent.CodingSession, r Printe
 }
 
 func handleSessions(parts []string, session *coding_agent.CodingSession, r Printer) {
-	all := false
+	arg := ""
 	if len(parts) > 1 {
-		all = strings.TrimSpace(parts[1]) == "all"
+		arg = strings.TrimSpace(parts[1])
 	}
+	if strings.HasPrefix(arg, "delete ") || arg == "delete" {
+		path := strings.TrimSpace(strings.TrimPrefix(arg, "delete"))
+		if path == "" {
+			r.PrintInfo("usage: /sessions delete <session-file>")
+			return
+		}
+		if err := session.DeleteSession(path); err != nil {
+			r.PrintError(err)
+		} else {
+			r.PrintInfo("deleted session: " + path)
+		}
+		return
+	}
+	all := arg == "all"
 	var sessions []coding_agent.SessionInfo
 	var err error
 	if all {
@@ -632,6 +659,7 @@ func PrintHelp(r Printer) {
 		"/context            — show current prompt/context sources",
 		"/session            — show or name the current session",
 		"/sessions [all]     — list saved sessions",
+		"/session delete <f> — delete a saved session file",
 		"/resume <file>      — switch to a saved session",
 		"/fork-session <file> — copy a saved session into this cwd",
 		"/doctor             — show runtime diagnostics",

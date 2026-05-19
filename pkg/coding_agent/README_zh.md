@@ -276,6 +276,7 @@ type Extension interface {
 | `/compact` | 手动触发上下文压缩 |
 | `/session` | 显示当前会话 ID、名称、文件 |
 | `/session name <name>` | 设置当前会话 display name |
+| `/session delete <file>` | 删除非当前会话文件 |
 | `/sessions [all]` | 列出当前项目或全部项目的已保存会话 |
 | `/resume <file>` | 切换到指定会话文件 |
 | `/fork-session <file>` | 从指定会话文件复制一份到当前项目 |

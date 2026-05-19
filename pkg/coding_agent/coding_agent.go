@@ -1276,6 +1276,22 @@ func (s *CodingSession) ForkFromSession(sessionFile string) error {
 	return s.switchSessionManager(mgr)
 }
 
+// DeleteSession removes a saved session file, except the active session.
+func (s *CodingSession) DeleteSession(sessionFile string) error {
+	current, err := filepath.Abs(s.GetSessionFile())
+	if err != nil {
+		return err
+	}
+	target, err := filepath.Abs(sessionFile)
+	if err != nil {
+		return err
+	}
+	if current == target {
+		return fmt.Errorf("refusing to delete the active session")
+	}
+	return session.Delete(s.agentDir, sessionFile)
+}
+
 // SetSessionName sets the display name for this session.
 func (s *CodingSession) SetSessionName(name string) {
 	s.sessionName = name

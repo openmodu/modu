@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
+	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/session"
 	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/types"
 )
@@ -166,6 +167,32 @@ func TestHandleSessionCommands(t *testing.T) {
 	}
 	if output := printer.String(); !strings.Contains(output, "Sessions (1)") || !strings.Contains(output, "demo") {
 		t.Fatalf("expected sessions output with demo, got:\n%s", output)
+	}
+
+	other, err := sessionpkg.NewManager(agentDir, filepath.Join(cwd, "other"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := other.Append(sessionpkg.NewEntry(sessionpkg.EntryTypeMessage, "", sessionpkg.MessageData{Role: "user", Content: "other"})); err != nil {
+		t.Fatal(err)
+	}
+	otherPath := other.FilePath()
+	printer = &capturePrinter{}
+	handled, exit = Handle(context.Background(), "/sessions delete "+otherPath, session, printer, model)
+	if !handled || exit {
+		t.Fatalf("expected /sessions delete to be handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	if _, err := os.Stat(otherPath); !os.IsNotExist(err) {
+		t.Fatalf("expected other session deleted, stat err=%v output=%s", err, printer.String())
+	}
+
+	printer = &capturePrinter{}
+	handled, exit = Handle(context.Background(), "/session delete "+session.GetSessionFile(), session, printer, model)
+	if !handled || exit {
+		t.Fatalf("expected /session delete active to be handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	if output := printer.String(); !strings.Contains(output, "refusing to delete the active session") {
+		t.Fatalf("expected active delete refusal, got:\n%s", output)
 	}
 }
 

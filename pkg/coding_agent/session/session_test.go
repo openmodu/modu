@@ -3,6 +3,7 @@ package session
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -257,6 +258,43 @@ func TestSessionManagerListAllAndForkFrom(t *testing.T) {
 	}
 	if len(infos) != 2 {
 		t.Fatalf("expected source and forked sessions, got %#v", infos)
+	}
+}
+
+func TestSessionDeleteValidatesPathAndHeader(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := NewManager(dir, "/test/project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Append(NewEntry(EntryTypeMessage, "", MessageData{Role: "user", Content: "delete me"})); err != nil {
+		t.Fatal(err)
+	}
+	path := mgr.FilePath()
+	if err := Delete(dir, path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("expected session file deleted, stat err=%v", err)
+	}
+
+	outside := filepath.Join(t.TempDir(), "outside.jsonl")
+	if err := os.WriteFile(outside, []byte(`{"type":"session","id":"x"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Delete(dir, outside); err == nil {
+		t.Fatal("expected outside session delete to be rejected")
+	}
+
+	invalid := filepath.Join(DefaultSessionDir(dir, "/test/project"), "invalid.jsonl")
+	if err := os.MkdirAll(filepath.Dir(invalid), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(invalid, []byte(`{"type":"not-session","id":"x"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Delete(dir, invalid); err == nil {
+		t.Fatal("expected invalid session delete to be rejected")
 	}
 }
 

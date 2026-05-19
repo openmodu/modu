@@ -614,6 +614,36 @@ func ForkFrom(agentDir, sourcePath, targetCwd string) (*Manager, error) {
 	return fresh, nil
 }
 
+// Delete removes a persisted session file after validating it lives under
+// agentDir/sessions and has a session header.
+func Delete(agentDir, sessionPath string) error {
+	if strings.TrimSpace(sessionPath) == "" {
+		return fmt.Errorf("session path is required")
+	}
+	root, err := filepath.Abs(filepath.Join(agentDir, "sessions"))
+	if err != nil {
+		return err
+	}
+	path, err := filepath.Abs(sessionPath)
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
+		return fmt.Errorf("refusing to delete session outside sessions dir: %s", sessionPath)
+	}
+	if !strings.HasSuffix(path, ".jsonl") {
+		return fmt.Errorf("refusing to delete non-jsonl session: %s", sessionPath)
+	}
+	if !isValidSessionFile(path) {
+		return fmt.Errorf("refusing to delete invalid session file: %s", sessionPath)
+	}
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	return nil
+}
+
 // BuildSessionInfo reads a session file summary.
 func BuildSessionInfo(path string) (SessionInfo, error) {
 	m, err := NewManagerFromFile(path)
