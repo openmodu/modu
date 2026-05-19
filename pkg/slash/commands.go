@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/types"
@@ -463,13 +464,60 @@ func handleSession(parts []string, session *coding_agent.CodingSession, r Printe
 	if name == "" {
 		name = "(unnamed)"
 	}
+	stats := session.GetSessionStats()
+	info := session.GetContextInfo()
+	model := info.ModelName
+	if model == "" {
+		model = info.ModelID
+	}
+	if model == "" {
+		model = "(unknown)"
+	}
+	modelLine := model
+	if info.ModelProvider != "" || info.ModelID != "" {
+		modelLine += fmt.Sprintf(" (%s / %s)", info.ModelProvider, info.ModelID)
+	}
+	planMode := "off"
+	if info.PlanMode {
+		planMode = "on"
+	}
+	worktree := "none"
+	if info.ActiveWorktree != "" {
+		worktree = info.ActiveWorktree
+	}
 	lines := []string{
 		"id: " + session.GetSessionID(),
 		"name: " + name,
 		"file: " + session.GetSessionFile(),
-		fmt.Sprintf("messages: %d", len(session.GetMessages())),
+		"cwd: " + info.Cwd,
+		"model: " + modelLine,
+		fmt.Sprintf("messages: %d", stats.MessageCount),
+		fmt.Sprintf("tokens: %d", stats.TotalTokens),
+		"duration: " + formatSessionDuration(stats.DurationMs),
+		"plan mode: " + planMode,
+		"worktree: " + worktree,
+		fmt.Sprintf("context files: %d", len(info.ContextFiles)),
+		fmt.Sprintf("skills: %d", len(info.Skills)),
+		fmt.Sprintf("prompt templates: %d", len(info.PromptTemplates)),
 	}
 	r.PrintSection("Session", lines)
+}
+
+func formatSessionDuration(ms int64) string {
+	if ms < 0 {
+		ms = 0
+	}
+	d := time.Duration(ms) * time.Millisecond
+	if d < time.Second {
+		return "0s"
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm %ds", int(d.Minutes()), int(d.Seconds())%60)
+	}
+	return fmt.Sprintf("%dh %dm", int(d.Hours()), int(d.Minutes())%60)
 }
 
 func handleSessions(parts []string, session *coding_agent.CodingSession, r Printer) {

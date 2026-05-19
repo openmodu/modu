@@ -157,8 +157,24 @@ func TestHandleSessionCommands(t *testing.T) {
 	if !handled || exit {
 		t.Fatalf("expected /session to be handled without exit, handled=%v exit=%v", handled, exit)
 	}
-	if output := printer.String(); !strings.Contains(output, "Session") || !strings.Contains(output, "name: demo") {
-		t.Fatalf("expected session output with name, got:\n%s", output)
+	output := printer.String()
+	for _, want := range []string{
+		"Session",
+		"name: demo",
+		"cwd: " + cwd,
+		"model: MiMo V2.5 Pro (xiaomi-mimo / mimo-v2.5-pro)",
+		"messages: 0",
+		"tokens: 0",
+		"duration:",
+		"plan mode: off",
+		"worktree: none",
+		"context files:",
+		"skills:",
+		"prompt templates:",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected session output to contain %q, got:\n%s", want, output)
+		}
 	}
 
 	printer = &capturePrinter{}

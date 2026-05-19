@@ -93,7 +93,7 @@ go run ./cmd/modu_code config validate
 | `/hotkeys` | 查看快捷键 |
 | `/reload` | 重新加载 keybindings 之外的动态资源：skills、prompts、context |
 | `/new` | 清空当前会话上下文 |
-| `/session` | 查看或命名当前会话 |
+| `/session` | 查看当前会话 id、名称、文件、cwd、模型、消息数、tokens、plan/worktree 和资源摘要 |
 | `/name <name>` | 设置当前会话名称 |
 | `/session delete <file>` | 删除非当前会话文件 |
 | `/sessions [all]` | 在 TUI 中打开当前项目或全部项目的会话选择器；非 TUI 模式列出会话 |

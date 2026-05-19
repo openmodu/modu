@@ -274,7 +274,7 @@ type Extension interface {
 | `/context` | 显示当前 prompt/context 来源 |
 | `/doctor` | 显示基础运行诊断 |
 | `/compact` | 手动触发上下文压缩 |
-| `/session` | 显示当前会话 ID、名称、文件 |
+| `/session` | 显示当前会话 ID、名称、文件、cwd、模型、消息数、tokens、plan/worktree 和资源摘要 |
 | `/session name <name>` | 设置当前会话 display name |
 | `/session delete <file>` | 删除非当前会话文件 |
 | `/sessions [all]` | 列出当前项目或全部项目的已保存会话 |

@@ -51,6 +51,8 @@ enough to implement, verify, and commit independently.
 - TUI shell shortcuts now align with pi semantics: `!cmd` sends command output to
   the model, while `!!cmd` only displays command output.
 - Added `/export [file]` for HTML session export from slash/TUI paths.
+- `/session` now shows a richer pi-style runtime summary: cwd, model, messages,
+  tokens, duration, plan/worktree state, and resource counts.
 
 ## Next
 
@@ -87,3 +89,5 @@ enough to implement, verify, and commit independently.
   passed for single-bang and double-bang shell shortcut behavior.
 - 2026-05-19: `go test ./pkg/slash ./pkg/coding_agent`
   passed for slash-driven session HTML export.
+- 2026-05-19: `go test ./pkg/slash ./cmd/modu_code`
+  passed for the expanded `/session` runtime summary.
