@@ -123,6 +123,52 @@ func TestHandlePromptsListsPromptTemplates(t *testing.T) {
 	}
 }
 
+func TestHandleSessionCommands(t *testing.T) {
+	cwd := t.TempDir()
+	agentDir := filepath.Join(cwd, ".coding_agent")
+	model := &types.Model{
+		ID:         "mimo-v2.5-pro",
+		Name:       "MiMo V2.5 Pro",
+		ProviderID: "xiaomi-mimo",
+	}
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       cwd,
+		AgentDir:  agentDir,
+		Model:     model,
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	printer := &capturePrinter{}
+	handled, exit := Handle(context.Background(), "/session name demo", session, printer, model)
+	if !handled || exit {
+		t.Fatalf("expected /session name to be handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	if session.GetSessionName() != "demo" {
+		t.Fatalf("expected session name demo, got %q", session.GetSessionName())
+	}
+
+	printer = &capturePrinter{}
+	handled, exit = Handle(context.Background(), "/session", session, printer, model)
+	if !handled || exit {
+		t.Fatalf("expected /session to be handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	if output := printer.String(); !strings.Contains(output, "Session") || !strings.Contains(output, "name: demo") {
+		t.Fatalf("expected session output with name, got:\n%s", output)
+	}
+
+	printer = &capturePrinter{}
+	handled, exit = Handle(context.Background(), "/sessions", session, printer, model)
+	if !handled || exit {
+		t.Fatalf("expected /sessions to be handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	if output := printer.String(); !strings.Contains(output, "Sessions (1)") || !strings.Contains(output, "demo") {
+		t.Fatalf("expected sessions output with demo, got:\n%s", output)
+	}
+}
+
 func TestHandleDoctorShowsDiagnostics(t *testing.T) {
 	cwd := t.TempDir()
 	agentDir := filepath.Join(cwd, ".coding_agent")

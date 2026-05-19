@@ -184,6 +184,82 @@ func TestSessionManagerListIncludesNameAndSortsByModified(t *testing.T) {
 	}
 }
 
+func TestSessionManagerCreateBranchedSessionCopiesPathOnly(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := NewManager(dir, "/test/project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry1 := NewEntry(EntryTypeMessage, "", MessageData{Role: "user", Content: "one"})
+	if err := mgr.Append(entry1); err != nil {
+		t.Fatal(err)
+	}
+	entry2 := NewEntry(EntryTypeMessage, "", MessageData{Role: "assistant", Content: "two"})
+	if err := mgr.Append(entry2); err != nil {
+		t.Fatal(err)
+	}
+	entry3 := NewEntry(EntryTypeMessage, "", MessageData{Role: "user", Content: "three"})
+	if err := mgr.Append(entry3); err != nil {
+		t.Fatal(err)
+	}
+	original := mgr.FilePath()
+
+	branchedPath, err := mgr.CreateBranchedSession(entry2.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if branchedPath == original {
+		t.Fatalf("expected a new session file, got original %s", original)
+	}
+	entries := mgr.Load()
+	if len(entries) != 2 {
+		t.Fatalf("expected branched path to keep two entries, got %#v", entries)
+	}
+	if entries[0].ID != entry1.ID || entries[1].ID != entry2.ID {
+		t.Fatalf("unexpected branched entries: %#v", entries)
+	}
+	header := mgr.Header()
+	if header.ParentSession != original {
+		t.Fatalf("expected parent session %q, got %#v", original, header)
+	}
+}
+
+func TestSessionManagerListAllAndForkFrom(t *testing.T) {
+	dir := t.TempDir()
+	source, err := NewManager(dir, "/source/project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Append(NewEntry(EntryTypeMessage, "", MessageData{Role: "user", Content: "source message"})); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.AppendSessionInfo("source name"); err != nil {
+		t.Fatal(err)
+	}
+
+	forked, err := ForkFrom(dir, source.FilePath(), "/target/project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if forked.Header().ParentSession != source.FilePath() {
+		t.Fatalf("expected parent source path, got %#v", forked.Header())
+	}
+	if forked.Header().Cwd != "/target/project" {
+		t.Fatalf("expected target cwd, got %#v", forked.Header())
+	}
+	if got := forked.Load(); len(got) != len(source.Load()) {
+		t.Fatalf("expected forked entries to be copied, got %#v", got)
+	}
+
+	infos, err := ListAll(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 2 {
+		t.Fatalf("expected source and forked sessions, got %#v", infos)
+	}
+}
+
 func TestTree(t *testing.T) {
 	dir := t.TempDir()
 	mgr, _ := NewManager(dir, "/test/project")

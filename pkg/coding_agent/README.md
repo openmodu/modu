@@ -274,8 +274,14 @@ type Extension interface {
 | `/context` | 显示当前 prompt/context 来源 |
 | `/doctor` | 显示基础运行诊断 |
 | `/compact` | 手动触发上下文压缩 |
+| `/session` | 显示当前会话 ID、名称、文件 |
+| `/session name <name>` | 设置当前会话 display name |
+| `/sessions [all]` | 列出当前项目或全部项目的已保存会话 |
+| `/resume <file>` | 切换到指定会话文件 |
+| `/fork-session <file>` | 从指定会话文件复制一份到当前项目 |
 | `/tree` | 显示会话分支结构 |
 | `/fork <id>` | 从指定条目创建分支 |
+| `/branch-session <id>` | 抽取当前会话分支路径为新的会话文件 |
 | `/settings` | 显示当前配置 |
 | `/tools` | 显示当前活跃工具 |
 | `/skills` | 显示已发现 skills |

@@ -236,6 +236,56 @@ func (m *Manager) AppendLabelChange(targetID, label string) error {
 	return m.Append(NewEntry(EntryTypeLabel, "", LabelData{TargetID: targetID, Text: label}))
 }
 
+// BranchWithSummary moves the leaf to branchFromID and appends a branch summary.
+func (m *Manager) BranchWithSummary(branchFromID, summary string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if branchFromID != "" {
+		if _, ok := m.byID[branchFromID]; !ok {
+			return "", fmt.Errorf("entry %s not found", branchFromID)
+		}
+	}
+	m.leafID = branchFromID
+	entry := NewEntry(EntryTypeBranchSummary, branchFromID, BranchSummaryData{
+		Summary: summary,
+		FromID:  branchFromID,
+	})
+	m.entries = append(m.entries, entry)
+	m.byID[entry.ID] = entry
+	m.leafID = entry.ID
+	if err := m.appendToFileLocked(entry); err != nil {
+		return "", err
+	}
+	return entry.ID, nil
+}
+
+// CreateBranchedSession writes a new session containing only the path to leafID.
+func (m *Manager) CreateBranchedSession(leafID string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	path := m.branchLocked(leafID)
+	if len(path) == 0 {
+		return "", fmt.Errorf("entry %s not found", leafID)
+	}
+	fresh, err := newManager(m.header.Cwd, m.dir, "", m.filePath)
+	if err != nil {
+		return "", err
+	}
+	fresh.entries = append([]SessionEntry(nil), path...)
+	fresh.rebuildIndexLocked()
+	if err := fresh.rewriteFileLocked(); err != nil {
+		return "", err
+	}
+	m.header = fresh.header
+	m.entries = fresh.entries
+	m.byID = fresh.byID
+	m.labels = fresh.labels
+	m.leafID = fresh.leafID
+	m.filePath = fresh.filePath
+	m.flushed = true
+	return m.filePath, nil
+}
+
 // AppendSessionInfo appends a display-name metadata entry.
 func (m *Manager) AppendSessionInfo(name string) error {
 	return m.Append(NewEntry(EntryTypeSessionInfo, "", SessionInfoData{Name: strings.TrimSpace(name)}))
@@ -404,6 +454,35 @@ func (m *Manager) appendToFileLocked(entry SessionEntry) error {
 	return err
 }
 
+func (m *Manager) rewriteFileLocked() error {
+	if err := os.MkdirAll(m.dir, 0o755); err != nil {
+		return fmt.Errorf("failed to create session directory: %w", err)
+	}
+	file, err := os.OpenFile(m.filePath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("failed to rewrite session file: %w", err)
+	}
+	defer file.Close()
+	header, err := json.Marshal(m.header)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(append(header, '\n')); err != nil {
+		return err
+	}
+	for _, entry := range m.entries {
+		data, err := json.Marshal(entry)
+		if err != nil {
+			return err
+		}
+		if _, err := file.Write(append(data, '\n')); err != nil {
+			return err
+		}
+	}
+	m.flushed = true
+	return nil
+}
+
 // FindMostRecentSession returns the newest valid JSONL session in dir.
 func FindMostRecentSession(dir string) string {
 	entries, err := os.ReadDir(dir)
@@ -479,6 +558,60 @@ func List(agentDir, cwd string) ([]SessionInfo, error) {
 		return out[i].Modified.After(out[j].Modified)
 	})
 	return out, nil
+}
+
+// ListAll returns sessions across all cwd-specific session directories.
+func ListAll(agentDir string) ([]SessionInfo, error) {
+	root := filepath.Join(agentDir, "sessions")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []SessionInfo
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		files, err := os.ReadDir(filepath.Join(root, entry.Name()))
+		if err != nil {
+			continue
+		}
+		for _, file := range files {
+			if file.IsDir() || !strings.HasSuffix(file.Name(), ".jsonl") {
+				continue
+			}
+			info, err := BuildSessionInfo(filepath.Join(root, entry.Name(), file.Name()))
+			if err == nil && info.Path != "" {
+				out = append(out, info)
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Modified.After(out[j].Modified)
+	})
+	return out, nil
+}
+
+// ForkFrom creates a new session in targetCwd by copying entries from sourcePath.
+func ForkFrom(agentDir, sourcePath, targetCwd string) (*Manager, error) {
+	source, err := NewManagerFromFile(sourcePath)
+	if err != nil {
+		return nil, err
+	}
+	dir := DefaultSessionDir(agentDir, targetCwd)
+	fresh, err := newManager(targetCwd, dir, "", sourcePath)
+	if err != nil {
+		return nil, err
+	}
+	fresh.entries = source.Load()
+	fresh.rebuildIndexLocked()
+	if err := fresh.rewriteFileLocked(); err != nil {
+		return nil, err
+	}
+	return fresh, nil
 }
 
 // BuildSessionInfo reads a session file summary.

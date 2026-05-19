@@ -961,6 +961,21 @@ func (s *CodingSession) Fork(entryID string) error {
 	return s.sessionManager.Fork(entryID)
 }
 
+// CreateBranchedSession creates a new session file from the path to entryID.
+func (s *CodingSession) CreateBranchedSession(entryID string) (string, error) {
+	if s.sessionManager == nil {
+		return "", fmt.Errorf("session manager not available")
+	}
+	path, err := s.sessionManager.CreateBranchedSession(entryID)
+	if err != nil {
+		return "", err
+	}
+	s.sessionTree = session.NewTree(s.sessionManager)
+	_, _ = s.RestoreMessages()
+	s.writeRuntimeState()
+	return path, nil
+}
+
 // NavigateTree navigates to a specific point in the session tree.
 func (s *CodingSession) NavigateTree(entryID string) error {
 	return s.sessionTree.NavigateTo(entryID)
@@ -1234,6 +1249,33 @@ func (s *CodingSession) GetSessionFile() string {
 	return s.sessionManager.FilePath()
 }
 
+// ListSessions returns persisted sessions for the current working directory.
+func (s *CodingSession) ListSessions() ([]session.SessionInfo, error) {
+	return session.List(s.agentDir, s.cwd)
+}
+
+func (s *CodingSession) ListSessionInfos() ([]SessionInfo, error) {
+	return s.ListSessions()
+}
+
+// ListAllSessions returns persisted sessions across all working directories.
+func (s *CodingSession) ListAllSessions() ([]session.SessionInfo, error) {
+	return session.ListAll(s.agentDir)
+}
+
+func (s *CodingSession) ListAllSessionInfos() ([]SessionInfo, error) {
+	return s.ListAllSessions()
+}
+
+// ForkFromSession creates and switches to a new session copied from sessionFile.
+func (s *CodingSession) ForkFromSession(sessionFile string) error {
+	mgr, err := session.ForkFrom(s.agentDir, sessionFile, s.cwd)
+	if err != nil {
+		return err
+	}
+	return s.switchSessionManager(mgr)
+}
+
 // SetSessionName sets the display name for this session.
 func (s *CodingSession) SetSessionName(name string) {
 	s.sessionName = name
@@ -1447,7 +1489,10 @@ func (s *CodingSession) SwitchSession(sessionFile string) error {
 	if err != nil {
 		return fmt.Errorf("failed to load session: %w", err)
 	}
+	return s.switchSessionManager(newMgr)
+}
 
+func (s *CodingSession) switchSessionManager(newMgr *session.Manager) error {
 	var messages []agent.AgentMessage
 	newTree := session.NewTree(newMgr)
 	for _, entry := range newTree.GetCurrentPath() {

@@ -147,6 +147,7 @@ High-priority gaps identified before this round:
   prompt-template slash commands with `{{input}}` / `{{args}}` expansion
   `/context` and `/prompts` visibility for resource packages and prompt templates
   pi-style session JSONL shape and session-manager behavior for local persistence/resume/listing
+  reusable session list-all, fork-from-session, branch extraction APIs, plus `/session`, `/sessions`, `/resume`, `/fork-session`, and `/branch-session`
 
 ## Still Missing
 
@@ -154,7 +155,7 @@ High-priority gaps identified before this round:
 - Deeper plan-mode semantics beyond the current state/prompt toggle
 - Richer worktree lifecycle controls and cleanup introspection
 - Full pi-compatible TypeScript extension/package ecosystem, including remote npm/git package install, theme resources, UI extension context, provider hooks, and hot reload
-- Full pi TUI session selector parity, including cross-project list-all UI, tree filter modes, rename/delete UI flows, and branch-summary rendering controls
+- Full pi TUI session selector parity, including interactive picker UI, tree filter modes, delete UI flow, and branch-summary rendering controls
 
 ## Suggested Next Steps
 

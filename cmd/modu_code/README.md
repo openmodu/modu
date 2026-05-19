@@ -83,6 +83,10 @@ go run ./cmd/modu_code config validate
 | `/context` | 查看当前 prompt/context 来源 |
 | `/doctor` | 查看基础运行诊断 |
 | `/retry` | 重试上一条失败的 prompt |
+| `/session` | 查看或命名当前会话 |
+| `/sessions [all]` | 列出当前项目或全部项目的会话 |
+| `/resume <file>` | 切换到指定会话文件 |
+| `/fork-session <file>` | 从已有会话复制一份到当前项目 |
 | `/skills` | 查看已发现 skills |
 | `/prompts` | 查看已发现 prompt templates |
 

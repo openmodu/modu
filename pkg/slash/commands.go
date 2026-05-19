@@ -81,6 +81,53 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		handleContext(session, r)
 		return true, false
 
+	case "session":
+		handleSession(parts, session, r)
+		return true, false
+
+	case "sessions":
+		handleSessions(parts, session, r)
+		return true, false
+
+	case "resume":
+		if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
+			r.PrintInfo("usage: /resume <session-file>")
+			return true, false
+		}
+		path := strings.TrimSpace(parts[1])
+		if err := session.SwitchSession(path); err != nil {
+			r.PrintError(err)
+		} else {
+			r.PrintInfo("resumed session: " + path)
+		}
+		return true, false
+
+	case "fork-session":
+		if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
+			r.PrintInfo("usage: /fork-session <session-file>")
+			return true, false
+		}
+		path := strings.TrimSpace(parts[1])
+		if err := session.ForkFromSession(path); err != nil {
+			r.PrintError(err)
+		} else {
+			r.PrintInfo("forked session: " + session.GetSessionFile())
+		}
+		return true, false
+
+	case "branch-session":
+		if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
+			r.PrintInfo("usage: /branch-session <entry-id>")
+			return true, false
+		}
+		path, err := session.CreateBranchedSession(strings.TrimSpace(parts[1]))
+		if err != nil {
+			r.PrintError(err)
+		} else {
+			r.PrintInfo("created branched session: " + path)
+		}
+		return true, false
+
 	case "doctor":
 		handleDoctor(ctx, session, r)
 		return true, false
@@ -253,6 +300,73 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 	default:
 		return false, false
 	}
+}
+
+func handleSession(parts []string, session *coding_agent.CodingSession, r Printer) {
+	arg := ""
+	if len(parts) > 1 {
+		arg = strings.TrimSpace(parts[1])
+	}
+	if strings.HasPrefix(arg, "name ") || arg == "name" {
+		name := strings.TrimSpace(strings.TrimPrefix(arg, "name"))
+		session.SetSessionName(name)
+		if name == "" {
+			r.PrintInfo("session name cleared")
+		} else {
+			r.PrintInfo("session name: " + name)
+		}
+		return
+	}
+	name := session.GetSessionName()
+	if name == "" {
+		name = "(unnamed)"
+	}
+	lines := []string{
+		"id: " + session.GetSessionID(),
+		"name: " + name,
+		"file: " + session.GetSessionFile(),
+		fmt.Sprintf("messages: %d", len(session.GetMessages())),
+	}
+	r.PrintSection("Session", lines)
+}
+
+func handleSessions(parts []string, session *coding_agent.CodingSession, r Printer) {
+	all := false
+	if len(parts) > 1 {
+		all = strings.TrimSpace(parts[1]) == "all"
+	}
+	var sessions []coding_agent.SessionInfo
+	var err error
+	if all {
+		sessions, err = session.ListAllSessionInfos()
+	} else {
+		sessions, err = session.ListSessionInfos()
+	}
+	if err != nil {
+		r.PrintError(err)
+		return
+	}
+	if len(sessions) == 0 {
+		r.PrintInfo("no sessions found")
+		return
+	}
+	title := fmt.Sprintf("Sessions (%d)", len(sessions))
+	if all {
+		title += " all"
+	}
+	lines := make([]string, 0, len(sessions))
+	for i, info := range sessions {
+		if i >= 20 {
+			lines = append(lines, fmt.Sprintf("... %d more", len(sessions)-i))
+			break
+		}
+		label := info.Name
+		if label == "" {
+			label = info.FirstMessage
+		}
+		lines = append(lines, fmt.Sprintf("%s  messages=%d  %s", info.Path, info.MessageCount, label))
+	}
+	r.PrintSection(title, lines)
 }
 
 func handleModel(arg string, session *coding_agent.CodingSession, r Printer, fallback *types.Model) {
@@ -516,6 +630,10 @@ func PrintHelp(r Printer) {
 		"/compact            — compact the conversation context",
 		"/tokens             — show total token usage",
 		"/context            — show current prompt/context sources",
+		"/session            — show or name the current session",
+		"/sessions [all]     — list saved sessions",
+		"/resume <file>      — switch to a saved session",
+		"/fork-session <file> — copy a saved session into this cwd",
 		"/doctor             — show runtime diagnostics",
 		"/retry              — retry last failed prompt in interactive TUI",
 		"/tools              — list active tools",

@@ -1,11 +1,15 @@
 package coding_agent
 
+import "github.com/openmodu/modu/pkg/coding_agent/session"
+
 // ForkMessage represents a user message available for forking.
 type ForkMessage struct {
 	EntryID string `json:"entryId"`
 	Role    string `json:"role"`
 	Content string `json:"content"`
 }
+
+type SessionInfo = session.SessionInfo
 
 // SessionStats contains aggregate statistics for the current session.
 type SessionStats struct {
