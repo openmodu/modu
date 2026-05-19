@@ -62,12 +62,13 @@ func (r *Runner) RegisterTool(tool agent.AgentTool) {
 }
 
 // RegisterCommand implements ExtensionAPI.
-func (r *Runner) RegisterCommand(name string, handler CommandHandler) {
+func (r *Runner) RegisterCommand(name, description string, handler CommandHandler) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.commands = append(r.commands, Command{
-		Name:    name,
-		Handler: handler,
+		Name:        name,
+		Description: description,
+		Handler:     handler,
 	})
 }
 

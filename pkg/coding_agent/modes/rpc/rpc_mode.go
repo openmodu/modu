@@ -419,6 +419,68 @@ func (r *RpcMode) handleCommand(ctx context.Context, cmd RpcCommand) RpcResponse
 		r.session.SetSessionName(data.Name)
 		resp.Success = true
 
+	case RpcCmdListSessions:
+		var data ListSessionsData
+		if len(cmd.Data) > 0 {
+			if err := json.Unmarshal(cmd.Data, &data); err != nil {
+				resp.Error = fmt.Sprintf("invalid list_sessions data: %v", err)
+				return resp
+			}
+		}
+		var (
+			sessions any
+			err      error
+		)
+		if data.All {
+			sessions, err = r.session.ListAllSessionInfos()
+		} else {
+			sessions, err = r.session.ListSessionInfos()
+		}
+		if err != nil {
+			resp.Error = err.Error()
+			return resp
+		}
+		resp.Success = true
+		resp.Data = sessions
+
+	case RpcCmdDeleteSession:
+		var data SwitchSessionData
+		if err := json.Unmarshal(cmd.Data, &data); err != nil {
+			resp.Error = fmt.Sprintf("invalid delete_session data: %v", err)
+			return resp
+		}
+		if err := r.session.DeleteSession(data.SessionFile); err != nil {
+			resp.Error = err.Error()
+			return resp
+		}
+		resp.Success = true
+
+	case RpcCmdForkSession:
+		var data SwitchSessionData
+		if err := json.Unmarshal(cmd.Data, &data); err != nil {
+			resp.Error = fmt.Sprintf("invalid fork_session data: %v", err)
+			return resp
+		}
+		if err := r.session.ForkFromSession(data.SessionFile); err != nil {
+			resp.Error = err.Error()
+			return resp
+		}
+		resp.Success = true
+
+	case RpcCmdBranchSession:
+		var data BranchSessionData
+		if err := json.Unmarshal(cmd.Data, &data); err != nil {
+			resp.Error = fmt.Sprintf("invalid branch_session data: %v", err)
+			return resp
+		}
+		path, err := r.session.CreateBranchedSession(data.EntryID)
+		if err != nil {
+			resp.Error = err.Error()
+			return resp
+		}
+		resp.Success = true
+		resp.Data = map[string]string{"sessionFile": path}
+
 	case RpcCmdToolApprovalResponse:
 		var data ToolApprovalResponseData
 		if err := json.Unmarshal(cmd.Data, &data); err != nil {

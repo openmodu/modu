@@ -405,6 +405,40 @@ func (c *RpcClient) SetSessionName(name string) error {
 	return err
 }
 
+// ListSessions sends a list_sessions command.
+func (c *RpcClient) ListSessions(all bool) (*RpcResponse, error) {
+	return c.Send(RpcCmdListSessions, ListSessionsData{All: all})
+}
+
+// DeleteSession sends a delete_session command.
+func (c *RpcClient) DeleteSession(sessionFile string) error {
+	resp, err := c.Send(RpcCmdDeleteSession, SwitchSessionData{SessionFile: sessionFile})
+	if err != nil {
+		return err
+	}
+	if !resp.Success {
+		return fmt.Errorf("delete_session failed: %s", resp.Error)
+	}
+	return nil
+}
+
+// ForkSession sends a fork_session command.
+func (c *RpcClient) ForkSession(sessionFile string) error {
+	resp, err := c.Send(RpcCmdForkSession, SwitchSessionData{SessionFile: sessionFile})
+	if err != nil {
+		return err
+	}
+	if !resp.Success {
+		return fmt.Errorf("fork_session failed: %s", resp.Error)
+	}
+	return nil
+}
+
+// BranchSession sends a branch_session command.
+func (c *RpcClient) BranchSession(entryID string) (*RpcResponse, error) {
+	return c.Send(RpcCmdBranchSession, BranchSessionData{EntryID: entryID})
+}
+
 // --- Event handling ---
 
 // OnEvent registers an event handler. Returns an unsubscribe function.

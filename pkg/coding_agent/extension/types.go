@@ -2,7 +2,6 @@ package extension
 
 import (
 	"github.com/openmodu/modu/pkg/agent"
-	"github.com/openmodu/modu/pkg/types"
 )
 
 // Extension is the interface that all extensions must implement.
@@ -18,7 +17,9 @@ type ExtensionAPI interface {
 	// RegisterTool registers a new tool provided by the extension.
 	RegisterTool(tool agent.AgentTool)
 	// RegisterCommand registers a slash command handler.
-	RegisterCommand(name string, handler CommandHandler)
+	RegisterCommand(name, description string, handler CommandHandler)
+	// AddHook registers a hook that wraps tool execution.
+	AddHook(hook ToolHook)
 	// On registers an event handler.
 	On(event string, handler EventHandler)
 	// SendMessage injects a message into the conversation.
@@ -52,20 +53,4 @@ type ToolHook struct {
 	After func(toolName string, args map[string]any, result agent.AgentToolResult)
 	// Transform allows modifying the tool result before returning it.
 	Transform func(toolName string, result agent.AgentToolResult) agent.AgentToolResult
-}
-
-// ToolDefinition wraps tool metadata for extension registration.
-type ToolDefinition struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Parameters  any    `json:"parameters"`
-}
-
-// ToLlmToolDef converts to an LLM ToolDefinition.
-func (d ToolDefinition) ToLlmToolDef() types.ToolDefinition {
-	return types.ToolDefinition{
-		Name:        d.Name,
-		Description: d.Description,
-		Parameters:  d.Parameters,
-	}
 }

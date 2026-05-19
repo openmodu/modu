@@ -34,9 +34,13 @@ const (
 	RpcCmdSwitchSession        RpcCommandType = "switch_session"
 	RpcCmdFork                 RpcCommandType = "fork"
 	RpcCmdGetForkMessages      RpcCommandType = "get_fork_messages"
-	RpcCmdGetLastAssistantText  RpcCommandType = "get_last_assistant_text"
-	RpcCmdSetSessionName        RpcCommandType = "set_session_name"
-	RpcCmdToolApprovalResponse  RpcCommandType = "tool_approval_response"
+	RpcCmdGetLastAssistantText RpcCommandType = "get_last_assistant_text"
+	RpcCmdSetSessionName       RpcCommandType = "set_session_name"
+	RpcCmdListSessions         RpcCommandType = "list_sessions"
+	RpcCmdDeleteSession        RpcCommandType = "delete_session"
+	RpcCmdForkSession          RpcCommandType = "fork_session"
+	RpcCmdBranchSession        RpcCommandType = "branch_session"
+	RpcCmdToolApprovalResponse RpcCommandType = "tool_approval_response"
 )
 
 // RpcCommand is an incoming RPC command.
@@ -46,7 +50,7 @@ type RpcCommand struct {
 	ID      string          `json:"id,omitempty"`
 	Type    RpcCommandType  `json:"type"`
 	Command RpcCommandType  `json:"command"`           // legacy compat
-	Message string          `json:"message,omitempty"`  // flat field for prompt/steer/follow_up
+	Message string          `json:"message,omitempty"` // flat field for prompt/steer/follow_up
 	Data    json.RawMessage `json:"data,omitempty"`
 }
 
@@ -132,6 +136,16 @@ type ForkData struct {
 // SwitchSessionData is the data payload for the switch_session command.
 type SwitchSessionData struct {
 	SessionFile string `json:"sessionFile"`
+}
+
+// ListSessionsData is the data payload for list_sessions command.
+type ListSessionsData struct {
+	All bool `json:"all,omitempty"`
+}
+
+// BranchSessionData is the data payload for branch_session command.
+type BranchSessionData struct {
+	EntryID string `json:"entryId"`
 }
 
 // SetSessionNameData is the data payload for the set_session_name command.

@@ -42,16 +42,22 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		PrintHelp(r)
 		return true, false
 
-	case "clear":
+	case "clear", "new":
 		if err := session.ClearConversation(); err != nil {
 			r.PrintError(fmt.Errorf("clear session: %w", err))
 		} else {
-			r.PrintInfo("session cleared")
+			if cmd == "new" {
+				r.PrintInfo("new session")
+			} else {
+				r.PrintInfo("session cleared")
+			}
 		}
-		if clearer, ok := r.(Clearer); ok {
-			clearer.ClearScreen()
-		} else {
-			fmt.Print("\033[2J\033[H")
+		if cmd == "clear" {
+			if clearer, ok := r.(Clearer); ok {
+				clearer.ClearScreen()
+			} else {
+				fmt.Print("\033[2J\033[H")
+			}
 		}
 		return true, false
 
@@ -61,6 +67,14 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 			arg = strings.TrimSpace(parts[1])
 		}
 		handleModel(arg, session, r, model)
+		return true, false
+
+	case "settings":
+		r.PrintInfo("settings are available in the interactive TUI via /settings")
+		return true, false
+
+	case "scoped-models":
+		r.PrintInfo("model scope editing is available in the interactive TUI via /scoped-models")
 		return true, false
 
 	case "compact":
@@ -81,12 +95,119 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		handleContext(session, r)
 		return true, false
 
+	case "session":
+		handleSession(parts, session, r)
+		return true, false
+
+	case "name":
+		arg := ""
+		if len(parts) > 1 {
+			arg = strings.TrimSpace(parts[1])
+		}
+		session.SetSessionName(arg)
+		if arg == "" {
+			r.PrintInfo("session name cleared")
+		} else {
+			r.PrintInfo("session name: " + arg)
+		}
+		return true, false
+
+	case "sessions":
+		handleSessions(parts, session, r)
+		return true, false
+
+	case "resume":
+		if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
+			r.PrintInfo("usage: /resume <session-file>")
+			return true, false
+		}
+		path := strings.TrimSpace(parts[1])
+		if err := session.SwitchSession(path); err != nil {
+			r.PrintError(err)
+		} else {
+			r.PrintInfo("resumed session: " + path)
+		}
+		return true, false
+
+	case "fork-session":
+		if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
+			r.PrintInfo("usage: /fork-session <session-file>")
+			return true, false
+		}
+		path := strings.TrimSpace(parts[1])
+		if err := session.ForkFromSession(path); err != nil {
+			r.PrintError(err)
+		} else {
+			r.PrintInfo("forked session: " + session.GetSessionFile())
+		}
+		return true, false
+
+	case "tree":
+		handleTree(session, r)
+		return true, false
+
+	case "fork":
+		if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
+			r.PrintInfo("usage: /fork <entry-id>")
+			return true, false
+		}
+		entryID := strings.TrimSpace(parts[1])
+		if err := session.Fork(entryID); err != nil {
+			r.PrintError(err)
+		} else {
+			r.PrintInfo("forked from entry: " + entryID)
+		}
+		return true, false
+
+	case "clone":
+		leafID := session.GetSessionLeafID()
+		if leafID == "" {
+			r.PrintInfo("nothing to clone")
+			return true, false
+		}
+		path, err := session.CreateBranchedSession(leafID)
+		if err != nil {
+			r.PrintError(err)
+		} else {
+			r.PrintInfo("cloned session: " + path)
+		}
+		return true, false
+
+	case "branch-session":
+		if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
+			r.PrintInfo("usage: /branch-session <entry-id>")
+			return true, false
+		}
+		path, err := session.CreateBranchedSession(strings.TrimSpace(parts[1]))
+		if err != nil {
+			r.PrintError(err)
+		} else {
+			r.PrintInfo("created branched session: " + path)
+		}
+		return true, false
+
 	case "doctor":
 		handleDoctor(ctx, session, r)
 		return true, false
 
 	case "retry":
 		r.PrintInfo("retry is available in the interactive TUI after a failed prompt")
+		return true, false
+
+	case "hotkeys":
+		r.PrintSection("Hotkeys", []string{
+			"Ctrl+C interrupt/exit",
+			"Ctrl+L clear screen",
+			"Ctrl+O expand/collapse tool output",
+			"Ctrl+P/Ctrl+N cycle models",
+			"Shift+Tab toggle plan mode",
+			"/settings, /model, /sessions, /tree, /fork",
+		})
+		return true, false
+
+	case "reload":
+		session.ReloadResources()
+		r.PrintInfo("reloaded resources")
 		return true, false
 
 	case "tools":
@@ -223,6 +344,25 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		}
 		return true, false
 
+	case "prompts":
+		prompts := session.GetPromptTemplates()
+		if len(prompts) == 0 {
+			r.PrintInfo("no prompt templates found")
+			return true, false
+		}
+		r.PrintInfo(fmt.Sprintf("available prompt templates (%d):", len(prompts)))
+		for _, p := range prompts {
+			l := "  /" + p.Name
+			if p.Description != "" {
+				l += " — " + p.Description
+			}
+			if p.Source != "" {
+				l += " [" + p.Source + "]"
+			}
+			r.PrintInfo(l)
+		}
+		return true, false
+
 	case "telegram":
 		arg := ""
 		if len(parts) > 1 {
@@ -234,6 +374,130 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 	default:
 		return false, false
 	}
+}
+
+func handleTree(session *coding_agent.CodingSession, r Printer) {
+	branches := session.GetSessionBranches()
+	if len(branches) == 0 {
+		forkMessages := session.GetForkMessages()
+		if len(forkMessages) == 0 {
+			r.PrintInfo("session tree: empty")
+			return
+		}
+		lines := make([]string, 0, len(forkMessages))
+		for _, msg := range forkMessages {
+			content := strings.ReplaceAll(strings.TrimSpace(msg.Content), "\n", " ")
+			if len(content) > 80 {
+				content = content[:77] + "..."
+			}
+			lines = append(lines, fmt.Sprintf("%s  %s", msg.EntryID, content))
+		}
+		r.PrintSection("Forkable Messages", lines)
+		return
+	}
+	lines := make([]string, 0, len(branches))
+	for _, branch := range branches {
+		line := fmt.Sprintf("%s parent=%s entries=%d", branch.ID, branch.ParentID, branch.EntryCount)
+		if branch.Label != "" {
+			line += " label=" + branch.Label
+		}
+		lines = append(lines, line)
+	}
+	r.PrintSection("Session Tree", lines)
+}
+
+func handleSession(parts []string, session *coding_agent.CodingSession, r Printer) {
+	arg := ""
+	if len(parts) > 1 {
+		arg = strings.TrimSpace(parts[1])
+	}
+	if strings.HasPrefix(arg, "name ") || arg == "name" {
+		name := strings.TrimSpace(strings.TrimPrefix(arg, "name"))
+		session.SetSessionName(name)
+		if name == "" {
+			r.PrintInfo("session name cleared")
+		} else {
+			r.PrintInfo("session name: " + name)
+		}
+		return
+	}
+	if strings.HasPrefix(arg, "delete ") || arg == "delete" {
+		path := strings.TrimSpace(strings.TrimPrefix(arg, "delete"))
+		if path == "" {
+			r.PrintInfo("usage: /session delete <session-file>")
+			return
+		}
+		if err := session.DeleteSession(path); err != nil {
+			r.PrintError(err)
+		} else {
+			r.PrintInfo("deleted session: " + path)
+		}
+		return
+	}
+	name := session.GetSessionName()
+	if name == "" {
+		name = "(unnamed)"
+	}
+	lines := []string{
+		"id: " + session.GetSessionID(),
+		"name: " + name,
+		"file: " + session.GetSessionFile(),
+		fmt.Sprintf("messages: %d", len(session.GetMessages())),
+	}
+	r.PrintSection("Session", lines)
+}
+
+func handleSessions(parts []string, session *coding_agent.CodingSession, r Printer) {
+	arg := ""
+	if len(parts) > 1 {
+		arg = strings.TrimSpace(parts[1])
+	}
+	if strings.HasPrefix(arg, "delete ") || arg == "delete" {
+		path := strings.TrimSpace(strings.TrimPrefix(arg, "delete"))
+		if path == "" {
+			r.PrintInfo("usage: /sessions delete <session-file>")
+			return
+		}
+		if err := session.DeleteSession(path); err != nil {
+			r.PrintError(err)
+		} else {
+			r.PrintInfo("deleted session: " + path)
+		}
+		return
+	}
+	all := arg == "all"
+	var sessions []coding_agent.SessionInfo
+	var err error
+	if all {
+		sessions, err = session.ListAllSessionInfos()
+	} else {
+		sessions, err = session.ListSessionInfos()
+	}
+	if err != nil {
+		r.PrintError(err)
+		return
+	}
+	if len(sessions) == 0 {
+		r.PrintInfo("no sessions found")
+		return
+	}
+	title := fmt.Sprintf("Sessions (%d)", len(sessions))
+	if all {
+		title += " all"
+	}
+	lines := make([]string, 0, len(sessions))
+	for i, info := range sessions {
+		if i >= 20 {
+			lines = append(lines, fmt.Sprintf("... %d more", len(sessions)-i))
+			break
+		}
+		label := info.Name
+		if label == "" {
+			label = info.FirstMessage
+		}
+		lines = append(lines, fmt.Sprintf("%s  messages=%d  %s", info.Path, info.MessageCount, label))
+	}
+	r.PrintSection(title, lines)
 }
 
 func handleModel(arg string, session *coding_agent.CodingSession, r Printer, fallback *types.Model) {
@@ -357,6 +621,30 @@ func handleContext(session *coding_agent.CodingSession, r Printer) {
 			lines = append(lines, line)
 		}
 	}
+	if len(info.PromptTemplates) == 0 {
+		lines = append(lines, "prompt templates: none")
+	} else {
+		lines = append(lines, fmt.Sprintf("prompt templates (%d):", len(info.PromptTemplates)))
+		for _, tmpl := range info.PromptTemplates {
+			line := "  " + tmpl.Name
+			if tmpl.Source != "" {
+				line += " [" + tmpl.Source + "]"
+			}
+			lines = append(lines, line)
+		}
+	}
+	if len(info.Packages) == 0 {
+		lines = append(lines, "resource packages: none")
+	} else {
+		lines = append(lines, fmt.Sprintf("resource packages (%d):", len(info.Packages)))
+		for _, pkg := range info.Packages {
+			status := "disabled"
+			if pkg.Enabled {
+				status = "enabled"
+			}
+			lines = append(lines, fmt.Sprintf("  %s [%s/%s] skills=%d prompts=%d - %s", pkg.Name, pkg.Source, status, pkg.Skills, pkg.Prompts, pkg.Path))
+		}
+	}
 
 	r.PrintSection("Context", lines)
 }
@@ -473,6 +761,13 @@ func PrintHelp(r Printer) {
 		"/compact            — compact the conversation context",
 		"/tokens             — show total token usage",
 		"/context            — show current prompt/context sources",
+		"/session            — show or name the current session",
+		"/sessions [all]     — list saved sessions",
+		"/session delete <f> — delete a saved session file",
+		"/resume <file>      — switch to a saved session",
+		"/fork-session <file> — copy a saved session into this cwd",
+		"/tree               — show forkable messages or branch points",
+		"/fork <entry-id>    — move the session leaf to an entry",
 		"/doctor             — show runtime diagnostics",
 		"/retry              — retry last failed prompt in interactive TUI",
 		"/tools              — list active tools",
@@ -483,6 +778,7 @@ func PrintHelp(r Printer) {
 		"/plan [on|off]      — inspect or toggle plan mode",
 		"/worktree [on|off]  — inspect or toggle isolated worktree mode",
 		"/skills             — list available skills",
+		"/prompts            — list available prompt templates",
 		"/telegram           — show Telegram bot config",
 		"/telegram token <t> — set Telegram bot token",
 		"",

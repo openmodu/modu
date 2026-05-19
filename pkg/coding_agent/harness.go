@@ -434,6 +434,10 @@ func (s *CodingSession) RuntimePaths() HarnessRuntimePaths {
 	_ = os.MkdirAll(runtimeDir, 0o755)
 	_ = os.MkdirAll(traceDir, 0o755)
 
+	sessionsDir := filepath.Dir(s.messagesFilePath())
+	if s.sessionManager != nil {
+		sessionsDir = s.sessionManager.Dir()
+	}
 	return HarnessRuntimePaths{
 		Root:             s.agentDir,
 		RuntimeDir:       runtimeDir,
@@ -442,7 +446,7 @@ func (s *CodingSession) RuntimePaths() HarnessRuntimePaths {
 		TraceDir:         traceDir,
 		TraceEventsFile:  filepath.Join(traceDir, "events.jsonl"),
 		TraceSummaryFile: filepath.Join(traceDir, "summary.json"),
-		SessionsDir:      filepath.Dir(s.messagesFilePath()),
+		SessionsDir:      sessionsDir,
 		PlansDir:         plansDir,
 		PlanFile:         filepath.Join(plansDir, "latest.md"),
 		WorktreesDir:     filepath.Join(s.agentDir, "worktrees"),

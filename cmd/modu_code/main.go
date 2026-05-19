@@ -35,6 +35,8 @@ import (
 	"github.com/openmodu/modu/pkg/tui"
 )
 
+var runTUI = tui.Run
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "config" {
 		if err := runConfigCommand(os.Args[2:], os.Stdout, os.Stderr); err != nil {
@@ -141,7 +143,7 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if err := tui.Run(ctx, session, model, *noApprove); err != nil {
+	if err := runTUI(ctx, session, model, *noApprove); err != nil {
 		fmt.Fprintf(os.Stderr, "ui error: %v\n", err)
 		os.Exit(1)
 	}

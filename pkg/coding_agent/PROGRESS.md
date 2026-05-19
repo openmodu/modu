@@ -21,6 +21,7 @@ High-priority gaps identified before this round:
 - Wired discovered context files into the system prompt build path.
 - Wired agent `message_end` events into persistence so assistant and tool-result messages are recorded.
 - Hooked `SaveMessages()` into the live session flow so `messages.jsonl` is generated from real prompts.
+- Replaced the split message snapshot/session timeline with a pi-style append-only JSONL session manager: versioned session header, timestamped session files, `leafId` branch navigation, display-name entries, labels, recent-session loading, and session listing metadata.
 - Added explicit `/skill` handling that pins the named skill instructions onto the main agent turn.
 - Recorded thinking-level changes into the session timeline.
 - Ensured `~/.coding_agent/agents` is created alongside skills and sessions.
@@ -139,12 +140,24 @@ High-priority gaps identified before this round:
   effective config export
   default config template export
   subagent frontmatter parsing for `harness_block_tools`
+  default core tool alignment with upstream coding-agent (`read`, `bash`, `edit`, `write`)
+  full `AllTools` restoration including `ls` for explicit opt-in use
+  extension API cleanup for first-class hook registration, command descriptions, event dispatch, and removal of the unused `ToolDefinition` wrapper
+  unified resource discovery for context files, skills, prompt templates, and local resource packages
+  prompt-template slash commands with `{{input}}` / `{{args}}` expansion
+  `/context` and `/prompts` visibility for resource packages and prompt templates
+  pi-style session JSONL shape and session-manager behavior for local persistence/resume/listing
+  reusable session list-all, fork-from-session, branch extraction, and safe delete APIs, plus `/session`, `/sessions`, `/resume`, `/fork-session`, and `/branch-session`
+  RPC commands and client helpers for listing, deleting, forking, and extracting sessions
+  TUI slash routing for `/tree` and `/fork <entry-id>` so session tree operations are reachable interactively
+  session APIs for all-model listing, session-scoped model ranges, leaf-id cloning, and dynamic resource reloads used by the TUI parity work
 
 ## Still Missing
 
-- Broader end-to-end coverage for the `cmd/modu_code` interactive path
 - Deeper plan-mode semantics beyond the current state/prompt toggle
 - Richer worktree lifecycle controls and cleanup introspection
+- Full pi-compatible TypeScript extension/package ecosystem, including remote npm/git package install, theme resources, UI extension context, provider hooks, and hot reload
+- Remaining pi TUI tree parity, including branch-summary rendering controls
 
 ## Suggested Next Steps
 

@@ -35,6 +35,14 @@ enough to implement, verify, and commit independently.
   and checking multi-model config files.
 - `/retry` retries the last failed prompt in the interactive TUI and clears the
   failed prompt marker after a successful retry.
+- `/sessions` opens a real TUI session picker, with keyboard actions to resume,
+  fork, and delete persisted sessions.
+- TUI session picker now supports search, current/all scope, sort modes,
+  named-only filtering, path display, rename, and delete confirmation.
+- TUI model selector now supports search, scoped/all selection, `/model <query>`,
+  `/scoped-models`, and `Ctrl+P` / `Ctrl+N` model cycling.
+- Added interactive `/settings`, `/hotkeys`, `/reload`, `/new`, `/name`, and
+  `/clone` handling for the TUI path.
 
 ## Next
 
@@ -58,3 +66,8 @@ enough to implement, verify, and commit independently.
   passed for config helper commands.
 - 2026-05-16: `go test ./cmd/modu_code ./cmd/modu_code/internal/provider ./pkg/coding_agent ./pkg/tui ./pkg/slash ./pkg/providers/openai ./pkg/agent`
   passed for `/retry`.
+- 2026-05-19: `go test -count=1 ./cmd/modu_code ./pkg/tui ./pkg/slash ./pkg/coding_agent`
+  passed for the TUI session picker and cmd/modu_code session-flow coverage.
+- 2026-05-19: `go test -count=1 ./pkg/tui ./pkg/slash ./pkg/coding_agent ./cmd/modu_code`
+  passed for expanded TUI parity: slash commands, session selector, model selector,
+  settings, hotkeys, and reload.

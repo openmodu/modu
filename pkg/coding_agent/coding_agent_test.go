@@ -93,6 +93,11 @@ func TestNewCodingSession(t *testing.T) {
 	if len(toolNames) == 0 {
 		t.Fatal("expected tools to be initialized")
 	}
+	for _, name := range []string{"grep", "find", "ls"} {
+		if containsTool(toolNames, name) {
+			t.Fatalf("expected search/list tool %s to be opt-in, got default tools %v", name, toolNames)
+		}
+	}
 
 	// Check config
 	cfg := session.GetConfig()
@@ -1203,21 +1208,18 @@ type testHookExtension struct {
 
 func (e *testHookExtension) Name() string { return "test-hook" }
 func (e *testHookExtension) Init(api extension.ExtensionAPI) error {
-	// Register a hook via the runner's AddHook (cast to *Runner)
-	if runner, ok := api.(*extension.Runner); ok {
-		runner.AddHook(extension.ToolHook{
-			Before: func(toolName string, args map[string]any) bool {
-				if toolName == "bash" {
-					e.blocked = append(e.blocked, toolName)
-					return false // block bash tool
-				}
-				return true
-			},
-			After: func(toolName string, args map[string]any, result agent.AgentToolResult) {
-				e.afterCalls = append(e.afterCalls, toolName)
-			},
-		})
-	}
+	api.AddHook(extension.ToolHook{
+		Before: func(toolName string, args map[string]any) bool {
+			if toolName == "bash" {
+				e.blocked = append(e.blocked, toolName)
+				return false // block bash tool
+			}
+			return true
+		},
+		After: func(toolName string, args map[string]any, result agent.AgentToolResult) {
+			e.afterCalls = append(e.afterCalls, toolName)
+		},
+	})
 	return nil
 }
 
@@ -1277,6 +1279,60 @@ func TestExtensionHooksAreApplied(t *testing.T) {
 
 	if len(hookExt.blocked) != 1 || hookExt.blocked[0] != "bash" {
 		t.Fatalf("expected bash to be blocked, got: %v", hookExt.blocked)
+	}
+}
+
+type testEventExtension struct {
+	agentStartCount int
+}
+
+func (e *testEventExtension) Name() string { return "test-events" }
+func (e *testEventExtension) Init(api extension.ExtensionAPI) error {
+	api.On(string(agent.EventTypeAgentStart), func(event agent.AgentEvent) {
+		e.agentStartCount++
+	})
+	return nil
+}
+
+func TestExtensionEventHandlersReceiveAgentEvents(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	model := newTestModel()
+	streamFn := func(ctx context.Context, _ *types.Model, _ *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+		stream := types.NewEventStream()
+		go func() {
+			defer stream.Close()
+			msg := &types.AssistantMessage{
+				Role:       "assistant",
+				ProviderID: model.ProviderID,
+				Model:      model.ID,
+				StopReason: "stop",
+				Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "ok"}},
+				Timestamp:  time.Now().UnixMilli(),
+			}
+			stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+			stream.Resolve(msg, nil)
+		}()
+		return stream, nil
+	}
+	ext := &testEventExtension{}
+
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:        dir,
+		AgentDir:   agentDir,
+		Model:      model,
+		Extensions: []extension.Extension{ext},
+		GetAPIKey:  func(provider string) (string, error) { return "", nil },
+		StreamFn:   streamFn,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Prompt(context.Background(), "hello"); err != nil {
+		t.Fatal(err)
+	}
+	if ext.agentStartCount == 0 {
+		t.Fatal("expected extension event handler to receive agent_start")
 	}
 }
 
@@ -1770,6 +1826,159 @@ You are a summarizer. Reply with a concise summary of the user's request.`
 	if got != "skill-result: spaced task" {
 		t.Fatalf("expected trimmed slash skill invocation, got %q", got)
 	}
+}
+
+func TestPromptTemplateSlashExpandsToUserPrompt(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	promptDir := filepath.Join(dir, ".coding_agent", "prompts")
+	if err := os.MkdirAll(promptDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	template := `---
+description: review a target
+---
+Review this target:
+{{input}}`
+	if err := os.WriteFile(filepath.Join(promptDir, "review.md"), []byte(template), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	model := newTestModel()
+	var capturedMessages []agent.AgentMessage
+	streamFn := func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+		capturedMessages = append([]agent.AgentMessage{}, llmCtx.Messages...)
+		stream := types.NewEventStream()
+		go func() {
+			defer stream.Close()
+			msg := &types.AssistantMessage{
+				Role:       "assistant",
+				ProviderID: model.ProviderID,
+				Model:      model.ID,
+				StopReason: "stop",
+				Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "ok"}},
+				Timestamp:  time.Now().UnixMilli(),
+			}
+			stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+			stream.Resolve(msg, nil)
+		}()
+		return stream, nil
+	}
+
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  agentDir,
+		Model:     model,
+		GetAPIKey: func(p string) (string, error) { return "", nil },
+		StreamFn:  streamFn,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := session.Prompt(context.Background(), "/review pkg/coding_agent"); err != nil {
+		t.Fatal(err)
+	}
+	if !messagesContainText(capturedMessages, "Review this target:\npkg/coding_agent") {
+		t.Fatalf("expected prompt template expansion in messages, got %#v", capturedMessages)
+	}
+	if templates := session.GetPromptTemplates(); len(templates) != 1 || templates[0].Name != "review" {
+		t.Fatalf("expected review prompt template, got %#v", templates)
+	}
+}
+
+func TestLocalPackageResourcesExposeSkillsAndPrompts(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	pkgDir := filepath.Join(dir, ".coding_agent", "packages", "team")
+	if err := os.MkdirAll(filepath.Join(pkgDir, "skills", "helper"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(pkgDir, "prompts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"name":"team","skills":["skills/**/SKILL.md"],"prompts":["prompts/*.md"]}`
+	if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "skills", "helper", "SKILL.md"), []byte("---\ndescription: helper\n---\nUse helper."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "prompts", "ship.md"), []byte("---\ndescription: ship\n---\nShip {{input}}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  agentDir,
+		Model:     newTestModel(),
+		GetAPIKey: func(p string) (string, error) { return "", nil },
+		StreamFn: func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+			stream := types.NewEventStream()
+			go func() {
+				defer stream.Close()
+				msg := &types.AssistantMessage{Role: "assistant", StopReason: "stop", Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "ok"}}, Timestamp: time.Now().UnixMilli()}
+				stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+				stream.Resolve(msg, nil)
+			}()
+			return stream, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	info := session.GetContextInfo()
+	if len(info.Packages) != 1 || info.Packages[0].Name != "team" || info.Packages[0].Skills != 1 || info.Packages[0].Prompts != 1 {
+		t.Fatalf("unexpected package info: %#v", info.Packages)
+	}
+	if !containsSkillName(info.Skills, "helper") {
+		t.Fatalf("expected packaged helper skill, got %#v", info.Skills)
+	}
+	if !containsPromptName(info.PromptTemplates, "ship") {
+		t.Fatalf("expected packaged ship prompt, got %#v", info.PromptTemplates)
+	}
+
+	lateDir := filepath.Join(dir, ".coding_agent", "packages", "late")
+	if err := os.MkdirAll(filepath.Join(lateDir, "skills", "late"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(lateDir, "prompts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(lateDir, "package.json"), []byte(`{"name":"late","skills":["skills/**/SKILL.md"],"prompts":["prompts/*.md"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(lateDir, "skills", "late", "SKILL.md"), []byte("---\ndescription: late\n---\nUse late."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(lateDir, "prompts", "late.md"), []byte("---\ndescription: late\n---\nLate {{input}}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !containsSkillName(session.GetSkills(), "late") {
+		t.Fatalf("expected post-start packaged late skill, got %#v", session.GetSkills())
+	}
+	if !containsPromptName(session.GetPromptTemplates(), "late") {
+		t.Fatalf("expected post-start packaged late prompt, got %#v", session.GetPromptTemplates())
+	}
+}
+
+func containsSkillName(skills []SkillInfo, name string) bool {
+	for _, skill := range skills {
+		if skill.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func containsPromptName(prompts []PromptTemplateInfo, name string) bool {
+	for _, prompt := range prompts {
+		if prompt.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func messagesContainText(messages []agent.AgentMessage, text string) bool {
