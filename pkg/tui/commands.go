@@ -93,7 +93,7 @@ func (r *goTUIRoot) showHotkeys() {
 		"",
 		"Commands",
 		"  /settings, /model, /scoped-models, /sessions, /resume",
-		"  /tree, /fork, /clone, /export, /copy, /new, /reload",
+		"  /tree, /fork, /clone, /export, /copy, /changelog",
 	}
 	r.appendSystemSection("Hotkeys", strings.Join(lines, "\n"))
 }

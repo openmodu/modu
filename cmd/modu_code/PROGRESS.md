@@ -55,6 +55,7 @@ enough to implement, verify, and commit independently.
   tokens, duration, plan/worktree state, and resource counts.
 - Added `/copy` to copy the last assistant message to the system clipboard when
   `pbcopy` is available.
+- Added `/changelog` to show recent git commits from the active working directory.
 
 ## Next
 
@@ -95,3 +96,5 @@ enough to implement, verify, and commit independently.
   passed for the expanded `/session` runtime summary.
 - 2026-05-19: `go test ./pkg/slash ./cmd/modu_code`
   passed for slash-driven last-assistant copy behavior.
+- 2026-05-19: `go test ./pkg/slash ./cmd/modu_code ./pkg/tui`
+  passed for slash/TUI changelog command coverage.

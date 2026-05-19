@@ -215,6 +215,10 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		}
 		return true, false
 
+	case "changelog":
+		handleChangelog(session, r)
+		return true, false
+
 	case "doctor":
 		handleDoctor(ctx, session, r)
 		return true, false
@@ -423,6 +427,27 @@ var copyTextToClipboard = func(text string) error {
 		return fmt.Errorf("copy to clipboard: %w", err)
 	}
 	return nil
+}
+
+func handleChangelog(session *coding_agent.CodingSession, r Printer) {
+	cwd := session.GetContextInfo().Cwd
+	if cwd == "" {
+		r.PrintInfo("changelog unavailable: no cwd")
+		return
+	}
+	cmd := exec.Command("git", "log", "--oneline", "--decorate", "-n", "8")
+	cmd.Dir = cwd
+	out, err := cmd.Output()
+	if err != nil {
+		r.PrintError(fmt.Errorf("changelog: %w", err))
+		return
+	}
+	text := strings.TrimSpace(string(out))
+	if text == "" {
+		r.PrintInfo("changelog: no commits found")
+		return
+	}
+	r.PrintSection("Changelog", strings.Split(text, "\n"))
 }
 
 func handleTree(session *coding_agent.CodingSession, r Printer) {
@@ -866,6 +891,7 @@ func PrintHelp(r Printer) {
 		"/fork <entry-id>    — move the session leaf to an entry",
 		"/export [file]      — export the session to HTML",
 		"/copy               — copy the last assistant message",
+		"/changelog          — show recent git commits",
 		"/doctor             — show runtime diagnostics",
 		"/retry              — retry last failed prompt in interactive TUI",
 		"/tools              — list active tools",

@@ -90,6 +90,7 @@ var uiSlashCommands = []slashCommandDef{
 	{"/tree", "show session tree"},
 	{"/export", "export session to HTML"},
 	{"/copy", "copy last assistant message"},
+	{"/changelog", "show recent git commits"},
 	{"/skills", "list skills"},
 	{"/prompts", "list prompt templates"},
 	{"/name", "set session name"},
