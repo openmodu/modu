@@ -89,6 +89,7 @@ var uiSlashCommands = []slashCommandDef{
 	{"/branch-session", "create a branched session"},
 	{"/tree", "show session tree"},
 	{"/export", "export session to HTML"},
+	{"/copy", "copy last assistant message"},
 	{"/skills", "list skills"},
 	{"/prompts", "list prompt templates"},
 	{"/name", "set session name"},

@@ -53,6 +53,8 @@ enough to implement, verify, and commit independently.
 - Added `/export [file]` for HTML session export from slash/TUI paths.
 - `/session` now shows a richer pi-style runtime summary: cwd, model, messages,
   tokens, duration, plan/worktree state, and resource counts.
+- Added `/copy` to copy the last assistant message to the system clipboard when
+  `pbcopy` is available.
 
 ## Next
 
@@ -91,3 +93,5 @@ enough to implement, verify, and commit independently.
   passed for slash-driven session HTML export.
 - 2026-05-19: `go test ./pkg/slash ./cmd/modu_code`
   passed for the expanded `/session` runtime summary.
+- 2026-05-19: `go test ./pkg/slash ./cmd/modu_code`
+  passed for slash-driven last-assistant copy behavior.

@@ -307,6 +307,44 @@ func TestHandleExportCommand(t *testing.T) {
 	}
 }
 
+func TestHandleCopyCommand(t *testing.T) {
+	cwd := t.TempDir()
+	model := &types.Model{ID: "test", Name: "Test", ProviderID: "test"}
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       cwd,
+		AgentDir:  filepath.Join(cwd, ".coding_agent"),
+		Model:     model,
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.GetAgent().AppendMessage(types.AssistantMessage{
+		Role:    "assistant",
+		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "copy me"}},
+	})
+
+	oldCopy := copyTextToClipboard
+	defer func() { copyTextToClipboard = oldCopy }()
+	var copied string
+	copyTextToClipboard = func(text string) error {
+		copied = text
+		return nil
+	}
+
+	printer := &capturePrinter{}
+	handled, exit := Handle(context.Background(), "/copy", session, printer, model)
+	if !handled || exit {
+		t.Fatalf("expected /copy to be handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	if copied != "copy me" {
+		t.Fatalf("expected copied assistant text, got %q", copied)
+	}
+	if !strings.Contains(printer.String(), "copied last assistant message") {
+		t.Fatalf("expected copy confirmation, got %s", printer.String())
+	}
+}
+
 func TestHandleDoctorShowsDiagnostics(t *testing.T) {
 	cwd := t.TempDir()
 	agentDir := filepath.Join(cwd, ".coding_agent")

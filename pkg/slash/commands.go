@@ -3,6 +3,7 @@ package slash
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -198,6 +199,19 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 			r.PrintError(err)
 		} else {
 			r.PrintInfo("exported session: " + path)
+		}
+		return true, false
+
+	case "copy":
+		text := strings.TrimSpace(session.GetLastAssistantText())
+		if text == "" {
+			r.PrintInfo("no assistant message to copy")
+			return true, false
+		}
+		if err := copyTextToClipboard(text); err != nil {
+			r.PrintError(err)
+		} else {
+			r.PrintInfo("copied last assistant message")
 		}
 		return true, false
 
@@ -400,6 +414,15 @@ func resolveExportPath(session *coding_agent.CodingSession, path string) string 
 		return filepath.Clean(path)
 	}
 	return filepath.Join(cwd, path)
+}
+
+var copyTextToClipboard = func(text string) error {
+	cmd := exec.Command("pbcopy")
+	cmd.Stdin = strings.NewReader(text)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("copy to clipboard: %w", err)
+	}
+	return nil
 }
 
 func handleTree(session *coding_agent.CodingSession, r Printer) {
@@ -842,6 +865,7 @@ func PrintHelp(r Printer) {
 		"/tree               — show forkable messages or branch points",
 		"/fork <entry-id>    — move the session leaf to an entry",
 		"/export [file]      — export the session to HTML",
+		"/copy               — copy the last assistant message",
 		"/doctor             — show runtime diagnostics",
 		"/retry              — retry last failed prompt in interactive TUI",
 		"/tools              — list active tools",

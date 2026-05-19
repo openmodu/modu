@@ -284,6 +284,7 @@ type Extension interface {
 | `/fork <id>` | 从指定条目创建分支 |
 | `/branch-session <id>` | 抽取当前会话分支路径为新的会话文件 |
 | `/export [file]` | 导出当前会话为 HTML |
+| `/copy` | 复制最后一条 assistant 回复到系统剪贴板 |
 | `/settings` | 显示当前配置 |
 | `/tools` | 显示当前活跃工具 |
 | `/skills` | 显示已发现 skills |

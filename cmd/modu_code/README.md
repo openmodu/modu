@@ -103,6 +103,7 @@ go run ./cmd/modu_code config validate
 | `/clone` | 从当前 session leaf 克隆一份会话 |
 | `/tree` | 在 TUI 中打开 session tree，Enter 跳转并注入 branch summary，Ctrl+F 从选中节点创建 branched session |
 | `/export [file]` | 导出当前 session 为 HTML；相对路径按当前工作目录解析 |
+| `/copy` | 复制最后一条 assistant 回复到系统剪贴板 |
 | `/skills` | 查看已发现 skills |
 | `/prompts` | 查看已发现 prompt templates |
 
