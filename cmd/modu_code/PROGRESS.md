@@ -48,6 +48,8 @@ enough to implement, verify, and commit independently.
   creation.
 - TUI editor now supports `@file` fuzzy references, Tab/Enter reference completion,
   prompt-time referenced-file expansion, and Tab completion for path-like tokens.
+- TUI shell shortcuts now align with pi semantics: `!cmd` sends command output to
+  the model, while `!!cmd` only displays command output.
 
 ## Next
 
@@ -80,3 +82,5 @@ enough to implement, verify, and commit independently.
   passed for interactive session-tree navigation and branch-summary restoration.
 - 2026-05-19: `go test ./pkg/tui`
   passed for TUI file-reference and path-token completion coverage.
+- 2026-05-19: `go test ./pkg/tui ./cmd/modu_code`
+  passed for single-bang and double-bang shell shortcut behavior.

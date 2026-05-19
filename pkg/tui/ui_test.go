@@ -748,6 +748,43 @@ func TestPathTokenCompletion(t *testing.T) {
 	}
 }
 
+func TestShellShortcutSendsSingleBangToModel(t *testing.T) {
+	session := newUITestSession(t)
+	var promptMu sync.Mutex
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, &promptMu)
+
+	root.submit("!printf model-output")
+	waitForUITestIdle(t, root, session)
+
+	messages := session.GetMessages()
+	if len(messages) == 0 {
+		t.Fatal("expected shell output prompt to reach model")
+	}
+	if got := uiTestMessageText(messages[0]); !strings.Contains(got, "$ printf model-output") || !strings.Contains(got, "model-output") {
+		t.Fatalf("expected shell command and output in prompt, got %q", got)
+	}
+}
+
+func TestShellShortcutDoubleBangDoesNotSendToModel(t *testing.T) {
+	session := newUITestSession(t)
+	var promptMu sync.Mutex
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, &promptMu)
+
+	root.submit("!!printf display-only")
+	waitForUITestCondition(t, time.Second, func() bool {
+		for _, block := range root.model.blocks {
+			if block.Kind == "system" && strings.Contains(block.Content, "display-only") {
+				return true
+			}
+		}
+		return false
+	})
+
+	if got := len(session.GetMessages()); got != 0 {
+		t.Fatalf("expected no model messages for !! shell command, got %d", got)
+	}
+}
+
 func TestPromptErrorCollapsesRepeatsAndOffersActions(t *testing.T) {
 	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 	err := errors.New("max retries (3) exceeded: dial tcp 127.0.0.1:1234: connect: operation timed out")
@@ -965,6 +1002,25 @@ func uiTestContentText(content any) string {
 	default:
 		return ""
 	}
+}
+
+func waitForUITestIdle(t *testing.T, root *goTUIRoot, session *coding_agent.CodingSession) {
+	t.Helper()
+	waitForUITestCondition(t, time.Second, func() bool {
+		return !root.model.queryActive && len(session.GetMessages()) > 0
+	})
+}
+
+func waitForUITestCondition(t *testing.T, timeout time.Duration, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if ok() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("condition was not met before timeout")
 }
 
 func indexSessionChoice(t *testing.T, choices []coding_agent.SessionInfo, path string) int {

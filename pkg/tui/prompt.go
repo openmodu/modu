@@ -10,7 +10,8 @@ import (
 )
 
 // submit dispatches a submitted draft. Three forms:
-//   - "! cmd"  → run shell, print output to scrollback
+//   - "!cmd"   → run shell, print output, then send command/output to the model
+//   - "!!cmd"  → run shell and print output without sending it to the model
 //   - "/cmd"   → built-in slash command via pkg/slash
 //   - anything else → send to the agent as a prompt
 func (r *goTUIRoot) submit(text string) {
@@ -24,8 +25,12 @@ func (r *goTUIRoot) submit(text string) {
 	r.fileMatches = nil
 	r.appendHistory(line)
 
-	if rest, ok := strings.CutPrefix(line, "! "); ok {
-		r.runShell(rest)
+	if rest, ok := strings.CutPrefix(line, "!!"); ok {
+		r.runShell(strings.TrimSpace(rest), false)
+		return
+	}
+	if rest, ok := strings.CutPrefix(line, "!"); ok {
+		r.runShell(strings.TrimSpace(rest), true)
 		return
 	}
 	if strings.HasPrefix(line, "/") {
@@ -101,26 +106,50 @@ func (r *goTUIRoot) togglePlanMode() {
 	r.bump()
 }
 
-func (r *goTUIRoot) runShell(shellCmd string) {
+func (r *goTUIRoot) runShell(shellCmd string, sendToModel bool) {
+	if shellCmd == "" {
+		r.model.statusMsg = "shell command is empty"
+		r.bump()
+		return
+	}
 	block := uiBlock{Kind: "system", Content: "$ " + shellCmd, Timestamp: time.Now()}
 	r.model.appendBlock(block)
 	r.pushBlockAbove(block)
 	go func() {
-		out, err := exec.Command("bash", "-c", shellCmd).CombinedOutput()
+		cmd := exec.Command("bash", "-c", shellCmd)
+		if cwd := r.currentWorkingDir(); cwd != "" {
+			cmd.Dir = cwd
+		}
+		out, err := cmd.CombinedOutput()
 		r.queue(func() {
-			text := strings.TrimSpace(string(out))
-			if err != nil {
-				if text != "" {
-					text += "\n"
-				}
-				text += err.Error()
-			}
+			text := formatShellResult(out, err)
 			b := uiBlock{Kind: "system", Content: text, Timestamp: time.Now()}
 			r.model.appendBlock(b)
 			r.pushBlockAbove(b)
 			r.bump()
+			if sendToModel {
+				r.runPrompt(formatShellPrompt(shellCmd, text))
+			}
 		})
 	}()
+}
+
+func formatShellResult(out []byte, err error) string {
+	text := strings.TrimSpace(string(out))
+	if err != nil {
+		if text != "" {
+			text += "\n"
+		}
+		text += err.Error()
+	}
+	if text == "" {
+		return "(no output)"
+	}
+	return text
+}
+
+func formatShellPrompt(shellCmd, output string) string {
+	return "$ " + shellCmd + "\n" + output
 }
 
 func (r *goTUIRoot) runSlash(line string) {
@@ -222,8 +251,10 @@ func (r *goTUIRoot) runPrompt(line string) {
 
 	go func() {
 		defer queryCancel()
-		r.promptMu.Lock()
-		defer r.promptMu.Unlock()
+		if r.promptMu != nil {
+			r.promptMu.Lock()
+			defer r.promptMu.Unlock()
+		}
 		// Bail if the context was cancelled while waiting for the lock.
 		select {
 		case <-queryCtx.Done():
