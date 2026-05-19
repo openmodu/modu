@@ -43,6 +43,9 @@ enough to implement, verify, and commit independently.
   `/scoped-models`, and `Ctrl+P` / `Ctrl+N` model cycling.
 - Added interactive `/settings`, `/hotkeys`, `/reload`, `/new`, `/name`, and
   `/clone` handling for the TUI path.
+- `/tree` now opens an interactive session-tree selector with search, current-path
+  markers, branch-summary preview, Enter navigation, and Ctrl+F branched-session
+  creation.
 
 ## Next
 
@@ -71,3 +74,5 @@ enough to implement, verify, and commit independently.
 - 2026-05-19: `go test -count=1 ./pkg/tui ./pkg/slash ./pkg/coding_agent ./cmd/modu_code`
   passed for expanded TUI parity: slash commands, session selector, model selector,
   settings, hotkeys, and reload.
+- 2026-05-19: `go test ./pkg/coding_agent ./pkg/tui ./pkg/slash`
+  passed for interactive session-tree navigation and branch-summary restoration.

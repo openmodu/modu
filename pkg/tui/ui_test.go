@@ -661,6 +661,45 @@ func TestScopedModelsSelectorTogglesSessionScope(t *testing.T) {
 	}
 }
 
+func TestTreeSelectNavigatesWithBranchSummary(t *testing.T) {
+	session := newUITestSession(t)
+	if err := session.Prompt(context.Background(), "first tree prompt"); err != nil {
+		t.Fatal(err)
+	}
+	session.WaitForIdle()
+	if err := session.Prompt(context.Background(), "second tree prompt"); err != nil {
+		t.Fatal(err)
+	}
+	session.WaitForIdle()
+
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, nil)
+	root.openTreeSelect()
+	if root.model.state != uiStateTreeSelect {
+		t.Fatalf("expected tree select state, got %v", root.model.state)
+	}
+	for _, r := range "first tree" {
+		root.appendTreeSearch(r)
+	}
+	if len(root.treeNodes) == 0 {
+		t.Fatal("expected tree search result")
+	}
+	root.confirmTreeSelect()
+	if root.model.state != uiStateInput {
+		t.Fatalf("expected input state after tree navigation, got %v", root.model.state)
+	}
+	if !strings.Contains(root.model.statusMsg, "jumped") {
+		t.Fatalf("expected jumped status, got %q", root.model.statusMsg)
+	}
+	messages := session.GetMessages()
+	if len(messages) == 0 {
+		t.Fatal("expected restored messages")
+	}
+	lastText := uiTestMessageText(messages[len(messages)-1])
+	if !strings.Contains(lastText, "[Branch Navigation Summary]") || !strings.Contains(lastText, "first tree prompt") {
+		t.Fatalf("expected branch summary message for selected point, got %q", lastText)
+	}
+}
+
 func TestPromptErrorCollapsesRepeatsAndOffersActions(t *testing.T) {
 	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 	err := errors.New("max retries (3) exceeded: dial tcp 127.0.0.1:1234: connect: operation timed out")
@@ -846,6 +885,38 @@ func writeUITestSessionFile(t *testing.T, agentDir, cwd, name, prompt string) st
 		t.Fatal(err)
 	}
 	return mgr.FilePath()
+}
+
+func uiTestMessageText(msg agent.AgentMessage) string {
+	switch m := msg.(type) {
+	case types.UserMessage:
+		return uiTestContentText(m.Content)
+	case *types.UserMessage:
+		return uiTestContentText(m.Content)
+	case types.AssistantMessage:
+		return uiTestContentText(m.Content)
+	case *types.AssistantMessage:
+		return uiTestContentText(m.Content)
+	default:
+		return ""
+	}
+}
+
+func uiTestContentText(content any) string {
+	switch value := content.(type) {
+	case string:
+		return value
+	case []types.ContentBlock:
+		var parts []string
+		for _, block := range value {
+			if text, ok := block.(*types.TextContent); ok && text != nil {
+				parts = append(parts, text.Text)
+			}
+		}
+		return strings.Join(parts, "\n")
+	default:
+		return ""
+	}
 }
 
 func indexSessionChoice(t *testing.T, choices []coding_agent.SessionInfo, path string) int {

@@ -987,6 +987,156 @@ func (s *CodingSession) GetSessionBranches() []SessionBranchInfo {
 	return out
 }
 
+// GetSessionTreeNodes returns a depth-first view of the current session tree.
+func (s *CodingSession) GetSessionTreeNodes() []SessionTreeNode {
+	if s.sessionManager == nil || s.sessionTree == nil {
+		return nil
+	}
+	entries := s.sessionManager.Load()
+	lookup := make(map[string]session.SessionEntry, len(entries))
+	visible := make(map[string]struct{})
+	for _, entry := range entries {
+		lookup[entry.ID] = entry
+		if visibleSessionTreeEntry(entry) {
+			visible[entry.ID] = struct{}{}
+		}
+	}
+	children := make(map[string][]session.SessionEntry)
+	for _, entry := range entries {
+		if !visibleSessionTreeEntry(entry) {
+			continue
+		}
+		parentID := nearestVisibleSessionParent(entry.ParentID, lookup, visible)
+		children[parentID] = append(children[parentID], entry)
+	}
+	currentPath := make(map[string]struct{})
+	for _, entry := range s.sessionTree.GetCurrentPath() {
+		currentPath[entry.ID] = struct{}{}
+	}
+	currentID := s.sessionManager.LastID()
+	var out []SessionTreeNode
+	var walk func(parentID string, depth int)
+	walk = func(parentID string, depth int) {
+		for _, entry := range children[parentID] {
+			_, inPath := currentPath[entry.ID]
+			node := SessionTreeNode{
+				ID:            entry.ID,
+				ParentID:      nearestVisibleSessionParent(entry.ParentID, lookup, visible),
+				Type:          string(entry.Type),
+				Role:          sessionEntryRole(entry),
+				Label:         s.sessionManager.GetLabel(entry.ID),
+				Preview:       sessionEntryPreview(entry),
+				Depth:         depth,
+				ChildCount:    len(children[entry.ID]),
+				Current:       entry.ID == currentID,
+				InCurrentPath: inPath,
+				Timestamp:     entry.Timestamp,
+			}
+			out = append(out, node)
+			walk(entry.ID, depth+1)
+		}
+	}
+	walk("", 0)
+	return out
+}
+
+func nearestVisibleSessionParent(parentID string, lookup map[string]session.SessionEntry, visible map[string]struct{}) string {
+	for parentID != "" {
+		if _, ok := visible[parentID]; ok {
+			return parentID
+		}
+		parent, ok := lookup[parentID]
+		if !ok {
+			return ""
+		}
+		parentID = parent.ParentID
+	}
+	return ""
+}
+
+func visibleSessionTreeEntry(entry session.SessionEntry) bool {
+	switch entry.Type {
+	case session.EntryTypeMessage, session.EntryTypeBranchSummary, session.EntryTypeCompaction, session.EntryTypeModelChange:
+		return true
+	default:
+		return false
+	}
+}
+
+func sessionEntryRole(entry session.SessionEntry) string {
+	if entry.Type != session.EntryTypeMessage {
+		return ""
+	}
+	switch data := entry.Data.(type) {
+	case session.MessageData:
+		return string(data.Role)
+	case map[string]any:
+		role, _ := data["role"].(string)
+		return role
+	default:
+		return ""
+	}
+}
+
+func sessionEntryPreview(entry session.SessionEntry) string {
+	switch data := entry.Data.(type) {
+	case session.MessageData:
+		return previewAnyContent(data.Content)
+	case session.BranchSummaryData:
+		return data.Summary
+	case session.CompactionData:
+		return data.Summary
+	case session.ModelChangeData:
+		if data.Provider != "" {
+			return data.Provider + "/" + data.ModelID
+		}
+		return data.ModelID
+	case map[string]any:
+		if summary, _ := data["summary"].(string); summary != "" {
+			return summary
+		}
+		if content, ok := data["content"]; ok {
+			return previewAnyContent(content)
+		}
+		if model, _ := data["modelId"].(string); model != "" {
+			provider, _ := data["provider"].(string)
+			if provider != "" {
+				return provider + "/" + model
+			}
+			return model
+		}
+	}
+	return ""
+}
+
+func previewAnyContent(content any) string {
+	switch value := content.(type) {
+	case string:
+		return value
+	case []types.ContentBlock:
+		var parts []string
+		for _, block := range value {
+			if text, ok := block.(*types.TextContent); ok && text != nil && text.Text != "" {
+				parts = append(parts, text.Text)
+			}
+		}
+		return strings.Join(parts, " ")
+	case []any:
+		var parts []string
+		for _, block := range value {
+			if m, ok := block.(map[string]any); ok {
+				text, _ := m["text"].(string)
+				if text != "" {
+					parts = append(parts, text)
+				}
+			}
+		}
+		return strings.Join(parts, " ")
+	default:
+		return fmt.Sprint(value)
+	}
+}
+
 // CreateBranchedSession creates a new session file from the path to entryID.
 func (s *CodingSession) CreateBranchedSession(entryID string) (string, error) {
 	if s.sessionManager == nil {
@@ -1004,7 +1154,37 @@ func (s *CodingSession) CreateBranchedSession(entryID string) (string, error) {
 
 // NavigateTree navigates to a specific point in the session tree.
 func (s *CodingSession) NavigateTree(entryID string) error {
-	return s.sessionTree.NavigateTo(entryID)
+	if s.sessionManager == nil || s.sessionTree == nil {
+		return fmt.Errorf("session tree not available")
+	}
+	path := s.sessionTree.GetPath(entryID)
+	if len(path) == 0 {
+		return fmt.Errorf("entry %s not found", entryID)
+	}
+	if entryID == s.sessionManager.LastID() {
+		_, err := s.RestoreMessages()
+		return err
+	}
+	var msgs []types.AgentMessage
+	for _, entry := range path {
+		if entry.Type != session.EntryTypeMessage {
+			continue
+		}
+		if msg, ok := agentMessageFromSessionData(entry.Data); ok && msg != nil {
+			msgs = append(msgs, msg)
+		}
+	}
+	summary, err := compaction.GenerateBranchSummary(context.Background(), msgs, compaction.BranchSummaryOptions{})
+	if err != nil {
+		return err
+	}
+	if _, err := s.sessionManager.BranchWithSummary(entryID, summary); err != nil {
+		return err
+	}
+	s.sessionTree = session.NewTree(s.sessionManager)
+	_, err = s.RestoreMessages()
+	s.writeRuntimeState()
+	return err
 }
 
 // GetAgent returns the underlying agent.

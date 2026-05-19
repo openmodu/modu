@@ -79,6 +79,12 @@ type goTUIRoot struct {
 	sessionConfirmDelete string
 	sessionRenameMode    bool
 	sessionRenameText    string
+	treeNodes            []coding_agent.SessionTreeNode
+	treeAllNodes         []coding_agent.SessionTreeNode
+	treeSelectIdx        int
+	treeSelectScroll     int
+	treeSearch           string
+	treeShowSummary      bool
 	settingsChoices      []settingsChoice
 	settingsSelectIdx    int
 	lastFailedPrompt     string
@@ -204,6 +210,7 @@ func (r *goTUIRoot) positionCursor(app *gotui.App) {
 	if r.model.state == uiStateModelSelect ||
 		r.model.state == uiStateSessionSelect ||
 		r.model.state == uiStateSettingsSelect ||
+		r.model.state == uiStateTreeSelect ||
 		r.model.state == uiStatePermission {
 		return
 	}
@@ -248,6 +255,9 @@ func (r *goTUIRoot) KeyMap() gotui.KeyMap {
 	}
 	if r.model.state == uiStateSettingsSelect {
 		return r.settingsSelectKeyMap()
+	}
+	if r.model.state == uiStateTreeSelect {
+		return r.treeSelectKeyMap()
 	}
 	if r.model.state == uiStatePlanReject {
 		return r.planRejectKeyMap()
@@ -330,6 +340,7 @@ func (r *goTUIRoot) KeyMap() gotui.KeyMap {
 //   - Model select   : sep / model-picker / sep / meta
 //   - Session select : sep / session-picker / sep / meta
 //   - Settings select: sep / settings / sep / meta
+//   - Tree select    : sep / tree-picker / sep / meta
 //   - Normal mode    : [activity] / sep / input / sep / [suggestions | status] / meta
 func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 	_ = r.refresh.Get()
@@ -469,6 +480,29 @@ func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 		r.commitInlineHeight(app, neededH)
 		addSep(root)
 		root.AddChild(r.renderSettingsSelectWidget())
+		addSep(root)
+		addMeta(root)
+		return root
+	}
+
+	if r.model.state == uiStateTreeSelect {
+		visible := len(r.treeNodes)
+		if visible > treeSelectVisibleRows {
+			visible = treeSelectVisibleRows
+		}
+		if visible == 0 {
+			visible = 1
+		}
+		neededH := visible + 5 // sep + title + search + choices + hints + sep
+		if meta != "" {
+			neededH++
+		}
+		if neededH < 5 {
+			neededH = 5
+		}
+		r.commitInlineHeight(app, neededH)
+		addSep(root)
+		root.AddChild(r.renderTreeSelectWidget())
 		addSep(root)
 		addMeta(root)
 		return root

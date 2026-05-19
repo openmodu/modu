@@ -26,6 +26,7 @@ const (
 	uiStateModelSelect
 	uiStateSessionSelect
 	uiStateSettingsSelect
+	uiStateTreeSelect
 	uiStatePlanReject // capturing free-form rejection feedback for a plan
 )
 

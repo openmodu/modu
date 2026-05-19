@@ -51,6 +51,10 @@ func (r *goTUIRoot) submit(text string) {
 			r.openSessionSelect(true)
 			return
 		}
+		if line == "/tree" || line == "/fork" {
+			r.openTreeSelect()
+			return
+		}
 		if line == "/new" {
 			r.runNewSessionCommand()
 			return

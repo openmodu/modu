@@ -95,9 +95,9 @@ go run ./cmd/modu_code config validate
 | `/sessions [all]` | 在 TUI 中打开当前项目或全部项目的会话选择器；非 TUI 模式列出会话 |
 | `/resume [all]` | 在 TUI 中打开会话选择器；非 TUI 模式需要传入 `<file>` |
 | `/fork-session <file>` | 从已有会话复制一份到当前项目 |
-| `/fork <entry-id>` | 从历史用户消息位置 fork |
+| `/fork [entry-id]` | TUI 中无参数打开 session tree；带 entry id 时从历史位置 fork |
 | `/clone` | 从当前 session leaf 克隆一份会话 |
-| `/tree` | 查看 session tree |
+| `/tree` | 在 TUI 中打开 session tree，Enter 跳转并注入 branch summary，Ctrl+F 从选中节点创建 branched session |
 | `/skills` | 查看已发现 skills |
 | `/prompts` | 查看已发现 prompt templates |
 
