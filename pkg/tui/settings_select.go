@@ -40,7 +40,7 @@ func (r *goTUIRoot) buildSettingsChoices() []settingsChoice {
 				return "compact"
 			},
 			Apply: func() {
-				r.model.transcriptMode = !r.model.transcriptMode
+				r.setTranscriptMode(!r.model.transcriptMode)
 				if err := r.savePersistedTUISettings(); err != nil {
 					r.model.errMsg = err.Error()
 				}

@@ -35,8 +35,7 @@ func (r *goTUIRoot) permissionKeyMap() gotui.KeyMap {
 	return gotui.KeyMap{
 		gotui.OnStop(gotui.KeyCtrlC, func(ke gotui.KeyEvent) { r.abortQuery() }),
 		gotui.OnStop(gotui.KeyCtrlO, func(ke gotui.KeyEvent) {
-			r.model.transcriptMode = !r.model.transcriptMode
-			r.bump()
+			r.toggleTranscriptMode()
 		}),
 		gotui.OnStop(gotui.KeyEnter, func(ke gotui.KeyEvent) { r.approve("allow") }),
 		gotui.OnStop(gotui.KeyEscape, func(ke gotui.KeyEvent) { r.approve("deny") }),
@@ -58,8 +57,7 @@ func (r *goTUIRoot) planApprovalKeyMap() gotui.KeyMap {
 	return gotui.KeyMap{
 		gotui.OnStop(gotui.KeyCtrlC, func(ke gotui.KeyEvent) { r.abortQuery() }),
 		gotui.OnStop(gotui.KeyCtrlO, func(ke gotui.KeyEvent) {
-			r.model.transcriptMode = !r.model.transcriptMode
-			r.bump()
+			r.toggleTranscriptMode()
 		}),
 		gotui.OnStop(gotui.KeyEnter, func(ke gotui.KeyEvent) { r.resolvePlan("approve") }),
 		gotui.OnStop(gotui.Rune('y'), func(ke gotui.KeyEvent) { r.resolvePlan("approve") }),

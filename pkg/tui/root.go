@@ -200,6 +200,33 @@ func (r *goTUIRoot) resetInlineHeight() {
 	}
 }
 
+func (r *goTUIRoot) toggleTranscriptMode() {
+	r.setTranscriptMode(!r.model.transcriptMode)
+	if r.model.transcriptMode {
+		r.model.setTransientStatus("tool output expanded")
+	} else {
+		r.model.setTransientStatus("tool output collapsed")
+	}
+	r.bump()
+}
+
+func (r *goTUIRoot) setTranscriptMode(expanded bool) {
+	if r.model.transcriptMode == expanded {
+		return
+	}
+	r.model.transcriptMode = expanded
+	r.repaintTranscript()
+}
+
+func (r *goTUIRoot) repaintTranscript() {
+	if r.app == nil {
+		return
+	}
+	_, _ = r.app.Terminal().WriteDirect([]byte("\033[3J\033[2J\033[H"))
+	r.resetInlineHeight()
+	r.repaintAbove()
+}
+
 // queue schedules fn to run on the main event loop. Outside the loop (e.g.
 // tests with no app), the function runs synchronously.
 func (r *goTUIRoot) queue(fn func()) {
@@ -310,8 +337,7 @@ func (r *goTUIRoot) KeyMap() gotui.KeyMap {
 			r.bump()
 		}),
 		gotui.OnStop(gotui.KeyCtrlO, func(ke gotui.KeyEvent) {
-			r.model.transcriptMode = !r.model.transcriptMode
-			r.bump()
+			r.toggleTranscriptMode()
 		}),
 		gotui.OnStop(gotui.KeyCtrlP, func(ke gotui.KeyEvent) { r.cycleModel("forward") }),
 		gotui.OnStop(gotui.KeyCtrlN, func(ke gotui.KeyEvent) { r.cycleModel("backward") }),

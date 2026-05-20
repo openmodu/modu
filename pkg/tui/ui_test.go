@@ -1046,6 +1046,55 @@ func TestPersistedTUISettingsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCtrlOTogglesTranscriptModeAndStatus(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+
+	if !dispatchFirstGoTUIKey(root.KeyMap(), gotui.KeyEvent{Key: gotui.KeyRune, Rune: 'o', Mod: gotui.ModCtrl}) {
+		t.Fatal("expected ctrl+o to be handled")
+	}
+	if !root.model.transcriptMode {
+		t.Fatal("expected ctrl+o to expand tool output")
+	}
+	if root.model.statusMsg != "tool output expanded" {
+		t.Fatalf("expected expanded status, got %q", root.model.statusMsg)
+	}
+
+	if !dispatchFirstGoTUIKey(root.KeyMap(), gotui.KeyEvent{Key: gotui.KeyRune, Rune: 'o', Mod: gotui.ModCtrl}) {
+		t.Fatal("expected second ctrl+o to be handled")
+	}
+	if root.model.transcriptMode {
+		t.Fatal("expected second ctrl+o to collapse tool output")
+	}
+	if root.model.statusMsg != "tool output collapsed" {
+		t.Fatalf("expected collapsed status, got %q", root.model.statusMsg)
+	}
+}
+
+func TestCtrlOTogglesTranscriptModeDuringApproval(t *testing.T) {
+	responseCh := make(chan string, 1)
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+	root.handleApprovalRequest(approval.Request{
+		ToolName:   "bash",
+		ToolCallID: "call-1",
+		Response:   responseCh,
+	})
+
+	if !dispatchFirstGoTUIKey(root.KeyMap(), gotui.KeyEvent{Key: gotui.KeyRune, Rune: 'o', Mod: gotui.ModCtrl}) {
+		t.Fatal("expected approval ctrl+o to be handled")
+	}
+	if !root.model.transcriptMode {
+		t.Fatal("expected ctrl+o to expand tool output during approval")
+	}
+	if root.model.pendingPerm == nil {
+		t.Fatal("expected approval to remain pending")
+	}
+	select {
+	case got := <-responseCh:
+		t.Fatalf("expected ctrl+o not to resolve approval, got %q", got)
+	default:
+	}
+}
+
 func TestSettingsSelectPagingClamps(t *testing.T) {
 	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 	root.settingsChoices = []settingsChoice{
