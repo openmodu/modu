@@ -53,7 +53,10 @@ func RunWithOptions(ctx context.Context, session *coding_agent.CodingSession, mo
 	app, err := gotui.NewApp(
 		gotui.WithRootComponent(root),
 		gotui.WithInlineHeight(5),
-		gotui.WithCursor(),
+		// Intentionally NOT WithCursor(): the hardware cursor would otherwise
+		// overdraw the reverse-video cursor block painted by renderInput. IME
+		// candidate windows still anchor correctly because positionCursor()
+		// keeps the (hidden) terminal cursor row/col in sync each frame.
 		// Soft-reset the visible viewport on launch: push whatever was in the
 		// terminal (e.g. a prior modu_code session's exit stats) up into
 		// scrollback via newline flow instead of rendering the inline widget

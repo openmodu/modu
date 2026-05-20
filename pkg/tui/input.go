@@ -204,16 +204,19 @@ func (r *goTUIRoot) navigateHistory(delta int) {
 
 // ─── Input rendering ─────────────────────────────────────────────────────────
 
-// renderInput builds the "> draft" widget. Each rune becomes its own gotui
-// element so that CJK wide characters are not pushed sideways by an inline
-// cursor block; instead we underline the rune at the cursor position.
+// renderInput builds the "❯ draft" widget. Each rune becomes its own gotui
+// element so CJK wide characters are not pushed sideways by an inline cursor
+// block; the rune at the cursor position is reverse-video styled (Claude Code
+// style — looks like a solid block highlighting the character). At end of line
+// the cursor is a single reverse-video space, which the terminal paints as a
+// full-cell solid block.
 func (r *goTUIRoot) renderInput(width int) *gotui.Element {
 	_ = width
 	rs := []rune(r.draft.Get())
 	r.cursor = clampInt(r.cursor, 0, len(rs))
 
-	const promptStr = "> "
-	const promptIndent = "  " // aligns continuation lines with text after "> "
+	const promptStr = "❯ "
+	const promptIndent = "  " // aligns continuation lines with text after "❯ "
 
 	container := gotui.New(
 		gotui.WithDisplay(gotui.DisplayFlex),
@@ -221,10 +224,13 @@ func (r *goTUIRoot) renderInput(width int) *gotui.Element {
 		gotui.WithFlexShrink(0),
 	)
 
+	// EOL cursor uses U+2588 FULL BLOCK rather than a reverse-styled space —
+	// go-tui's flex renderer skips elements whose text is only whitespace
+	// (Reverse / Background attrs are never written to the cell), so an
+	// empty-input box would otherwise have no visible cursor.
 	eolCursor := func() *gotui.Element {
 		return gotui.New(
-			gotui.WithText("▋"),
-			gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Green)),
+			gotui.WithText("█"),
 			gotui.WithFlexShrink(0),
 		)
 	}
@@ -276,7 +282,7 @@ func (r *goTUIRoot) renderInput(width int) *gotui.Element {
 		}
 		style := gotui.NewStyle()
 		if i == r.cursor {
-			style = gotui.NewStyle().Underline()
+			style = gotui.NewStyle().Reverse()
 		}
 		line.AddChild(gotui.New(
 			gotui.WithText(string(ch)),
