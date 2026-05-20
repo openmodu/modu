@@ -214,6 +214,68 @@ func TestHandleSessionCommands(t *testing.T) {
 	}
 }
 
+func TestHandleWorktreeStatusShowsLifecycle(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	cwd := t.TempDir()
+	initSlashGitRepo(t, cwd)
+	agentDir := filepath.Join(cwd, ".coding_agent")
+	model := &types.Model{
+		ID:         "mimo-v2.5-pro",
+		Name:       "MiMo V2.5 Pro",
+		ProviderID: "xiaomi-mimo",
+	}
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       cwd,
+		AgentDir:  agentDir,
+		Model:     model,
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	printer := &capturePrinter{}
+	handled, exit := Handle(context.Background(), "/worktree status", session, printer, model)
+	if !handled || exit {
+		t.Fatalf("expected /worktree status handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	if output := printer.String(); !strings.Contains(output, "Worktree") || !strings.Contains(output, "active: no") || !strings.Contains(output, "cwd: "+cwd) {
+		t.Fatalf("expected inactive worktree status, got:\n%s", output)
+	}
+
+	printer = &capturePrinter{}
+	handled, exit = Handle(context.Background(), "/worktree on", session, printer, model)
+	if !handled || exit {
+		t.Fatalf("expected /worktree on handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	active := session.WorktreeStatus()
+	if !active.Active {
+		t.Fatal("expected active worktree")
+	}
+
+	printer = &capturePrinter{}
+	handled, exit = Handle(context.Background(), "/worktree status", session, printer, model)
+	if !handled || exit {
+		t.Fatalf("expected active /worktree status handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	output := printer.String()
+	for _, want := range []string{
+		"Worktree",
+		"active: yes",
+		"path: " + active.Path,
+		"cwd: " + active.Cwd,
+		"original cwd: " + cwd,
+		"exists: yes",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected active worktree status to contain %q, got:\n%s", want, output)
+		}
+	}
+}
+
 func TestHandleTreeAndForkCommands(t *testing.T) {
 	cwd := t.TempDir()
 	agentDir := filepath.Join(cwd, ".coding_agent")
@@ -513,4 +575,24 @@ func TestHandleModelSwitchReportsClearedContext(t *testing.T) {
 	if got := len(session.GetMessages()); got != 0 {
 		t.Fatalf("expected model switch to clear messages, got %d", got)
 	}
+}
+
+func initSlashGitRepo(t *testing.T, dir string) {
+	t.Helper()
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+		}
+	}
+	run("init")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "README.md")
+	run("commit", "-m", "init")
 }

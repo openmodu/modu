@@ -578,6 +578,10 @@ func TestEnterAndExitWorktree(t *testing.T) {
 	if path == "" || session.cwd == original {
 		t.Fatalf("expected worktree cwd change, got cwd=%s path=%s", session.cwd, path)
 	}
+	status := session.WorktreeStatus()
+	if !status.Active || status.Path != path || status.Cwd != path || status.OriginalCwd != original || !status.Exists {
+		t.Fatalf("unexpected active worktree status: %#v", status)
+	}
 	if _, err := os.Stat(filepath.Join(path, "README.md")); err != nil {
 		t.Fatalf("expected repo file in worktree: %v", err)
 	}
@@ -587,6 +591,10 @@ func TestEnterAndExitWorktree(t *testing.T) {
 	}
 	if session.cwd != original {
 		t.Fatalf("expected cwd restored to %s, got %s", original, session.cwd)
+	}
+	status = session.WorktreeStatus()
+	if status.Active || status.Path != "" || status.Cwd != original {
+		t.Fatalf("unexpected inactive worktree status: %#v", status)
 	}
 }
 

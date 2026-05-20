@@ -156,6 +156,7 @@ High-priority gaps identified before this round:
   TUI session-tree row polish with short entry IDs, stable type labels, labels, and branch counts
   TUI idle status line polish with model, token, plan, and worktree state ahead of common hints
   TUI hotkey help alignment for selector paging, tree branch/summary controls, and resource commands
+  Worktree lifecycle status API and richer `/worktree status` output for active path, original cwd, current cwd, and path existence
 
 ## Still Missing
 

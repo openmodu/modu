@@ -335,10 +335,21 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		}
 		switch arg {
 		case "", "status":
-			if path := session.ActiveWorktree(); path != "" {
-				r.PrintInfo("active worktree: " + path)
+			status := session.WorktreeStatus()
+			if status.Active {
+				lines := []string{
+					"active: yes",
+					"path: " + status.Path,
+					"cwd: " + status.Cwd,
+					"original cwd: " + status.OriginalCwd,
+					"exists: " + yesNo(status.Exists),
+				}
+				r.PrintSection("Worktree", lines)
 			} else {
-				r.PrintInfo("active worktree: none")
+				r.PrintSection("Worktree", []string{
+					"active: no",
+					"cwd: " + status.Cwd,
+				})
 			}
 		case "on":
 			path, err := session.EnterWorktree()
@@ -784,6 +795,13 @@ func onOff(v bool) string {
 	return "off"
 }
 
+func yesNo(v bool) string {
+	if v {
+		return "yes"
+	}
+	return "no"
+}
+
 func handleDoctor(ctx context.Context, session *coding_agent.CodingSession, r Printer) {
 	info := session.GetDoctorInfo(ctx)
 	model := "none"
@@ -819,13 +837,6 @@ func handleDoctor(ctx context.Context, session *coding_agent.CodingSession, r Pr
 		}
 	}
 	r.PrintSection("Doctor", lines)
-}
-
-func yesNo(v bool) string {
-	if v {
-		return "yes"
-	}
-	return "no"
 }
 
 func handleTelegram(arg string, r Printer) {

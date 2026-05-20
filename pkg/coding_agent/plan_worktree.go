@@ -194,6 +194,15 @@ type worktreeAdapter struct {
 	session *CodingSession
 }
 
+// WorktreeStatus describes the current isolated worktree lifecycle state.
+type WorktreeStatus struct {
+	Active      bool
+	Path        string
+	OriginalCwd string
+	Cwd         string
+	Exists      bool
+}
+
 func (a worktreeAdapter) EnterWorktree() (string, error) {
 	if a.session == nil {
 		return "", fmt.Errorf("worktree session is not configured")
@@ -220,6 +229,26 @@ func (s *CodingSession) ActiveWorktree() string {
 	s.worktreeMu.Lock()
 	defer s.worktreeMu.Unlock()
 	return s.worktreePath
+}
+
+// WorktreeStatus returns the current isolated worktree state without mutating
+// the session. Exists is only true when the active worktree path is still on
+// disk.
+func (s *CodingSession) WorktreeStatus() WorktreeStatus {
+	s.worktreeMu.Lock()
+	defer s.worktreeMu.Unlock()
+	status := WorktreeStatus{
+		Active:      s.worktreePath != "",
+		Path:        s.worktreePath,
+		OriginalCwd: s.originalCwd,
+		Cwd:         s.cwd,
+	}
+	if status.Path != "" {
+		if _, err := os.Stat(status.Path); err == nil {
+			status.Exists = true
+		}
+	}
+	return status
 }
 
 func (s *CodingSession) replaceWorktreeTools() {
