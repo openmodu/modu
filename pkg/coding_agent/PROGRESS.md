@@ -162,6 +162,7 @@ High-priority gaps identified before this round:
   Managed worktree listing API and `/worktree list` output with active/idle and existence markers
   `/plan clear` command for removing the latest plan artifact and clearing approved-plan todos
   `/worktree cleanup` command for removing inactive managed worktrees while preserving the active worktree
+  Session tree branch-summary fallback labels that show the historical source entry when no explicit label exists
 
 ## Still Missing
 

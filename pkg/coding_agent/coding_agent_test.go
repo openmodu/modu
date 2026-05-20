@@ -416,6 +416,19 @@ func TestClearPlanRemovesPlanArtifactAndTodos(t *testing.T) {
 	}
 }
 
+func TestSessionTreeBranchSummaryFallbackLabel(t *testing.T) {
+	entry := sessionpkg.SessionEntry{
+		Type: sessionpkg.EntryTypeBranchSummary,
+		Data: sessionpkg.BranchSummaryData{FromID: "1234567890abcdef"},
+	}
+	if got := sessionTreeNodeLabel(entry, ""); got != "from #12345678" {
+		t.Fatalf("expected branch summary fallback label, got %q", got)
+	}
+	if got := sessionTreeNodeLabel(entry, "manual label"); got != "manual label" {
+		t.Fatalf("expected explicit label to win, got %q", got)
+	}
+}
+
 // TestSubmitPlanAutoAccept covers approve_auto: edits are auto-allowed for the
 // rest of the session.
 func TestSubmitPlanAutoAccept(t *testing.T) {

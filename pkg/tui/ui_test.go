@@ -719,6 +719,20 @@ func TestTreeNodeLineShowsIDRoleLabelAndBranchCount(t *testing.T) {
 	}
 }
 
+func TestTreeNodeLineShowsBranchSummaryFallbackLabel(t *testing.T) {
+	line := treeNodeLine(coding_agent.SessionTreeNode{
+		ID:      "branch-entry",
+		Type:    "branch_summary",
+		Label:   "from #12345678",
+		Preview: "restored context",
+	}, false, false)
+	for _, want := range []string{"branch", "[from #12345678]", "restored context"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("expected tree line to contain %q, got %q", want, line)
+		}
+	}
+}
+
 func TestFileReferenceSuggestionsCompleteAndExpandPrompt(t *testing.T) {
 	session := newUITestSession(t)
 	cwd := session.GetContextInfo().Cwd
