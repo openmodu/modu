@@ -86,6 +86,14 @@ func (r *goTUIRoot) submit(text string) {
 			r.showHotkeys()
 			return
 		}
+		if line == "/plan" {
+			r.showPlanPanel()
+			return
+		}
+		if line == "/worktree" {
+			r.showWorktreePanel()
+			return
+		}
 		if line == "/reload" {
 			r.runReloadCommand()
 			return

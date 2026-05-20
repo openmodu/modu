@@ -1013,6 +1013,26 @@ func TestHotkeyHelpIncludesSelectorAndResourceCommands(t *testing.T) {
 	}
 }
 
+func TestPlanAndWorktreePanelsRenderLifecycleState(t *testing.T) {
+	session := newUITestSession(t)
+	session.EnterPlanMode()
+	session.ExitPlanMode("panel plan", []string{"ship panel"})
+
+	plan := planPanelContent(session)
+	for _, want := range []string{"active: no", "latest: yes", "revisions: 1", "[pending] ship panel"} {
+		if !strings.Contains(plan, want) {
+			t.Fatalf("expected plan panel to contain %q, got:\n%s", want, plan)
+		}
+	}
+
+	worktree := worktreePanelContent(session)
+	for _, want := range []string{"active: no", "managed worktrees: 0"} {
+		if !strings.Contains(worktree, want) {
+			t.Fatalf("expected worktree panel to contain %q, got:\n%s", want, worktree)
+		}
+	}
+}
+
 func TestPromptErrorCompactsLongMultilineText(t *testing.T) {
 	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 	root.model.setPromptError(errors.New(strings.Repeat("long line\n", 80)))
