@@ -18,7 +18,7 @@ type settingsChoice struct {
 func (r *goTUIRoot) openSettingsSelect() {
 	r.settingsChoices = r.buildSettingsChoices()
 	if len(r.settingsChoices) == 0 {
-		r.model.statusMsg = "no settings"
+		r.model.setTransientStatus("no settings")
 		r.bump()
 		return
 	}
@@ -152,7 +152,7 @@ func (r *goTUIRoot) applySettingsSelect() {
 	}
 	r.settingsChoices[r.settingsSelectIdx].Apply()
 	r.settingsChoices = r.buildSettingsChoices()
-	r.model.statusMsg = "setting updated"
+	r.model.setTransientStatus("setting updated")
 	r.bump()
 }
 
@@ -160,7 +160,7 @@ func (r *goTUIRoot) closeSettingsSelect(status string) {
 	r.model.state = uiStateInput
 	r.settingsChoices = nil
 	r.settingsSelectIdx = 0
-	r.model.statusMsg = status
+	r.model.setTransientStatus(status)
 	r.bump()
 }
 

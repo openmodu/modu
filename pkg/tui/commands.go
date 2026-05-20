@@ -20,7 +20,7 @@ func (r *goTUIRoot) runNewSessionCommand() {
 		r.model.setPromptError(err)
 	} else {
 		r.model.blocks = nil
-		r.model.statusMsg = "new session"
+		r.model.setTransientStatus("new session")
 	}
 	r.bump()
 }
@@ -31,14 +31,14 @@ func (r *goTUIRoot) runCloneCommand() {
 	}
 	leafID := r.session.GetSessionLeafID()
 	if leafID == "" {
-		r.model.statusMsg = "nothing to clone"
+		r.model.setTransientStatus("nothing to clone")
 		r.bump()
 		return
 	}
 	if _, err := r.session.CreateBranchedSession(leafID); err != nil {
 		r.model.setPromptError(err)
 	} else {
-		r.model.statusMsg = "cloned session"
+		r.model.setTransientStatus("cloned session")
 	}
 	r.bump()
 }
@@ -48,7 +48,7 @@ func (r *goTUIRoot) runReloadCommand() {
 		return
 	}
 	r.session.ReloadResources()
-	r.model.statusMsg = "reloaded resources"
+	r.model.setTransientStatus("reloaded resources")
 	r.bump()
 }
 
@@ -65,7 +65,7 @@ func (r *goTUIRoot) runNameCommand(name string) {
 		return
 	}
 	r.session.SetSessionName(name)
-	r.model.statusMsg = "session name: " + name
+	r.model.setTransientStatus("session name: " + name)
 	r.bump()
 }
 

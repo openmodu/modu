@@ -592,6 +592,46 @@ func TestActivityLinePersistsCompletedTurn(t *testing.T) {
 	}
 }
 
+func TestTransientStatusExpiresToIdleLine(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+	root.model.setTransientStatus("saved")
+	root.model.statusExpiresAt = time.Now().Add(-time.Second)
+
+	line, _ := root.bottomLine()
+	if strings.Contains(line, "saved") {
+		t.Fatalf("expected expired status to clear, got %q", line)
+	}
+	if root.model.statusMsg != "" {
+		t.Fatalf("expected model status to be cleared, got %q", root.model.statusMsg)
+	}
+}
+
+func TestPersistentStatusIgnoresStaleTransientExpiry(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+	root.model.setTransientStatus("saved")
+	root.model.statusExpiresAt = time.Now().Add(-time.Second)
+	root.model.statusMsg = "permission required"
+
+	line, _ := root.bottomLine()
+	if !strings.Contains(line, "permission required") {
+		t.Fatalf("expected persistent status to remain visible, got %q", line)
+	}
+}
+
+func TestCompletedActivityExpires(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+	root.model.queryStartTime = time.Now().Add(-2 * time.Second)
+	root.model.finishActivity(nil)
+	root.model.activityExpiresAt = time.Now().Add(-time.Second)
+
+	if got, ok := root.activityLine(); ok {
+		t.Fatalf("expected expired activity to clear, got %q", got)
+	}
+	if root.model.lastActivity != "" {
+		t.Fatalf("expected model activity to be cleared, got %q", root.model.lastActivity)
+	}
+}
+
 func TestModelSelectEnterSwitchesModel(t *testing.T) {
 	providers.Models["ui-model-select"] = map[string]*types.Model{
 		"model-a": {ID: "model-a", Name: "Model A", ProviderID: "ui-model-select"},

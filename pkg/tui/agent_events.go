@@ -12,8 +12,8 @@ func (m *uiModel) handleAgentEvent(ev agent.AgentEvent) {
 	switch ev.Type {
 	case agent.EventTypeAgentStart:
 		m.queryActive = true
-		m.statusMsg = "thinking"
-		m.lastActivity = ""
+		m.setStatus("thinking")
+		m.clearActivity()
 
 	case agent.EventTypeMessageUpdate:
 		if ev.StreamEvent == nil {
@@ -107,7 +107,7 @@ func (m *uiModel) handleAgentEvent(ev agent.AgentEvent) {
 	case agent.EventTypeAgentEnd:
 		m.queryActive = false
 		if m.statusMsg != "interrupted" {
-			m.statusMsg = ""
+			m.setStatus("")
 		}
 	}
 }

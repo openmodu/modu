@@ -65,7 +65,7 @@ func (m *uiModel) renderActivityLine() string {
 
 func (m *uiModel) finishActivity(err error) string {
 	if m.queryStartTime.IsZero() {
-		m.lastActivity = ""
+		m.clearActivity()
 		return ""
 	}
 	elapsed := formatActivityDuration(time.Since(m.queryStartTime))
@@ -78,7 +78,7 @@ func (m *uiModel) finishActivity(err error) string {
 	} else {
 		summary = "✓ Completed (" + elapsed + ")"
 	}
-	m.lastActivity = "  " + uiDimText.Render(summary)
+	m.setTransientActivity("  " + uiDimText.Render(summary))
 	return summary
 }
 

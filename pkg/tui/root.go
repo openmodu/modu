@@ -150,7 +150,7 @@ func (r *goTUIRoot) Watchers() []gotui.Watcher {
 }
 
 func (r *goTUIRoot) tick() {
-	if r.model.state == uiStateQuerying || r.model.statusMsg != "" {
+	if r.model.state == uiStateQuerying || r.model.statusMsg != "" || r.model.lastActivity != "" {
 		r.bump()
 	}
 }
@@ -299,7 +299,7 @@ func (r *goTUIRoot) KeyMap() gotui.KeyMap {
 		gotui.OnStop(gotui.KeyCtrlL, func(ke gotui.KeyEvent) {
 			r.model.blocks = nil
 			r.model.clearPromptError()
-			r.model.statusMsg = "cleared"
+			r.model.setTransientStatus("cleared")
 			// Wipe terminal scrollback area + restart the inline widget at
 			// its baseline. Without this Ctrl+L only clears in-memory state
 			// while the widget keeps whatever inflated size it had grown to.
@@ -327,7 +327,7 @@ func (r *goTUIRoot) KeyMap() gotui.KeyMap {
 				return
 			}
 			r.model.state = uiStateInput
-			r.model.statusMsg = ""
+			r.model.setStatus("")
 			r.bump()
 		}),
 		// Editing keys all funnel into handleInputKey (defined in input.go).
