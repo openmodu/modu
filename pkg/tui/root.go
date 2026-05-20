@@ -223,7 +223,9 @@ func (r *goTUIRoot) repaintTranscript() {
 		return
 	}
 	_, _ = r.app.Terminal().WriteDirect([]byte("\033[3J\033[2J\033[H"))
-	r.resetInlineHeight()
+	if w, _ := r.app.Size(); w > 0 {
+		r.model.width = max(20, w-2)
+	}
 	r.repaintAbove()
 }
 
