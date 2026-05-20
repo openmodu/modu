@@ -165,6 +165,7 @@ High-priority gaps identified before this round:
   Session tree branch-summary fallback labels that show the historical source entry when no explicit label exists
   Plan revision snapshots plus `/plan history` for tracing approved plan iterations
   Active worktree diff API and `/worktree diff` for reviewing isolated changes before handoff
+  Shared TUI selector headers with current position, filtered/total counts, search query, and mode
 
 ## Still Missing
 

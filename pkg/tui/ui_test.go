@@ -733,6 +733,22 @@ func TestTreeNodeLineShowsBranchSummaryFallbackLabel(t *testing.T) {
 	}
 }
 
+func TestSelectorHeaderLineShowsCountsQueryAndMode(t *testing.T) {
+	line := selectorHeaderLine(selectorHeaderOptions{
+		Title:    "Session tree",
+		Selected: 2,
+		Visible:  4,
+		Total:    9,
+		Query:    "branch",
+		Mode:     "summary",
+	})
+	for _, want := range []string{"Session tree", "3/4", "filtered 4/9", "search: branch", "mode: summary"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("expected selector header to contain %q, got %q", want, line)
+		}
+	}
+}
+
 func TestFileReferenceSuggestionsCompleteAndExpandPrompt(t *testing.T) {
 	session := newUITestSession(t)
 	cwd := session.GetContextInfo().Cwd

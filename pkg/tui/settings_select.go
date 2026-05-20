@@ -171,7 +171,12 @@ func (r *goTUIRoot) renderSettingsSelectWidget() *gotui.Element {
 		gotui.WithFlexShrink(0),
 	)
 	container.AddChild(gotui.New(
-		gotui.WithText("  Settings"),
+		gotui.WithText(selectorHeaderLine(selectorHeaderOptions{
+			Title:    "Settings",
+			Selected: r.settingsSelectIdx,
+			Visible:  len(r.settingsChoices),
+			Total:    len(r.settingsChoices),
+		})),
 		gotui.WithTextStyle(gotui.NewStyle().Bold()),
 		gotui.WithFlexShrink(0),
 	))

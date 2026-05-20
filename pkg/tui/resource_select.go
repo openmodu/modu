@@ -190,7 +190,13 @@ func (r *goTUIRoot) renderResourceSelectWidget() *gotui.Element {
 		title = "Resources"
 	}
 	container.AddChild(gotui.New(
-		gotui.WithText("  "+title),
+		gotui.WithText(selectorHeaderLine(selectorHeaderOptions{
+			Title:    title,
+			Selected: r.resourceSelectIdx,
+			Visible:  len(r.resourceChoices),
+			Total:    len(r.resourceAllChoices),
+			Query:    r.resourceSearch,
+		})),
 		gotui.WithTextStyle(gotui.NewStyle().Bold()),
 		gotui.WithFlexShrink(0),
 	))
