@@ -27,6 +27,7 @@ const (
 	uiStateSessionSelect
 	uiStateSettingsSelect
 	uiStateTreeSelect
+	uiStateResourceSelect
 	uiStatePlanReject // capturing free-form rejection feedback for a plan
 )
 
@@ -74,6 +75,7 @@ var uiSlashCommands = []slashCommandDef{
 	{"/context", "show context sources"},
 	{"/doctor", "show runtime diagnostics"},
 	{"/retry", "retry last failed prompt"},
+	{"/config", "show/init/validate model config"},
 	{"/tools", "list active tools"},
 	{"/allow", "clear deny decision for a tool"},
 	{"/agents", "list subagents"},

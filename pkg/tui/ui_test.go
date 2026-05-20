@@ -785,6 +785,51 @@ func TestShellShortcutDoubleBangDoesNotSendToModel(t *testing.T) {
 	}
 }
 
+func TestConfigHookCommandRendersOutput(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+	root.commandHooks.Config = func(args string) (string, error) {
+		if args != "validate" {
+			t.Fatalf("unexpected config args %q", args)
+		}
+		return "status: ok\n", nil
+	}
+
+	root.submit("/config validate")
+
+	waitForUITestCondition(t, time.Second, func() bool {
+		for _, block := range root.model.blocks {
+			if block.Title == "Config" && strings.Contains(block.Content, "status: ok") {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+func TestResourceSelectFiltersAndInsertsCommand(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+	root.model.state = uiStateResourceSelect
+	root.resourceTitle = "Skills"
+	root.resourceAllChoices = []resourceChoice{
+		{Name: "git-commit", Description: "create a commit", Source: "user"},
+		{Name: "security-review", Description: "review code", Source: "project"},
+	}
+
+	for _, ch := range "security" {
+		root.appendResourceSearch(ch)
+	}
+	if len(root.resourceChoices) != 1 || root.resourceChoices[0].Name != "security-review" {
+		t.Fatalf("expected security-review match, got %#v", root.resourceChoices)
+	}
+	root.confirmResourceSelect()
+	if root.model.state != uiStateInput {
+		t.Fatalf("expected input state, got %v", root.model.state)
+	}
+	if got := root.draft.Get(); got != "/security-review " {
+		t.Fatalf("expected inserted command, got %q", got)
+	}
+}
+
 func TestPromptErrorCollapsesRepeatsAndOffersActions(t *testing.T) {
 	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 	err := errors.New("max retries (3) exceeded: dial tcp 127.0.0.1:1234: connect: operation timed out")

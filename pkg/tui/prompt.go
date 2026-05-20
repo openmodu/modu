@@ -38,6 +38,10 @@ func (r *goTUIRoot) submit(text string) {
 			r.retryLastFailedPrompt()
 			return
 		}
+		if line == "/config" || strings.HasPrefix(line, "/config ") {
+			r.runConfigHook(strings.TrimSpace(strings.TrimPrefix(line, "/config")))
+			return
+		}
 		if line == "/settings" {
 			r.openSettingsSelect()
 			return
@@ -60,6 +64,14 @@ func (r *goTUIRoot) submit(text string) {
 		}
 		if line == "/tree" || line == "/fork" {
 			r.openTreeSelect()
+			return
+		}
+		if line == "/skills" {
+			r.openResourceSelect("skills")
+			return
+		}
+		if line == "/prompts" {
+			r.openResourceSelect("prompts")
 			return
 		}
 		if line == "/new" {
@@ -181,6 +193,33 @@ func (r *goTUIRoot) runSlash(line string) {
 			if exit && r.app != nil {
 				r.app.Stop()
 			}
+		})
+	}()
+}
+
+func (r *goTUIRoot) runConfigHook(args string) {
+	if r.commandHooks.Config == nil {
+		r.model.statusMsg = "config command is not available"
+		r.bump()
+		return
+	}
+	go func() {
+		out, err := r.commandHooks.Config(args)
+		r.queue(func() {
+			content := strings.TrimSpace(out)
+			if err != nil {
+				if content != "" {
+					content += "\n"
+				}
+				content += "error: " + err.Error()
+			}
+			if content == "" {
+				content = "config command completed"
+			}
+			block := uiBlock{Kind: "section", Title: "Config", Content: content, Timestamp: time.Now()}
+			r.model.appendBlock(block)
+			r.pushBlockAbove(block)
+			r.bump()
 		})
 	}()
 }

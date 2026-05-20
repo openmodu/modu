@@ -92,7 +92,7 @@ func (r *goTUIRoot) showHotkeys() {
 		"  Shift+Tab: toggle plan mode",
 		"",
 		"Commands",
-		"  /settings, /model, /scoped-models, /sessions, /resume",
+		"  /settings, /config, /model, /scoped-models, /sessions",
 		"  /tree, /fork, /clone, /export, /copy, /changelog",
 	}
 	r.appendSystemSection("Hotkeys", strings.Join(lines, "\n"))

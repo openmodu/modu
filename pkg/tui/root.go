@@ -37,12 +37,13 @@ import (
 // shared UI state and routes events to the per-component method receivers
 // defined in this package's other files.
 type goTUIRoot struct {
-	ctx        context.Context
-	session    *coding_agent.CodingSession
-	modelInfo  *types.Model
-	histFile   string
-	approvalCh <-chan approval.Request
-	promptMu   *sync.Mutex
+	ctx          context.Context
+	session      *coding_agent.CodingSession
+	modelInfo    *types.Model
+	histFile     string
+	approvalCh   <-chan approval.Request
+	promptMu     *sync.Mutex
+	commandHooks CommandHooks
 
 	app     *gotui.App
 	model   *uiModel
@@ -88,6 +89,12 @@ type goTUIRoot struct {
 	treeSelectScroll     int
 	treeSearch           string
 	treeShowSummary      bool
+	resourceTitle        string
+	resourceChoices      []resourceChoice
+	resourceAllChoices   []resourceChoice
+	resourceSelectIdx    int
+	resourceSelectScroll int
+	resourceSearch       string
 	settingsChoices      []settingsChoice
 	settingsSelectIdx    int
 	lastFailedPrompt     string
@@ -214,6 +221,7 @@ func (r *goTUIRoot) positionCursor(app *gotui.App) {
 		r.model.state == uiStateSessionSelect ||
 		r.model.state == uiStateSettingsSelect ||
 		r.model.state == uiStateTreeSelect ||
+		r.model.state == uiStateResourceSelect ||
 		r.model.state == uiStatePermission {
 		return
 	}
@@ -261,6 +269,9 @@ func (r *goTUIRoot) KeyMap() gotui.KeyMap {
 	}
 	if r.model.state == uiStateTreeSelect {
 		return r.treeSelectKeyMap()
+	}
+	if r.model.state == uiStateResourceSelect {
+		return r.resourceSelectKeyMap()
 	}
 	if r.model.state == uiStatePlanReject {
 		return r.planRejectKeyMap()
@@ -344,6 +355,7 @@ func (r *goTUIRoot) KeyMap() gotui.KeyMap {
 //   - Session select : sep / session-picker / sep / meta
 //   - Settings select: sep / settings / sep / meta
 //   - Tree select    : sep / tree-picker / sep / meta
+//   - Resource select: sep / resource-picker / sep / meta
 //   - Normal mode    : [activity] / sep / input / sep / [suggestions | status] / meta
 func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 	_ = r.refresh.Get()
@@ -506,6 +518,29 @@ func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 		r.commitInlineHeight(app, neededH)
 		addSep(root)
 		root.AddChild(r.renderTreeSelectWidget())
+		addSep(root)
+		addMeta(root)
+		return root
+	}
+
+	if r.model.state == uiStateResourceSelect {
+		visible := len(r.resourceChoices)
+		if visible > resourceSelectVisibleRows {
+			visible = resourceSelectVisibleRows
+		}
+		if visible == 0 {
+			visible = 1
+		}
+		neededH := visible + 5
+		if meta != "" {
+			neededH++
+		}
+		if neededH < 5 {
+			neededH = 5
+		}
+		r.commitInlineHeight(app, neededH)
+		addSep(root)
+		root.AddChild(r.renderResourceSelectWidget())
 		addSep(root)
 		addMeta(root)
 		return root

@@ -12,6 +12,7 @@ import (
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/session"
 	"github.com/openmodu/modu/pkg/slash"
+	"github.com/openmodu/modu/pkg/tui"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -103,10 +104,16 @@ func TestMainTUISessionFlows(t *testing.T) {
 	}
 
 	called := false
-	runTUI = func(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool) error {
+	runTUI = func(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool, opts tui.RunOptions) error {
 		called = true
 		if noApprove {
 			t.Fatal("expected noApprove false")
+		}
+		if opts.CommandHooks.Config == nil {
+			t.Fatal("expected config hook")
+		}
+		if out, err := opts.CommandHooks.Config("validate"); err != nil || !strings.Contains(out, "status: ok") {
+			t.Fatalf("expected config hook validate ok, out=%q err=%v", out, err)
 		}
 		session.SetSessionName("active")
 		agentDir := filepath.Dir(filepath.Dir(filepath.Dir(session.GetSessionFile())))

@@ -56,6 +56,10 @@ enough to implement, verify, and commit independently.
 - Added `/copy` to copy the last assistant message to the system clipboard when
   `pbcopy` is available.
 - Added `/changelog` to show recent git commits from the active working directory.
+- Added TUI `/config example|init|validate` routing through a command hook so
+  `cmd/modu_code` can reuse its internal provider config helpers without moving packages.
+- `/skills` and `/prompts` now open searchable TUI resource pickers and insert
+  the selected slash command back into the input.
 
 ## Next
 
@@ -98,3 +102,7 @@ enough to implement, verify, and commit independently.
   passed for slash-driven last-assistant copy behavior.
 - 2026-05-19: `go test ./pkg/slash ./cmd/modu_code ./pkg/tui`
   passed for slash/TUI changelog command coverage.
+- 2026-05-20: `go test ./cmd/modu_code ./pkg/tui`
+  passed for the TUI `/config` command hook.
+- 2026-05-20: `go test ./pkg/tui`
+  passed for searchable skill/prompt resource picker behavior.

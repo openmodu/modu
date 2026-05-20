@@ -17,6 +17,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"fmt"
@@ -35,7 +36,7 @@ import (
 	"github.com/openmodu/modu/pkg/tui"
 )
 
-var runTUI = tui.Run
+var runTUI = tui.RunWithOptions
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "config" {
@@ -143,10 +144,19 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if err := runTUI(ctx, session, model, *noApprove); err != nil {
+	if err := runTUI(ctx, session, model, *noApprove, tui.RunOptions{CommandHooks: tui.CommandHooks{
+		Config: runConfigHook,
+	}}); err != nil {
 		fmt.Fprintf(os.Stderr, "ui error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func runConfigHook(args string) (string, error) {
+	fields := strings.Fields(args)
+	var out bytes.Buffer
+	err := runConfigCommand(fields, &out, nil)
+	return out.String(), err
 }
 
 func runConfigCommand(args []string, stdout, stderr io.Writer) error {

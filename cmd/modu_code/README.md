@@ -87,6 +87,7 @@ go run ./cmd/modu_code config validate
 | `/settings` | 打开 TUI 设置面板 |
 | `/model [query]` | 打开带搜索的模型选择器 |
 | `/scoped-models` | 打开模型范围选择器，用于控制模型循环范围 |
+| `/config example\|init\|validate` | 在 TUI 内查看、初始化或校验模型配置 |
 | `/context` | 查看当前 prompt/context 来源 |
 | `/doctor` | 查看基础运行诊断 |
 | `/retry` | 重试上一条失败的 prompt |
@@ -105,8 +106,8 @@ go run ./cmd/modu_code config validate
 | `/export [file]` | 导出当前 session 为 HTML；相对路径按当前工作目录解析 |
 | `/copy` | 复制最后一条 assistant 回复到系统剪贴板 |
 | `/changelog` | 显示当前 git 仓库最近提交 |
-| `/skills` | 查看已发现 skills |
-| `/prompts` | 查看已发现 prompt templates |
+| `/skills` | 在 TUI 中打开可搜索 skills 选择器；非 TUI 模式列出已发现 skills |
+| `/prompts` | 在 TUI 中打开可搜索 prompt templates 选择器；非 TUI 模式列出已发现 templates |
 
 ---
 
