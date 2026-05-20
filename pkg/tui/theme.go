@@ -23,4 +23,7 @@ var (
 	// character on the right, no surrounding bg gutters.
 	uiUserPrompt         = lipgloss.NewStyle().Foreground(lipgloss.Color("#E6EDF3")).Background(lipgloss.Color("#1F2A2E"))
 	uiExternalUserPrompt = lipgloss.NewStyle().Foreground(lipgloss.Color("#F2E7C9")).Background(lipgloss.Color("#2E2618"))
+	// Diff row backgrounds live as raw SGR sequences in highlight.go
+	// (sgrDiffAddedBg / sgrDiffRemovedBg) — they're emitted directly to
+	// bypass lipgloss's profile-detection color stripping.
 )

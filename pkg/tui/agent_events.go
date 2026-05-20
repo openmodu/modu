@@ -49,7 +49,11 @@ func (m *uiModel) handleAgentEvent(ev agent.AgentEvent) {
 		if args != nil {
 			switch ev.ToolName {
 			case "edit", "write", "read":
-				if fp, ok := args["file_path"].(string); ok {
+				// File tools (pkg/coding_agent/tools/{edit,write,read}.go) use
+				// "path" as their key — NOT "file_path". A previous version of
+				// this code used "file_path" and silently produced empty paths
+				// in tool headers and edit-summary lines.
+				if fp, ok := args["path"].(string); ok {
 					filePath = fp
 				}
 			}

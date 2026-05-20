@@ -262,13 +262,6 @@ func renderUIToolOutput(toolName, output, filePath string, expanded bool, w int)
 	expandedMax := 30
 	rowWidth := widthForPrefix(w)
 
-	// padAt returns hookPad for the first line (idx==0), dotPad otherwise.
-	padAt := func(idx int) string {
-		if idx == 0 {
-			return hookPad
-		}
-		return dotPad
-	}
 	maxRows := collapsedMax
 	if expanded {
 		maxRows = expandedMax
@@ -303,24 +296,87 @@ func renderUIToolOutput(toolName, output, filePath string, expanded bool, w int)
 		if len(lines) == 0 || (len(lines) == 1 && lines[0] == "") {
 			b.WriteString(hookPad + uiSuccessText.Render("updated") + "\n")
 		} else {
+			// Edit-tool output layout (from pkg/coding_agent/tools/edit.go):
+			//   line 0   : "Successfully edited <path> (N replacement(s))"
+			//   line 1   : "" (blank separator)
+			//   line 2-4 : "--- path", "+++ path", "@@ -a,b +c,d @@" (unidiff metadata)
+			//   rest     : context (" "), removed ("-"), added ("+") lines
+			//
+			// Claude Code layout: hook shows a concise `Updated <path> (+N -M)`
+			// summary; diff rows render lineno-first with the marker between
+			// gutter and content; metadata + blank gap are dropped.
+			rest := lines
+			if strings.HasPrefix(lines[0], "Successfully edited") {
+				rest = lines[1:] // strip the tool-generated success line; we synthesize our own summary
+			}
+			diffLines := make([]string, 0, len(rest))
+			for _, line := range rest {
+				if strings.HasPrefix(line, "--- ") || strings.HasPrefix(line, "+++ ") || strings.HasPrefix(line, "@@") {
+					continue
+				}
+				if len(diffLines) == 0 && line == "" {
+					continue // skip the blank separator that follows the summary
+				}
+				diffLines = append(diffLines, line)
+			}
+
+			// Pre-pass: count +/- and find max lineno digit width for gutter
+			// alignment across context (' ') and ± rows.
+			var addCount, removeCount, linenoWidth int
+			for _, line := range diffLines {
+				m, lineno, _ := parseEditDiffLine(line)
+				if l := len(lineno); l > linenoWidth {
+					linenoWidth = l
+				}
+				switch m {
+				case '+':
+					addCount++
+				case '-':
+					removeCount++
+				}
+			}
+
+			b.WriteString(hookPad + uiSuccessText.Render(editSummary(addCount, removeCount)) + "\n")
+
+			editMax := maxRows
+			if !expanded && editMax < 10 {
+				editMax = 10 // give the diff enough room to actually be visible
+			}
 			lexer := lexerForPath(filePath)
 			usedRows := 0
 			remaining := 0
-			for lineIdx := 0; lineIdx < len(lines) && usedRows < maxRows; lineIdx++ {
-				pad := padAt(lineIdx)
-				line := lines[lineIdx]
-				styled := styleEditDiffLine(line, lexer)
-				used, complete, hidden := writeSingleWrappedRowBudget(&b, styled, rowWidth, pad, dotPad, lipgloss.NewStyle(), maxRows-usedRows)
-				usedRows += used
-				if !complete {
-					remaining += hidden
-					remaining += wrappedLineCount(lines[lineIdx+1:], rowWidth)
+			// Row width to fill with bg tint on ± lines so the highlight extends
+			// to the column edge instead of stopping mid-row. lipgloss.Width
+			// strips ANSI before measuring, matching what the terminal sees.
+			tintWidth := lipgloss.Width(dotPad) + rowWidth
+			for lineIdx := 0; lineIdx < len(diffLines) && usedRows < editMax; lineIdx++ {
+				marker, _, _ := parseEditDiffLine(diffLines[lineIdx])
+				firstPrefix, restPrefix, content := styleEditDiffRow(diffLines[lineIdx], lexer, linenoWidth)
+				segments := wrapSegments(content, rowWidth)
+				lineComplete := true
+				for segIdx, seg := range segments {
+					if usedRows >= editMax {
+						remaining += len(segments) - segIdx
+						lineComplete = false
+						break
+					}
+					prefix := dotPad + restPrefix
+					if segIdx == 0 {
+						prefix = dotPad + firstPrefix
+					}
+					row := prefix + seg
+					row = tintDiffRow(row, marker, tintWidth)
+					b.WriteString(row + "\n")
+					usedRows++
+				}
+				if !lineComplete {
+					remaining += wrappedLineCount(diffLines[lineIdx+1:], rowWidth)
 					break
 				}
-				if lineIdx == len(lines)-1 {
+				if lineIdx == len(diffLines)-1 {
 					break
 				}
-				remaining = wrappedLineCount(lines[lineIdx+1:], rowWidth)
+				remaining = wrappedLineCount(diffLines[lineIdx+1:], rowWidth)
 			}
 			if expanded {
 				if remaining > 0 {
@@ -529,7 +585,10 @@ func formatToolInput(toolName string, args map[string]any) string {
 			return cmd
 		}
 	case "read":
-		if fp, ok := args["file_path"].(string); ok {
+		// File tools use "path" (see pkg/coding_agent/tools/read.go). The TUI
+		// previously read "file_path" here, which silently never matched and
+		// fell through to the noisy key=value fallback.
+		if fp, ok := args["path"].(string); ok {
 			s := shortenUIPath(fp)
 			if offset, ok := args["offset"].(float64); ok && offset > 0 {
 				s += fmt.Sprintf(":%d", int(offset))
@@ -537,16 +596,15 @@ func formatToolInput(toolName string, args map[string]any) string {
 			return s
 		}
 	case "write":
-		if fp, ok := args["file_path"].(string); ok {
+		if fp, ok := args["path"].(string); ok {
 			return shortenUIPath(fp)
 		}
 	case "edit":
-		if fp, ok := args["file_path"].(string); ok {
-			old, _ := args["old_string"].(string)
-			if len(old) > 40 {
-				old = old[:40] + "..."
-			}
-			return fmt.Sprintf("%s: %q → ...", shortenUIPath(fp), old)
+		// Claude Code style: tool header only shows the file path. The diff
+		// summary line below carries the +/- counts, so embedding a quoted
+		// old_text snippet here is redundant and frequently wraps to multi-row.
+		if fp, ok := args["path"].(string); ok {
+			return shortenUIPath(fp)
 		}
 	case "glob":
 		if p, ok := args["pattern"].(string); ok {
