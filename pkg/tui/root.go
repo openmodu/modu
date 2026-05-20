@@ -223,10 +223,22 @@ func (r *goTUIRoot) repaintTranscript() {
 		return
 	}
 	_, _ = r.app.Terminal().WriteDirect([]byte("\033[3J\033[2J\033[H"))
-	if w, _ := r.app.Size(); w > 0 {
+	w, h := r.app.Size()
+	if w > 0 {
 		r.model.width = max(20, w-2)
 	}
 	r.repaintAbove()
+	// Manual clears wipe the widget on the terminal but leave go-tui's cell
+	// buffer untouched, so its diff renderer would skip repainting the input.
+	// Dispatching a same-size ResizeEvent is the only public hook that sets
+	// needsFullRedraw — geometry-wise it's a no-op when width matches. Queue it
+	// instead of dispatching from inside the key handler, otherwise Ctrl+O can
+	// be swallowed before the expanded/collapsed frame is rendered.
+	if w > 0 && h > 0 {
+		r.app.QueueUpdate(func() {
+			r.app.Dispatch(gotui.ResizeEvent{Width: w, Height: h})
+		})
+	}
 }
 
 // queue schedules fn to run on the main event loop. Outside the loop (e.g.
