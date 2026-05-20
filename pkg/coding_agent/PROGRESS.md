@@ -166,10 +166,10 @@ High-priority gaps identified before this round:
 
 ## Still Missing
 
-- Deeper plan-mode semantics beyond the current state/prompt toggle
-- Richer worktree lifecycle controls and cleanup introspection
+- Deeper plan-mode revision flows beyond the current approval/rejection gate
+- Advanced worktree flows such as diff/merge handoff from isolated worktrees back to the original checkout
 - Full pi-compatible TypeScript extension/package ecosystem, including remote npm/git package install, theme resources, UI extension context, provider hooks, and hot reload
-- Remaining pi TUI polish around session tree rendering and historical branch labels
+- Remaining pi TUI polish outside the now-covered selector/status/session-tree basics
 
 ## Suggested Next Steps
 
