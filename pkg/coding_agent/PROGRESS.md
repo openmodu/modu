@@ -160,6 +160,7 @@ High-priority gaps identified before this round:
   Plan lifecycle status API and richer `/plan status` output for latest plan artifact and todo counters
   `/plan show` command for reading the latest approved plan artifact from the CLI/TUI slash path
   Managed worktree listing API and `/worktree list` output with active/idle and existence markers
+  `/plan clear` command for removing the latest plan artifact and clearing approved-plan todos
 
 ## Still Missing
 

@@ -211,6 +211,20 @@ func (s *CodingSession) PlanStatus() PlanStatus {
 	return status
 }
 
+// ClearPlan removes the latest persisted plan artifact and clears the current
+// todo list seeded from an approved plan. It does not toggle plan mode.
+func (s *CodingSession) ClearPlan() error {
+	status := s.PlanStatus()
+	if status.PlanFile != "" {
+		if err := os.Remove(status.PlanFile); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	s.SetTodos(nil)
+	s.writeRuntimeState()
+	return nil
+}
+
 func (s *CodingSession) replacePlanTools() {
 	if !s.config.FeaturePlanMode() {
 		s.activeTools = removeAgentToolByName(s.activeTools, "enter_plan_mode")

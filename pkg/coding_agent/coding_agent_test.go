@@ -399,6 +399,23 @@ func TestSubmitPlanApprove(t *testing.T) {
 	}
 }
 
+func TestClearPlanRemovesPlanArtifactAndTodos(t *testing.T) {
+	session := newTestSession(t, newTestModel())
+	session.EnterPlanMode()
+	session.ExitPlanMode("clear me", []string{"a"})
+	if status := session.PlanStatus(); !status.PlanExists || status.TodoTotal != 1 {
+		t.Fatalf("expected plan artifact and todo before clear, got %#v", status)
+	}
+
+	if err := session.ClearPlan(); err != nil {
+		t.Fatal(err)
+	}
+	status := session.PlanStatus()
+	if status.PlanExists || status.TodoTotal != 0 {
+		t.Fatalf("expected cleared plan status, got %#v", status)
+	}
+}
+
 // TestSubmitPlanAutoAccept covers approve_auto: edits are auto-allowed for the
 // rest of the session.
 func TestSubmitPlanAutoAccept(t *testing.T) {

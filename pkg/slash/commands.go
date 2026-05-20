@@ -343,8 +343,14 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 				content = "(empty plan)"
 			}
 			r.PrintSection("Plan", []string{content})
+		case "clear":
+			if err := session.ClearPlan(); err != nil {
+				r.PrintError(err)
+			} else {
+				r.PrintInfo("cleared latest plan and todos")
+			}
 		default:
-			r.PrintInfo("usage: /plan [status|show|on|off]")
+			r.PrintInfo("usage: /plan [status|show|clear|on|off]")
 		}
 		return true, false
 
@@ -945,7 +951,7 @@ func PrintHelp(r Printer) {
 		"/agents             — list discovered subagents",
 		"/todos              — show current todo list",
 		"/tasks              — show background subagent tasks",
-		"/plan [status|show|on|off] — inspect, show, or toggle plan mode",
+		"/plan [status|show|clear|on|off] — inspect, show, clear, or toggle plan mode",
 		"/worktree [status|list|on|off] — inspect or toggle isolated worktree mode",
 		"/skills             — list available skills",
 		"/prompts            — list available prompt templates",

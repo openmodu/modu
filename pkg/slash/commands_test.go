@@ -339,6 +339,18 @@ func TestHandlePlanStatusShowsArtifactAndTodos(t *testing.T) {
 	if !strings.Contains(output, "Plan") || !strings.Contains(output, "approved slash plan") {
 		t.Fatalf("expected plan show output with plan content, got:\n%s", output)
 	}
+
+	printer = &capturePrinter{}
+	handled, exit = Handle(context.Background(), "/plan clear", session, printer, model)
+	if !handled || exit {
+		t.Fatalf("expected /plan clear handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	if output := printer.String(); !strings.Contains(output, "cleared latest plan and todos") {
+		t.Fatalf("expected plan clear output, got:\n%s", output)
+	}
+	if status := session.PlanStatus(); status.PlanExists || status.TodoTotal != 0 {
+		t.Fatalf("expected cleared plan status, got %#v", status)
+	}
 }
 
 func TestHandleTreeAndForkCommands(t *testing.T) {
