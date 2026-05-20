@@ -469,9 +469,20 @@ func (r *goTUIRoot) renderSessionSelectWidget() *gotui.Element {
 	if r.sessionNamedOnly {
 		filter = "named"
 	}
-	title := fmt.Sprintf("  Select session  scope=%s  sort=%s  filter=%s", scope, r.sessionSortMode, filter)
+	mode := fmt.Sprintf("scope=%s sort=%s filter=%s", scope, r.sessionSortMode, filter)
+	headerQuery := r.sessionSearch
+	if r.sessionRenameMode || r.sessionConfirmDelete != "" {
+		headerQuery = ""
+	}
 	container.AddChild(gotui.New(
-		gotui.WithText(title),
+		gotui.WithText(selectorHeaderLine(selectorHeaderOptions{
+			Title:    "Select session",
+			Selected: r.sessionSelectIdx,
+			Visible:  len(r.sessionChoices),
+			Total:    len(r.sessionAllChoices),
+			Query:    headerQuery,
+			Mode:     mode,
+		})),
 		gotui.WithTextStyle(gotui.NewStyle().Bold()),
 		gotui.WithFlexShrink(0),
 	))

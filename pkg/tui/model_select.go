@@ -325,7 +325,14 @@ func (r *goTUIRoot) renderModelSelectWidget() *gotui.Element {
 		query = "type to search"
 	}
 	container.AddChild(gotui.New(
-		gotui.WithText("  Select model  scope="+scope),
+		gotui.WithText(selectorHeaderLine(selectorHeaderOptions{
+			Title:    "Select model",
+			Selected: r.modelSelectIdx,
+			Visible:  len(r.modelChoices),
+			Total:    len(r.modelAllChoices),
+			Query:    r.modelSearch,
+			Mode:     "scope=" + scope,
+		})),
 		gotui.WithTextStyle(gotui.NewStyle().Bold()),
 		gotui.WithFlexShrink(0),
 	))

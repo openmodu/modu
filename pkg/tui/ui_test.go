@@ -568,6 +568,12 @@ func TestModelSelectEnterSwitchesModel(t *testing.T) {
 	}
 	root.modelSearch = "model-b"
 	root.filterModelChoices()
+	header := collectGoTUIText(root.renderModelSelectWidget())
+	for _, want := range []string{"Select model", "search: model-b", "mode: scope="} {
+		if !strings.Contains(header, want) {
+			t.Fatalf("expected model selector header to contain %q, got %q", want, header)
+		}
+	}
 	root.confirmModelSelect()
 
 	if got := session.GetModel(); got.ID != "model-b" {
@@ -599,6 +605,12 @@ func TestSessionSelectResumeForkDelete(t *testing.T) {
 	}
 	if got := len(root.sessionChoices); got == 0 {
 		t.Fatal("expected search to keep matching session")
+	}
+	header := collectGoTUIText(root.renderSessionSelectWidget())
+	for _, want := range []string{"Select session", "search: resume", "mode: scope=all sort=threaded filter=all"} {
+		if !strings.Contains(header, want) {
+			t.Fatalf("expected session selector header to contain %q, got %q", want, header)
+		}
 	}
 	root.sessionSearch = ""
 	root.filterSessionChoices()
