@@ -344,6 +344,13 @@ func TestUIUserBlockUsesPromptBackground(t *testing.T) {
 	if bg := uiUserPrompt.GetBackground(); bg == nil {
 		t.Fatalf("expected user prompt background style, got nil")
 	}
+	external := ansiPattern.ReplaceAllString(renderUIUserBlockWithSource("remote prompt", "external", 80), "")
+	if !strings.Contains(external, "◆ remote prompt") {
+		t.Fatalf("expected external prompt marker, got %q", external)
+	}
+	if bg := uiExternalUserPrompt.GetBackground(); bg == nil {
+		t.Fatalf("expected external user prompt background style, got nil")
+	}
 }
 
 func TestUIRenderBlocksUsesBulletPrefixes(t *testing.T) {

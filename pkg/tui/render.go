@@ -139,8 +139,17 @@ func (m *uiModel) renderInputMeta() string {
 // uniformly; continuation lines use a two-space placeholder to keep the text
 // column aligned under ❯.
 func renderUIUserBlock(content string, width int) string {
+	return renderUIUserBlockWithSource(content, "", width)
+}
+
+func renderUIUserBlockWithSource(content, source string, width int) string {
 	var b strings.Builder
-	const glyph = "❯ "
+	glyph := "❯ "
+	style := uiUserPrompt
+	if strings.TrimSpace(source) != "" && source != "local" {
+		glyph = "◆ "
+		style = uiExternalUserPrompt
+	}
 	glyphW := lipgloss.Width(glyph)
 	// uiUserPrompt has no padding; only the two-cell ❯-glyph eats inline width.
 	avail := max(8, width-glyphW)
@@ -156,7 +165,7 @@ func renderUIUserBlock(content string, width int) string {
 				lead = glyph
 				first = false
 			}
-			b.WriteString(blockIndent + uiUserPrompt.Render(lead+seg) + "\n")
+			b.WriteString(blockIndent + style.Render(lead+seg) + "\n")
 		}
 	}
 	return b.String()
@@ -392,7 +401,7 @@ func (m *uiModel) renderSingleBlock(block uiBlock) string {
 	var s string
 	switch block.Kind {
 	case "user":
-		s = renderUIUserBlock(block.Content, viewWidth)
+		s = renderUIUserBlockWithSource(block.Content, block.Source, viewWidth)
 	case "assistant":
 		var ab strings.Builder
 		if block.Thinking != "" {

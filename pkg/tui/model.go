@@ -37,6 +37,7 @@ type uiBlock struct {
 	Kind      string
 	Title     string
 	Content   string
+	Source    string
 	RawText   string
 	Thinking  string
 	Streaming bool // true while LLM is still streaming this block; skip glamour render

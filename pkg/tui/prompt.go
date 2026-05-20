@@ -283,7 +283,7 @@ func (r *goTUIRoot) skillSlashCommands() []slashCommandDef {
 }
 
 func (r *goTUIRoot) runPrompt(line string) {
-	block := uiBlock{Kind: "user", Content: line, Timestamp: time.Now()}
+	block := uiBlock{Kind: "user", Content: line, Source: "local", Timestamp: time.Now()}
 	r.model.appendBlock(block)
 	r.pushBlockAbove(block)
 	r.model.queryActive = true
