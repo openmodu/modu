@@ -928,6 +928,24 @@ func TestPromptErrorCollapsesRepeatsAndOffersActions(t *testing.T) {
 	}
 }
 
+func TestBottomLineShowsSessionStatusWhenIdle(t *testing.T) {
+	session := newUITestSession(t)
+	session.EnterPlanMode()
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, nil)
+
+	line, _ := root.bottomLine()
+	for _, want := range []string{
+		"model test/test-model",
+		"plan",
+		"shift+tab plan",
+		"/help",
+	} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("expected bottom line to contain %q, got %q", want, line)
+		}
+	}
+}
+
 func TestPromptErrorCompactsLongMultilineText(t *testing.T) {
 	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 	root.model.setPromptError(errors.New(strings.Repeat("long line\n", 80)))

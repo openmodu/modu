@@ -154,6 +154,7 @@ High-priority gaps identified before this round:
   interactive session-tree nodes, branch-summary restoration during tree navigation, and TUI tree search/branch controls
   TUI resource/settings selector polish for consistent page navigation and visible resource source/path metadata
   TUI session-tree row polish with short entry IDs, stable type labels, labels, and branch counts
+  TUI idle status line polish with model, token, plan, and worktree state ahead of common hints
 
 ## Still Missing
 
