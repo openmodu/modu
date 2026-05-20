@@ -3,6 +3,7 @@ package slash
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -312,19 +313,59 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		}
 		switch arg {
 		case "", "status":
-			if session.IsPlanMode() {
-				r.PrintInfo("plan mode: on")
-			} else {
-				r.PrintInfo("plan mode: off")
+			status := session.PlanStatus()
+			lines := []string{
+				"active: " + yesNo(status.Active),
+				"latest plan: " + status.PlanFile,
+				"latest plan exists: " + yesNo(status.PlanExists),
+				fmt.Sprintf("revisions: %d", status.RevisionCount),
+				fmt.Sprintf("todos: total=%d pending=%d in_progress=%d completed=%d", status.TodoTotal, status.TodoPending, status.TodoInProgress, status.TodoCompleted),
 			}
+			r.PrintSection("Plan", lines)
 		case "on":
 			session.EnterPlanMode()
 			r.PrintInfo("plan mode enabled")
 		case "off":
 			session.ExitPlanMode("manually exited from /plan off", nil)
 			r.PrintInfo("plan mode disabled")
+		case "show":
+			status := session.PlanStatus()
+			if !status.PlanExists {
+				r.PrintInfo("no latest plan")
+				return true, false
+			}
+			data, err := os.ReadFile(status.PlanFile)
+			if err != nil {
+				r.PrintError(err)
+				return true, false
+			}
+			content := strings.TrimSpace(string(data))
+			if content == "" {
+				content = "(empty plan)"
+			}
+			r.PrintSection("Plan", []string{content})
+		case "clear":
+			if err := session.ClearPlan(); err != nil {
+				r.PrintError(err)
+			} else {
+				r.PrintInfo("cleared latest plan and todos")
+			}
+		case "history":
+			revisions := session.ListPlanRevisions()
+			if len(revisions) == 0 {
+				r.PrintInfo("no plan revisions")
+				return true, false
+			}
+			lines := make([]string, 0, len(revisions))
+			for i, revision := range revisions {
+				if i >= 10 {
+					break
+				}
+				lines = append(lines, fmt.Sprintf("%s  %s", revision.ModTime.Format(time.RFC3339), revision.Path))
+			}
+			r.PrintSection("Plan history", lines)
 		default:
-			r.PrintInfo("usage: /plan [status|on|off]")
+			r.PrintInfo("usage: /plan [status|show|history|clear|on|off]")
 		}
 		return true, false
 
@@ -335,10 +376,21 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		}
 		switch arg {
 		case "", "status":
-			if path := session.ActiveWorktree(); path != "" {
-				r.PrintInfo("active worktree: " + path)
+			status := session.WorktreeStatus()
+			if status.Active {
+				lines := []string{
+					"active: yes",
+					"path: " + status.Path,
+					"cwd: " + status.Cwd,
+					"original cwd: " + status.OriginalCwd,
+					"exists: " + yesNo(status.Exists),
+				}
+				r.PrintSection("Worktree", lines)
 			} else {
-				r.PrintInfo("active worktree: none")
+				r.PrintSection("Worktree", []string{
+					"active: no",
+					"cwd: " + status.Cwd,
+				})
 			}
 		case "on":
 			path, err := session.EnterWorktree()
@@ -353,8 +405,60 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 			} else {
 				r.PrintInfo("exited worktree")
 			}
+		case "list":
+			worktrees := session.ListManagedWorktrees()
+			if len(worktrees) == 0 {
+				r.PrintInfo("no managed worktrees")
+				return true, false
+			}
+			lines := make([]string, 0, len(worktrees))
+			for _, wt := range worktrees {
+				state := "idle"
+				if wt.Active {
+					state = "active"
+				}
+				lines = append(lines, fmt.Sprintf("%s exists=%s %s", state, yesNo(wt.Exists), wt.Path))
+			}
+			r.PrintSection("Worktrees", lines)
+		case "cleanup":
+			removed, err := session.CleanupManagedWorktrees()
+			if err != nil {
+				r.PrintError(err)
+				return true, false
+			}
+			if len(removed) == 0 {
+				r.PrintInfo("no inactive managed worktrees to cleanup")
+				return true, false
+			}
+			lines := make([]string, 0, len(removed))
+			for _, wt := range removed {
+				lines = append(lines, "removed "+wt.Path)
+			}
+			r.PrintSection("Worktree cleanup", lines)
+		case "diff":
+			diff, err := session.ActiveWorktreeDiff()
+			if err != nil {
+				r.PrintError(err)
+				return true, false
+			}
+			lines := []string{"path: " + diff.Path}
+			if diff.Stat == "" && diff.NameStatus == "" && diff.Patch == "" {
+				lines = append(lines, "no changes")
+				r.PrintSection("Worktree diff", lines)
+				return true, false
+			}
+			if diff.Stat != "" {
+				lines = append(lines, "stat:", diff.Stat)
+			}
+			if diff.NameStatus != "" {
+				lines = append(lines, "files:", diff.NameStatus)
+			}
+			if diff.Patch != "" {
+				lines = append(lines, "patch:", diff.Patch)
+			}
+			r.PrintSection("Worktree diff", lines)
 		default:
-			r.PrintInfo("usage: /worktree [status|on|off]")
+			r.PrintInfo("usage: /worktree [status|list|diff|cleanup|on|off]")
 		}
 		return true, false
 
@@ -784,6 +888,13 @@ func onOff(v bool) string {
 	return "off"
 }
 
+func yesNo(v bool) string {
+	if v {
+		return "yes"
+	}
+	return "no"
+}
+
 func handleDoctor(ctx context.Context, session *coding_agent.CodingSession, r Printer) {
 	info := session.GetDoctorInfo(ctx)
 	model := "none"
@@ -819,13 +930,6 @@ func handleDoctor(ctx context.Context, session *coding_agent.CodingSession, r Pr
 		}
 	}
 	r.PrintSection("Doctor", lines)
-}
-
-func yesNo(v bool) string {
-	if v {
-		return "yes"
-	}
-	return "no"
 }
 
 func handleTelegram(arg string, r Printer) {
@@ -899,8 +1003,8 @@ func PrintHelp(r Printer) {
 		"/agents             — list discovered subagents",
 		"/todos              — show current todo list",
 		"/tasks              — show background subagent tasks",
-		"/plan [on|off]      — inspect or toggle plan mode",
-		"/worktree [on|off]  — inspect or toggle isolated worktree mode",
+		"/plan [status|show|history|clear|on|off] — inspect, show, clear, or toggle plan mode",
+		"/worktree [status|list|diff|cleanup|on|off] — inspect, diff, clean, or toggle isolated worktree mode",
 		"/skills             — list available skills",
 		"/prompts            — list available prompt templates",
 		"/telegram           — show Telegram bot config",

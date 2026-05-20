@@ -390,8 +390,46 @@ func TestSubmitPlanApprove(t *testing.T) {
 	if todos := session.GetTodos(); len(todos) != 2 || todos[0].Content != "a" {
 		t.Fatalf("expected 2 todos from steps, got %v", todos)
 	}
+	status := session.PlanStatus()
+	if status.Active || !status.PlanExists || status.RevisionCount != 1 || status.TodoTotal != 2 || status.TodoPending != 2 {
+		t.Fatalf("unexpected approved plan status: %#v", status)
+	}
+	revisions := session.ListPlanRevisions()
+	if len(revisions) != 1 || revisions[0].Path == "" {
+		t.Fatalf("expected one plan revision, got %#v", revisions)
+	}
 	if !strings.Contains(msg, "approved") {
 		t.Fatalf("expected approval message, got %q", msg)
+	}
+}
+
+func TestClearPlanRemovesPlanArtifactAndTodos(t *testing.T) {
+	session := newTestSession(t, newTestModel())
+	session.EnterPlanMode()
+	session.ExitPlanMode("clear me", []string{"a"})
+	if status := session.PlanStatus(); !status.PlanExists || status.TodoTotal != 1 {
+		t.Fatalf("expected plan artifact and todo before clear, got %#v", status)
+	}
+
+	if err := session.ClearPlan(); err != nil {
+		t.Fatal(err)
+	}
+	status := session.PlanStatus()
+	if status.PlanExists || status.TodoTotal != 0 {
+		t.Fatalf("expected cleared plan status, got %#v", status)
+	}
+}
+
+func TestSessionTreeBranchSummaryFallbackLabel(t *testing.T) {
+	entry := sessionpkg.SessionEntry{
+		Type: sessionpkg.EntryTypeBranchSummary,
+		Data: sessionpkg.BranchSummaryData{FromID: "1234567890abcdef"},
+	}
+	if got := sessionTreeNodeLabel(entry, ""); got != "from #12345678" {
+		t.Fatalf("expected branch summary fallback label, got %q", got)
+	}
+	if got := sessionTreeNodeLabel(entry, "manual label"); got != "manual label" {
+		t.Fatalf("expected explicit label to win, got %q", got)
 	}
 }
 
@@ -578,6 +616,41 @@ func TestEnterAndExitWorktree(t *testing.T) {
 	if path == "" || session.cwd == original {
 		t.Fatalf("expected worktree cwd change, got cwd=%s path=%s", session.cwd, path)
 	}
+	status := session.WorktreeStatus()
+	if !status.Active || status.Path != path || status.Cwd != path || status.OriginalCwd != original || !status.Exists {
+		t.Fatalf("unexpected active worktree status: %#v", status)
+	}
+	worktrees := session.ListManagedWorktrees()
+	if len(worktrees) != 1 || !worktrees[0].Active || worktrees[0].Path != path || !worktrees[0].Exists {
+		t.Fatalf("unexpected managed worktree list: %#v", worktrees)
+	}
+	stalePath := filepath.Join(agentDir, "worktrees", "wt-stale")
+	if err := os.MkdirAll(stalePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := session.CleanupManagedWorktrees()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(removed) != 1 || removed[0].Path != stalePath {
+		t.Fatalf("expected stale worktree removed, got %#v", removed)
+	}
+	if _, err := os.Stat(stalePath); !os.IsNotExist(err) {
+		t.Fatalf("expected stale worktree removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected active worktree kept: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "README.md"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	diff, err := session.ActiveWorktreeDiff()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(diff.NameStatus, "README.md") || !strings.Contains(diff.Patch, "changed") {
+		t.Fatalf("expected active worktree diff for README.md, got %#v", diff)
+	}
 	if _, err := os.Stat(filepath.Join(path, "README.md")); err != nil {
 		t.Fatalf("expected repo file in worktree: %v", err)
 	}
@@ -587,6 +660,10 @@ func TestEnterAndExitWorktree(t *testing.T) {
 	}
 	if session.cwd != original {
 		t.Fatalf("expected cwd restored to %s, got %s", original, session.cwd)
+	}
+	status = session.WorktreeStatus()
+	if status.Active || status.Path != "" || status.Cwd != original {
+		t.Fatalf("unexpected inactive worktree status: %#v", status)
 	}
 }
 

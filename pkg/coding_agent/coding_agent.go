@@ -1024,7 +1024,7 @@ func (s *CodingSession) GetSessionTreeNodes() []SessionTreeNode {
 				ParentID:      nearestVisibleSessionParent(entry.ParentID, lookup, visible),
 				Type:          string(entry.Type),
 				Role:          sessionEntryRole(entry),
-				Label:         s.sessionManager.GetLabel(entry.ID),
+				Label:         sessionTreeNodeLabel(entry, s.sessionManager.GetLabel(entry.ID)),
 				Preview:       sessionEntryPreview(entry),
 				Depth:         depth,
 				ChildCount:    len(children[entry.ID]),
@@ -1052,6 +1052,35 @@ func nearestVisibleSessionParent(parentID string, lookup map[string]session.Sess
 		parentID = parent.ParentID
 	}
 	return ""
+}
+
+func sessionTreeNodeLabel(entry session.SessionEntry, explicit string) string {
+	if strings.TrimSpace(explicit) != "" {
+		return explicit
+	}
+	if entry.Type != session.EntryTypeBranchSummary {
+		return ""
+	}
+	switch data := entry.Data.(type) {
+	case session.BranchSummaryData:
+		return branchSummaryLabel(data.FromID)
+	case map[string]any:
+		fromID, _ := data["fromId"].(string)
+		return branchSummaryLabel(fromID)
+	default:
+		return ""
+	}
+}
+
+func branchSummaryLabel(fromID string) string {
+	fromID = strings.TrimSpace(fromID)
+	if fromID == "" {
+		return ""
+	}
+	if len(fromID) > 8 {
+		fromID = fromID[:8]
+	}
+	return "from #" + fromID
 }
 
 func visibleSessionTreeEntry(entry session.SessionEntry) bool {

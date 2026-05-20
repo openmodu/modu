@@ -156,13 +156,23 @@ High-priority gaps identified before this round:
   TUI session-tree row polish with short entry IDs, stable type labels, labels, and branch counts
   TUI idle status line polish with model, token, plan, and worktree state ahead of common hints
   TUI hotkey help alignment for selector paging, tree branch/summary controls, and resource commands
+  Worktree lifecycle status API and richer `/worktree status` output for active path, original cwd, current cwd, and path existence
+  Plan lifecycle status API and richer `/plan status` output for latest plan artifact and todo counters
+  `/plan show` command for reading the latest approved plan artifact from the CLI/TUI slash path
+  Managed worktree listing API and `/worktree list` output with active/idle and existence markers
+  `/plan clear` command for removing the latest plan artifact and clearing approved-plan todos
+  `/worktree cleanup` command for removing inactive managed worktrees while preserving the active worktree
+  Session tree branch-summary fallback labels that show the historical source entry when no explicit label exists
+  Plan revision snapshots plus `/plan history` for tracing approved plan iterations
+  Active worktree diff API and `/worktree diff` for reviewing isolated changes before handoff
+  Shared TUI selector headers with current position, filtered/total counts, search query, and mode
 
 ## Still Missing
 
-- Deeper plan-mode semantics beyond the current state/prompt toggle
-- Richer worktree lifecycle controls and cleanup introspection
+- Deeper plan-mode revision flows beyond the current approval/rejection gate
+- Advanced worktree flows such as diff/merge handoff from isolated worktrees back to the original checkout
 - Full pi-compatible TypeScript extension/package ecosystem, including remote npm/git package install, theme resources, UI extension context, provider hooks, and hot reload
-- Remaining pi TUI polish around session tree rendering and historical branch labels
+- Remaining pi TUI polish outside the now-covered selector/status/session-tree basics
 
 ## Suggested Next Steps
 

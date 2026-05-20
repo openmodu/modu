@@ -211,7 +211,14 @@ func (r *goTUIRoot) renderTreeSelectWidget() *gotui.Element {
 		mode = "summary"
 	}
 	container.AddChild(gotui.New(
-		gotui.WithText("  Session tree  view="+mode),
+		gotui.WithText(selectorHeaderLine(selectorHeaderOptions{
+			Title:    "Session tree",
+			Selected: r.treeSelectIdx,
+			Visible:  len(r.treeNodes),
+			Total:    len(r.treeAllNodes),
+			Query:    r.treeSearch,
+			Mode:     mode,
+		})),
 		gotui.WithTextStyle(gotui.NewStyle().Bold()),
 		gotui.WithFlexShrink(0),
 	))

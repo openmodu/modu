@@ -214,6 +214,195 @@ func TestHandleSessionCommands(t *testing.T) {
 	}
 }
 
+func TestHandleWorktreeStatusShowsLifecycle(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	cwd := t.TempDir()
+	initSlashGitRepo(t, cwd)
+	agentDir := filepath.Join(cwd, ".coding_agent")
+	model := &types.Model{
+		ID:         "mimo-v2.5-pro",
+		Name:       "MiMo V2.5 Pro",
+		ProviderID: "xiaomi-mimo",
+	}
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       cwd,
+		AgentDir:  agentDir,
+		Model:     model,
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	printer := &capturePrinter{}
+	handled, exit := Handle(context.Background(), "/worktree status", session, printer, model)
+	if !handled || exit {
+		t.Fatalf("expected /worktree status handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	if output := printer.String(); !strings.Contains(output, "Worktree") || !strings.Contains(output, "active: no") || !strings.Contains(output, "cwd: "+cwd) {
+		t.Fatalf("expected inactive worktree status, got:\n%s", output)
+	}
+
+	printer = &capturePrinter{}
+	handled, exit = Handle(context.Background(), "/worktree on", session, printer, model)
+	if !handled || exit {
+		t.Fatalf("expected /worktree on handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	active := session.WorktreeStatus()
+	if !active.Active {
+		t.Fatal("expected active worktree")
+	}
+
+	printer = &capturePrinter{}
+	handled, exit = Handle(context.Background(), "/worktree status", session, printer, model)
+	if !handled || exit {
+		t.Fatalf("expected active /worktree status handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	output := printer.String()
+	for _, want := range []string{
+		"Worktree",
+		"active: yes",
+		"path: " + active.Path,
+		"cwd: " + active.Cwd,
+		"original cwd: " + cwd,
+		"exists: yes",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected active worktree status to contain %q, got:\n%s", want, output)
+		}
+	}
+
+	printer = &capturePrinter{}
+	handled, exit = Handle(context.Background(), "/worktree list", session, printer, model)
+	if !handled || exit {
+		t.Fatalf("expected /worktree list handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	output = printer.String()
+	for _, want := range []string{
+		"Worktrees",
+		"active exists=yes " + active.Path,
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected worktree list to contain %q, got:\n%s", want, output)
+		}
+	}
+
+	stalePath := filepath.Join(agentDir, "worktrees", "wt-stale")
+	if err := os.MkdirAll(stalePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	printer = &capturePrinter{}
+	handled, exit = Handle(context.Background(), "/worktree cleanup", session, printer, model)
+	if !handled || exit {
+		t.Fatalf("expected /worktree cleanup handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	output = printer.String()
+	if !strings.Contains(output, "Worktree cleanup") || !strings.Contains(output, "removed "+stalePath) {
+		t.Fatalf("expected worktree cleanup output, got:\n%s", output)
+	}
+	if _, err := os.Stat(stalePath); !os.IsNotExist(err) {
+		t.Fatalf("expected stale worktree removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(active.Path); err != nil {
+		t.Fatalf("expected active worktree kept: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(active.Path, "README.md"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	printer = &capturePrinter{}
+	handled, exit = Handle(context.Background(), "/worktree diff", session, printer, model)
+	if !handled || exit {
+		t.Fatalf("expected /worktree diff handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	output = printer.String()
+	for _, want := range []string{
+		"Worktree diff",
+		"README.md",
+		"changed",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected worktree diff to contain %q, got:\n%s", want, output)
+		}
+	}
+}
+
+func TestHandlePlanStatusShowsArtifactAndTodos(t *testing.T) {
+	cwd := t.TempDir()
+	agentDir := filepath.Join(cwd, ".coding_agent")
+	model := &types.Model{
+		ID:         "mimo-v2.5-pro",
+		Name:       "MiMo V2.5 Pro",
+		ProviderID: "xiaomi-mimo",
+	}
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       cwd,
+		AgentDir:  agentDir,
+		Model:     model,
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.EnterPlanMode()
+	session.ExitPlanMode("approved slash plan", []string{"first", "second"})
+	status := session.PlanStatus()
+
+	printer := &capturePrinter{}
+	handled, exit := Handle(context.Background(), "/plan status", session, printer, model)
+	if !handled || exit {
+		t.Fatalf("expected /plan status handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	output := printer.String()
+	for _, want := range []string{
+		"Plan",
+		"active: no",
+		"latest plan: " + status.PlanFile,
+		"latest plan exists: yes",
+		"revisions: 1",
+		"todos: total=2 pending=2 in_progress=0 completed=0",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected plan status to contain %q, got:\n%s", want, output)
+		}
+	}
+
+	printer = &capturePrinter{}
+	handled, exit = Handle(context.Background(), "/plan show", session, printer, model)
+	if !handled || exit {
+		t.Fatalf("expected /plan show handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	output = printer.String()
+	if !strings.Contains(output, "Plan") || !strings.Contains(output, "approved slash plan") {
+		t.Fatalf("expected plan show output with plan content, got:\n%s", output)
+	}
+
+	printer = &capturePrinter{}
+	handled, exit = Handle(context.Background(), "/plan history", session, printer, model)
+	if !handled || exit {
+		t.Fatalf("expected /plan history handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	output = printer.String()
+	if !strings.Contains(output, "Plan history") || !strings.Contains(output, "revision-") {
+		t.Fatalf("expected plan history output with revision, got:\n%s", output)
+	}
+
+	printer = &capturePrinter{}
+	handled, exit = Handle(context.Background(), "/plan clear", session, printer, model)
+	if !handled || exit {
+		t.Fatalf("expected /plan clear handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	if output := printer.String(); !strings.Contains(output, "cleared latest plan and todos") {
+		t.Fatalf("expected plan clear output, got:\n%s", output)
+	}
+	if status := session.PlanStatus(); status.PlanExists || status.TodoTotal != 0 {
+		t.Fatalf("expected cleared plan status, got %#v", status)
+	}
+}
+
 func TestHandleTreeAndForkCommands(t *testing.T) {
 	cwd := t.TempDir()
 	agentDir := filepath.Join(cwd, ".coding_agent")
@@ -513,4 +702,24 @@ func TestHandleModelSwitchReportsClearedContext(t *testing.T) {
 	if got := len(session.GetMessages()); got != 0 {
 		t.Fatalf("expected model switch to clear messages, got %d", got)
 	}
+}
+
+func initSlashGitRepo(t *testing.T, dir string) {
+	t.Helper()
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+		}
+	}
+	run("init")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "README.md")
+	run("commit", "-m", "init")
 }

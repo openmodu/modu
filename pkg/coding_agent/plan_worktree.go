@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,6 +17,26 @@ import (
 
 type planModeAdapter struct {
 	session *CodingSession
+}
+
+// PlanStatus describes the current plan-mode lifecycle state and approved
+// plan artifacts.
+type PlanStatus struct {
+	Active         bool
+	PlanFile       string
+	PlanExists     bool
+	RevisionCount  int
+	TodoTotal      int
+	TodoPending    int
+	TodoInProgress int
+	TodoCompleted  int
+}
+
+// PlanRevision describes one persisted approved-plan snapshot.
+type PlanRevision struct {
+	Path    string
+	Name    string
+	ModTime time.Time
 }
 
 func (a planModeAdapter) EnterPlanMode() {
@@ -172,6 +193,78 @@ func (s *CodingSession) ExitPlanMode(plan string, steps []string) {
 	planModeAdapter{session: s}.ExitPlanMode(plan, steps)
 }
 
+// PlanStatus returns plan-mode state, latest persisted plan path, and current
+// todo counters seeded by an approved plan.
+func (s *CodingSession) PlanStatus() PlanStatus {
+	status := PlanStatus{
+		Active:   s.IsPlanMode(),
+		PlanFile: s.RuntimePaths().PlanFile,
+	}
+	if status.PlanFile != "" {
+		if _, err := os.Stat(status.PlanFile); err == nil {
+			status.PlanExists = true
+		}
+	}
+	status.RevisionCount = len(s.ListPlanRevisions())
+	for _, item := range s.GetTodos() {
+		status.TodoTotal++
+		switch item.Status {
+		case "pending":
+			status.TodoPending++
+		case "in_progress":
+			status.TodoInProgress++
+		case "completed":
+			status.TodoCompleted++
+		}
+	}
+	return status
+}
+
+// ClearPlan removes the latest persisted plan artifact and clears the current
+// todo list seeded from an approved plan. It does not toggle plan mode.
+func (s *CodingSession) ClearPlan() error {
+	status := s.PlanStatus()
+	if status.PlanFile != "" {
+		if err := os.Remove(status.PlanFile); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	s.SetTodos(nil)
+	s.writeRuntimeState()
+	return nil
+}
+
+// ListPlanRevisions returns approved-plan snapshots, newest first.
+func (s *CodingSession) ListPlanRevisions() []PlanRevision {
+	paths := s.RuntimePaths()
+	entries, err := os.ReadDir(paths.PlansDir)
+	if err != nil {
+		return nil
+	}
+	revisions := make([]PlanRevision, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "revision-") || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		revisions = append(revisions, PlanRevision{
+			Path:    filepath.Join(paths.PlansDir, entry.Name()),
+			Name:    entry.Name(),
+			ModTime: info.ModTime(),
+		})
+	}
+	sort.Slice(revisions, func(i, j int) bool {
+		if revisions[i].ModTime.Equal(revisions[j].ModTime) {
+			return revisions[i].Name > revisions[j].Name
+		}
+		return revisions[i].ModTime.After(revisions[j].ModTime)
+	})
+	return revisions
+}
+
 func (s *CodingSession) replacePlanTools() {
 	if !s.config.FeaturePlanMode() {
 		s.activeTools = removeAgentToolByName(s.activeTools, "enter_plan_mode")
@@ -192,6 +285,30 @@ func (s *CodingSession) replacePlanTools() {
 
 type worktreeAdapter struct {
 	session *CodingSession
+}
+
+// WorktreeStatus describes the current isolated worktree lifecycle state.
+type WorktreeStatus struct {
+	Active      bool
+	Path        string
+	OriginalCwd string
+	Cwd         string
+	Exists      bool
+}
+
+// WorktreeInfo describes one managed worktree under the session agent dir.
+type WorktreeInfo struct {
+	Path   string
+	Active bool
+	Exists bool
+}
+
+// WorktreeDiff describes the current active worktree changes.
+type WorktreeDiff struct {
+	Path       string
+	Stat       string
+	NameStatus string
+	Patch      string
 }
 
 func (a worktreeAdapter) EnterWorktree() (string, error) {
@@ -220,6 +337,148 @@ func (s *CodingSession) ActiveWorktree() string {
 	s.worktreeMu.Lock()
 	defer s.worktreeMu.Unlock()
 	return s.worktreePath
+}
+
+// WorktreeStatus returns the current isolated worktree state without mutating
+// the session. Exists is only true when the active worktree path is still on
+// disk.
+func (s *CodingSession) WorktreeStatus() WorktreeStatus {
+	s.worktreeMu.Lock()
+	defer s.worktreeMu.Unlock()
+	status := WorktreeStatus{
+		Active:      s.worktreePath != "",
+		Path:        s.worktreePath,
+		OriginalCwd: s.originalCwd,
+		Cwd:         s.cwd,
+	}
+	if status.Path != "" {
+		if _, err := os.Stat(status.Path); err == nil {
+			status.Exists = true
+		}
+	}
+	return status
+}
+
+// ListManagedWorktrees returns managed worktree directories under the agent
+// runtime root and marks the currently active one.
+func (s *CodingSession) ListManagedWorktrees() []WorktreeInfo {
+	s.worktreeMu.Lock()
+	activePath := s.worktreePath
+	s.worktreeMu.Unlock()
+
+	dir := filepath.Join(s.agentDir, "worktrees")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if activePath == "" {
+			return nil
+		}
+		return []WorktreeInfo{{Path: activePath, Active: true, Exists: pathExists(activePath)}}
+	}
+
+	seen := make(map[string]struct{}, len(entries)+1)
+	out := make([]WorktreeInfo, 0, len(entries)+1)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		seen[path] = struct{}{}
+		out = append(out, WorktreeInfo{
+			Path:   path,
+			Active: path == activePath,
+			Exists: true,
+		})
+	}
+	if activePath != "" {
+		if _, ok := seen[activePath]; !ok {
+			out = append(out, WorktreeInfo{Path: activePath, Active: true, Exists: pathExists(activePath)})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Active != out[j].Active {
+			return out[i].Active
+		}
+		return out[i].Path < out[j].Path
+	})
+	return out
+}
+
+// CleanupManagedWorktrees removes inactive managed worktree directories. The
+// active worktree is never removed.
+func (s *CodingSession) CleanupManagedWorktrees() ([]WorktreeInfo, error) {
+	worktrees := s.ListManagedWorktrees()
+	removed := make([]WorktreeInfo, 0, len(worktrees))
+	for _, wt := range worktrees {
+		if wt.Active || !wt.Exists {
+			continue
+		}
+		if !s.isManagedWorktreePath(wt.Path) {
+			return removed, fmt.Errorf("refusing to cleanup unmanaged worktree path: %s", wt.Path)
+		}
+		if _, err := runGit(s.cwd, "worktree", "remove", "--force", wt.Path); err != nil {
+			if err := os.RemoveAll(wt.Path); err != nil {
+				return removed, err
+			}
+		}
+		removed = append(removed, wt)
+	}
+	return removed, nil
+}
+
+// ActiveWorktreeDiff returns a read-only diff for the active isolated worktree.
+func (s *CodingSession) ActiveWorktreeDiff() (WorktreeDiff, error) {
+	status := s.WorktreeStatus()
+	if !status.Active {
+		return WorktreeDiff{}, fmt.Errorf("no active worktree")
+	}
+	if !status.Exists {
+		return WorktreeDiff{}, fmt.Errorf("active worktree path does not exist: %s", status.Path)
+	}
+	stat, err := runGit(status.Path, "diff", "--stat")
+	if err != nil {
+		return WorktreeDiff{}, err
+	}
+	nameStatus, err := runGit(status.Path, "diff", "--name-status")
+	if err != nil {
+		return WorktreeDiff{}, err
+	}
+	patch, err := runGit(status.Path, "diff")
+	if err != nil {
+		return WorktreeDiff{}, err
+	}
+	return WorktreeDiff{
+		Path:       status.Path,
+		Stat:       strings.TrimSpace(stat),
+		NameStatus: strings.TrimSpace(nameStatus),
+		Patch:      strings.TrimSpace(patch),
+	}, nil
+}
+
+func (s *CodingSession) isManagedWorktreePath(path string) bool {
+	if path == "" {
+		return false
+	}
+	base, err := filepath.Abs(filepath.Join(s.agentDir, "worktrees"))
+	if err != nil {
+		return false
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(base, abs)
+	if err != nil {
+		return false
+	}
+	return rel != "." && rel != "" && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) && rel != ".."
+}
+
+func pathExists(path string) bool {
+	if path == "" {
+		return false
+	}
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func (s *CodingSession) replaceWorktreeTools() {
@@ -418,7 +677,12 @@ func (s *CodingSession) writeLatestPlan(plan string) error {
 	if err := os.MkdirAll(paths.PlansDir, 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(paths.PlanFile, []byte(strings.TrimSpace(plan)+"\n"), 0o600); err != nil {
+	content := []byte(strings.TrimSpace(plan) + "\n")
+	if err := os.WriteFile(paths.PlanFile, content, 0o600); err != nil {
+		return err
+	}
+	revisionPath := filepath.Join(paths.PlansDir, fmt.Sprintf("revision-%d.md", time.Now().UnixNano()))
+	if err := os.WriteFile(revisionPath, content, 0o600); err != nil {
 		return err
 	}
 	s.writeRuntimeState()
