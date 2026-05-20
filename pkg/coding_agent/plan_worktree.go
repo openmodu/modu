@@ -303,6 +303,14 @@ type WorktreeInfo struct {
 	Exists bool
 }
 
+// WorktreeDiff describes the current active worktree changes.
+type WorktreeDiff struct {
+	Path       string
+	Stat       string
+	NameStatus string
+	Patch      string
+}
+
 func (a worktreeAdapter) EnterWorktree() (string, error) {
 	if a.session == nil {
 		return "", fmt.Errorf("worktree session is not configured")
@@ -415,6 +423,35 @@ func (s *CodingSession) CleanupManagedWorktrees() ([]WorktreeInfo, error) {
 		removed = append(removed, wt)
 	}
 	return removed, nil
+}
+
+// ActiveWorktreeDiff returns a read-only diff for the active isolated worktree.
+func (s *CodingSession) ActiveWorktreeDiff() (WorktreeDiff, error) {
+	status := s.WorktreeStatus()
+	if !status.Active {
+		return WorktreeDiff{}, fmt.Errorf("no active worktree")
+	}
+	if !status.Exists {
+		return WorktreeDiff{}, fmt.Errorf("active worktree path does not exist: %s", status.Path)
+	}
+	stat, err := runGit(status.Path, "diff", "--stat")
+	if err != nil {
+		return WorktreeDiff{}, err
+	}
+	nameStatus, err := runGit(status.Path, "diff", "--name-status")
+	if err != nil {
+		return WorktreeDiff{}, err
+	}
+	patch, err := runGit(status.Path, "diff")
+	if err != nil {
+		return WorktreeDiff{}, err
+	}
+	return WorktreeDiff{
+		Path:       status.Path,
+		Stat:       strings.TrimSpace(stat),
+		NameStatus: strings.TrimSpace(nameStatus),
+		Patch:      strings.TrimSpace(patch),
+	}, nil
 }
 
 func (s *CodingSession) isManagedWorktreePath(path string) bool {

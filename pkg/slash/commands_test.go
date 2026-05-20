@@ -309,6 +309,25 @@ func TestHandleWorktreeStatusShowsLifecycle(t *testing.T) {
 	if _, err := os.Stat(active.Path); err != nil {
 		t.Fatalf("expected active worktree kept: %v", err)
 	}
+
+	if err := os.WriteFile(filepath.Join(active.Path, "README.md"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	printer = &capturePrinter{}
+	handled, exit = Handle(context.Background(), "/worktree diff", session, printer, model)
+	if !handled || exit {
+		t.Fatalf("expected /worktree diff handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	output = printer.String()
+	for _, want := range []string{
+		"Worktree diff",
+		"README.md",
+		"changed",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected worktree diff to contain %q, got:\n%s", want, output)
+		}
+	}
 }
 
 func TestHandlePlanStatusShowsArtifactAndTodos(t *testing.T) {

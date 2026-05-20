@@ -435,8 +435,30 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 				lines = append(lines, "removed "+wt.Path)
 			}
 			r.PrintSection("Worktree cleanup", lines)
+		case "diff":
+			diff, err := session.ActiveWorktreeDiff()
+			if err != nil {
+				r.PrintError(err)
+				return true, false
+			}
+			lines := []string{"path: " + diff.Path}
+			if diff.Stat == "" && diff.NameStatus == "" && diff.Patch == "" {
+				lines = append(lines, "no changes")
+				r.PrintSection("Worktree diff", lines)
+				return true, false
+			}
+			if diff.Stat != "" {
+				lines = append(lines, "stat:", diff.Stat)
+			}
+			if diff.NameStatus != "" {
+				lines = append(lines, "files:", diff.NameStatus)
+			}
+			if diff.Patch != "" {
+				lines = append(lines, "patch:", diff.Patch)
+			}
+			r.PrintSection("Worktree diff", lines)
 		default:
-			r.PrintInfo("usage: /worktree [status|list|cleanup|on|off]")
+			r.PrintInfo("usage: /worktree [status|list|diff|cleanup|on|off]")
 		}
 		return true, false
 
@@ -982,7 +1004,7 @@ func PrintHelp(r Printer) {
 		"/todos              — show current todo list",
 		"/tasks              — show background subagent tasks",
 		"/plan [status|show|history|clear|on|off] — inspect, show, clear, or toggle plan mode",
-		"/worktree [status|list|cleanup|on|off] — inspect, clean, or toggle isolated worktree mode",
+		"/worktree [status|list|diff|cleanup|on|off] — inspect, diff, clean, or toggle isolated worktree mode",
 		"/skills             — list available skills",
 		"/prompts            — list available prompt templates",
 		"/telegram           — show Telegram bot config",

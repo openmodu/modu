@@ -164,6 +164,7 @@ High-priority gaps identified before this round:
   `/worktree cleanup` command for removing inactive managed worktrees while preserving the active worktree
   Session tree branch-summary fallback labels that show the historical source entry when no explicit label exists
   Plan revision snapshots plus `/plan history` for tracing approved plan iterations
+  Active worktree diff API and `/worktree diff` for reviewing isolated changes before handoff
 
 ## Still Missing
 

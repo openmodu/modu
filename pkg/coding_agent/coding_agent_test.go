@@ -641,6 +641,16 @@ func TestEnterAndExitWorktree(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("expected active worktree kept: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(path, "README.md"), []byte("changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	diff, err := session.ActiveWorktreeDiff()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(diff.NameStatus, "README.md") || !strings.Contains(diff.Patch, "changed") {
+		t.Fatalf("expected active worktree diff for README.md, got %#v", diff)
+	}
 	if _, err := os.Stat(filepath.Join(path, "README.md")); err != nil {
 		t.Fatalf("expected repo file in worktree: %v", err)
 	}
