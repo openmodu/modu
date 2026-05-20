@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -830,6 +831,31 @@ func TestResourceSelectFiltersAndInsertsCommand(t *testing.T) {
 	}
 }
 
+func TestResourceSelectPagingAndPathDisplay(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+	for i := range resourceSelectVisibleRows + 3 {
+		root.resourceChoices = append(root.resourceChoices, resourceChoice{Name: fmt.Sprintf("skill-%02d", i)})
+	}
+
+	root.moveResourceSelect(resourceSelectVisibleRows)
+	if root.resourceSelectIdx != resourceSelectVisibleRows {
+		t.Fatalf("expected page down to move to %d, got %d", resourceSelectVisibleRows, root.resourceSelectIdx)
+	}
+	if root.resourceSelectScroll != 1 {
+		t.Fatalf("expected scroll to keep selected row visible, got %d", root.resourceSelectScroll)
+	}
+
+	line := resourceChoiceLine(resourceChoice{
+		Name:        "review",
+		Description: "check changes",
+		Source:      "project",
+		Path:        "/Users/test/.codex/skills/review/SKILL.md",
+	}, true)
+	if !strings.Contains(line, "[project] /Users/test/.codex/skills/review/SKILL.md") {
+		t.Fatalf("expected source and path in resource line, got %q", line)
+	}
+}
+
 func TestPersistedTUISettingsRoundTrip(t *testing.T) {
 	session := newUITestSession(t)
 	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, nil)
@@ -842,6 +868,24 @@ func TestPersistedTUISettingsRoundTrip(t *testing.T) {
 	next.loadPersistedTUISettings()
 	if !next.model.transcriptMode {
 		t.Fatal("expected persisted transcript mode")
+	}
+}
+
+func TestSettingsSelectPagingClamps(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+	root.settingsChoices = []settingsChoice{
+		{Label: "one"},
+		{Label: "two"},
+		{Label: "three"},
+	}
+
+	root.pageSettingsSelect(settingsSelectVisibleRows)
+	if root.settingsSelectIdx != 2 {
+		t.Fatalf("expected page down to clamp to last setting, got %d", root.settingsSelectIdx)
+	}
+	root.pageSettingsSelect(-settingsSelectVisibleRows)
+	if root.settingsSelectIdx != 0 {
+		t.Fatalf("expected page up to clamp to first setting, got %d", root.settingsSelectIdx)
 	}
 }
 

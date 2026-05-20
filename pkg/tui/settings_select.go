@@ -114,6 +114,8 @@ func (r *goTUIRoot) settingsSelectKeyMap() gotui.KeyMap {
 		gotui.OnStop(gotui.KeyEscape, func(ke gotui.KeyEvent) { r.closeSettingsSelect("settings closed") }),
 		gotui.OnStop(gotui.KeyUp, func(ke gotui.KeyEvent) { r.moveSettingsSelect(-1) }),
 		gotui.OnStop(gotui.KeyDown, func(ke gotui.KeyEvent) { r.moveSettingsSelect(1) }),
+		gotui.OnStop(gotui.KeyPageUp, func(ke gotui.KeyEvent) { r.pageSettingsSelect(-settingsSelectVisibleRows) }),
+		gotui.OnStop(gotui.KeyPageDown, func(ke gotui.KeyEvent) { r.pageSettingsSelect(settingsSelectVisibleRows) }),
 		gotui.OnStop(gotui.KeyHome, func(ke gotui.KeyEvent) { r.jumpSettingsSelect(0) }),
 		gotui.OnStop(gotui.KeyEnd, func(ke gotui.KeyEvent) { r.jumpSettingsSelect(len(r.settingsChoices) - 1) }),
 		gotui.OnStop(gotui.KeyEnter, func(ke gotui.KeyEvent) { r.applySettingsSelect() }),
@@ -125,6 +127,14 @@ func (r *goTUIRoot) moveSettingsSelect(delta int) {
 		return
 	}
 	r.settingsSelectIdx = (r.settingsSelectIdx + delta + len(r.settingsChoices)) % len(r.settingsChoices)
+	r.bump()
+}
+
+func (r *goTUIRoot) pageSettingsSelect(delta int) {
+	if len(r.settingsChoices) == 0 {
+		return
+	}
+	r.settingsSelectIdx = clampInt(r.settingsSelectIdx+delta, 0, len(r.settingsChoices)-1)
 	r.bump()
 }
 
@@ -189,7 +199,7 @@ func (r *goTUIRoot) renderSettingsSelectWidget() *gotui.Element {
 		))
 	}
 	container.AddChild(gotui.New(
-		gotui.WithText("  ↑/↓ select  enter change  esc close"),
+		gotui.WithText("  ↑/↓ select  pgup/pgdn page  enter change  esc close"),
 		gotui.WithTextStyle(gotui.NewStyle().Dim()),
 		gotui.WithFlexShrink(0),
 	))

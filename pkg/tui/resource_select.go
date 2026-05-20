@@ -95,6 +95,8 @@ func (r *goTUIRoot) resourceSelectKeyMap() gotui.KeyMap {
 		gotui.OnStop(gotui.KeyEscape, func(ke gotui.KeyEvent) { r.closeResourceSelect("resource selection closed") }),
 		gotui.OnStop(gotui.KeyUp, func(ke gotui.KeyEvent) { r.moveResourceSelect(-1) }),
 		gotui.OnStop(gotui.KeyDown, func(ke gotui.KeyEvent) { r.moveResourceSelect(1) }),
+		gotui.OnStop(gotui.KeyPageUp, func(ke gotui.KeyEvent) { r.moveResourceSelect(-resourceSelectVisibleRows) }),
+		gotui.OnStop(gotui.KeyPageDown, func(ke gotui.KeyEvent) { r.moveResourceSelect(resourceSelectVisibleRows) }),
 		gotui.OnStop(gotui.KeyHome, func(ke gotui.KeyEvent) { r.jumpResourceSelect(0) }),
 		gotui.OnStop(gotui.KeyEnd, func(ke gotui.KeyEvent) { r.jumpResourceSelect(len(r.resourceChoices) - 1) }),
 		gotui.OnStop(gotui.KeyBackspace, func(ke gotui.KeyEvent) { r.backspaceResourceSearch() }),
@@ -233,7 +235,7 @@ func (r *goTUIRoot) renderResourceSelectWidget() *gotui.Element {
 		))
 	}
 	container.AddChild(gotui.New(
-		gotui.WithText("  ↑/↓ select  enter insert command  esc close"),
+		gotui.WithText("  ↑/↓ select  pgup/pgdn page  enter insert command  esc close"),
 		gotui.WithTextStyle(gotui.NewStyle().Dim()),
 		gotui.WithFlexShrink(0),
 	))
@@ -254,8 +256,35 @@ func resourceChoiceLine(choice resourceChoice, selected bool) string {
 	if source == "" {
 		source = "local"
 	}
+	meta := resourceChoiceMeta(source, choice.Path)
 	if desc == "" {
-		return fmt.Sprintf("%s%-24s [%s]", prefix, label, source)
+		return fmt.Sprintf("%s%-24s %s", prefix, label, meta)
 	}
-	return fmt.Sprintf("%s%-24s %s  [%s]", prefix, label, desc, source)
+	return fmt.Sprintf("%s%-24s %s  %s", prefix, label, desc, meta)
+}
+
+func resourceChoiceMeta(source, path string) string {
+	path = compactResourcePath(path)
+	if path == "" {
+		return "[" + source + "]"
+	}
+	return fmt.Sprintf("[%s] %s", source, path)
+}
+
+func compactResourcePath(path string) string {
+	path = strings.ReplaceAll(strings.TrimSpace(path), "\n", " ")
+	if path == "" {
+		return ""
+	}
+	if len(path) <= 48 {
+		return path
+	}
+	parts := strings.Split(path, "/")
+	if len(parts) > 2 {
+		tail := strings.Join(parts[len(parts)-2:], "/")
+		if len(tail) <= 45 {
+			return ".../" + tail
+		}
+	}
+	return "..." + path[len(path)-45:]
 }
