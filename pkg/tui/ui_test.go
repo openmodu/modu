@@ -830,6 +830,21 @@ func TestResourceSelectFiltersAndInsertsCommand(t *testing.T) {
 	}
 }
 
+func TestPersistedTUISettingsRoundTrip(t *testing.T) {
+	session := newUITestSession(t)
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, nil)
+	root.model.transcriptMode = true
+	if err := root.savePersistedTUISettings(); err != nil {
+		t.Fatal(err)
+	}
+
+	next := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, nil)
+	next.loadPersistedTUISettings()
+	if !next.model.transcriptMode {
+		t.Fatal("expected persisted transcript mode")
+	}
+}
+
 func TestPromptErrorCollapsesRepeatsAndOffersActions(t *testing.T) {
 	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 	err := errors.New("max retries (3) exceeded: dial tcp 127.0.0.1:1234: connect: operation timed out")

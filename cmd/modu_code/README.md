@@ -78,6 +78,8 @@ go run ./cmd/modu_code config validate
 
 输入 `!cmd` 会在当前工作目录执行 shell 命令，把输出显示在 TUI 中，并作为下一条用户消息发送给模型。输入 `!!cmd` 只执行并显示输出，不发送给模型。
 
+`/settings` 中的 tool output 展开模式会持久化到 `~/.coding_agent/tui_settings.json`，下次启动自动恢复。
+
 ---
 
 ## 斜杠命令

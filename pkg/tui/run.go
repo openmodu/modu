@@ -44,6 +44,7 @@ func RunWithOptions(ctx context.Context, session *coding_agent.CodingSession, mo
 
 	root := newGoTUIRoot(ctx, session, model, histFile, approvalCh, &promptMu)
 	root.commandHooks = opts.CommandHooks
+	root.loadPersistedTUISettings()
 	if history, err := loadHistoryFile(histFile); err == nil {
 		root.history = history
 		root.historyIndex = len(history)

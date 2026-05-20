@@ -41,6 +41,9 @@ func (r *goTUIRoot) buildSettingsChoices() []settingsChoice {
 			},
 			Apply: func() {
 				r.model.transcriptMode = !r.model.transcriptMode
+				if err := r.savePersistedTUISettings(); err != nil {
+					r.model.errMsg = err.Error()
+				}
 			},
 		},
 		{

@@ -60,10 +60,12 @@ enough to implement, verify, and commit independently.
   `cmd/modu_code` can reuse its internal provider config helpers without moving packages.
 - `/skills` and `/prompts` now open searchable TUI resource pickers and insert
   the selected slash command back into the input.
+- TUI tool-output display mode selected from `/settings` is persisted in
+  `~/.coding_agent/tui_settings.json` and restored on startup.
 
 ## Next
 
-1. Add interactive `/config` shortcuts for config example/init/validate.
+1. Add real keybindings.json remapping if custom keyboard shortcuts become a priority.
 
 ## Validation Log
 
@@ -106,3 +108,5 @@ enough to implement, verify, and commit independently.
   passed for the TUI `/config` command hook.
 - 2026-05-20: `go test ./pkg/tui`
   passed for searchable skill/prompt resource picker behavior.
+- 2026-05-20: `go test ./pkg/tui`
+  passed for persisted TUI settings round-trip behavior.
