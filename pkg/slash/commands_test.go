@@ -343,6 +343,7 @@ func TestHandlePlanStatusShowsArtifactAndTodos(t *testing.T) {
 		"active: no",
 		"latest plan: " + status.PlanFile,
 		"latest plan exists: yes",
+		"revisions: 1",
 		"todos: total=2 pending=2 in_progress=0 completed=0",
 	} {
 		if !strings.Contains(output, want) {
@@ -358,6 +359,16 @@ func TestHandlePlanStatusShowsArtifactAndTodos(t *testing.T) {
 	output = printer.String()
 	if !strings.Contains(output, "Plan") || !strings.Contains(output, "approved slash plan") {
 		t.Fatalf("expected plan show output with plan content, got:\n%s", output)
+	}
+
+	printer = &capturePrinter{}
+	handled, exit = Handle(context.Background(), "/plan history", session, printer, model)
+	if !handled || exit {
+		t.Fatalf("expected /plan history handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	output = printer.String()
+	if !strings.Contains(output, "Plan history") || !strings.Contains(output, "revision-") {
+		t.Fatalf("expected plan history output with revision, got:\n%s", output)
 	}
 
 	printer = &capturePrinter{}

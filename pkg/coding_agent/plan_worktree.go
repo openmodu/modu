@@ -25,10 +25,18 @@ type PlanStatus struct {
 	Active         bool
 	PlanFile       string
 	PlanExists     bool
+	RevisionCount  int
 	TodoTotal      int
 	TodoPending    int
 	TodoInProgress int
 	TodoCompleted  int
+}
+
+// PlanRevision describes one persisted approved-plan snapshot.
+type PlanRevision struct {
+	Path    string
+	Name    string
+	ModTime time.Time
 }
 
 func (a planModeAdapter) EnterPlanMode() {
@@ -197,6 +205,7 @@ func (s *CodingSession) PlanStatus() PlanStatus {
 			status.PlanExists = true
 		}
 	}
+	status.RevisionCount = len(s.ListPlanRevisions())
 	for _, item := range s.GetTodos() {
 		status.TodoTotal++
 		switch item.Status {
@@ -223,6 +232,37 @@ func (s *CodingSession) ClearPlan() error {
 	s.SetTodos(nil)
 	s.writeRuntimeState()
 	return nil
+}
+
+// ListPlanRevisions returns approved-plan snapshots, newest first.
+func (s *CodingSession) ListPlanRevisions() []PlanRevision {
+	paths := s.RuntimePaths()
+	entries, err := os.ReadDir(paths.PlansDir)
+	if err != nil {
+		return nil
+	}
+	revisions := make([]PlanRevision, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "revision-") || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		revisions = append(revisions, PlanRevision{
+			Path:    filepath.Join(paths.PlansDir, entry.Name()),
+			Name:    entry.Name(),
+			ModTime: info.ModTime(),
+		})
+	}
+	sort.Slice(revisions, func(i, j int) bool {
+		if revisions[i].ModTime.Equal(revisions[j].ModTime) {
+			return revisions[i].Name > revisions[j].Name
+		}
+		return revisions[i].ModTime.After(revisions[j].ModTime)
+	})
+	return revisions
 }
 
 func (s *CodingSession) replacePlanTools() {
@@ -600,7 +640,12 @@ func (s *CodingSession) writeLatestPlan(plan string) error {
 	if err := os.MkdirAll(paths.PlansDir, 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(paths.PlanFile, []byte(strings.TrimSpace(plan)+"\n"), 0o600); err != nil {
+	content := []byte(strings.TrimSpace(plan) + "\n")
+	if err := os.WriteFile(paths.PlanFile, content, 0o600); err != nil {
+		return err
+	}
+	revisionPath := filepath.Join(paths.PlansDir, fmt.Sprintf("revision-%d.md", time.Now().UnixNano()))
+	if err := os.WriteFile(revisionPath, content, 0o600); err != nil {
 		return err
 	}
 	s.writeRuntimeState()

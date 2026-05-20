@@ -391,8 +391,12 @@ func TestSubmitPlanApprove(t *testing.T) {
 		t.Fatalf("expected 2 todos from steps, got %v", todos)
 	}
 	status := session.PlanStatus()
-	if status.Active || !status.PlanExists || status.TodoTotal != 2 || status.TodoPending != 2 {
+	if status.Active || !status.PlanExists || status.RevisionCount != 1 || status.TodoTotal != 2 || status.TodoPending != 2 {
 		t.Fatalf("unexpected approved plan status: %#v", status)
+	}
+	revisions := session.ListPlanRevisions()
+	if len(revisions) != 1 || revisions[0].Path == "" {
+		t.Fatalf("expected one plan revision, got %#v", revisions)
 	}
 	if !strings.Contains(msg, "approved") {
 		t.Fatalf("expected approval message, got %q", msg)

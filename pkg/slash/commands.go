@@ -318,6 +318,7 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 				"active: " + yesNo(status.Active),
 				"latest plan: " + status.PlanFile,
 				"latest plan exists: " + yesNo(status.PlanExists),
+				fmt.Sprintf("revisions: %d", status.RevisionCount),
 				fmt.Sprintf("todos: total=%d pending=%d in_progress=%d completed=%d", status.TodoTotal, status.TodoPending, status.TodoInProgress, status.TodoCompleted),
 			}
 			r.PrintSection("Plan", lines)
@@ -349,8 +350,22 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 			} else {
 				r.PrintInfo("cleared latest plan and todos")
 			}
+		case "history":
+			revisions := session.ListPlanRevisions()
+			if len(revisions) == 0 {
+				r.PrintInfo("no plan revisions")
+				return true, false
+			}
+			lines := make([]string, 0, len(revisions))
+			for i, revision := range revisions {
+				if i >= 10 {
+					break
+				}
+				lines = append(lines, fmt.Sprintf("%s  %s", revision.ModTime.Format(time.RFC3339), revision.Path))
+			}
+			r.PrintSection("Plan history", lines)
 		default:
-			r.PrintInfo("usage: /plan [status|show|clear|on|off]")
+			r.PrintInfo("usage: /plan [status|show|history|clear|on|off]")
 		}
 		return true, false
 
@@ -966,7 +981,7 @@ func PrintHelp(r Printer) {
 		"/agents             — list discovered subagents",
 		"/todos              — show current todo list",
 		"/tasks              — show background subagent tasks",
-		"/plan [status|show|clear|on|off] — inspect, show, clear, or toggle plan mode",
+		"/plan [status|show|history|clear|on|off] — inspect, show, clear, or toggle plan mode",
 		"/worktree [status|list|cleanup|on|off] — inspect, clean, or toggle isolated worktree mode",
 		"/skills             — list available skills",
 		"/prompts            — list available prompt templates",
