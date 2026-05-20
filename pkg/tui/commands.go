@@ -70,16 +70,23 @@ func (r *goTUIRoot) runNameCommand(name string) {
 }
 
 func (r *goTUIRoot) showHotkeys() {
+	r.appendSystemSection("Hotkeys", hotkeyHelpText())
+}
+
+func hotkeyHelpText() string {
 	lines := []string{
 		"Navigation",
 		"  Up/Down: move cursor, history, or selector",
 		"  Home/End: line start/end or selector start/end",
 		"  PageUp/PageDown: scroll transcript or selector page",
+		"  Esc: close selector",
 		"",
 		"Editing",
 		"  Enter: submit",
 		"  Ctrl+J: newline",
 		"  Tab: autocomplete or selector scope",
+		"  @file: fuzzy file reference; Tab/Enter completes",
+		"  !cmd: run shell and send output; !!cmd display only",
 		"",
 		"App",
 		"  Ctrl+C: interrupt or exit",
@@ -88,10 +95,12 @@ func (r *goTUIRoot) showHotkeys() {
 		"  Ctrl+O: expand/collapse tool output",
 		"  Ctrl+P/Ctrl+N: cycle models",
 		"  Shift+Tab: toggle plan mode",
+		"  Tree: Ctrl+F branch-session, Ctrl+S summary",
 		"",
 		"Commands",
-		"  /settings, /model, /scoped-models, /sessions, /resume",
-		"  /tree, /fork, /clone, /new, /reload, /hotkeys",
+		"  /settings, /config, /model, /scoped-models, /sessions",
+		"  /tree, /fork, /clone, /skills, /prompts",
+		"  /export, /copy, /changelog",
 	}
-	r.appendSystemSection("Hotkeys", strings.Join(lines, "\n"))
+	return strings.Join(lines, "\n")
 }

@@ -38,6 +38,12 @@ func (s *CodingSession) SaveMessages() error {
 func (s *CodingSession) RestoreMessages() (int, error) {
 	var msgs []agent.AgentMessage
 	for _, entry := range s.sessionTree.GetCurrentPath() {
+		if entry.Type == session.EntryTypeBranchSummary {
+			if msg, ok := branchSummaryMessageFromSessionData(entry.Data); ok {
+				msgs = append(msgs, msg)
+			}
+			continue
+		}
 		if entry.Type != session.EntryTypeMessage {
 			continue
 		}
@@ -53,6 +59,23 @@ func (s *CodingSession) RestoreMessages() (int, error) {
 	s.agent.ReplaceMessages(msgs)
 	s.lastSavedIndex = len(msgs)
 	return len(msgs), nil
+}
+
+func branchSummaryMessageFromSessionData(data any) (types.UserMessage, bool) {
+	switch value := data.(type) {
+	case session.BranchSummaryData:
+		return (&BranchSummaryMessage{Summary: value.Summary, FromID: value.FromID, ToID: value.ToID}).ToLlmMessage(), true
+	case map[string]any:
+		summary, _ := value["summary"].(string)
+		if strings.TrimSpace(summary) == "" {
+			return types.UserMessage{}, false
+		}
+		fromID, _ := value["fromId"].(string)
+		toID, _ := value["toId"].(string)
+		return (&BranchSummaryMessage{Summary: summary, FromID: fromID, ToID: toID}).ToLlmMessage(), true
+	default:
+		return types.UserMessage{}, false
+	}
 }
 
 // migrateOldMessagesJSON handles migration from older single JSON array to new JSONL.

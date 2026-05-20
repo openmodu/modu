@@ -37,12 +37,13 @@ import (
 // shared UI state and routes events to the per-component method receivers
 // defined in this package's other files.
 type goTUIRoot struct {
-	ctx        context.Context
-	session    *coding_agent.CodingSession
-	modelInfo  *types.Model
-	histFile   string
-	approvalCh <-chan approval.Request
-	promptMu   *sync.Mutex
+	ctx          context.Context
+	session      *coding_agent.CodingSession
+	modelInfo    *types.Model
+	histFile     string
+	approvalCh   <-chan approval.Request
+	promptMu     *sync.Mutex
+	commandHooks CommandHooks
 
 	app     *gotui.App
 	model   *uiModel
@@ -58,6 +59,9 @@ type goTUIRoot struct {
 	slashMatches      []slashCommandDef
 	slashMatchIdx     int
 	slashScrollOffset int
+	fileMatches       []fileSuggestion
+	fileMatchIdx      int
+	fileScrollOffset  int
 
 	modelChoices         []*types.Model
 	modelAllChoices      []*types.Model
@@ -79,6 +83,18 @@ type goTUIRoot struct {
 	sessionConfirmDelete string
 	sessionRenameMode    bool
 	sessionRenameText    string
+	treeNodes            []coding_agent.SessionTreeNode
+	treeAllNodes         []coding_agent.SessionTreeNode
+	treeSelectIdx        int
+	treeSelectScroll     int
+	treeSearch           string
+	treeShowSummary      bool
+	resourceTitle        string
+	resourceChoices      []resourceChoice
+	resourceAllChoices   []resourceChoice
+	resourceSelectIdx    int
+	resourceSelectScroll int
+	resourceSearch       string
 	settingsChoices      []settingsChoice
 	settingsSelectIdx    int
 	lastFailedPrompt     string
@@ -204,6 +220,8 @@ func (r *goTUIRoot) positionCursor(app *gotui.App) {
 	if r.model.state == uiStateModelSelect ||
 		r.model.state == uiStateSessionSelect ||
 		r.model.state == uiStateSettingsSelect ||
+		r.model.state == uiStateTreeSelect ||
+		r.model.state == uiStateResourceSelect ||
 		r.model.state == uiStatePermission {
 		return
 	}
@@ -248,6 +266,12 @@ func (r *goTUIRoot) KeyMap() gotui.KeyMap {
 	}
 	if r.model.state == uiStateSettingsSelect {
 		return r.settingsSelectKeyMap()
+	}
+	if r.model.state == uiStateTreeSelect {
+		return r.treeSelectKeyMap()
+	}
+	if r.model.state == uiStateResourceSelect {
+		return r.resourceSelectKeyMap()
 	}
 	if r.model.state == uiStatePlanReject {
 		return r.planRejectKeyMap()
@@ -330,6 +354,8 @@ func (r *goTUIRoot) KeyMap() gotui.KeyMap {
 //   - Model select   : sep / model-picker / sep / meta
 //   - Session select : sep / session-picker / sep / meta
 //   - Settings select: sep / settings / sep / meta
+//   - Tree select    : sep / tree-picker / sep / meta
+//   - Resource select: sep / resource-picker / sep / meta
 //   - Normal mode    : [activity] / sep / input / sep / [suggestions | status] / meta
 func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 	_ = r.refresh.Get()
@@ -474,6 +500,52 @@ func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 		return root
 	}
 
+	if r.model.state == uiStateTreeSelect {
+		visible := len(r.treeNodes)
+		if visible > treeSelectVisibleRows {
+			visible = treeSelectVisibleRows
+		}
+		if visible == 0 {
+			visible = 1
+		}
+		neededH := visible + 5 // sep + title + search + choices + hints + sep
+		if meta != "" {
+			neededH++
+		}
+		if neededH < 5 {
+			neededH = 5
+		}
+		r.commitInlineHeight(app, neededH)
+		addSep(root)
+		root.AddChild(r.renderTreeSelectWidget())
+		addSep(root)
+		addMeta(root)
+		return root
+	}
+
+	if r.model.state == uiStateResourceSelect {
+		visible := len(r.resourceChoices)
+		if visible > resourceSelectVisibleRows {
+			visible = resourceSelectVisibleRows
+		}
+		if visible == 0 {
+			visible = 1
+		}
+		neededH := visible + 5
+		if meta != "" {
+			neededH++
+		}
+		if neededH < 5 {
+			neededH = 5
+		}
+		r.commitInlineHeight(app, neededH)
+		addSep(root)
+		root.AddChild(r.renderResourceSelectWidget())
+		addSep(root)
+		addMeta(root)
+		return root
+	}
+
 	// Normal mode: compute height accounting for suggestion list (if any).
 	draftLines := strings.Count(r.draft.Get(), "\n") + 1
 	neededH := draftLines + 3 // sep + input + sep + status/suggestion
@@ -487,10 +559,20 @@ func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 	if visibleSuggestions > slashVisibleRows {
 		visibleSuggestions = slashVisibleRows
 	}
+	visibleFileSuggestions := 0
+	if visibleSuggestions == 0 {
+		visibleFileSuggestions = len(r.fileMatches)
+		if visibleFileSuggestions > fileReferenceVisibleRows {
+			visibleFileSuggestions = fileReferenceVisibleRows
+		}
+	}
 	if visibleSuggestions > 0 {
 		// Suggestions replace the single status line; add the extra rows
 		// plus one detail row for the highlighted entry.
 		neededH += visibleSuggestions - 1
+		neededH++
+	} else if visibleFileSuggestions > 0 {
+		neededH += visibleFileSuggestions - 1
 		neededH++
 	}
 	if neededH < 5 {
@@ -503,6 +585,10 @@ func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 	root.AddChild(r.renderInput(width))
 	addSep(root)
 	if rows := r.renderSlashSuggestions(); rows != nil {
+		for _, row := range rows {
+			root.AddChild(row)
+		}
+	} else if rows := r.renderFileSuggestions(); rows != nil {
 		for _, row := range rows {
 			root.AddChild(row)
 		}

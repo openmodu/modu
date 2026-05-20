@@ -18,6 +18,7 @@ func (r *goTUIRoot) updateSlashMatches() {
 	if !strings.HasPrefix(draft, "/") || strings.ContainsRune(draft, ' ') {
 		r.slashMatches = nil
 		r.slashMatchIdx = 0
+		r.slashScrollOffset = 0
 		return
 	}
 	r.slashMatches = matchSlashCommands(draft, r.skillSlashCommands())
@@ -49,15 +50,16 @@ func (r *goTUIRoot) adjustSlashScroll() {
 // completeSlashMatch fills the draft with the currently highlighted suggestion
 // (without cycling). Recomputes matches afterward so the list reduces to the
 // chosen prefix.
-func (r *goTUIRoot) completeSlashMatch() {
+func (r *goTUIRoot) completeSlashMatch() bool {
 	if len(r.slashMatches) == 0 {
-		return
+		return false
 	}
 	chosen := r.slashMatches[r.slashMatchIdx].Name
 	r.draft.Set(chosen)
 	r.cursor = len([]rune(chosen))
-	r.updateSlashMatches()
+	r.updateInputSuggestions()
 	r.bump()
+	return true
 }
 
 // renderSlashSuggestions returns the rows to insert below the input area

@@ -19,6 +19,21 @@ type SessionBranchInfo struct {
 	EntryCount int    `json:"entryCount"`
 }
 
+// SessionTreeNode describes one visible entry in the current session tree.
+type SessionTreeNode struct {
+	ID            string `json:"id"`
+	ParentID      string `json:"parentId,omitempty"`
+	Type          string `json:"type"`
+	Role          string `json:"role,omitempty"`
+	Label         string `json:"label,omitempty"`
+	Preview       string `json:"preview,omitempty"`
+	Depth         int    `json:"depth"`
+	ChildCount    int    `json:"childCount"`
+	Current       bool   `json:"current"`
+	InCurrentPath bool   `json:"inCurrentPath"`
+	Timestamp     int64  `json:"timestamp"`
+}
+
 // SessionStats contains aggregate statistics for the current session.
 type SessionStats struct {
 	TotalTokens    int   `json:"totalTokens"`

@@ -246,10 +246,12 @@ func (m *Manager) BranchWithSummary(branchFromID, summary string) (string, error
 		}
 	}
 	m.leafID = branchFromID
-	entry := NewEntry(EntryTypeBranchSummary, branchFromID, BranchSummaryData{
+	entry := NewEntry(EntryTypeBranchSummary, branchFromID, nil)
+	entry.Data = BranchSummaryData{
 		Summary: summary,
 		FromID:  branchFromID,
-	})
+		ToID:    entry.ID,
+	}
 	m.entries = append(m.entries, entry)
 	m.byID[entry.ID] = entry
 	m.leafID = entry.ID

@@ -26,6 +26,8 @@ const (
 	uiStateModelSelect
 	uiStateSessionSelect
 	uiStateSettingsSelect
+	uiStateTreeSelect
+	uiStateResourceSelect
 	uiStatePlanReject // capturing free-form rejection feedback for a plan
 )
 
@@ -73,6 +75,7 @@ var uiSlashCommands = []slashCommandDef{
 	{"/context", "show context sources"},
 	{"/doctor", "show runtime diagnostics"},
 	{"/retry", "retry last failed prompt"},
+	{"/config", "show/init/validate model config"},
 	{"/tools", "list active tools"},
 	{"/allow", "clear deny decision for a tool"},
 	{"/agents", "list subagents"},
@@ -87,6 +90,9 @@ var uiSlashCommands = []slashCommandDef{
 	{"/fork-session", "copy an existing session"},
 	{"/branch-session", "create a branched session"},
 	{"/tree", "show session tree"},
+	{"/export", "export session to HTML"},
+	{"/copy", "copy last assistant message"},
+	{"/changelog", "show recent git commits"},
 	{"/skills", "list skills"},
 	{"/prompts", "list prompt templates"},
 	{"/name", "set session name"},

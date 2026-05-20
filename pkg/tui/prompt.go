@@ -10,7 +10,8 @@ import (
 )
 
 // submit dispatches a submitted draft. Three forms:
-//   - "! cmd"  → run shell, print output to scrollback
+//   - "!cmd"   → run shell, print output, then send command/output to the model
+//   - "!!cmd"  → run shell and print output without sending it to the model
 //   - "/cmd"   → built-in slash command via pkg/slash
 //   - anything else → send to the agent as a prompt
 func (r *goTUIRoot) submit(text string) {
@@ -20,15 +21,25 @@ func (r *goTUIRoot) submit(text string) {
 	}
 	r.draft.Set("")
 	r.cursor = 0
+	r.slashMatches = nil
+	r.fileMatches = nil
 	r.appendHistory(line)
 
-	if rest, ok := strings.CutPrefix(line, "! "); ok {
-		r.runShell(rest)
+	if rest, ok := strings.CutPrefix(line, "!!"); ok {
+		r.runShell(strings.TrimSpace(rest), false)
+		return
+	}
+	if rest, ok := strings.CutPrefix(line, "!"); ok {
+		r.runShell(strings.TrimSpace(rest), true)
 		return
 	}
 	if strings.HasPrefix(line, "/") {
 		if line == "/retry" {
 			r.retryLastFailedPrompt()
+			return
+		}
+		if line == "/config" || strings.HasPrefix(line, "/config ") {
+			r.runConfigHook(strings.TrimSpace(strings.TrimPrefix(line, "/config")))
 			return
 		}
 		if line == "/settings" {
@@ -49,6 +60,18 @@ func (r *goTUIRoot) submit(text string) {
 		}
 		if line == "/sessions all" || line == "/resume all" {
 			r.openSessionSelect(true)
+			return
+		}
+		if line == "/tree" || line == "/fork" {
+			r.openTreeSelect()
+			return
+		}
+		if line == "/skills" {
+			r.openResourceSelect("skills")
+			return
+		}
+		if line == "/prompts" {
+			r.openResourceSelect("prompts")
 			return
 		}
 		if line == "/new" {
@@ -74,7 +97,7 @@ func (r *goTUIRoot) submit(text string) {
 		r.runSlash(line)
 		return
 	}
-	r.runPrompt(line)
+	r.runPrompt(r.expandFileReferencesForPrompt(line))
 }
 
 // togglePlanMode flips plan mode on/off. Bound to Shift+Tab so the user can
@@ -95,26 +118,50 @@ func (r *goTUIRoot) togglePlanMode() {
 	r.bump()
 }
 
-func (r *goTUIRoot) runShell(shellCmd string) {
+func (r *goTUIRoot) runShell(shellCmd string, sendToModel bool) {
+	if shellCmd == "" {
+		r.model.statusMsg = "shell command is empty"
+		r.bump()
+		return
+	}
 	block := uiBlock{Kind: "system", Content: "$ " + shellCmd, Timestamp: time.Now()}
 	r.model.appendBlock(block)
 	r.pushBlockAbove(block)
 	go func() {
-		out, err := exec.Command("bash", "-c", shellCmd).CombinedOutput()
+		cmd := exec.Command("bash", "-c", shellCmd)
+		if cwd := r.currentWorkingDir(); cwd != "" {
+			cmd.Dir = cwd
+		}
+		out, err := cmd.CombinedOutput()
 		r.queue(func() {
-			text := strings.TrimSpace(string(out))
-			if err != nil {
-				if text != "" {
-					text += "\n"
-				}
-				text += err.Error()
-			}
+			text := formatShellResult(out, err)
 			b := uiBlock{Kind: "system", Content: text, Timestamp: time.Now()}
 			r.model.appendBlock(b)
 			r.pushBlockAbove(b)
 			r.bump()
+			if sendToModel {
+				r.runPrompt(formatShellPrompt(shellCmd, text))
+			}
 		})
 	}()
+}
+
+func formatShellResult(out []byte, err error) string {
+	text := strings.TrimSpace(string(out))
+	if err != nil {
+		if text != "" {
+			text += "\n"
+		}
+		text += err.Error()
+	}
+	if text == "" {
+		return "(no output)"
+	}
+	return text
+}
+
+func formatShellPrompt(shellCmd, output string) string {
+	return "$ " + shellCmd + "\n" + output
 }
 
 func (r *goTUIRoot) runSlash(line string) {
@@ -146,6 +193,33 @@ func (r *goTUIRoot) runSlash(line string) {
 			if exit && r.app != nil {
 				r.app.Stop()
 			}
+		})
+	}()
+}
+
+func (r *goTUIRoot) runConfigHook(args string) {
+	if r.commandHooks.Config == nil {
+		r.model.statusMsg = "config command is not available"
+		r.bump()
+		return
+	}
+	go func() {
+		out, err := r.commandHooks.Config(args)
+		r.queue(func() {
+			content := strings.TrimSpace(out)
+			if err != nil {
+				if content != "" {
+					content += "\n"
+				}
+				content += "error: " + err.Error()
+			}
+			if content == "" {
+				content = "config command completed"
+			}
+			block := uiBlock{Kind: "section", Title: "Config", Content: content, Timestamp: time.Now()}
+			r.model.appendBlock(block)
+			r.pushBlockAbove(block)
+			r.bump()
 		})
 	}()
 }
@@ -216,8 +290,10 @@ func (r *goTUIRoot) runPrompt(line string) {
 
 	go func() {
 		defer queryCancel()
-		r.promptMu.Lock()
-		defer r.promptMu.Unlock()
+		if r.promptMu != nil {
+			r.promptMu.Lock()
+			defer r.promptMu.Unlock()
+		}
 		// Bail if the context was cancelled while waiting for the lock.
 		select {
 		case <-queryCtx.Done():

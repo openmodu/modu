@@ -17,8 +17,20 @@ import (
 	"github.com/openmodu/modu/pkg/types"
 )
 
+type CommandHooks struct {
+	Config func(args string) (string, error)
+}
+
+type RunOptions struct {
+	CommandHooks CommandHooks
+}
+
 // Run starts the interactive TUI session.
 func Run(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool) error {
+	return RunWithOptions(ctx, session, model, noApprove, RunOptions{})
+}
+
+func RunWithOptions(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool, opts RunOptions) error {
 	if n, err := session.RestoreMessages(); err == nil && n > 0 {
 		_ = n
 	}
@@ -31,6 +43,8 @@ func Run(ctx context.Context, session *coding_agent.CodingSession, model *types.
 	var promptMu sync.Mutex
 
 	root := newGoTUIRoot(ctx, session, model, histFile, approvalCh, &promptMu)
+	root.commandHooks = opts.CommandHooks
+	root.loadPersistedTUISettings()
 	if history, err := loadHistoryFile(histFile); err == nil {
 		root.history = history
 		root.historyIndex = len(history)

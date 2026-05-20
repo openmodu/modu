@@ -43,10 +43,29 @@ enough to implement, verify, and commit independently.
   `/scoped-models`, and `Ctrl+P` / `Ctrl+N` model cycling.
 - Added interactive `/settings`, `/hotkeys`, `/reload`, `/new`, `/name`, and
   `/clone` handling for the TUI path.
+- `/tree` now opens an interactive session-tree selector with search, current-path
+  markers, branch-summary preview, Enter navigation, and Ctrl+F branched-session
+  creation.
+- TUI editor now supports `@file` fuzzy references, Tab/Enter reference completion,
+  prompt-time referenced-file expansion, and Tab completion for path-like tokens.
+- TUI shell shortcuts now align with pi semantics: `!cmd` sends command output to
+  the model, while `!!cmd` only displays command output.
+- Added `/export [file]` for HTML session export from slash/TUI paths.
+- `/session` now shows a richer pi-style runtime summary: cwd, model, messages,
+  tokens, duration, plan/worktree state, and resource counts.
+- Added `/copy` to copy the last assistant message to the system clipboard when
+  `pbcopy` is available.
+- Added `/changelog` to show recent git commits from the active working directory.
+- Added TUI `/config example|init|validate` routing through a command hook so
+  `cmd/modu_code` can reuse its internal provider config helpers without moving packages.
+- `/skills` and `/prompts` now open searchable TUI resource pickers and insert
+  the selected slash command back into the input.
+- TUI tool-output display mode selected from `/settings` is persisted in
+  `~/.coding_agent/tui_settings.json` and restored on startup.
 
 ## Next
 
-1. Add interactive `/config` shortcuts for config example/init/validate.
+1. Add real keybindings.json remapping if custom keyboard shortcuts become a priority.
 
 ## Validation Log
 
@@ -71,3 +90,23 @@ enough to implement, verify, and commit independently.
 - 2026-05-19: `go test -count=1 ./pkg/tui ./pkg/slash ./pkg/coding_agent ./cmd/modu_code`
   passed for expanded TUI parity: slash commands, session selector, model selector,
   settings, hotkeys, and reload.
+- 2026-05-19: `go test ./pkg/coding_agent ./pkg/tui ./pkg/slash`
+  passed for interactive session-tree navigation and branch-summary restoration.
+- 2026-05-19: `go test ./pkg/tui`
+  passed for TUI file-reference and path-token completion coverage.
+- 2026-05-19: `go test ./pkg/tui ./cmd/modu_code`
+  passed for single-bang and double-bang shell shortcut behavior.
+- 2026-05-19: `go test ./pkg/slash ./pkg/coding_agent`
+  passed for slash-driven session HTML export.
+- 2026-05-19: `go test ./pkg/slash ./cmd/modu_code`
+  passed for the expanded `/session` runtime summary.
+- 2026-05-19: `go test ./pkg/slash ./cmd/modu_code`
+  passed for slash-driven last-assistant copy behavior.
+- 2026-05-19: `go test ./pkg/slash ./cmd/modu_code ./pkg/tui`
+  passed for slash/TUI changelog command coverage.
+- 2026-05-20: `go test ./cmd/modu_code ./pkg/tui`
+  passed for the TUI `/config` command hook.
+- 2026-05-20: `go test ./pkg/tui`
+  passed for searchable skill/prompt resource picker behavior.
+- 2026-05-20: `go test ./pkg/tui`
+  passed for persisted TUI settings round-trip behavior.

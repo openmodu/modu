@@ -3,8 +3,11 @@ package slash
 import (
 	"context"
 	"fmt"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/types"
@@ -184,6 +187,36 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		} else {
 			r.PrintInfo("created branched session: " + path)
 		}
+		return true, false
+
+	case "export":
+		path := ""
+		if len(parts) > 1 {
+			path = strings.TrimSpace(parts[1])
+		}
+		path = resolveExportPath(session, path)
+		if err := session.ExportHTML(path); err != nil {
+			r.PrintError(err)
+		} else {
+			r.PrintInfo("exported session: " + path)
+		}
+		return true, false
+
+	case "copy":
+		text := strings.TrimSpace(session.GetLastAssistantText())
+		if text == "" {
+			r.PrintInfo("no assistant message to copy")
+			return true, false
+		}
+		if err := copyTextToClipboard(text); err != nil {
+			r.PrintError(err)
+		} else {
+			r.PrintInfo("copied last assistant message")
+		}
+		return true, false
+
+	case "changelog":
+		handleChangelog(session, r)
 		return true, false
 
 	case "doctor":
@@ -376,6 +409,47 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 	}
 }
 
+func resolveExportPath(session *coding_agent.CodingSession, path string) string {
+	cwd := session.GetContextInfo().Cwd
+	if strings.TrimSpace(path) == "" {
+		path = "modu_code-session.html"
+	}
+	if filepath.IsAbs(path) || cwd == "" {
+		return filepath.Clean(path)
+	}
+	return filepath.Join(cwd, path)
+}
+
+var copyTextToClipboard = func(text string) error {
+	cmd := exec.Command("pbcopy")
+	cmd.Stdin = strings.NewReader(text)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("copy to clipboard: %w", err)
+	}
+	return nil
+}
+
+func handleChangelog(session *coding_agent.CodingSession, r Printer) {
+	cwd := session.GetContextInfo().Cwd
+	if cwd == "" {
+		r.PrintInfo("changelog unavailable: no cwd")
+		return
+	}
+	cmd := exec.Command("git", "log", "--oneline", "--decorate", "-n", "8")
+	cmd.Dir = cwd
+	out, err := cmd.Output()
+	if err != nil {
+		r.PrintError(fmt.Errorf("changelog: %w", err))
+		return
+	}
+	text := strings.TrimSpace(string(out))
+	if text == "" {
+		r.PrintInfo("changelog: no commits found")
+		return
+	}
+	r.PrintSection("Changelog", strings.Split(text, "\n"))
+}
+
 func handleTree(session *coding_agent.CodingSession, r Printer) {
 	branches := session.GetSessionBranches()
 	if len(branches) == 0 {
@@ -438,13 +512,60 @@ func handleSession(parts []string, session *coding_agent.CodingSession, r Printe
 	if name == "" {
 		name = "(unnamed)"
 	}
+	stats := session.GetSessionStats()
+	info := session.GetContextInfo()
+	model := info.ModelName
+	if model == "" {
+		model = info.ModelID
+	}
+	if model == "" {
+		model = "(unknown)"
+	}
+	modelLine := model
+	if info.ModelProvider != "" || info.ModelID != "" {
+		modelLine += fmt.Sprintf(" (%s / %s)", info.ModelProvider, info.ModelID)
+	}
+	planMode := "off"
+	if info.PlanMode {
+		planMode = "on"
+	}
+	worktree := "none"
+	if info.ActiveWorktree != "" {
+		worktree = info.ActiveWorktree
+	}
 	lines := []string{
 		"id: " + session.GetSessionID(),
 		"name: " + name,
 		"file: " + session.GetSessionFile(),
-		fmt.Sprintf("messages: %d", len(session.GetMessages())),
+		"cwd: " + info.Cwd,
+		"model: " + modelLine,
+		fmt.Sprintf("messages: %d", stats.MessageCount),
+		fmt.Sprintf("tokens: %d", stats.TotalTokens),
+		"duration: " + formatSessionDuration(stats.DurationMs),
+		"plan mode: " + planMode,
+		"worktree: " + worktree,
+		fmt.Sprintf("context files: %d", len(info.ContextFiles)),
+		fmt.Sprintf("skills: %d", len(info.Skills)),
+		fmt.Sprintf("prompt templates: %d", len(info.PromptTemplates)),
 	}
 	r.PrintSection("Session", lines)
+}
+
+func formatSessionDuration(ms int64) string {
+	if ms < 0 {
+		ms = 0
+	}
+	d := time.Duration(ms) * time.Millisecond
+	if d < time.Second {
+		return "0s"
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm %ds", int(d.Minutes()), int(d.Seconds())%60)
+	}
+	return fmt.Sprintf("%dh %dm", int(d.Hours()), int(d.Minutes())%60)
 }
 
 func handleSessions(parts []string, session *coding_agent.CodingSession, r Printer) {
@@ -768,6 +889,9 @@ func PrintHelp(r Printer) {
 		"/fork-session <file> — copy a saved session into this cwd",
 		"/tree               — show forkable messages or branch points",
 		"/fork <entry-id>    — move the session leaf to an entry",
+		"/export [file]      — export the session to HTML",
+		"/copy               — copy the last assistant message",
+		"/changelog          — show recent git commits",
 		"/doctor             — show runtime diagnostics",
 		"/retry              — retry last failed prompt in interactive TUI",
 		"/tools              — list active tools",

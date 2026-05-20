@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -157,8 +158,24 @@ func TestHandleSessionCommands(t *testing.T) {
 	if !handled || exit {
 		t.Fatalf("expected /session to be handled without exit, handled=%v exit=%v", handled, exit)
 	}
-	if output := printer.String(); !strings.Contains(output, "Session") || !strings.Contains(output, "name: demo") {
-		t.Fatalf("expected session output with name, got:\n%s", output)
+	output := printer.String()
+	for _, want := range []string{
+		"Session",
+		"name: demo",
+		"cwd: " + cwd,
+		"model: MiMo V2.5 Pro (xiaomi-mimo / mimo-v2.5-pro)",
+		"messages: 0",
+		"tokens: 0",
+		"duration:",
+		"plan mode: off",
+		"worktree: none",
+		"context files:",
+		"skills:",
+		"prompt templates:",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected session output to contain %q, got:\n%s", want, output)
+		}
 	}
 
 	printer = &capturePrinter{}
@@ -256,6 +273,117 @@ func TestHandleTreeAndForkCommands(t *testing.T) {
 	}
 	if output := printer.String(); !strings.Contains(output, "forked from entry") {
 		t.Fatalf("expected fork output, got:\n%s", output)
+	}
+}
+
+func TestHandleExportCommand(t *testing.T) {
+	cwd := t.TempDir()
+	model := &types.Model{ID: "test", Name: "Test", ProviderID: "test"}
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       cwd,
+		AgentDir:  filepath.Join(cwd, ".coding_agent"),
+		Model:     model,
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "export this"})
+
+	printer := &capturePrinter{}
+	handled, exit := Handle(context.Background(), "/export exports/session.html", session, printer, model)
+	if !handled || exit {
+		t.Fatalf("expected /export to be handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	outPath := filepath.Join(cwd, "exports", "session.html")
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("expected export file: %v", err)
+	}
+	if !strings.Contains(string(data), "export this") {
+		t.Fatalf("expected exported message, got %s", string(data))
+	}
+	if !strings.Contains(printer.String(), outPath) {
+		t.Fatalf("expected output path, got %s", printer.String())
+	}
+}
+
+func TestHandleCopyCommand(t *testing.T) {
+	cwd := t.TempDir()
+	model := &types.Model{ID: "test", Name: "Test", ProviderID: "test"}
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       cwd,
+		AgentDir:  filepath.Join(cwd, ".coding_agent"),
+		Model:     model,
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.GetAgent().AppendMessage(types.AssistantMessage{
+		Role:    "assistant",
+		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "copy me"}},
+	})
+
+	oldCopy := copyTextToClipboard
+	defer func() { copyTextToClipboard = oldCopy }()
+	var copied string
+	copyTextToClipboard = func(text string) error {
+		copied = text
+		return nil
+	}
+
+	printer := &capturePrinter{}
+	handled, exit := Handle(context.Background(), "/copy", session, printer, model)
+	if !handled || exit {
+		t.Fatalf("expected /copy to be handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	if copied != "copy me" {
+		t.Fatalf("expected copied assistant text, got %q", copied)
+	}
+	if !strings.Contains(printer.String(), "copied last assistant message") {
+		t.Fatalf("expected copy confirmation, got %s", printer.String())
+	}
+}
+
+func TestHandleChangelogCommand(t *testing.T) {
+	cwd := t.TempDir()
+	runGit(t, cwd, "init")
+	runGit(t, cwd, "config", "user.email", "test@example.com")
+	runGit(t, cwd, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(cwd, "README.md"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, cwd, "add", "README.md")
+	runGit(t, cwd, "commit", "-m", "initial changelog entry")
+
+	model := &types.Model{ID: "test", Name: "Test", ProviderID: "test"}
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       cwd,
+		AgentDir:  filepath.Join(cwd, ".coding_agent"),
+		Model:     model,
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	printer := &capturePrinter{}
+	handled, exit := Handle(context.Background(), "/changelog", session, printer, model)
+	if !handled || exit {
+		t.Fatalf("expected /changelog to be handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	if output := printer.String(); !strings.Contains(output, "Changelog") || !strings.Contains(output, "initial changelog entry") {
+		t.Fatalf("expected changelog output, got:\n%s", output)
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, string(out))
 	}
 }
 

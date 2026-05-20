@@ -151,13 +151,18 @@ High-priority gaps identified before this round:
   RPC commands and client helpers for listing, deleting, forking, and extracting sessions
   TUI slash routing for `/tree` and `/fork <entry-id>` so session tree operations are reachable interactively
   session APIs for all-model listing, session-scoped model ranges, leaf-id cloning, and dynamic resource reloads used by the TUI parity work
+  interactive session-tree nodes, branch-summary restoration during tree navigation, and TUI tree search/branch controls
+  TUI resource/settings selector polish for consistent page navigation and visible resource source/path metadata
+  TUI session-tree row polish with short entry IDs, stable type labels, labels, and branch counts
+  TUI idle status line polish with model, token, plan, and worktree state ahead of common hints
+  TUI hotkey help alignment for selector paging, tree branch/summary controls, and resource commands
 
 ## Still Missing
 
 - Deeper plan-mode semantics beyond the current state/prompt toggle
 - Richer worktree lifecycle controls and cleanup introspection
 - Full pi-compatible TypeScript extension/package ecosystem, including remote npm/git package install, theme resources, UI extension context, provider hooks, and hot reload
-- Remaining pi TUI tree parity, including branch-summary rendering controls
+- Remaining pi TUI polish around session tree rendering and historical branch labels
 
 ## Suggested Next Steps
 

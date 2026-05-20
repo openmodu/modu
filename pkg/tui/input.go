@@ -31,7 +31,7 @@ func (r *goTUIRoot) handleInputKey(ke gotui.KeyEvent) {
 		rs = append(rs[:r.cursor], append([]rune{ke.Rune}, rs[r.cursor:]...)...)
 		r.cursor++
 		r.draft.Set(string(rs))
-		r.updateSlashMatches()
+		r.updateInputSuggestions()
 	case gotui.KeyBackspace:
 		if r.cursor == 0 {
 			return
@@ -39,16 +39,22 @@ func (r *goTUIRoot) handleInputKey(ke gotui.KeyEvent) {
 		rs = append(rs[:r.cursor-1], rs[r.cursor:]...)
 		r.cursor--
 		r.draft.Set(string(rs))
-		r.updateSlashMatches()
+		r.updateInputSuggestions()
 	case gotui.KeyDelete:
 		if r.cursor >= len(rs) {
 			return
 		}
 		rs = append(rs[:r.cursor], rs[r.cursor+1:]...)
 		r.draft.Set(string(rs))
-		r.updateSlashMatches()
+		r.updateInputSuggestions()
 	case gotui.KeyTab:
-		r.completeSlashMatch()
+		if r.completeSlashMatch() {
+			return
+		}
+		if r.completeFileMatch() {
+			return
+		}
+		r.completePathToken()
 	case gotui.KeyLeft:
 		if r.cursor > 0 {
 			r.cursor--
@@ -70,6 +76,8 @@ func (r *goTUIRoot) handleInputKey(ke gotui.KeyEvent) {
 			r.slashMatchIdx = (r.slashMatchIdx - 1 + len(r.slashMatches)) % len(r.slashMatches)
 			r.adjustSlashScroll()
 			r.bump()
+		} else if r.moveFileMatch(-1) {
+			return
 		} else if moved := moveInputCursorVertical(rs, r.cursor, -1); moved != r.cursor {
 			r.cursor = moved
 			r.bump()
@@ -81,6 +89,8 @@ func (r *goTUIRoot) handleInputKey(ke gotui.KeyEvent) {
 			r.slashMatchIdx = (r.slashMatchIdx + 1) % len(r.slashMatches)
 			r.adjustSlashScroll()
 			r.bump()
+		} else if r.moveFileMatch(1) {
+			return
 		} else if moved := moveInputCursorVertical(rs, r.cursor, 1); moved != r.cursor {
 			r.cursor = moved
 			r.bump()
@@ -94,6 +104,9 @@ func (r *goTUIRoot) handleInputKey(ke gotui.KeyEvent) {
 			r.slashMatches = nil
 			r.slashMatchIdx = 0
 			r.submit(chosen)
+			return
+		}
+		if r.completeFileMatch() {
 			return
 		}
 		r.submit(r.draft.Get())

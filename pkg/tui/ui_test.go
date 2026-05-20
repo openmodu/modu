@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -661,6 +662,251 @@ func TestScopedModelsSelectorTogglesSessionScope(t *testing.T) {
 	}
 }
 
+func TestTreeSelectNavigatesWithBranchSummary(t *testing.T) {
+	session := newUITestSession(t)
+	if err := session.Prompt(context.Background(), "first tree prompt"); err != nil {
+		t.Fatal(err)
+	}
+	session.WaitForIdle()
+	if err := session.Prompt(context.Background(), "second tree prompt"); err != nil {
+		t.Fatal(err)
+	}
+	session.WaitForIdle()
+
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, nil)
+	root.openTreeSelect()
+	if root.model.state != uiStateTreeSelect {
+		t.Fatalf("expected tree select state, got %v", root.model.state)
+	}
+	for _, r := range "first tree" {
+		root.appendTreeSearch(r)
+	}
+	if len(root.treeNodes) == 0 {
+		t.Fatal("expected tree search result")
+	}
+	root.confirmTreeSelect()
+	if root.model.state != uiStateInput {
+		t.Fatalf("expected input state after tree navigation, got %v", root.model.state)
+	}
+	if !strings.Contains(root.model.statusMsg, "jumped") {
+		t.Fatalf("expected jumped status, got %q", root.model.statusMsg)
+	}
+	messages := session.GetMessages()
+	if len(messages) == 0 {
+		t.Fatal("expected restored messages")
+	}
+	lastText := uiTestMessageText(messages[len(messages)-1])
+	if !strings.Contains(lastText, "[Branch Navigation Summary]") || !strings.Contains(lastText, "first tree prompt") {
+		t.Fatalf("expected branch summary message for selected point, got %q", lastText)
+	}
+}
+
+func TestTreeNodeLineShowsIDRoleLabelAndBranchCount(t *testing.T) {
+	line := treeNodeLine(coding_agent.SessionTreeNode{
+		ID:            "1234567890abcdef",
+		Type:          "message",
+		Role:          "assistant",
+		Label:         "main branch",
+		Preview:       "hello\nworld",
+		ChildCount:    3,
+		InCurrentPath: true,
+	}, true, false)
+
+	for _, want := range []string{"#12345678", "assistant", "[main branch]", "hello world", "branches=3"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("expected tree line to contain %q, got %q", want, line)
+		}
+	}
+}
+
+func TestFileReferenceSuggestionsCompleteAndExpandPrompt(t *testing.T) {
+	session := newUITestSession(t)
+	cwd := session.GetContextInfo().Cwd
+	if err := os.MkdirAll(filepath.Join(cwd, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cwd, "pkg", "target.go"), []byte("package pkg\n\nconst Answer = 42\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, nil)
+	root.draft.Set("inspect @target")
+	root.cursor = len([]rune(root.draft.Get()))
+
+	root.updateInputSuggestions()
+	if len(root.fileMatches) == 0 || root.fileMatches[0].Path != "pkg/target.go" {
+		t.Fatalf("expected pkg/target.go suggestion, got %#v", root.fileMatches)
+	}
+	if !root.completeFileMatch() {
+		t.Fatal("expected file completion")
+	}
+	if got := root.draft.Get(); got != "inspect @pkg/target.go" {
+		t.Fatalf("unexpected completed draft %q", got)
+	}
+
+	expanded := root.expandFileReferencesForPrompt(root.draft.Get())
+	if !strings.Contains(expanded, "Referenced files") || !strings.Contains(expanded, "const Answer = 42") {
+		t.Fatalf("expected referenced file content, got %q", expanded)
+	}
+}
+
+func TestPathTokenCompletion(t *testing.T) {
+	session := newUITestSession(t)
+	cwd := session.GetContextInfo().Cwd
+	if err := os.MkdirAll(filepath.Join(cwd, "cmd", "tool"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, nil)
+	root.draft.Set("open ./cm")
+	root.cursor = len([]rune(root.draft.Get()))
+
+	if !root.completePathToken() {
+		t.Fatal("expected path token completion")
+	}
+	if got := root.draft.Get(); got != "open ./cmd/" {
+		t.Fatalf("unexpected completed path %q", got)
+	}
+}
+
+func TestShellShortcutSendsSingleBangToModel(t *testing.T) {
+	session := newUITestSession(t)
+	var promptMu sync.Mutex
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, &promptMu)
+
+	root.submit("!printf model-output")
+	waitForUITestIdle(t, root, session)
+
+	messages := session.GetMessages()
+	if len(messages) == 0 {
+		t.Fatal("expected shell output prompt to reach model")
+	}
+	if got := uiTestMessageText(messages[0]); !strings.Contains(got, "$ printf model-output") || !strings.Contains(got, "model-output") {
+		t.Fatalf("expected shell command and output in prompt, got %q", got)
+	}
+}
+
+func TestShellShortcutDoubleBangDoesNotSendToModel(t *testing.T) {
+	session := newUITestSession(t)
+	var promptMu sync.Mutex
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, &promptMu)
+
+	root.submit("!!printf display-only")
+	waitForUITestCondition(t, time.Second, func() bool {
+		for _, block := range root.model.blocks {
+			if block.Kind == "system" && strings.Contains(block.Content, "display-only") {
+				return true
+			}
+		}
+		return false
+	})
+
+	if got := len(session.GetMessages()); got != 0 {
+		t.Fatalf("expected no model messages for !! shell command, got %d", got)
+	}
+}
+
+func TestConfigHookCommandRendersOutput(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+	root.commandHooks.Config = func(args string) (string, error) {
+		if args != "validate" {
+			t.Fatalf("unexpected config args %q", args)
+		}
+		return "status: ok\n", nil
+	}
+
+	root.submit("/config validate")
+
+	waitForUITestCondition(t, time.Second, func() bool {
+		for _, block := range root.model.blocks {
+			if block.Title == "Config" && strings.Contains(block.Content, "status: ok") {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+func TestResourceSelectFiltersAndInsertsCommand(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+	root.model.state = uiStateResourceSelect
+	root.resourceTitle = "Skills"
+	root.resourceAllChoices = []resourceChoice{
+		{Name: "git-commit", Description: "create a commit", Source: "user"},
+		{Name: "security-review", Description: "review code", Source: "project"},
+	}
+
+	for _, ch := range "security" {
+		root.appendResourceSearch(ch)
+	}
+	if len(root.resourceChoices) != 1 || root.resourceChoices[0].Name != "security-review" {
+		t.Fatalf("expected security-review match, got %#v", root.resourceChoices)
+	}
+	root.confirmResourceSelect()
+	if root.model.state != uiStateInput {
+		t.Fatalf("expected input state, got %v", root.model.state)
+	}
+	if got := root.draft.Get(); got != "/security-review " {
+		t.Fatalf("expected inserted command, got %q", got)
+	}
+}
+
+func TestResourceSelectPagingAndPathDisplay(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+	for i := range resourceSelectVisibleRows + 3 {
+		root.resourceChoices = append(root.resourceChoices, resourceChoice{Name: fmt.Sprintf("skill-%02d", i)})
+	}
+
+	root.moveResourceSelect(resourceSelectVisibleRows)
+	if root.resourceSelectIdx != resourceSelectVisibleRows {
+		t.Fatalf("expected page down to move to %d, got %d", resourceSelectVisibleRows, root.resourceSelectIdx)
+	}
+	if root.resourceSelectScroll != 1 {
+		t.Fatalf("expected scroll to keep selected row visible, got %d", root.resourceSelectScroll)
+	}
+
+	line := resourceChoiceLine(resourceChoice{
+		Name:        "review",
+		Description: "check changes",
+		Source:      "project",
+		Path:        "/Users/test/.codex/skills/review/SKILL.md",
+	}, true)
+	if !strings.Contains(line, "[project] /Users/test/.codex/skills/review/SKILL.md") {
+		t.Fatalf("expected source and path in resource line, got %q", line)
+	}
+}
+
+func TestPersistedTUISettingsRoundTrip(t *testing.T) {
+	session := newUITestSession(t)
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, nil)
+	root.model.transcriptMode = true
+	if err := root.savePersistedTUISettings(); err != nil {
+		t.Fatal(err)
+	}
+
+	next := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, nil)
+	next.loadPersistedTUISettings()
+	if !next.model.transcriptMode {
+		t.Fatal("expected persisted transcript mode")
+	}
+}
+
+func TestSettingsSelectPagingClamps(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+	root.settingsChoices = []settingsChoice{
+		{Label: "one"},
+		{Label: "two"},
+		{Label: "three"},
+	}
+
+	root.pageSettingsSelect(settingsSelectVisibleRows)
+	if root.settingsSelectIdx != 2 {
+		t.Fatalf("expected page down to clamp to last setting, got %d", root.settingsSelectIdx)
+	}
+	root.pageSettingsSelect(-settingsSelectVisibleRows)
+	if root.settingsSelectIdx != 0 {
+		t.Fatalf("expected page up to clamp to first setting, got %d", root.settingsSelectIdx)
+	}
+}
+
 func TestPromptErrorCollapsesRepeatsAndOffersActions(t *testing.T) {
 	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 	err := errors.New("max retries (3) exceeded: dial tcp 127.0.0.1:1234: connect: operation timed out")
@@ -678,6 +924,38 @@ func TestPromptErrorCollapsesRepeatsAndOffersActions(t *testing.T) {
 	} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("expected bottom line to contain %q, got %q", want, line)
+		}
+	}
+}
+
+func TestBottomLineShowsSessionStatusWhenIdle(t *testing.T) {
+	session := newUITestSession(t)
+	session.EnterPlanMode()
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, nil)
+
+	line, _ := root.bottomLine()
+	for _, want := range []string{
+		"model test/test-model",
+		"plan",
+		"shift+tab plan",
+		"/help",
+	} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("expected bottom line to contain %q, got %q", want, line)
+		}
+	}
+}
+
+func TestHotkeyHelpIncludesSelectorAndResourceCommands(t *testing.T) {
+	text := hotkeyHelpText()
+	for _, want := range []string{
+		"PageUp/PageDown: scroll transcript or selector page",
+		"Tree: Ctrl+F branch-session, Ctrl+S summary",
+		"/skills",
+		"/prompts",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected hotkey help to contain %q, got %q", want, text)
 		}
 	}
 }
@@ -846,6 +1124,57 @@ func writeUITestSessionFile(t *testing.T, agentDir, cwd, name, prompt string) st
 		t.Fatal(err)
 	}
 	return mgr.FilePath()
+}
+
+func uiTestMessageText(msg agent.AgentMessage) string {
+	switch m := msg.(type) {
+	case types.UserMessage:
+		return uiTestContentText(m.Content)
+	case *types.UserMessage:
+		return uiTestContentText(m.Content)
+	case types.AssistantMessage:
+		return uiTestContentText(m.Content)
+	case *types.AssistantMessage:
+		return uiTestContentText(m.Content)
+	default:
+		return ""
+	}
+}
+
+func uiTestContentText(content any) string {
+	switch value := content.(type) {
+	case string:
+		return value
+	case []types.ContentBlock:
+		var parts []string
+		for _, block := range value {
+			if text, ok := block.(*types.TextContent); ok && text != nil {
+				parts = append(parts, text.Text)
+			}
+		}
+		return strings.Join(parts, "\n")
+	default:
+		return ""
+	}
+}
+
+func waitForUITestIdle(t *testing.T, root *goTUIRoot, session *coding_agent.CodingSession) {
+	t.Helper()
+	waitForUITestCondition(t, time.Second, func() bool {
+		return !root.model.queryActive && len(session.GetMessages()) > 0
+	})
+}
+
+func waitForUITestCondition(t *testing.T, timeout time.Duration, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if ok() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("condition was not met before timeout")
 }
 
 func indexSessionChoice(t *testing.T, choices []coding_agent.SessionInfo, path string) int {
