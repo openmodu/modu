@@ -118,8 +118,6 @@ modu/
 │   ├── env/                # Environment variable loader
 │   ├── stream/             # Streaming utilities
 │   └── utils/              # General utility functions
-├── repos/                  # Business repository layer
-│   └── gen_image_repo/     # Image generation (Gemini, etc.)
 ```
 
 ## 📚 Core Modules
@@ -208,12 +206,6 @@ Terminal user interface rendering and input handling library.
 📖 [Detailed Documentation](pkg/env/README.md)
 
 ---
-
-### repos/ — Business Repositories
-
-| Module | Description |
-|------|------|
-| [`repos/gen_image_repo`](repos/gen_image_repo/README.md) | Image generation abstraction layer supporting Gemini and other providers |
 
 ## 🔧 Supported LLM Providers
 
