@@ -18,6 +18,18 @@ type planModeAdapter struct {
 	session *CodingSession
 }
 
+// PlanStatus describes the current plan-mode lifecycle state and approved
+// plan artifacts.
+type PlanStatus struct {
+	Active         bool
+	PlanFile       string
+	PlanExists     bool
+	TodoTotal      int
+	TodoPending    int
+	TodoInProgress int
+	TodoCompleted  int
+}
+
 func (a planModeAdapter) EnterPlanMode() {
 	if a.session == nil {
 		return
@@ -170,6 +182,32 @@ func (s *CodingSession) EnterPlanMode() {
 // provided, replace the todo list so execution follows the approved plan.
 func (s *CodingSession) ExitPlanMode(plan string, steps []string) {
 	planModeAdapter{session: s}.ExitPlanMode(plan, steps)
+}
+
+// PlanStatus returns plan-mode state, latest persisted plan path, and current
+// todo counters seeded by an approved plan.
+func (s *CodingSession) PlanStatus() PlanStatus {
+	status := PlanStatus{
+		Active:   s.IsPlanMode(),
+		PlanFile: s.RuntimePaths().PlanFile,
+	}
+	if status.PlanFile != "" {
+		if _, err := os.Stat(status.PlanFile); err == nil {
+			status.PlanExists = true
+		}
+	}
+	for _, item := range s.GetTodos() {
+		status.TodoTotal++
+		switch item.Status {
+		case "pending":
+			status.TodoPending++
+		case "in_progress":
+			status.TodoInProgress++
+		case "completed":
+			status.TodoCompleted++
+		}
+	}
+	return status
 }
 
 func (s *CodingSession) replacePlanTools() {

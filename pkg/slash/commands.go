@@ -312,11 +312,14 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		}
 		switch arg {
 		case "", "status":
-			if session.IsPlanMode() {
-				r.PrintInfo("plan mode: on")
-			} else {
-				r.PrintInfo("plan mode: off")
+			status := session.PlanStatus()
+			lines := []string{
+				"active: " + yesNo(status.Active),
+				"latest plan: " + status.PlanFile,
+				"latest plan exists: " + yesNo(status.PlanExists),
+				fmt.Sprintf("todos: total=%d pending=%d in_progress=%d completed=%d", status.TodoTotal, status.TodoPending, status.TodoInProgress, status.TodoCompleted),
 			}
+			r.PrintSection("Plan", lines)
 		case "on":
 			session.EnterPlanMode()
 			r.PrintInfo("plan mode enabled")

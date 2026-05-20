@@ -276,6 +276,46 @@ func TestHandleWorktreeStatusShowsLifecycle(t *testing.T) {
 	}
 }
 
+func TestHandlePlanStatusShowsArtifactAndTodos(t *testing.T) {
+	cwd := t.TempDir()
+	agentDir := filepath.Join(cwd, ".coding_agent")
+	model := &types.Model{
+		ID:         "mimo-v2.5-pro",
+		Name:       "MiMo V2.5 Pro",
+		ProviderID: "xiaomi-mimo",
+	}
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       cwd,
+		AgentDir:  agentDir,
+		Model:     model,
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.EnterPlanMode()
+	session.ExitPlanMode("approved slash plan", []string{"first", "second"})
+	status := session.PlanStatus()
+
+	printer := &capturePrinter{}
+	handled, exit := Handle(context.Background(), "/plan status", session, printer, model)
+	if !handled || exit {
+		t.Fatalf("expected /plan status handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	output := printer.String()
+	for _, want := range []string{
+		"Plan",
+		"active: no",
+		"latest plan: " + status.PlanFile,
+		"latest plan exists: yes",
+		"todos: total=2 pending=2 in_progress=0 completed=0",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected plan status to contain %q, got:\n%s", want, output)
+		}
+	}
+}
+
 func TestHandleTreeAndForkCommands(t *testing.T) {
 	cwd := t.TempDir()
 	agentDir := filepath.Join(cwd, ".coding_agent")
