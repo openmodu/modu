@@ -97,6 +97,38 @@ func TestGoTUIApprovalKeyMapEnterAllows(t *testing.T) {
 	}
 }
 
+func TestApprovalWidgetShowsLayeredToolDetails(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+	root.model.pendingPerm = &approval.Request{
+		ToolName: "bash",
+		Args:     map[string]any{"command": "go test ./pkg/tui"},
+	}
+
+	text := collectGoTUIText(root.renderApprovalWidget())
+	for _, want := range []string{"Permission required", "tool: bash", "go test ./pkg/tui", "actions:", "[Y]es", "[D]eny always"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected approval widget to contain %q, got %q", want, text)
+		}
+	}
+}
+
+func TestPlanApprovalWidgetShowsStepCountAndRisk(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+	root.model.pendingPerm = &approval.Request{
+		ToolName: "exit_plan_mode",
+		Args: map[string]any{
+			"steps": []any{"inspect", "", "implement"},
+		},
+	}
+
+	text := collectGoTUIText(root.renderApprovalWidget())
+	for _, want := range []string{"Plan approval", "steps=2", "auto-accept allows write/edit/bash", "[Y]es, start coding"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected plan approval widget to contain %q, got %q", want, text)
+		}
+	}
+}
+
 func TestGoTUIInputUsesCursorEditing(t *testing.T) {
 	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 
@@ -312,6 +344,13 @@ func TestUIUserBlockUsesPromptBackground(t *testing.T) {
 	if bg := uiUserPrompt.GetBackground(); bg == nil {
 		t.Fatalf("expected user prompt background style, got nil")
 	}
+	external := ansiPattern.ReplaceAllString(renderUIUserBlockWithSource("remote prompt", "external", 80), "")
+	if !strings.Contains(external, "◆ remote prompt") {
+		t.Fatalf("expected external prompt marker, got %q", external)
+	}
+	if bg := uiExternalUserPrompt.GetBackground(); bg == nil {
+		t.Fatalf("expected external user prompt background style, got nil")
+	}
 }
 
 func TestUIRenderBlocksUsesBulletPrefixes(t *testing.T) {
@@ -344,6 +383,31 @@ func TestUIRenderBlocksMarkdownDoesNotDuplicateHeadings(t *testing.T) {
 	got := ansiPattern.ReplaceAllString(renderAllBlocks(m), "")
 	if strings.Count(got, "render.go (+39 -1)") != 1 {
 		t.Fatalf("expected markdown heading once, got %q", got)
+	}
+}
+
+func TestUISectionRendersStructuredKeyValues(t *testing.T) {
+	raw := renderUISection("Plan", "active: true\ntodos: total=2 pending=1\n\nNavigation\n  Enter: submit", 80)
+	plain := ansiPattern.ReplaceAllString(raw, "")
+	for _, want := range []string{
+		"Plan",
+		"active: true",
+		"todos: total=2 pending=1",
+		"Navigation",
+		"  Enter: submit",
+	} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("expected section to contain %q, got %q", want, plain)
+		}
+	}
+}
+
+func TestSplitSectionKeyValueSkipsIndentedLines(t *testing.T) {
+	if key, value, ok := splitSectionKeyValue("active: true"); !ok || key != "active" || value != "true" {
+		t.Fatalf("expected key/value split, got key=%q value=%q ok=%v", key, value, ok)
+	}
+	if _, _, ok := splitSectionKeyValue("  Enter: submit"); ok {
+		t.Fatal("expected indented hotkey line to stay unstructured")
 	}
 }
 
@@ -553,6 +617,46 @@ func TestActivityLinePersistsCompletedTurn(t *testing.T) {
 	}
 }
 
+func TestTransientStatusExpiresToIdleLine(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+	root.model.setTransientStatus("saved")
+	root.model.statusExpiresAt = time.Now().Add(-time.Second)
+
+	line, _ := root.bottomLine()
+	if strings.Contains(line, "saved") {
+		t.Fatalf("expected expired status to clear, got %q", line)
+	}
+	if root.model.statusMsg != "" {
+		t.Fatalf("expected model status to be cleared, got %q", root.model.statusMsg)
+	}
+}
+
+func TestPersistentStatusIgnoresStaleTransientExpiry(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+	root.model.setTransientStatus("saved")
+	root.model.statusExpiresAt = time.Now().Add(-time.Second)
+	root.model.statusMsg = "permission required"
+
+	line, _ := root.bottomLine()
+	if !strings.Contains(line, "permission required") {
+		t.Fatalf("expected persistent status to remain visible, got %q", line)
+	}
+}
+
+func TestCompletedActivityExpires(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+	root.model.queryStartTime = time.Now().Add(-2 * time.Second)
+	root.model.finishActivity(nil)
+	root.model.activityExpiresAt = time.Now().Add(-time.Second)
+
+	if got, ok := root.activityLine(); ok {
+		t.Fatalf("expected expired activity to clear, got %q", got)
+	}
+	if root.model.lastActivity != "" {
+		t.Fatalf("expected model activity to be cleared, got %q", root.model.lastActivity)
+	}
+}
+
 func TestModelSelectEnterSwitchesModel(t *testing.T) {
 	providers.Models["ui-model-select"] = map[string]*types.Model{
 		"model-a": {ID: "model-a", Name: "Model A", ProviderID: "ui-model-select"},
@@ -568,6 +672,12 @@ func TestModelSelectEnterSwitchesModel(t *testing.T) {
 	}
 	root.modelSearch = "model-b"
 	root.filterModelChoices()
+	header := collectGoTUIText(root.renderModelSelectWidget())
+	for _, want := range []string{"Select model", "search: model-b", "mode: scope="} {
+		if !strings.Contains(header, want) {
+			t.Fatalf("expected model selector header to contain %q, got %q", want, header)
+		}
+	}
 	root.confirmModelSelect()
 
 	if got := session.GetModel(); got.ID != "model-b" {
@@ -599,6 +709,12 @@ func TestSessionSelectResumeForkDelete(t *testing.T) {
 	}
 	if got := len(root.sessionChoices); got == 0 {
 		t.Fatal("expected search to keep matching session")
+	}
+	header := collectGoTUIText(root.renderSessionSelectWidget())
+	for _, want := range []string{"Select session", "search: resume", "mode: scope=all sort=threaded filter=all"} {
+		if !strings.Contains(header, want) {
+			t.Fatalf("expected session selector header to contain %q, got %q", want, header)
+		}
 	}
 	root.sessionSearch = ""
 	root.filterSessionChoices()
@@ -997,6 +1113,26 @@ func TestHotkeyHelpIncludesSelectorAndResourceCommands(t *testing.T) {
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected hotkey help to contain %q, got %q", want, text)
+		}
+	}
+}
+
+func TestPlanAndWorktreePanelsRenderLifecycleState(t *testing.T) {
+	session := newUITestSession(t)
+	session.EnterPlanMode()
+	session.ExitPlanMode("panel plan", []string{"ship panel"})
+
+	plan := planPanelContent(session)
+	for _, want := range []string{"active: no", "latest: yes", "revisions: 1", "[pending] ship panel"} {
+		if !strings.Contains(plan, want) {
+			t.Fatalf("expected plan panel to contain %q, got:\n%s", want, plan)
+		}
+	}
+
+	worktree := worktreePanelContent(session)
+	for _, want := range []string{"active: no", "managed worktrees: 0"} {
+		if !strings.Contains(worktree, want) {
+			t.Fatalf("expected worktree panel to contain %q, got:\n%s", want, worktree)
 		}
 	}
 }

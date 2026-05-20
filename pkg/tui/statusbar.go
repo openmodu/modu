@@ -3,11 +3,94 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	gotui "github.com/grindlemire/go-tui"
 
 	"github.com/openmodu/modu/pkg/types"
 )
+
+const (
+	transientStatusTTL   = 3 * time.Second
+	transientActivityTTL = 8 * time.Second
+)
+
+func (m *uiModel) setStatus(msg string) {
+	m.statusMsg = msg
+	m.statusExpiresAt = time.Time{}
+	m.statusExpiresText = ""
+}
+
+func (m *uiModel) setTransientStatus(msg string) {
+	m.statusMsg = msg
+	if msg == "" {
+		m.statusExpiresAt = time.Time{}
+		m.statusExpiresText = ""
+		return
+	}
+	m.statusExpiresAt = time.Now().Add(transientStatusTTL)
+	m.statusExpiresText = msg
+}
+
+func (m *uiModel) effectiveStatusMsg(now time.Time) string {
+	if m.statusMsg == "" {
+		m.statusExpiresAt = time.Time{}
+		m.statusExpiresText = ""
+		return ""
+	}
+	if m.statusExpiresAt.IsZero() {
+		return m.statusMsg
+	}
+	if m.statusMsg != m.statusExpiresText {
+		m.statusExpiresAt = time.Time{}
+		m.statusExpiresText = ""
+		return m.statusMsg
+	}
+	if now.Before(m.statusExpiresAt) {
+		return m.statusMsg
+	}
+	m.statusMsg = ""
+	m.statusExpiresAt = time.Time{}
+	m.statusExpiresText = ""
+	return ""
+}
+
+func (m *uiModel) clearActivity() {
+	m.lastActivity = ""
+	m.activityExpiresAt = time.Time{}
+	m.activityExpiresText = ""
+}
+
+func (m *uiModel) setTransientActivity(activity string) {
+	m.lastActivity = activity
+	if activity == "" {
+		m.activityExpiresAt = time.Time{}
+		m.activityExpiresText = ""
+		return
+	}
+	m.activityExpiresAt = time.Now().Add(transientActivityTTL)
+	m.activityExpiresText = activity
+}
+
+func (m *uiModel) effectiveLastActivity(now time.Time) string {
+	if strings.TrimSpace(stripANSIForGoTUI(m.lastActivity)) == "" {
+		m.clearActivity()
+		return ""
+	}
+	if m.activityExpiresAt.IsZero() {
+		return m.lastActivity
+	}
+	if m.lastActivity != m.activityExpiresText {
+		m.activityExpiresAt = time.Time{}
+		m.activityExpiresText = ""
+		return m.lastActivity
+	}
+	if now.Before(m.activityExpiresAt) {
+		return m.lastActivity
+	}
+	m.clearActivity()
+	return ""
+}
 
 // bottomLine returns the text and style for the single hint row below the
 // input box. It surfaces the working indicator while a query is in flight,
@@ -17,8 +100,8 @@ func (r *goTUIRoot) bottomLine() (string, gotui.Style) {
 	if r.model.errMsg != "" {
 		return "! " + r.model.errMsg, gotui.NewStyle().Foreground(gotui.Red)
 	}
-	if r.model.statusMsg != "" && r.model.statusMsg != "thinking" {
-		return r.model.statusMsg, gotui.NewStyle().Dim()
+	if status := r.model.effectiveStatusMsg(time.Now()); status != "" && status != "thinking" {
+		return status, gotui.NewStyle().Dim()
 	}
 	style := gotui.NewStyle().Dim()
 	if r.session != nil && r.session.IsPlanMode() {
@@ -83,8 +166,8 @@ func (r *goTUIRoot) activityLine() (string, bool) {
 		}
 		return "Working (esc to interrupt)", true
 	}
-	if strings.TrimSpace(stripANSIForGoTUI(r.model.lastActivity)) != "" {
-		return strings.TrimSpace(stripANSIForGoTUI(r.model.lastActivity)), true
+	if activity := r.model.effectiveLastActivity(time.Now()); strings.TrimSpace(stripANSIForGoTUI(activity)) != "" {
+		return strings.TrimSpace(stripANSIForGoTUI(activity)), true
 	}
 	return "", false
 }

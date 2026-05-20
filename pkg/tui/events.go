@@ -107,7 +107,7 @@ func (r *goTUIRoot) externalUser(text string) {
 		return
 	}
 	r.queue(func() {
-		b := uiBlock{Kind: "user", Content: text, Timestamp: time.Now()}
+		b := uiBlock{Kind: "user", Content: text, Source: "external", Timestamp: time.Now()}
 		r.model.appendBlock(b)
 		r.pushBlockAbove(b)
 		r.bump()

@@ -65,7 +65,7 @@ func (m *uiModel) renderActivityLine() string {
 
 func (m *uiModel) finishActivity(err error) string {
 	if m.queryStartTime.IsZero() {
-		m.lastActivity = ""
+		m.clearActivity()
 		return ""
 	}
 	elapsed := formatActivityDuration(time.Since(m.queryStartTime))
@@ -78,7 +78,7 @@ func (m *uiModel) finishActivity(err error) string {
 	} else {
 		summary = "✓ Completed (" + elapsed + ")"
 	}
-	m.lastActivity = "  " + uiDimText.Render(summary)
+	m.setTransientActivity("  " + uiDimText.Render(summary))
 	return summary
 }
 
@@ -139,8 +139,17 @@ func (m *uiModel) renderInputMeta() string {
 // uniformly; continuation lines use a two-space placeholder to keep the text
 // column aligned under ❯.
 func renderUIUserBlock(content string, width int) string {
+	return renderUIUserBlockWithSource(content, "", width)
+}
+
+func renderUIUserBlockWithSource(content, source string, width int) string {
 	var b strings.Builder
-	const glyph = "❯ "
+	glyph := "❯ "
+	style := uiUserPrompt
+	if strings.TrimSpace(source) != "" && source != "local" {
+		glyph = "◆ "
+		style = uiExternalUserPrompt
+	}
 	glyphW := lipgloss.Width(glyph)
 	// uiUserPrompt has no padding; only the two-cell ❯-glyph eats inline width.
 	avail := max(8, width-glyphW)
@@ -156,7 +165,7 @@ func renderUIUserBlock(content string, width int) string {
 				lead = glyph
 				first = false
 			}
-			b.WriteString(blockIndent + uiUserPrompt.Render(lead+seg) + "\n")
+			b.WriteString(blockIndent + style.Render(lead+seg) + "\n")
 		}
 	}
 	return b.String()
@@ -372,8 +381,42 @@ func renderUIToolOutput(toolName, output, filePath string, expanded bool, w int)
 func renderUISection(title, content string, width int) string {
 	var b strings.Builder
 	b.WriteString("  " + uiPrimaryText.Render(title) + "\n")
-	writeWrappedStyledLines(&b, content, max(12, width-lipgloss.Width("  ")), "  ", "  ", lipgloss.NewStyle())
+	contentWidth := max(12, width-lipgloss.Width("  "))
+	for _, line := range strings.Split(strings.TrimRight(content, "\n"), "\n") {
+		if key, value, ok := splitSectionKeyValue(line); ok {
+			b.WriteString("  " + uiDimText.Render(key+":") + " " + value + "\n")
+			continue
+		}
+		writeWrappedStyledLines(&b, line, contentWidth, "  ", "  ", lipgloss.NewStyle())
+	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func splitSectionKeyValue(line string) (string, string, bool) {
+	if strings.TrimLeft(line, " \t") != line {
+		return "", "", false
+	}
+	idx := strings.Index(line, ":")
+	if idx <= 0 {
+		return "", "", false
+	}
+	key := strings.TrimSpace(line[:idx])
+	value := strings.TrimSpace(line[idx+1:])
+	if key == "" || len([]rune(key)) > 40 {
+		return "", "", false
+	}
+	for _, r := range key {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			continue
+		}
+		switch r {
+		case ' ', '-', '_', '.', '/':
+			continue
+		default:
+			return "", "", false
+		}
+	}
+	return key, value, true
 }
 
 func (m *uiModel) renderSingleBlock(block uiBlock) string {
@@ -392,7 +435,7 @@ func (m *uiModel) renderSingleBlock(block uiBlock) string {
 	var s string
 	switch block.Kind {
 	case "user":
-		s = renderUIUserBlock(block.Content, viewWidth)
+		s = renderUIUserBlockWithSource(block.Content, block.Source, viewWidth)
 	case "assistant":
 		var ab strings.Builder
 		if block.Thinking != "" {

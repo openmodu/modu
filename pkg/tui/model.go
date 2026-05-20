@@ -37,6 +37,7 @@ type uiBlock struct {
 	Kind      string
 	Title     string
 	Content   string
+	Source    string
 	RawText   string
 	Thinking  string
 	Streaming bool // true while LLM is still streaming this block; skip glamour render
@@ -155,15 +156,19 @@ type uiModel struct {
 	ready  bool
 	state  uiState
 
-	blocks        []uiBlock
-	queryActive   bool
-	errMsg        string
-	lastErrText   string
-	errRepeat     int
-	statusMsg     string
-	pendingPerm   *approval.Request
-	planRejectBuf string // free-form rejection reason being typed
-	lastActivity  string
+	blocks              []uiBlock
+	queryActive         bool
+	errMsg              string
+	lastErrText         string
+	errRepeat           int
+	statusMsg           string
+	statusExpiresAt     time.Time
+	statusExpiresText   string
+	pendingPerm         *approval.Request
+	planRejectBuf       string // free-form rejection reason being typed
+	lastActivity        string
+	activityExpiresAt   time.Time
+	activityExpiresText string
 
 	// Query tracking
 	queryStartTime time.Time

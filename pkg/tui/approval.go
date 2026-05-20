@@ -229,18 +229,13 @@ func (r *goTUIRoot) renderApprovalWidget() *gotui.Element {
 		return r.renderPlanApprovalWidget(perm, container)
 	}
 
-	toolRow := gotui.New(
-		gotui.WithDisplay(gotui.DisplayFlex),
-		gotui.WithDirection(gotui.Row),
-		gotui.WithFlexShrink(0),
-	)
-	toolRow.AddChild(gotui.New(
-		gotui.WithText("⏺ "),
-		gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Yellow)),
+	container.AddChild(gotui.New(
+		gotui.WithText("⏺ Permission required"),
+		gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Yellow).Bold()),
 		gotui.WithFlexShrink(0),
 	))
-	toolRow.AddChild(gotui.New(
-		gotui.WithText(perm.ToolName),
+	container.AddChild(gotui.New(
+		gotui.WithText("  tool: "+perm.ToolName),
 		gotui.WithTextStyle(gotui.NewStyle().Bold()),
 		gotui.WithFlexShrink(0),
 	))
@@ -248,13 +243,12 @@ func (r *goTUIRoot) renderApprovalWidget() *gotui.Element {
 		if len(args) > 80 {
 			args = args[:80] + "…"
 		}
-		toolRow.AddChild(gotui.New(
-			gotui.WithText("("+args+")"),
+		container.AddChild(gotui.New(
+			gotui.WithText("  args: "+args),
 			gotui.WithTextStyle(gotui.NewStyle().Dim()),
 			gotui.WithFlexShrink(0),
 		))
 	}
-	container.AddChild(toolRow)
 
 	hintRow := gotui.New(
 		gotui.WithDisplay(gotui.DisplayFlex),
@@ -264,7 +258,7 @@ func (r *goTUIRoot) renderApprovalWidget() *gotui.Element {
 	sp := func() *gotui.Element {
 		return gotui.New(gotui.WithText("  "), gotui.WithFlexShrink(0))
 	}
-	hintRow.AddChild(gotui.New(gotui.WithText("  "), gotui.WithFlexShrink(0)))
+	hintRow.AddChild(gotui.New(gotui.WithText("  actions: "), gotui.WithTextStyle(gotui.NewStyle().Dim()), gotui.WithFlexShrink(0)))
 	hintRow.AddChild(gotui.New(gotui.WithText("[Y]es"), gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Green).Bold()), gotui.WithFlexShrink(0)))
 	hintRow.AddChild(sp())
 	hintRow.AddChild(gotui.New(gotui.WithText("[N]o"), gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Red).Bold()), gotui.WithFlexShrink(0)))
@@ -309,10 +303,19 @@ func (r *goTUIRoot) renderPlanRejectWidget() *gotui.Element {
 //	⏺ Plan ready (above) — proceed?
 //	  [Y]es, start coding   [A] auto-accept edits   [N]o, keep planning
 func (r *goTUIRoot) renderPlanApprovalWidget(perm *approval.Request, container *gotui.Element) *gotui.Element {
-	_ = perm
 	container.AddChild(gotui.New(
-		gotui.WithText("⏺ Plan ready (shown above) — proceed?"),
+		gotui.WithText("⏺ Plan approval"),
 		gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Yellow).Bold()),
+		gotui.WithFlexShrink(0),
+	))
+	container.AddChild(gotui.New(
+		gotui.WithText(fmt.Sprintf("  plan shown above  steps=%d", planApprovalStepCount(perm.Args))),
+		gotui.WithTextStyle(gotui.NewStyle().Dim()),
+		gotui.WithFlexShrink(0),
+	))
+	container.AddChild(gotui.New(
+		gotui.WithText("  auto-accept allows write/edit/bash for this session"),
+		gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Yellow)),
 		gotui.WithFlexShrink(0),
 	))
 
@@ -324,7 +327,7 @@ func (r *goTUIRoot) renderPlanApprovalWidget(perm *approval.Request, container *
 		gotui.WithDirection(gotui.Row),
 		gotui.WithFlexShrink(0),
 	)
-	hintRow.AddChild(gotui.New(gotui.WithText("  "), gotui.WithFlexShrink(0)))
+	hintRow.AddChild(gotui.New(gotui.WithText("  actions: "), gotui.WithTextStyle(gotui.NewStyle().Dim()), gotui.WithFlexShrink(0)))
 	hintRow.AddChild(gotui.New(gotui.WithText("[Y]es, start coding"), gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Green).Bold()), gotui.WithFlexShrink(0)))
 	hintRow.AddChild(sp())
 	hintRow.AddChild(gotui.New(gotui.WithText("[A] auto-accept edits"), gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Yellow).Bold()), gotui.WithFlexShrink(0)))
@@ -333,4 +336,18 @@ func (r *goTUIRoot) renderPlanApprovalWidget(perm *approval.Request, container *
 	container.AddChild(hintRow)
 
 	return container
+}
+
+func planApprovalStepCount(args map[string]any) int {
+	raw, ok := args["steps"].([]any)
+	if !ok {
+		return 0
+	}
+	count := 0
+	for _, step := range raw {
+		if text, ok := step.(string); ok && strings.TrimSpace(text) != "" {
+			count++
+		}
+	}
+	return count
 }

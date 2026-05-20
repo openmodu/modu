@@ -118,8 +118,6 @@ modu/
 │   ├── env/                # 环境变量加载器
 │   ├── stream/             # 流处理工具
 │   └── utils/              # 通用工具函数
-├── repos/                  # 业务仓库层
-│   └── gen_image_repo/     # 图像生成（Gemini 等）
 ```
 
 ## 📚 核心模块
@@ -208,12 +206,6 @@ Telegram、飞书等消息平台的统一接口。
 📖 [详细文档](pkg/env/README_zh.md)
 
 ---
-
-### repos/ — 业务仓库
-
-| 模块 | 描述 |
-|------|------|
-| [`repos/gen_image_repo`](repos/gen_image_repo/README_zh.md) | 图像生成抽象层，支持 Gemini 和其他提供商 |
 
 ## 🔧 支持的 LLM Providers
 

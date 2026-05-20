@@ -86,6 +86,14 @@ func (r *goTUIRoot) submit(text string) {
 			r.showHotkeys()
 			return
 		}
+		if line == "/plan" {
+			r.showPlanPanel()
+			return
+		}
+		if line == "/worktree" {
+			r.showWorktreePanel()
+			return
+		}
 		if line == "/reload" {
 			r.runReloadCommand()
 			return
@@ -110,17 +118,17 @@ func (r *goTUIRoot) togglePlanMode() {
 	}
 	if r.session.IsPlanMode() {
 		r.session.ExitPlanMode("manually exited via shift+tab", nil)
-		r.model.statusMsg = "plan mode off"
+		r.model.setTransientStatus("plan mode off")
 	} else {
 		r.session.EnterPlanMode()
-		r.model.statusMsg = "plan mode on — describe the task; I'll plan first"
+		r.model.setTransientStatus("plan mode on — describe the task; I'll plan first")
 	}
 	r.bump()
 }
 
 func (r *goTUIRoot) runShell(shellCmd string, sendToModel bool) {
 	if shellCmd == "" {
-		r.model.statusMsg = "shell command is empty"
+		r.model.setTransientStatus("shell command is empty")
 		r.bump()
 		return
 	}
@@ -199,7 +207,7 @@ func (r *goTUIRoot) runSlash(line string) {
 
 func (r *goTUIRoot) runConfigHook(args string) {
 	if r.commandHooks.Config == nil {
-		r.model.statusMsg = "config command is not available"
+		r.model.setTransientStatus("config command is not available")
 		r.bump()
 		return
 	}
@@ -275,13 +283,13 @@ func (r *goTUIRoot) skillSlashCommands() []slashCommandDef {
 }
 
 func (r *goTUIRoot) runPrompt(line string) {
-	block := uiBlock{Kind: "user", Content: line, Timestamp: time.Now()}
+	block := uiBlock{Kind: "user", Content: line, Source: "local", Timestamp: time.Now()}
 	r.model.appendBlock(block)
 	r.pushBlockAbove(block)
 	r.model.queryActive = true
 	r.model.state = uiStateQuerying
-	r.model.statusMsg = "thinking"
-	r.model.lastActivity = ""
+	r.model.setStatus("thinking")
+	r.model.clearActivity()
 	r.model.queryStartTime = time.Now()
 	r.model.thinkingStart = time.Time{}
 	queryCtx, queryCancel := context.WithCancel(r.ctx)
@@ -312,7 +320,7 @@ func (r *goTUIRoot) runPrompt(line string) {
 			r.model.finishActivity(err)
 			r.model.queryActive = false
 			if r.model.statusMsg != "interrupted" {
-				r.model.statusMsg = ""
+				r.model.setStatus("")
 			}
 			r.model.state = uiStateInput
 			r.bump()
@@ -323,10 +331,10 @@ func (r *goTUIRoot) runPrompt(line string) {
 func (r *goTUIRoot) retryLastFailedPrompt() {
 	prompt := strings.TrimSpace(r.lastFailedPrompt)
 	if prompt == "" {
-		r.model.statusMsg = "no failed prompt to retry"
+		r.model.setTransientStatus("no failed prompt to retry")
 		r.bump()
 		return
 	}
-	r.model.statusMsg = "retrying last prompt"
+	r.model.setTransientStatus("retrying last prompt")
 	r.runPrompt(prompt)
 }
