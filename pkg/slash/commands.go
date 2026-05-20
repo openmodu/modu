@@ -3,6 +3,7 @@ package slash
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -326,8 +327,24 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		case "off":
 			session.ExitPlanMode("manually exited from /plan off", nil)
 			r.PrintInfo("plan mode disabled")
+		case "show":
+			status := session.PlanStatus()
+			if !status.PlanExists {
+				r.PrintInfo("no latest plan")
+				return true, false
+			}
+			data, err := os.ReadFile(status.PlanFile)
+			if err != nil {
+				r.PrintError(err)
+				return true, false
+			}
+			content := strings.TrimSpace(string(data))
+			if content == "" {
+				content = "(empty plan)"
+			}
+			r.PrintSection("Plan", []string{content})
 		default:
-			r.PrintInfo("usage: /plan [status|on|off]")
+			r.PrintInfo("usage: /plan [status|show|on|off]")
 		}
 		return true, false
 
@@ -913,7 +930,7 @@ func PrintHelp(r Printer) {
 		"/agents             — list discovered subagents",
 		"/todos              — show current todo list",
 		"/tasks              — show background subagent tasks",
-		"/plan [on|off]      — inspect or toggle plan mode",
+		"/plan [status|show|on|off] — inspect, show, or toggle plan mode",
 		"/worktree [on|off]  — inspect or toggle isolated worktree mode",
 		"/skills             — list available skills",
 		"/prompts            — list available prompt templates",

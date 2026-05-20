@@ -158,6 +158,7 @@ High-priority gaps identified before this round:
   TUI hotkey help alignment for selector paging, tree branch/summary controls, and resource commands
   Worktree lifecycle status API and richer `/worktree status` output for active path, original cwd, current cwd, and path existence
   Plan lifecycle status API and richer `/plan status` output for latest plan artifact and todo counters
+  `/plan show` command for reading the latest approved plan artifact from the CLI/TUI slash path
 
 ## Still Missing
 

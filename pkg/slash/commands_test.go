@@ -314,6 +314,16 @@ func TestHandlePlanStatusShowsArtifactAndTodos(t *testing.T) {
 			t.Fatalf("expected plan status to contain %q, got:\n%s", want, output)
 		}
 	}
+
+	printer = &capturePrinter{}
+	handled, exit = Handle(context.Background(), "/plan show", session, printer, model)
+	if !handled || exit {
+		t.Fatalf("expected /plan show handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	output = printer.String()
+	if !strings.Contains(output, "Plan") || !strings.Contains(output, "approved slash plan") {
+		t.Fatalf("expected plan show output with plan content, got:\n%s", output)
+	}
 }
 
 func TestHandleTreeAndForkCommands(t *testing.T) {
