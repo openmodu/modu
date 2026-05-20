@@ -97,6 +97,38 @@ func TestGoTUIApprovalKeyMapEnterAllows(t *testing.T) {
 	}
 }
 
+func TestApprovalWidgetShowsLayeredToolDetails(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+	root.model.pendingPerm = &approval.Request{
+		ToolName: "bash",
+		Args:     map[string]any{"command": "go test ./pkg/tui"},
+	}
+
+	text := collectGoTUIText(root.renderApprovalWidget())
+	for _, want := range []string{"Permission required", "tool: bash", "go test ./pkg/tui", "actions:", "[Y]es", "[D]eny always"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected approval widget to contain %q, got %q", want, text)
+		}
+	}
+}
+
+func TestPlanApprovalWidgetShowsStepCountAndRisk(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+	root.model.pendingPerm = &approval.Request{
+		ToolName: "exit_plan_mode",
+		Args: map[string]any{
+			"steps": []any{"inspect", "", "implement"},
+		},
+	}
+
+	text := collectGoTUIText(root.renderApprovalWidget())
+	for _, want := range []string{"Plan approval", "steps=2", "auto-accept allows write/edit/bash", "[Y]es, start coding"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected plan approval widget to contain %q, got %q", want, text)
+		}
+	}
+}
+
 func TestGoTUIInputUsesCursorEditing(t *testing.T) {
 	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 
