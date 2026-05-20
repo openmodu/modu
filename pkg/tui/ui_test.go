@@ -701,6 +701,24 @@ func TestTreeSelectNavigatesWithBranchSummary(t *testing.T) {
 	}
 }
 
+func TestTreeNodeLineShowsIDRoleLabelAndBranchCount(t *testing.T) {
+	line := treeNodeLine(coding_agent.SessionTreeNode{
+		ID:            "1234567890abcdef",
+		Type:          "message",
+		Role:          "assistant",
+		Label:         "main branch",
+		Preview:       "hello\nworld",
+		ChildCount:    3,
+		InCurrentPath: true,
+	}, true, false)
+
+	for _, want := range []string{"#12345678", "assistant", "[main branch]", "hello world", "branches=3"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("expected tree line to contain %q, got %q", want, line)
+		}
+	}
+}
+
 func TestFileReferenceSuggestionsCompleteAndExpandPrompt(t *testing.T) {
 	session := newUITestSession(t)
 	cwd := session.GetContextInfo().Cwd

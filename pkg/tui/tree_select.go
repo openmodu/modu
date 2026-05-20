@@ -300,9 +300,37 @@ func treeNodeLine(node coding_agent.SessionTreeNode, selected, showSummary bool)
 	if node.ChildCount > 1 {
 		branch = fmt.Sprintf(" branches=%d", node.ChildCount)
 	}
-	label := ""
-	if node.Label != "" {
-		label = " [" + node.Label + "]"
+	return fmt.Sprintf("%s%s%s %-9s %-15s%s %s%s", prefix, indent, pathMarker, "#"+shortTreeNodeID(node.ID), treeNodeKind(kind), treeNodeLabel(node.Label), preview, branch)
+}
+
+func shortTreeNodeID(id string) string {
+	id = strings.TrimSpace(id)
+	if len(id) <= 8 {
+		return id
 	}
-	return fmt.Sprintf("%s%s%s%s %-15s %s%s", prefix, indent, pathMarker, label, kind, preview, branch)
+	return id[:8]
+}
+
+func treeNodeKind(kind string) string {
+	switch strings.TrimSpace(kind) {
+	case "branch_summary":
+		return "branch"
+	case "model_change":
+		return "model"
+	case "":
+		return "entry"
+	default:
+		return kind
+	}
+}
+
+func treeNodeLabel(label string) string {
+	label = strings.ReplaceAll(strings.TrimSpace(label), "\n", " ")
+	if label == "" {
+		return ""
+	}
+	if len(label) > 18 {
+		label = label[:15] + "..."
+	}
+	return " [" + label + "]"
 }

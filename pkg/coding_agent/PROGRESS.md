@@ -153,6 +153,7 @@ High-priority gaps identified before this round:
   session APIs for all-model listing, session-scoped model ranges, leaf-id cloning, and dynamic resource reloads used by the TUI parity work
   interactive session-tree nodes, branch-summary restoration during tree navigation, and TUI tree search/branch controls
   TUI resource/settings selector polish for consistent page navigation and visible resource source/path metadata
+  TUI session-tree row polish with short entry IDs, stable type labels, labels, and branch counts
 
 ## Still Missing
 
