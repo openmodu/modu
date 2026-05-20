@@ -928,6 +928,70 @@ func TestRuntimeStateFileAndJSON(t *testing.T) {
 	}
 }
 
+func TestRuntimeStateGitRefreshCanRunAsync(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  filepath.Join(dir, ".coding_agent"),
+		Model:     newTestModel(),
+		GetAPIKey: func(provider string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.After(2 * time.Second)
+	for {
+		session.gitCache.mu.RLock()
+		refreshing := session.gitCache.refreshing
+		session.gitCache.mu.RUnlock()
+		if !refreshing {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for startup git refresh")
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	session.gitCache.mu.Lock()
+	session.gitCache.state = nil
+	session.gitCache.cwd = ""
+	session.gitCache.refreshing = false
+	session.gitCache.refreshingCwd = ""
+	session.gitCache.mu.Unlock()
+
+	state := session.RuntimeState()
+	if state.Git["available"] != false || state.Git["refreshing"] != false {
+		t.Fatalf("expected empty git cache to return non-refreshing placeholder, got %#v", state.Git)
+	}
+
+	session.RefreshRuntimeStateAsync()
+	deadline = time.After(2 * time.Second)
+	for {
+		session.gitCache.mu.RLock()
+		cached := session.gitCache.state
+		cachedCwd := session.gitCache.cwd
+		session.gitCache.mu.RUnlock()
+		if cachedCwd == dir && cached["available"] == true {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("expected async git refresh to populate cache, got cwd=%q state=%#v", cachedCwd, cached)
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+}
+
 func TestCodingSessionWritesTraceFiles(t *testing.T) {
 	dir := t.TempDir()
 	agentDir := filepath.Join(dir, ".coding_agent")

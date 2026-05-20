@@ -31,32 +31,69 @@ type RuntimeStateSnapshot struct {
 // cachedGitState holds the last-known git state so that writeRuntimeState
 // can run without spawning git subprocesses on every call.
 type cachedGitState struct {
-	mu    sync.RWMutex
-	state map[string]any
-	cwd   string
+	mu            sync.RWMutex
+	state         map[string]any
+	cwd           string
+	refreshing    bool
+	refreshingCwd string
 }
 
 func (s *CodingSession) refreshGitRuntimeState() {
-	state := s.gitRuntimeState()
+	cwd := s.cwd
+	state := s.gitRuntimeStateForCwd(cwd)
 	s.gitCache.mu.Lock()
 	s.gitCache.state = state
-	s.gitCache.cwd = s.cwd
+	s.gitCache.cwd = cwd
+	s.gitCache.refreshing = false
+	s.gitCache.refreshingCwd = ""
 	s.gitCache.mu.Unlock()
 }
 
 func (s *CodingSession) cachedGitState() map[string]any {
+	cwd := s.cwd
 	s.gitCache.mu.RLock()
 	st := s.gitCache.state
-	cwd := s.gitCache.cwd
+	cachedCwd := s.gitCache.cwd
 	s.gitCache.mu.RUnlock()
-	if st == nil || cwd != s.cwd {
-		// Cache is empty or stale (cwd changed); refresh synchronously once.
-		s.refreshGitRuntimeState()
-		s.gitCache.mu.RLock()
-		st = s.gitCache.state
-		s.gitCache.mu.RUnlock()
+	if st != nil && cachedCwd == cwd {
+		return st
 	}
-	return st
+	return map[string]any{
+		"available":  false,
+		"refreshing": false,
+	}
+}
+
+// RefreshRuntimeStateAsync refreshes expensive runtime state in the background.
+// Callers use this after the UI is visible so startup is not blocked by git
+// subprocesses on large repositories.
+func (s *CodingSession) RefreshRuntimeStateAsync() {
+	if s == nil {
+		return
+	}
+	s.scheduleGitRuntimeStateRefresh(s.cwd)
+}
+
+func (s *CodingSession) scheduleGitRuntimeStateRefresh(cwd string) {
+	s.gitCache.mu.Lock()
+	if s.gitCache.refreshing && s.gitCache.refreshingCwd == cwd {
+		s.gitCache.mu.Unlock()
+		return
+	}
+	s.gitCache.refreshing = true
+	s.gitCache.refreshingCwd = cwd
+	s.gitCache.mu.Unlock()
+
+	go func() {
+		state := s.gitRuntimeStateForCwd(cwd)
+		s.gitCache.mu.Lock()
+		s.gitCache.state = state
+		s.gitCache.cwd = cwd
+		s.gitCache.refreshing = false
+		s.gitCache.refreshingCwd = ""
+		s.gitCache.mu.Unlock()
+		s.writeRuntimeState()
+	}()
 }
 
 func (s *CodingSession) RuntimeState() RuntimeStateSnapshot {

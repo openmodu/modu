@@ -9,7 +9,11 @@ import (
 )
 
 func (s *CodingSession) gitRuntimeState() map[string]any {
-	tool := tools.NewGitPreflightTool(s.cwd)
+	return s.gitRuntimeStateForCwd(s.cwd)
+}
+
+func (s *CodingSession) gitRuntimeStateForCwd(cwd string) map[string]any {
+	tool := tools.NewGitPreflightTool(cwd)
 	result, err := tool.Execute(context.Background(), "runtime-git", nil, nil)
 	if err != nil || len(result.Content) == 0 {
 		return map[string]any{"available": false}
