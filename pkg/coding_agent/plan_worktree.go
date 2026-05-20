@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -241,6 +242,13 @@ type WorktreeStatus struct {
 	Exists      bool
 }
 
+// WorktreeInfo describes one managed worktree under the session agent dir.
+type WorktreeInfo struct {
+	Path   string
+	Active bool
+	Exists bool
+}
+
 func (a worktreeAdapter) EnterWorktree() (string, error) {
 	if a.session == nil {
 		return "", fmt.Errorf("worktree session is not configured")
@@ -287,6 +295,58 @@ func (s *CodingSession) WorktreeStatus() WorktreeStatus {
 		}
 	}
 	return status
+}
+
+// ListManagedWorktrees returns managed worktree directories under the agent
+// runtime root and marks the currently active one.
+func (s *CodingSession) ListManagedWorktrees() []WorktreeInfo {
+	s.worktreeMu.Lock()
+	activePath := s.worktreePath
+	s.worktreeMu.Unlock()
+
+	dir := filepath.Join(s.agentDir, "worktrees")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if activePath == "" {
+			return nil
+		}
+		return []WorktreeInfo{{Path: activePath, Active: true, Exists: pathExists(activePath)}}
+	}
+
+	seen := make(map[string]struct{}, len(entries)+1)
+	out := make([]WorktreeInfo, 0, len(entries)+1)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		seen[path] = struct{}{}
+		out = append(out, WorktreeInfo{
+			Path:   path,
+			Active: path == activePath,
+			Exists: true,
+		})
+	}
+	if activePath != "" {
+		if _, ok := seen[activePath]; !ok {
+			out = append(out, WorktreeInfo{Path: activePath, Active: true, Exists: pathExists(activePath)})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Active != out[j].Active {
+			return out[i].Active
+		}
+		return out[i].Path < out[j].Path
+	})
+	return out
+}
+
+func pathExists(path string) bool {
+	if path == "" {
+		return false
+	}
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func (s *CodingSession) replaceWorktreeTools() {

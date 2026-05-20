@@ -384,8 +384,23 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 			} else {
 				r.PrintInfo("exited worktree")
 			}
+		case "list":
+			worktrees := session.ListManagedWorktrees()
+			if len(worktrees) == 0 {
+				r.PrintInfo("no managed worktrees")
+				return true, false
+			}
+			lines := make([]string, 0, len(worktrees))
+			for _, wt := range worktrees {
+				state := "idle"
+				if wt.Active {
+					state = "active"
+				}
+				lines = append(lines, fmt.Sprintf("%s exists=%s %s", state, yesNo(wt.Exists), wt.Path))
+			}
+			r.PrintSection("Worktrees", lines)
 		default:
-			r.PrintInfo("usage: /worktree [status|on|off]")
+			r.PrintInfo("usage: /worktree [status|list|on|off]")
 		}
 		return true, false
 
@@ -931,7 +946,7 @@ func PrintHelp(r Printer) {
 		"/todos              — show current todo list",
 		"/tasks              — show background subagent tasks",
 		"/plan [status|show|on|off] — inspect, show, or toggle plan mode",
-		"/worktree [on|off]  — inspect or toggle isolated worktree mode",
+		"/worktree [status|list|on|off] — inspect or toggle isolated worktree mode",
 		"/skills             — list available skills",
 		"/prompts            — list available prompt templates",
 		"/telegram           — show Telegram bot config",

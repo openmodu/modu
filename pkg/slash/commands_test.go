@@ -274,6 +274,21 @@ func TestHandleWorktreeStatusShowsLifecycle(t *testing.T) {
 			t.Fatalf("expected active worktree status to contain %q, got:\n%s", want, output)
 		}
 	}
+
+	printer = &capturePrinter{}
+	handled, exit = Handle(context.Background(), "/worktree list", session, printer, model)
+	if !handled || exit {
+		t.Fatalf("expected /worktree list handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	output = printer.String()
+	for _, want := range []string{
+		"Worktrees",
+		"active exists=yes " + active.Path,
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected worktree list to contain %q, got:\n%s", want, output)
+		}
+	}
 }
 
 func TestHandlePlanStatusShowsArtifactAndTodos(t *testing.T) {
