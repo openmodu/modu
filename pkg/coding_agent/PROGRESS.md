@@ -155,6 +155,7 @@ High-priority gaps identified before this round:
   TUI resource/settings selector polish for consistent page navigation and visible resource source/path metadata
   TUI session-tree row polish with short entry IDs, stable type labels, labels, and branch counts
   TUI idle status line polish with model, token, plan, and worktree state ahead of common hints
+  TUI hotkey help alignment for selector paging, tree branch/summary controls, and resource commands
 
 ## Still Missing
 

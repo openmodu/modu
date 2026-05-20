@@ -946,6 +946,20 @@ func TestBottomLineShowsSessionStatusWhenIdle(t *testing.T) {
 	}
 }
 
+func TestHotkeyHelpIncludesSelectorAndResourceCommands(t *testing.T) {
+	text := hotkeyHelpText()
+	for _, want := range []string{
+		"PageUp/PageDown: scroll transcript or selector page",
+		"Tree: Ctrl+F branch-session, Ctrl+S summary",
+		"/skills",
+		"/prompts",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected hotkey help to contain %q, got %q", want, text)
+		}
+	}
+}
+
 func TestPromptErrorCompactsLongMultilineText(t *testing.T) {
 	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 	root.model.setPromptError(errors.New(strings.Repeat("long line\n", 80)))
