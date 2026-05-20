@@ -355,6 +355,47 @@ func (s *CodingSession) ListManagedWorktrees() []WorktreeInfo {
 	return out
 }
 
+// CleanupManagedWorktrees removes inactive managed worktree directories. The
+// active worktree is never removed.
+func (s *CodingSession) CleanupManagedWorktrees() ([]WorktreeInfo, error) {
+	worktrees := s.ListManagedWorktrees()
+	removed := make([]WorktreeInfo, 0, len(worktrees))
+	for _, wt := range worktrees {
+		if wt.Active || !wt.Exists {
+			continue
+		}
+		if !s.isManagedWorktreePath(wt.Path) {
+			return removed, fmt.Errorf("refusing to cleanup unmanaged worktree path: %s", wt.Path)
+		}
+		if _, err := runGit(s.cwd, "worktree", "remove", "--force", wt.Path); err != nil {
+			if err := os.RemoveAll(wt.Path); err != nil {
+				return removed, err
+			}
+		}
+		removed = append(removed, wt)
+	}
+	return removed, nil
+}
+
+func (s *CodingSession) isManagedWorktreePath(path string) bool {
+	if path == "" {
+		return false
+	}
+	base, err := filepath.Abs(filepath.Join(s.agentDir, "worktrees"))
+	if err != nil {
+		return false
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(base, abs)
+	if err != nil {
+		return false
+	}
+	return rel != "." && rel != "" && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) && rel != ".."
+}
+
 func pathExists(path string) bool {
 	if path == "" {
 		return false

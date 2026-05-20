@@ -289,6 +289,26 @@ func TestHandleWorktreeStatusShowsLifecycle(t *testing.T) {
 			t.Fatalf("expected worktree list to contain %q, got:\n%s", want, output)
 		}
 	}
+
+	stalePath := filepath.Join(agentDir, "worktrees", "wt-stale")
+	if err := os.MkdirAll(stalePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	printer = &capturePrinter{}
+	handled, exit = Handle(context.Background(), "/worktree cleanup", session, printer, model)
+	if !handled || exit {
+		t.Fatalf("expected /worktree cleanup handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	output = printer.String()
+	if !strings.Contains(output, "Worktree cleanup") || !strings.Contains(output, "removed "+stalePath) {
+		t.Fatalf("expected worktree cleanup output, got:\n%s", output)
+	}
+	if _, err := os.Stat(stalePath); !os.IsNotExist(err) {
+		t.Fatalf("expected stale worktree removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(active.Path); err != nil {
+		t.Fatalf("expected active worktree kept: %v", err)
+	}
 }
 
 func TestHandlePlanStatusShowsArtifactAndTodos(t *testing.T) {

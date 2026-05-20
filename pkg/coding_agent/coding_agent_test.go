@@ -607,6 +607,23 @@ func TestEnterAndExitWorktree(t *testing.T) {
 	if len(worktrees) != 1 || !worktrees[0].Active || worktrees[0].Path != path || !worktrees[0].Exists {
 		t.Fatalf("unexpected managed worktree list: %#v", worktrees)
 	}
+	stalePath := filepath.Join(agentDir, "worktrees", "wt-stale")
+	if err := os.MkdirAll(stalePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := session.CleanupManagedWorktrees()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(removed) != 1 || removed[0].Path != stalePath {
+		t.Fatalf("expected stale worktree removed, got %#v", removed)
+	}
+	if _, err := os.Stat(stalePath); !os.IsNotExist(err) {
+		t.Fatalf("expected stale worktree removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected active worktree kept: %v", err)
+	}
 	if _, err := os.Stat(filepath.Join(path, "README.md")); err != nil {
 		t.Fatalf("expected repo file in worktree: %v", err)
 	}

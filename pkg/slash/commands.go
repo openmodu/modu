@@ -405,8 +405,23 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 				lines = append(lines, fmt.Sprintf("%s exists=%s %s", state, yesNo(wt.Exists), wt.Path))
 			}
 			r.PrintSection("Worktrees", lines)
+		case "cleanup":
+			removed, err := session.CleanupManagedWorktrees()
+			if err != nil {
+				r.PrintError(err)
+				return true, false
+			}
+			if len(removed) == 0 {
+				r.PrintInfo("no inactive managed worktrees to cleanup")
+				return true, false
+			}
+			lines := make([]string, 0, len(removed))
+			for _, wt := range removed {
+				lines = append(lines, "removed "+wt.Path)
+			}
+			r.PrintSection("Worktree cleanup", lines)
 		default:
-			r.PrintInfo("usage: /worktree [status|list|on|off]")
+			r.PrintInfo("usage: /worktree [status|list|cleanup|on|off]")
 		}
 		return true, false
 
@@ -952,7 +967,7 @@ func PrintHelp(r Printer) {
 		"/todos              — show current todo list",
 		"/tasks              — show background subagent tasks",
 		"/plan [status|show|clear|on|off] — inspect, show, clear, or toggle plan mode",
-		"/worktree [status|list|on|off] — inspect or toggle isolated worktree mode",
+		"/worktree [status|list|cleanup|on|off] — inspect, clean, or toggle isolated worktree mode",
 		"/skills             — list available skills",
 		"/prompts            — list available prompt templates",
 		"/telegram           — show Telegram bot config",
