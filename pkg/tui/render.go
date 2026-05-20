@@ -23,8 +23,11 @@ import (
 var uiANSIPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 // blockIndent is the left margin applied to every top-level scrollback
-// glyph (>, ●, ⏺) so block prefixes don't hug column 0.
-const blockIndent = " "
+// glyph (>, ●, ⏺). Empty by default — bullets sit flush at column 0,
+// matching the Claude Code layout. Continuation / hook padding
+// (assistantPad, dotPad, hookPad) derives from this width, so adjusting
+// it here shifts every block prefix and its continuation uniformly.
+const blockIndent = ""
 
 // dotPadW is the visual cell-width of "● " (● may be 2 cells in CJK terminals).
 var dotPadW = lipgloss.Width("● ")
@@ -133,7 +136,7 @@ func (m *uiModel) renderInputMeta() string {
 func renderUIUserBlock(content string, width int) string {
 	var b strings.Builder
 	prefixW := lipgloss.Width(blockIndent + "> ")
-	writeWrappedStyledLines(&b, content, max(20, width-prefixW), blockIndent+uiSecondaryText.Render(">")+" ", strings.Repeat(" ", prefixW), lipgloss.NewStyle())
+	writeWrappedStyledLines(&b, content, max(20, width-prefixW-2), blockIndent+uiSecondaryText.Render(">")+" ", strings.Repeat(" ", prefixW), uiUserPrompt)
 	return b.String()
 }
 

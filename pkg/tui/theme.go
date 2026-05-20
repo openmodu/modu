@@ -19,4 +19,5 @@ var (
 	uiErrorText     = lipgloss.NewStyle().Foreground(uiError).Bold(true)
 	uiMutedText     = lipgloss.NewStyle().Foreground(uiMuted)
 	uiDimText       = lipgloss.NewStyle().Foreground(uiDim)
+	uiUserPrompt    = lipgloss.NewStyle().Foreground(lipgloss.Color("#E6EDF3")).Background(lipgloss.Color("#1F2A2E")).Padding(0, 1)
 )
