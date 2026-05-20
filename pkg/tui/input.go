@@ -224,10 +224,13 @@ func (r *goTUIRoot) renderInput(width int) *gotui.Element {
 		gotui.WithFlexShrink(0),
 	)
 
+	// EOL cursor uses U+2588 FULL BLOCK rather than a reverse-styled space —
+	// go-tui's flex renderer skips elements whose text is only whitespace
+	// (Reverse / Background attrs are never written to the cell), so an
+	// empty-input box would otherwise have no visible cursor.
 	eolCursor := func() *gotui.Element {
 		return gotui.New(
-			gotui.WithText(" "),
-			gotui.WithTextStyle(gotui.NewStyle().Reverse()),
+			gotui.WithText("█"),
 			gotui.WithFlexShrink(0),
 		)
 	}
