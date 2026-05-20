@@ -133,10 +133,32 @@ func (m *uiModel) renderInputMeta() string {
 
 // ─── Conversation rendering ───────────────────────
 
+// renderUIUserBlock renders submitted user prompts with the ❯ glyph inside
+// the uiUserPrompt background block (Padding(0,1) supplies the surrounding
+// gutter). The glyph is part of the styled content so the highlight covers it
+// uniformly; continuation lines use a two-space placeholder to keep the text
+// column aligned under ❯.
 func renderUIUserBlock(content string, width int) string {
 	var b strings.Builder
-	prefixW := lipgloss.Width(blockIndent + "> ")
-	writeWrappedStyledLines(&b, content, max(20, width-prefixW-2), blockIndent+uiSecondaryText.Render(">")+" ", strings.Repeat(" ", prefixW), uiUserPrompt)
+	const glyph = "❯ "
+	glyphW := lipgloss.Width(glyph)
+	// uiUserPrompt has no padding; only the two-cell ❯-glyph eats inline width.
+	avail := max(8, width-glyphW)
+	first := true
+	for _, rawLine := range strings.Split(strings.TrimRight(content, "\n"), "\n") {
+		if strings.TrimSpace(rawLine) == "" {
+			b.WriteString("\n")
+			continue
+		}
+		for _, seg := range wrapSegments(rawLine, avail) {
+			lead := "  "
+			if first {
+				lead = glyph
+				first = false
+			}
+			b.WriteString(blockIndent + uiUserPrompt.Render(lead+seg) + "\n")
+		}
+	}
 	return b.String()
 }
 

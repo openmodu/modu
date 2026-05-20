@@ -212,8 +212,8 @@ func (r *goTUIRoot) renderInput(width int) *gotui.Element {
 	rs := []rune(r.draft.Get())
 	r.cursor = clampInt(r.cursor, 0, len(rs))
 
-	const promptStr = "> "
-	const promptIndent = "  " // aligns continuation lines with text after "> "
+	const promptStr = "❯ "
+	const promptIndent = "  " // aligns continuation lines with text after "❯ "
 
 	container := gotui.New(
 		gotui.WithDisplay(gotui.DisplayFlex),

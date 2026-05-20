@@ -306,8 +306,8 @@ func TestUIRenderBlocksIncludesUserAndAssistantContent(t *testing.T) {
 func TestUIUserBlockUsesPromptBackground(t *testing.T) {
 	raw := renderUIUserBlock("hello prompt", 80)
 	plain := ansiPattern.ReplaceAllString(raw, "")
-	if !strings.Contains(plain, ">  hello prompt ") {
-		t.Fatalf("expected padded user prompt text, got %q", plain)
+	if !strings.Contains(plain, "❯ hello prompt") {
+		t.Fatalf("expected user prompt text with ❯ glyph, got %q", plain)
 	}
 	if bg := uiUserPrompt.GetBackground(); bg == nil {
 		t.Fatalf("expected user prompt background style, got nil")
