@@ -386,6 +386,31 @@ func TestUIRenderBlocksMarkdownDoesNotDuplicateHeadings(t *testing.T) {
 	}
 }
 
+func TestUISectionRendersStructuredKeyValues(t *testing.T) {
+	raw := renderUISection("Plan", "active: true\ntodos: total=2 pending=1\n\nNavigation\n  Enter: submit", 80)
+	plain := ansiPattern.ReplaceAllString(raw, "")
+	for _, want := range []string{
+		"Plan",
+		"active: true",
+		"todos: total=2 pending=1",
+		"Navigation",
+		"  Enter: submit",
+	} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("expected section to contain %q, got %q", want, plain)
+		}
+	}
+}
+
+func TestSplitSectionKeyValueSkipsIndentedLines(t *testing.T) {
+	if key, value, ok := splitSectionKeyValue("active: true"); !ok || key != "active" || value != "true" {
+		t.Fatalf("expected key/value split, got key=%q value=%q ok=%v", key, value, ok)
+	}
+	if _, _, ok := splitSectionKeyValue("  Enter: submit"); ok {
+		t.Fatal("expected indented hotkey line to stay unstructured")
+	}
+}
+
 func TestNormalizeRenderedMarkdownPreservesStylingCollapsesBlanks(t *testing.T) {
 	raw := "\x1b[38;5;39mtitle\x1b[0m\n\x1b[38;5;252m     \x1b[0m\n"
 	got := normalizeRenderedMarkdown(raw)

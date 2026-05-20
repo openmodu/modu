@@ -381,8 +381,42 @@ func renderUIToolOutput(toolName, output, filePath string, expanded bool, w int)
 func renderUISection(title, content string, width int) string {
 	var b strings.Builder
 	b.WriteString("  " + uiPrimaryText.Render(title) + "\n")
-	writeWrappedStyledLines(&b, content, max(12, width-lipgloss.Width("  ")), "  ", "  ", lipgloss.NewStyle())
+	contentWidth := max(12, width-lipgloss.Width("  "))
+	for _, line := range strings.Split(strings.TrimRight(content, "\n"), "\n") {
+		if key, value, ok := splitSectionKeyValue(line); ok {
+			b.WriteString("  " + uiDimText.Render(key+":") + " " + value + "\n")
+			continue
+		}
+		writeWrappedStyledLines(&b, line, contentWidth, "  ", "  ", lipgloss.NewStyle())
+	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func splitSectionKeyValue(line string) (string, string, bool) {
+	if strings.TrimLeft(line, " \t") != line {
+		return "", "", false
+	}
+	idx := strings.Index(line, ":")
+	if idx <= 0 {
+		return "", "", false
+	}
+	key := strings.TrimSpace(line[:idx])
+	value := strings.TrimSpace(line[idx+1:])
+	if key == "" || len([]rune(key)) > 40 {
+		return "", "", false
+	}
+	for _, r := range key {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
+			continue
+		}
+		switch r {
+		case ' ', '-', '_', '.', '/':
+			continue
+		default:
+			return "", "", false
+		}
+	}
+	return key, value, true
 }
 
 func (m *uiModel) renderSingleBlock(block uiBlock) string {
