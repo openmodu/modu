@@ -126,6 +126,30 @@ func TestHandlePromptsListsPromptTemplates(t *testing.T) {
 	}
 }
 
+func TestHandleLeavesTUIOnlyCommandsUnhandled(t *testing.T) {
+	cwd := t.TempDir()
+	model := &types.Model{ID: "test", Name: "Test", ProviderID: "test"}
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       cwd,
+		AgentDir:  filepath.Join(cwd, ".coding_agent"),
+		Model:     model,
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, cmd := range []string{"/settings", "/scoped-models", "/retry", "/hotkeys"} {
+		t.Run(cmd, func(t *testing.T) {
+			printer := &capturePrinter{}
+			handled, exit := Handle(context.Background(), cmd, session, printer, model)
+			if handled || exit {
+				t.Fatalf("expected %s to be left to TUI, handled=%v exit=%v output=%q", cmd, handled, exit, printer.String())
+			}
+		})
+	}
+}
+
 func TestHandleSessionCommands(t *testing.T) {
 	cwd := t.TempDir()
 	agentDir := filepath.Join(cwd, ".coding_agent")

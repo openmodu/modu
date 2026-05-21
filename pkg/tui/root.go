@@ -275,6 +275,9 @@ func (r *goTUIRoot) positionCursor(app *gotui.App) {
 
 	rs := []rune(r.draft.Get())
 	cursor := clampInt(r.cursor, 0, len(rs))
+	ranges := inputLineRanges(rs)
+	cursorLine := inputCursorLine(ranges, cursor)
+	startLine, _, above, _ := inputVisibleRange(len(ranges), cursorLine, maxInputVisibleRows)
 
 	// Without activity: row 0 = top separator, row 1 = first input line.
 	// With activity: row 0 = activity, row 1 = top separator, row 2 = input.
@@ -282,14 +285,15 @@ func (r *goTUIRoot) positionCursor(app *gotui.App) {
 	if _, ok := r.activityLine(); ok {
 		widgetRow++
 	}
-	col := 2 // after "> " (2 chars)
-	for i := 0; i < cursor; i++ {
-		ch := rs[i]
-		if ch == '\n' {
-			widgetRow++
-			col = 2 // continuation indent "  "
-		} else {
-			col += runewidth.RuneWidth(ch)
+	if above {
+		widgetRow++
+	}
+	widgetRow += cursorLine - startLine
+
+	col := 2 // after "> " / continuation indent (2 chars)
+	if cursorLine >= 0 && cursorLine < len(ranges) {
+		for i := ranges[cursorLine].Start; i < cursor && i < len(rs); i++ {
+			col += runewidth.RuneWidth(rs[i])
 		}
 	}
 
@@ -587,7 +591,7 @@ func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 	}
 
 	// Normal mode: compute height accounting for suggestion list (if any).
-	draftLines := strings.Count(r.draft.Get(), "\n") + 1
+	draftLines := inputVisibleRows(r.draft.Get())
 	neededH := draftLines + 3 // sep + input + sep + status/suggestion
 	if _, ok := r.activityLine(); ok {
 		neededH++

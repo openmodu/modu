@@ -170,6 +170,9 @@ func runLoop(app *gotui.App, root *goTUIRoot) error {
 	if err := app.Open(); err != nil {
 		return err
 	}
+	if root != nil && root.session != nil {
+		root.session.RefreshRuntimeStateAsync()
+	}
 	const frameDuration = 16 * time.Millisecond
 	resized := false
 	for {

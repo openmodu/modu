@@ -186,6 +186,26 @@ func TestGoTUIInputRendersChineseCursorWithoutInsertedGlyph(t *testing.T) {
 	}
 }
 
+func TestGoTUIInputClipsLongMultilineDraftAroundCursor(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+	root.draft.Set("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve")
+	root.cursor = strings.Index(root.draft.Get(), "seven")
+
+	got := collectGoTUIText(root.renderInput(80))
+	if !strings.Contains(got, "lines above") || !strings.Contains(got, "lines below") {
+		t.Fatalf("expected clipping hints above and below, got %q", got)
+	}
+	if strings.Contains(got, "one") || strings.Contains(got, "twelve") {
+		t.Fatalf("expected distant lines to be clipped, got %q", got)
+	}
+	if !strings.Contains(got, "seven") {
+		t.Fatalf("expected cursor line to remain visible, got %q", got)
+	}
+	if rows := inputVisibleRows(root.draft.Get()); rows != maxInputVisibleRows {
+		t.Fatalf("expected visible input rows capped at %d, got %d", maxInputVisibleRows, rows)
+	}
+}
+
 func TestGoTUIApprovalCancelClearsPending(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
