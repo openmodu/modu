@@ -41,12 +41,12 @@ func (r *goTUIRoot) submitWithMode(text string, mode submitMode) {
 	r.fileMatches = nil
 	r.appendHistory(line)
 
-	if line == "/steer" || strings.HasPrefix(line, "/steer ") {
-		r.submitQueueCommand("steer", strings.TrimSpace(strings.TrimPrefix(line, "/steer")))
+	if arg, ok := queueCommandArg(line, "/steer", "/s"); ok {
+		r.submitQueueCommand("steer", arg)
 		return
 	}
-	if line == "/followup" || strings.HasPrefix(line, "/followup ") {
-		r.submitQueueCommand("followup", strings.TrimSpace(strings.TrimPrefix(line, "/followup")))
+	if arg, ok := queueCommandArg(line, "/followup", "/f"); ok {
+		r.submitQueueCommand("followup", arg)
 		return
 	}
 	if rest, ok := strings.CutPrefix(line, "!!"); ok {
@@ -138,6 +138,18 @@ func (r *goTUIRoot) submitWithMode(text string, mode submitMode) {
 		return
 	}
 	r.runPrompt(r.expandFileReferencesForPrompt(line))
+}
+
+func queueCommandArg(line string, names ...string) (string, bool) {
+	for _, name := range names {
+		if line == name {
+			return "", true
+		}
+		if strings.HasPrefix(line, name+" ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, name)), true
+		}
+	}
+	return "", false
 }
 
 func (r *goTUIRoot) submitQueueCommand(kind, text string) {

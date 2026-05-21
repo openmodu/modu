@@ -64,7 +64,8 @@ enough to implement, verify, and commit independently.
   `~/.coding_agent/tui_settings.json` and restored on startup.
 - TUI now exposes the agent steer/follow-up queues: Enter while running queues
   a follow-up, Shift+Enter or `/steer <message>` interrupts and steers, and
-  `/followup <message>` queues explicitly.
+  `/followup <message>` queues explicitly. `/s` and `/f` provide terminal-safe
+  short aliases when Shift+Enter is not distinguishable from Enter.
 
 ## Next
 

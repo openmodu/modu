@@ -1188,7 +1188,7 @@ func TestHotkeyHelpIncludesSelectorAndResourceCommands(t *testing.T) {
 		"Tree: Ctrl+F branch-session, Ctrl+S summary",
 		"/skills",
 		"/prompts",
-		"/followup <message>",
+		"/followup <message> (/f)",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected hotkey help to contain %q, got %q", want, text)
@@ -1484,6 +1484,34 @@ func TestSteerQueuedDuringStreamingContinuesAfterWrappedCancel(t *testing.T) {
 	}
 	if !uiBlocksContainAssistant(root.model.blocks, "assistant: change direction") {
 		t.Fatalf("expected assistant response for queued steer, got %#v", root.model.blocks)
+	}
+}
+
+func TestShortQueueAliasesWhileQuerying(t *testing.T) {
+	session := newUITestSession(t)
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, nil)
+	root.model.queryActive = true
+	root.model.state = uiStateQuerying
+
+	root.submit("/s steer fallback")
+
+	if got := session.GetAgent().QueuedMessageCount(); got != 1 {
+		t.Fatalf("expected one queued steer message, got %d", got)
+	}
+	if len(root.model.blocks) == 0 || root.model.blocks[len(root.model.blocks)-1].Source != "steer" {
+		t.Fatalf("expected /s to append steer block, got %#v", root.model.blocks)
+	}
+	if root.model.statusMsg != "steering" {
+		t.Fatalf("expected steering status, got %q", root.model.statusMsg)
+	}
+
+	root.submit("/f follow-up fallback")
+
+	if got := session.GetAgent().QueuedMessageCount(); got != 2 {
+		t.Fatalf("expected steer plus follow-up messages, got %d", got)
+	}
+	if len(root.model.blocks) == 0 || root.model.blocks[len(root.model.blocks)-1].Source != "followup" {
+		t.Fatalf("expected /f to append follow-up block, got %#v", root.model.blocks)
 	}
 }
 
