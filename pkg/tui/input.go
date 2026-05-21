@@ -4,6 +4,8 @@ import (
 	gotui "github.com/grindlemire/go-tui"
 )
 
+const maxInputVisibleRows = 6
+
 // handleInputKey routes individual key events into the text-buffer / cursor
 // state. Permission mode bypasses the input box entirely (handled elsewhere
 // via permissionKeyMap), so we early-return there.
@@ -152,6 +154,81 @@ func moveInputCursorVertical(rs []rune, cursor, delta int) int {
 	return min(nextStart+col, nextEnd)
 }
 
+type inputLineRange struct {
+	Start int
+	End   int
+}
+
+func inputLineRanges(rs []rune) []inputLineRange {
+	ranges := make([]inputLineRange, 0, 1)
+	start := 0
+	for i, ch := range rs {
+		if ch != '\n' {
+			continue
+		}
+		ranges = append(ranges, inputLineRange{Start: start, End: i})
+		start = i + 1
+	}
+	ranges = append(ranges, inputLineRange{Start: start, End: len(rs)})
+	return ranges
+}
+
+func inputCursorLine(ranges []inputLineRange, cursor int) int {
+	if len(ranges) == 0 {
+		return 0
+	}
+	for i, line := range ranges {
+		if cursor <= line.End {
+			return i
+		}
+	}
+	return len(ranges) - 1
+}
+
+func inputVisibleRange(totalLines, cursorLine, maxRows int) (start, end int, above, below bool) {
+	if totalLines <= 0 {
+		return 0, 0, false, false
+	}
+	if maxRows < 3 {
+		maxRows = 3
+	}
+	if totalLines <= maxRows {
+		return 0, totalLines, false, false
+	}
+	edgeRows := maxRows - 1
+	if cursorLine < edgeRows {
+		return 0, edgeRows, false, true
+	}
+	if cursorLine >= totalLines-edgeRows {
+		return totalLines - edgeRows, totalLines, true, false
+	}
+	contentRows := maxRows - 2
+	start = cursorLine - contentRows/2
+	end = start + contentRows
+	if cursorLine >= end {
+		end = cursorLine + 1
+		start = end - contentRows
+	}
+	return start, end, true, true
+}
+
+func inputVisibleRows(text string) int {
+	rs := []rune(text)
+	ranges := inputLineRanges(rs)
+	start, end, above, below := inputVisibleRange(len(ranges), inputCursorLine(ranges, len(rs)), maxInputVisibleRows)
+	rows := end - start
+	if above {
+		rows++
+	}
+	if below {
+		rows++
+	}
+	if rows < 1 {
+		return 1
+	}
+	return rows
+}
+
 func clampInt(value, low, high int) int {
 	if value < low {
 		return low
@@ -214,6 +291,9 @@ func (r *goTUIRoot) renderInput(width int) *gotui.Element {
 	_ = width
 	rs := []rune(r.draft.Get())
 	r.cursor = clampInt(r.cursor, 0, len(rs))
+	ranges := inputLineRanges(rs)
+	cursorLine := inputCursorLine(ranges, r.cursor)
+	startLine, endLine, above, below := inputVisibleRange(len(ranges), cursorLine, maxInputVisibleRows)
 
 	const promptStr = "❯ "
 	const promptIndent = "  " // aligns continuation lines with text after "❯ "
@@ -251,47 +331,69 @@ func (r *goTUIRoot) renderInput(width int) *gotui.Element {
 		return container
 	}
 
-	line := gotui.New(
-		gotui.WithDisplay(gotui.DisplayFlex),
-		gotui.WithDirection(gotui.Row),
-		gotui.WithFlexShrink(0),
-	)
-	line.AddChild(gotui.New(
-		gotui.WithText(promptStr),
-		gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Green)),
-		gotui.WithFlexShrink(0),
-	))
-	container.AddChild(line)
-
-	for i, ch := range rs {
-		if ch == '\n' {
-			if i == r.cursor {
-				line.AddChild(eolCursor())
-			}
-			line = gotui.New(
-				gotui.WithDisplay(gotui.DisplayFlex),
-				gotui.WithDirection(gotui.Row),
-				gotui.WithFlexShrink(0),
-			)
-			line.AddChild(gotui.New(
-				gotui.WithText(promptIndent),
-				gotui.WithFlexShrink(0),
-			))
-			container.AddChild(line)
-			continue
-		}
-		style := gotui.NewStyle()
-		if i == r.cursor {
-			style = gotui.NewStyle().Reverse()
-		}
-		line.AddChild(gotui.New(
-			gotui.WithText(string(ch)),
-			gotui.WithTextStyle(style),
+	addHint := func(text string) {
+		container.AddChild(gotui.New(
+			gotui.WithText(promptIndent+text),
+			gotui.WithTextStyle(gotui.NewStyle().Dim()),
 			gotui.WithFlexShrink(0),
 		))
 	}
-	if r.cursor == len(rs) {
-		line.AddChild(eolCursor())
+	addLine := func(lineIdx int, rng inputLineRange) {
+		line := gotui.New(
+			gotui.WithDisplay(gotui.DisplayFlex),
+			gotui.WithDirection(gotui.Row),
+			gotui.WithFlexShrink(0),
+		)
+		prefix := promptIndent
+		style := gotui.NewStyle()
+		if lineIdx == 0 {
+			prefix = promptStr
+			style = gotui.NewStyle().Foreground(gotui.Green)
+		}
+		line.AddChild(gotui.New(
+			gotui.WithText(prefix),
+			gotui.WithTextStyle(style),
+			gotui.WithFlexShrink(0),
+		))
+		for i := rng.Start; i < rng.End; i++ {
+			charStyle := gotui.NewStyle()
+			if i == r.cursor {
+				charStyle = gotui.NewStyle().Reverse()
+			}
+			line.AddChild(gotui.New(
+				gotui.WithText(string(rs[i])),
+				gotui.WithTextStyle(charStyle),
+				gotui.WithFlexShrink(0),
+			))
+		}
+		if r.cursor == rng.End {
+			line.AddChild(eolCursor())
+		}
+		container.AddChild(line)
+	}
+
+	if above {
+		addHint("... " + itoa(startLine) + " lines above")
+	}
+	for lineIdx := startLine; lineIdx < endLine; lineIdx++ {
+		addLine(lineIdx, ranges[lineIdx])
+	}
+	if below {
+		addHint("... " + itoa(len(ranges)-endLine) + " lines below")
 	}
 	return container
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var buf [20]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(buf[i:])
 }
