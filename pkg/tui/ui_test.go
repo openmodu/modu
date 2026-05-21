@@ -1402,6 +1402,91 @@ func TestQueuedFollowUpContinuesWhenQueuedBeforeUIFinish(t *testing.T) {
 	}
 }
 
+func TestFollowUpQueuedDuringStreamingProducesResponse(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	session := newUITestSessionWithStream(t, func(ctx context.Context, model *types.Model, llmCtx *types.LLMContext, opts *types.SimpleStreamOptions) (types.EventStream, error) {
+		stream := types.NewEventStream()
+		go func() {
+			if len(llmCtx.Messages) == 1 {
+				close(started)
+				select {
+				case <-release:
+				case <-ctx.Done():
+					stream.Resolve(nil, fmt.Errorf("stream stopped: %w", ctx.Err()))
+					stream.Close()
+					return
+				}
+			}
+			msg := testAssistantMessageForLastUser(model, llmCtx)
+			stream.Push(types.StreamEvent{Type: types.EventDone, Reason: "stop", Message: msg})
+			stream.Resolve(msg, nil)
+			stream.Close()
+		}()
+		return stream, nil
+	})
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, nil)
+	unsubscribe := session.GetAgent().Subscribe(root.handleAgentEvent)
+	defer unsubscribe()
+
+	root.runPrompt("first")
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("expected first stream to start")
+	}
+	root.submit("second")
+	close(release)
+
+	waitForTUITurn(t, root, session, 4)
+	if got := session.GetAgent().QueuedMessageCount(); got != 0 {
+		t.Fatalf("expected follow-up queue to drain, got %d", got)
+	}
+	if !uiBlocksContainAssistant(root.model.blocks, "assistant: second") {
+		t.Fatalf("expected assistant response for queued follow-up, got %#v", root.model.blocks)
+	}
+}
+
+func TestSteerQueuedDuringStreamingContinuesAfterWrappedCancel(t *testing.T) {
+	started := make(chan struct{})
+	session := newUITestSessionWithStream(t, func(ctx context.Context, model *types.Model, llmCtx *types.LLMContext, opts *types.SimpleStreamOptions) (types.EventStream, error) {
+		stream := types.NewEventStream()
+		go func() {
+			if len(llmCtx.Messages) == 1 {
+				close(started)
+				<-ctx.Done()
+				stream.Resolve(nil, fmt.Errorf("provider canceled: %w", ctx.Err()))
+				stream.Close()
+				return
+			}
+			msg := testAssistantMessageForLastUser(model, llmCtx)
+			stream.Push(types.StreamEvent{Type: types.EventDone, Reason: "stop", Message: msg})
+			stream.Resolve(msg, nil)
+			stream.Close()
+		}()
+		return stream, nil
+	})
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, nil)
+	unsubscribe := session.GetAgent().Subscribe(root.handleAgentEvent)
+	defer unsubscribe()
+
+	root.runPrompt("first")
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("expected first stream to start")
+	}
+	root.submitSteer("change direction")
+
+	waitForTUITurn(t, root, session, 3)
+	if got := session.GetAgent().QueuedMessageCount(); got != 0 {
+		t.Fatalf("expected steer queue to drain, got %d", got)
+	}
+	if !uiBlocksContainAssistant(root.model.blocks, "assistant: change direction") {
+		t.Fatalf("expected assistant response for queued steer, got %#v", root.model.blocks)
+	}
+}
+
 func TestViewportConversationWrapsWithinViewportWidth(t *testing.T) {
 	session := newUITestSession(t)
 	model := testUIModel()
@@ -1461,6 +1546,21 @@ var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 func newUITestSession(t *testing.T) *coding_agent.CodingSession {
 	t.Helper()
 
+	return newUITestSessionWithStream(t, func(ctx context.Context, model *types.Model, llmCtx *types.LLMContext, opts *types.SimpleStreamOptions) (types.EventStream, error) {
+		stream := types.NewEventStream()
+		go func() {
+			msg := testAssistantMessageForLastUser(model, llmCtx)
+			stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+			stream.Resolve(msg, nil)
+			stream.Close()
+		}()
+		return stream, nil
+	})
+}
+
+func newUITestSessionWithStream(t *testing.T, streamFn agent.StreamFn) *coding_agent.CodingSession {
+	t.Helper()
+
 	root := t.TempDir()
 	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
 		Cwd:      root,
@@ -1469,33 +1569,49 @@ func newUITestSession(t *testing.T) *coding_agent.CodingSession {
 		GetAPIKey: func(provider string) (string, error) {
 			return "", nil
 		},
-		StreamFn: func(ctx context.Context, model *types.Model, llmCtx *types.LLMContext, opts *types.SimpleStreamOptions) (types.EventStream, error) {
-			stream := types.NewEventStream()
-			go func() {
-				last := llmCtx.Messages[len(llmCtx.Messages)-1]
-				userText := ""
-				if msg, ok := last.(types.UserMessage); ok {
-					userText, _ = msg.Content.(string)
-				}
-				msg := &types.AssistantMessage{
-					Role:       "assistant",
-					ProviderID: model.ProviderID,
-					Model:      model.ID,
-					StopReason: "stop",
-					Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "assistant: " + userText}},
-					Timestamp:  time.Now().UnixMilli(),
-				}
-				stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
-				stream.Resolve(msg, nil)
-				stream.Close()
-			}()
-			return stream, nil
-		},
+		StreamFn: streamFn,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return session
+}
+
+func testAssistantMessageForLastUser(model *types.Model, llmCtx *types.LLMContext) *types.AssistantMessage {
+	last := llmCtx.Messages[len(llmCtx.Messages)-1]
+	userText := ""
+	if msg, ok := last.(types.UserMessage); ok {
+		userText, _ = msg.Content.(string)
+	}
+	return &types.AssistantMessage{
+		Role:       "assistant",
+		ProviderID: model.ProviderID,
+		Model:      model.ID,
+		StopReason: "stop",
+		Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "assistant: " + userText}},
+		Timestamp:  time.Now().UnixMilli(),
+	}
+}
+
+func waitForTUITurn(t *testing.T, root *goTUIRoot, session *coding_agent.CodingSession, minMessages int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if !root.model.queryActive && len(session.GetMessages()) >= minMessages {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for TUI turn: queryActive=%v messages=%d queued=%d", root.model.queryActive, len(session.GetMessages()), session.GetAgent().QueuedMessageCount())
+}
+
+func uiBlocksContainAssistant(blocks []uiBlock, text string) bool {
+	for _, block := range blocks {
+		if block.Kind == "assistant" && strings.Contains(block.Content, text) {
+			return true
+		}
+	}
+	return false
 }
 
 func writeUITestSessionFile(t *testing.T, agentDir, cwd, name, prompt string) string {

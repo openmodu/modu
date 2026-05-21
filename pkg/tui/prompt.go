@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"strings"
 	"time"
@@ -426,7 +427,8 @@ func (r *goTUIRoot) continueQueuedPrompt() bool {
 }
 
 func (r *goTUIRoot) finishPromptOperation(err error, failedPrompt string) {
-	steeringCancel := err == context.Canceled && r.continueQueuedAfterCancel
+	wasCanceled := errors.Is(err, context.Canceled)
+	steeringCancel := wasCanceled && r.continueQueuedAfterCancel
 	shouldContinue := r.session != nil &&
 		r.session.GetAgent() != nil &&
 		r.session.GetAgent().HasQueuedMessages() &&
@@ -435,7 +437,7 @@ func (r *goTUIRoot) finishPromptOperation(err error, failedPrompt string) {
 	if shouldContinue && r.continueQueuedPrompt() {
 		return
 	}
-	if err != nil && err != context.Canceled {
+	if err != nil && !wasCanceled {
 		if failedPrompt != "" {
 			r.lastFailedPrompt = failedPrompt
 		}
