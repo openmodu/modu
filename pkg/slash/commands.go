@@ -73,14 +73,6 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		handleModel(arg, session, r, model)
 		return true, false
 
-	case "settings":
-		r.PrintInfo("settings are available in the interactive TUI via /settings")
-		return true, false
-
-	case "scoped-models":
-		r.PrintInfo("model scope editing is available in the interactive TUI via /scoped-models")
-		return true, false
-
 	case "compact":
 		r.PrintInfo("compacting context…")
 		if err := session.Compact(ctx); err != nil {
@@ -222,21 +214,6 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 
 	case "doctor":
 		handleDoctor(ctx, session, r)
-		return true, false
-
-	case "retry":
-		r.PrintInfo("retry is available in the interactive TUI after a failed prompt")
-		return true, false
-
-	case "hotkeys":
-		r.PrintSection("Hotkeys", []string{
-			"Ctrl+C interrupt/exit",
-			"Ctrl+L clear screen",
-			"Ctrl+O expand/collapse tool output",
-			"Ctrl+P/Ctrl+N cycle models",
-			"Shift+Tab toggle plan mode",
-			"/settings, /model, /sessions, /tree, /fork",
-		})
 		return true, false
 
 	case "reload":
@@ -997,7 +974,6 @@ func PrintHelp(r Printer) {
 		"/copy               — copy the last assistant message",
 		"/changelog          — show recent git commits",
 		"/doctor             — show runtime diagnostics",
-		"/retry              — retry last failed prompt in interactive TUI",
 		"/tools              — list active tools",
 		"/allow <tool>       — clear always-deny so the tool is asked again",
 		"/agents             — list discovered subagents",
