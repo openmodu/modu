@@ -63,41 +63,42 @@ type goTUIRoot struct {
 	fileMatchIdx      int
 	fileScrollOffset  int
 
-	modelChoices         []*types.Model
-	modelAllChoices      []*types.Model
-	modelSelectIdx       int
-	modelSelectScroll    int
-	modelSearch          string
-	modelScopedOnly      bool
-	modelScopeEdit       bool
-	modelScopedIDs       map[string]bool
-	sessionChoices       []coding_agent.SessionInfo
-	sessionAllChoices    []coding_agent.SessionInfo
-	sessionSelectIdx     int
-	sessionSelectScroll  int
-	sessionSearch        string
-	sessionAllScope      bool
-	sessionSortMode      string
-	sessionNamedOnly     bool
-	sessionShowPath      bool
-	sessionConfirmDelete string
-	sessionRenameMode    bool
-	sessionRenameText    string
-	treeNodes            []coding_agent.SessionTreeNode
-	treeAllNodes         []coding_agent.SessionTreeNode
-	treeSelectIdx        int
-	treeSelectScroll     int
-	treeSearch           string
-	treeShowSummary      bool
-	resourceTitle        string
-	resourceChoices      []resourceChoice
-	resourceAllChoices   []resourceChoice
-	resourceSelectIdx    int
-	resourceSelectScroll int
-	resourceSearch       string
-	settingsChoices      []settingsChoice
-	settingsSelectIdx    int
-	lastFailedPrompt     string
+	modelChoices              []*types.Model
+	modelAllChoices           []*types.Model
+	modelSelectIdx            int
+	modelSelectScroll         int
+	modelSearch               string
+	modelScopedOnly           bool
+	modelScopeEdit            bool
+	modelScopedIDs            map[string]bool
+	sessionChoices            []coding_agent.SessionInfo
+	sessionAllChoices         []coding_agent.SessionInfo
+	sessionSelectIdx          int
+	sessionSelectScroll       int
+	sessionSearch             string
+	sessionAllScope           bool
+	sessionSortMode           string
+	sessionNamedOnly          bool
+	sessionShowPath           bool
+	sessionConfirmDelete      string
+	sessionRenameMode         bool
+	sessionRenameText         string
+	treeNodes                 []coding_agent.SessionTreeNode
+	treeAllNodes              []coding_agent.SessionTreeNode
+	treeSelectIdx             int
+	treeSelectScroll          int
+	treeSearch                string
+	treeShowSummary           bool
+	resourceTitle             string
+	resourceChoices           []resourceChoice
+	resourceAllChoices        []resourceChoice
+	resourceSelectIdx         int
+	resourceSelectScroll      int
+	resourceSearch            string
+	settingsChoices           []settingsChoice
+	settingsSelectIdx         int
+	lastFailedPrompt          string
+	continueQueuedAfterCancel bool
 }
 
 func newGoTUIRoot(
@@ -386,6 +387,7 @@ func (r *goTUIRoot) KeyMap() gotui.KeyMap {
 		gotui.OnStop(gotui.KeyDown, dispatch),
 		gotui.OnStop(gotui.KeyTab, dispatch),
 		gotui.OnStop(gotui.KeyTab.Shift(), func(ke gotui.KeyEvent) { r.togglePlanMode() }),
+		gotui.OnStop(gotui.KeyEnter.Shift(), dispatch),
 		gotui.OnStop(gotui.KeyEnter, dispatch),
 		gotui.OnStop(gotui.AnyRune, dispatch),
 	}

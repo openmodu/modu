@@ -146,7 +146,14 @@ func renderUIUserBlockWithSource(content, source string, width int) string {
 	var b strings.Builder
 	glyph := "❯ "
 	style := uiUserPrompt
-	if strings.TrimSpace(source) != "" && source != "local" {
+	switch strings.TrimSpace(source) {
+	case "", "local":
+	case "followup":
+		glyph = "↳ "
+	case "steer":
+		glyph = "↯ "
+		style = uiExternalUserPrompt
+	default:
 		glyph = "◆ "
 		style = uiExternalUserPrompt
 	}

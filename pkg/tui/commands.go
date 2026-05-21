@@ -82,7 +82,8 @@ func hotkeyHelpText() string {
 		"  Esc: close selector",
 		"",
 		"Editing",
-		"  Enter: submit",
+		"  Enter: submit; while running, queue follow-up",
+		"  Shift+Enter: while running, steer current task",
 		"  Ctrl+J: newline",
 		"  Tab: autocomplete or selector scope",
 		"  @file: fuzzy file reference; Tab/Enter completes",
@@ -100,6 +101,7 @@ func hotkeyHelpText() string {
 		"Commands",
 		"  /settings, /config, /model, /scoped-models, /sessions",
 		"  /tree, /fork, /clone, /skills, /prompts",
+		"  /steer <message>, /followup <message>",
 		"  /export, /copy, /changelog",
 	}
 	return strings.Join(lines, "\n")

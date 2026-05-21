@@ -76,6 +76,8 @@ var uiSlashCommands = []slashCommandDef{
 	{"/context", "show context sources"},
 	{"/doctor", "show runtime diagnostics"},
 	{"/retry", "retry last failed prompt"},
+	{"/steer", "interrupt current task with new direction"},
+	{"/followup", "queue message after current task"},
 	{"/config", "show/init/validate model config"},
 	{"/tools", "list active tools"},
 	{"/allow", "clear deny decision for a tool"},

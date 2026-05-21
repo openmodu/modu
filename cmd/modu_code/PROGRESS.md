@@ -62,6 +62,9 @@ enough to implement, verify, and commit independently.
   the selected slash command back into the input.
 - TUI tool-output display mode selected from `/settings` is persisted in
   `~/.coding_agent/tui_settings.json` and restored on startup.
+- TUI now exposes the agent steer/follow-up queues: Enter while running queues
+  a follow-up, Shift+Enter or `/steer <message>` interrupts and steers, and
+  `/followup <message>` queues explicitly.
 
 ## Next
 

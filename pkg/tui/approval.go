@@ -195,11 +195,15 @@ func (r *goTUIRoot) approve(decision string) {
 }
 
 func (r *goTUIRoot) abortQuery() {
+	r.continueQueuedAfterCancel = false
 	if r.model.queryCancel != nil {
 		r.model.queryCancel()
 		r.model.queryCancel = nil
 	}
 	if r.session != nil {
+		if ag := r.session.GetAgent(); ag != nil {
+			ag.ClearAllQueues()
+		}
 		r.session.Abort()
 		r.session.AbortBash()
 	}

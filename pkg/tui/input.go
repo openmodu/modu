@@ -111,6 +111,10 @@ func (r *goTUIRoot) handleInputKey(ke gotui.KeyEvent) {
 		if r.completeFileMatch() {
 			return
 		}
+		if ke.Mod == gotui.ModShift && r.model.queryActive {
+			r.submitSteer(r.draft.Get())
+			return
+		}
 		r.submit(r.draft.Get())
 	}
 }

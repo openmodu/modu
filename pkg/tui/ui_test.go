@@ -368,6 +368,14 @@ func TestUIUserBlockUsesPromptBackground(t *testing.T) {
 	if !strings.Contains(external, "◆ remote prompt") {
 		t.Fatalf("expected external prompt marker, got %q", external)
 	}
+	followup := ansiPattern.ReplaceAllString(renderUIUserBlockWithSource("queued prompt", "followup", 80), "")
+	if !strings.Contains(followup, "↳ queued prompt") {
+		t.Fatalf("expected follow-up prompt marker, got %q", followup)
+	}
+	steer := ansiPattern.ReplaceAllString(renderUIUserBlockWithSource("steer prompt", "steer", 80), "")
+	if !strings.Contains(steer, "↯ steer prompt") {
+		t.Fatalf("expected steer prompt marker, got %q", steer)
+	}
 	if bg := uiExternalUserPrompt.GetBackground(); bg == nil {
 		t.Fatalf("expected external user prompt background style, got nil")
 	}
@@ -1176,9 +1184,11 @@ func TestHotkeyHelpIncludesSelectorAndResourceCommands(t *testing.T) {
 	text := hotkeyHelpText()
 	for _, want := range []string{
 		"PageUp/PageDown: scroll transcript or selector page",
+		"Shift+Enter: while running, steer current task",
 		"Tree: Ctrl+F branch-session, Ctrl+S summary",
 		"/skills",
 		"/prompts",
+		"/followup <message>",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected hotkey help to contain %q, got %q", want, text)
@@ -1252,6 +1262,93 @@ func TestRetrySubmitsLastFailedPrompt(t *testing.T) {
 	}
 	if got := len(session.GetMessages()); got == 0 {
 		t.Fatal("expected retry to submit a prompt")
+	}
+}
+
+func TestSubmittingWhileQueryingQueuesFollowUp(t *testing.T) {
+	session := newUITestSession(t)
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, nil)
+	root.model.queryActive = true
+	root.model.state = uiStateQuerying
+	root.draft.Set("continue after this")
+	root.cursor = len([]rune(root.draft.Get()))
+
+	if !dispatchFirstGoTUIKey(root.KeyMap(), gotui.KeyEvent{Key: gotui.KeyEnter}) {
+		t.Fatal("expected Enter binding")
+	}
+
+	if got := session.GetAgent().QueuedMessageCount(); got != 1 {
+		t.Fatalf("expected one queued follow-up, got %d", got)
+	}
+	if root.model.statusMsg != "queued follow-up" {
+		t.Fatalf("expected queued follow-up status, got %q", root.model.statusMsg)
+	}
+	if len(root.model.blocks) == 0 || root.model.blocks[len(root.model.blocks)-1].Source != "followup" {
+		t.Fatalf("expected follow-up user block, got %#v", root.model.blocks)
+	}
+	if root.model.state != uiStateQuerying {
+		t.Fatalf("expected current query to keep running, got %v", root.model.state)
+	}
+}
+
+func TestShiftEnterWhileQueryingQueuesSteerAndCancels(t *testing.T) {
+	session := newUITestSession(t)
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, nil)
+	queryCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	root.model.queryCancel = cancel
+	root.model.queryActive = true
+	root.model.state = uiStateQuerying
+	root.draft.Set("change direction")
+	root.cursor = len([]rune(root.draft.Get()))
+
+	if !dispatchFirstGoTUIKey(root.KeyMap(), gotui.KeyEvent{Key: gotui.KeyEnter, Mod: gotui.ModShift}) {
+		t.Fatal("expected Shift+Enter binding")
+	}
+
+	if got := session.GetAgent().QueuedMessageCount(); got != 1 {
+		t.Fatalf("expected one queued steer message, got %d", got)
+	}
+	if root.model.statusMsg != "steering" {
+		t.Fatalf("expected steering status, got %q", root.model.statusMsg)
+	}
+	if !root.continueQueuedAfterCancel {
+		t.Fatal("expected queued steer to continue after cancellation")
+	}
+	select {
+	case <-queryCtx.Done():
+	default:
+		t.Fatal("expected Shift+Enter steer to cancel the active query")
+	}
+	if len(root.model.blocks) == 0 || root.model.blocks[len(root.model.blocks)-1].Source != "steer" {
+		t.Fatalf("expected steer user block, got %#v", root.model.blocks)
+	}
+}
+
+func TestQueuedFollowUpContinuesAfterPromptCompletes(t *testing.T) {
+	session := newUITestSession(t)
+	var promptMu sync.Mutex
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, &promptMu)
+	promptMu.Lock()
+	root.runPrompt("first")
+	root.submit("second")
+	promptMu.Unlock()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if !root.model.queryActive && session.GetAgent().QueuedMessageCount() == 0 && len(session.GetMessages()) >= 4 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if root.model.queryActive {
+		t.Fatal("expected queued follow-up to finish")
+	}
+	if got := session.GetAgent().QueuedMessageCount(); got != 0 {
+		t.Fatalf("expected follow-up queue to drain, got %d", got)
+	}
+	if got := len(session.GetMessages()); got < 4 {
+		t.Fatalf("expected first prompt and queued follow-up messages, got %d", got)
 	}
 }
 

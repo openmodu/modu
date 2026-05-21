@@ -63,7 +63,8 @@ go run ./cmd/modu_code config validate
 
 | 按键 | 说明 |
 |------|------|
-| `Enter` | 提交消息 |
+| `Enter` | 提交消息；任务运行中提交为 follow-up 队列 |
+| `Shift+Enter` | 任务运行中 steer 当前任务，打断当前轮并切到新指令 |
 | `ctrl+c` | 中断当前请求 / 退出 |
 | `ctrl+d` | 退出（输入框为空时） |
 | `ctrl+l` | 清屏 |
@@ -77,6 +78,8 @@ go run ./cmd/modu_code config validate
 输入 `@` 后继续键入文件名或路径片段可以模糊搜索当前工作目录下的文件，Tab 或 Enter 会补全选中的 `@path`。提交普通 prompt 时，合法的 `@path` 文件引用会把文件内容附加到发给模型的消息中。Tab 也支持补全 `./`、`../`、`~/` 或包含 `/` 的路径 token。
 
 输入 `!cmd` 会在当前工作目录执行 shell 命令，把输出显示在 TUI 中，并作为下一条用户消息发送给模型。输入 `!!cmd` 只执行并显示输出，不发送给模型。
+
+任务运行中继续输入普通消息并按 Enter，会把消息加入 follow-up 队列，在当前任务结束后自动继续执行。任务运行中按 Shift+Enter，或输入 `/steer <message>`，会把消息加入 steer 队列并中断当前轮，随后按新方向继续。也可以输入 `/followup <message>` 显式排队下一条 follow-up。
 
 `/settings` 中的 tool output 展开模式会持久化到 `~/.coding_agent/tui_settings.json`，下次启动自动恢复。
 
@@ -93,6 +96,8 @@ go run ./cmd/modu_code config validate
 | `/context` | 查看当前 prompt/context 来源 |
 | `/doctor` | 查看基础运行诊断 |
 | `/retry` | 重试上一条失败的 prompt |
+| `/steer <message>` | 任务运行中打断当前轮，并按新消息继续 |
+| `/followup <message>` | 任务运行中把消息排到当前任务之后执行 |
 | `/hotkeys` | 查看快捷键 |
 | `/reload` | 重新加载 keybindings 之外的动态资源：skills、prompts、context |
 | `/new` | 清空当前会话上下文 |

@@ -15,6 +15,21 @@ import (
 //   - "/cmd"   → built-in slash command via pkg/slash
 //   - anything else → send to the agent as a prompt
 func (r *goTUIRoot) submit(text string) {
+	r.submitWithMode(text, submitModeNormal)
+}
+
+func (r *goTUIRoot) submitSteer(text string) {
+	r.submitWithMode(text, submitModeSteer)
+}
+
+type submitMode int
+
+const (
+	submitModeNormal submitMode = iota
+	submitModeSteer
+)
+
+func (r *goTUIRoot) submitWithMode(text string, mode submitMode) {
 	line := strings.TrimSpace(text)
 	if line == "" {
 		return
@@ -25,6 +40,14 @@ func (r *goTUIRoot) submit(text string) {
 	r.fileMatches = nil
 	r.appendHistory(line)
 
+	if line == "/steer" || strings.HasPrefix(line, "/steer ") {
+		r.submitQueueCommand("steer", strings.TrimSpace(strings.TrimPrefix(line, "/steer")))
+		return
+	}
+	if line == "/followup" || strings.HasPrefix(line, "/followup ") {
+		r.submitQueueCommand("followup", strings.TrimSpace(strings.TrimPrefix(line, "/followup")))
+		return
+	}
 	if rest, ok := strings.CutPrefix(line, "!!"); ok {
 		r.runShell(strings.TrimSpace(rest), false)
 		return
@@ -105,7 +128,71 @@ func (r *goTUIRoot) submit(text string) {
 		r.runSlash(line)
 		return
 	}
+	if r.model.queryActive {
+		if mode == submitModeSteer {
+			r.queueSteer(line)
+			return
+		}
+		r.queueFollowUp(line)
+		return
+	}
 	r.runPrompt(r.expandFileReferencesForPrompt(line))
+}
+
+func (r *goTUIRoot) submitQueueCommand(kind, text string) {
+	if text == "" {
+		r.model.setTransientStatus("/" + kind + " requires a message")
+		r.bump()
+		return
+	}
+	if !r.model.queryActive {
+		r.model.setTransientStatus("no active task to " + kind)
+		r.bump()
+		return
+	}
+	if kind == "steer" {
+		r.queueSteer(text)
+		return
+	}
+	r.queueFollowUp(text)
+}
+
+func (r *goTUIRoot) queueFollowUp(line string) {
+	if r.session == nil {
+		r.model.setTransientStatus("session is not available")
+		r.bump()
+		return
+	}
+	expanded := r.expandFileReferencesForPrompt(line)
+	r.session.FollowUp(expanded)
+	r.appendQueuedUserBlock("followup", expanded)
+	r.model.setStatus("queued follow-up")
+	r.bump()
+}
+
+func (r *goTUIRoot) queueSteer(line string) {
+	if r.session == nil {
+		r.model.setTransientStatus("session is not available")
+		r.bump()
+		return
+	}
+	expanded := r.expandFileReferencesForPrompt(line)
+	r.session.Steer(expanded)
+	r.appendQueuedUserBlock("steer", expanded)
+	r.continueQueuedAfterCancel = true
+	if r.model.queryCancel != nil {
+		r.model.queryCancel()
+	}
+	r.session.Abort()
+	r.session.AbortBash()
+	r.model.setStatus("steering")
+	r.bump()
+}
+
+func (r *goTUIRoot) appendQueuedUserBlock(source, content string) {
+	block := uiBlock{Kind: "user", Content: content, Source: source, Timestamp: time.Now()}
+	r.model.appendBlock(block)
+	r.pushBlockAbove(block)
 }
 
 // togglePlanMode flips plan mode on/off. Bound to Shift+Tab so the user can
@@ -286,6 +373,12 @@ func (r *goTUIRoot) runPrompt(line string) {
 	block := uiBlock{Kind: "user", Content: line, Source: "local", Timestamp: time.Now()}
 	r.model.appendBlock(block)
 	r.pushBlockAbove(block)
+	r.runPromptOperation(line, func(ctx context.Context) error {
+		return r.session.Prompt(ctx, line)
+	})
+}
+
+func (r *goTUIRoot) runPromptOperation(failedPrompt string, run func(context.Context) error) {
 	r.model.queryActive = true
 	r.model.state = uiStateQuerying
 	r.model.setStatus("thinking")
@@ -305,27 +398,63 @@ func (r *goTUIRoot) runPrompt(line string) {
 		// Bail if the context was cancelled while waiting for the lock.
 		select {
 		case <-queryCtx.Done():
+			r.queue(func() {
+				r.finishPromptOperation(queryCtx.Err(), failedPrompt)
+			})
 			return
 		default:
 		}
-		err := r.session.Prompt(queryCtx, line)
+		err := run(queryCtx)
 		r.queue(func() {
-			if err != nil && err != context.Canceled {
-				r.lastFailedPrompt = line
-				r.model.setPromptError(err)
-			} else if err == nil {
-				r.lastFailedPrompt = ""
-				r.model.clearPromptError()
-			}
-			r.model.finishActivity(err)
-			r.model.queryActive = false
-			if r.model.statusMsg != "interrupted" {
-				r.model.setStatus("")
-			}
-			r.model.state = uiStateInput
-			r.bump()
+			r.finishPromptOperation(err, failedPrompt)
 		})
 	}()
+}
+
+func (r *goTUIRoot) continueQueuedPrompt() bool {
+	if r.session == nil {
+		return false
+	}
+	ag := r.session.GetAgent()
+	if ag == nil || !ag.HasQueuedMessages() {
+		return false
+	}
+	r.runPromptOperation("", func(ctx context.Context) error {
+		return ag.Continue(ctx)
+	})
+	return true
+}
+
+func (r *goTUIRoot) finishPromptOperation(err error, failedPrompt string) {
+	steeringCancel := err == context.Canceled && r.continueQueuedAfterCancel
+	shouldContinue := r.session != nil &&
+		r.session.GetAgent() != nil &&
+		r.session.GetAgent().HasQueuedMessages() &&
+		(err == nil || steeringCancel)
+	r.continueQueuedAfterCancel = false
+	if shouldContinue && r.continueQueuedPrompt() {
+		return
+	}
+	if err != nil && err != context.Canceled {
+		if failedPrompt != "" {
+			r.lastFailedPrompt = failedPrompt
+		}
+		r.model.setPromptError(err)
+	} else if err == nil || steeringCancel {
+		r.lastFailedPrompt = ""
+		r.model.clearPromptError()
+	}
+	finishErr := err
+	if steeringCancel {
+		finishErr = nil
+	}
+	r.model.finishActivity(finishErr)
+	r.model.queryActive = false
+	if r.model.statusMsg != "interrupted" {
+		r.model.setStatus("")
+	}
+	r.model.state = uiStateInput
+	r.bump()
 }
 
 func (r *goTUIRoot) retryLastFailedPrompt() {
