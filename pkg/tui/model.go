@@ -209,6 +209,17 @@ func (m *uiModel) currentAssistantBlock() *uiBlock {
 	return &m.blocks[len(m.blocks)-1]
 }
 
+func (m *uiModel) beginAssistantBlock() *uiBlock {
+	if len(m.blocks) > 0 {
+		last := &m.blocks[len(m.blocks)-1]
+		if last.Kind == "assistant" && last.Streaming {
+			return last
+		}
+	}
+	m.blocks = append(m.blocks, uiBlock{Kind: "assistant", Streaming: true, Timestamp: time.Now()})
+	return &m.blocks[len(m.blocks)-1]
+}
+
 func (m *uiModel) currentToolBlock() *uiBlock {
 	if len(m.blocks) == 0 || m.blocks[len(m.blocks)-1].Kind != "tool" {
 		m.blocks = append(m.blocks, uiBlock{Kind: "tool", Timestamp: time.Now()})

@@ -15,6 +15,11 @@ func (m *uiModel) handleAgentEvent(ev agent.AgentEvent) {
 		m.setStatus("thinking")
 		m.clearActivity()
 
+	case agent.EventTypeMessageStart:
+		if _, ok := assistantMessageFromEvent(ev.Message); ok {
+			m.beginAssistantBlock()
+		}
+
 	case agent.EventTypeMessageUpdate:
 		if ev.StreamEvent == nil {
 			break

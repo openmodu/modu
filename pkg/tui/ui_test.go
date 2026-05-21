@@ -1329,6 +1329,8 @@ func TestQueuedFollowUpContinuesAfterPromptCompletes(t *testing.T) {
 	session := newUITestSession(t)
 	var promptMu sync.Mutex
 	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, &promptMu)
+	unsubscribe := session.GetAgent().Subscribe(root.handleAgentEvent)
+	defer unsubscribe()
 	promptMu.Lock()
 	root.runPrompt("first")
 	root.submit("second")
@@ -1349,6 +1351,54 @@ func TestQueuedFollowUpContinuesAfterPromptCompletes(t *testing.T) {
 	}
 	if got := len(session.GetMessages()); got < 4 {
 		t.Fatalf("expected first prompt and queued follow-up messages, got %d", got)
+	}
+	var firstReply, followUpReply bool
+	for _, block := range root.model.blocks {
+		if block.Kind != "assistant" {
+			continue
+		}
+		if strings.Contains(block.Content, "assistant: first") {
+			firstReply = true
+		}
+		if strings.Contains(block.Content, "assistant: second") {
+			followUpReply = true
+		}
+	}
+	if !firstReply || !followUpReply {
+		t.Fatalf("expected separate assistant replies for first and follow-up prompts, got %#v", root.model.blocks)
+	}
+}
+
+func TestQueuedFollowUpContinuesWhenQueuedBeforeUIFinish(t *testing.T) {
+	session := newUITestSession(t)
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, nil)
+	unsubscribe := session.GetAgent().Subscribe(root.handleAgentEvent)
+	defer unsubscribe()
+
+	if err := session.Prompt(context.Background(), "first"); err != nil {
+		t.Fatalf("prompt failed: %v", err)
+	}
+	root.model.queryActive = true
+	root.model.state = uiStateQuerying
+	root.queueFollowUp("late follow-up")
+
+	root.finishPromptOperation(nil, "first")
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if !root.model.queryActive && session.GetAgent().QueuedMessageCount() == 0 && len(session.GetMessages()) >= 4 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if root.model.queryActive {
+		t.Fatal("expected queued follow-up continuation to finish")
+	}
+	if got := session.GetAgent().QueuedMessageCount(); got != 0 {
+		t.Fatalf("expected queued follow-up to drain, got %d", got)
+	}
+	if got := len(session.GetMessages()); got < 4 {
+		t.Fatalf("expected continued follow-up messages, got %d", got)
 	}
 }
 
