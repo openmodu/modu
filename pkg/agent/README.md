@@ -201,6 +201,8 @@ Use `agent.FollowUp(msg)` to queue messages to be processed after the current ta
 a.FollowUp(types.UserMessage{Role: "user", Content: "After you finish that, summarize the session."})
 ```
 
+Use `QueuedMessageCount()` or `QueuedMessageCounts()` to inspect pending work. `QueuedMessages()` returns copies for display, and `ClearSteeringQueue()`, `ClearFollowUpQueue()`, `ClearAllQueues()`, or `DropLastQueuedMessage()` let a UI recover from accidental queued input without changing the queue priority rules.
+
 #### Execution Modes (`ExecutionMode`)
 
 You can control *how many* messages the Agent consumes from each queue at a time using `SetSteeringMode(...)` and `SetFollowUpMode(...)`:

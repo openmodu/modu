@@ -122,6 +122,10 @@ func (r *goTUIRoot) submitWithMode(text string, mode submitMode) {
 			r.showWorktreePanel()
 			return
 		}
+		if line == "/queue" || strings.HasPrefix(line, "/queue ") {
+			r.runQueueCommand(strings.TrimSpace(strings.TrimPrefix(line, "/queue")))
+			return
+		}
 		if line == "/reload" {
 			r.runReloadCommand()
 			return

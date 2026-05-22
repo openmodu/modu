@@ -88,6 +88,7 @@ var uiSlashCommands = []slashCommandDef{
 	{"/tasks", "show background tasks"},
 	{"/plan", "toggle plan mode"},
 	{"/worktree", "toggle worktree mode"},
+	{"/queue", "show or clear queued steer/follow-up messages"},
 	{"/session", "show or name current session"},
 	{"/sessions", "open session selector"},
 	{"/resume", "resume a session"},

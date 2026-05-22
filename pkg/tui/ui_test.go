@@ -1573,6 +1573,60 @@ func TestShortQueueAliasesWhileQuerying(t *testing.T) {
 	}
 }
 
+func TestQueueCommandShowsAndMutatesPendingMessages(t *testing.T) {
+	session := newUITestSession(t)
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, nil)
+	session.Steer("change direction")
+	session.FollowUp("after this")
+	session.FollowUp("then this")
+
+	root.runQueueCommand("")
+	if len(root.model.blocks) == 0 {
+		t.Fatal("expected queue command to append a section")
+	}
+	block := root.model.blocks[len(root.model.blocks)-1]
+	for _, want := range []string{"Steer (1)", "change direction", "Follow-up (2)", "after this", "then this"} {
+		if !strings.Contains(block.Content, want) {
+			t.Fatalf("expected queue output to contain %q, got:\n%s", want, block.Content)
+		}
+	}
+
+	root.runQueueCommand("drop")
+	steering, followUp := session.GetAgent().QueuedMessageCounts()
+	if steering != 1 || followUp != 1 {
+		t.Fatalf("expected drop to remove one follow-up, got steering=%d followUp=%d", steering, followUp)
+	}
+	if root.model.statusMsg != "dropped follow-up" {
+		t.Fatalf("expected drop status, got %q", root.model.statusMsg)
+	}
+
+	root.runQueueCommand("clear steer")
+	steering, followUp = session.GetAgent().QueuedMessageCounts()
+	if steering != 0 || followUp != 1 {
+		t.Fatalf("expected clear steer to keep follow-up, got steering=%d followUp=%d", steering, followUp)
+	}
+
+	root.runQueueCommand("clear")
+	if got := session.GetAgent().QueuedMessageCount(); got != 0 {
+		t.Fatalf("expected clear to remove all queued messages, got %d", got)
+	}
+}
+
+func TestQueueCommandRejectsUnknownArgs(t *testing.T) {
+	session := newUITestSession(t)
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, nil)
+
+	root.runQueueCommand("drop steer")
+	if !strings.Contains(root.model.statusMsg, "usage: /queue drop") {
+		t.Fatalf("expected drop usage status, got %q", root.model.statusMsg)
+	}
+
+	root.runQueueCommand("wat")
+	if !strings.Contains(root.model.statusMsg, "usage: /queue") {
+		t.Fatalf("expected queue usage status, got %q", root.model.statusMsg)
+	}
+}
+
 func TestViewportConversationWrapsWithinViewportWidth(t *testing.T) {
 	session := newUITestSession(t)
 	model := testUIModel()

@@ -102,6 +102,7 @@ func hotkeyHelpText() string {
 		"  /settings, /config, /model, /scoped-models, /sessions",
 		"  /tree, /fork, /clone, /skills, /prompts",
 		"  /steer <message> (/s), /followup <message> (/f)",
+		"  /queue, /queue clear [steer|followup], /queue drop",
 		"  /export, /copy, /changelog",
 	}
 	return strings.Join(lines, "\n")

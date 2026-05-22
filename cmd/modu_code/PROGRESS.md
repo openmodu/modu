@@ -66,6 +66,8 @@ enough to implement, verify, and commit independently.
   a follow-up, Shift+Enter or `/steer <message>` interrupts and steers, and
   `/followup <message>` queues explicitly. `/s` and `/f` provide terminal-safe
   short aliases when Shift+Enter is not distinguishable from Enter.
+- Added `/queue` to inspect pending steer/follow-up messages, clear all or one
+  queue type, and drop the last pending message after accidental input.
 
 ## Next
 

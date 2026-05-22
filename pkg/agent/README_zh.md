@@ -201,6 +201,8 @@ a.Steer(types.UserMessage{Role: "user", Content: "Stop what you're doing! Answer
 a.FollowUp(types.UserMessage{Role: "user", Content: "After you finish that, summarize the session."})
 ```
 
+使用 `QueuedMessageCount()` 或 `QueuedMessageCounts()` 查看等待中的消息数量。`QueuedMessages()` 返回用于展示的队列副本，`ClearSteeringQueue()`、`ClearFollowUpQueue()`、`ClearAllQueues()` 和 `DropLastQueuedMessage()` 可让 UI 处理误排队输入，同时不改变队列优先级规则。
+
 #### 执行模式 (`ExecutionMode`)
 
 您可以通过使用 `SetSteeringMode(...)` 和 `SetFollowUpMode(...)` 控制 Agent 每次从队列中消费的消息数量：

@@ -313,6 +313,38 @@ func TestAgentQueuedMessageCounts(t *testing.T) {
 	}
 }
 
+func TestAgentQueuedMessagesAndDropLast(t *testing.T) {
+	agent := NewAgent(AgentConfig{})
+	agent.Steer(types.UserMessage{Role: "user", Content: "change direction"})
+	agent.FollowUp(types.UserMessage{Role: "user", Content: "after this"})
+
+	steering, followUp := agent.QueuedMessages()
+	if len(steering) != 1 || len(followUp) != 1 {
+		t.Fatalf("expected one steering and one follow-up, got %d and %d", len(steering), len(followUp))
+	}
+	steering[0] = types.UserMessage{Role: "user", Content: "mutated"}
+	steering, _ = agent.QueuedMessages()
+	if got := steering[0].(types.UserMessage).Content; got != "change direction" {
+		t.Fatalf("expected queued message copy, got %q", got)
+	}
+
+	kind, ok := agent.DropLastQueuedMessage()
+	if !ok || kind != "follow-up" {
+		t.Fatalf("expected to drop follow-up, got kind=%q ok=%v", kind, ok)
+	}
+	steeringCount, followUpCount := agent.QueuedMessageCounts()
+	if steeringCount != 1 || followUpCount != 0 {
+		t.Fatalf("expected steering=1 followUp=0, got steering=%d followUp=%d", steeringCount, followUpCount)
+	}
+	kind, ok = agent.DropLastQueuedMessage()
+	if !ok || kind != "steer" {
+		t.Fatalf("expected to drop steer, got kind=%q ok=%v", kind, ok)
+	}
+	if _, ok = agent.DropLastQueuedMessage(); ok {
+		t.Fatal("expected empty queue drop to fail")
+	}
+}
+
 func TestAgentSessionIDGetterSetter(t *testing.T) {
 	agent := NewAgent(AgentConfig{SessionID: "initial"})
 	if agent.GetSessionID() != "initial" {

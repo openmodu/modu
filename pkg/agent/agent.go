@@ -276,6 +276,28 @@ func (a *Agent) QueuedMessageCounts() (steering, followUp int) {
 	return len(a.steeringQueue), len(a.followUpQueue)
 }
 
+func (a *Agent) QueuedMessages() (steering, followUp []AgentMessage) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	steering = append([]AgentMessage(nil), a.steeringQueue...)
+	followUp = append([]AgentMessage(nil), a.followUpQueue...)
+	return steering, followUp
+}
+
+func (a *Agent) DropLastQueuedMessage() (kind string, ok bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if len(a.followUpQueue) > 0 {
+		a.followUpQueue = a.followUpQueue[:len(a.followUpQueue)-1]
+		return "follow-up", true
+	}
+	if len(a.steeringQueue) > 0 {
+		a.steeringQueue = a.steeringQueue[:len(a.steeringQueue)-1]
+		return "steer", true
+	}
+	return "", false
+}
+
 func (a *Agent) Abort() {
 	a.mu.Lock()
 	defer a.mu.Unlock()

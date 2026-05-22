@@ -81,6 +81,8 @@ go run ./cmd/modu_code config validate
 
 任务运行中继续输入普通消息并按 Enter，会把消息加入 follow-up 队列，在当前任务结束后自动继续执行。任务运行中按 Shift+Enter，或输入 `/steer <message>` / `/s <message>`，会把消息加入 steer 队列并中断当前轮，随后按新方向继续。也可以输入 `/followup <message>` / `/f <message>` 显式排队下一条 follow-up。
 
+输入 `/queue` 可以查看当前等待执行的 steer / follow-up 队列；`/queue clear` 清空全部队列，`/queue clear steer` 或 `/queue clear followup` 按类型清空，`/queue drop` 删除最后一条等待消息。
+
 `/settings` 中的 tool output 展开模式会持久化到 `~/.coding_agent/tui_settings.json`，下次启动自动恢复。
 
 ---
@@ -100,6 +102,9 @@ go run ./cmd/modu_code config validate
 | `/s <message>` | `/steer` 的短别名；用于终端无法识别 Shift+Enter 时 |
 | `/followup <message>` | 任务运行中把消息排到当前任务之后执行 |
 | `/f <message>` | `/followup` 的短别名 |
+| `/queue` | 查看当前等待执行的 steer / follow-up 队列 |
+| `/queue clear [steer\|followup]` | 清空全部队列，或按类型清空 |
+| `/queue drop` | 删除最后一条等待消息 |
 | `/hotkeys` | 查看快捷键 |
 | `/reload` | 重新加载 keybindings 之外的动态资源：skills、prompts、context |
 | `/new` | 清空当前会话上下文 |
