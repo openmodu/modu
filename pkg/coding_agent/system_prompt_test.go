@@ -46,3 +46,19 @@ func TestSystemPromptBuilderIncludesConnectedModel(t *testing.T) {
 		t.Fatalf("expected connected model display name in prompt, got:\n%s", prompt)
 	}
 }
+
+func TestDefaultSystemPromptAllowsNonCodingTasks(t *testing.T) {
+	prompt := NewSystemPromptBuilder(t.TempDir()).Build()
+
+	for _, want := range []string{
+		"you can also answer general questions and perform safe non-coding tasks",
+		"Do not refuse solely because the task is not about code",
+		"If the user asks for current facts such as weather",
+		"safe one-off commands, including read-only commands that answer non-coding requests",
+		"For coding or repository tasks, follow this sequence",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected default prompt to contain %q, got:\n%s", want, prompt)
+		}
+	}
+}
