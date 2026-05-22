@@ -53,11 +53,11 @@ var assistantPad = strings.Repeat(" ", lipgloss.Width(blockIndent)+dotPadW)
 
 func (m *uiModel) renderActivityLine() string {
 	spinner := activitySpinner(time.Now())
-	hint := "esc to interrupt"
+	hint := "Enter follow-up • Shift+Enter or /s steer • esc interrupt"
 	if !m.queryStartTime.IsZero() {
 		elapsed := formatActivityDuration(time.Since(m.queryStartTime))
 		if elapsed != "" {
-			hint = fmt.Sprintf("%s • esc to interrupt", elapsed)
+			hint = fmt.Sprintf("%s • Enter follow-up • Shift+Enter or /s steer • esc interrupt", elapsed)
 		}
 	}
 	return "  " + uiDimText.Render(spinner+" Working ("+hint+")")

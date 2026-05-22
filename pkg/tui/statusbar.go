@@ -188,7 +188,7 @@ func (r *goTUIRoot) activityLine() (string, bool) {
 		if activity := r.model.renderActivityLine(); strings.TrimSpace(stripANSIForGoTUI(activity)) != "" {
 			return strings.TrimSpace(stripANSIForGoTUI(activity)), true
 		}
-		return "Working (esc to interrupt)", true
+		return "Working (Enter follow-up, Shift+Enter or /s steer, esc interrupt)", true
 	}
 	if activity := r.model.effectiveLastActivity(time.Now()); strings.TrimSpace(stripANSIForGoTUI(activity)) != "" {
 		return strings.TrimSpace(stripANSIForGoTUI(activity)), true

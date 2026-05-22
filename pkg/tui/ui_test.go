@@ -645,6 +645,22 @@ func TestActivityLinePersistsCompletedTurn(t *testing.T) {
 	}
 }
 
+func TestActivityLineShowsRunningQueueHints(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+	root.model.state = uiStateQuerying
+
+	got, ok := root.activityLine()
+	if !ok {
+		t.Fatal("expected running activity line")
+	}
+	got = uiANSIPattern.ReplaceAllString(got, "")
+	for _, want := range []string{"Enter follow-up", "Shift+Enter or /s steer", "esc interrupt"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected activity line to contain %q, got %q", want, got)
+		}
+	}
+}
+
 func TestTransientStatusExpiresToIdleLine(t *testing.T) {
 	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 	root.model.setTransientStatus("saved")
@@ -1346,6 +1362,24 @@ func TestShiftEnterWhileQueryingQueuesSteerAndCancels(t *testing.T) {
 	}
 	if len(root.model.blocks) == 0 || root.model.blocks[len(root.model.blocks)-1].Source != "steer" {
 		t.Fatalf("expected steer user block, got %#v", root.model.blocks)
+	}
+}
+
+func TestEmptyShiftEnterWhileQueryingShowsSteerMessage(t *testing.T) {
+	session := newUITestSession(t)
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, nil)
+	root.model.queryActive = true
+	root.model.state = uiStateQuerying
+
+	if !dispatchFirstGoTUIKey(root.KeyMap(), gotui.KeyEvent{Key: gotui.KeyEnter, Mod: gotui.ModShift}) {
+		t.Fatal("expected Shift+Enter binding")
+	}
+
+	if got := session.GetAgent().QueuedMessageCount(); got != 0 {
+		t.Fatalf("expected no queued messages for empty steer, got %d", got)
+	}
+	if root.model.statusMsg != "steer requires a message" {
+		t.Fatalf("expected empty steer status, got %q", root.model.statusMsg)
 	}
 }
 

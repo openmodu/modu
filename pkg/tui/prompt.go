@@ -33,6 +33,10 @@ const (
 func (r *goTUIRoot) submitWithMode(text string, mode submitMode) {
 	line := strings.TrimSpace(text)
 	if line == "" {
+		if mode == submitModeSteer && r.model.queryActive {
+			r.model.setTransientStatus("steer requires a message")
+			r.bump()
+		}
 		return
 	}
 	r.draft.Set("")
