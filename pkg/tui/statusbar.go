@@ -101,6 +101,9 @@ func (r *goTUIRoot) bottomLine() (string, gotui.Style) {
 		return "! " + r.model.errMsg, gotui.NewStyle().Foreground(gotui.Red)
 	}
 	if status := r.model.effectiveStatusMsg(time.Now()); status != "" && status != "thinking" {
+		if queue := r.queueStatusLine(); queue != "" {
+			status += "  |  " + queue
+		}
 		return status, gotui.NewStyle().Dim()
 	}
 	style := gotui.NewStyle().Dim()
@@ -141,7 +144,28 @@ func (r *goTUIRoot) sessionStatusParts() []string {
 	if r.session.ActiveWorktree() != "" {
 		parts = append(parts, "worktree")
 	}
+	if queue := r.queueStatusLine(); queue != "" {
+		parts = append(parts, queue)
+	}
 	return parts
+}
+
+func (r *goTUIRoot) queueStatusLine() string {
+	if r.session == nil || r.session.GetAgent() == nil {
+		return ""
+	}
+	steering, followUp := r.session.GetAgent().QueuedMessageCounts()
+	var parts []string
+	if steering > 0 {
+		parts = append(parts, fmt.Sprintf("steer %d", steering))
+	}
+	if followUp > 0 {
+		parts = append(parts, fmt.Sprintf("follow-up %d", followUp))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, " ")
 }
 
 func (r *goTUIRoot) currentModelForStatus() *types.Model {

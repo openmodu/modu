@@ -270,6 +270,12 @@ func (a *Agent) QueuedMessageCount() int {
 	return len(a.steeringQueue) + len(a.followUpQueue)
 }
 
+func (a *Agent) QueuedMessageCounts() (steering, followUp int) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return len(a.steeringQueue), len(a.followUpQueue)
+}
+
 func (a *Agent) Abort() {
 	a.mu.Lock()
 	defer a.mu.Unlock()

@@ -298,6 +298,21 @@ func TestAgentModeGetters(t *testing.T) {
 	}
 }
 
+func TestAgentQueuedMessageCounts(t *testing.T) {
+	agent := NewAgent(AgentConfig{})
+	agent.Steer(types.UserMessage{Role: "user", Content: "change direction"})
+	agent.FollowUp(types.UserMessage{Role: "user", Content: "after this"})
+	agent.FollowUp(types.UserMessage{Role: "user", Content: "then this"})
+
+	steering, followUp := agent.QueuedMessageCounts()
+	if steering != 1 || followUp != 2 {
+		t.Fatalf("expected steering=1 followUp=2, got steering=%d followUp=%d", steering, followUp)
+	}
+	if got := agent.QueuedMessageCount(); got != 3 {
+		t.Fatalf("expected total queued count 3, got %d", got)
+	}
+}
+
 func TestAgentSessionIDGetterSetter(t *testing.T) {
 	agent := NewAgent(AgentConfig{SessionID: "initial"})
 	if agent.GetSessionID() != "initial" {

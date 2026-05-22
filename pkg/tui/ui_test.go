@@ -1180,6 +1180,30 @@ func TestBottomLineShowsSessionStatusWhenIdle(t *testing.T) {
 	}
 }
 
+func TestBottomLineShowsQueuedMessageCounts(t *testing.T) {
+	session := newUITestSession(t)
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, nil)
+
+	session.Steer("change direction")
+	session.FollowUp("after this")
+	session.FollowUp("then this")
+
+	line, _ := root.bottomLine()
+	for _, want := range []string{"steer 1", "follow-up 2"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("expected bottom line to contain %q, got %q", want, line)
+		}
+	}
+
+	root.model.setStatus("queued follow-up")
+	line, _ = root.bottomLine()
+	for _, want := range []string{"queued follow-up", "steer 1", "follow-up 2"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("expected status line to contain %q, got %q", want, line)
+		}
+	}
+}
+
 func TestHotkeyHelpIncludesSelectorAndResourceCommands(t *testing.T) {
 	text := hotkeyHelpText()
 	for _, want := range []string{
