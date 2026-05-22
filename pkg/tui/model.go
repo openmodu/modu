@@ -34,16 +34,17 @@ const (
 // ─── Display blocks ──────────────────────────────
 
 type uiBlock struct {
-	Kind      string
-	Title     string
-	Content   string
-	Source    string
-	RawText   string
-	Thinking  string
-	Streaming bool // true while LLM is still streaming this block; skip glamour render
-	Tools     []*uiToolState
-	Timestamp time.Time
-	pushed    bool // set after being pushed to terminal scrollback; prevents double-push
+	Kind       string
+	Title      string
+	Content    string
+	Source     string
+	QueueState string
+	RawText    string
+	Thinking   string
+	Streaming  bool // true while LLM is still streaming this block; skip glamour render
+	Tools      []*uiToolState
+	Timestamp  time.Time
+	pushed     bool // set after being pushed to terminal scrollback; prevents double-push
 }
 
 type uiToolState struct {

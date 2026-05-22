@@ -211,7 +211,7 @@ func (r *goTUIRoot) queueSteer(line string) {
 }
 
 func (r *goTUIRoot) appendQueuedUserBlock(source, content string) {
-	block := uiBlock{Kind: "user", Content: content, Source: source, Timestamp: time.Now()}
+	block := uiBlock{Kind: "user", Content: content, Source: source, QueueState: "queued", Timestamp: time.Now()}
 	r.model.appendBlock(block)
 	r.pushBlockAbove(block)
 }
@@ -440,6 +440,7 @@ func (r *goTUIRoot) continueQueuedPrompt() bool {
 	if ag == nil || !ag.HasQueuedMessages() {
 		return false
 	}
+	r.markNextQueuedUserBlockRunning()
 	r.runPromptOperation("", func(ctx context.Context) error {
 		return ag.Continue(ctx)
 	})
@@ -454,6 +455,9 @@ func (r *goTUIRoot) finishPromptOperation(err error, failedPrompt string) {
 		r.session.GetAgent().HasQueuedMessages() &&
 		(err == nil || steeringCancel)
 	r.continueQueuedAfterCancel = false
+	if shouldContinue {
+		r.markRunningQueuedUserBlock("done")
+	}
 	if shouldContinue && r.continueQueuedPrompt() {
 		return
 	}
@@ -470,6 +474,7 @@ func (r *goTUIRoot) finishPromptOperation(err error, failedPrompt string) {
 	if steeringCancel {
 		finishErr = nil
 	}
+	r.markRunningQueuedUserBlock(queueStateForPromptError(err, steeringCancel))
 	r.model.finishActivity(finishErr)
 	r.model.queryActive = false
 	if r.model.statusMsg != "interrupted" {
@@ -477,6 +482,52 @@ func (r *goTUIRoot) finishPromptOperation(err error, failedPrompt string) {
 	}
 	r.model.state = uiStateInput
 	r.bump()
+}
+
+func queueStateForPromptError(err error, steeringCancel bool) string {
+	if err == nil || steeringCancel {
+		return "done"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "interrupted"
+	}
+	return "failed"
+}
+
+func (r *goTUIRoot) markNextQueuedUserBlockRunning() {
+	if r.session == nil || r.session.GetAgent() == nil {
+		return
+	}
+	steering, followUp := r.session.GetAgent().QueuedMessageCounts()
+	source := ""
+	switch {
+	case steering > 0:
+		source = "steer"
+	case followUp > 0:
+		source = "followup"
+	default:
+		return
+	}
+	for i := range r.model.blocks {
+		block := &r.model.blocks[i]
+		if block.Kind == "user" && block.Source == source && block.QueueState == "queued" {
+			block.QueueState = "running"
+			return
+		}
+	}
+}
+
+func (r *goTUIRoot) markRunningQueuedUserBlock(state string) {
+	if state == "" {
+		return
+	}
+	for i := len(r.model.blocks) - 1; i >= 0; i-- {
+		block := &r.model.blocks[i]
+		if block.Kind == "user" && (block.Source == "steer" || block.Source == "followup") && block.QueueState == "running" {
+			block.QueueState = state
+			return
+		}
+	}
 }
 
 func (r *goTUIRoot) retryLastFailedPrompt() {

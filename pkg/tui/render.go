@@ -143,6 +143,10 @@ func renderUIUserBlock(content string, width int) string {
 }
 
 func renderUIUserBlockWithSource(content, source string, width int) string {
+	return renderUIUserBlockWithQueueState(content, source, "", width)
+}
+
+func renderUIUserBlockWithQueueState(content, source, queueState string, width int) string {
 	var b strings.Builder
 	glyph := "❯ "
 	style := uiUserPrompt
@@ -157,9 +161,11 @@ func renderUIUserBlockWithSource(content, source string, width int) string {
 		glyph = "◆ "
 		style = uiExternalUserPrompt
 	}
+	prefix := queueStatePrefix(queueState)
 	glyphW := lipgloss.Width(glyph)
+	leadW := glyphW + lipgloss.Width(prefix)
 	// uiUserPrompt has no padding; only the two-cell ❯-glyph eats inline width.
-	avail := max(8, width-glyphW)
+	avail := max(8, width-leadW)
 	first := true
 	for _, rawLine := range strings.Split(strings.TrimRight(content, "\n"), "\n") {
 		if strings.TrimSpace(rawLine) == "" {
@@ -167,15 +173,32 @@ func renderUIUserBlockWithSource(content, source string, width int) string {
 			continue
 		}
 		for _, seg := range wrapSegments(rawLine, avail) {
-			lead := "  "
+			lead := strings.Repeat(" ", leadW)
 			if first {
-				lead = glyph
+				lead = glyph + prefix
 				first = false
 			}
 			b.WriteString(blockIndent + style.Render(lead+seg) + "\n")
 		}
 	}
 	return b.String()
+}
+
+func queueStatePrefix(queueState string) string {
+	switch strings.TrimSpace(queueState) {
+	case "queued":
+		return "[queued] "
+	case "running":
+		return "[running] "
+	case "done":
+		return "[done] "
+	case "failed":
+		return "[failed] "
+	case "interrupted":
+		return "[interrupted] "
+	default:
+		return ""
+	}
 }
 
 func renderUIAssistantBlock(content string, width int) string {
@@ -498,7 +521,7 @@ func (m *uiModel) renderSingleBlock(block uiBlock) string {
 	var s string
 	switch block.Kind {
 	case "user":
-		s = renderUIUserBlockWithSource(block.Content, block.Source, viewWidth)
+		s = renderUIUserBlockWithQueueState(block.Content, block.Source, block.QueueState, viewWidth)
 	case "assistant":
 		var ab strings.Builder
 		if block.Thinking != "" {

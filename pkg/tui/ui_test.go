@@ -376,6 +376,14 @@ func TestUIUserBlockUsesPromptBackground(t *testing.T) {
 	if !strings.Contains(steer, "↯ steer prompt") {
 		t.Fatalf("expected steer prompt marker, got %q", steer)
 	}
+	queued := ansiPattern.ReplaceAllString(renderUIUserBlockWithQueueState("queued prompt", "followup", "queued", 80), "")
+	if !strings.Contains(queued, "↳ [queued] queued prompt") {
+		t.Fatalf("expected queued lifecycle marker, got %q", queued)
+	}
+	running := ansiPattern.ReplaceAllString(renderUIUserBlockWithQueueState("steer prompt", "steer", "running", 80), "")
+	if !strings.Contains(running, "↯ [running] steer prompt") {
+		t.Fatalf("expected running lifecycle marker, got %q", running)
+	}
 	if bg := uiExternalUserPrompt.GetBackground(); bg == nil {
 		t.Fatalf("expected external user prompt background style, got nil")
 	}
@@ -1624,6 +1632,43 @@ func TestQueueCommandRejectsUnknownArgs(t *testing.T) {
 	root.runQueueCommand("wat")
 	if !strings.Contains(root.model.statusMsg, "usage: /queue") {
 		t.Fatalf("expected queue usage status, got %q", root.model.statusMsg)
+	}
+}
+
+func TestQueuedUserBlockLifecyclePrefersSteerThenCompletes(t *testing.T) {
+	session := newUITestSession(t)
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, nil)
+	root.appendQueuedUserBlock("followup", "after this")
+	root.appendQueuedUserBlock("steer", "change direction")
+	session.FollowUp("after this")
+	session.Steer("change direction")
+
+	root.markNextQueuedUserBlockRunning()
+	if got := root.model.blocks[0].QueueState; got != "queued" {
+		t.Fatalf("expected follow-up to remain queued, got %q", got)
+	}
+	if got := root.model.blocks[1].QueueState; got != "running" {
+		t.Fatalf("expected steer to run first, got %q", got)
+	}
+
+	root.markRunningQueuedUserBlock("done")
+	if got := root.model.blocks[1].QueueState; got != "done" {
+		t.Fatalf("expected running steer to complete, got %q", got)
+	}
+}
+
+func TestQueueStateForPromptError(t *testing.T) {
+	if got := queueStateForPromptError(nil, false); got != "done" {
+		t.Fatalf("expected nil error to mark done, got %q", got)
+	}
+	if got := queueStateForPromptError(context.Canceled, false); got != "interrupted" {
+		t.Fatalf("expected canceled error to mark interrupted, got %q", got)
+	}
+	if got := queueStateForPromptError(errors.New("boom"), false); got != "failed" {
+		t.Fatalf("expected regular error to mark failed, got %q", got)
+	}
+	if got := queueStateForPromptError(context.Canceled, true); got != "done" {
+		t.Fatalf("expected steering cancel to mark done, got %q", got)
 	}
 }
 
