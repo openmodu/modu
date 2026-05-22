@@ -87,6 +87,18 @@ go run ./cmd/modu_code config validate
 
 ---
 
+## Telegram
+
+配置 `MOMS_TG_TOKEN` 或 `~/.coding_agent/channels/telegram/config.json` 后，`modu_code` 会启动共享当前 session 的 Telegram bot。Telegram 和 TUI 共用同一个 steer / follow-up 队列：
+
+| Telegram 输入 | 任务空闲时 | 任务运行中 |
+|------|------|------|
+| 普通消息 | 作为新 prompt 执行 | 加入 follow-up 队列 |
+| `/followup <message>` / `/f <message>` | 提示当前没有 active task | 加入 follow-up 队列 |
+| `/steer <message>` / `/s <message>` | 提示当前没有 active task | 加入 steer 队列并中断当前轮 |
+
+---
+
 ## 斜杠命令
 
 | 命令 | 说明 |

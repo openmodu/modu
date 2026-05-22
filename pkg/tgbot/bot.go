@@ -2,6 +2,7 @@ package tgbot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -34,13 +35,18 @@ func Start(
 	approvalCh chan approval.Request,
 ) (string, error) {
 	var bot *telegram.Bot
+	active := &activeTelegramPrompt{}
 
 	handler := func(hCtx context.Context, chCtx channels.ChannelContext) {
 		sender := chCtx.SenderName()
-		text := chCtx.MessageText()
+		text := strings.TrimSpace(chCtx.MessageText())
 
 		renderer.ClearLine()
 		renderer.PrintUser(fmt.Sprintf("← telegram · %s: %s", sender, text))
+
+		if handleTelegramQueuedInput(chCtx, session, active, text) {
+			return
+		}
 
 		_ = chCtx.SetWorking(true)
 
@@ -201,7 +207,7 @@ func Start(
 			defer session.SetToolApprovalCallback(tuiApprovalFn)
 		}
 
-		if err := session.Prompt(hCtx, text); err != nil && hCtx.Err() == nil {
+		if err := runTelegramPromptTurns(hCtx, session, text, active); err != nil && hCtx.Err() == nil {
 			_ = chCtx.RespondInThread(fmt.Sprintf("Error: %v", err))
 		}
 	}
@@ -221,4 +227,143 @@ func Start(
 	}()
 
 	return bot.Username(), nil
+}
+
+type activeTelegramPrompt struct {
+	mu     sync.Mutex
+	cancel context.CancelFunc
+	token  uint64
+}
+
+func (a *activeTelegramPrompt) Set(cancel context.CancelFunc) uint64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.token++
+	a.cancel = cancel
+	return a.token
+}
+
+func (a *activeTelegramPrompt) Clear(token uint64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.token == token {
+		a.cancel = nil
+	}
+}
+
+func (a *activeTelegramPrompt) Active() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.cancel != nil
+}
+
+func (a *activeTelegramPrompt) Cancel() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.cancel == nil {
+		return false
+	}
+	a.cancel()
+	return true
+}
+
+func handleTelegramQueuedInput(chCtx channels.ChannelContext, session *coding_agent.CodingSession, active *activeTelegramPrompt, text string) bool {
+	if session == nil || text == "" {
+		return false
+	}
+	if arg, ok := telegramQueueCommandArg(text, "/steer", "/s"); ok {
+		if arg == "" {
+			_ = chCtx.RespondInThread("steer requires a message")
+			return true
+		}
+		if !telegramTaskActive(session, active) {
+			_ = chCtx.RespondInThread("no active task to steer")
+			return true
+		}
+		session.Steer(arg)
+		active.Cancel()
+		session.Abort()
+		session.AbortBash()
+		_ = chCtx.RespondInThread("queued steer")
+		return true
+	}
+	if arg, ok := telegramQueueCommandArg(text, "/followup", "/f"); ok {
+		if arg == "" {
+			_ = chCtx.RespondInThread("follow up requires a message")
+			return true
+		}
+		if !telegramTaskActive(session, active) {
+			_ = chCtx.RespondInThread("no active task for follow up")
+			return true
+		}
+		session.FollowUp(arg)
+		_ = chCtx.RespondInThread("queued follow up")
+		return true
+	}
+	if telegramTaskActive(session, active) {
+		session.FollowUp(text)
+		_ = chCtx.RespondInThread("queued follow up")
+		return true
+	}
+	return false
+}
+
+func telegramQueueCommandArg(line string, names ...string) (string, bool) {
+	for _, name := range names {
+		if line == name {
+			return "", true
+		}
+		if strings.HasPrefix(line, name+" ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, name)), true
+		}
+	}
+	return "", false
+}
+
+func telegramTaskActive(session *coding_agent.CodingSession, active *activeTelegramPrompt) bool {
+	if active != nil && active.Active() {
+		return true
+	}
+	if session == nil || session.GetAgent() == nil {
+		return false
+	}
+	return session.GetAgent().GetState().IsStreaming
+}
+
+func runTelegramPromptTurns(parent context.Context, session *coding_agent.CodingSession, text string, active *activeTelegramPrompt) error {
+	err := runTelegramTurn(parent, active, func(ctx context.Context) error {
+		return session.Prompt(ctx, text)
+	})
+	if err != nil && !shouldContinueTelegramQueue(parent, session, err) {
+		return err
+	}
+	for parent.Err() == nil && session.GetAgent() != nil && session.GetAgent().HasQueuedMessages() {
+		err = runTelegramTurn(parent, active, func(ctx context.Context) error {
+			return session.GetAgent().Continue(ctx)
+		})
+		if err != nil && !shouldContinueTelegramQueue(parent, session, err) {
+			return err
+		}
+	}
+	if parent.Err() != nil {
+		return parent.Err()
+	}
+	return nil
+}
+
+func runTelegramTurn(parent context.Context, active *activeTelegramPrompt, run func(context.Context) error) error {
+	ctx, cancel := context.WithCancel(parent)
+	if active != nil {
+		token := active.Set(cancel)
+		defer active.Clear(token)
+	}
+	defer cancel()
+	return run(ctx)
+}
+
+func shouldContinueTelegramQueue(parent context.Context, session *coding_agent.CodingSession, err error) bool {
+	if parent.Err() != nil || !errors.Is(err, context.Canceled) {
+		return false
+	}
+	return session != nil && session.GetAgent() != nil && session.GetAgent().HasQueuedMessages()
 }

@@ -68,6 +68,9 @@ enough to implement, verify, and commit independently.
   short aliases when Shift+Enter is not distinguishable from Enter.
 - Added `/queue` to inspect pending steer/follow-up messages, clear all or one
   queue type, and drop the last pending message after accidental input.
+- Telegram input now mirrors the TUI queue semantics: plain messages become
+  follow-ups while a task is active, `/f` queues explicitly, and `/s` steers and
+  cancels the current Telegram-driven turn so queued work can continue.
 
 ## Next
 
