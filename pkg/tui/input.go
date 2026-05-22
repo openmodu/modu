@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"unicode"
+
 	gotui "github.com/grindlemire/go-tui"
 )
 
@@ -308,10 +310,10 @@ func (r *goTUIRoot) renderInput(width int) *gotui.Element {
 		gotui.WithFlexShrink(0),
 	)
 
-	// EOL cursor uses U+2588 FULL BLOCK rather than a reverse-styled space —
+	// Space cursors use U+2588 FULL BLOCK rather than a reverse-styled space —
 	// go-tui's flex renderer skips elements whose text is only whitespace
-	// (Reverse / Background attrs are never written to the cell), so an
-	// empty-input box would otherwise have no visible cursor.
+	// (Reverse / Background attrs are never written to the cell), so empty
+	// input and cursor-on-space positions would otherwise be invisible.
 	eolCursor := func() *gotui.Element {
 		return gotui.New(
 			gotui.WithText("█"),
@@ -361,11 +363,16 @@ func (r *goTUIRoot) renderInput(width int) *gotui.Element {
 		))
 		for i := rng.Start; i < rng.End; i++ {
 			charStyle := gotui.NewStyle()
+			text := string(rs[i])
 			if i == r.cursor {
-				charStyle = gotui.NewStyle().Reverse()
+				if unicode.IsSpace(rs[i]) {
+					text = "█"
+				} else {
+					charStyle = gotui.NewStyle().Reverse()
+				}
 			}
 			line.AddChild(gotui.New(
-				gotui.WithText(string(rs[i])),
+				gotui.WithText(text),
 				gotui.WithTextStyle(charStyle),
 				gotui.WithFlexShrink(0),
 			))

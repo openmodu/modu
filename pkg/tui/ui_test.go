@@ -186,6 +186,17 @@ func TestGoTUIInputRendersChineseCursorWithoutInsertedGlyph(t *testing.T) {
 	}
 }
 
+func TestGoTUIInputRendersCursorOnSpace(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+	root.draft.Set("a b")
+	root.cursor = 1
+
+	got := collectGoTUIText(root.renderInput(80))
+	if !strings.Contains(got, "a█b") {
+		t.Fatalf("expected visible block cursor on space, got %q", got)
+	}
+}
+
 func TestGoTUIInputClipsLongMultilineDraftAroundCursor(t *testing.T) {
 	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
 	root.draft.Set("one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve")
