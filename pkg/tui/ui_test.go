@@ -105,7 +105,7 @@ func TestApprovalWidgetShowsLayeredToolDetails(t *testing.T) {
 	}
 
 	text := collectGoTUIText(root.renderApprovalWidget())
-	for _, want := range []string{"Permission required", "tool: bash", "go test ./pkg/tui", "actions:", "[Y]es", "[D]eny always"} {
+	for _, want := range []string{"Permission required", "tool: bash", "go test ./pkg/tui", "actions:", "[Y]es", "[A]llow this command", "[D]eny this command"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected approval widget to contain %q, got %q", want, text)
 		}

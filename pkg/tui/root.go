@@ -395,8 +395,8 @@ func (r *goTUIRoot) KeyMap() gotui.KeyMap {
 
 // ─── Render ──────────────────────────────────────────────────────────────────
 
-// Render builds the inline widget. Two layouts:
-//   - Permission mode: sep / approval-dialog / sep / meta
+// Render builds the inline widget. Layouts:
+//   - Permission mode: sep / approval-dialog / sep / input / sep / status / meta
 //   - Model select   : sep / model-picker / sep / meta
 //   - Session select : sep / session-picker / sep / meta
 //   - Settings select: sep / settings / sep / meta
@@ -444,6 +444,14 @@ func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 		))
 		return true
 	}
+	addBottom := func(root *gotui.Element) {
+		bottomText, bottomStyle := r.bottomLine()
+		root.AddChild(gotui.New(
+			gotui.WithText(bottomText),
+			gotui.WithTextStyle(bottomStyle),
+			gotui.WithFlexShrink(0),
+		))
+	}
 
 	root := gotui.New(
 		gotui.WithDisplay(gotui.DisplayFlex),
@@ -466,16 +474,25 @@ func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 	}
 
 	if r.model.pendingPerm != nil {
-		// Permission mode replaces the input area with the approval dialog.
-		neededH := 4 // sep + tool + hints + sep
+		// Permission mode keeps the input visible and shows the approval panel
+		// above it, so approval does not feel like it hijacks the prompt box.
+		draftLines := inputVisibleRows(r.draft.Get())
+		neededH := draftLines + 6 // sep + approval + sep + input + sep + status
+		if _, ok := r.activityLine(); ok {
+			neededH++
+		}
 		if meta != "" {
 			neededH++
 		}
 		// Never shrink the widget at runtime — see commitInlineHeight.
 		r.commitInlineHeight(app, neededH)
+		addActivity(root)
 		addSep(root)
 		root.AddChild(r.renderApprovalWidget())
 		addSep(root)
+		root.AddChild(r.renderInput(width))
+		addSep(root)
+		addBottom(root)
 		addMeta(root)
 		return root
 	}
@@ -639,12 +656,7 @@ func (r *goTUIRoot) Render(app *gotui.App) *gotui.Element {
 			root.AddChild(row)
 		}
 	} else {
-		bottomText, bottomStyle := r.bottomLine()
-		root.AddChild(gotui.New(
-			gotui.WithText(bottomText),
-			gotui.WithTextStyle(bottomStyle),
-			gotui.WithFlexShrink(0),
-		))
+		addBottom(root)
 	}
 	addMeta(root)
 	return root

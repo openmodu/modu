@@ -84,6 +84,7 @@ High-priority gaps identified before this round:
 - Added unified runtime state snapshots under `runtime/<project>/state.json`.
 - Added top-level feature gates for core runtime capabilities such as memory, todos, task output, plan mode, worktree mode, subagents, and harness actions.
 - Added top-level permission rules for tool allow/deny and bash command prefix allow/deny.
+- Scoped interactive bash always-allow/deny approvals to the exact command, and made dangerous bash writes bypass broad allow rules before execution.
 - Extended harness events and outputs with `session` and `permission` categories.
 - Added a dashboard view in `cmd/modu_code` that summarizes runtime state, latest events, and action statuses.
 - Added subagent frontmatter support for `harness_block_tools` and merged it into effective tool blocking.

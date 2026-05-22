@@ -416,6 +416,7 @@ session, _ := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
 - `permissions`
   - 统一配置工具权限规则
   - 支持 `allowTools`、`denyTools`、`allowBashPrefixes`、`denyBashPrefixes`
+  - 危险 bash 写操作会绕过宽授权并强制走交互审批；交互审批里的 bash “always” 只记忆同一条命令
 - `blockTools`
   - 在工具执行前直接阻断指定工具
 - `captureHints`

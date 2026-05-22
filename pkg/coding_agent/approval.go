@@ -9,15 +9,18 @@ import (
 )
 
 // ApprovalManager manages tool execution permissions.
-// It remembers always-allow and always-deny decisions per tool name,
-// and delegates unknown tools to the configured callback.
+// It remembers always-allow and always-deny decisions per tool name. Interactive
+// "always" decisions for bash are scoped to the exact command so approving a
+// safe command does not silently approve a later dangerous one.
 type ApprovalManager struct {
-	mu          sync.RWMutex
-	alwaysAllow map[string]bool
-	alwaysDeny  map[string]bool
-	rules       PermissionConfig
-	observer    ApprovalObserver
-	blocker     func(toolName string, args map[string]any) (bool, string)
+	mu              sync.RWMutex
+	alwaysAllow     map[string]bool
+	alwaysDeny      map[string]bool
+	alwaysAllowBash map[string]bool
+	alwaysDenyBash  map[string]bool
+	rules           PermissionConfig
+	observer        ApprovalObserver
+	blocker         func(toolName string, args map[string]any) (bool, string)
 	// callback is called when no cached decision exists.
 	// If nil, all tools are auto-approved.
 	callback func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error)
@@ -31,8 +34,10 @@ type ApprovalObserver interface {
 // NewApprovalManager creates an ApprovalManager with no cached rules.
 func NewApprovalManager() *ApprovalManager {
 	return &ApprovalManager{
-		alwaysAllow: make(map[string]bool),
-		alwaysDeny:  make(map[string]bool),
+		alwaysAllow:     make(map[string]bool),
+		alwaysDeny:      make(map[string]bool),
+		alwaysAllowBash: make(map[string]bool),
+		alwaysDenyBash:  make(map[string]bool),
 	}
 }
 
@@ -86,25 +91,43 @@ func (m *ApprovalManager) Approve(toolName, toolCallID string, args map[string]a
 		}
 	}
 
+	bashCommand := approvalBashCommand(toolName, args)
+	bashNeedsApproval := isDangerousBashCommand(bashCommand)
+
 	m.mu.RLock()
-	if m.alwaysAllow[toolName] {
+	if bashCommand != "" && m.alwaysDenyBash[bashCommand] {
 		m.mu.RUnlock()
-		return agent.ToolApprovalAllow, nil
+		return agent.ToolApprovalDeny, nil
 	}
 	if m.alwaysDeny[toolName] {
 		m.mu.RUnlock()
 		return agent.ToolApprovalDeny, nil
 	}
+	bashAllowed := bashCommand != "" && m.alwaysAllowBash[bashCommand]
+	toolAllowed := !bashNeedsApproval && m.alwaysAllow[toolName]
 	cb := m.callback
 	rules := m.rules
 	observer = m.observer
 	m.mu.RUnlock()
 
-	if decision, reason, ok := evaluatePermissionRules(rules, toolName, args); ok {
+	if decision, reason, ok := evaluateDenyPermissionRules(rules, toolName, args); ok {
 		if !decision.IsAllow() && observer != nil {
 			observer.OnPermissionDenied(toolName, toolCallID, args, reason)
 		}
 		return decision, nil
+	}
+
+	if bashAllowed || toolAllowed {
+		return agent.ToolApprovalAllow, nil
+	}
+
+	if !bashNeedsApproval {
+		if decision, reason, ok := evaluateAllowPermissionRules(rules, toolName, args); ok {
+			if !decision.IsAllow() && observer != nil {
+				observer.OnPermissionDenied(toolName, toolCallID, args, reason)
+			}
+			return decision, nil
+		}
 	}
 
 	if cb == nil {
@@ -125,8 +148,19 @@ func (m *ApprovalManager) Approve(toolName, toolCallID string, args map[string]a
 		observer.OnPermissionDenied(toolName, toolCallID, args, string(decision))
 	}
 
-	// Persist always decisions
-	if decision == agent.ToolApprovalAllowAlways {
+	// Persist always decisions. Interactive bash decisions are intentionally
+	// command-scoped; programmatic AllowAlways("bash") remains tool-wide.
+	if bashCommand != "" && decision == agent.ToolApprovalAllowAlways {
+		m.mu.Lock()
+		m.alwaysAllowBash[bashCommand] = true
+		delete(m.alwaysDenyBash, bashCommand)
+		m.mu.Unlock()
+	} else if bashCommand != "" && decision == agent.ToolApprovalDenyAlways {
+		m.mu.Lock()
+		m.alwaysDenyBash[bashCommand] = true
+		delete(m.alwaysAllowBash, bashCommand)
+		m.mu.Unlock()
+	} else if decision == agent.ToolApprovalAllowAlways {
 		m.mu.Lock()
 		m.alwaysAllow[toolName] = true
 		m.mu.Unlock()
@@ -139,22 +173,16 @@ func (m *ApprovalManager) Approve(toolName, toolCallID string, args map[string]a
 	return decision, nil
 }
 
-func evaluatePermissionRules(rules PermissionConfig, toolName string, args map[string]any) (agent.ToolApprovalDecision, string, bool) {
+func evaluateDenyPermissionRules(rules PermissionConfig, toolName string, args map[string]any) (agent.ToolApprovalDecision, string, bool) {
 	for _, denied := range rules.DenyTools {
 		if strings.TrimSpace(denied) == toolName {
 			return agent.ToolApprovalDeny, "denied by permission rules", true
 		}
 	}
-	for _, allowed := range rules.AllowTools {
-		if strings.TrimSpace(allowed) == toolName {
-			return agent.ToolApprovalAllow, "", true
-		}
-	}
 	if toolName != "bash" {
 		return "", "", false
 	}
-	command, _ := args["command"].(string)
-	command = strings.TrimSpace(command)
+	command := approvalBashCommand(toolName, args)
 	if command == "" {
 		return "", "", false
 	}
@@ -162,6 +190,25 @@ func evaluatePermissionRules(rules PermissionConfig, toolName string, args map[s
 		if denied = strings.TrimSpace(denied); denied != "" && strings.HasPrefix(command, denied) {
 			return agent.ToolApprovalDeny, "bash command denied by permission rules", true
 		}
+	}
+	return "", "", false
+}
+
+func evaluateAllowPermissionRules(rules PermissionConfig, toolName string, args map[string]any) (agent.ToolApprovalDecision, string, bool) {
+	for _, allowed := range rules.AllowTools {
+		if strings.TrimSpace(allowed) == toolName {
+			return agent.ToolApprovalAllow, "", true
+		}
+	}
+	if isAutoAllowedReadOnlyTool(toolName) {
+		return agent.ToolApprovalAllow, "", true
+	}
+	if toolName != "bash" {
+		return "", "", false
+	}
+	command := approvalBashCommand(toolName, args)
+	if command == "" {
+		return "", "", false
 	}
 	if len(rules.AllowBashPrefixes) > 0 {
 		for _, allowed := range rules.AllowBashPrefixes {
@@ -171,7 +218,24 @@ func evaluatePermissionRules(rules PermissionConfig, toolName string, args map[s
 		}
 		return agent.ToolApprovalDeny, "bash command not allowed by permission rules", true
 	}
-	return "", "", false
+	return agent.ToolApprovalAllow, "", true
+}
+
+func isAutoAllowedReadOnlyTool(toolName string) bool {
+	switch toolName {
+	case "read", "grep", "find", "ls":
+		return true
+	default:
+		return false
+	}
+}
+
+func approvalBashCommand(toolName string, args map[string]any) string {
+	if toolName != "bash" {
+		return ""
+	}
+	command, _ := args["command"].(string)
+	return strings.TrimSpace(command)
 }
 
 // AllowAlways marks a tool as always allowed.
@@ -180,6 +244,10 @@ func (m *ApprovalManager) AllowAlways(toolName string) {
 	defer m.mu.Unlock()
 	m.alwaysAllow[toolName] = true
 	delete(m.alwaysDeny, toolName)
+	if toolName == "bash" {
+		m.alwaysAllowBash = make(map[string]bool)
+		m.alwaysDenyBash = make(map[string]bool)
+	}
 }
 
 // DenyAlways marks a tool as always denied.
@@ -188,6 +256,10 @@ func (m *ApprovalManager) DenyAlways(toolName string) {
 	defer m.mu.Unlock()
 	m.alwaysDeny[toolName] = true
 	delete(m.alwaysAllow, toolName)
+	if toolName == "bash" {
+		m.alwaysAllowBash = make(map[string]bool)
+		m.alwaysDenyBash = make(map[string]bool)
+	}
 }
 
 // ClearDecision removes any cached always-allow or always-deny decision for a tool,
@@ -197,6 +269,10 @@ func (m *ApprovalManager) ClearDecision(toolName string) {
 	defer m.mu.Unlock()
 	delete(m.alwaysAllow, toolName)
 	delete(m.alwaysDeny, toolName)
+	if toolName == "bash" {
+		m.alwaysAllowBash = make(map[string]bool)
+		m.alwaysDenyBash = make(map[string]bool)
+	}
 }
 
 // Reset clears all cached decisions and the callback.
@@ -205,6 +281,8 @@ func (m *ApprovalManager) Reset() {
 	defer m.mu.Unlock()
 	m.alwaysAllow = make(map[string]bool)
 	m.alwaysDeny = make(map[string]bool)
+	m.alwaysAllowBash = make(map[string]bool)
+	m.alwaysDenyBash = make(map[string]bool)
 	m.rules = PermissionConfig{}
 	m.observer = nil
 	m.callback = nil

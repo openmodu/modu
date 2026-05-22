@@ -265,9 +265,15 @@ func (r *goTUIRoot) renderApprovalWidget() *gotui.Element {
 	hintRow.AddChild(sp())
 	hintRow.AddChild(gotui.New(gotui.WithText("[N]o"), gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Red).Bold()), gotui.WithFlexShrink(0)))
 	hintRow.AddChild(sp())
-	hintRow.AddChild(gotui.New(gotui.WithText("[A]lways allow"), gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Yellow).Bold()), gotui.WithFlexShrink(0)))
+	allowLabel := "[A]lways allow"
+	denyLabel := "[D]eny always"
+	if perm.ToolName == "bash" {
+		allowLabel = "[A]llow this command"
+		denyLabel = "[D]eny this command"
+	}
+	hintRow.AddChild(gotui.New(gotui.WithText(allowLabel), gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Yellow).Bold()), gotui.WithFlexShrink(0)))
 	hintRow.AddChild(sp())
-	hintRow.AddChild(gotui.New(gotui.WithText("[D]eny always"), gotui.WithTextStyle(gotui.NewStyle().Dim()), gotui.WithFlexShrink(0)))
+	hintRow.AddChild(gotui.New(gotui.WithText(denyLabel), gotui.WithTextStyle(gotui.NewStyle().Dim()), gotui.WithFlexShrink(0)))
 	container.AddChild(hintRow)
 
 	return container
