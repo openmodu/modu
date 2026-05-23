@@ -18,6 +18,19 @@ import (
 // not stop the schedule from firing again.
 type Runner func(ctx context.Context, task config.Task) error
 
+// exprParser matches the parser used by cron.New(cron.WithSeconds()), so
+// ValidateCron rejects exactly what a real scheduler Add would reject.
+var exprParser = cron.NewParser(
+	cron.Second | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor,
+)
+
+// ValidateCron returns nil if expr is a legal 6-field cron expression for
+// this scheduler. Useful to validate user input before persisting it.
+func ValidateCron(expr string) error {
+	_, err := exprParser.Parse(expr)
+	return err
+}
+
 // Scheduler owns a cron.Cron and one runState per registered task.
 type Scheduler struct {
 	cron   *cron.Cron

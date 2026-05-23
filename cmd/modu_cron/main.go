@@ -5,9 +5,9 @@
 //	modu_cron daemon              run the scheduler loop
 //	modu_cron list                list configured tasks
 //	modu_cron logs <id> [flags]   inspect a task's run history
-//	modu_cron add                 [stub] add a task
+//	modu_cron add                 interactively add a task
+//	modu_cron rm   <id> [--yes]   remove a task
 //	modu_cron run  <id>           [stub] fire a task immediately
-//	modu_cron rm   <id>           [stub] remove a task
 //
 // Default config: ~/.modu_cron/config.yaml (override with -c).
 package main
@@ -17,6 +17,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+
+	"golang.org/x/term"
 
 	"github.com/openmodu/modu/cmd/modu_cron/internal/cli"
 	"github.com/openmodu/modu/cmd/modu_cron/internal/config"
@@ -47,7 +49,11 @@ func dispatch(cmd string, args []string, cfgPath string) error {
 		return cli.List(cfgPath, os.Stdout)
 	case "logs":
 		return runLogs(args)
-	case "add", "run", "rm":
+	case "add":
+		return cli.Add(cfgPath, os.Stdin, os.Stderr)
+	case "rm":
+		return runRm(args, cfgPath)
+	case "run":
 		return cli.NotImplemented(cmd)
 	case "help", "-h", "--help":
 		usage()
@@ -56,6 +62,32 @@ func dispatch(cmd string, args []string, cfgPath string) error {
 		usage()
 		return fmt.Errorf("unknown subcommand: %s", cmd)
 	}
+}
+
+func runRm(args []string, cfgPath string) error {
+	fs := flag.NewFlagSet("rm", flag.ContinueOnError)
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, `Usage:
+  modu_cron rm <task-id> [--yes]
+
+Without --yes, an interactive confirmation prompt is shown when stdin is
+a terminal; scripts running outside a TTY must pass --yes explicitly.`)
+	}
+	yes := fs.Bool("yes", false, "skip confirmation prompt")
+	if len(args) == 0 {
+		fs.Usage()
+		return fmt.Errorf("rm: task id required")
+	}
+	taskID := args[0]
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	return cli.Rm(cfgPath, taskID, cli.RmOptions{
+		Yes:   *yes,
+		IsTTY: term.IsTerminal(int(os.Stdin.Fd())),
+		In:    os.Stdin,
+		Out:   os.Stderr,
+	})
 }
 
 func runLogs(args []string) error {
@@ -98,9 +130,9 @@ Subcommands:
   daemon            run the scheduler loop
   list              list configured tasks
   logs <id>         inspect a task's run history (--tail / --file / --json)
-  add               [stub] add a task
+  add               interactively add a task
+  rm   <id>         remove a task (--yes to skip prompt)
   run  <id>         [stub] fire a task immediately
-  rm   <id>         [stub] remove a task
 
 Flags:
   -c <path>         config file (default: ~/.modu_cron/config.yaml)`)
