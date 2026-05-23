@@ -30,7 +30,7 @@ modu_cron [-c <config>] <subcommand>
 | `logs <id>` | ✅ | 查看任务历史 (`--tail` / `--file <name>` / `--json`) |
 | `add` | ✅ | 交互式添加任务（id/cron/prompt/enabled/on_overlap）|
 | `rm <id>` | ✅ | 删除任务（TTY 下默认问，`--yes` 跳过；非 TTY 必须 `--yes`）|
-| `run <id>` | 🚧 | 立即触发一次 |
+| `run <id>` | ✅ | 立即触发一次（忽略 `enabled` 和 cron 表达式，用于调试）|
 
 ## Provider 配置
 
@@ -53,7 +53,10 @@ modu_cron add                  # 交互式输入 id/cron/prompt/enabled/on_overl
 modu_cron list                 # 查看现有任务
 modu_cron rm <id>              # 交互确认后删除
 modu_cron rm <id> --yes        # 直接删除（非 TTY 场景必需）
+modu_cron run <id>             # 立即跑一次（调试用：跳过 enabled 和 cron 时间表）
 ```
+
+`run` 触发一次后即退出，事件流写入 `~/.modu_cron/logs/<id>/...`，跟 daemon 同一目录，所以可以接着 `logs <id> --tail` 看详情。`run` 必须配置 provider env，dry mode 对它无意义。
 
 > daemon 启动后不会监听 `config.yaml` 变化。`add` / `rm` 后需要重启 daemon 才生效。
 > `add` / `rm` 会用 `yaml.Marshal` 重写整个文件，**用户在 YAML 里写的注释会丢失**。
@@ -123,6 +126,6 @@ cmd/modu_cron/
 1. ✅ `Runner` 接 `CodingSession`, prompt 真跑起来，事件流落任务日志
 2. ✅ `logs <id>` 子命令: 列出 / tail / 指定文件 / NDJSON 原文
 3. ✅ `add` / `rm` 子命令: 交互式编辑 + 写回 YAML（daemon 需重启）
-4. `run <id>` 子命令: 不等到点，立即跑一次
+4. ✅ `run <id>` 子命令: 不等到点，立即跑一次
 5. daemon 热加载（SIGHUP / fsnotify）
 6. agent 工具集 `cron_add` / `cron_list` / `cron_remove`，让 agent 用自然语言管理任务

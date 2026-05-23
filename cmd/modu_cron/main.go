@@ -7,7 +7,7 @@
 //	modu_cron logs <id> [flags]   inspect a task's run history
 //	modu_cron add                 interactively add a task
 //	modu_cron rm   <id> [--yes]   remove a task
-//	modu_cron run  <id>           [stub] fire a task immediately
+//	modu_cron run  <id>           fire a task once, ignoring schedule + enabled
 //
 // Default config: ~/.modu_cron/config.yaml (override with -c).
 package main
@@ -54,7 +54,10 @@ func dispatch(cmd string, args []string, cfgPath string) error {
 	case "rm":
 		return runRm(args, cfgPath)
 	case "run":
-		return cli.NotImplemented(cmd)
+		if len(args) == 0 {
+			return fmt.Errorf("run: task id required")
+		}
+		return cli.Run(context.Background(), cfgPath, args[0], os.Stdout)
 	case "help", "-h", "--help":
 		usage()
 		return nil
@@ -132,7 +135,7 @@ Subcommands:
   logs <id>         inspect a task's run history (--tail / --file / --json)
   add               interactively add a task
   rm   <id>         remove a task (--yes to skip prompt)
-  run  <id>         [stub] fire a task immediately
+  run  <id>         fire a task once (ignores schedule + enabled flag)
 
 Flags:
   -c <path>         config file (default: ~/.modu_cron/config.yaml)`)

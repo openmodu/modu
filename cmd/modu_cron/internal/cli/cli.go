@@ -89,8 +89,3 @@ func List(cfgPath string, out io.Writer) error {
 	return nil
 }
 
-// NotImplemented is the temporary handler for subcommands whose business
-// logic lands after the scaffold.
-func NotImplemented(name string) error {
-	return fmt.Errorf("%s: not yet implemented — business phase", name)
-}
