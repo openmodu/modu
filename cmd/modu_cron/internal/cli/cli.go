@@ -11,11 +11,20 @@ import (
 	"os/signal"
 	"syscall"
 
+	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
+
 	"github.com/openmodu/modu/cmd/modu_cron/internal/config"
+	"github.com/openmodu/modu/cmd/modu_cron/internal/provider"
+	"github.com/openmodu/modu/cmd/modu_cron/internal/runlog"
+	"github.com/openmodu/modu/cmd/modu_cron/internal/runner"
 	"github.com/openmodu/modu/cmd/modu_cron/internal/scheduler"
 )
 
 // Daemon loads the config and runs the scheduler until SIGINT/SIGTERM.
+//
+// Provider is resolved from environment variables; if none is configured the
+// daemon falls back to a no-op runner that just logs each tick — useful for
+// dry-running the schedule without spending API calls.
 func Daemon(ctx context.Context, cfgPath string) error {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
@@ -23,7 +32,27 @@ func Daemon(ctx context.Context, cfgPath string) error {
 	}
 	log.Printf("loaded %d task(s) from %s", len(cfg.Tasks), cfgPath)
 
-	sch := scheduler.New(nil)
+	var run scheduler.Runner
+	model, getAPIKey := provider.Resolve()
+	if model == nil {
+		log.Printf("no provider configured (set ANTHROPIC_API_KEY / OPENAI_API_KEY / DEEPSEEK_API_KEY / OLLAMA_HOST / LMSTUDIO_BASE_URL) — running in dry mode")
+	} else {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("getwd: %w", err)
+		}
+		logs := runlog.New("")
+		run = runner.New(runner.Deps{
+			Cwd:       cwd,
+			AgentDir:  coding_agent.DefaultAgentDir(),
+			Model:     model,
+			GetAPIKey: getAPIKey,
+			Logs:      logs,
+		})
+		log.Printf("agent runner: model=%s logs=%s", model.ID, runlog.DefaultRoot())
+	}
+
+	sch := scheduler.New(run)
 	if err := sch.LoadAll(cfg); err != nil {
 		return err
 	}

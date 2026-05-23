@@ -5,7 +5,7 @@ the daemon owns the schedule, the CLI manages tasks.
 
 ## 状态
 
-骨架阶段 (feat/modu_cron)。`daemon` / `list` 已可跑；`add` / `run` / `rm` / `logs` 占位待业务开发。
+`daemon` / `list` 已可用，每个 tick 起一个独立 `CodingSession` 跑配置好的 prompt，事件流写入任务日志文件。`add` / `run` / `rm` / `logs` 子命令占位待业务期落地。
 
 ## 安装
 
@@ -19,20 +19,34 @@ go build ./cmd/modu_cron
 modu_cron [-c <config>] <subcommand>
 ```
 
-默认配置: `~/.modu_cron/config.yaml`，可用 `-c` 覆盖。示例见 `config.example.yaml`。
+默认配置: `~/.modu_cron/config.yaml`（用 `-c` 覆盖）。示例见 `config.example.yaml`。
 
 ### 子命令
 
 | 命令 | 状态 | 说明 |
 |------|------|------|
-| `daemon` | ✅ | 跑调度循环, 按 cron 表达式触发任务, `Ctrl+C` 退出 |
+| `daemon` | ✅ | 跑调度循环, 按 cron 表达式触发 agent, `Ctrl+C` 退出 |
 | `list` | ✅ | 列出当前配置中的所有任务 |
-| `add` | 🚧 | 添加任务 (待业务开发) |
-| `run <id>` | 🚧 | 立即触发一次 (待业务开发) |
-| `rm <id>` | 🚧 | 删除任务 (待业务开发) |
-| `logs <id>` | 🚧 | 查看任务历史 (待业务开发) |
+| `add` | 🚧 | 添加任务 |
+| `run <id>` | 🚧 | 立即触发一次 |
+| `rm <id>` | 🚧 | 删除任务 |
+| `logs <id>` | 🚧 | 查看任务历史 |
 
-## 配置
+## Provider 配置
+
+`modu_cron` 只读环境变量（与 `modu_code` 同序），第一项匹配即用：
+
+| 变量 | 必填补充 |
+|------|----------|
+| `ANTHROPIC_API_KEY` | `ANTHROPIC_MODEL` |
+| `OPENAI_API_KEY` | 可选 `OPENAI_MODEL`（默认 `gpt-4o`）、`OPENAI_BASE_URL` |
+| `DEEPSEEK_API_KEY` | 可选 `DEEPSEEK_MODEL`（默认 `deepseek-chat`）|
+| `OLLAMA_HOST` | `OLLAMA_MODEL` |
+| `LMSTUDIO_BASE_URL` | 可选 `LMSTUDIO_MODEL` |
+
+任何一项都没配 → daemon 走 **dry mode**，只打 tick 日志、不调用 LLM，方便先验证调度。
+
+## 配置文件
 
 ```yaml
 tasks:
@@ -40,9 +54,30 @@ tasks:
     cron: "*/10 * * * * *"   # 6 字段格式: sec min hour dom mon dow
     prompt: "say hello"
     enabled: true
+    on_overlap: skip          # skip | queue | kill, 默认 skip
 ```
 
-`cron` 表达式使用 `robfig/cron/v3` 的 6 字段格式 (含 seconds)。
+### 并发策略 `on_overlap`
+
+任务上一次执行未结束，下一次 tick 又到了的处理方式：
+
+| 策略 | 行为 |
+|------|------|
+| `skip`（默认） | 丢弃新 tick，打 warning |
+| `queue` | 排队执行（容量 8，溢出丢弃 + warn）|
+| `kill` | 取消旧 ctx，立刻起新 |
+
+任一任务连续 3 次 overlap 会额外打"频率过高 vs 任务耗时"提示，提醒你是 cron 太密还是任务太重。
+
+## 任务日志
+
+每次 tick 生成一个 NDJSON 文件：
+
+```
+~/.modu_cron/logs/<task_id>/<RFC3339-timestamp>.log
+```
+
+里面是 `coding_agent` 完整事件流（session_start, message_update, tool_call, tool_result, message_end, session_end）。后续 `logs <id>` 子命令会读它。
 
 ## 目录结构
 
@@ -53,13 +88,16 @@ cmd/modu_cron/
 ├── README.md
 └── internal/
     ├── cli/                # 子命令实现
-    ├── config/             # YAML 加载/保存
-    └── scheduler/          # robfig/cron 封装 + Runner hook
+    ├── config/             # YAML 加载/保存 + Task 模型
+    ├── provider/           # env-only LLM provider 解析
+    ├── runlog/             # 任务日志文件 store
+    ├── runner/             # CodingSession 装配的 Runner
+    └── scheduler/          # robfig/cron 封装 + 并发策略
 ```
 
 ## 业务开发路线
 
-1. `scheduler.Runner` 接 `coding_agent.CodingSession`, 真正跑 prompt
-2. agent 工具集加入 `cron_add` / `cron_remove` / `cron_list` (自然语言管理任务)
-3. 任务执行历史持久化, `logs <id>` 查询
-4. `add` / `rm` 子命令落地 (写回 YAML)
+1. ✅ `Runner` 接 `CodingSession`, prompt 真跑起来，事件流落任务日志
+2. `logs <id>` 子命令: 列出 / tail / replay 历史
+3. `add` / `rm` 子命令: 写回 YAML, daemon 热加载或要求重启
+4. agent 工具集 `cron_add` / `cron_list` / `cron_remove`，让 agent 用自然语言管理任务
