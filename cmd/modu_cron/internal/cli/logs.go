@@ -125,19 +125,22 @@ func decodeEventStream(r io.Reader, out io.Writer) error {
 		case "tool_execution_end":
 			renderToolResult(out, ev)
 
-		case "interrupt":
-			fmt.Fprintln(out, "⏸ interrupt")
-
-		// Drop the rest: agent_start/agent_end and turn_start/turn_end are
-		// envelope-only with no extra info; message_start is the matching
-		// header for the message_end we already render; message_update and
-		// tool_execution_update are per-token streaming noise; "" catches
-		// malformed lines.
+		// Drop the rest:
+		//   - agent_start/end, turn_start/end, message_start: envelopes
+		//     with no extra info beyond what message_end / tool_execution_*
+		//     carry.
+		//   - message_update / tool_execution_update: per-token streaming
+		//     noise.
+		//   - interrupt: emitted whenever a tool waits on approval. modu_cron
+		//     auto-approves everything, so seeing it would just confuse the
+		//     reader.
+		//   - "": catches malformed JSON lines.
 		case "",
 			"agent_start", "agent_end",
 			"turn_start", "turn_end",
 			"message_start", "message_update",
-			"tool_execution_update":
+			"tool_execution_update",
+			"interrupt":
 			continue
 
 		default:
