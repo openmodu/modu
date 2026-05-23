@@ -146,7 +146,13 @@ modu_cron logs <id> --tail --json     # 同上但输出原 NDJSON
 modu_cron logs <id> --file <name>     # 看指定文件 (从 list 拷文件名)
 ```
 
-可读视图保留：session 边界、tool call/result（含 ERROR 标识）、assistant 最终文本；过滤掉 `message_update` 的 per-token 增量噪音。
+可读视图（`--tail` / `--file`）保留：
+- `session_start` / `session_end` 边界（带 model + session ID）
+- 用户 prompt
+- `tool_execution_start` / `_end`（带 args 摘要、ok/ERROR 标记、输出前 5 行片段）
+- assistant 最终文本
+
+被过滤的噪音：`message_update` 的 per-token 增量、`agent_start`/`turn_start`/`message_start` 等 envelope、`thinking` 块、只含 tool call 没真文本的 assistant turn。典型 100+ 行原始 NDJSON 解码后通常压到不到 15 行。需要原文 jq 时 `--json` 直出。
 
 ## 目录结构
 

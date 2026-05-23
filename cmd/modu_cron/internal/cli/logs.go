@@ -94,8 +94,10 @@ func printRun(store *runlog.Store, taskID, name string, raw bool, out io.Writer)
 }
 
 // decodeEventStream renders the NDJSON event stream into a compact,
-// human-readable transcript. Unknown event types are emitted as a one-line
-// "raw" entry so nothing is silently swallowed.
+// human-readable transcript. Only a handful of event types are surfaced —
+// turn/agent envelopes and per-token message_update deltas are dropped as
+// pure noise. Unknown event types fall to a one-line "raw" entry so nothing
+// new is silently swallowed.
 func decodeEventStream(r io.Reader, out io.Writer) error {
 	dec := json.NewDecoder(r)
 	for {
@@ -114,54 +116,135 @@ func decodeEventStream(r io.Reader, out io.Writer) error {
 			fmt.Fprintf(out, "▶ session start  model=%v session=%v\n", ev["model"], ev["sessionId"])
 		case "session_end":
 			fmt.Fprintln(out, "■ session end")
-		case "tool_call_start":
-			fmt.Fprintf(out, "→ tool call      %s%s\n", ev["toolName"], formatArgs(ev["args"]))
-		case "tool_call_end":
-			marker := "ok"
-			if isErr, _ := ev["isError"].(bool); isErr {
-				marker = "ERROR"
-			}
-			fmt.Fprintf(out, "← tool result    %s  %s\n", ev["toolName"], marker)
+
 		case "message_end":
-			text := extractAssistantText(ev["message"])
-			if text != "" {
-				fmt.Fprintln(out, "✎ assistant:")
-				for _, line := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
-					fmt.Fprintf(out, "    %s\n", line)
-				}
-			}
-		case "", "message_update":
-			// message_update is per-token noise; skip in decoded view.
+			renderMessage(out, ev["message"])
+
+		case "tool_execution_start":
+			fmt.Fprintf(out, "→ tool call      %s%s\n", ev["toolName"], formatArgs(ev["args"]))
+		case "tool_execution_end":
+			renderToolResult(out, ev)
+
+		case "interrupt":
+			fmt.Fprintln(out, "⏸ interrupt")
+
+		// Drop the rest: agent_start/agent_end and turn_start/turn_end are
+		// envelope-only with no extra info; message_start is the matching
+		// header for the message_end we already render; message_update and
+		// tool_execution_update are per-token streaming noise; "" catches
+		// malformed lines.
+		case "",
+			"agent_start", "agent_end",
+			"turn_start", "turn_end",
+			"message_start", "message_update",
+			"tool_execution_update":
 			continue
+
 		default:
 			fmt.Fprintf(out, "· %s\n", kind)
 		}
 	}
 }
 
-// extractAssistantText pulls a flat text from an AssistantMessage encoded as
-// JSON. The shape is `{"content": [{"text": "..."}, ...]}` for the text
-// blocks we care about.
-func extractAssistantText(message any) string {
+// renderMessage formats one message_end event. We branch on role so user
+// prompts, assistant text, and tool results all render naturally — and
+// silently skip messages that carry only tool-call metadata (those show up
+// via tool_execution_start instead, so re-printing them would just repeat
+// the same line).
+func renderMessage(out io.Writer, message any) {
 	msg, ok := message.(map[string]any)
 	if !ok {
-		return ""
+		return
 	}
-	content, ok := msg["content"].([]any)
+	role, _ := msg["role"].(string)
+	switch role {
+	case "user":
+		text := strings.TrimSpace(flattenContent(msg))
+		if text == "" {
+			return
+		}
+		fmt.Fprintln(out, "✎ user:")
+		writeIndented(out, text)
+	case "assistant":
+		// flattenContent already skips toolCall/thinking blocks; TrimSpace
+		// also drops turns whose only text block is a "\n\n" filler that
+		// LM Studio's stream sometimes emits before a tool call.
+		text := strings.TrimSpace(flattenContent(msg))
+		if text == "" {
+			return
+		}
+		fmt.Fprintln(out, "✎ assistant:")
+		writeIndented(out, text)
+	case "toolResult":
+		// Already surfaced by tool_execution_end; skip to avoid duplicates.
+	}
+}
+
+// renderToolResult prints "ok" / "ERROR" plus a short snippet of the tool's
+// text output (first 5 lines, truncated). For typical bash/Read-style tools
+// that produces enough context to skim the run without diving into raw NDJSON.
+func renderToolResult(out io.Writer, ev map[string]any) {
+	marker := "ok"
+	if isErr, _ := ev["isError"].(bool); isErr {
+		marker = "ERROR"
+	}
+	fmt.Fprintf(out, "← tool result    %s  %s\n", ev["toolName"], marker)
+	if res, ok := ev["result"].(map[string]any); ok {
+		writeIndented(out, snippet(flattenContent(res), 5))
+	}
+}
+
+// flattenContent walks a message-like object (either a top-level message or a
+// tool-result envelope) and concatenates its text-bearing blocks. The shape
+// is `{"content": "..."}` for raw strings (user prompts) or
+// `{"content": [{"type":"text","text":"..."}, ...]}` for blocks.
+// "thinking" and "toolCall" blocks are intentionally skipped.
+func flattenContent(obj any) string {
+	m, ok := obj.(map[string]any)
 	if !ok {
 		return ""
 	}
-	var b strings.Builder
-	for _, c := range content {
-		blk, ok := c.(map[string]any)
-		if !ok {
-			continue
+	switch c := m["content"].(type) {
+	case string:
+		return c
+	case []any:
+		var b strings.Builder
+		for _, item := range c {
+			blk, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			if t, ok := blk["text"].(string); ok && t != "" {
+				b.WriteString(t)
+			}
 		}
-		if t, ok := blk["text"].(string); ok && t != "" {
-			b.WriteString(t)
-		}
+		return b.String()
 	}
-	return b.String()
+	return ""
+}
+
+// snippet trims a multi-line block down to the first n lines with a
+// "+N more" tail when it overflows.
+func snippet(text string, n int) string {
+	if text == "" {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	if len(lines) <= n {
+		return strings.Join(lines, "\n")
+	}
+	return strings.Join(lines[:n], "\n") + fmt.Sprintf("\n... (+%d more lines)", len(lines)-n)
+}
+
+// writeIndented prefixes each line of text with 4 spaces so the user can
+// tell quoted content apart from event markers at a glance.
+func writeIndented(out io.Writer, text string) {
+	if text == "" {
+		return
+	}
+	for _, line := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+		fmt.Fprintf(out, "    %s\n", line)
+	}
 }
 
 // formatArgs renders tool args as `(key=value, ...)` truncated for one-line
