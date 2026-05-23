@@ -14,6 +14,7 @@ import (
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 
 	"github.com/openmodu/modu/cmd/modu_cron/internal/config"
+	"github.com/openmodu/modu/cmd/modu_cron/internal/crontools"
 	"github.com/openmodu/modu/cmd/modu_cron/internal/provider"
 	"github.com/openmodu/modu/cmd/modu_cron/internal/runlog"
 	"github.com/openmodu/modu/cmd/modu_cron/internal/runner"
@@ -43,11 +44,12 @@ func Daemon(ctx context.Context, cfgPath string) error {
 		}
 		logs := runlog.New("")
 		run = runner.New(runner.Deps{
-			Cwd:       cwd,
-			AgentDir:  coding_agent.DefaultAgentDir(),
-			Model:     model,
-			GetAPIKey: getAPIKey,
-			Logs:      logs,
+			Cwd:         cwd,
+			AgentDir:    coding_agent.DefaultAgentDir(),
+			Model:       model,
+			GetAPIKey:   getAPIKey,
+			Logs:        logs,
+			CustomTools: crontools.New(cfgPath),
 		})
 		log.Printf("agent runner: model=%s logs=%s", model.ID, runlog.DefaultRoot())
 	}

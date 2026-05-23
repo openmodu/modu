@@ -10,6 +10,7 @@ import (
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 
 	"github.com/openmodu/modu/cmd/modu_cron/internal/config"
+	"github.com/openmodu/modu/cmd/modu_cron/internal/crontools"
 	"github.com/openmodu/modu/cmd/modu_cron/internal/provider"
 	"github.com/openmodu/modu/cmd/modu_cron/internal/runlog"
 	"github.com/openmodu/modu/cmd/modu_cron/internal/runner"
@@ -51,11 +52,12 @@ func Run(ctx context.Context, cfgPath, taskID string, out io.Writer) error {
 	}
 
 	deps := runner.Deps{
-		Cwd:       cwd,
-		AgentDir:  coding_agent.DefaultAgentDir(),
-		Model:     model,
-		GetAPIKey: getAPIKey,
-		Logs:      runlog.New(""),
+		Cwd:         cwd,
+		AgentDir:    coding_agent.DefaultAgentDir(),
+		Model:       model,
+		GetAPIKey:   getAPIKey,
+		Logs:        runlog.New(""),
+		CustomTools: crontools.New(cfgPath),
 	}
 
 	fmt.Fprintf(out, "running task %q (prompt=%q, model=%s)…\n", task.ID, truncate(task.Prompt, 80), model.ID)

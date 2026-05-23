@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/openmodu/modu/pkg/agent"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/coding_agent/modes"
 	"github.com/openmodu/modu/pkg/types"
@@ -20,11 +21,12 @@ import (
 
 // Deps gathers everything a Runner needs to spin up a CodingSession per tick.
 type Deps struct {
-	Cwd       string
-	AgentDir  string
-	Model     *types.Model
-	GetAPIKey func(provider string) (string, error)
-	Logs      *runlog.Store
+	Cwd         string
+	AgentDir    string
+	Model       *types.Model
+	GetAPIKey   func(provider string) (string, error)
+	Logs        *runlog.Store
+	CustomTools []agent.AgentTool
 }
 
 // Result describes one completed execution. LogPath is populated even if the
@@ -55,10 +57,11 @@ func Execute(ctx context.Context, deps Deps, task config.Task) (Result, error) {
 	defer func() { _ = run.Close() }()
 
 	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
-		Cwd:       deps.Cwd,
-		AgentDir:  deps.AgentDir,
-		Model:     deps.Model,
-		GetAPIKey: deps.GetAPIKey,
+		Cwd:         deps.Cwd,
+		AgentDir:    deps.AgentDir,
+		Model:       deps.Model,
+		GetAPIKey:   deps.GetAPIKey,
+		CustomTools: deps.CustomTools,
 	})
 	if err != nil {
 		res.Ended = time.Now()
