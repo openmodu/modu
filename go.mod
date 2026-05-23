@@ -7,6 +7,7 @@ require (
 	github.com/charmbracelet/glamour v0.9.1
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/ansi v0.8.0
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-telegram-bot-api/telegram-bot-api/v5 v5.5.1
 	github.com/google/uuid v1.6.0
 	github.com/grindlemire/go-tui v0.13.1
@@ -26,6 +27,7 @@ require (
 	golang.org/x/term v0.42.0
 	golang.org/x/text v0.36.0
 	google.golang.org/genai v1.55.0
+	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.47.0
 )
 
