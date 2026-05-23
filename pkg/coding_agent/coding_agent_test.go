@@ -396,7 +396,16 @@ func TestApprovalManagerAutoAllowsSafeBashCommands(t *testing.T) {
 		called = true
 		return agent.ToolApprovalDeny, nil
 	})
-	for _, command := range []string{"pwd", "git status --short", "go test ./pkg/tui", "curl -sS http://127.0.0.1:7081/"} {
+	for _, command := range []string{
+		"pwd",
+		"git status --short",
+		"go test ./pkg/tui",
+		"curl -sS http://127.0.0.1:7081/",
+		"rg -n ApprovalManager pkg/coding_agent 2>/dev/null",
+		"bash -lc 'git status --short'",
+		"curl -sS -o /dev/null http://127.0.0.1:7081/",
+		"python <<'PY'\nprint('inspect')\nPY",
+	} {
 		if d, _ := m.Approve("bash", "call-safe", map[string]any{"command": command}); d != agent.ToolApprovalAllow {
 			t.Fatalf("expected safe bash command %q to auto-allow, got %v", command, d)
 		}
@@ -517,6 +526,22 @@ func TestApprovalManagerDangerousBashBypassesToolWideAllow(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("expected dangerous bash command to prompt despite tool-wide allow, got %d callbacks", calls)
+	}
+}
+
+func TestApprovalManagerDangerousBashWrapperBypassesToolWideAllow(t *testing.T) {
+	m := NewApprovalManager()
+	m.AllowAlways("bash")
+	calls := 0
+	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
+		calls++
+		return agent.ToolApprovalDeny, nil
+	})
+	if d, _ := m.Approve("bash", "call-danger", map[string]any{"command": "bash -lc 'rm -rf /tmp/nope'"}); d != agent.ToolApprovalDeny {
+		t.Fatalf("expected dangerous wrapped bash command to require approval and deny, got %v", d)
+	}
+	if calls != 1 {
+		t.Fatalf("expected dangerous wrapped bash command to prompt despite tool-wide allow, got %d callbacks", calls)
 	}
 }
 
