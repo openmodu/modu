@@ -18,6 +18,7 @@ const sampleNDJSON = `{"type":"session_start","sessionId":"abc123","model":"gpt-
 {"type":"message_start","message":{"role":"user","content":"please show files"}}
 {"type":"message_end","message":{"role":"user","content":"please show files"}}
 {"type":"message_update","streamEvent":{"Type":"text_delta","Delta":"hel"},"message":"hel"}
+{"type":"interrupt"}
 {"type":"tool_execution_start","toolName":"Read","toolCallId":"t1","args":{"path":"foo.txt"}}
 {"type":"tool_execution_end","toolName":"Read","toolCallId":"t1","result":{"content":[{"type":"text","text":"file line 1\nfile line 2"}]},"isError":false}
 {"type":"tool_execution_start","toolName":"Run","toolCallId":"t2","args":{"cmd":"git status"}}
@@ -72,6 +73,7 @@ func TestDecodeEventStreamHumanReadable(t *testing.T) {
 		"agent_end",
 		"turn_start",
 		"turn_end",
+		"interrupt",
 		"hidden chain of thought", // thinking blocks are intentionally dropped
 	}
 	for _, banned := range mustNotContain {
