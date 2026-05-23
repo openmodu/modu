@@ -421,7 +421,29 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		extRunner.SetCallbacks(
 			func(text string) error {
 				msg := &CustomMessage{Source: "extension", Text: text}
-				ag.Steer(msg.ToLlmMessage())
+				llmMsg := msg.ToLlmMessage()
+				if ag.GetState().IsStreaming {
+					// Agent is mid-turn: queue the steer so the in-flight
+					// Prompt picks it up between iterations.
+					ag.Steer(llmMsg)
+					return nil
+				}
+				// Agent is idle: Steer alone wouldn't trigger anything
+				// (Continue requires existing state.Messages), so we
+				// drive a fresh Prompt directly with the extension's
+				// message as input. This lets slash-command handlers
+				// (e.g. /goal) kick off a continuation loop from a cold
+				// session.
+				go func() { _ = ag.Prompt(context.Background(), llmMsg) }()
+				// Wait briefly for the new turn to enter streaming so a
+				// caller's WaitForIdle doesn't race past it.
+				deadline := time.Now().Add(200 * time.Millisecond)
+				for time.Now().Before(deadline) {
+					if ag.GetState().IsStreaming {
+						break
+					}
+					time.Sleep(time.Millisecond)
+				}
 				return nil
 			},
 			func(names []string) {
