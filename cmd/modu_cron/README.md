@@ -28,7 +28,7 @@ modu_cron [-c <config>] <subcommand>
 | `daemon` | ✅ | 跑调度循环, 按 cron 表达式触发 agent, `Ctrl+C` 退出 |
 | `list` | ✅ | 列出当前配置中的所有任务 |
 | `logs <id>` | ✅ | 查看任务历史 (`--tail` / `--file <name>` / `--json`) |
-| `add` | ✅ | 交互式添加任务（id/cron/prompt/enabled/on_overlap）|
+| `add "<desc>"` | ✅ | 用一句自然语言描述，agent 解析后调 `cron_add` 落盘 |
 | `rm <id>` | ✅ | 删除任务（TTY 下默认问，`--yes` 跳过；非 TTY 必须 `--yes`）|
 | `run <id>` | ✅ | 立即触发一次（忽略 `enabled` 和 cron 表达式，用于调试）|
 
@@ -49,12 +49,22 @@ modu_cron [-c <config>] <subcommand>
 ## 任务管理
 
 ```
-modu_cron add                  # 交互式输入 id/cron/prompt/enabled/on_overlap
+modu_cron add "<desc>"         # 自然语言描述, agent 解析出 id/cron/prompt 后落盘
 modu_cron list                 # 查看现有任务
 modu_cron rm <id>              # 交互确认后删除
 modu_cron rm <id> --yes        # 直接删除（非 TTY 场景必需）
 modu_cron run <id>             # 立即跑一次（调试用：跳过 enabled 和 cron 时间表）
 ```
+
+### add 工作流
+
+```
+$ modu_cron add "每天早上 8 点跑 git log 看看昨晚有啥提交"
+Scheduled task "daily-git-log" to run every day at 08:00, listing yesterday's
+commits. Restart the daemon (modu_cron daemon) for the schedule to take effect.
+```
+
+底层：起一个临时 `CodingSession`，工具集**只暴露** `cron_add` + `cron_list`（屏蔽 Read/Write/Bash 等默认工具，避免 agent 跑偏）。一段 framed prompt 告诉它怎么从描述里推断 id / cron 表达式 / overlap 策略，然后回一句确认。要求 provider env 已配；没配直接报错。
 
 `run` 触发一次后即退出，事件流写入 `~/.modu_cron/logs/<id>/...`，跟 daemon 同一目录，所以可以接着 `logs <id> --tail` 看详情。`run` 必须配置 provider env，dry mode 对它无意义。
 

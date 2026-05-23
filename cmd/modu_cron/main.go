@@ -5,7 +5,7 @@
 //	modu_cron daemon              run the scheduler loop
 //	modu_cron list                list configured tasks
 //	modu_cron logs <id> [flags]   inspect a task's run history
-//	modu_cron add                 interactively add a task
+//	modu_cron add "<desc>"        add a task from a natural-language description
 //	modu_cron rm   <id> [--yes]   remove a task
 //	modu_cron run  <id>           fire a task once, ignoring schedule + enabled
 //
@@ -17,6 +17,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"golang.org/x/term"
 
@@ -50,7 +51,12 @@ func dispatch(cmd string, args []string, cfgPath string) error {
 	case "logs":
 		return runLogs(args)
 	case "add":
-		return cli.Add(cfgPath, os.Stdin, os.Stderr)
+		if len(args) == 0 {
+			return fmt.Errorf(`add: usage: modu_cron add "<task description>"`)
+		}
+		// Accept either modu_cron add "<text>" (one arg, quoted) or
+		// modu_cron add <text...> (multiple unquoted args).
+		return cli.Add(context.Background(), cfgPath, strings.Join(args, " "), os.Stdout)
 	case "rm":
 		return runRm(args, cfgPath)
 	case "run":
@@ -133,7 +139,7 @@ Subcommands:
   daemon            run the scheduler loop
   list              list configured tasks
   logs <id>         inspect a task's run history (--tail / --file / --json)
-  add               interactively add a task
+  add "<desc>"      add a task from a natural-language description
   rm   <id>         remove a task (--yes to skip prompt)
   run  <id>         fire a task once (ignores schedule + enabled flag)
 
