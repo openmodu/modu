@@ -28,6 +28,8 @@ import (
 	"syscall"
 
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
+	"github.com/openmodu/modu/pkg/coding_agent/extension"
+	"github.com/openmodu/modu/pkg/coding_agent/extension/goal"
 	"github.com/openmodu/modu/pkg/coding_agent/modes"
 	"github.com/openmodu/modu/pkg/coding_agent/modes/rpc"
 
@@ -72,6 +74,10 @@ func main() {
 	thinkingLevel := provider.ResolveThinkingLevel()
 	agentDir := coding_agent.DefaultAgentDir()
 
+	goalExt := goal.New(goal.Options{
+		Out: func(line string) { fmt.Fprintln(os.Stderr, line) },
+	})
+
 	sessionOpts := coding_agent.CodingSessionOptions{
 		Cwd:             cwd,
 		AgentDir:        agentDir,
@@ -80,6 +86,7 @@ func main() {
 		GetAPIKey:       getAPIKey,
 		ScopedModels:    provider.ConfiguredModelIDs(),
 		ModelConfigPath: provider.ConfigPath(),
+		Extensions:      []extension.Extension{goalExt},
 	}
 	session, err := coding_agent.NewCodingSession(sessionOpts)
 	if err != nil {
