@@ -27,10 +27,10 @@ modu_cron [-c <config>] <subcommand>
 |------|------|------|
 | `daemon` | ✅ | 跑调度循环, 按 cron 表达式触发 agent, `Ctrl+C` 退出 |
 | `list` | ✅ | 列出当前配置中的所有任务 |
+| `logs <id>` | ✅ | 查看任务历史 (`--tail` / `--file <name>` / `--json`) |
 | `add` | 🚧 | 添加任务 |
 | `run <id>` | 🚧 | 立即触发一次 |
 | `rm <id>` | 🚧 | 删除任务 |
-| `logs <id>` | 🚧 | 查看任务历史 |
 
 ## Provider 配置
 
@@ -74,10 +74,21 @@ tasks:
 每次 tick 生成一个 NDJSON 文件：
 
 ```
-~/.modu_cron/logs/<task_id>/<RFC3339-timestamp>.log
+~/.modu_cron/logs/<task_id>/<RFC3339-timestamp-with-ns>.log
 ```
 
-里面是 `coding_agent` 完整事件流（session_start, message_update, tool_call, tool_result, message_end, session_end）。后续 `logs <id>` 子命令会读它。
+里面是 `coding_agent` 完整事件流（session_start, message_update, tool_call, tool_result, message_end, session_end）。
+
+查看历史：
+
+```
+modu_cron logs <id>                   # 列出该任务所有 run, 最新在上
+modu_cron logs <id> --tail            # 解码最近一次为可读文本
+modu_cron logs <id> --tail --json     # 同上但输出原 NDJSON
+modu_cron logs <id> --file <name>     # 看指定文件 (从 list 拷文件名)
+```
+
+可读视图保留：session 边界、tool call/result（含 ERROR 标识）、assistant 最终文本；过滤掉 `message_update` 的 per-token 增量噪音。
 
 ## 目录结构
 
@@ -98,6 +109,6 @@ cmd/modu_cron/
 ## 业务开发路线
 
 1. ✅ `Runner` 接 `CodingSession`, prompt 真跑起来，事件流落任务日志
-2. `logs <id>` 子命令: 列出 / tail / replay 历史
+2. ✅ `logs <id>` 子命令: 列出 / tail / 指定文件 / NDJSON 原文
 3. `add` / `rm` 子命令: 写回 YAML, daemon 热加载或要求重启
 4. agent 工具集 `cron_add` / `cron_list` / `cron_remove`，让 agent 用自然语言管理任务
