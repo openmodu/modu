@@ -44,7 +44,7 @@ modu_cron [-c <config>] <subcommand>
 | `OLLAMA_HOST` | `OLLAMA_MODEL` |
 | `LMSTUDIO_BASE_URL` | 可选 `LMSTUDIO_MODEL` |
 
-任何一项都没配 → daemon 走 **dry mode**，只打 tick 日志、不调用 LLM，方便先验证调度。
+**没设任何 env 时的兜底**：自动落到 `http://localhost:1234/v1` + 模型 `qwen/qwen3.6-35b-a3b`。本地起着 LM Studio 装这个模型就能直接用，无需 export 任何 env。启动时 stderr 会打一行提示让你确认。
 
 ## 任务管理
 

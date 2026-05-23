@@ -30,9 +30,6 @@ func Add(ctx context.Context, cfgPath, description string, out io.Writer) error 
 	}
 
 	model, getAPIKey := provider.Resolve()
-	if model == nil {
-		return fmt.Errorf("add: no provider configured (set ANTHROPIC_API_KEY / OPENAI_API_KEY / DEEPSEEK_API_KEY / OLLAMA_HOST / LMSTUDIO_BASE_URL)")
-	}
 
 	cwd, err := os.Getwd()
 	if err != nil {

@@ -25,10 +25,3 @@ func TestAddWhitespaceOnlyDescriptionErrors(t *testing.T) {
 	}
 }
 
-func TestAddNoProviderErrors(t *testing.T) {
-	unsetAllProviders(t)
-	err := Add(context.Background(), filepath.Join(t.TempDir(), "x.yaml"), "every morning at 8 run git log", &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "no provider configured") {
-		t.Errorf("expected 'no provider configured', got: %v", err)
-	}
-}

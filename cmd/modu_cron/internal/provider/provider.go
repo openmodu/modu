@@ -13,6 +13,12 @@
 //	DEEPSEEK_API_KEY  (+ DEEPSEEK_MODEL)
 //	OLLAMA_HOST       (+ OLLAMA_MODEL)
 //	LMSTUDIO_BASE_URL (+ LMSTUDIO_MODEL)
+//
+// If none of the above are set, Resolve falls back to a local LM Studio
+// instance at http://localhost:1234/v1 running qwen/qwen3.6-35b-a3b. The
+// fallback exists so a fresh install can run `add` / `daemon` without
+// exporting anything — the user just needs LM Studio running locally with
+// that model loaded.
 package provider
 
 import (
@@ -92,7 +98,17 @@ func Resolve() (*types.Model, func(string) (string, error)) {
 			noKey
 	}
 
-	return nil, nil
+	// No provider env set — fall back to a local LM Studio instance. The
+	// model needs to actually be loaded in LM Studio for requests to
+	// succeed; that failure surfaces when a task runs, not here.
+	const (
+		fallbackModel = "qwen/qwen3.6-35b-a3b"
+		fallbackURL   = "http://localhost:1234/v1"
+	)
+	fmt.Fprintf(os.Stderr, "no provider env set; defaulting to LM Studio at %s with model %s (start LM Studio locally or export a provider env to override)\n", fallbackURL, fallbackModel)
+	providers.Register(openai.New("lmstudio", openai.WithBaseURL(fallbackURL)))
+	return &types.Model{ID: fallbackModel, Name: fallbackModel + " (LM Studio, default)", ProviderID: "lmstudio", BaseURL: fallbackURL},
+		noKey
 }
 
 func staticKey(provider, key string) func(string) (string, error) {

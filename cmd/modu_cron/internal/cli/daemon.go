@@ -103,13 +103,10 @@ func Daemon(ctx context.Context, cfgPath string) error {
 }
 
 // buildRunner resolves the provider and returns the scheduler.Runner to use
-// for every task. Returns nil runner (= dry mode) when no provider is set.
+// for every task. provider.Resolve always returns a model (with a LM Studio
+// fallback), so this never returns a nil runner.
 func buildRunner(cfgPath string) (scheduler.Runner, error) {
 	model, getAPIKey := provider.Resolve()
-	if model == nil {
-		log.Printf("no provider configured (set ANTHROPIC_API_KEY / OPENAI_API_KEY / DEEPSEEK_API_KEY / OLLAMA_HOST / LMSTUDIO_BASE_URL) — running in dry mode")
-		return nil, nil
-	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, fmt.Errorf("getwd: %w", err)
