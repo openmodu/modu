@@ -418,39 +418,66 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 
 	// Initialize extensions
 	if len(opts.Extensions) > 0 {
-		extRunner.SetCallbacks(
-			func(text string) error {
-				msg := &CustomMessage{Source: "extension", Text: text}
-				llmMsg := msg.ToLlmMessage()
-				if ag.GetState().IsStreaming {
-					// Agent is mid-turn: queue the steer so the in-flight
-					// Prompt picks it up between iterations.
+		sendExtensionMessage := func(text string, followUp bool) error {
+			msg := &CustomMessage{Source: "extension", Text: text}
+			llmMsg := msg.ToLlmMessage()
+			if ag.GetState().IsStreaming {
+				if followUp {
+					ag.FollowUp(llmMsg)
+				} else {
 					ag.Steer(llmMsg)
-					return nil
-				}
-				// Agent is idle: Steer alone wouldn't trigger anything
-				// (Continue requires existing state.Messages), so we
-				// drive a fresh Prompt directly with the extension's
-				// message as input. This lets slash-command handlers
-				// (e.g. /goal) kick off a continuation loop from a cold
-				// session.
-				go func() { _ = ag.Prompt(context.Background(), llmMsg) }()
-				// Wait briefly for the new turn to enter streaming so a
-				// caller's WaitForIdle doesn't race past it.
-				deadline := time.Now().Add(200 * time.Millisecond)
-				for time.Now().Before(deadline) {
-					if ag.GetState().IsStreaming {
-						break
-					}
-					time.Sleep(time.Millisecond)
 				}
 				return nil
+			}
+			go func() {
+				deadline := time.Now().Add(time.Second)
+				for {
+					err := ag.Prompt(context.Background(), llmMsg)
+					if err == nil {
+						return
+					}
+					if !strings.Contains(err.Error(), "already processing") || time.Now().After(deadline) {
+						return
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+			}()
+			// Wait briefly for the new turn to enter streaming so a caller's
+			// WaitForIdle doesn't race past it.
+			deadline := time.Now().Add(200 * time.Millisecond)
+			for time.Now().Before(deadline) {
+				if ag.GetState().IsStreaming {
+					break
+				}
+				time.Sleep(time.Millisecond)
+			}
+			return nil
+		}
+		extRunner.SetCallbacks(
+			func(text string) error {
+				return sendExtensionMessage(text, false)
+			},
+			func(text string) error {
+				return sendExtensionMessage(text, true)
 			},
 			func(names []string) {
 				cs.SetActiveTools(names)
 			},
 			func(provider, modelID string) error {
 				return cs.SetModelByID(provider, modelID)
+			},
+			func() string { return cs.GetSessionID() },
+			func() string { return cs.sessionManager.Dir() },
+			func() string { return cs.agentDir },
+			func() string { return cs.cwd },
+			func() bool { return !ag.GetState().IsStreaming },
+			func() bool { return ag.HasQueuedMessages() },
+			func(extensionName, text string) {
+				cs.emitSessionEvent(SessionEvent{
+					Type:          SessionEventExtensionNotify,
+					ExtensionName: extensionName,
+					Message:       text,
+				})
 			},
 		)
 
@@ -482,6 +509,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 				},
 			}
 		}
+		extRunner.EmitEvent(agent.AgentEvent{Type: agent.EventType("session_start")})
 	}
 
 	cs.installHarnessLayer()
@@ -512,7 +540,9 @@ func (s *CodingSession) Prompt(ctx context.Context, text string) error {
 		}
 
 		if cmd, ok := s.slashCommands[cmdName]; ok {
-			return cmd.Handler(s, cmdArgs)
+			err := cmd.Handler(s, cmdArgs)
+			s.writeRuntimeState()
+			return err
 		}
 
 		s.refreshResourcePaths()
@@ -1495,6 +1525,12 @@ func sessionEventMeta(event SessionEvent) map[string]any {
 	if event.Reason != "" {
 		meta["reason"] = event.Reason
 	}
+	if event.ExtensionName != "" {
+		meta["extensionName"] = event.ExtensionName
+	}
+	if event.Message != "" {
+		meta["message"] = event.Message
+	}
 	if len(meta) == 0 {
 		return nil
 	}
@@ -1812,6 +1848,9 @@ func (s *CodingSession) switchSessionManager(newMgr *session.Manager) error {
 	s.sessionName = newMgr.SessionName()
 	s.agent.ReplaceMessages(messages)
 	s.lastSavedIndex = len(messages)
+	if s.extensions != nil {
+		s.extensions.EmitEvent(agent.AgentEvent{Type: agent.EventType("session_start")})
+	}
 	s.writeRuntimeState()
 	return nil
 }

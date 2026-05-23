@@ -2,9 +2,12 @@ package goal
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/openmodu/modu/pkg/types"
 )
 
 func TestStartRejectsEmpty(t *testing.T) {
@@ -135,5 +138,53 @@ func TestConcurrentLifecycle(t *testing.T) {
 	wg.Wait()
 	if _, ok := s.Current(); !ok {
 		t.Fatal("goal should still exist after concurrent toggles")
+	}
+}
+
+func TestFileBackedStorePersistsBySession(t *testing.T) {
+	dir := t.TempDir()
+	ref := StoreRef{BaseDir: dir, ThreadID: "thread/one"}
+	store := NewStore()
+	store.SetRefProvider(func() StoreRef { return ref })
+
+	g, err := store.Start("persist this goal")
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if _, err := os.Stat(GoalFilePath(ref)); err != nil {
+		t.Fatalf("goal file not written: %v", err)
+	}
+
+	again := NewStore()
+	again.SetRefProvider(func() StoreRef { return ref })
+	got, ok := again.Current()
+	if !ok {
+		t.Fatal("persisted goal not loaded")
+	}
+	if got.ID != g.ID || got.Objective != "persist this goal" {
+		t.Fatalf("persisted goal mismatch: %+v", got)
+	}
+}
+
+func TestAccountUsageBudgetLimited(t *testing.T) {
+	store := NewStore()
+	budget := 10
+	g, err := store.StartWithBudget("stay within budget", &budget)
+	if err != nil {
+		t.Fatalf("StartWithBudget: %v", err)
+	}
+	usage := types.AgentUsage{Input: 4, Output: 6}
+	got, ok, err := store.AccountUsage(usage, 7, false, g.ID)
+	if err != nil {
+		t.Fatalf("AccountUsage: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected goal after accounting")
+	}
+	if got.Status != StatusBudgetLimited {
+		t.Fatalf("status = %q, want budgetLimited", got.Status)
+	}
+	if got.TokensUsed != 10 || got.TimeUsedSeconds != 7 {
+		t.Fatalf("usage not accounted: %+v", got)
 	}
 }

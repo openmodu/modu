@@ -1608,6 +1608,37 @@ func (e *testHookExtension) Init(api extension.ExtensionAPI) error {
 	return nil
 }
 
+type testRuntimeStateExtension struct{}
+
+func (e *testRuntimeStateExtension) Name() string { return "stateful" }
+func (e *testRuntimeStateExtension) Init(extension.ExtensionAPI) error {
+	return nil
+}
+func (e *testRuntimeStateExtension) RuntimeState() any {
+	return map[string]any{"status": "ok"}
+}
+
+func TestRuntimeStateIncludesExtensionState(t *testing.T) {
+	dir := t.TempDir()
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:        dir,
+		AgentDir:   filepath.Join(dir, ".coding_agent"),
+		Model:      newTestModel(),
+		Extensions: []extension.Extension{&testRuntimeStateExtension{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	states := session.ExtensionRuntimeStates()
+	state, ok := states["stateful"].(map[string]any)
+	if !ok || state["status"] != "ok" {
+		t.Fatalf("extension runtime state missing: %#v", states)
+	}
+	if got := session.RuntimeStateJSON(); !strings.Contains(got, `"extensions"`) || !strings.Contains(got, `"stateful"`) {
+		t.Fatalf("runtime state json missing extension state: %s", got)
+	}
+}
+
 func TestExtensionHooksAreApplied(t *testing.T) {
 	dir := t.TempDir()
 	agentDir := filepath.Join(dir, ".coding_agent")

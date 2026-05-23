@@ -32,12 +32,52 @@ func TestUpdateGoalCompletesActive(t *testing.T) {
 	store := NewStore()
 	store.Start("audit citations in report.md")
 	out := callTool(t, &updateGoalTool{store: store}, map[string]any{"status": "complete"})
-	if !strings.Contains(out, "marked complete") {
+	if !strings.Contains(out, `"status": "complete"`) {
 		t.Errorf("update_goal success message wrong: %q", out)
 	}
 	g, _ := store.Current()
 	if g.Status != StatusComplete {
 		t.Errorf("store status should be complete, got %q", g.Status)
+	}
+}
+
+func TestCreateGoalToolCreatesBudgetedGoal(t *testing.T) {
+	store := NewStore()
+	out := callTool(t, &createGoalTool{store: store}, map[string]any{
+		"objective":    "ship a durable goal mode",
+		"token_budget": float64(25),
+	})
+	if !strings.Contains(out, "ship a durable goal mode") ||
+		!strings.Contains(out, `"tokenBudget": 25`) {
+		t.Fatalf("create_goal response missing goal fields: %s", out)
+	}
+	g, ok := store.Current()
+	if !ok {
+		t.Fatal("create_goal did not persist goal")
+	}
+	if g.TokenBudget == nil || *g.TokenBudget != 25 {
+		t.Fatalf("token budget mismatch: %+v", g.TokenBudget)
+	}
+}
+
+func TestCreateGoalToolRejectsExistingGoal(t *testing.T) {
+	store := NewStore()
+	store.Start("existing")
+	out := callTool(t, &createGoalTool{store: store}, map[string]any{"objective": "new"})
+	if !strings.Contains(out, "already active") {
+		t.Fatalf("expected existing-goal rejection, got: %s", out)
+	}
+}
+
+func TestUpdateGoalCompletionBudgetReport(t *testing.T) {
+	store := NewStore()
+	budget := 20
+	g, _ := store.StartWithBudget("finish with report", &budget)
+	store.AccountUsage(types.AgentUsage{Input: 3, Output: 5}, 9, false, g.ID)
+	out := callTool(t, &updateGoalTool{store: store}, map[string]any{"status": "complete"})
+	if !strings.Contains(out, "completionBudgetReport") ||
+		!strings.Contains(out, "tokens used: 8 of 20") {
+		t.Fatalf("missing completion budget report: %s", out)
 	}
 }
 
@@ -49,7 +89,7 @@ func TestUpdateGoalRejectsNonCompleteStatus(t *testing.T) {
 	// and self-correct, not blow up the run).
 	for _, bad := range []string{"paused", "active", "", "done", "complete "} {
 		out := callTool(t, &updateGoalTool{store: store}, map[string]any{"status": bad})
-		if !strings.Contains(out, "only accepts status=\"complete\"") {
+		if !strings.Contains(out, "can only mark the existing goal complete") {
 			t.Errorf("status=%q want rejection message, got: %s", bad, out)
 		}
 	}
@@ -68,7 +108,7 @@ func TestUpdateGoalNoGoalErrors(t *testing.T) {
 
 func TestGetGoalEmptyAndPopulated(t *testing.T) {
 	store := NewStore()
-	if got := callTool(t, &getGoalTool{store: store}, nil); !strings.Contains(got, "no goal set") {
+	if got := callTool(t, &getGoalTool{store: store}, nil); !strings.Contains(got, `"goal": null`) {
 		t.Errorf("get_goal empty mismatch: %s", got)
 	}
 	store.Start("benchmark the inference path")
@@ -82,6 +122,7 @@ func TestGetGoalEmptyAndPopulated(t *testing.T) {
 func TestToolMetadata(t *testing.T) {
 	store := NewStore()
 	for _, tool := range []agent.AgentTool{
+		&createGoalTool{store: store},
 		&updateGoalTool{store: store},
 		&getGoalTool{store: store},
 	} {

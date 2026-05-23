@@ -144,10 +144,46 @@ func (r *goTUIRoot) sessionStatusParts() []string {
 	if r.session.ActiveWorktree() != "" {
 		parts = append(parts, "worktree")
 	}
+	if goal := goalStatusPart(r.session.ExtensionRuntimeStates()); goal != "" {
+		parts = append(parts, goal)
+	}
 	if queue := r.queueStatusLine(); queue != "" {
 		parts = append(parts, queue)
 	}
 	return parts
+}
+
+func goalStatusPart(states map[string]any) string {
+	if len(states) == 0 {
+		return ""
+	}
+	raw, ok := states["goal"]
+	if !ok {
+		return ""
+	}
+	state, ok := raw.(map[string]any)
+	if !ok {
+		return ""
+	}
+	if indicator, ok := state["indicator"].(string); ok && strings.TrimSpace(indicator) != "" {
+		return indicator
+	}
+	status, _ := state["status"].(string)
+	if status == "" {
+		return ""
+	}
+	switch status {
+	case "active":
+		return "Pursuing goal"
+	case "paused":
+		return "Goal paused (/goal resume)"
+	case "budgetLimited":
+		return "Goal unmet"
+	case "complete":
+		return "Goal achieved"
+	default:
+		return "goal " + status
+	}
 }
 
 func (r *goTUIRoot) queueStatusLine() string {

@@ -167,12 +167,16 @@ High-priority gaps identified before this round:
   Plan revision snapshots plus `/plan history` for tracing approved plan iterations
   Active worktree diff API and `/worktree diff` for reviewing isolated changes before handoff
   Shared TUI selector headers with current position, filtered/total counts, search query, and mode
+  Persistent `/goal` extension parity for session-scoped goal files, `create_goal`/`get_goal`/`update_goal` tools, hidden follow-up continuation, token/time accounting, and `budgetLimited` wrap-up behavior
+  `/goal` subcommand parity for show, set/replace objective, pause, resume, and clear while keeping the earlier `/goal-*` aliases
+  Goal runtime-state exposure plus TUI idle-status indicators for pursuing, paused, unmet, and achieved goals
+  Extension notification events so goal command output is visible inside TUI scrollback instead of only stderr
 
 ## Still Missing
 
 - Deeper plan-mode revision flows beyond the current approval/rejection gate
 - Advanced worktree flows such as diff/merge handoff from isolated worktrees back to the original checkout
-- Full pi-compatible TypeScript extension/package ecosystem, including remote npm/git package install, theme resources, UI extension context, provider hooks, and hot reload
+- Full pi-compatible TypeScript extension/package ecosystem, including remote npm/git package install, theme resources, rich UI extension context, provider hooks, and hot reload
 - Remaining pi TUI polish outside the now-covered selector/status/session-tree basics
 
 ## Suggested Next Steps

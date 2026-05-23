@@ -19,6 +19,7 @@ type fakeAPI struct {
 	commands map[string]extension.CommandHandler
 	handlers map[string][]extension.EventHandler
 	sent     []string
+	notices  []string
 }
 
 func newFakeAPI() *fakeAPI {
@@ -55,9 +56,21 @@ func (f *fakeAPI) SendMessage(text string) error {
 	return nil
 }
 
-func (f *fakeAPI) SetActiveTools([]string)                  {}
-func (f *fakeAPI) SetModel(string, string) error            { return nil }
-func (f *fakeAPI) GetCommands() []extension.Command         { return nil }
+func (f *fakeAPI) SendFollowUpMessage(text string) error { return f.SendMessage(text) }
+func (f *fakeAPI) SetActiveTools([]string)               {}
+func (f *fakeAPI) SetModel(string, string) error         { return nil }
+func (f *fakeAPI) GetCommands() []extension.Command      { return nil }
+func (f *fakeAPI) SessionID() string                     { return "test-session" }
+func (f *fakeAPI) SessionDir() string                    { return "" }
+func (f *fakeAPI) AgentDir() string                      { return "" }
+func (f *fakeAPI) Cwd() string                           { return "/tmp/project" }
+func (f *fakeAPI) IsIdle() bool                          { return true }
+func (f *fakeAPI) HasPendingMessages() bool              { return false }
+func (f *fakeAPI) Notify(extensionName, text string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.notices = append(f.notices, extensionName+": "+text)
+}
 
 func (f *fakeAPI) sentCount() int {
 	f.mu.Lock()
@@ -116,7 +129,7 @@ func TestInitRegistersTheExpectedSurface(t *testing.T) {
 		}
 	}
 	// Tools.
-	wantTools := map[string]bool{"update_goal": false, "get_goal": false}
+	wantTools := map[string]bool{"create_goal": false, "update_goal": false, "get_goal": false}
 	for _, tl := range api.tools {
 		if _, ok := wantTools[tl.Name()]; ok {
 			wantTools[tl.Name()] = true
@@ -233,13 +246,54 @@ func TestUpdateGoalCompleteStopsLoop(t *testing.T) {
 	}
 }
 
-func TestStartingTwiceWithoutCancelFailsLoudly(t *testing.T) {
+func TestGoalObjectiveReplacesExistingGoal(t *testing.T) {
 	_, api := initialized(t)
 	if err := api.runCommand(t, "goal", "first"); err != nil {
 		t.Fatalf("first /goal: %v", err)
 	}
-	err := api.runCommand(t, "goal", "second")
-	if err == nil || !strings.Contains(err.Error(), "already active") {
-		t.Errorf("second /goal should fail with already-active hint, got %v", err)
+	if err := api.runCommand(t, "goal", "second"); err != nil {
+		t.Fatalf("second /goal should replace existing objective: %v", err)
+	}
+	if !strings.Contains(api.lastSent(), "second") {
+		t.Errorf("replacement continuation missing new objective: %s", api.lastSent())
+	}
+}
+
+func TestRuntimeStateExposesIndicator(t *testing.T) {
+	ext, api := initialized(t)
+	if err := api.runCommand(t, "goal", "show in status line"); err != nil {
+		t.Fatalf("/goal: %v", err)
+	}
+	state, ok := ext.RuntimeState().(map[string]any)
+	if !ok {
+		t.Fatalf("RuntimeState type mismatch: %T", ext.RuntimeState())
+	}
+	if state["status"] != StatusActive {
+		t.Fatalf("status = %v, want active", state["status"])
+	}
+	if got, _ := state["indicator"].(string); !strings.Contains(got, "Pursuing goal") {
+		t.Fatalf("indicator missing pursuing text: %q", got)
+	}
+
+	if err := api.runCommand(t, "goal-pause", ""); err != nil {
+		t.Fatalf("/goal-pause: %v", err)
+	}
+	state, _ = ext.RuntimeState().(map[string]any)
+	if got, _ := state["indicator"].(string); got != "Goal paused (/goal resume)" {
+		t.Fatalf("paused indicator mismatch: %q", got)
+	}
+}
+
+func TestSlashGoalNotifiesHost(t *testing.T) {
+	_, api := initialized(t)
+	if err := api.runCommand(t, "goal", "notify the tui"); err != nil {
+		t.Fatalf("/goal: %v", err)
+	}
+	if len(api.notices) == 0 {
+		t.Fatal("expected host notification")
+	}
+	if got := api.notices[len(api.notices)-1]; !strings.Contains(got, "goal: Goal active") ||
+		!strings.Contains(got, "notify the tui") {
+		t.Fatalf("notification mismatch: %q", got)
 	}
 }

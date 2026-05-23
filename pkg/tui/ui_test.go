@@ -1239,6 +1239,46 @@ func TestBottomLineShowsQueuedMessageCounts(t *testing.T) {
 	}
 }
 
+func TestGoalStatusPartFromRuntimeState(t *testing.T) {
+	line := goalStatusPart(map[string]any{
+		"goal": map[string]any{
+			"status":    "active",
+			"indicator": "Pursuing goal (12s)",
+		},
+	})
+	if line != "Pursuing goal (12s)" {
+		t.Fatalf("goal status line mismatch: %q", line)
+	}
+
+	line = goalStatusPart(map[string]any{
+		"goal": map[string]any{
+			"status": "paused",
+		},
+	})
+	if line != "Goal paused (/goal resume)" {
+		t.Fatalf("paused fallback mismatch: %q", line)
+	}
+}
+
+func TestExtensionNotifyRendersSection(t *testing.T) {
+	session := newUITestSession(t)
+	root := newGoTUIRoot(context.Background(), session, session.GetModel(), "", nil, nil)
+
+	root.handleSessionEvent(coding_agent.SessionEvent{
+		Type:          coding_agent.SessionEventExtensionNotify,
+		ExtensionName: "goal",
+		Message:       "Goal active\nObjective: test",
+	})
+
+	if len(root.model.blocks) == 0 {
+		t.Fatal("expected notification block")
+	}
+	block := root.model.blocks[len(root.model.blocks)-1]
+	if block.Kind != "section" || block.Title != "goal" || !strings.Contains(block.Content, "Goal active") {
+		t.Fatalf("unexpected notification block: %#v", block)
+	}
+}
+
 func TestHotkeyHelpIncludesSelectorAndResourceCommands(t *testing.T) {
 	text := hotkeyHelpText()
 	for _, want := range []string{

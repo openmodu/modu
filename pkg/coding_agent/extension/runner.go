@@ -9,15 +9,23 @@ import (
 
 // Runner manages the lifecycle of extensions and provides the ExtensionAPI.
 type Runner struct {
-	extensions []Extension
-	tools      []agent.AgentTool
-	commands   []Command
-	hooks      []ToolHook
-	handlers   map[string][]EventHandler
-	sendMsg    func(text string) error
-	setTools   func(names []string)
-	setModel   func(provider, modelID string) error
-	mu         sync.RWMutex
+	extensions   []Extension
+	tools        []agent.AgentTool
+	commands     []Command
+	hooks        []ToolHook
+	handlers     map[string][]EventHandler
+	sendMsg      func(text string) error
+	sendFollowUp func(text string) error
+	setTools     func(names []string)
+	setModel     func(provider, modelID string) error
+	sessionID    func() string
+	sessionDir   func() string
+	agentDir     func() string
+	cwd          func() string
+	isIdle       func() bool
+	hasPending   func() bool
+	notify       func(extensionName, text string)
+	mu           sync.RWMutex
 }
 
 // NewRunner creates a new extension runner.
@@ -30,14 +38,30 @@ func NewRunner() *Runner {
 // SetCallbacks configures the callbacks for the extension API.
 func (r *Runner) SetCallbacks(
 	sendMsg func(text string) error,
+	sendFollowUp func(text string) error,
 	setTools func(names []string),
 	setModel func(provider, modelID string) error,
+	sessionID func() string,
+	sessionDir func() string,
+	agentDir func() string,
+	cwd func() string,
+	isIdle func() bool,
+	hasPending func() bool,
+	notify func(extensionName, text string),
 ) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sendMsg = sendMsg
+	r.sendFollowUp = sendFollowUp
 	r.setTools = setTools
 	r.setModel = setModel
+	r.sessionID = sessionID
+	r.sessionDir = sessionDir
+	r.agentDir = agentDir
+	r.cwd = cwd
+	r.isIdle = isIdle
+	r.hasPending = hasPending
+	r.notify = notify
 }
 
 // Init initializes all extensions.
@@ -90,6 +114,17 @@ func (r *Runner) SendMessage(text string) error {
 	return fn(text)
 }
 
+// SendFollowUpMessage implements ExtensionAPI.
+func (r *Runner) SendFollowUpMessage(text string) error {
+	r.mu.RLock()
+	fn := r.sendFollowUp
+	r.mu.RUnlock()
+	if fn == nil {
+		return r.SendMessage(text)
+	}
+	return fn(text)
+}
+
 // SetActiveTools implements ExtensionAPI.
 func (r *Runner) SetActiveTools(names []string) {
 	r.mu.RLock()
@@ -118,6 +153,99 @@ func (r *Runner) GetCommands() []Command {
 	result := make([]Command, len(r.commands))
 	copy(result, r.commands)
 	return result
+}
+
+// RuntimeStates returns lightweight state snapshots exposed by extensions.
+func (r *Runner) RuntimeStates() map[string]any {
+	r.mu.RLock()
+	extensions := append([]Extension(nil), r.extensions...)
+	r.mu.RUnlock()
+
+	out := make(map[string]any)
+	for _, ext := range extensions {
+		provider, ok := ext.(RuntimeStateProvider)
+		if !ok {
+			continue
+		}
+		out[ext.Name()] = provider.RuntimeState()
+	}
+	return out
+}
+
+// SessionID implements ExtensionAPI.
+func (r *Runner) SessionID() string {
+	r.mu.RLock()
+	fn := r.sessionID
+	r.mu.RUnlock()
+	if fn == nil {
+		return ""
+	}
+	return fn()
+}
+
+// SessionDir implements ExtensionAPI.
+func (r *Runner) SessionDir() string {
+	r.mu.RLock()
+	fn := r.sessionDir
+	r.mu.RUnlock()
+	if fn == nil {
+		return ""
+	}
+	return fn()
+}
+
+// AgentDir implements ExtensionAPI.
+func (r *Runner) AgentDir() string {
+	r.mu.RLock()
+	fn := r.agentDir
+	r.mu.RUnlock()
+	if fn == nil {
+		return ""
+	}
+	return fn()
+}
+
+// Cwd implements ExtensionAPI.
+func (r *Runner) Cwd() string {
+	r.mu.RLock()
+	fn := r.cwd
+	r.mu.RUnlock()
+	if fn == nil {
+		return ""
+	}
+	return fn()
+}
+
+// IsIdle implements ExtensionAPI.
+func (r *Runner) IsIdle() bool {
+	r.mu.RLock()
+	fn := r.isIdle
+	r.mu.RUnlock()
+	if fn == nil {
+		return true
+	}
+	return fn()
+}
+
+// HasPendingMessages implements ExtensionAPI.
+func (r *Runner) HasPendingMessages() bool {
+	r.mu.RLock()
+	fn := r.hasPending
+	r.mu.RUnlock()
+	if fn == nil {
+		return false
+	}
+	return fn()
+}
+
+// Notify implements ExtensionAPI.
+func (r *Runner) Notify(extensionName, text string) {
+	r.mu.RLock()
+	fn := r.notify
+	r.mu.RUnlock()
+	if fn != nil {
+		fn(extensionName, text)
+	}
 }
 
 // GetTools returns all tools registered by extensions.

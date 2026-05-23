@@ -138,7 +138,20 @@ type ToolHook struct {
 
 所有工具通过 `extension.WrapTools()` 统一包装，对 Agent 完全透明。
 
-### 4. 自动上下文压缩（Auto Compaction）
+### 4. Goal 长程任务
+
+`modu_code` 默认加载 `extension/goal`，提供 session-scoped 的 `/goal` 长程任务循环：
+
+- `/goal <objective>` 设置或替换当前目标，并注入隐藏 follow-up 继续执行。
+- `/goal` 或 `/goal status` 查看当前目标。
+- `/goal pause`、`/goal resume`、`/goal clear` 控制生命周期；兼容旧入口 `/goal-pause`、`/goal-resume`、`/goal-cancel`、`/goal-status`。
+- 模型可调用 `create_goal`、`get_goal`、`update_goal({status:"complete"})`；`update_goal` 只能用于完成目标。
+
+目标状态持久化在当前 session 目录的 `extensions/pi-goal/<session-id>.json`，包含 `active`、`paused`、`budgetLimited`、`complete` 状态，以及 token/time accounting。达到显式 token budget 后会进入 `budgetLimited`，并注入收尾提示而不是继续做实质工作。
+
+Goal 状态也会暴露到 `RuntimeState().Extensions["goal"]`，TUI 底部状态行会显示 `Pursuing goal (...)`、`Goal paused (/goal resume)`、`Goal unmet (...)` 或 `Goal achieved (...)`。`/goal` 命令输出通过 extension notify 进入 TUI scrollback，print mode 仍会把同样文本写到 stderr。
+
+### 5. 自动上下文压缩（Auto Compaction）
 
 当累计 token 用量超过模型 context window 的阈值百分比时，自动触发压缩：
 
@@ -157,13 +170,13 @@ Agent 完成回复 → 累加 token 用量 → 超过阈值？→ 调用 Compact
 - 可通过 `config.AutoCompaction = false` 关闭
 - 支持 `/compact` 手动触发
 
-### 5. 上下文来源摘要
+### 6. 上下文来源摘要
 
 `GetContextInfo()` 返回当前运行时可见的 prompt/context 来源摘要，包括当前模型、工作目录、消息数、系统 prompt 大小、项目上下文文件、memory 是否为空、skills、plan mode 和 worktree 状态。`modu_code` 的 `/context` 命令基于这份只读摘要渲染，便于确认模型为什么会看到某些上下文。
 
 `GetDoctorInfo()` 返回基础运行诊断摘要，包括模型配置路径、当前模型、baseURL 连通性、provider 注册状态、API key 状态、上下文文件数量和问题列表。`modu_code` 的 `/doctor` 命令基于这份只读摘要渲染。
 
-### 6. 计划模式（Plan Mode）
+### 7. 计划模式（Plan Mode）
 
 启用 plan mode 后，系统 prompt 会标记当前处于规划状态，要求只做只读调研、先产出方案。执行层同时会阻断 `write`、`edit` 和 `bash` 工具，避免计划阶段直接修改项目文件或通过 shell 绕过。
 

@@ -81,6 +81,17 @@ func (r *goTUIRoot) handleSessionEvent(ev coding_agent.SessionEvent) {
 		r.model.statusMsg = "subagent started"
 	case coding_agent.SessionEventSubagentStop:
 		r.model.statusMsg = "subagent stopped"
+	case coding_agent.SessionEventExtensionNotify:
+		title := strings.TrimSpace(ev.ExtensionName)
+		if title == "" {
+			title = "extension"
+		}
+		msg := strings.TrimSpace(ev.Message)
+		if msg != "" {
+			block := uiBlock{Kind: "section", Title: title, Content: msg, Timestamp: time.Now()}
+			r.model.appendBlock(block)
+			r.pushBlockAbove(block)
+		}
 	}
 	r.bump()
 }

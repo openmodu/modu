@@ -12,6 +12,12 @@ type Extension interface {
 	Init(api ExtensionAPI) error
 }
 
+// RuntimeStateProvider is optionally implemented by extensions that expose
+// lightweight state for RuntimeState JSON and host UIs.
+type RuntimeStateProvider interface {
+	RuntimeState() any
+}
+
 // ExtensionAPI provides the API available to extensions.
 type ExtensionAPI interface {
 	// RegisterTool registers a new tool provided by the extension.
@@ -30,6 +36,22 @@ type ExtensionAPI interface {
 	SetModel(provider, modelID string) error
 	// GetCommands returns all registered commands.
 	GetCommands() []Command
+	// SessionID returns the active persisted session id.
+	SessionID() string
+	// SessionDir returns the directory that contains the active session file.
+	SessionDir() string
+	// AgentDir returns the agent runtime/configuration directory.
+	AgentDir() string
+	// Cwd returns the active working directory.
+	Cwd() string
+	// IsIdle reports whether the host agent is not currently streaming.
+	IsIdle() bool
+	// HasPendingMessages reports whether queued steering/follow-up messages exist.
+	HasPendingMessages() bool
+	// SendFollowUpMessage queues a follow-up message and triggers a turn if idle.
+	SendFollowUpMessage(text string) error
+	// Notify sends a user-visible extension notification to the host UI.
+	Notify(extensionName, text string)
 }
 
 // CommandHandler handles a slash command invocation.

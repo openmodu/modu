@@ -58,10 +58,10 @@ func TestObjectiveXMLEscaped(t *testing.T) {
 
 func TestEscapeXMLText(t *testing.T) {
 	cases := map[string]string{
-		"":            "",
-		"plain":       "plain",
-		"a&b":         "a&amp;b",
-		"<tag>":       "&lt;tag&gt;",
+		"":           "",
+		"plain":      "plain",
+		"a&b":        "a&amp;b",
+		"<tag>":      "&lt;tag&gt;",
 		"a < b && c": "a &lt; b &amp;&amp; c",
 	}
 	for in, want := range cases {
