@@ -14,11 +14,11 @@
 //	OLLAMA_HOST       (+ OLLAMA_MODEL)
 //	LMSTUDIO_BASE_URL (+ LMSTUDIO_MODEL)
 //
-// If none of the above are set, Resolve falls back to a local LM Studio
-// instance at http://localhost:1234/v1 running qwen/qwen3.6-35b-a3b. The
-// fallback exists so a fresh install can run `add` / `daemon` without
-// exporting anything — the user just needs LM Studio running locally with
-// that model loaded.
+// If none of the above are set, Resolve falls back to a LM Studio instance
+// at http://192.168.5.149:1234/v1 running qwen/qwen3.6-35b-a3b. The fallback
+// exists so a fresh install can run `add` / `daemon` without exporting
+// anything — assuming that LM Studio host is reachable. Set LMSTUDIO_BASE_URL
+// to point elsewhere (e.g. http://localhost:1234/v1 for a local instance).
 package provider
 
 import (
@@ -98,14 +98,14 @@ func Resolve() (*types.Model, func(string) (string, error)) {
 			noKey
 	}
 
-	// No provider env set — fall back to a local LM Studio instance. The
+	// No provider env set — fall back to the team LM Studio host. The
 	// model needs to actually be loaded in LM Studio for requests to
 	// succeed; that failure surfaces when a task runs, not here.
 	const (
 		fallbackModel = "qwen/qwen3.6-35b-a3b"
-		fallbackURL   = "http://localhost:1234/v1"
+		fallbackURL   = "http://192.168.5.149:1234/v1"
 	)
-	fmt.Fprintf(os.Stderr, "no provider env set; defaulting to LM Studio at %s with model %s (start LM Studio locally or export a provider env to override)\n", fallbackURL, fallbackModel)
+	fmt.Fprintf(os.Stderr, "no provider env set; defaulting to LM Studio at %s with model %s (export a provider env to override)\n", fallbackURL, fallbackModel)
 	providers.Register(openai.New("lmstudio", openai.WithBaseURL(fallbackURL)))
 	return &types.Model{ID: fallbackModel, Name: fallbackModel + " (LM Studio, default)", ProviderID: "lmstudio", BaseURL: fallbackURL},
 		noKey

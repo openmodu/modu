@@ -29,8 +29,8 @@ func TestResolveFallbackToLMStudio(t *testing.T) {
 	if model.ID != "qwen/qwen3.6-35b-a3b" {
 		t.Errorf("expected fallback model qwen/qwen3.6-35b-a3b, got %q", model.ID)
 	}
-	if model.BaseURL != "http://localhost:1234/v1" {
-		t.Errorf("expected fallback URL http://localhost:1234/v1, got %q", model.BaseURL)
+	if model.BaseURL != "http://192.168.5.149:1234/v1" {
+		t.Errorf("expected fallback URL http://192.168.5.149:1234/v1, got %q", model.BaseURL)
 	}
 	// Fallback uses no API key.
 	key, err := getKey("lmstudio")

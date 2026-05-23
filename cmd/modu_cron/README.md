@@ -44,7 +44,7 @@ modu_cron [-c <config>] <subcommand>
 | `OLLAMA_HOST` | `OLLAMA_MODEL` |
 | `LMSTUDIO_BASE_URL` | 可选 `LMSTUDIO_MODEL` |
 
-**没设任何 env 时的兜底**：自动落到 `http://localhost:1234/v1` + 模型 `qwen/qwen3.6-35b-a3b`。本地起着 LM Studio 装这个模型就能直接用，无需 export 任何 env。启动时 stderr 会打一行提示让你确认。
+**没设任何 env 时的兜底**：自动落到 `http://192.168.5.149:1234/v1` + 模型 `qwen/qwen3.6-35b-a3b`。该 LM Studio 主机可达 + 模型已加载就能直接用，无需 export 任何 env。本地跑可以 `export LMSTUDIO_BASE_URL=http://localhost:1234/v1` 覆盖。启动时 stderr 会打一行提示让你确认。
 
 ## 任务管理
 
