@@ -11,8 +11,14 @@ import (
 )
 
 // callTool runs a tool's Execute and returns the flat text of the first
-// TextContent block plus the raw result.
+// TextContent block.
 func callTool(t *testing.T, tool agent.AgentTool, args map[string]any) string {
+	t.Helper()
+	text, _ := callToolResult(t, tool, args)
+	return text
+}
+
+func callToolResult(t *testing.T, tool agent.AgentTool, args map[string]any) (string, agent.AgentToolResult) {
 	t.Helper()
 	res, err := tool.Execute(context.Background(), "test-call", args, nil)
 	if err != nil {
@@ -25,7 +31,7 @@ func callTool(t *testing.T, tool agent.AgentTool, args map[string]any) string {
 	if !ok {
 		t.Fatalf("%s: first block not text: %T", tool.Name(), res.Content[0])
 	}
-	return tc.Text
+	return tc.Text, res
 }
 
 func TestUpdateGoalCompletesActive(t *testing.T) {
@@ -84,7 +90,7 @@ func TestUpdateGoalCompletionBudgetReport(t *testing.T) {
 func TestUpdateGoalRejectsNonCompleteStatus(t *testing.T) {
 	store := NewStore()
 	store.Start("test")
-	// MVP only accepts "complete" — any other value is a user-facing error
+	// MVP only accepts "complete"; any other value is a user-facing error
 	// message, not a hard tool failure (we want the model to read the text
 	// and self-correct, not blow up the run).
 	for _, bad := range []string{"paused", "active", "", "done", "complete "} {
@@ -95,6 +101,27 @@ func TestUpdateGoalRejectsNonCompleteStatus(t *testing.T) {
 	}
 	if g, _ := store.Current(); g.Status != StatusActive {
 		t.Errorf("store should still be active, got %q", g.Status)
+	}
+}
+
+func TestGoalToolErrorResultsCarryIsErrorDetail(t *testing.T) {
+	store := NewStore()
+	store.Start("test")
+	_, res := callToolResult(t, &updateGoalTool{store: store}, map[string]any{"status": "paused"})
+	details, ok := res.Details.(map[string]any)
+	if !ok {
+		t.Fatalf("expected details map, got %T", res.Details)
+	}
+	if details["isError"] != true {
+		t.Fatalf("expected isError detail true, got %#v", details)
+	}
+	_, res = callToolResult(t, &getGoalTool{store: store}, nil)
+	details, ok = res.Details.(map[string]any)
+	if !ok {
+		t.Fatalf("expected details map, got %T", res.Details)
+	}
+	if details["isError"] != false {
+		t.Fatalf("expected isError detail false, got %#v", details)
 	}
 }
 
@@ -134,7 +161,7 @@ func TestToolMetadata(t *testing.T) {
 }
 
 // We keep this assertion separate so a future Errors change drawing on
-// store error types is reflected here too — guards against silently
+// store error types is reflected here too; guards against silently
 // rewording the public ErrGoalActive sentinel.
 func TestUpdateGoalDoubleCompleteReturnsAlreadyDone(t *testing.T) {
 	store := NewStore()

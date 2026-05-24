@@ -19,7 +19,7 @@ func TestStartRejectsEmpty(t *testing.T) {
 }
 
 func TestStartRejectsTooLongObjective(t *testing.T) {
-	_, err := NewStore().Start(strings.Repeat("目", MaxObjectiveLength+1))
+	_, err := NewStore().Start(strings.Repeat("x", MaxObjectiveLength+1))
 	if err == nil {
 		t.Fatal("expected too-long objective to fail")
 	}
@@ -171,8 +171,8 @@ func TestSummaryFormatsTimestampsInLocalTimezone(t *testing.T) {
 
 // TestConcurrentLifecycle stresses the store's mutex by running pause /
 // resume / current pairs from many goroutines. The point isn't to validate
-// any specific terminal state — we expect either active or paused at the
-// end — but to catch races / deadlocks via the race detector when run with
+// any specific terminal state - we expect either active or paused at the
+// end - but to catch races / deadlocks via the race detector when run with
 // `go test -race`.
 func TestConcurrentLifecycle(t *testing.T) {
 	s := NewStore()
@@ -259,6 +259,95 @@ func TestCwdStoreKeyUsesStableHash(t *testing.T) {
 	}
 	if key != cwdStoreKey("/Users/ityike/Code/go/src/github.com/openmodu/modu") {
 		t.Fatal("cwd key should be stable")
+	}
+}
+
+// TestResumeFromBudgetLimitedStaysBudgetLimited mirrors pi-goal's
+// statusAfterExplicitStatusUpdate: a Resume against a goal that has already
+// exhausted its token budget must keep it in budgetLimited, otherwise the
+// model can paper over the budget gate by toggling status.
+func TestResumeFromBudgetLimitedStaysBudgetLimited(t *testing.T) {
+	store := NewStore()
+	budget := 4
+	g, err := store.StartWithBudget("tight budget", &budget)
+	if err != nil {
+		t.Fatalf("StartWithBudget: %v", err)
+	}
+	if _, _, err := store.AccountUsage(types.AgentUsage{Input: 2, Output: 3}, 0, false, g.ID); err != nil {
+		t.Fatalf("AccountUsage: %v", err)
+	}
+	got, _ := store.Current()
+	if got.Status != StatusBudgetLimited {
+		t.Fatalf("setup precondition: want budgetLimited after over-spend, got %q", got.Status)
+	}
+	resumed, err := store.Resume()
+	if err != nil {
+		t.Fatalf("Resume from budgetLimited: %v", err)
+	}
+	if resumed.Status != StatusBudgetLimited {
+		t.Errorf("Resume should not escape budgetLimited while tokens are still over budget, got %q", resumed.Status)
+	}
+}
+
+// TestReplaceObjectiveBudgetTransitions covers the two budget-edge paths the
+// pi-goal updateGoal contract guarantees when the objective is unchanged:
+// going from no-budget to a budget, and clearing a budget. (Objective
+// changes always reset to a fresh goal with whatever budget was passed in;
+// the unchanged-objective path is the one with non-obvious semantics.)
+func TestReplaceObjectiveBudgetTransitions(t *testing.T) {
+	store := NewStore()
+	if _, err := store.Start("steady objective"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// nil -> budget set
+	budget := 99
+	g, err := store.ReplaceObjective("steady objective", &budget)
+	if err != nil {
+		t.Fatalf("set budget: %v", err)
+	}
+	if g.TokenBudget == nil || *g.TokenBudget != 99 {
+		t.Fatalf("budget not applied: %+v", g.TokenBudget)
+	}
+	if g.Status != StatusActive {
+		t.Errorf("status should remain active after budget set, got %q", g.Status)
+	}
+
+	// budget set -> nil
+	g, err = store.ReplaceObjective("steady objective", nil)
+	if err != nil {
+		t.Fatalf("clear budget: %v", err)
+	}
+	if g.TokenBudget != nil {
+		t.Errorf("budget should clear to nil, got %+v", g.TokenBudget)
+	}
+	if g.Status != StatusActive {
+		t.Errorf("status should remain active after budget clear, got %q", g.Status)
+	}
+}
+
+// TestAccountUsageRejectsMismatchedGoalID guards the optimistic-locking path:
+// if a stale handler tries to account a turn for a goal that has since been
+// replaced, the new goal must not be silently mutated.
+func TestAccountUsageRejectsMismatchedGoalID(t *testing.T) {
+	store := NewStore()
+	g, err := store.Start("first")
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	got, ok, err := store.AccountUsage(types.AgentUsage{Input: 5, Output: 5}, 1, false, "stale-goal-id")
+	if err != nil {
+		t.Fatalf("AccountUsage: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected current goal returned even on mismatch")
+	}
+	if got.ID != g.ID {
+		t.Fatalf("returned goal ID = %q, want current %q", got.ID, g.ID)
+	}
+	// Tokens and time must NOT have been applied to the live goal.
+	if got.TokensUsed != 0 || got.TimeUsedSeconds != 0 {
+		t.Fatalf("stale accounting leaked into live goal: tokens=%d time=%d", got.TokensUsed, got.TimeUsedSeconds)
 	}
 }
 

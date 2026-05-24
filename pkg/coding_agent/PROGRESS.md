@@ -50,6 +50,7 @@ High-priority gaps identified before this round:
 - Extended dynamic context triggers beyond `read/edit/write` to include `grep`, `find`, and `ls` path discovery.
 - Aligned `/goal` UI interactions: hidden follow-up messages are transient, TUI confirms goal replacement, and paused goals ask before resuming once the UI is ready.
 - Hardened `/goal` parity with objective length limits, goal-store schema validation, shutdown-time accounting flush, local-time summaries, hashed no-session store keys, and compact user-facing token counts.
+- Split `/goal` continuation queue decisions into pure idle/after-agent-end helpers, expanded store edge-case coverage, and preserved goal tool `isError` details for model-readable correction paths.
 - Marked dynamic nested-context messages as transient so they do not persist into long-term session history or saved transcripts.
 - Added a lightweight session-scoped harness hook layer around tool execution.
 - Added a harness-only hint side channel by stripping `<modu-code-hint .../>` tags from tool-visible text output while recording them for the host runtime.

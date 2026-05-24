@@ -228,7 +228,7 @@ func (e *Extension) onAgentStart(_ agent.AgentEvent) {
 func (e *Extension) onSessionStart(_ agent.AgentEvent) {
 	if g, ok := e.store.Current(); ok && g.Status == StatusActive {
 		e.beginAgentGoalAccounting(g)
-		if e.shouldQueueContinuation() {
+		if ShouldQueueContinuationWhenIdle(&g, e.apiIsIdle(), e.apiHasPendingMessages()) {
 			if err := e.queueHiddenGoalPrompt(BuildContinuationPrompt(g)); err != nil {
 				e.tell(fmt.Sprintf("goal: startup continuation inject failed: %v", err))
 			}
@@ -281,7 +281,10 @@ func (e *Extension) onAgentEnd(event agent.AgentEvent) {
 	}
 	if g.Status == StatusActive {
 		e.beginAgentGoalAccounting(g)
-		if e.shouldQueueContinuation() {
+		// agent_end fires inside the agent loop just before IsStreaming
+		// flips off, so we must not gate on IsIdle here; the pure
+		// after-agent-end policy only cares about pending user messages.
+		if ShouldQueueContinuationAfterAgentEnd(&g, e.apiHasPendingMessages()) {
 			if err := e.queueHiddenGoalPrompt(BuildContinuationPrompt(g)); err != nil {
 				e.tell(fmt.Sprintf("goal: continuation inject failed: %v (loop will halt)", err))
 			}
@@ -289,15 +292,19 @@ func (e *Extension) onAgentEnd(event agent.AgentEvent) {
 		return
 	}
 	e.clearAgentGoalAccounting()
-	if g.Status == StatusBudgetLimited && e.shouldQueueContinuation() {
+	if g.Status == StatusBudgetLimited && !e.apiHasPendingMessages() {
 		if err := e.queueHiddenGoalPrompt(BuildBudgetLimitedPrompt(g)); err != nil {
 			e.tell(fmt.Sprintf("goal: budget-limit prompt inject failed: %v", err))
 		}
 	}
 }
 
+// queueGoalContinuation is the slash-command entry point (used by /goal,
+// /goal-resume, /goal <new objective>). It uses the WhenIdle policy because
+// these handlers can fire while the agent has a pending message queue or is
+// otherwise busy and we must not double-prompt.
 func (e *Extension) queueGoalContinuation(g Goal) error {
-	if g.Status != StatusActive || !e.shouldQueueContinuation() {
+	if !ShouldQueueContinuationWhenIdle(&g, e.apiIsIdle(), e.apiHasPendingMessages()) {
 		return nil
 	}
 	return e.queueHiddenGoalPrompt(BuildContinuationPrompt(g))
@@ -310,11 +317,22 @@ func (e *Extension) queueHiddenGoalPrompt(content string) error {
 	return e.api.SendFollowUpMessage(content)
 }
 
-func (e *Extension) shouldQueueContinuation() bool {
+// apiIsIdle and apiHasPendingMessages thin-wrap the API so the nil-api
+// case (unit tests using NewStore directly) gracefully degrades to "idle
+// and no pending work" - the same default a freshly started, never-driven
+// agent would report.
+func (e *Extension) apiIsIdle() bool {
 	if e.api == nil {
 		return true
 	}
-	return e.api.IsIdle() && !e.api.HasPendingMessages()
+	return e.api.IsIdle()
+}
+
+func (e *Extension) apiHasPendingMessages() bool {
+	if e.api == nil {
+		return false
+	}
+	return e.api.HasPendingMessages()
 }
 
 func (e *Extension) beginAgentGoalAccounting(g Goal) {

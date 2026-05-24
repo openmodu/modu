@@ -214,10 +214,13 @@ func optionalPositiveInt(v any) (*int, error) {
 	return &out, nil
 }
 
-func textResult(s string, _ bool) agent.AgentToolResult {
+func textResult(s string, isError bool) agent.AgentToolResult {
 	return agent.AgentToolResult{
 		Content: []types.ContentBlock{
 			&types.TextContent{Type: "text", Text: s},
+		},
+		Details: map[string]any{
+			"isError": isError,
 		},
 	}
 }
