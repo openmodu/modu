@@ -3909,10 +3909,16 @@ func TestTransientNestedContextMessagesArePrunedAndNotPersisted(t *testing.T) {
 		Source: nestedContextSource,
 		Text:   "Additional path-specific instructions became relevant after accessing:\n- " + filepath.Join(dir, "nested", "file.go"),
 	}).ToLlmMessage()
+	hiddenFollowUp := (&CustomMessage{
+		Source: hiddenExtensionSource,
+		Text:   "Continue working toward the active thread goal.",
+	}).ToLlmMessage()
 	normal := types.UserMessage{Role: "user", Content: "regular user message"}
 
 	session.agent.AppendMessage(transient)
 	session.handleMessageEnd(transient)
+	session.agent.AppendMessage(hiddenFollowUp)
+	session.handleMessageEnd(hiddenFollowUp)
 	session.agent.AppendMessage(normal)
 	session.handleMessageEnd(normal)
 	session.pruneTransientContextMessages()
@@ -3932,6 +3938,9 @@ func TestTransientNestedContextMessagesArePrunedAndNotPersisted(t *testing.T) {
 	text := string(data)
 	if strings.Contains(text, nestedContextSource) {
 		t.Fatalf("expected transient nested context not to be persisted, got:\n%s", text)
+	}
+	if strings.Contains(text, hiddenExtensionSource) {
+		t.Fatalf("expected hidden extension follow-up not to be persisted, got:\n%s", text)
 	}
 	if !strings.Contains(text, "regular user message") {
 		t.Fatalf("expected regular message to be persisted, got:\n%s", text)

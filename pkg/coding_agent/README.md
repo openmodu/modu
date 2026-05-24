@@ -142,14 +142,14 @@ type ToolHook struct {
 
 `modu_code` 默认加载 `extension/goal`，提供 session-scoped 的 `/goal` 长程任务循环：
 
-- `/goal <objective>` 设置或替换当前目标，并注入隐藏 follow-up 继续执行。
+- `/goal <objective>` 设置或替换当前目标，并注入隐藏 follow-up 继续执行；TUI 中替换已有目标前会弹出确认。
 - `/goal` 或 `/goal status` 查看当前目标。
 - `/goal pause`、`/goal resume`、`/goal clear` 控制生命周期；兼容旧入口 `/goal-pause`、`/goal-resume`、`/goal-cancel`、`/goal-status`。
 - 模型可调用 `create_goal`、`get_goal`、`update_goal({status:"complete"})`；`update_goal` 只能用于完成目标。
 
 目标状态持久化在当前 session 目录的 `extensions/pi-goal/<session-id>.json`，包含 `active`、`paused`、`budgetLimited`、`complete` 状态，以及 token/time accounting。达到显式 token budget 后会进入 `budgetLimited`，并注入收尾提示而不是继续做实质工作。
 
-Goal 状态也会暴露到 `RuntimeState().Extensions["goal"]`，TUI 底部状态行会显示 `Pursuing goal (...)`、`Goal paused (/goal resume)`、`Goal unmet (...)` 或 `Goal achieved (...)`。`/goal` 命令输出通过 extension notify 进入 TUI scrollback，print mode 仍会把同样文本写到 stderr。
+Goal 状态也会暴露到 `RuntimeState().Extensions["goal"]`，TUI 底部状态行会显示 `Pursuing goal (...)`、`Goal paused (/goal resume)`、`Goal unmet (...)` 或 `Goal achieved (...)`。`/goal` 命令输出通过 extension notify 进入 TUI scrollback，print mode 仍会把同样文本写到 stderr。TUI 启动后如果发现 paused goal，会询问是否恢复；headless 模式保持 paused，避免无交互自动恢复。
 
 ### 5. 自动上下文压缩（Auto Compaction）
 

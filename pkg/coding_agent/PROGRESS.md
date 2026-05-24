@@ -48,6 +48,7 @@ High-priority gaps identified before this round:
 - Flattened prior conversation summaries during compaction so repeated compaction does not recursively summarize old summary envelopes.
 - Added dynamic nested-context injection triggered by file/tool access so deeper path-specific instructions can be loaded on demand during a turn.
 - Extended dynamic context triggers beyond `read/edit/write` to include `grep`, `find`, and `ls` path discovery.
+- Aligned `/goal` UI interactions: hidden follow-up messages are transient, TUI confirms goal replacement, and paused goals ask before resuming once the UI is ready.
 - Marked dynamic nested-context messages as transient so they do not persist into long-term session history or saved transcripts.
 - Added a lightweight session-scoped harness hook layer around tool execution.
 - Added a harness-only hint side channel by stripping `<modu-code-hint .../>` tags from tool-visible text output while recording them for the host runtime.

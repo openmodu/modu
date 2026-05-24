@@ -52,6 +52,9 @@ type ExtensionAPI interface {
 	SendFollowUpMessage(text string) error
 	// Notify sends a user-visible extension notification to the host UI.
 	Notify(extensionName, text string)
+	// Confirm asks the host UI for a yes/no decision. When no interactive UI is
+	// configured, implementations return defaultYes.
+	Confirm(title, body string, defaultYes bool) bool
 }
 
 // CommandHandler handles a slash command invocation.

@@ -18,6 +18,7 @@ import (
 	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/approval"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
+	"github.com/openmodu/modu/pkg/coding_agent/extension"
 	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/session"
 	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/types"
@@ -125,6 +126,24 @@ func TestPlanApprovalWidgetShowsStepCountAndRisk(t *testing.T) {
 	for _, want := range []string{"Plan approval", "steps=2", "auto-accept allows write/edit/bash", "[Y]es, start coding"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected plan approval widget to contain %q, got %q", want, text)
+		}
+	}
+}
+
+func TestExtensionConfirmWidgetShowsPrompt(t *testing.T) {
+	root := newGoTUIRoot(context.Background(), nil, nil, "", nil, nil)
+	root.model.pendingPerm = &approval.Request{
+		ToolName: "extension_confirm",
+		Args: map[string]any{
+			"title": "Replace goal?",
+			"body":  "Current: first\nNew: second",
+		},
+	}
+
+	text := collectGoTUIText(root.renderApprovalWidget())
+	for _, want := range []string{"Replace goal?", "Current: first", "New: second", "[Y]es", "[N]o"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected extension confirm widget to contain %q, got %q", want, text)
 		}
 	}
 }
@@ -550,6 +569,26 @@ func TestMatchSlashCommandsMergesBuiltinsAndSkills(t *testing.T) {
 	// Prefix that matches neither built-ins nor skills returns empty.
 	if got := matchSlashCommands("/zzz", extras); len(got) != 0 {
 		t.Fatalf("expected no matches for /zzz, got %v", got)
+	}
+}
+
+func TestExtensionSlashCommandIsDelegatedToAgentSession(t *testing.T) {
+	session := newUITestSessionWithExtensions(t, &testSlashExtension{})
+	root := newGoTUIRoot(context.Background(), session, testUIModel(), "", nil, nil)
+
+	if !root.isDynamicAgentSlash("/goal ship this") {
+		t.Fatal("expected /goal to be recognized as a session slash command")
+	}
+	extras := root.skillSlashCommands()
+	found := false
+	for _, cmd := range extras {
+		if cmd.Name == "/goal" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected /goal in dynamic slash suggestions, got %#v", extras)
 	}
 }
 
@@ -1792,6 +1831,38 @@ func newUITestSession(t *testing.T) *coding_agent.CodingSession {
 		}()
 		return stream, nil
 	})
+}
+
+type testSlashExtension struct{}
+
+func (e *testSlashExtension) Name() string { return "test-slash" }
+func (e *testSlashExtension) Init(api extension.ExtensionAPI) error {
+	api.RegisterCommand("goal", "test goal command", func(args string) error { return nil })
+	return nil
+}
+
+func newUITestSessionWithExtensions(t *testing.T, extensions ...extension.Extension) *coding_agent.CodingSession {
+	t.Helper()
+
+	root := t.TempDir()
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:        root,
+		AgentDir:   filepath.Join(root, ".coding_agent"),
+		Model:      testUIModel(),
+		Extensions: extensions,
+		GetAPIKey: func(provider string) (string, error) {
+			return "", nil
+		},
+		StreamFn: func(ctx context.Context, model *types.Model, llmCtx *types.LLMContext, opts *types.SimpleStreamOptions) (types.EventStream, error) {
+			stream := types.NewEventStream()
+			stream.Close()
+			return stream, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return session
 }
 
 func newUITestSessionWithStream(t *testing.T, streamFn agent.StreamFn) *coding_agent.CodingSession {

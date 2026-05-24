@@ -285,8 +285,8 @@ func (r *goTUIRoot) runSlash(line string) {
 		printer := &uiSlashPrinter{}
 		handled, exit := slash.Handle(r.ctx, line, r.session, printer, r.modelInfo)
 		if !handled && r.isDynamicAgentSlash(line) {
-			// Not a built-in slash command, but a known skill or prompt
-			// template — delegate to the session for expansion/execution.
+			// Not a TUI-local slash command, but the agent session knows how
+			// to handle it (extension command, skill, or prompt template).
 			r.queue(func() {
 				r.runPrompt(line)
 			})
@@ -341,7 +341,7 @@ func (r *goTUIRoot) runConfigHook(args string) {
 }
 
 // isDynamicAgentSlash reports whether line is `/<name>[ args]` where <name>
-// matches a discovered skill or prompt template.
+// matches a session slash command, discovered skill, or prompt template.
 func (r *goTUIRoot) isDynamicAgentSlash(line string) bool {
 	cmd := strings.TrimPrefix(strings.TrimSpace(line), "/")
 	if i := strings.IndexAny(cmd, " \t"); i >= 0 {
@@ -349,6 +349,9 @@ func (r *goTUIRoot) isDynamicAgentSlash(line string) bool {
 	}
 	if cmd == "" || r.session == nil {
 		return false
+	}
+	if r.session.HasSlashCommand(cmd) {
+		return true
 	}
 	for _, s := range r.session.GetSkills() {
 		if s.Name == cmd {
@@ -363,18 +366,30 @@ func (r *goTUIRoot) isDynamicAgentSlash(line string) bool {
 	return false
 }
 
-// skillSlashCommands snapshots the current dynamic resources into
-// slash-suggestion entries so /<name> auto-completes alongside the built-ins.
+// skillSlashCommands snapshots current dynamic resources and extension slash
+// commands so /<name> auto-completes alongside the built-ins.
 func (r *goTUIRoot) skillSlashCommands() []slashCommandDef {
 	if r.session == nil {
 		return nil
 	}
 	list := r.session.GetSkills()
 	prompts := r.session.GetPromptTemplates()
-	if len(list) == 0 && len(prompts) == 0 {
-		return nil
+	registered := r.session.RegisteredSlashCommands()
+	builtins := make(map[string]struct{}, len(uiSlashCommands))
+	for _, cmd := range uiSlashCommands {
+		builtins[cmd.Name] = struct{}{}
 	}
-	out := make([]slashCommandDef, 0, len(list)+len(prompts))
+	out := make([]slashCommandDef, 0, len(registered)+len(list)+len(prompts))
+	for _, cmd := range registered {
+		name := "/" + cmd.Name
+		if _, ok := builtins[name]; ok {
+			continue
+		}
+		out = append(out, slashCommandDef{
+			Name:        name,
+			Description: cmd.Description,
+		})
+	}
 	for _, s := range list {
 		out = append(out, slashCommandDef{
 			Name:        "/" + s.Name,

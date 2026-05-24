@@ -25,6 +25,7 @@ type Runner struct {
 	isIdle       func() bool
 	hasPending   func() bool
 	notify       func(extensionName, text string)
+	confirm      func(title, body string, defaultYes bool) bool
 	mu           sync.RWMutex
 }
 
@@ -48,6 +49,7 @@ func (r *Runner) SetCallbacks(
 	isIdle func() bool,
 	hasPending func() bool,
 	notify func(extensionName, text string),
+	confirm func(title, body string, defaultYes bool) bool,
 ) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -62,6 +64,7 @@ func (r *Runner) SetCallbacks(
 	r.isIdle = isIdle
 	r.hasPending = hasPending
 	r.notify = notify
+	r.confirm = confirm
 }
 
 // Init initializes all extensions.
@@ -246,6 +249,17 @@ func (r *Runner) Notify(extensionName, text string) {
 	if fn != nil {
 		fn(extensionName, text)
 	}
+}
+
+// Confirm implements ExtensionAPI.
+func (r *Runner) Confirm(title, body string, defaultYes bool) bool {
+	r.mu.RLock()
+	fn := r.confirm
+	r.mu.RUnlock()
+	if fn == nil {
+		return defaultYes
+	}
+	return fn(title, body, defaultYes)
 }
 
 // GetTools returns all tools registered by extensions.

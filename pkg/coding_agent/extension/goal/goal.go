@@ -15,6 +15,7 @@ import (
 const (
 	goalUsage             = "Usage: /goal <objective>"
 	extensionSessionStart = "session_start"
+	extensionUIReady      = "ui_ready"
 )
 
 // Extension wires persistent /goal support into a CodingSession.
@@ -112,6 +113,7 @@ func (e *Extension) Init(api extension.ExtensionAPI) error {
 	api.On(string(agent.EventTypeAgentStart), e.onAgentStart)
 	api.On(string(agent.EventTypeAgentEnd), e.onAgentEnd)
 	api.On(extensionSessionStart, e.onSessionStart)
+	api.On(extensionUIReady, e.onUIReady)
 	return nil
 }
 
@@ -135,8 +137,18 @@ func (e *Extension) cmdGoal(args string) error {
 }
 
 func (e *Extension) cmdSetObjective(objective string) error {
-	if g, ok := e.store.Current(); ok && g.Status == StatusActive {
-		e.accountCurrentAgentTurn(types.AgentUsage{}, false)
+	if current, ok := e.store.Current(); ok {
+		if shouldConfirmGoalReplace(current, objective) && !e.api.Confirm(
+			"Replace goal?",
+			fmt.Sprintf("Current: %s\nNew: %s", current.Objective, objective),
+			true,
+		) {
+			e.tell("Goal unchanged")
+			return nil
+		}
+		if current.Status == StatusActive {
+			e.accountCurrentAgentTurn(types.AgentUsage{}, false)
+		}
 	}
 	g, err := e.store.ReplaceObjective(objective, nil)
 	if err != nil {
@@ -222,6 +234,24 @@ func (e *Extension) onSessionStart(_ agent.AgentEvent) {
 		return
 	}
 	e.clearAgentGoalAccounting()
+}
+
+func (e *Extension) onUIReady(_ agent.AgentEvent) {
+	g, ok := e.store.Current()
+	if !ok || g.Status != StatusPaused {
+		return
+	}
+	if !e.api.Confirm(
+		"Resume paused goal?",
+		fmt.Sprintf("Goal: %s", g.Objective),
+		false,
+	) {
+		e.tell("Goal remains paused")
+		return
+	}
+	if err := e.cmdResume(""); err != nil {
+		e.tell(fmt.Sprintf("goal: resume failed: %v", err))
+	}
 }
 
 func (e *Extension) onAgentEnd(event agent.AgentEvent) {
@@ -397,6 +427,13 @@ func goalStatusLabel(status Status) string {
 	default:
 		return string(status)
 	}
+}
+
+func shouldConfirmGoalReplace(current Goal, nextObjective string) bool {
+	if current.Status == StatusComplete {
+		return false
+	}
+	return strings.TrimSpace(current.Objective) != strings.TrimSpace(nextObjective)
 }
 
 func goalIndicatorText(g Goal) string {

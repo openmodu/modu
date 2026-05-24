@@ -106,15 +106,17 @@ type CodingSession struct {
 	// planDecisionCb presents the plan to the user and returns the decision:
 	// "approve", "approve_auto", "reject", or "reject:<feedback>". nil means
 	// headless — the plan is auto-approved.
-	planDecisionCb func(plan string, steps []string) string
-	worktreeMu     sync.Mutex
-	originalCwd    string
-	worktreePath   string
-	contextMu      sync.Mutex
-	loadedContexts map[string]struct{}
-	harness        *harnessState
-	traceRecorder  *sessiontrace.Recorder
-	otelBridge     *sessiontrace.OTelBridge
+	planDecisionCb     func(plan string, steps []string) string
+	extensionMu        sync.RWMutex
+	extensionConfirmCb func(title, body string, defaultYes bool) bool
+	worktreeMu         sync.Mutex
+	originalCwd        string
+	worktreePath       string
+	contextMu          sync.Mutex
+	loadedContexts     map[string]struct{}
+	harness            *harnessState
+	traceRecorder      *sessiontrace.Recorder
+	otelBridge         *sessiontrace.OTelBridge
 
 	// approvalManager handles tool execution approval.
 	approvalManager *ApprovalManager
@@ -419,7 +421,11 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	// Initialize extensions
 	if len(opts.Extensions) > 0 {
 		sendExtensionMessage := func(text string, followUp bool) error {
-			msg := &CustomMessage{Source: "extension", Text: text}
+			source := "extension"
+			if followUp {
+				source = hiddenExtensionSource
+			}
+			msg := &CustomMessage{Source: source, Text: text}
 			llmMsg := msg.ToLlmMessage()
 			if ag.GetState().IsStreaming {
 				if followUp {
@@ -478,6 +484,9 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 					ExtensionName: extensionName,
 					Message:       text,
 				})
+			},
+			func(title, body string, defaultYes bool) bool {
+				return cs.requestExtensionConfirm(title, body, defaultYes)
 			},
 		)
 

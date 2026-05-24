@@ -20,6 +20,8 @@ type fakeAPI struct {
 	handlers map[string][]extension.EventHandler
 	sent     []string
 	notices  []string
+	confirms []string
+	confirm  *bool
 }
 
 func newFakeAPI() *fakeAPI {
@@ -71,6 +73,15 @@ func (f *fakeAPI) Notify(extensionName, text string) {
 	defer f.mu.Unlock()
 	f.notices = append(f.notices, extensionName+": "+text)
 }
+func (f *fakeAPI) Confirm(title, body string, defaultYes bool) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.confirms = append(f.confirms, title+"\n"+body)
+	if f.confirm != nil {
+		return *f.confirm
+	}
+	return defaultYes
+}
 
 func (f *fakeAPI) sentCount() int {
 	f.mu.Lock()
@@ -88,11 +99,15 @@ func (f *fakeAPI) lastSent() string {
 }
 
 func (f *fakeAPI) fireAgentEnd() {
+	f.fire(string(agent.EventTypeAgentEnd))
+}
+
+func (f *fakeAPI) fire(event string) {
 	f.mu.Lock()
-	hs := append([]extension.EventHandler(nil), f.handlers[string(agent.EventTypeAgentEnd)]...)
+	hs := append([]extension.EventHandler(nil), f.handlers[event]...)
 	f.mu.Unlock()
 	for _, h := range hs {
-		h(agent.AgentEvent{Type: agent.EventTypeAgentEnd})
+		h(agent.AgentEvent{Type: agent.EventType(event)})
 	}
 }
 
@@ -256,6 +271,49 @@ func TestGoalObjectiveReplacesExistingGoal(t *testing.T) {
 	}
 	if !strings.Contains(api.lastSent(), "second") {
 		t.Errorf("replacement continuation missing new objective: %s", api.lastSent())
+	}
+}
+
+func TestGoalObjectiveReplacementCanBeRejected(t *testing.T) {
+	ext, api := initialized(t)
+	if err := api.runCommand(t, "goal", "first"); err != nil {
+		t.Fatalf("first /goal: %v", err)
+	}
+	reject := false
+	api.confirm = &reject
+	before := api.sentCount()
+	if err := api.runCommand(t, "goal", "second"); err != nil {
+		t.Fatalf("second /goal rejection should not error: %v", err)
+	}
+	g, _ := ext.store.Current()
+	if g.Objective != "first" {
+		t.Fatalf("goal should remain unchanged, got %q", g.Objective)
+	}
+	if api.sentCount() != before {
+		t.Fatalf("rejected replacement should not queue continuation: got %d want %d", api.sentCount(), before)
+	}
+	if len(api.confirms) != 1 || !strings.Contains(api.confirms[0], "Replace goal?") {
+		t.Fatalf("replacement should ask for confirmation, got %#v", api.confirms)
+	}
+}
+
+func TestUIReadyCanResumePausedGoal(t *testing.T) {
+	_, api := initialized(t)
+	if err := api.runCommand(t, "goal", "scan todo"); err != nil {
+		t.Fatalf("/goal: %v", err)
+	}
+	if err := api.runCommand(t, "goal-pause", ""); err != nil {
+		t.Fatalf("/goal-pause: %v", err)
+	}
+	accept := true
+	api.confirm = &accept
+	before := api.sentCount()
+	api.fire(extensionUIReady)
+	if api.sentCount() != before+1 {
+		t.Fatalf("ui_ready resume should queue one continuation: got %d want %d", api.sentCount(), before+1)
+	}
+	if len(api.confirms) == 0 || !strings.Contains(api.confirms[len(api.confirms)-1], "Resume paused goal?") {
+		t.Fatalf("ui_ready should ask for resume confirmation, got %#v", api.confirms)
 	}
 }
 
