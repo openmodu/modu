@@ -6,8 +6,6 @@ import (
 	"time"
 
 	gotui "github.com/grindlemire/go-tui"
-
-	"github.com/openmodu/modu/pkg/types"
 )
 
 const (
@@ -124,19 +122,8 @@ func (r *goTUIRoot) idleStatusLine() string {
 
 func (r *goTUIRoot) sessionStatusParts() []string {
 	var parts []string
-	if model := r.currentModelForStatus(); model != nil {
-		label := model.ID
-		if model.ProviderID != "" {
-			label = model.ProviderID + "/" + label
-		}
-		parts = append(parts, "model "+label)
-	}
 	if r.session == nil {
 		return parts
-	}
-	stats := r.session.GetSessionStats()
-	if stats.TotalTokens > 0 {
-		parts = append(parts, fmt.Sprintf("~%d tokens", stats.TotalTokens))
 	}
 	if r.session.IsPlanMode() {
 		parts = append(parts, "plan")
@@ -144,46 +131,10 @@ func (r *goTUIRoot) sessionStatusParts() []string {
 	if r.session.ActiveWorktree() != "" {
 		parts = append(parts, "worktree")
 	}
-	if goal := goalStatusPart(r.session.ExtensionRuntimeStates()); goal != "" {
-		parts = append(parts, goal)
-	}
 	if queue := r.queueStatusLine(); queue != "" {
 		parts = append(parts, queue)
 	}
 	return parts
-}
-
-func goalStatusPart(states map[string]any) string {
-	if len(states) == 0 {
-		return ""
-	}
-	raw, ok := states["goal"]
-	if !ok {
-		return ""
-	}
-	state, ok := raw.(map[string]any)
-	if !ok {
-		return ""
-	}
-	if indicator, ok := state["indicator"].(string); ok && strings.TrimSpace(indicator) != "" {
-		return indicator
-	}
-	status, _ := state["status"].(string)
-	if status == "" {
-		return ""
-	}
-	switch status {
-	case "active":
-		return "goal"
-	case "paused":
-		return "goal paused"
-	case "budgetLimited":
-		return "goal limited"
-	case "complete":
-		return "goal done"
-	default:
-		return "goal " + status
-	}
 }
 
 func (r *goTUIRoot) queueStatusLine() string {
@@ -202,21 +153,6 @@ func (r *goTUIRoot) queueStatusLine() string {
 		return ""
 	}
 	return strings.Join(parts, " ")
-}
-
-func (r *goTUIRoot) currentModelForStatus() *types.Model {
-	if r.session != nil {
-		if model := r.session.GetModel(); model != nil {
-			return model
-		}
-	}
-	if r.modelInfo != nil {
-		return r.modelInfo
-	}
-	if r.model != nil {
-		return r.model.model
-	}
-	return nil
 }
 
 func (r *goTUIRoot) activityLine() (string, bool) {

@@ -1243,13 +1243,21 @@ func TestBottomLineShowsSessionStatusWhenIdle(t *testing.T) {
 
 	line, _ := root.bottomLine()
 	for _, want := range []string{
-		"model test/test-model",
 		"plan",
 		"shift+tab plan",
 		"/help",
 	} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("expected bottom line to contain %q, got %q", want, line)
+		}
+	}
+	for _, unwanted := range []string{
+		"model ",
+		"tokens",
+		"goal",
+	} {
+		if strings.Contains(line, unwanted) {
+			t.Fatalf("expected compact bottom line without %q, got %q", unwanted, line)
 		}
 	}
 }
@@ -1275,27 +1283,6 @@ func TestBottomLineShowsQueuedMessageCounts(t *testing.T) {
 		if !strings.Contains(line, want) {
 			t.Fatalf("expected status line to contain %q, got %q", want, line)
 		}
-	}
-}
-
-func TestGoalStatusPartFromRuntimeState(t *testing.T) {
-	line := goalStatusPart(map[string]any{
-		"goal": map[string]any{
-			"status":    "active",
-			"indicator": "goal 12s",
-		},
-	})
-	if line != "goal 12s" {
-		t.Fatalf("goal status line mismatch: %q", line)
-	}
-
-	line = goalStatusPart(map[string]any{
-		"goal": map[string]any{
-			"status": "paused",
-		},
-	})
-	if line != "goal paused" {
-		t.Fatalf("paused fallback mismatch: %q", line)
 	}
 }
 
