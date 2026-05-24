@@ -5,6 +5,7 @@
 package goal
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,12 +15,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/openmodu/modu/pkg/types"
 )
 
 const storeVersion = 1
+const MaxObjectiveLength = 4000
 
 // Status mirrors pi-goal's GoalStatus.
 type Status string
@@ -87,6 +90,7 @@ var (
 	ErrEmptyObj      = errors.New("goal: objective must not be empty")
 	ErrAlreadyDone   = errors.New("goal: goal is already complete")
 	ErrInvalidBudget = errors.New("goal: token budget must be a positive integer")
+	ErrInvalidStore  = errors.New("goal: invalid goal store")
 )
 
 // GoalFilePath returns the JSON file path for a store ref.
@@ -354,16 +358,24 @@ func (s *Store) Summary() string {
 	if !ok {
 		return "(no goal set)"
 	}
-	out := fmt.Sprintf("Goal %s - status=%s\nObjective: %s\nTime used: %s\nTokens used: %d",
-		shortID(g.ID), g.Status, g.Objective, formatElapsed(g.TimeUsedSeconds), g.TokensUsed)
-	if g.TokenBudget != nil {
-		out += fmt.Sprintf("/%d", *g.TokenBudget)
-	}
+	out := fmt.Sprintf("Goal %s\n%s", shortID(g.ID), FormatGoalForUser(&g))
 	out += fmt.Sprintf("\nStarted: %s", formatGoalTimestamp(g.CreatedAt))
 	if g.CompletedAt != nil {
 		out += fmt.Sprintf("\nCompleted: %s", formatGoalTimestamp(*g.CompletedAt))
 	}
 	return out
+}
+
+func FormatGoalForUser(g *Goal) string {
+	if g == nil {
+		return "(no goal set)"
+	}
+	tokens := formatTokensCompact(g.TokensUsed)
+	if g.TokenBudget != nil {
+		tokens += "/" + formatTokensCompact(*g.TokenBudget)
+	}
+	return fmt.Sprintf("Objective: %s\nStatus: %s\nTime used: %s\nTokens used: %s",
+		g.Objective, g.Status, formatElapsed(g.TimeUsedSeconds), tokens)
 }
 
 func (s *Store) readLocked() (*Goal, error) {
@@ -384,6 +396,11 @@ func (s *Store) readLocked() (*Goal, error) {
 	}
 	if file.Version != storeVersion {
 		return nil, fmt.Errorf("goal: unsupported store version %d", file.Version)
+	}
+	if file.Goal != nil {
+		if err := validateGoalFields(file.Goal); err != nil {
+			return nil, err
+		}
 	}
 	return cloneGoalPtr(file.Goal), nil
 }
@@ -430,7 +447,49 @@ func validateObjective(objective string) (string, error) {
 	if objective == "" {
 		return "", ErrEmptyObj
 	}
+	if n := utf8.RuneCountInString(objective); n > MaxObjectiveLength {
+		return "", fmt.Errorf("goal: objective too long (%d chars, limit %d) — put longer instructions in a file and refer to it, e.g. /goal follow docs/goal.md", n, MaxObjectiveLength)
+	}
 	return objective, nil
+}
+
+func validateGoalFields(g *Goal) error {
+	if g == nil {
+		return nil
+	}
+	if strings.TrimSpace(g.ID) == "" {
+		return fmt.Errorf("%w: id must not be empty", ErrInvalidStore)
+	}
+	if _, err := validateObjective(g.Objective); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidStore, err)
+	}
+	switch g.Status {
+	case StatusActive, StatusPaused, StatusBudgetLimited, StatusComplete:
+	default:
+		return fmt.Errorf("%w: unsupported status %q", ErrInvalidStore, g.Status)
+	}
+	if g.TokenBudget != nil && *g.TokenBudget <= 0 {
+		return fmt.Errorf("%w: tokenBudget must be positive", ErrInvalidStore)
+	}
+	if g.TokensUsed < 0 {
+		return fmt.Errorf("%w: tokensUsed must be non-negative", ErrInvalidStore)
+	}
+	if g.TimeUsedSeconds < 0 {
+		return fmt.Errorf("%w: timeUsedSeconds must be non-negative", ErrInvalidStore)
+	}
+	if g.CreatedAt <= 0 {
+		return fmt.Errorf("%w: createdAt must be positive", ErrInvalidStore)
+	}
+	if g.UpdatedAt <= 0 {
+		return fmt.Errorf("%w: updatedAt must be positive", ErrInvalidStore)
+	}
+	if g.LastStartedAt != nil && *g.LastStartedAt <= 0 {
+		return fmt.Errorf("%w: lastStartedAt must be positive", ErrInvalidStore)
+	}
+	if g.CompletedAt != nil && *g.CompletedAt <= 0 {
+		return fmt.Errorf("%w: completedAt must be positive", ErrInvalidStore)
+	}
+	return nil
 }
 
 func validateTokenBudget(tokenBudget *int) error {
@@ -514,6 +573,37 @@ func shortID(id string) string {
 		return id
 	}
 	return id[:8]
+}
+
+func cwdStoreKey(cwd string) string {
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		return "unknown"
+	}
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(cwd)))[:24]
+}
+
+func formatTokensCompact(v int) string {
+	if v < 0 {
+		v = 0
+	}
+	if v < 1000 {
+		return fmt.Sprintf("%d", v)
+	}
+	if v >= 999_500 && v < 1_000_000 {
+		return "1M"
+	}
+	if v < 1_000_000 {
+		return formatCompactFloat(float64(v)/1000, "K")
+	}
+	return formatCompactFloat(float64(v)/1_000_000, "M")
+}
+
+func formatCompactFloat(v float64, suffix string) string {
+	if v >= 10 || v == float64(int(v)) {
+		return fmt.Sprintf("%.0f%s", v, suffix)
+	}
+	return fmt.Sprintf("%.1f%s", v, suffix)
 }
 
 func formatElapsed(seconds int64) string {

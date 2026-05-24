@@ -217,6 +217,31 @@ func TestPauseStopsLoopResumeRestartsIt(t *testing.T) {
 	}
 }
 
+func TestSessionShutdownFlushesActiveTurnAccounting(t *testing.T) {
+	ext, api := initialized(t)
+	if err := api.runCommand(t, "goal", "account shutdown time"); err != nil {
+		t.Fatalf("/goal: %v", err)
+	}
+	active, _ := ext.store.Current()
+	ext.mu.Lock()
+	ext.agentTurnInProgress = true
+	ext.agentGoalID = active.ID
+	ext.agentMeasuredFrom = time.Now().Add(-2 * time.Second)
+	ext.mu.Unlock()
+
+	api.fire(extensionShutdown)
+	got, _ := ext.store.Current()
+	if got.TimeUsedSeconds < 1 {
+		t.Fatalf("shutdown should flush active elapsed time, got %ds", got.TimeUsedSeconds)
+	}
+	ext.mu.Lock()
+	cleared := ext.agentGoalID == "" && ext.completedThisTurnGoalID == "" && ext.agentMeasuredFrom.IsZero()
+	ext.mu.Unlock()
+	if !cleared {
+		t.Fatal("shutdown should clear in-memory goal accounting")
+	}
+}
+
 func TestCancelStopsLoopPermanently(t *testing.T) {
 	_, api := initialized(t)
 	api.runCommand(t, "goal", "noop")

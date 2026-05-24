@@ -16,6 +16,7 @@ const (
 	goalUsage             = "Usage: /goal <objective>"
 	extensionSessionStart = "session_start"
 	extensionUIReady      = "ui_ready"
+	extensionShutdown     = "session_shutdown"
 )
 
 // Extension wires persistent /goal support into a CodingSession.
@@ -114,6 +115,7 @@ func (e *Extension) Init(api extension.ExtensionAPI) error {
 	api.On(string(agent.EventTypeAgentEnd), e.onAgentEnd)
 	api.On(extensionSessionStart, e.onSessionStart)
 	api.On(extensionUIReady, e.onUIReady)
+	api.On(extensionShutdown, e.onSessionShutdown)
 	return nil
 }
 
@@ -203,7 +205,7 @@ func (e *Extension) cmdStatus(string) error {
 		e.tell(goalUsage + "\nNo goal is currently set.")
 		return nil
 	}
-	e.tell(e.store.Summary())
+	e.tell(e.store.Summary() + "\n\n(Use /goal {pause|resume|clear|status} or /goal <new objective>)")
 	if g.Status == StatusActive {
 		e.beginAgentGoalAccounting(g)
 	}
@@ -252,6 +254,11 @@ func (e *Extension) onUIReady(_ agent.AgentEvent) {
 	if err := e.cmdResume(""); err != nil {
 		e.tell(fmt.Sprintf("goal: resume failed: %v", err))
 	}
+}
+
+func (e *Extension) onSessionShutdown(_ agent.AgentEvent) {
+	e.accountCurrentAgentTurn(types.AgentUsage{}, false)
+	e.clearAgentGoalAccounting()
 }
 
 func (e *Extension) onAgentEnd(event agent.AgentEvent) {
@@ -449,32 +456,24 @@ func goalIndicatorText(g Goal) string {
 	switch g.Status {
 	case StatusActive:
 		if g.TokenBudget != nil {
-			return fmt.Sprintf("Pursuing goal (%d/%d tokens)", g.TokensUsed, *g.TokenBudget)
+			return fmt.Sprintf("Pursuing goal (%s/%s tokens)", formatTokensCompact(g.TokensUsed), formatTokensCompact(*g.TokenBudget))
 		}
 		return fmt.Sprintf("Pursuing goal (%s)", formatElapsed(g.TimeUsedSeconds))
 	case StatusPaused:
 		return "Goal paused (/goal resume)"
 	case StatusBudgetLimited:
 		if g.TokenBudget != nil {
-			return fmt.Sprintf("Goal unmet (%d/%d tokens)", g.TokensUsed, *g.TokenBudget)
+			return fmt.Sprintf("Goal unmet (%s/%s tokens)", formatTokensCompact(g.TokensUsed), formatTokensCompact(*g.TokenBudget))
 		}
 		return "Goal unmet"
 	case StatusComplete:
 		if g.TokenBudget != nil {
-			return fmt.Sprintf("Goal achieved (%d tokens)", g.TokensUsed)
+			return fmt.Sprintf("Goal achieved (%s tokens)", formatTokensCompact(g.TokensUsed))
 		}
 		return fmt.Sprintf("Goal achieved (%s)", formatElapsed(g.TimeUsedSeconds))
 	default:
 		return string(g.Status)
 	}
-}
-
-func cwdStoreKey(cwd string) string {
-	cwd = strings.TrimSpace(cwd)
-	if cwd == "" {
-		return "unknown"
-	}
-	return strings.NewReplacer("/", "-", "\\", "-", ":", "-").Replace(cwd)
 }
 
 func (e *Extension) tell(msg string) {

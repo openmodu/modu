@@ -18,6 +18,17 @@ func TestStartRejectsEmpty(t *testing.T) {
 	}
 }
 
+func TestStartRejectsTooLongObjective(t *testing.T) {
+	_, err := NewStore().Start(strings.Repeat("目", MaxObjectiveLength+1))
+	if err == nil {
+		t.Fatal("expected too-long objective to fail")
+	}
+	if !strings.Contains(err.Error(), "objective too long") ||
+		!strings.Contains(err.Error(), "docs/goal.md") {
+		t.Fatalf("unexpected error for too-long objective: %v", err)
+	}
+}
+
 func TestStartThenSecondStartRejected(t *testing.T) {
 	s := NewStore()
 	if _, err := s.Start("first"); err != nil {
@@ -111,10 +122,24 @@ func TestSummaryWithAndWithoutGoal(t *testing.T) {
 	if s.Summary() != "(no goal set)" {
 		t.Errorf("empty Summary mismatch: %q", s.Summary())
 	}
-	s.Start("ship modu_cron v1")
-	if !strings.Contains(s.Summary(), "ship modu_cron v1") ||
-		!strings.Contains(s.Summary(), "active") {
-		t.Errorf("Summary missing fields: %q", s.Summary())
+	budget := 2500
+	if _, err := s.StartWithBudget("ship modu_cron v1", &budget); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.AccountUsage(types.AgentUsage{Input: 1200, Output: 34}, 90, false, ""); err != nil {
+		t.Fatal(err)
+	}
+	summary := s.Summary()
+	for _, want := range []string{
+		"Goal ",
+		"Objective: ship modu_cron v1",
+		"Status: active",
+		"Time used: 1m",
+		"Tokens used: 1.2K/2.5K",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Errorf("Summary missing %q:\n%s", want, summary)
+		}
 	}
 }
 
@@ -190,6 +215,50 @@ func TestFileBackedStorePersistsBySession(t *testing.T) {
 	}
 	if got.ID != g.ID || got.Objective != "persist this goal" {
 		t.Fatalf("persisted goal mismatch: %+v", got)
+	}
+}
+
+func TestFileBackedStoreRejectsInvalidGoalSchema(t *testing.T) {
+	dir := t.TempDir()
+	ref := StoreRef{BaseDir: dir, ThreadID: "thread/invalid"}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	raw := `{
+  "version": 1,
+  "goal": {
+    "id": "bad",
+    "objective": "broken",
+    "status": "mystery",
+    "tokensUsed": -1,
+    "timeUsedSeconds": 0,
+    "createdAt": 1,
+    "updatedAt": 1
+  }
+}`
+	if err := os.WriteFile(GoalFilePath(ref), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := NewStore()
+	store.SetRefProvider(func() StoreRef { return ref })
+	if _, ok := store.Current(); ok {
+		t.Fatal("invalid goal store should not load")
+	}
+	if _, err := store.Start("new goal"); err == nil || !errors.Is(err, ErrInvalidStore) {
+		t.Fatalf("expected invalid store error when mutating bad store, got %v", err)
+	}
+}
+
+func TestCwdStoreKeyUsesStableHash(t *testing.T) {
+	key := cwdStoreKey("/Users/ityike/Code/go/src/github.com/openmodu/modu")
+	if len(key) != 24 {
+		t.Fatalf("expected 24-char cwd key, got %q", key)
+	}
+	if strings.ContainsAny(key, `/\:`) {
+		t.Fatalf("cwd key should be path-safe, got %q", key)
+	}
+	if key != cwdStoreKey("/Users/ityike/Code/go/src/github.com/openmodu/modu") {
+		t.Fatal("cwd key should be stable")
 	}
 }
 

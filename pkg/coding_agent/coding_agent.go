@@ -599,6 +599,9 @@ func (s *CodingSession) Prompt(ctx context.Context, text string) error {
 }
 
 func (s *CodingSession) Close(reason string) {
+	if s.extensions != nil {
+		s.extensions.EmitEvent(agent.AgentEvent{Type: agent.EventType("session_shutdown")})
+	}
 	if s.traceRecorder != nil {
 		_ = s.traceRecorder.RecordSessionEvent("session_end", map[string]any{"reason": reason})
 		_ = s.traceRecorder.Close()
