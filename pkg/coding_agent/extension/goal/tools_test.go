@@ -70,7 +70,8 @@ func TestCreateGoalToolRejectsExistingGoal(t *testing.T) {
 	store := NewStore()
 	store.Start("existing")
 	out := callTool(t, &createGoalTool{store: store}, map[string]any{"objective": "new"})
-	if !strings.Contains(out, "already active") {
+	if !strings.Contains(out, "already has a goal") ||
+		!strings.Contains(out, "use update_goal only when the existing goal is complete") {
 		t.Fatalf("expected existing-goal rejection, got: %s", out)
 	}
 }

@@ -518,7 +518,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 				},
 			}
 		}
-		extRunner.EmitEvent(agent.AgentEvent{Type: agent.EventType("session_start")})
+		extRunner.EmitEvent(agent.AgentEvent{Type: agent.EventType("session_start"), Reason: "startup"})
 	}
 
 	cs.installHarnessLayer()
@@ -1861,7 +1861,7 @@ func (s *CodingSession) switchSessionManager(newMgr *session.Manager) error {
 	s.agent.ReplaceMessages(messages)
 	s.lastSavedIndex = len(messages)
 	if s.extensions != nil {
-		s.extensions.EmitEvent(agent.AgentEvent{Type: agent.EventType("session_start")})
+		s.extensions.EmitEvent(agent.AgentEvent{Type: agent.EventType("session_start"), Reason: "resume"})
 	}
 	s.writeRuntimeState()
 	return nil

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -44,7 +45,7 @@ type StoreRef struct {
 // Unix seconds so the on-disk shape stays close to pi-goal.
 type Goal struct {
 	ID              string `json:"id"`
-	ThreadID        string `json:"threadId,omitempty"`
+	ThreadID        string `json:"threadId"`
 	Objective       string `json:"objective"`
 	Status          Status `json:"status"`
 	TokenBudget     *int   `json:"tokenBudget,omitempty"`
@@ -60,6 +61,15 @@ type goalFile struct {
 	Version int   `json:"version"`
 	Goal    *Goal `json:"goal"`
 }
+
+type accountingMode string
+
+const (
+	accountActiveStatusOnly accountingMode = "activeStatusOnly"
+	accountActive           accountingMode = "active"
+	accountActiveOrComplete accountingMode = "activeOrComplete"
+	accountActiveOrStopped  accountingMode = "activeOrStopped"
+)
 
 // Store holds the current Goal. Without a ref provider it is purely in-memory,
 // which keeps unit tests and embedded SDK users lightweight. With a ref
@@ -310,6 +320,14 @@ func (s *Store) MarkComplete() (Goal, error) {
 
 // AccountUsage adds one agent turn's usage to the active goal.
 func (s *Store) AccountUsage(usage types.AgentUsage, elapsedSeconds int64, includeComplete bool, expectedGoalID string) (Goal, bool, error) {
+	mode := accountActive
+	if includeComplete {
+		mode = accountActiveOrComplete
+	}
+	return s.accountUsage(usage, elapsedSeconds, mode, expectedGoalID)
+}
+
+func (s *Store) accountUsage(usage types.AgentUsage, elapsedSeconds int64, mode accountingMode, expectedGoalID string) (Goal, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	current, err := s.readLocked()
@@ -322,7 +340,7 @@ func (s *Store) AccountUsage(usage types.AgentUsage, elapsedSeconds int64, inclu
 	if expectedGoalID != "" && current.ID != expectedGoalID {
 		return *current, true, nil
 	}
-	if !canAccountUsage(current.Status, includeComplete) {
+	if !canAccountUsage(current.Status, mode) {
 		return *current, true, nil
 	}
 	if elapsedSeconds < 0 {
@@ -331,7 +349,7 @@ func (s *Store) AccountUsage(usage types.AgentUsage, elapsedSeconds int64, inclu
 	current.TokensUsed += tokenDelta(usage)
 	current.TimeUsedSeconds += elapsedSeconds
 	current.UpdatedAt = nowSeconds()
-	current.Status = statusAfterAccounting(current.Status, current.TokensUsed, current.TokenBudget)
+	current.Status = statusAfterAccounting(current.Status, current.TokensUsed, current.TokenBudget, mode)
 	if current.Status == StatusBudgetLimited {
 		current.LastStartedAt = nil
 	}
@@ -356,26 +374,36 @@ func (s *Store) Current() (Goal, bool) {
 func (s *Store) Summary() string {
 	g, ok := s.Current()
 	if !ok {
-		return "(no goal set)"
+		return "No active goal is set."
 	}
-	out := fmt.Sprintf("Goal %s\n%s", shortID(g.ID), FormatGoalForUser(&g))
-	out += fmt.Sprintf("\nStarted: %s", formatGoalTimestamp(g.CreatedAt))
-	if g.CompletedAt != nil {
-		out += fmt.Sprintf("\nCompleted: %s", formatGoalTimestamp(*g.CompletedAt))
-	}
-	return out
+	return FormatGoalForUser(&g)
 }
 
 func FormatGoalForUser(g *Goal) string {
 	if g == nil {
-		return "(no goal set)"
+		return "No active goal is set."
 	}
 	tokens := formatTokensCompact(g.TokensUsed)
 	if g.TokenBudget != nil {
 		tokens += "/" + formatTokensCompact(*g.TokenBudget)
 	}
-	return fmt.Sprintf("Objective: %s\nStatus: %s\nTime used: %s\nTokens used: %s",
-		g.Objective, g.Status, formatElapsed(g.TimeUsedSeconds), tokens)
+	out := fmt.Sprintf("Objective: %s\nStatus: %s\nTime used: %s\nTokens used: %s",
+		g.Objective, goalStatusLabel(g.Status), formatElapsed(g.TimeUsedSeconds), tokens)
+	if g.CompletedAt != nil && *g.CompletedAt != 0 {
+		out += "\nCompleted at: " + time.Unix(*g.CompletedAt, 0).UTC().Format(time.RFC3339)
+	}
+	return out
+}
+
+func goalUsageSummary(g Goal) string {
+	parts := []string{"Objective: " + g.Objective}
+	if g.TimeUsedSeconds > 0 {
+		parts = append(parts, "Time: "+formatElapsed(g.TimeUsedSeconds)+".")
+	}
+	if g.TokenBudget != nil {
+		parts = append(parts, "Tokens: "+formatTokensCompact(g.TokensUsed)+"/"+formatTokensCompact(*g.TokenBudget)+".")
+	}
+	return strings.Join(parts, " ")
 }
 
 func (s *Store) readLocked() (*Goal, error) {
@@ -460,6 +488,9 @@ func validateGoalFields(g *Goal) error {
 	if strings.TrimSpace(g.ID) == "" {
 		return fmt.Errorf("%w: id must not be empty", ErrInvalidStore)
 	}
+	if g.ThreadID == "" {
+		return fmt.Errorf("%w: threadId must be a string", ErrInvalidStore)
+	}
 	if _, err := validateObjective(g.Objective); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalidStore, err)
 	}
@@ -477,17 +508,17 @@ func validateGoalFields(g *Goal) error {
 	if g.TimeUsedSeconds < 0 {
 		return fmt.Errorf("%w: timeUsedSeconds must be non-negative", ErrInvalidStore)
 	}
-	if g.CreatedAt <= 0 {
-		return fmt.Errorf("%w: createdAt must be positive", ErrInvalidStore)
+	if g.CreatedAt < 0 {
+		return fmt.Errorf("%w: createdAt must be non-negative", ErrInvalidStore)
 	}
-	if g.UpdatedAt <= 0 {
-		return fmt.Errorf("%w: updatedAt must be positive", ErrInvalidStore)
+	if g.UpdatedAt < 0 {
+		return fmt.Errorf("%w: updatedAt must be non-negative", ErrInvalidStore)
 	}
-	if g.LastStartedAt != nil && *g.LastStartedAt <= 0 {
-		return fmt.Errorf("%w: lastStartedAt must be positive", ErrInvalidStore)
+	if g.LastStartedAt != nil && *g.LastStartedAt < 0 {
+		return fmt.Errorf("%w: lastStartedAt must be non-negative", ErrInvalidStore)
 	}
-	if g.CompletedAt != nil && *g.CompletedAt <= 0 {
-		return fmt.Errorf("%w: completedAt must be positive", ErrInvalidStore)
+	if g.CompletedAt != nil && *g.CompletedAt < 0 {
+		return fmt.Errorf("%w: completedAt must be non-negative", ErrInvalidStore)
 	}
 	return nil
 }
@@ -506,21 +537,36 @@ func statusAfterBudgetLimit(status Status, tokensUsed int, tokenBudget *int) Sta
 	return status
 }
 
-func statusAfterAccounting(status Status, tokensUsed int, tokenBudget *int) Status {
+func statusAfterAccounting(status Status, tokensUsed int, tokenBudget *int, mode accountingMode) Status {
 	if tokenBudget == nil || tokensUsed < *tokenBudget {
 		return status
 	}
-	if status == StatusActive || status == StatusBudgetLimited {
-		return StatusBudgetLimited
+	switch mode {
+	case accountActiveStatusOnly, accountActive, accountActiveOrComplete:
+		if status == StatusActive {
+			return StatusBudgetLimited
+		}
+	case accountActiveOrStopped:
+		if status == StatusActive || status == StatusPaused || status == StatusBudgetLimited {
+			return StatusBudgetLimited
+		}
 	}
 	return status
 }
 
-func canAccountUsage(status Status, includeComplete bool) bool {
-	if status == StatusActive || status == StatusBudgetLimited {
-		return true
+func canAccountUsage(status Status, mode accountingMode) bool {
+	switch mode {
+	case accountActiveStatusOnly:
+		return status == StatusActive
+	case accountActive:
+		return status == StatusActive || status == StatusBudgetLimited
+	case accountActiveOrComplete:
+		return status == StatusActive || status == StatusBudgetLimited || status == StatusComplete
+	case accountActiveOrStopped:
+		return status == StatusActive || status == StatusPaused || status == StatusBudgetLimited
+	default:
+		return false
 	}
-	return includeComplete && status == StatusComplete
 }
 
 func tokenDelta(usage types.AgentUsage) int {
@@ -564,17 +610,6 @@ func nowSeconds() int64 {
 	return time.Now().Unix()
 }
 
-func formatGoalTimestamp(seconds int64) string {
-	return time.Unix(seconds, 0).Local().Format(time.RFC3339)
-}
-
-func shortID(id string) string {
-	if len(id) <= 8 {
-		return id
-	}
-	return id[:8]
-}
-
 func cwdStoreKey(cwd string) string {
 	cwd = strings.TrimSpace(cwd)
 	if cwd == "" {
@@ -584,29 +619,26 @@ func cwdStoreKey(cwd string) string {
 }
 
 func formatTokensCompact(v int) string {
-	if v < 0 {
-		v = 0
-	}
-	if v < 1000 {
+	abs := math.Abs(float64(v))
+	if abs < 1000 {
 		return fmt.Sprintf("%d", v)
 	}
-	if v >= 999_500 && v < 1_000_000 {
-		return "1M"
-	}
-	if v < 1_000_000 {
+	if abs < 1_000_000 {
 		return formatCompactFloat(float64(v)/1000, "K")
 	}
 	return formatCompactFloat(float64(v)/1_000_000, "M")
 }
 
 func formatCompactFloat(v float64, suffix string) string {
-	if v >= 10 || v == float64(int(v)) {
-		return fmt.Sprintf("%.0f%s", v, suffix)
-	}
-	return fmt.Sprintf("%.1f%s", v, suffix)
+	rounded := fmt.Sprintf("%.1f", v)
+	rounded = strings.TrimSuffix(rounded, ".0")
+	return rounded + suffix
 }
 
 func formatElapsed(seconds int64) string {
+	if seconds < 0 {
+		seconds = 0
+	}
 	if seconds < 60 {
 		return fmt.Sprintf("%ds", seconds)
 	}

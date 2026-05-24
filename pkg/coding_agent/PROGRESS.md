@@ -174,6 +174,7 @@ High-priority gaps identified before this round:
   `/goal` subcommand parity for show, set/replace objective, pause, resume, and clear while keeping the earlier `/goal-*` aliases
   Goal runtime-state exposure plus TUI idle-status indicators for pursuing, paused, unmet, and achieved goals
   Extension notification events so goal command output is visible inside TUI scrollback instead of only stderr
+  pi-goal command/tool/accounting parity for `/goal` parsing, replacement confirmation, clear feedback, completion accounting, resume-only paused prompts, and compact user-facing goal formatting
 
 ## Still Missing
 

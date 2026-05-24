@@ -3,7 +3,6 @@ package goal
 import (
 	"fmt"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -31,6 +30,7 @@ type Extension struct {
 	agentMeasuredFrom       time.Time
 	agentTurnInProgress     bool
 	completedThisTurnGoalID string
+	lastSessionStartReason  string
 }
 
 // Options configures the Extension. The zero value is usable.
@@ -108,7 +108,11 @@ func (e *Extension) Init(api extension.ExtensionAPI) error {
 	api.RegisterCommand("goal-status", "Print the current goal's status", e.cmdStatus)
 
 	api.RegisterTool(&createGoalTool{store: e.store})
-	api.RegisterTool(&updateGoalTool{store: e.store, onComplete: e.markGoalCompletedThisTurn})
+	api.RegisterTool(&updateGoalTool{
+		store:          e.store,
+		beforeComplete: func() { e.accountCurrentAgentTurn(types.AgentUsage{}, false) },
+		onComplete:     e.markGoalCompletedThisTurn,
+	})
 	api.RegisterTool(&getGoalTool{store: e.store})
 
 	api.On(string(agent.EventTypeAgentStart), e.onAgentStart)
@@ -120,29 +124,28 @@ func (e *Extension) Init(api extension.ExtensionAPI) error {
 }
 
 func (e *Extension) cmdGoal(args string) error {
-	trimmed := strings.TrimSpace(args)
-	if trimmed == "" {
+	command := parseGoalCommand(args)
+	switch command.Kind {
+	case parsedGoalShow:
 		return e.cmdStatus("")
-	}
-	switch strings.ToLower(trimmed) {
-	case "pause":
-		return e.cmdPause("")
-	case "resume":
+	case parsedGoalSetStatus:
+		if command.Status == StatusPaused {
+			return e.cmdPause("")
+		}
 		return e.cmdResume("")
-	case "clear", "cancel":
+	case parsedGoalClear:
 		return e.cmdClear("")
-	case "status":
-		return e.cmdStatus("")
-	default:
-		return e.cmdSetObjective(trimmed)
+	case parsedGoalSetObjective:
+		return e.cmdSetObjective(command.Objective)
 	}
+	return nil
 }
 
 func (e *Extension) cmdSetObjective(objective string) error {
 	if current, ok := e.store.Current(); ok {
-		if shouldConfirmGoalReplace(current, objective) && !e.api.Confirm(
+		if !e.api.Confirm(
 			"Replace goal?",
-			fmt.Sprintf("Current: %s\nNew: %s", current.Objective, objective),
+			fmt.Sprintf("New objective: %s", objective),
 			true,
 		) {
 			e.tell("Goal unchanged")
@@ -161,7 +164,7 @@ func (e *Extension) cmdSetObjective(objective string) error {
 	} else {
 		e.stopAgentGoalAccounting(g.ID)
 	}
-	e.tell(fmt.Sprintf("Goal %s\n%s", goalStatusLabel(g.Status), e.store.Summary()))
+	e.tell(fmt.Sprintf("Goal %s\n%s", goalStatusLabel(g.Status), FormatGoalForUser(&g)))
 	return e.queueGoalContinuation(g)
 }
 
@@ -172,7 +175,7 @@ func (e *Extension) cmdPause(string) error {
 		return err
 	}
 	e.stopAgentGoalAccounting(g.ID)
-	e.tell(fmt.Sprintf("Goal paused\n%s", e.store.Summary()))
+	e.tell(fmt.Sprintf("Goal paused\n%s", FormatGoalForUser(&g)))
 	return nil
 }
 
@@ -184,14 +187,19 @@ func (e *Extension) cmdResume(string) error {
 	if g.Status == StatusActive {
 		e.beginAgentGoalAccounting(g)
 	}
-	e.tell(fmt.Sprintf("Goal %s\n%s", goalStatusLabel(g.Status), e.store.Summary()))
+	e.tell(fmt.Sprintf("Goal %s\n%s", goalStatusLabel(g.Status), FormatGoalForUser(&g)))
 	return e.queueGoalContinuation(g)
 }
 
 func (e *Extension) cmdClear(string) error {
 	e.accountCurrentAgentTurn(types.AgentUsage{}, false)
-	g, err := e.store.Cancel()
-	if err != nil {
+	g, ok := e.store.Current()
+	if !ok {
+		e.clearAgentGoalAccounting()
+		e.tell("No goal to clear\nThis thread does not currently have a goal.")
+		return nil
+	}
+	if _, err := e.store.Cancel(); err != nil {
 		return err
 	}
 	e.stopAgentGoalAccounting(g.ID)
@@ -205,7 +213,7 @@ func (e *Extension) cmdStatus(string) error {
 		e.tell(goalUsage + "\nNo goal is currently set.")
 		return nil
 	}
-	e.tell(e.store.Summary() + "\n\n(Use /goal {pause|resume|clear|status} or /goal <new objective>)")
+	e.tell(FormatGoalForUser(&g))
 	if g.Status == StatusActive {
 		e.beginAgentGoalAccounting(g)
 	}
@@ -225,7 +233,11 @@ func (e *Extension) onAgentStart(_ agent.AgentEvent) {
 	e.clearAgentGoalAccounting()
 }
 
-func (e *Extension) onSessionStart(_ agent.AgentEvent) {
+func (e *Extension) onSessionStart(event agent.AgentEvent) {
+	e.mu.Lock()
+	e.lastSessionStartReason = event.Reason
+	e.mu.Unlock()
+
 	if g, ok := e.store.Current(); ok && g.Status == StatusActive {
 		e.beginAgentGoalAccounting(g)
 		if ShouldQueueContinuationWhenIdle(&g, e.apiIsIdle(), e.apiHasPendingMessages()) {
@@ -243,6 +255,9 @@ func (e *Extension) onUIReady(_ agent.AgentEvent) {
 	if !ok || g.Status != StatusPaused {
 		return
 	}
+	if e.sessionStartReason() != "resume" || !e.apiIsIdle() || e.apiHasPendingMessages() {
+		return
+	}
 	if !e.api.Confirm(
 		"Resume paused goal?",
 		fmt.Sprintf("Goal: %s", g.Objective),
@@ -257,7 +272,9 @@ func (e *Extension) onUIReady(_ agent.AgentEvent) {
 }
 
 func (e *Extension) onSessionShutdown(_ agent.AgentEvent) {
-	e.accountCurrentAgentTurn(types.AgentUsage{}, false)
+	if e.hasAgentGoalAccounting() {
+		e.accountCurrentAgentTurn(types.AgentUsage{}, false)
+	}
 	e.clearAgentGoalAccounting()
 }
 
@@ -276,7 +293,7 @@ func (e *Extension) onAgentEnd(event agent.AgentEvent) {
 	}
 	if includeComplete && g.Status == StatusComplete {
 		e.clearAgentGoalAccounting()
-		e.tell(fmt.Sprintf("Goal complete\n%s", e.store.Summary()))
+		e.tell(fmt.Sprintf("Goal complete\n%s", FormatGoalForUser(&g)))
 		return
 	}
 	if g.Status == StatusActive {
@@ -355,12 +372,8 @@ func (e *Extension) markGoalCompletedThisTurn(g Goal) {
 		return
 	}
 	e.completedThisTurnGoalID = g.ID
-	if e.agentGoalID == "" {
-		e.agentGoalID = g.ID
-	}
-	if e.agentMeasuredFrom.IsZero() {
-		e.agentMeasuredFrom = time.Now()
-	}
+	e.agentGoalID = g.ID
+	e.agentMeasuredFrom = time.Now()
 }
 
 func (e *Extension) stopAgentGoalAccounting(goalID string) {
@@ -389,6 +402,18 @@ func (e *Extension) completedGoalThisTurn() string {
 	return e.completedThisTurnGoalID
 }
 
+func (e *Extension) hasAgentGoalAccounting() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.agentGoalID != ""
+}
+
+func (e *Extension) sessionStartReason() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.lastSessionStartReason
+}
+
 func (e *Extension) accountCurrentAgentTurn(usage types.AgentUsage, includeComplete bool) (Goal, bool) {
 	e.mu.Lock()
 	goalID := e.agentGoalID
@@ -411,6 +436,8 @@ func (e *Extension) accountCurrentAgentTurn(usage types.AgentUsage, includeCompl
 		e.mu.Lock()
 		e.agentMeasuredFrom = time.Now()
 		e.mu.Unlock()
+	} else {
+		e.clearAgentGoalAccounting()
 	}
 	return g, ok
 }
@@ -463,27 +490,20 @@ func goalStatusLabel(status Status) string {
 	}
 }
 
-func shouldConfirmGoalReplace(current Goal, nextObjective string) bool {
-	if current.Status == StatusComplete {
-		return false
-	}
-	return strings.TrimSpace(current.Objective) != strings.TrimSpace(nextObjective)
-}
-
 func goalIndicatorText(g Goal) string {
 	switch g.Status {
 	case StatusActive:
 		if g.TokenBudget != nil {
-			return fmt.Sprintf("Pursuing goal (%s/%s tokens)", formatTokensCompact(g.TokensUsed), formatTokensCompact(*g.TokenBudget))
+			return fmt.Sprintf("Pursuing goal (%s / %s)", formatTokensCompact(g.TokensUsed), formatTokensCompact(*g.TokenBudget))
 		}
 		return fmt.Sprintf("Pursuing goal (%s)", formatElapsed(g.TimeUsedSeconds))
 	case StatusPaused:
 		return "Goal paused (/goal resume)"
 	case StatusBudgetLimited:
 		if g.TokenBudget != nil {
-			return fmt.Sprintf("Goal unmet (%s/%s tokens)", formatTokensCompact(g.TokensUsed), formatTokensCompact(*g.TokenBudget))
+			return fmt.Sprintf("Goal unmet (%s / %s tokens)", formatTokensCompact(g.TokensUsed), formatTokensCompact(*g.TokenBudget))
 		}
-		return "Goal unmet"
+		return "Goal abandoned"
 	case StatusComplete:
 		if g.TokenBudget != nil {
 			return fmt.Sprintf("Goal achieved (%s tokens)", formatTokensCompact(g.TokensUsed))

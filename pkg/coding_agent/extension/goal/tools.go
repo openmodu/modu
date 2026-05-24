@@ -15,7 +15,7 @@ type createGoalTool struct{ store *Store }
 func (t *createGoalTool) Name() string  { return "create_goal" }
 func (t *createGoalTool) Label() string { return "Create Goal" }
 func (t *createGoalTool) Description() string {
-	return `Create a goal only when explicitly requested by the user or system/developer instructions; do not infer goals from ordinary tasks. Set token_budget only when an explicit token budget is requested. Fails if a goal exists; use update_goal only for status.`
+	return "Create a goal only when explicitly requested by the user or system/developer instructions; do not infer goals from ordinary tasks.\nSet token_budget only when an explicit token budget is requested. Fails if a goal exists; use update_goal only for status."
 }
 
 func (t *createGoalTool) Parameters() any {
@@ -24,7 +24,7 @@ func (t *createGoalTool) Parameters() any {
 		"properties": map[string]any{
 			"objective": map[string]any{
 				"type":        "string",
-				"description": "Required. The concrete objective to start pursuing.",
+				"description": "Required. The concrete objective to start pursuing. This starts a new active goal only when no goal is currently defined; if a goal already exists, this tool fails.",
 			},
 			"token_budget": map[string]any{
 				"type":        "integer",
@@ -42,6 +42,9 @@ func (t *createGoalTool) Execute(_ context.Context, _ string, args map[string]an
 	if err != nil {
 		return textResult(fmt.Sprintf("create_goal failed: %v", err), true), nil
 	}
+	if _, ok := t.store.Current(); ok {
+		return textResult("cannot create a new goal because this thread already has a goal; use update_goal only when the existing goal is complete", true), nil
+	}
 	g, err := t.store.StartWithBudget(objective, budget)
 	if err != nil {
 		return textResult(fmt.Sprintf("create_goal failed: %v", err), true), nil
@@ -50,14 +53,15 @@ func (t *createGoalTool) Execute(_ context.Context, _ string, args map[string]an
 }
 
 type updateGoalTool struct {
-	store      *Store
-	onComplete func(Goal)
+	store          *Store
+	beforeComplete func()
+	onComplete     func(Goal)
 }
 
 func (t *updateGoalTool) Name() string  { return "update_goal" }
 func (t *updateGoalTool) Label() string { return "Update Goal" }
 func (t *updateGoalTool) Description() string {
-	return `Update the existing goal. Set status to "complete" only when the objective has actually been achieved and no required work remains. Pause, resume, and budget-limited status changes are controlled by the user or system.`
+	return "Update the existing goal.\nUse this tool only to mark the goal achieved.\nSet status to `complete` only when the objective has actually been achieved and no required work remains.\nDo not mark a goal complete merely because its budget is nearly exhausted or because you are stopping work.\nYou cannot use this tool to pause, resume, or budget-limit a goal; those status changes are controlled by the user or system.\nWhen marking a budgeted goal achieved with status `complete`, report the final token usage from the tool result to the user."
 }
 
 func (t *updateGoalTool) Parameters() any {
@@ -65,9 +69,10 @@ func (t *updateGoalTool) Parameters() any {
 		"type": "object",
 		"properties": map[string]any{
 			"status": map[string]any{
-				"type":        "string",
-				"enum":        []string{"complete"},
-				"description": "Set to \"complete\" only when the objective is achieved and no required work remains.",
+				"anyOf": []map[string]any{
+					{"type": "string", "const": "complete"},
+				},
+				"description": "Required. Set to complete only when the objective is achieved and no required work remains.",
 			},
 		},
 		"required":             []string{"status"},
@@ -79,6 +84,9 @@ func (t *updateGoalTool) Execute(_ context.Context, _ string, args map[string]an
 	status, _ := args["status"].(string)
 	if status != "complete" {
 		return textResult("update_goal can only mark the existing goal complete; pause, resume, and budget-limited status changes are controlled by the user or system", true), nil
+	}
+	if t.beforeComplete != nil {
+		t.beforeComplete()
 	}
 	g, err := t.store.MarkComplete()
 	if err != nil {
@@ -115,7 +123,7 @@ func (t *getGoalTool) Execute(_ context.Context, _ string, _ map[string]any, _ a
 }
 
 type goalToolSnapshot struct {
-	ThreadID        string `json:"threadId,omitempty"`
+	ThreadID        string `json:"threadId"`
 	Objective       string `json:"objective"`
 	Status          Status `json:"status"`
 	TokenBudget     *int   `json:"tokenBudget,omitempty"`

@@ -9,6 +9,7 @@ import (
 
 	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/extension"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // fakeAPI is a hand-rolled ExtensionAPI good enough to exercise the Extension's
@@ -104,11 +105,15 @@ func (f *fakeAPI) fireAgentEnd() {
 }
 
 func (f *fakeAPI) fire(event string) {
+	f.fireEvent(agent.AgentEvent{Type: agent.EventType(event)})
+}
+
+func (f *fakeAPI) fireEvent(event agent.AgentEvent) {
 	f.mu.Lock()
-	hs := append([]extension.EventHandler(nil), f.handlers[event]...)
+	hs := append([]extension.EventHandler(nil), f.handlers[string(event.Type)]...)
 	f.mu.Unlock()
 	for _, h := range hs {
-		h(agent.AgentEvent{Type: agent.EventType(event)})
+		h(event)
 	}
 }
 
@@ -261,6 +266,34 @@ func TestCancelStopsLoopPermanently(t *testing.T) {
 	}
 }
 
+func TestGoalClearWithoutGoalMatchesPiFeedback(t *testing.T) {
+	_, api := initialized(t)
+	if err := api.runCommand(t, "goal", "clear"); err != nil {
+		t.Fatalf("/goal clear: %v", err)
+	}
+	if len(api.notices) == 0 {
+		t.Fatal("expected clear notification")
+	}
+	got := api.notices[len(api.notices)-1]
+	if !strings.Contains(got, "No goal to clear\nThis thread does not currently have a goal.") {
+		t.Fatalf("clear without goal notification mismatch: %q", got)
+	}
+}
+
+func TestGoalStatusSubcommandIsObjective(t *testing.T) {
+	ext, api := initialized(t)
+	if err := api.runCommand(t, "goal", "status"); err != nil {
+		t.Fatalf("/goal status: %v", err)
+	}
+	g, ok := ext.store.Current()
+	if !ok {
+		t.Fatal("/goal status should create a goal with objective status")
+	}
+	if g.Objective != "status" {
+		t.Fatalf("objective = %q, want status", g.Objective)
+	}
+}
+
 func TestUpdateGoalCompleteStopsLoop(t *testing.T) {
 	ext, api := initialized(t)
 	api.runCommand(t, "goal", "compile success")
@@ -306,6 +339,31 @@ func TestUpdateGoalCompleteStopsLoop(t *testing.T) {
 	}
 }
 
+func TestStaleAccountingClearsInMemoryState(t *testing.T) {
+	ext, _ := initialized(t)
+	first, err := ext.store.Start("first")
+	if err != nil {
+		t.Fatalf("Start first: %v", err)
+	}
+	if _, err := ext.store.ReplaceObjective("second", nil); err != nil {
+		t.Fatalf("ReplaceObjective: %v", err)
+	}
+	ext.mu.Lock()
+	ext.agentGoalID = first.ID
+	ext.agentMeasuredFrom = time.Now().Add(-time.Second)
+	ext.mu.Unlock()
+
+	if _, ok := ext.accountCurrentAgentTurn(types.AgentUsage{Input: 1, Output: 1}, false); !ok {
+		t.Fatal("expected current replacement goal returned")
+	}
+	ext.mu.Lock()
+	cleared := ext.agentGoalID == "" && ext.agentMeasuredFrom.IsZero()
+	ext.mu.Unlock()
+	if !cleared {
+		t.Fatal("stale accounting should clear in-memory accounting state")
+	}
+}
+
 func TestGoalObjectiveReplacesExistingGoal(t *testing.T) {
 	_, api := initialized(t)
 	if err := api.runCommand(t, "goal", "first"); err != nil {
@@ -340,6 +398,10 @@ func TestGoalObjectiveReplacementCanBeRejected(t *testing.T) {
 	if len(api.confirms) != 1 || !strings.Contains(api.confirms[0], "Replace goal?") {
 		t.Fatalf("replacement should ask for confirmation, got %#v", api.confirms)
 	}
+	if !strings.Contains(api.confirms[0], "New objective: second") ||
+		strings.Contains(api.confirms[0], "Current:") {
+		t.Fatalf("replacement prompt should match pi-goal, got %#v", api.confirms)
+	}
 }
 
 func TestUIReadyCanResumePausedGoal(t *testing.T) {
@@ -353,12 +415,28 @@ func TestUIReadyCanResumePausedGoal(t *testing.T) {
 	accept := true
 	api.confirm = &accept
 	before := api.sentCount()
+	api.fireEvent(agent.AgentEvent{Type: agent.EventType(extensionSessionStart), Reason: "resume"})
 	api.fire(extensionUIReady)
 	if api.sentCount() != before+1 {
 		t.Fatalf("ui_ready resume should queue one continuation: got %d want %d", api.sentCount(), before+1)
 	}
 	if len(api.confirms) == 0 || !strings.Contains(api.confirms[len(api.confirms)-1], "Resume paused goal?") {
 		t.Fatalf("ui_ready should ask for resume confirmation, got %#v", api.confirms)
+	}
+}
+
+func TestUIReadyDoesNotPromptPausedGoalOnStartup(t *testing.T) {
+	ext, api := initialized(t)
+	if _, err := ext.store.Start("paused startup"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if _, err := ext.store.Pause(); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	api.fireEvent(agent.AgentEvent{Type: agent.EventType(extensionSessionStart), Reason: "startup"})
+	api.fire(extensionUIReady)
+	if len(api.confirms) != 0 {
+		t.Fatalf("startup should not prompt to resume paused goal, got %#v", api.confirms)
 	}
 }
 
@@ -384,6 +462,22 @@ func TestRuntimeStateExposesIndicator(t *testing.T) {
 	state, _ = ext.RuntimeState().(map[string]any)
 	if got, _ := state["indicator"].(string); got != "Goal paused (/goal resume)" {
 		t.Fatalf("paused indicator mismatch: %q", got)
+	}
+}
+
+func TestGoalIndicatorTextMatchesPiGoalFooter(t *testing.T) {
+	budget := 50_000
+	active := Goal{Status: StatusActive, TokenBudget: &budget, TokensUsed: 63_876}
+	if got, want := goalIndicatorText(active), "Pursuing goal (63.9K / 50K)"; got != want {
+		t.Fatalf("active budget indicator = %q, want %q", got, want)
+	}
+	limited := Goal{Status: StatusBudgetLimited, TokenBudget: &budget, TokensUsed: 63_876}
+	if got, want := goalIndicatorText(limited), "Goal unmet (63.9K / 50K tokens)"; got != want {
+		t.Fatalf("budget-limited indicator = %q, want %q", got, want)
+	}
+	abandoned := Goal{Status: StatusBudgetLimited}
+	if got, want := goalIndicatorText(abandoned), "Goal abandoned"; got != want {
+		t.Fatalf("budget-limited without budget indicator = %q, want %q", got, want)
 	}
 }
 

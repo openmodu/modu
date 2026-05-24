@@ -6,7 +6,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/openmodu/modu/pkg/types"
 )
@@ -119,7 +118,7 @@ func TestOpsOnEmptyStore(t *testing.T) {
 
 func TestSummaryWithAndWithoutGoal(t *testing.T) {
 	s := NewStore()
-	if s.Summary() != "(no goal set)" {
+	if s.Summary() != "No active goal is set." {
 		t.Errorf("empty Summary mismatch: %q", s.Summary())
 	}
 	budget := 2500
@@ -131,7 +130,6 @@ func TestSummaryWithAndWithoutGoal(t *testing.T) {
 	}
 	summary := s.Summary()
 	for _, want := range []string{
-		"Goal ",
 		"Objective: ship modu_cron v1",
 		"Status: active",
 		"Time used: 1m",
@@ -143,11 +141,21 @@ func TestSummaryWithAndWithoutGoal(t *testing.T) {
 	}
 }
 
-func TestSummaryFormatsTimestampsInLocalTimezone(t *testing.T) {
-	oldLocal := time.Local
-	time.Local = time.FixedZone("CST", 8*60*60)
-	defer func() { time.Local = oldLocal }()
+func TestGoalUsageSummaryMatchesPiGoal(t *testing.T) {
+	budget := 50_000
+	g := Goal{
+		Objective:       "Port /goal as a pi extension",
+		Status:          StatusActive,
+		TokenBudget:     &budget,
+		TokensUsed:      63_876,
+		TimeUsedSeconds: 120,
+	}
+	if got, want := goalUsageSummary(g), "Objective: Port /goal as a pi extension Time: 2m. Tokens: 63.9K/50K."; got != want {
+		t.Fatalf("goalUsageSummary() = %q, want %q", got, want)
+	}
+}
 
+func TestFormatGoalForUserMatchesPiGoalCompletedTimestamp(t *testing.T) {
 	completed := int64(1714525200)
 	s := &Store{current: &Goal{
 		ID:              "goal-local-time",
@@ -159,13 +167,11 @@ func TestSummaryFormatsTimestampsInLocalTimezone(t *testing.T) {
 		TimeUsedSeconds: 3600,
 	}}
 	got := s.Summary()
-	for _, want := range []string{
-		"Started: 2024-05-01T08:00:00+08:00",
-		"Completed: 2024-05-01T09:00:00+08:00",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("expected summary to contain %q, got:\n%s", want, got)
-		}
+	if strings.Contains(got, "Started:") {
+		t.Fatalf("pi-goal format should not include Started, got:\n%s", got)
+	}
+	if want := "Completed at: 2024-05-01T01:00:00Z"; !strings.Contains(got, want) {
+		t.Fatalf("expected summary to contain %q, got:\n%s", want, got)
 	}
 }
 
@@ -371,5 +377,36 @@ func TestAccountUsageBudgetLimited(t *testing.T) {
 	}
 	if got.TokensUsed != 10 || got.TimeUsedSeconds != 7 {
 		t.Fatalf("usage not accounted: %+v", got)
+	}
+}
+
+func TestAccountUsageActiveOrStoppedCanPromotePausedGoalOverBudget(t *testing.T) {
+	store := NewStore()
+	budget := 20
+	if _, err := store.StartWithBudget("stopped", &budget); err != nil {
+		t.Fatalf("StartWithBudget: %v", err)
+	}
+	if _, err := store.Pause(); err != nil {
+		t.Fatalf("Pause: %v", err)
+	}
+	activeOnly, ok, err := store.accountUsage(types.AgentUsage{Input: 25}, 3, accountActive, "")
+	if err != nil {
+		t.Fatalf("account active: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected paused goal returned")
+	}
+	if activeOnly.Status != StatusPaused || activeOnly.TokensUsed != 0 || activeOnly.TimeUsedSeconds != 0 {
+		t.Fatalf("active mode should not account paused goals: %+v", activeOnly)
+	}
+	stopped, ok, err := store.accountUsage(types.AgentUsage{Input: 25}, 3, accountActiveOrStopped, "")
+	if err != nil {
+		t.Fatalf("account activeOrStopped: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected paused goal returned")
+	}
+	if stopped.Status != StatusBudgetLimited || stopped.TokensUsed != 25 || stopped.TimeUsedSeconds != 3 {
+		t.Fatalf("activeOrStopped should account and budget-limit paused goal: %+v", stopped)
 	}
 }
