@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/openmodu/modu/pkg/types"
 )
@@ -114,6 +115,32 @@ func TestSummaryWithAndWithoutGoal(t *testing.T) {
 	if !strings.Contains(s.Summary(), "ship modu_cron v1") ||
 		!strings.Contains(s.Summary(), "active") {
 		t.Errorf("Summary missing fields: %q", s.Summary())
+	}
+}
+
+func TestSummaryFormatsTimestampsInLocalTimezone(t *testing.T) {
+	oldLocal := time.Local
+	time.Local = time.FixedZone("CST", 8*60*60)
+	defer func() { time.Local = oldLocal }()
+
+	completed := int64(1714525200)
+	s := &Store{current: &Goal{
+		ID:              "goal-local-time",
+		Objective:       "check timezone",
+		Status:          StatusComplete,
+		CreatedAt:       1714521600,
+		UpdatedAt:       completed,
+		CompletedAt:     &completed,
+		TimeUsedSeconds: 3600,
+	}}
+	got := s.Summary()
+	for _, want := range []string{
+		"Started: 2024-05-01T08:00:00+08:00",
+		"Completed: 2024-05-01T09:00:00+08:00",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected summary to contain %q, got:\n%s", want, got)
+		}
 	}
 }
 

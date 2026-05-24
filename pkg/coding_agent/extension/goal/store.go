@@ -359,9 +359,9 @@ func (s *Store) Summary() string {
 	if g.TokenBudget != nil {
 		out += fmt.Sprintf("/%d", *g.TokenBudget)
 	}
-	out += fmt.Sprintf("\nStarted: %s", time.Unix(g.CreatedAt, 0).UTC().Format(time.RFC3339))
+	out += fmt.Sprintf("\nStarted: %s", formatGoalTimestamp(g.CreatedAt))
 	if g.CompletedAt != nil {
-		out += fmt.Sprintf("\nCompleted: %s", time.Unix(*g.CompletedAt, 0).UTC().Format(time.RFC3339))
+		out += fmt.Sprintf("\nCompleted: %s", formatGoalTimestamp(*g.CompletedAt))
 	}
 	return out
 }
@@ -502,7 +502,11 @@ func cloneInt64Ptr(v *int64) *int64 {
 }
 
 func nowSeconds() int64 {
-	return time.Now().UTC().Unix()
+	return time.Now().Unix()
+}
+
+func formatGoalTimestamp(seconds int64) string {
+	return time.Unix(seconds, 0).Local().Format(time.RFC3339)
 }
 
 func shortID(id string) string {
