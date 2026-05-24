@@ -367,7 +367,7 @@ func TestUpdateGoalCompleteStopsLoop(t *testing.T) {
 	}
 	foundCompleteNotice := false
 	for _, notice := range api.notices {
-		if strings.Contains(notice, "Goal complete") && strings.Contains(notice, "compile success") {
+		if strings.Contains(notice, "Goal complete: compile success") {
 			foundCompleteNotice = true
 			break
 		}
@@ -510,7 +510,7 @@ func TestRuntimeStateExposesIndicator(t *testing.T) {
 	if state["status"] != StatusActive {
 		t.Fatalf("status = %v, want active", state["status"])
 	}
-	if got, _ := state["indicator"].(string); !strings.Contains(got, "Pursuing goal") {
+	if got, _ := state["indicator"].(string); !strings.HasPrefix(got, "goal ") {
 		t.Fatalf("indicator missing pursuing text: %q", got)
 	}
 
@@ -518,7 +518,7 @@ func TestRuntimeStateExposesIndicator(t *testing.T) {
 		t.Fatalf("/goal-pause: %v", err)
 	}
 	state, _ = ext.RuntimeState().(map[string]any)
-	if got, _ := state["indicator"].(string); got != "Goal paused (/goal resume)" {
+	if got, _ := state["indicator"].(string); got != "goal paused" {
 		t.Fatalf("paused indicator mismatch: %q", got)
 	}
 }
@@ -526,15 +526,15 @@ func TestRuntimeStateExposesIndicator(t *testing.T) {
 func TestGoalIndicatorTextMatchesPiGoalFooter(t *testing.T) {
 	budget := 50_000
 	active := Goal{Status: StatusActive, TokenBudget: &budget, TokensUsed: 63_876}
-	if got, want := goalIndicatorText(active), "Pursuing goal (63.9K / 50K)"; got != want {
+	if got, want := goalIndicatorText(active), "goal 63.9K/50K"; got != want {
 		t.Fatalf("active budget indicator = %q, want %q", got, want)
 	}
 	limited := Goal{Status: StatusBudgetLimited, TokenBudget: &budget, TokensUsed: 63_876}
-	if got, want := goalIndicatorText(limited), "Goal unmet (63.9K / 50K tokens)"; got != want {
+	if got, want := goalIndicatorText(limited), "goal limited 63.9K/50K"; got != want {
 		t.Fatalf("budget-limited indicator = %q, want %q", got, want)
 	}
 	abandoned := Goal{Status: StatusBudgetLimited}
-	if got, want := goalIndicatorText(abandoned), "Goal abandoned"; got != want {
+	if got, want := goalIndicatorText(abandoned), "goal limited"; got != want {
 		t.Fatalf("budget-limited without budget indicator = %q, want %q", got, want)
 	}
 }

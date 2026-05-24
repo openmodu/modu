@@ -174,13 +174,13 @@ func goalStatusPart(states map[string]any) string {
 	}
 	switch status {
 	case "active":
-		return "Pursuing goal"
+		return "goal"
 	case "paused":
-		return "Goal paused (/goal resume)"
+		return "goal paused"
 	case "budgetLimited":
-		return "Goal unmet"
+		return "goal limited"
 	case "complete":
-		return "Goal achieved"
+		return "goal done"
 	default:
 		return "goal " + status
 	}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -179,7 +180,7 @@ func (e *Extension) cmdSetObjective(objective string) error {
 	} else {
 		e.stopAgentGoalAccounting(g.ID)
 	}
-	e.tell(fmt.Sprintf("Goal %s\n%s", goalStatusLabel(g.Status), FormatGoalForUser(&g)))
+	e.tell(formatGoalActionFeedback(g))
 	return e.queueGoalContinuation(g)
 }
 
@@ -190,7 +191,7 @@ func (e *Extension) cmdPause(string) error {
 		return err
 	}
 	e.stopAgentGoalAccounting(g.ID)
-	e.tell(fmt.Sprintf("Goal paused\n%s", FormatGoalForUser(&g)))
+	e.tell(formatGoalActionFeedback(g))
 	return nil
 }
 
@@ -202,7 +203,7 @@ func (e *Extension) cmdResume(string) error {
 	if g.Status == StatusActive {
 		e.beginAgentGoalAccounting(g)
 	}
-	e.tell(fmt.Sprintf("Goal %s\n%s", goalStatusLabel(g.Status), FormatGoalForUser(&g)))
+	e.tell(formatGoalActionFeedback(g))
 	return e.queueGoalContinuation(g)
 }
 
@@ -325,7 +326,7 @@ func (e *Extension) onAgentEnd(event agent.AgentEvent) {
 	}
 	if includeComplete && g.Status == StatusComplete {
 		e.clearAgentGoalAccounting()
-		e.tell(fmt.Sprintf("Goal complete\n%s", FormatGoalForUser(&g)))
+		e.tell(formatGoalActionFeedback(g))
 		return
 	}
 	if g.Status == StatusActive {
@@ -534,24 +535,43 @@ func goalIndicatorText(g Goal) string {
 	switch g.Status {
 	case StatusActive:
 		if g.TokenBudget != nil {
-			return fmt.Sprintf("Pursuing goal (%s / %s)", formatTokensCompact(g.TokensUsed), formatTokensCompact(*g.TokenBudget))
+			return fmt.Sprintf("goal %s/%s", formatTokensCompact(g.TokensUsed), formatTokensCompact(*g.TokenBudget))
 		}
-		return fmt.Sprintf("Pursuing goal (%s)", formatElapsed(g.TimeUsedSeconds))
+		return "goal " + formatElapsed(g.TimeUsedSeconds)
 	case StatusPaused:
-		return "Goal paused (/goal resume)"
+		return "goal paused"
 	case StatusBudgetLimited:
 		if g.TokenBudget != nil {
-			return fmt.Sprintf("Goal unmet (%s / %s tokens)", formatTokensCompact(g.TokensUsed), formatTokensCompact(*g.TokenBudget))
+			return fmt.Sprintf("goal limited %s/%s", formatTokensCompact(g.TokensUsed), formatTokensCompact(*g.TokenBudget))
 		}
-		return "Goal abandoned"
+		return "goal limited"
 	case StatusComplete:
 		if g.TokenBudget != nil {
-			return fmt.Sprintf("Goal achieved (%s tokens)", formatTokensCompact(g.TokensUsed))
+			return fmt.Sprintf("goal done %s", formatTokensCompact(g.TokensUsed))
 		}
-		return fmt.Sprintf("Goal achieved (%s)", formatElapsed(g.TimeUsedSeconds))
+		return "goal done " + formatElapsed(g.TimeUsedSeconds)
 	default:
 		return string(g.Status)
 	}
+}
+
+func formatGoalActionFeedback(g Goal) string {
+	return fmt.Sprintf("Goal %s: %s", goalStatusLabel(g.Status), truncateGoalObjective(g.Objective, 96))
+}
+
+func truncateGoalObjective(objective string, limit int) string {
+	objective = strings.TrimSpace(objective)
+	if limit <= 0 || len(objective) <= limit {
+		return objective
+	}
+	runes := []rune(objective)
+	if len(runes) <= limit {
+		return objective
+	}
+	if limit <= 1 {
+		return string(runes[:limit])
+	}
+	return string(runes[:limit-1]) + "…"
 }
 
 func (e *Extension) tell(msg string) {

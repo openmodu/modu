@@ -1282,10 +1282,10 @@ func TestGoalStatusPartFromRuntimeState(t *testing.T) {
 	line := goalStatusPart(map[string]any{
 		"goal": map[string]any{
 			"status":    "active",
-			"indicator": "Pursuing goal (12s)",
+			"indicator": "goal 12s",
 		},
 	})
-	if line != "Pursuing goal (12s)" {
+	if line != "goal 12s" {
 		t.Fatalf("goal status line mismatch: %q", line)
 	}
 
@@ -1294,7 +1294,7 @@ func TestGoalStatusPartFromRuntimeState(t *testing.T) {
 			"status": "paused",
 		},
 	})
-	if line != "Goal paused (/goal resume)" {
+	if line != "goal paused" {
 		t.Fatalf("paused fallback mismatch: %q", line)
 	}
 }
