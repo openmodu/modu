@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -555,23 +554,12 @@ func goalIndicatorText(g Goal) string {
 	}
 }
 
+// formatGoalActionFeedback assembles the slash-command echo / host
+// notification body. Mirrors pi-goal's "Goal <label>\n<formatGoalForTool>"
+// pattern so callers see the full state (Status / Time used / Tokens used /
+// Completed at) — not just an objective preview.
 func formatGoalActionFeedback(g Goal) string {
-	return fmt.Sprintf("Goal %s: %s", goalStatusLabel(g.Status), truncateGoalObjective(g.Objective, 96))
-}
-
-func truncateGoalObjective(objective string, limit int) string {
-	objective = strings.TrimSpace(objective)
-	if limit <= 0 || len(objective) <= limit {
-		return objective
-	}
-	runes := []rune(objective)
-	if len(runes) <= limit {
-		return objective
-	}
-	if limit <= 1 {
-		return string(runes[:limit])
-	}
-	return string(runes[:limit-1]) + "…"
+	return fmt.Sprintf("Goal %s\n%s", goalStatusLabel(g.Status), FormatGoalForUser(&g))
 }
 
 func (e *Extension) tell(msg string) {

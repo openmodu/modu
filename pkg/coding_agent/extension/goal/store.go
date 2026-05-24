@@ -91,14 +91,15 @@ func (s *Store) SetRefProvider(fn func() StoreRef) {
 	s.refProvider = fn
 }
 
-// Errors returned by Store methods.
+// Errors returned by Store methods. The sentinels stay deliberately tiny:
+// pi-goal's updateGoal flow is idempotent (Pause from Complete clears, Resume
+// from Active stays active, MarkComplete is reapplied without error), so the
+// "wrong-state" sentinels that earlier MVP drafts carried have no producers
+// and are not surfaced here.
 var (
 	ErrGoalActive    = errors.New("goal: a goal is already active; pause or clear it first")
 	ErrNoGoal        = errors.New("goal: no goal is set")
-	ErrNotActive     = errors.New("goal: goal is not active")
-	ErrNotPaused     = errors.New("goal: goal is not paused")
 	ErrEmptyObj      = errors.New("goal: objective must not be empty")
-	ErrAlreadyDone   = errors.New("goal: goal is already complete")
 	ErrInvalidBudget = errors.New("goal: token budget must be a positive integer")
 	ErrInvalidStore  = errors.New("goal: invalid goal store")
 )
