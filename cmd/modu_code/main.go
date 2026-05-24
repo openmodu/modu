@@ -74,9 +74,13 @@ func main() {
 	thinkingLevel := provider.ResolveThinkingLevel()
 	agentDir := coding_agent.DefaultAgentDir()
 
-	goalExt := goal.New(goal.Options{
-		Out: func(line string) { fmt.Fprintln(os.Stderr, line) },
-	})
+	// Out is intentionally nil here: writing to stderr from the goal
+	// extension bypasses the TUI's inline-mode widget management and
+	// corrupts the screen (Tokens/Status/Time fields land in arbitrary
+	// rows). All user-facing notifications still reach the scrollback via
+	// api.Notify -> SessionEventExtensionNotify -> a "section" uiBlock,
+	// which is the only path the TUI can safely render multi-line text.
+	goalExt := goal.New(goal.Options{})
 
 	sessionOpts := coding_agent.CodingSessionOptions{
 		Cwd:             cwd,
