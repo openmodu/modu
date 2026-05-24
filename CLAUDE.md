@@ -1,22 +1,65 @@
-# Modu
+# CLAUDE.md
 
-总的原则: 没有把握就不修改, 每次修改只做单一功能, 对于复杂任务拆分多个子任务(功能)实现.
+Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
 
-最关键的原则:
-1、先思考，不确定就问，不允许自选解释然后硬跑，遇到歧义要停下来。
-2、最小可用代码没人要的抽象层？不写。"以后可能用到"的灵活性？不加。
-3、像外科手术一样精准修改任务要求的代码，不顺手"优化"旁边那段。
-4、把模糊指令变成可验证目标"加个验证"→"先写失败测试，再让它通过"。
+**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
 
-## 本项目约束
-主要语言为Golang, 有一些前端页面是JS+HTML+CSS.
-1. Golang就用`go run`命令进行测试验证, 不要向git里面提交编译产物
-2. Golang开发要完整单元测试, 然后在用功能集成测试验证是否符合要求
-3. 开发功能需要用Process进行状态管理, 便于下次功能开发迭代
-4. `pkg`下面的代码要尽可能抽象, 可复用, 保持简洁
+## 1. Think Before Coding
 
-## 功能验收
-1. 需要明确验收的边界, 不做无用的测试验证
-2. 对于测试用例尽可能维护全, 单元测试, 功能测试, 集成测试, 全链路测试
-3. 对于测试中遇到的问题也要及时记录, 并沉淀下来避免下次再出错
-4. 在`pkg`下面如果遇到功能修改, 也需要修改对应的文档(doc/readme)进行更新记录, 这也是功能验收的一个环节
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
+
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+## 2. Simplicity First
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+## 3. Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it - don't delete it.
+
+When your changes create orphans:
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: Every changed line should trace directly to the user's request.
+
+## 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
+```
+
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+---
+
+**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

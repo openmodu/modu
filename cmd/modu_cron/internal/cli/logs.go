@@ -93,11 +93,14 @@ func printRun(store *runlog.Store, taskID, name string, raw bool, out io.Writer)
 	return decodeEventStream(f, out)
 }
 
-// decodeEventStream renders the NDJSON event stream into a compact,
-// human-readable transcript. Only a handful of event types are surfaced —
-// turn/agent envelopes and per-token message_update deltas are dropped as
-// pure noise. Unknown event types fall to a one-line "raw" entry so nothing
-// new is silently swallowed.
+// decodeEventStream renders the slim NDJSON transcript produced by
+// runner.summaryWriter into a compact human-readable view. The transcript
+// has one line per meaningful step (run_start / session_start / user /
+// assistant / tool_call / tool_result / run_end), so decoding is mostly a
+// straight field lookup — no filtering or content flattening needed.
+//
+// Unknown event types fall to a one-line "raw" entry so anything new added
+// upstream isn't silently swallowed.
 func decodeEventStream(r io.Reader, out io.Writer) error {
 	dec := json.NewDecoder(r)
 	for {
@@ -112,128 +115,47 @@ func decodeEventStream(r io.Reader, out io.Writer) error {
 		}
 		kind, _ := ev["type"].(string)
 		switch kind {
+		case "run_start":
+			fmt.Fprintf(out, "▶ run start      task=%v started=%v\n", ev["task_id"], ev["started_at"])
+			if p, _ := ev["prompt"].(string); p != "" {
+				fmt.Fprintln(out, "✎ prompt:")
+				writeIndented(out, p)
+			}
 		case "session_start":
-			fmt.Fprintf(out, "▶ session start  model=%v session=%v\n", ev["model"], ev["sessionId"])
-		case "session_end":
-			fmt.Fprintln(out, "■ session end")
-
-		case "message_end":
-			renderMessage(out, ev["message"])
-
-		case "tool_execution_start":
-			fmt.Fprintf(out, "→ tool call      %s%s\n", ev["toolName"], formatArgs(ev["args"]))
-		case "tool_execution_end":
-			renderToolResult(out, ev)
-
-		case "interrupt":
-			fmt.Fprintln(out, "⏸ interrupt")
-
-		// Drop the rest: agent_start/agent_end and turn_start/turn_end are
-		// envelope-only with no extra info; message_start is the matching
-		// header for the message_end we already render; message_update and
-		// tool_execution_update are per-token streaming noise; "" catches
-		// malformed lines.
-		case "",
-			"agent_start", "agent_end",
-			"turn_start", "turn_end",
-			"message_start", "message_update",
-			"tool_execution_update":
-			continue
-
+			fmt.Fprintf(out, "  session         model=%v id=%v\n", ev["model"], ev["session_id"])
+		case "user":
+			if t, _ := ev["text"].(string); t != "" {
+				fmt.Fprintln(out, "✎ user:")
+				writeIndented(out, t)
+			}
+		case "assistant":
+			if t, _ := ev["text"].(string); t != "" {
+				fmt.Fprintln(out, "✎ assistant:")
+				writeIndented(out, t)
+			}
+		case "tool_call":
+			fmt.Fprintf(out, "→ tool call      %s%s\n", ev["name"], formatArgs(ev["args"]))
+		case "tool_result":
+			marker := "ok"
+			if ok, _ := ev["ok"].(bool); !ok {
+				marker = "ERROR"
+			}
+			fmt.Fprintf(out, "← tool result    %s  %s\n", ev["name"], marker)
+			if s, _ := ev["snippet"].(string); s != "" {
+				writeIndented(out, s)
+			}
+		case "run_end":
+			status, _ := ev["status"].(string)
+			dur, _ := ev["duration_ms"].(float64)
+			fmt.Fprintf(out, "■ run end        status=%s duration=%dms\n", status, int64(dur))
+			if e, _ := ev["error"].(string); e != "" {
+				fmt.Fprintln(out, "  error:")
+				writeIndented(out, e)
+			}
 		default:
 			fmt.Fprintf(out, "· %s\n", kind)
 		}
 	}
-}
-
-// renderMessage formats one message_end event. We branch on role so user
-// prompts, assistant text, and tool results all render naturally — and
-// silently skip messages that carry only tool-call metadata (those show up
-// via tool_execution_start instead, so re-printing them would just repeat
-// the same line).
-func renderMessage(out io.Writer, message any) {
-	msg, ok := message.(map[string]any)
-	if !ok {
-		return
-	}
-	role, _ := msg["role"].(string)
-	switch role {
-	case "user":
-		text := strings.TrimSpace(flattenContent(msg))
-		if text == "" {
-			return
-		}
-		fmt.Fprintln(out, "✎ user:")
-		writeIndented(out, text)
-	case "assistant":
-		// flattenContent already skips toolCall/thinking blocks; TrimSpace
-		// also drops turns whose only text block is a "\n\n" filler that
-		// LM Studio's stream sometimes emits before a tool call.
-		text := strings.TrimSpace(flattenContent(msg))
-		if text == "" {
-			return
-		}
-		fmt.Fprintln(out, "✎ assistant:")
-		writeIndented(out, text)
-	case "toolResult":
-		// Already surfaced by tool_execution_end; skip to avoid duplicates.
-	}
-}
-
-// renderToolResult prints "ok" / "ERROR" plus a short snippet of the tool's
-// text output (first 5 lines, truncated). For typical bash/Read-style tools
-// that produces enough context to skim the run without diving into raw NDJSON.
-func renderToolResult(out io.Writer, ev map[string]any) {
-	marker := "ok"
-	if isErr, _ := ev["isError"].(bool); isErr {
-		marker = "ERROR"
-	}
-	fmt.Fprintf(out, "← tool result    %s  %s\n", ev["toolName"], marker)
-	if res, ok := ev["result"].(map[string]any); ok {
-		writeIndented(out, snippet(flattenContent(res), 5))
-	}
-}
-
-// flattenContent walks a message-like object (either a top-level message or a
-// tool-result envelope) and concatenates its text-bearing blocks. The shape
-// is `{"content": "..."}` for raw strings (user prompts) or
-// `{"content": [{"type":"text","text":"..."}, ...]}` for blocks.
-// "thinking" and "toolCall" blocks are intentionally skipped.
-func flattenContent(obj any) string {
-	m, ok := obj.(map[string]any)
-	if !ok {
-		return ""
-	}
-	switch c := m["content"].(type) {
-	case string:
-		return c
-	case []any:
-		var b strings.Builder
-		for _, item := range c {
-			blk, ok := item.(map[string]any)
-			if !ok {
-				continue
-			}
-			if t, ok := blk["text"].(string); ok && t != "" {
-				b.WriteString(t)
-			}
-		}
-		return b.String()
-	}
-	return ""
-}
-
-// snippet trims a multi-line block down to the first n lines with a
-// "+N more" tail when it overflows.
-func snippet(text string, n int) string {
-	if text == "" {
-		return ""
-	}
-	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
-	if len(lines) <= n {
-		return strings.Join(lines, "\n")
-	}
-	return strings.Join(lines[:n], "\n") + fmt.Sprintf("\n... (+%d more lines)", len(lines)-n)
 }
 
 // writeIndented prefixes each line of text with 4 spaces so the user can
