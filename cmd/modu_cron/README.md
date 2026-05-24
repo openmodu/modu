@@ -135,24 +135,34 @@ tasks:
 ~/.modu_cron/logs/<task_id>/<RFC3339-timestamp-with-ns>.log
 ```
 
-里面是 `coding_agent` 完整事件流（session_start, message_update, tool_call, tool_result, message_end, session_end）。
+落盘前 `runner` 已经把 `coding_agent` 的完整事件流过滤成**精简版**——只保留 7 种关键事件，每行一个 JSON 对象：
+
+| `type` | 字段 | 含义 |
+|--------|------|------|
+| `run_start` | `task_id` / `prompt` / `started_at` | 本次 tick 起始 |
+| `session_start` | `session_id` / `model` | session 元信息 |
+| `user` | `text` | 用户 prompt 原文 |
+| `tool_call` | `name` / `args` | agent 调用工具 |
+| `tool_result` | `name` / `ok` / `snippet` | 工具执行结果（snippet 是输出前 5 行 + `+N more lines`，无输出则省略）|
+| `assistant` | `text` | assistant 最终回答（thinking / 纯 toolCall turn 已被丢弃）|
+| `run_end` | `status` / `duration_ms` / `ended_at` / `error` | 本次 tick 结束；`status` 为 `ok` 或 `error`，失败带 `error` 字段 |
+
+`run_end` 即使失败也一定会写——它是可靠的"tick 已结束"标记，便于程序消费时判断是否完成。
+
+被丢弃的事件：`agent_start`/`turn_start`/`message_start`/`message_update` 等 envelope 与 per-token 增量、`interrupt`、`thinking` 块、只含 tool call 没真文本的 assistant turn、`toolResult` role 的 message（信息已在 `tool_result` 里）。典型 100+ 行原始事件压到 < 10 行。
+
+> 该格式是新版本，**与老的完整事件流日志不兼容**。已有旧日志解码会落到 `· <type>` unknown-event 行——重跑一次即可换上新格式。
 
 查看历史：
 
 ```
 modu_cron logs <id>                   # 列出该任务所有 run, 最新在上
 modu_cron logs <id> --tail            # 解码最近一次为可读文本
-modu_cron logs <id> --tail --json     # 同上但输出原 NDJSON
+modu_cron logs <id> --tail --json     # 同上但输出原 NDJSON（程序友好）
 modu_cron logs <id> --file <name>     # 看指定文件 (从 list 拷文件名)
 ```
 
-可读视图（`--tail` / `--file`）保留：
-- `session_start` / `session_end` 边界（带 model + session ID）
-- 用户 prompt
-- `tool_execution_start` / `_end`（带 args 摘要、ok/ERROR 标记、输出前 5 行片段）
-- assistant 最终文本
-
-被过滤的噪音：`message_update` 的 per-token 增量、`agent_start`/`turn_start`/`message_start` 等 envelope、`thinking` 块、只含 tool call 没真文本的 assistant turn。典型 100+ 行原始 NDJSON 解码后通常压到不到 15 行。需要原文 jq 时 `--json` 直出。
+`--json` 直接 cat 文件，可以喂给 `jq` 之类工具做后续处理。
 
 ## 目录结构
 

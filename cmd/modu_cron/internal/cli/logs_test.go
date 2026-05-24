@@ -8,25 +8,19 @@ import (
 	"testing"
 )
 
-// sampleNDJSON is a synthetic but shape-accurate event stream. Event names
-// match what pkg/agent actually emits (tool_execution_start/end, not
-// tool_call_*). Includes turn/agent envelope events so we can assert they
-// stay hidden from the decoded view.
-const sampleNDJSON = `{"type":"session_start","sessionId":"abc123","model":"gpt-4o"}
-{"type":"agent_start"}
-{"type":"turn_start"}
-{"type":"message_start","message":{"role":"user","content":"please show files"}}
-{"type":"message_end","message":{"role":"user","content":"please show files"}}
-{"type":"message_update","streamEvent":{"Type":"text_delta","Delta":"hel"},"message":"hel"}
-{"type":"interrupt"}
-{"type":"tool_execution_start","toolName":"Read","toolCallId":"t1","args":{"path":"foo.txt"}}
-{"type":"tool_execution_end","toolName":"Read","toolCallId":"t1","result":{"content":[{"type":"text","text":"file line 1\nfile line 2"}]},"isError":false}
-{"type":"tool_execution_start","toolName":"Run","toolCallId":"t2","args":{"cmd":"git status"}}
-{"type":"tool_execution_end","toolName":"Run","toolCallId":"t2","isError":true}
-{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hidden chain of thought"},{"type":"text","text":"hello\nworld"}]}}
-{"type":"turn_end"}
-{"type":"agent_end"}
-{"type":"session_end"}
+// sampleNDJSON is the slim format that runner.summaryWriter produces.
+// Every line is one of the seven event types the decoder knows about
+// (run_start / session_start / user / assistant / tool_call / tool_result
+// / run_end).
+const sampleNDJSON = `{"type":"run_start","task_id":"demo","prompt":"please show files","started_at":"2026-05-23T10:00:00Z"}
+{"type":"session_start","session_id":"abc123","model":"gpt-4o"}
+{"type":"user","text":"please show files"}
+{"type":"tool_call","name":"Read","args":{"path":"foo.txt"}}
+{"type":"tool_result","name":"Read","ok":true,"snippet":"file line 1\nfile line 2"}
+{"type":"tool_call","name":"Run","args":{"cmd":"git status"}}
+{"type":"tool_result","name":"Run","ok":false}
+{"type":"assistant","text":"hello\nworld"}
+{"type":"run_end","status":"ok","duration_ms":1234,"ended_at":"2026-05-23T10:00:01Z"}
 `
 
 func writeLog(t *testing.T, root, taskID, name, body string) {
@@ -47,9 +41,11 @@ func TestDecodeEventStreamHumanReadable(t *testing.T) {
 	}
 	got := out.String()
 	mustContain := []string{
-		"session start  model=gpt-4o session=abc123",
-		"✎ user:",
+		"run start      task=demo",
+		"✎ prompt:",
 		"    please show files",
+		"session         model=gpt-4o id=abc123",
+		"✎ user:",
 		"tool call      Read",
 		"tool result    Read  ok",
 		"    file line 1",
@@ -59,116 +55,44 @@ func TestDecodeEventStreamHumanReadable(t *testing.T) {
 		"✎ assistant:",
 		"    hello",
 		"    world",
-		"session end",
+		"run end        status=ok duration=1234ms",
 	}
 	for _, want := range mustContain {
 		if !strings.Contains(got, want) {
 			t.Errorf("output missing %q\n--- output ---\n%s", want, got)
 		}
 	}
-	// Noise events must NOT leak into the decoded view.
-	mustNotContain := []string{
-		"message_update",
-		"agent_start",
-		"agent_end",
-		"turn_start",
-		"turn_end",
-		"interrupt",
-		"hidden chain of thought", // thinking blocks are intentionally dropped
-	}
-	for _, banned := range mustNotContain {
-		if strings.Contains(got, banned) {
-			t.Errorf("decoded view should hide %q but contains it\n--- output ---\n%s", banned, got)
-		}
-	}
 }
 
-// TestDecodeRealRunlogShape exercises the decoder against the exact event
-// shape emitted by a real qwen-via-LM-Studio run (captured manually from a
-// task that asked the agent to print the current date via bash). Acts as a
-// regression guard that we still surface user prompt / tool exec / final
-// assistant message when faced with the actual pkg/agent event names.
-func TestDecodeRealRunlogShape(t *testing.T) {
-	const realRunlog = `{"model":"qwen/qwen3.6-35b-a3b","sessionId":"7372c720","type":"session_start"}
-{"type":"agent_start"}
-{"type":"turn_start"}
-{"message":{"role":"user","content":"请输出当前的日期和时间"},"type":"message_start"}
-{"message":{"role":"user","content":"请输出当前的日期和时间"},"type":"message_end"}
-{"streamEvent":{"Type":"thinking_delta","Delta":"checking"},"type":"message_update"}
-{"args":{"command":"date '+%Y-%m-%d %H:%M:%S'"},"toolCallId":"537580642","toolName":"bash","type":"tool_execution_start"}
-{"args":{"command":"date '+%Y-%m-%d %H:%M:%S'"},"result":{"content":[{"type":"text","text":"2026-05-23 16:16:06\n"}],"details":{"exitCode":0,"timedOut":false}},"toolCallId":"537580642","toolName":"bash","type":"tool_execution_end"}
-{"message":{"role":"toolResult","toolCallId":"537580642","toolName":"bash","content":[{"type":"text","text":"2026-05-23 16:16:06\n"}],"isError":false},"type":"message_start"}
-{"message":{"role":"toolResult","toolCallId":"537580642","toolName":"bash","content":[{"type":"text","text":"2026-05-23 16:16:06\n"}],"isError":false},"type":"message_end"}
-{"message":{"role":"assistant","content":[{"type":"thinking","thinking":"the user wants current time"},{"type":"text","text":"当前日期和时间是：2026-05-23 16:16:06"}]},"type":"message_end"}
-{"type":"turn_end"}
-{"type":"agent_end"}
-{"type":"session_end"}
-`
-	var out bytes.Buffer
-	if err := decodeEventStream(strings.NewReader(realRunlog), &out); err != nil {
-		t.Fatalf("decodeEventStream: %v", err)
-	}
-	got := out.String()
-
-	// Real-shape essentials.
-	for _, want := range []string{
-		"model=qwen/qwen3.6-35b-a3b session=7372c720",
-		"✎ user:",
-		"    请输出当前的日期和时间",
-		"tool call      bash",
-		"command=date '+%Y-%m-%d %H:%M:%S'",
-		"tool result    bash  ok",
-		"    2026-05-23 16:16:06",
-		"✎ assistant:",
-		"    当前日期和时间是：2026-05-23 16:16:06",
-		"session end",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("real-shape output missing %q\n--- output ---\n%s", want, got)
-		}
-	}
-	// toolResult role would duplicate the tool_execution_end output; assert
-	// we don't double-print "2026-05-23 16:16:06" line.
-	lines := strings.Split(got, "\n")
-	hits := 0
-	for _, l := range lines {
-		if strings.TrimSpace(l) == "2026-05-23 16:16:06" {
-			hits++
-		}
-	}
-	if hits != 1 {
-		t.Errorf("expected the date to appear exactly once in the decoded view, got %d times\n%s", hits, got)
-	}
-
-	// Whole transcript should fit in well under 20 lines — that's the whole
-	// point of this exercise. Real input had ~100 NDJSON lines.
-	nonEmpty := 0
-	for _, l := range lines {
-		if strings.TrimSpace(l) != "" {
-			nonEmpty++
-		}
-	}
-	if nonEmpty > 15 {
-		t.Errorf("decoded view too verbose: %d non-empty lines\n%s", nonEmpty, got)
-	}
-}
-
-// TestDecodeSkipsToolCallOnlyAssistantTurn guards against the bug where an
-// assistant turn whose content is just `thinking + "\n\n" filler text +
-// toolCall` was rendering as an empty "✎ assistant:" block. The tool call
-// is already shown via tool_execution_start, so the whole turn should
-// produce no output.
-func TestDecodeSkipsToolCallOnlyAssistantTurn(t *testing.T) {
-	const ndjson = `{"type":"session_start","sessionId":"x","model":"m"}
-{"message":{"role":"assistant","content":[{"type":"thinking","thinking":"reason"},{"type":"text","text":"\n\n"},{"type":"toolCall","id":"1","name":"bash","arguments":{"cmd":"ls"}}]},"type":"message_end"}
-{"type":"session_end"}
+func TestDecodeRunEndErrorShowsError(t *testing.T) {
+	const ndjson = `{"type":"run_start","task_id":"demo","prompt":"do thing","started_at":"2026-05-23T10:00:00Z"}
+{"type":"run_end","status":"error","duration_ms":42,"ended_at":"2026-05-23T10:00:00Z","error":"create session: missing api key"}
 `
 	var out bytes.Buffer
 	if err := decodeEventStream(strings.NewReader(ndjson), &out); err != nil {
-		t.Fatalf("decode: %v", err)
+		t.Fatalf("decodeEventStream: %v", err)
 	}
-	if strings.Contains(out.String(), "assistant:") {
-		t.Errorf("expected no 'assistant:' line for a tool-call-only turn, got:\n%s", out.String())
+	got := out.String()
+	for _, want := range []string{
+		"run end        status=error duration=42ms",
+		"  error:",
+		"    create session: missing api key",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output missing %q\n--- output ---\n%s", want, got)
+		}
+	}
+}
+
+func TestDecodeUnknownEventStillSurfaces(t *testing.T) {
+	const ndjson = `{"type":"future_event","payload":"x"}
+`
+	var out bytes.Buffer
+	if err := decodeEventStream(strings.NewReader(ndjson), &out); err != nil {
+		t.Fatalf("decodeEventStream: %v", err)
+	}
+	if !strings.Contains(out.String(), "· future_event") {
+		t.Errorf("expected unknown-event marker, got: %s", out.String())
 	}
 }
 
@@ -210,8 +134,8 @@ func TestLogsListAndTailRoundTrip(t *testing.T) {
 	if err := Logs("demo", LogsOptions{Tail: true}, &tailOut); err != nil {
 		t.Fatalf("tail: %v", err)
 	}
-	if !strings.Contains(tailOut.String(), "session start") {
-		t.Errorf("decoded tail missing session start: %s", tailOut.String())
+	if !strings.Contains(tailOut.String(), "run start") {
+		t.Errorf("decoded tail missing run start: %s", tailOut.String())
 	}
 }
 
