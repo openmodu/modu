@@ -134,7 +134,38 @@ func (r *goTUIRoot) sessionStatusParts() []string {
 	if queue := r.queueStatusLine(); queue != "" {
 		parts = append(parts, queue)
 	}
+	// Goal indicator opts in per session via /goal-watch. Without that
+	// toggle the goal extension stays invisible here even when a goal is
+	// active, matching the "simplified statusbar" stance from 4f50c95.
+	if indicator := goalWatchIndicator(r.session.ExtensionRuntimeStates()); indicator != "" {
+		parts = append(parts, indicator)
+	}
 	return parts
+}
+
+// goalWatchIndicator extracts the goal indicator string from the
+// extension RuntimeState map, but only when the goal extension has opted
+// the host UI in via /goal-watch (state["watching"] == true). Returns ""
+// when the extension is absent, watching is off, or the indicator field
+// is missing — never panics on a malformed state map.
+func goalWatchIndicator(states map[string]any) string {
+	if len(states) == 0 {
+		return ""
+	}
+	raw, ok := states["goal"]
+	if !ok {
+		return ""
+	}
+	state, ok := raw.(map[string]any)
+	if !ok {
+		return ""
+	}
+	watching, _ := state["watching"].(bool)
+	if !watching {
+		return ""
+	}
+	indicator, _ := state["indicator"].(string)
+	return strings.TrimSpace(indicator)
 }
 
 func (r *goTUIRoot) queueStatusLine() string {
