@@ -341,6 +341,7 @@ func executeToolCalls(tools []AgentTool, toolCalls []types.ToolCallContent, ctx 
 					result: AgentToolResult{
 						Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: preps[j].denyMsg}},
 						Details: map[string]any{"denied": true},
+						IsError: true,
 					},
 					isError: true,
 				}
@@ -355,10 +356,11 @@ func executeToolCalls(tools []AgentTool, toolCalls []types.ToolCallContent, ctx 
 				r = AgentToolResult{
 					Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: err.Error()}},
 					Details: map[string]any{},
+					IsError: true,
 				}
 				outcomes[j] = execOutcome{result: r, isError: true}
 			} else {
-				outcomes[j] = execOutcome{result: r, isError: false}
+				outcomes[j] = execOutcome{result: r, isError: r.IsError}
 			}
 			stream.Push(AgentEvent{Type: EventTypeToolExecutionEnd, ToolCallID: tc.ID, ToolName: tc.Name, Args: tc.Arguments, Result: outcomes[j].result, IsError: outcomes[j].isError, Parallel: inParallel})
 		}
@@ -428,6 +430,7 @@ func skipToolCall(toolCall types.ToolCallContent, stream *EventStream) types.Too
 	result := AgentToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "Skipped due to queued user message."}},
 		Details: map[string]any{},
+		IsError: true,
 	}
 	stream.Push(AgentEvent{Type: EventTypeToolExecutionStart, ToolCallID: toolCall.ID, ToolName: toolCall.Name, Args: toolCall.Arguments})
 	stream.Push(AgentEvent{Type: EventTypeToolExecutionEnd, ToolCallID: toolCall.ID, ToolName: toolCall.Name, Result: result, IsError: true})

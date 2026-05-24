@@ -28,6 +28,8 @@ import (
 	"syscall"
 
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
+	"github.com/openmodu/modu/pkg/coding_agent/extension"
+	"github.com/openmodu/modu/pkg/coding_agent/extension/goal"
 	"github.com/openmodu/modu/pkg/coding_agent/modes"
 	"github.com/openmodu/modu/pkg/coding_agent/modes/rpc"
 
@@ -72,6 +74,14 @@ func main() {
 	thinkingLevel := provider.ResolveThinkingLevel()
 	agentDir := coding_agent.DefaultAgentDir()
 
+	// Out is intentionally nil here: writing to stderr from the goal
+	// extension bypasses the TUI's inline-mode widget management and
+	// corrupts the screen (Tokens/Status/Time fields land in arbitrary
+	// rows). All user-facing notifications still reach the scrollback via
+	// api.Notify -> SessionEventExtensionNotify -> a "section" uiBlock,
+	// which is the only path the TUI can safely render multi-line text.
+	goalExt := goal.New(goal.Options{})
+
 	sessionOpts := coding_agent.CodingSessionOptions{
 		Cwd:             cwd,
 		AgentDir:        agentDir,
@@ -80,6 +90,7 @@ func main() {
 		GetAPIKey:       getAPIKey,
 		ScopedModels:    provider.ConfiguredModelIDs(),
 		ModelConfigPath: provider.ConfigPath(),
+		Extensions:      []extension.Extension{goalExt},
 	}
 	session, err := coding_agent.NewCodingSession(sessionOpts)
 	if err != nil {

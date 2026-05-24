@@ -9,6 +9,7 @@ import (
 type AgentToolResult struct {
 	Content []types.ContentBlock `json:"content"`
 	Details any                  `json:"details"`
+	IsError bool                 `json:"isError,omitempty"`
 }
 
 type AgentToolUpdateCallback func(partial AgentToolResult)

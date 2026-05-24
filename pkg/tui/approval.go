@@ -230,6 +230,9 @@ func (r *goTUIRoot) renderApprovalWidget() *gotui.Element {
 	if perm.ToolName == "exit_plan_mode" {
 		return r.renderPlanApprovalWidget(perm, container)
 	}
+	if perm.ToolName == "extension_confirm" {
+		return r.renderExtensionConfirmWidget(perm, container)
+	}
 
 	container.AddChild(gotui.New(
 		gotui.WithText("⏺ Permission required"),
@@ -276,6 +279,47 @@ func (r *goTUIRoot) renderApprovalWidget() *gotui.Element {
 	hintRow.AddChild(gotui.New(gotui.WithText(denyLabel), gotui.WithTextStyle(gotui.NewStyle().Dim()), gotui.WithFlexShrink(0)))
 	container.AddChild(hintRow)
 
+	return container
+}
+
+func (r *goTUIRoot) renderExtensionConfirmWidget(perm *approval.Request, container *gotui.Element) *gotui.Element {
+	title, _ := perm.Args["title"].(string)
+	body, _ := perm.Args["body"].(string)
+	if strings.TrimSpace(title) == "" {
+		title = "Confirm action"
+	}
+	container.AddChild(gotui.New(
+		gotui.WithText("⏺ "+title),
+		gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Yellow).Bold()),
+		gotui.WithFlexShrink(0),
+	))
+	for _, line := range strings.Split(strings.TrimSpace(body), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if len(line) > 100 {
+			line = line[:100] + "…"
+		}
+		container.AddChild(gotui.New(
+			gotui.WithText("  "+line),
+			gotui.WithTextStyle(gotui.NewStyle().Dim()),
+			gotui.WithFlexShrink(0),
+		))
+	}
+
+	hintRow := gotui.New(
+		gotui.WithDisplay(gotui.DisplayFlex),
+		gotui.WithDirection(gotui.Row),
+		gotui.WithFlexShrink(0),
+	)
+	sp := func() *gotui.Element {
+		return gotui.New(gotui.WithText("  "), gotui.WithFlexShrink(0))
+	}
+	hintRow.AddChild(gotui.New(gotui.WithText("  actions: "), gotui.WithTextStyle(gotui.NewStyle().Dim()), gotui.WithFlexShrink(0)))
+	hintRow.AddChild(gotui.New(gotui.WithText("[Y]es"), gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Green).Bold()), gotui.WithFlexShrink(0)))
+	hintRow.AddChild(sp())
+	hintRow.AddChild(gotui.New(gotui.WithText("[N]o"), gotui.WithTextStyle(gotui.NewStyle().Foreground(gotui.Red).Bold()), gotui.WithFlexShrink(0)))
+	container.AddChild(hintRow)
 	return container
 }
 

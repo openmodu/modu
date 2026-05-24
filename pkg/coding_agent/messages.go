@@ -73,12 +73,16 @@ func (m *BranchSummaryMessage) ToLlmMessage() types.UserMessage {
 
 // CustomMessage represents an extension-injected message.
 type CustomMessage struct {
-	Source string `json:"source"` // Extension name
-	Text   string `json:"text"`
+	Source     string `json:"source"` // Extension name
+	Text       string `json:"text"`
+	CustomType string `json:"customType,omitempty"`
+	Display    bool   `json:"display,omitempty"`
+	DeliverAs  string `json:"deliverAs,omitempty"`
 }
 
 const nestedContextSource = "nested_context"
 const explicitSkillSource = "explicit_skill"
+const hiddenExtensionSource = "extension_hidden"
 
 // ToLlmMessage converts a CustomMessage to a UserMessage.
 func (m *CustomMessage) ToLlmMessage() types.UserMessage {
@@ -97,9 +101,13 @@ func (m *CustomMessage) ToLlmMessage() types.UserMessage {
 func isTransientContextMessage(msg agent.AgentMessage) bool {
 	switch m := msg.(type) {
 	case types.UserMessage:
-		return customMessageHasSource(m.Content, nestedContextSource) || customMessageHasSource(m.Content, explicitSkillSource)
+		return customMessageHasSource(m.Content, nestedContextSource) ||
+			customMessageHasSource(m.Content, explicitSkillSource) ||
+			customMessageHasSource(m.Content, hiddenExtensionSource)
 	case *types.UserMessage:
-		return customMessageHasSource(m.Content, nestedContextSource) || customMessageHasSource(m.Content, explicitSkillSource)
+		return customMessageHasSource(m.Content, nestedContextSource) ||
+			customMessageHasSource(m.Content, explicitSkillSource) ||
+			customMessageHasSource(m.Content, hiddenExtensionSource)
 	default:
 		return false
 	}

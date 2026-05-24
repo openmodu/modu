@@ -106,15 +106,18 @@ type CodingSession struct {
 	// planDecisionCb presents the plan to the user and returns the decision:
 	// "approve", "approve_auto", "reject", or "reject:<feedback>". nil means
 	// headless — the plan is auto-approved.
-	planDecisionCb func(plan string, steps []string) string
-	worktreeMu     sync.Mutex
-	originalCwd    string
-	worktreePath   string
-	contextMu      sync.Mutex
-	loadedContexts map[string]struct{}
-	harness        *harnessState
-	traceRecorder  *sessiontrace.Recorder
-	otelBridge     *sessiontrace.OTelBridge
+	planDecisionCb     func(plan string, steps []string) string
+	extensionMu        sync.RWMutex
+	extensionConfirmCb func(title, body string, defaultYes bool) bool
+	extensionSelectCb  func(title string, options []string) string
+	worktreeMu         sync.Mutex
+	originalCwd        string
+	worktreePath       string
+	contextMu          sync.Mutex
+	loadedContexts     map[string]struct{}
+	harness            *harnessState
+	traceRecorder      *sessiontrace.Recorder
+	otelBridge         *sessiontrace.OTelBridge
 
 	// approvalManager handles tool execution approval.
 	approvalManager *ApprovalManager
@@ -418,17 +421,80 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 
 	// Initialize extensions
 	if len(opts.Extensions) > 0 {
-		extRunner.SetCallbacks(
-			func(text string) error {
-				msg := &CustomMessage{Source: "extension", Text: text}
-				ag.Steer(msg.ToLlmMessage())
+		sendExtensionMessage := func(text string, options extension.MessageOptions) error {
+			followUp := options.DeliverAs == "followUp"
+			source := "extension"
+			if followUp {
+				source = hiddenExtensionSource
+			}
+			msg := &CustomMessage{
+				Source:     source,
+				Text:       text,
+				CustomType: options.CustomType,
+				Display:    options.Display,
+				DeliverAs:  options.DeliverAs,
+			}
+			llmMsg := msg.ToLlmMessage()
+			if ag.GetState().IsStreaming {
+				if followUp {
+					ag.FollowUp(llmMsg)
+				} else {
+					ag.Steer(llmMsg)
+				}
 				return nil
+			}
+			go func() {
+				deadline := time.Now().Add(time.Second)
+				for {
+					err := ag.Prompt(context.Background(), llmMsg)
+					if err == nil {
+						return
+					}
+					if !strings.Contains(err.Error(), "already processing") || time.Now().After(deadline) {
+						return
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+			}()
+			// Wait briefly for the new turn to enter streaming so a caller's
+			// WaitForIdle doesn't race past it.
+			deadline := time.Now().Add(200 * time.Millisecond)
+			for time.Now().Before(deadline) {
+				if ag.GetState().IsStreaming {
+					break
+				}
+				time.Sleep(time.Millisecond)
+			}
+			return nil
+		}
+		extRunner.SetCallbacks(
+			func(text string, options extension.MessageOptions) error {
+				return sendExtensionMessage(text, options)
 			},
 			func(names []string) {
 				cs.SetActiveTools(names)
 			},
 			func(provider, modelID string) error {
 				return cs.SetModelByID(provider, modelID)
+			},
+			func() string { return cs.GetSessionID() },
+			func() string { return cs.sessionManager.Dir() },
+			func() string { return cs.agentDir },
+			func() string { return cs.cwd },
+			func() bool { return !ag.GetState().IsStreaming },
+			func() bool { return ag.HasQueuedMessages() },
+			func(extensionName, text string) {
+				cs.emitSessionEvent(SessionEvent{
+					Type:          SessionEventExtensionNotify,
+					ExtensionName: extensionName,
+					Message:       text,
+				})
+			},
+			func(title, body string, defaultYes bool) bool {
+				return cs.requestExtensionConfirm(title, body, defaultYes)
+			},
+			func(title string, options []string) string {
+				return cs.requestExtensionSelect(title, options)
 			},
 		)
 
@@ -460,6 +526,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 				},
 			}
 		}
+		extRunner.EmitEvent(agent.AgentEvent{Type: agent.EventType("session_start"), Reason: "startup"})
 	}
 
 	cs.installHarnessLayer()
@@ -490,7 +557,9 @@ func (s *CodingSession) Prompt(ctx context.Context, text string) error {
 		}
 
 		if cmd, ok := s.slashCommands[cmdName]; ok {
-			return cmd.Handler(s, cmdArgs)
+			err := cmd.Handler(s, cmdArgs)
+			s.writeRuntimeState()
+			return err
 		}
 
 		s.refreshResourcePaths()
@@ -538,6 +607,9 @@ func (s *CodingSession) Prompt(ctx context.Context, text string) error {
 }
 
 func (s *CodingSession) Close(reason string) {
+	if s.extensions != nil {
+		s.extensions.EmitEvent(agent.AgentEvent{Type: agent.EventType("session_shutdown")})
+	}
 	if s.traceRecorder != nil {
 		_ = s.traceRecorder.RecordSessionEvent("session_end", map[string]any{"reason": reason})
 		_ = s.traceRecorder.Close()
@@ -1473,6 +1545,12 @@ func sessionEventMeta(event SessionEvent) map[string]any {
 	if event.Reason != "" {
 		meta["reason"] = event.Reason
 	}
+	if event.ExtensionName != "" {
+		meta["extensionName"] = event.ExtensionName
+	}
+	if event.Message != "" {
+		meta["message"] = event.Message
+	}
 	if len(meta) == 0 {
 		return nil
 	}
@@ -1790,6 +1868,9 @@ func (s *CodingSession) switchSessionManager(newMgr *session.Manager) error {
 	s.sessionName = newMgr.SessionName()
 	s.agent.ReplaceMessages(messages)
 	s.lastSavedIndex = len(messages)
+	if s.extensions != nil {
+		s.extensions.EmitEvent(agent.AgentEvent{Type: agent.EventType("session_start"), Reason: "resume"})
+	}
 	s.writeRuntimeState()
 	return nil
 }

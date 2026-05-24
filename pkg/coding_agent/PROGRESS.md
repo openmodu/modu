@@ -48,6 +48,9 @@ High-priority gaps identified before this round:
 - Flattened prior conversation summaries during compaction so repeated compaction does not recursively summarize old summary envelopes.
 - Added dynamic nested-context injection triggered by file/tool access so deeper path-specific instructions can be loaded on demand during a turn.
 - Extended dynamic context triggers beyond `read/edit/write` to include `grep`, `find`, and `ls` path discovery.
+- Aligned `/goal` UI interactions: hidden follow-up messages are transient, TUI confirms goal replacement, and paused goals ask before resuming once the UI is ready.
+- Hardened `/goal` parity with objective length limits, goal-store schema validation, shutdown-time accounting flush, local-time summaries, hashed no-session store keys, and compact user-facing token counts.
+- Split `/goal` continuation queue decisions into pure idle/after-agent-end helpers, expanded store edge-case coverage, and preserved goal tool `isError` details for model-readable correction paths.
 - Marked dynamic nested-context messages as transient so they do not persist into long-term session history or saved transcripts.
 - Added a lightweight session-scoped harness hook layer around tool execution.
 - Added a harness-only hint side channel by stripping `<modu-code-hint .../>` tags from tool-visible text output while recording them for the host runtime.
@@ -167,12 +170,18 @@ High-priority gaps identified before this round:
   Plan revision snapshots plus `/plan history` for tracing approved plan iterations
   Active worktree diff API and `/worktree diff` for reviewing isolated changes before handoff
   Shared TUI selector headers with current position, filtered/total counts, search query, and mode
+  Persistent `/goal` extension parity for session-scoped goal files, `create_goal`/`get_goal`/`update_goal` tools, hidden follow-up continuation, token/time accounting, and `budgetLimited` wrap-up behavior
+  `/goal` subcommand parity for show, set/replace objective, pause, resume, and clear while keeping the earlier `/goal-*` aliases
+  Goal runtime-state exposure plus TUI idle-status indicators for pursuing, paused, unmet, and achieved goals
+  Extension notification events so goal command output is visible inside TUI scrollback instead of only stderr
+  pi-goal command/tool/accounting parity for `/goal` parsing, replacement confirmation, clear feedback, completion accounting, resume-only paused prompts, and compact user-facing goal formatting
+  pi-goal protocol parity for goal tool top-level `isError`, select-style extension prompts, hidden follow-up message metadata, and seconds-based continuation budget prompts
 
 ## Still Missing
 
 - Deeper plan-mode revision flows beyond the current approval/rejection gate
 - Advanced worktree flows such as diff/merge handoff from isolated worktrees back to the original checkout
-- Full pi-compatible TypeScript extension/package ecosystem, including remote npm/git package install, theme resources, UI extension context, provider hooks, and hot reload
+- Full pi-compatible TypeScript extension/package ecosystem, including remote npm/git package install, theme resources, rich UI extension context, provider hooks, and hot reload
 - Remaining pi TUI polish outside the now-covered selector/status/session-tree basics
 
 ## Suggested Next Steps

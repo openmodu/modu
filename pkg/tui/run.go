@@ -127,6 +127,91 @@ func RunWithOptions(ctx context.Context, session *coding_agent.CodingSession, mo
 				return "reject"
 			}
 		})
+
+		session.SetExtensionConfirmCallback(func(title, body string, defaultYes bool) bool {
+			respCh := make(chan string, 1)
+			req := approval.Request{
+				ToolName:   "extension_confirm",
+				ToolCallID: "extension_confirm",
+				Args: map[string]any{
+					"title":      title,
+					"body":       body,
+					"defaultYes": defaultYes,
+				},
+				Response: respCh,
+			}
+			select {
+			case approvalCh <- req:
+			case <-ctx.Done():
+				return defaultYes
+			case <-app.StopCh():
+				return defaultYes
+			}
+			select {
+			case decision := <-respCh:
+				switch strings.TrimSpace(strings.ToLower(decision)) {
+				case "allow", "allow_always", "approve", "yes", "y":
+					return true
+				case "deny", "deny_always", "reject", "no", "n":
+					return false
+				default:
+					return defaultYes
+				}
+			case <-ctx.Done():
+				return defaultYes
+			case <-app.StopCh():
+				return defaultYes
+			}
+		})
+		session.SetExtensionSelectCallback(func(title string, options []string) string {
+			respCh := make(chan string, 1)
+			req := approval.Request{
+				ToolName:   "extension_select",
+				ToolCallID: "extension_select",
+				Args: map[string]any{
+					"title":   title,
+					"options": options,
+				},
+				Response: respCh,
+			}
+			select {
+			case approvalCh <- req:
+			case <-ctx.Done():
+				if len(options) > 0 {
+					return options[0]
+				}
+				return ""
+			case <-app.StopCh():
+				if len(options) > 0 {
+					return options[0]
+				}
+				return ""
+			}
+			select {
+			case decision := <-respCh:
+				decision = strings.TrimSpace(decision)
+				for _, option := range options {
+					if decision == option {
+						return option
+					}
+				}
+				if len(options) > 0 {
+					return options[0]
+				}
+				return ""
+			case <-ctx.Done():
+				if len(options) > 0 {
+					return options[0]
+				}
+				return ""
+			case <-app.StopCh():
+				if len(options) > 0 {
+					return options[0]
+				}
+				return ""
+			}
+		})
+		go session.EmitExtensionEvent("ui_ready")
 	}
 
 	unsub := session.Subscribe(func(ev agent.AgentEvent) {

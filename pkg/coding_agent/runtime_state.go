@@ -17,6 +17,7 @@ type RuntimeStateSnapshot struct {
 	Model        map[string]string    `json:"model"`
 	Thinking     string               `json:"thinking"`
 	Modes        map[string]any       `json:"modes"`
+	Extensions   map[string]any       `json:"extensions"`
 	Features     map[string]bool      `json:"features"`
 	Permissions  map[string]any       `json:"permissions"`
 	Git          map[string]any       `json:"git"`
@@ -121,6 +122,7 @@ func (s *CodingSession) RuntimeState() RuntimeStateSnapshot {
 			"worktree":  s.ActiveWorktree(),
 			"streaming": s.IsStreaming(),
 		},
+		Extensions: s.ExtensionRuntimeStates(),
 		Features: map[string]bool{
 			"memory_tool":         s.config.FeatureMemoryTool(),
 			"todo_tool":           s.config.FeatureTodoTool(),
@@ -149,6 +151,18 @@ func (s *CodingSession) RuntimeState() RuntimeStateSnapshot {
 		HarnessHints: hintCount,
 		Trace:        s.TraceSummary(),
 	}
+}
+
+// ExtensionRuntimeStates returns lightweight state exposed by loaded extensions.
+func (s *CodingSession) ExtensionRuntimeStates() map[string]any {
+	if s == nil || s.extensions == nil {
+		return map[string]any{}
+	}
+	states := s.extensions.RuntimeStates()
+	if states == nil {
+		return map[string]any{}
+	}
+	return states
 }
 
 func (s *CodingSession) RuntimeStateJSON() string {

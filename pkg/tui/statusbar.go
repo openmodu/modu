@@ -6,8 +6,6 @@ import (
 	"time"
 
 	gotui "github.com/grindlemire/go-tui"
-
-	"github.com/openmodu/modu/pkg/types"
 )
 
 const (
@@ -124,19 +122,8 @@ func (r *goTUIRoot) idleStatusLine() string {
 
 func (r *goTUIRoot) sessionStatusParts() []string {
 	var parts []string
-	if model := r.currentModelForStatus(); model != nil {
-		label := model.ID
-		if model.ProviderID != "" {
-			label = model.ProviderID + "/" + label
-		}
-		parts = append(parts, "model "+label)
-	}
 	if r.session == nil {
 		return parts
-	}
-	stats := r.session.GetSessionStats()
-	if stats.TotalTokens > 0 {
-		parts = append(parts, fmt.Sprintf("~%d tokens", stats.TotalTokens))
 	}
 	if r.session.IsPlanMode() {
 		parts = append(parts, "plan")
@@ -147,7 +134,38 @@ func (r *goTUIRoot) sessionStatusParts() []string {
 	if queue := r.queueStatusLine(); queue != "" {
 		parts = append(parts, queue)
 	}
+	// Goal indicator opts in per session via /goal-watch. Without that
+	// toggle the goal extension stays invisible here even when a goal is
+	// active, matching the "simplified statusbar" stance from 4f50c95.
+	if indicator := goalWatchIndicator(r.session.ExtensionRuntimeStates()); indicator != "" {
+		parts = append(parts, indicator)
+	}
 	return parts
+}
+
+// goalWatchIndicator extracts the goal indicator string from the
+// extension RuntimeState map, but only when the goal extension has opted
+// the host UI in via /goal-watch (state["watching"] == true). Returns ""
+// when the extension is absent, watching is off, or the indicator field
+// is missing — never panics on a malformed state map.
+func goalWatchIndicator(states map[string]any) string {
+	if len(states) == 0 {
+		return ""
+	}
+	raw, ok := states["goal"]
+	if !ok {
+		return ""
+	}
+	state, ok := raw.(map[string]any)
+	if !ok {
+		return ""
+	}
+	watching, _ := state["watching"].(bool)
+	if !watching {
+		return ""
+	}
+	indicator, _ := state["indicator"].(string)
+	return strings.TrimSpace(indicator)
 }
 
 func (r *goTUIRoot) queueStatusLine() string {
@@ -166,21 +184,6 @@ func (r *goTUIRoot) queueStatusLine() string {
 		return ""
 	}
 	return strings.Join(parts, " ")
-}
-
-func (r *goTUIRoot) currentModelForStatus() *types.Model {
-	if r.session != nil {
-		if model := r.session.GetModel(); model != nil {
-			return model
-		}
-	}
-	if r.modelInfo != nil {
-		return r.modelInfo
-	}
-	if r.model != nil {
-		return r.model.model
-	}
-	return nil
 }
 
 func (r *goTUIRoot) activityLine() (string, bool) {

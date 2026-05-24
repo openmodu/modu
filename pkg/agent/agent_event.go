@@ -25,6 +25,7 @@ const (
 // AgentEvent union type in Go struct
 type AgentEvent struct {
 	Type        EventType
+	Reason      string
 	Messages    []AgentMessage
 	Message     AgentMessage
 	ToolResults []types.ToolResultMessage

@@ -18,6 +18,7 @@ const (
 	SessionEventSubagentStop    SessionEventType = "subagent_stop"
 	SessionEventPermissionReq   SessionEventType = "permission_request"
 	SessionEventPermissionDeny  SessionEventType = "permission_denied"
+	SessionEventExtensionNotify SessionEventType = "extension_notify"
 )
 
 // SessionEvent represents a session-level event emitted via the EventBus.
@@ -50,6 +51,10 @@ type SessionEvent struct {
 	// Permission fields
 	ToolName string `json:"toolName,omitempty"`
 	Reason   string `json:"reason,omitempty"`
+
+	// Extension notification fields
+	ExtensionName string `json:"extensionName,omitempty"`
+	Message       string `json:"message,omitempty"`
 }
 
 const sessionEventChannel = "session_event"

@@ -2,6 +2,7 @@ package coding_agent
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/openmodu/modu/pkg/agent"
@@ -12,6 +13,36 @@ type SlashCommand struct {
 	Name        string
 	Description string
 	Handler     func(session *CodingSession, args string) error
+}
+
+// HasSlashCommand reports whether the session has a registered slash command.
+func (s *CodingSession) HasSlashCommand(name string) bool {
+	if s == nil {
+		return false
+	}
+	name = strings.TrimPrefix(strings.TrimSpace(name), "/")
+	if i := strings.IndexAny(name, " \t"); i >= 0 {
+		name = name[:i]
+	}
+	if name == "" {
+		return false
+	}
+	_, ok := s.slashCommands[name]
+	return ok
+}
+
+// RegisteredSlashCommands returns all session-level slash commands, including
+// commands contributed by extensions.
+func (s *CodingSession) RegisteredSlashCommands() []SlashCommand {
+	if s == nil || len(s.slashCommands) == 0 {
+		return nil
+	}
+	out := make([]SlashCommand, 0, len(s.slashCommands))
+	for _, cmd := range s.slashCommands {
+		out = append(out, cmd)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // BuiltinCommands returns all built-in slash commands.

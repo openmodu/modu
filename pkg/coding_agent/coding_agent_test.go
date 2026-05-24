@@ -365,6 +365,24 @@ func TestApprovalManagerAutoAllowsReadOnlyTools(t *testing.T) {
 	}
 }
 
+func TestApprovalManagerAutoAllowsGoalStateTools(t *testing.T) {
+	m := NewApprovalManager()
+	m.SetRules(PermissionConfig{DenyTools: []string{"update_goal"}})
+	called := false
+	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
+		called = true
+		return agent.ToolApprovalDeny, nil
+	})
+	for _, toolName := range []string{"create_goal", "get_goal", "update_goal"} {
+		if d, _ := m.Approve(toolName, "call-"+toolName, nil); d != agent.ToolApprovalAllow {
+			t.Fatalf("expected %s to auto-allow, got %v", toolName, d)
+		}
+	}
+	if called {
+		t.Fatal("goal state tools should not hit the interactive approval callback")
+	}
+}
+
 func TestApprovalManagerDenyRulesOverrideReadOnlyAutoAllow(t *testing.T) {
 	m := NewApprovalManager()
 	m.SetRules(PermissionConfig{DenyTools: []string{"read"}})
@@ -1606,6 +1624,37 @@ func (e *testHookExtension) Init(api extension.ExtensionAPI) error {
 		},
 	})
 	return nil
+}
+
+type testRuntimeStateExtension struct{}
+
+func (e *testRuntimeStateExtension) Name() string { return "stateful" }
+func (e *testRuntimeStateExtension) Init(extension.ExtensionAPI) error {
+	return nil
+}
+func (e *testRuntimeStateExtension) RuntimeState() any {
+	return map[string]any{"status": "ok"}
+}
+
+func TestRuntimeStateIncludesExtensionState(t *testing.T) {
+	dir := t.TempDir()
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:        dir,
+		AgentDir:   filepath.Join(dir, ".coding_agent"),
+		Model:      newTestModel(),
+		Extensions: []extension.Extension{&testRuntimeStateExtension{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	states := session.ExtensionRuntimeStates()
+	state, ok := states["stateful"].(map[string]any)
+	if !ok || state["status"] != "ok" {
+		t.Fatalf("extension runtime state missing: %#v", states)
+	}
+	if got := session.RuntimeStateJSON(); !strings.Contains(got, `"extensions"`) || !strings.Contains(got, `"stateful"`) {
+		t.Fatalf("runtime state json missing extension state: %s", got)
+	}
 }
 
 func TestExtensionHooksAreApplied(t *testing.T) {
@@ -3878,10 +3927,16 @@ func TestTransientNestedContextMessagesArePrunedAndNotPersisted(t *testing.T) {
 		Source: nestedContextSource,
 		Text:   "Additional path-specific instructions became relevant after accessing:\n- " + filepath.Join(dir, "nested", "file.go"),
 	}).ToLlmMessage()
+	hiddenFollowUp := (&CustomMessage{
+		Source: hiddenExtensionSource,
+		Text:   "Continue working toward the active thread goal.",
+	}).ToLlmMessage()
 	normal := types.UserMessage{Role: "user", Content: "regular user message"}
 
 	session.agent.AppendMessage(transient)
 	session.handleMessageEnd(transient)
+	session.agent.AppendMessage(hiddenFollowUp)
+	session.handleMessageEnd(hiddenFollowUp)
 	session.agent.AppendMessage(normal)
 	session.handleMessageEnd(normal)
 	session.pruneTransientContextMessages()
@@ -3901,6 +3956,9 @@ func TestTransientNestedContextMessagesArePrunedAndNotPersisted(t *testing.T) {
 	text := string(data)
 	if strings.Contains(text, nestedContextSource) {
 		t.Fatalf("expected transient nested context not to be persisted, got:\n%s", text)
+	}
+	if strings.Contains(text, hiddenExtensionSource) {
+		t.Fatalf("expected hidden extension follow-up not to be persisted, got:\n%s", text)
 	}
 	if !strings.Contains(text, "regular user message") {
 		t.Fatalf("expected regular message to be persisted, got:\n%s", text)

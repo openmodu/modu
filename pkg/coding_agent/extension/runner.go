@@ -9,15 +9,24 @@ import (
 
 // Runner manages the lifecycle of extensions and provides the ExtensionAPI.
 type Runner struct {
-	extensions []Extension
-	tools      []agent.AgentTool
-	commands   []Command
-	hooks      []ToolHook
-	handlers   map[string][]EventHandler
-	sendMsg    func(text string) error
-	setTools   func(names []string)
-	setModel   func(provider, modelID string) error
-	mu         sync.RWMutex
+	extensions   []Extension
+	tools        []agent.AgentTool
+	commands     []Command
+	hooks        []ToolHook
+	handlers     map[string][]EventHandler
+	sendMsg      func(text string, options MessageOptions) error
+	setTools     func(names []string)
+	setModel     func(provider, modelID string) error
+	sessionID    func() string
+	sessionDir   func() string
+	agentDir     func() string
+	cwd          func() string
+	isIdle       func() bool
+	hasPending   func() bool
+	notify       func(extensionName, text string)
+	confirm      func(title, body string, defaultYes bool) bool
+	selectChoice func(title string, options []string) string
+	mu           sync.RWMutex
 }
 
 // NewRunner creates a new extension runner.
@@ -29,15 +38,33 @@ func NewRunner() *Runner {
 
 // SetCallbacks configures the callbacks for the extension API.
 func (r *Runner) SetCallbacks(
-	sendMsg func(text string) error,
+	sendMsg func(text string, options MessageOptions) error,
 	setTools func(names []string),
 	setModel func(provider, modelID string) error,
+	sessionID func() string,
+	sessionDir func() string,
+	agentDir func() string,
+	cwd func() string,
+	isIdle func() bool,
+	hasPending func() bool,
+	notify func(extensionName, text string),
+	confirm func(title, body string, defaultYes bool) bool,
+	selectChoice func(title string, options []string) string,
 ) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sendMsg = sendMsg
 	r.setTools = setTools
 	r.setModel = setModel
+	r.sessionID = sessionID
+	r.sessionDir = sessionDir
+	r.agentDir = agentDir
+	r.cwd = cwd
+	r.isIdle = isIdle
+	r.hasPending = hasPending
+	r.notify = notify
+	r.confirm = confirm
+	r.selectChoice = selectChoice
 }
 
 // Init initializes all extensions.
@@ -81,13 +108,23 @@ func (r *Runner) On(event string, handler EventHandler) {
 
 // SendMessage implements ExtensionAPI.
 func (r *Runner) SendMessage(text string) error {
+	return r.SendMessageWithOptions(text, MessageOptions{})
+}
+
+// SendMessageWithOptions implements ExtensionAPI.
+func (r *Runner) SendMessageWithOptions(text string, options MessageOptions) error {
 	r.mu.RLock()
 	fn := r.sendMsg
 	r.mu.RUnlock()
 	if fn == nil {
 		return fmt.Errorf("sendMessage not configured")
 	}
-	return fn(text)
+	return fn(text, options)
+}
+
+// SendFollowUpMessage implements ExtensionAPI.
+func (r *Runner) SendFollowUpMessage(text string) error {
+	return r.SendMessageWithOptions(text, MessageOptions{DeliverAs: "followUp"})
 }
 
 // SetActiveTools implements ExtensionAPI.
@@ -118,6 +155,124 @@ func (r *Runner) GetCommands() []Command {
 	result := make([]Command, len(r.commands))
 	copy(result, r.commands)
 	return result
+}
+
+// RuntimeStates returns lightweight state snapshots exposed by extensions.
+func (r *Runner) RuntimeStates() map[string]any {
+	r.mu.RLock()
+	extensions := append([]Extension(nil), r.extensions...)
+	r.mu.RUnlock()
+
+	out := make(map[string]any)
+	for _, ext := range extensions {
+		provider, ok := ext.(RuntimeStateProvider)
+		if !ok {
+			continue
+		}
+		out[ext.Name()] = provider.RuntimeState()
+	}
+	return out
+}
+
+// SessionID implements ExtensionAPI.
+func (r *Runner) SessionID() string {
+	r.mu.RLock()
+	fn := r.sessionID
+	r.mu.RUnlock()
+	if fn == nil {
+		return ""
+	}
+	return fn()
+}
+
+// SessionDir implements ExtensionAPI.
+func (r *Runner) SessionDir() string {
+	r.mu.RLock()
+	fn := r.sessionDir
+	r.mu.RUnlock()
+	if fn == nil {
+		return ""
+	}
+	return fn()
+}
+
+// AgentDir implements ExtensionAPI.
+func (r *Runner) AgentDir() string {
+	r.mu.RLock()
+	fn := r.agentDir
+	r.mu.RUnlock()
+	if fn == nil {
+		return ""
+	}
+	return fn()
+}
+
+// Cwd implements ExtensionAPI.
+func (r *Runner) Cwd() string {
+	r.mu.RLock()
+	fn := r.cwd
+	r.mu.RUnlock()
+	if fn == nil {
+		return ""
+	}
+	return fn()
+}
+
+// IsIdle implements ExtensionAPI.
+func (r *Runner) IsIdle() bool {
+	r.mu.RLock()
+	fn := r.isIdle
+	r.mu.RUnlock()
+	if fn == nil {
+		return true
+	}
+	return fn()
+}
+
+// HasPendingMessages implements ExtensionAPI.
+func (r *Runner) HasPendingMessages() bool {
+	r.mu.RLock()
+	fn := r.hasPending
+	r.mu.RUnlock()
+	if fn == nil {
+		return false
+	}
+	return fn()
+}
+
+// Notify implements ExtensionAPI.
+func (r *Runner) Notify(extensionName, text string) {
+	r.mu.RLock()
+	fn := r.notify
+	r.mu.RUnlock()
+	if fn != nil {
+		fn(extensionName, text)
+	}
+}
+
+// Confirm implements ExtensionAPI.
+func (r *Runner) Confirm(title, body string, defaultYes bool) bool {
+	r.mu.RLock()
+	fn := r.confirm
+	r.mu.RUnlock()
+	if fn == nil {
+		return defaultYes
+	}
+	return fn(title, body, defaultYes)
+}
+
+// Select implements ExtensionAPI.
+func (r *Runner) Select(title string, options []string) string {
+	r.mu.RLock()
+	fn := r.selectChoice
+	r.mu.RUnlock()
+	if fn == nil {
+		if len(options) == 0 {
+			return ""
+		}
+		return options[0]
+	}
+	return fn(title, append([]string(nil), options...))
 }
 
 // GetTools returns all tools registered by extensions.

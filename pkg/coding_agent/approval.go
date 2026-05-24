@@ -71,7 +71,7 @@ func (m *ApprovalManager) Approve(toolName, toolCallID string, args map[string]a
 	// exit_plan_mode runs its own interactive plan-approval gate inside the
 	// tool (so the user's rejection feedback can flow back to the model), so
 	// the agent-level gate must let it through without prompting.
-	if toolName == "exit_plan_mode" {
+	if toolName == "exit_plan_mode" || isGoalStateTool(toolName) {
 		return agent.ToolApprovalAllow, nil
 	}
 
@@ -224,6 +224,15 @@ func evaluateAllowPermissionRules(rules PermissionConfig, toolName string, args 
 func isAutoAllowedReadOnlyTool(toolName string) bool {
 	switch toolName {
 	case "read", "grep", "find", "ls":
+		return true
+	default:
+		return false
+	}
+}
+
+func isGoalStateTool(toolName string) bool {
+	switch toolName {
+	case "create_goal", "get_goal", "update_goal":
 		return true
 	default:
 		return false
