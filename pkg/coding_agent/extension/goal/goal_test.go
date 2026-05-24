@@ -526,6 +526,68 @@ func TestRuntimeStateExposesIndicator(t *testing.T) {
 	}
 }
 
+func TestRuntimeStateAlwaysCarriesWatchingFlag(t *testing.T) {
+	ext, _ := initialized(t)
+	// Even without a goal the key exists so host renderers can branch on
+	// it without a presence check.
+	empty, _ := ext.RuntimeState().(map[string]any)
+	if _, ok := empty["watching"]; !ok {
+		t.Fatal("watching key missing from empty runtime state")
+	}
+	if v, _ := empty["watching"].(bool); v {
+		t.Fatalf("watching should default to false, got %v", v)
+	}
+}
+
+func TestGoalWatchTogglesRuntimeStateFlag(t *testing.T) {
+	ext, api := initialized(t)
+	if err := api.runCommand(t, "goal-watch", ""); err != nil {
+		t.Fatalf("/goal-watch toggle on: %v", err)
+	}
+	if state, _ := ext.RuntimeState().(map[string]any); !state["watching"].(bool) {
+		t.Fatal("watching should be true after first /goal-watch")
+	}
+
+	if err := api.runCommand(t, "goal-watch", ""); err != nil {
+		t.Fatalf("/goal-watch toggle off: %v", err)
+	}
+	if state, _ := ext.RuntimeState().(map[string]any); state["watching"].(bool) {
+		t.Fatal("watching should flip back to false on second /goal-watch")
+	}
+
+	// Explicit on / off override toggle semantics.
+	for _, arg := range []string{"on", "true", "1", "show"} {
+		if err := api.runCommand(t, "goal-watch", "off"); err != nil {
+			t.Fatalf("reset to off: %v", err)
+		}
+		if err := api.runCommand(t, "goal-watch", arg); err != nil {
+			t.Fatalf("explicit %q: %v", arg, err)
+		}
+		if state, _ := ext.RuntimeState().(map[string]any); !state["watching"].(bool) {
+			t.Fatalf("%q should set watching=true", arg)
+		}
+	}
+	for _, arg := range []string{"off", "false", "0", "hide"} {
+		if err := api.runCommand(t, "goal-watch", "on"); err != nil {
+			t.Fatalf("reset to on: %v", err)
+		}
+		if err := api.runCommand(t, "goal-watch", arg); err != nil {
+			t.Fatalf("explicit %q: %v", arg, err)
+		}
+		if state, _ := ext.RuntimeState().(map[string]any); state["watching"].(bool) {
+			t.Fatalf("%q should set watching=false", arg)
+		}
+	}
+}
+
+func TestGoalWatchRejectsBadArgs(t *testing.T) {
+	_, api := initialized(t)
+	err := api.runCommand(t, "goal-watch", "maybe")
+	if err == nil || !strings.Contains(err.Error(), "expected on|off") {
+		t.Fatalf("bad arg should error with hint, got %v", err)
+	}
+}
+
 func TestGoalIndicatorTextMatchesPiGoalFooter(t *testing.T) {
 	budget := 50_000
 	active := Goal{Status: StatusActive, TokenBudget: &budget, TokensUsed: 63_876}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,6 +39,11 @@ type Extension struct {
 	agentTurnInProgress     bool
 	completedThisTurnGoalID string
 	lastSessionStartReason  string
+	// watching toggles whether the host UI should render the goal
+	// indicator (e.g. statusbar line). Off by default; controlled via
+	// /goal-watch [on|off]. Not persisted — every session starts hidden so
+	// the statusbar stays clean until the user opts in.
+	watching bool
 }
 
 // Options configures the Extension. The zero value is usable.
@@ -56,21 +62,30 @@ func New(opts Options) *Extension {
 func (e *Extension) Name() string { return "goal" }
 
 // RuntimeState exposes goal state for RuntimeState JSON and host UIs.
+//
+// `watching` is the host-UI opt-in: callers that render a statusbar /
+// footer (e.g. modu_code TUI) should suppress the goal line unless this
+// flag is true. The flag is always present so consumers can rely on the
+// key existing even when no goal is set.
 func (e *Extension) RuntimeState() any {
+	watching := e.isWatching()
 	g, ok, err := e.store.CurrentErr()
 	if err != nil {
 		return map[string]any{
-			"active": false,
-			"error":  err.Error(),
+			"active":   false,
+			"watching": watching,
+			"error":    err.Error(),
 		}
 	}
 	if !ok {
 		return map[string]any{
-			"active": false,
+			"active":   false,
+			"watching": watching,
 		}
 	}
 	state := map[string]any{
 		"active":          g.Status == StatusActive,
+		"watching":        watching,
 		"id":              g.ID,
 		"threadId":        g.ThreadID,
 		"objective":       g.Objective,
@@ -123,6 +138,7 @@ func (e *Extension) Init(api extension.ExtensionAPI) error {
 	api.RegisterCommand("goal-resume", "Resume a paused goal and inject one continuation immediately", e.cmdResume)
 	api.RegisterCommand("goal-cancel", "Clear the current goal", e.cmdClear)
 	api.RegisterCommand("goal-status", "Print the current goal's status", e.cmdStatus)
+	api.RegisterCommand("goal-watch", "Toggle goal indicator in the statusbar: /goal-watch [on|off]", e.cmdWatch)
 
 	api.RegisterTool(&createGoalTool{store: e.store, onCreate: e.beginAgentGoalAccounting})
 	api.RegisterTool(&updateGoalTool{
@@ -239,6 +255,44 @@ func (e *Extension) cmdStatus(string) error {
 		e.beginAgentGoalAccounting(g)
 	}
 	return nil
+}
+
+// cmdWatch toggles whether the host UI surfaces the goal indicator.
+// Bare /goal-watch flips state; explicit on / off / true / false / 1 / 0
+// set it. Any other argument is rejected rather than silently treated as
+// toggle, so a typo doesn't surprise the user.
+func (e *Extension) cmdWatch(args string) error {
+	arg := strings.ToLower(strings.TrimSpace(args))
+	var next bool
+	switch arg {
+	case "":
+		next = !e.isWatching()
+	case "on", "true", "1", "show":
+		next = true
+	case "off", "false", "0", "hide":
+		next = false
+	default:
+		return fmt.Errorf("goal-watch: expected on|off, got %q", args)
+	}
+	e.setWatching(next)
+	if next {
+		e.tell("Goal indicator on (statusbar will show pursuit / pause / budget / done state)")
+	} else {
+		e.tell("Goal indicator off")
+	}
+	return nil
+}
+
+func (e *Extension) isWatching() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.watching
+}
+
+func (e *Extension) setWatching(v bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.watching = v
 }
 
 func (e *Extension) onAgentStart(_ agent.AgentEvent) {
