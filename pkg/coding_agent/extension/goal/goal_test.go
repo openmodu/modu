@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/extension"
@@ -240,6 +241,12 @@ func TestUpdateGoalCompleteStopsLoop(t *testing.T) {
 	api.runCommand(t, "goal", "compile success")
 	api.fireAgentEnd()
 	before := api.sentCount()
+	active, _ := ext.store.Current()
+	ext.mu.Lock()
+	ext.agentTurnInProgress = true
+	ext.agentGoalID = active.ID
+	ext.agentMeasuredFrom = time.Now().Add(-2 * time.Second)
+	ext.mu.Unlock()
 
 	// Simulate the model calling the update_goal tool.
 	for _, tl := range api.tools {
@@ -258,6 +265,19 @@ func TestUpdateGoalCompleteStopsLoop(t *testing.T) {
 	api.fireAgentEnd()
 	if api.sentCount() != before {
 		t.Errorf("loop should stop once complete; sent=%d before=%d", api.sentCount(), before)
+	}
+	if g, _ := ext.store.Current(); g.TimeUsedSeconds < 1 {
+		t.Fatalf("completion accounting should include the active turn, got %ds", g.TimeUsedSeconds)
+	}
+	foundCompleteNotice := false
+	for _, notice := range api.notices {
+		if strings.Contains(notice, "Goal complete") && strings.Contains(notice, "compile success") {
+			foundCompleteNotice = true
+			break
+		}
+	}
+	if !foundCompleteNotice {
+		t.Fatalf("expected visible completion notice, got %#v", api.notices)
 	}
 }
 

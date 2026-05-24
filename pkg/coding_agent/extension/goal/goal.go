@@ -267,6 +267,11 @@ func (e *Extension) onAgentEnd(event agent.AgentEvent) {
 		e.clearAgentGoalAccounting()
 		return
 	}
+	if includeComplete && g.Status == StatusComplete {
+		e.clearAgentGoalAccounting()
+		e.tell(fmt.Sprintf("Goal complete\n%s", e.store.Summary()))
+		return
+	}
 	if g.Status == StatusActive {
 		e.beginAgentGoalAccounting(g)
 		if e.shouldQueueContinuation() {
@@ -325,8 +330,12 @@ func (e *Extension) markGoalCompletedThisTurn(g Goal) {
 		return
 	}
 	e.completedThisTurnGoalID = g.ID
-	e.agentGoalID = g.ID
-	e.agentMeasuredFrom = time.Now()
+	if e.agentGoalID == "" {
+		e.agentGoalID = g.ID
+	}
+	if e.agentMeasuredFrom.IsZero() {
+		e.agentMeasuredFrom = time.Now()
+	}
 }
 
 func (e *Extension) stopAgentGoalAccounting(goalID string) {
