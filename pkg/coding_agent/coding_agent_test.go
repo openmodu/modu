@@ -365,6 +365,24 @@ func TestApprovalManagerAutoAllowsReadOnlyTools(t *testing.T) {
 	}
 }
 
+func TestApprovalManagerAutoAllowsGoalStateTools(t *testing.T) {
+	m := NewApprovalManager()
+	m.SetRules(PermissionConfig{DenyTools: []string{"update_goal"}})
+	called := false
+	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
+		called = true
+		return agent.ToolApprovalDeny, nil
+	})
+	for _, toolName := range []string{"create_goal", "get_goal", "update_goal"} {
+		if d, _ := m.Approve(toolName, "call-"+toolName, nil); d != agent.ToolApprovalAllow {
+			t.Fatalf("expected %s to auto-allow, got %v", toolName, d)
+		}
+	}
+	if called {
+		t.Fatal("goal state tools should not hit the interactive approval callback")
+	}
+}
+
 func TestApprovalManagerDenyRulesOverrideReadOnlyAutoAllow(t *testing.T) {
 	m := NewApprovalManager()
 	m.SetRules(PermissionConfig{DenyTools: []string{"read"}})
