@@ -21,7 +21,7 @@ func (r *goTUIRoot) updateSlashMatches() {
 		r.slashScrollOffset = 0
 		return
 	}
-	r.slashMatches = matchSlashCommands(draft, r.skillSlashCommands())
+	r.slashMatches = matchSlashCommands(draft, r.sessionSlashCommands())
 	if r.slashMatchIdx >= len(r.slashMatches) {
 		r.slashMatchIdx = 0
 	}

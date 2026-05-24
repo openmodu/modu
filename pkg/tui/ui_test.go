@@ -576,10 +576,10 @@ func TestExtensionSlashCommandIsDelegatedToAgentSession(t *testing.T) {
 	session := newUITestSessionWithExtensions(t, &testSlashExtension{})
 	root := newGoTUIRoot(context.Background(), session, testUIModel(), "", nil, nil)
 
-	if !root.isDynamicAgentSlash("/goal ship this") {
+	if !root.isSessionAgentSlash("/goal ship this") {
 		t.Fatal("expected /goal to be recognized as a session slash command")
 	}
-	extras := root.skillSlashCommands()
+	extras := root.sessionSlashCommands()
 	found := false
 	for _, cmd := range extras {
 		if cmd.Name == "/goal" {
@@ -588,7 +588,7 @@ func TestExtensionSlashCommandIsDelegatedToAgentSession(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("expected /goal in dynamic slash suggestions, got %#v", extras)
+		t.Fatalf("expected /goal in session slash suggestions, got %#v", extras)
 	}
 }
 

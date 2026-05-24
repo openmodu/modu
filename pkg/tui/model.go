@@ -110,9 +110,9 @@ var uiSlashCommands = []slashCommandDef{
 }
 
 // matchSlashCommands returns all suggestions whose Name has the given prefix.
-// extras lets the caller mix in dynamic commands (e.g. skill names) on top of
-// the static built-ins. Built-ins are listed first so they win visually when a
-// skill name shadows a built-in.
+// extras lets the caller mix in session commands (e.g. extension commands and
+// skill names) on top of the TUI built-ins. Built-ins are listed first so they
+// win visually when another command uses the same name.
 func matchSlashCommands(prefix string, extras []slashCommandDef) []slashCommandDef {
 	var out []slashCommandDef
 	for _, cmd := range uiSlashCommands {

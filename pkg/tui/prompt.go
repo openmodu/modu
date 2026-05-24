@@ -284,7 +284,7 @@ func (r *goTUIRoot) runSlash(line string) {
 	go func() {
 		printer := &uiSlashPrinter{}
 		handled, exit := slash.Handle(r.ctx, line, r.session, printer, r.modelInfo)
-		if !handled && r.isDynamicAgentSlash(line) {
+		if !handled && r.isSessionAgentSlash(line) {
 			// Not a TUI-local slash command, but the agent session knows how
 			// to handle it (extension command, skill, or prompt template).
 			r.queue(func() {
@@ -340,9 +340,9 @@ func (r *goTUIRoot) runConfigHook(args string) {
 	}()
 }
 
-// isDynamicAgentSlash reports whether line is `/<name>[ args]` where <name>
+// isSessionAgentSlash reports whether line is `/<name>[ args]` where <name>
 // matches a session slash command, discovered skill, or prompt template.
-func (r *goTUIRoot) isDynamicAgentSlash(line string) bool {
+func (r *goTUIRoot) isSessionAgentSlash(line string) bool {
 	cmd := strings.TrimPrefix(strings.TrimSpace(line), "/")
 	if i := strings.IndexAny(cmd, " \t"); i >= 0 {
 		cmd = cmd[:i]
@@ -366,9 +366,9 @@ func (r *goTUIRoot) isDynamicAgentSlash(line string) bool {
 	return false
 }
 
-// skillSlashCommands snapshots current dynamic resources and extension slash
-// commands so /<name> auto-completes alongside the built-ins.
-func (r *goTUIRoot) skillSlashCommands() []slashCommandDef {
+// sessionSlashCommands snapshots current session slash commands so /<name>
+// auto-completes alongside the built-ins.
+func (r *goTUIRoot) sessionSlashCommands() []slashCommandDef {
 	if r.session == nil {
 		return nil
 	}
