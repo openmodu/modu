@@ -163,6 +163,54 @@ func RunWithOptions(ctx context.Context, session *coding_agent.CodingSession, mo
 				return defaultYes
 			}
 		})
+		session.SetExtensionSelectCallback(func(title string, options []string) string {
+			respCh := make(chan string, 1)
+			req := approval.Request{
+				ToolName:   "extension_select",
+				ToolCallID: "extension_select",
+				Args: map[string]any{
+					"title":   title,
+					"options": options,
+				},
+				Response: respCh,
+			}
+			select {
+			case approvalCh <- req:
+			case <-ctx.Done():
+				if len(options) > 0 {
+					return options[0]
+				}
+				return ""
+			case <-app.StopCh():
+				if len(options) > 0 {
+					return options[0]
+				}
+				return ""
+			}
+			select {
+			case decision := <-respCh:
+				decision = strings.TrimSpace(decision)
+				for _, option := range options {
+					if decision == option {
+						return option
+					}
+				}
+				if len(options) > 0 {
+					return options[0]
+				}
+				return ""
+			case <-ctx.Done():
+				if len(options) > 0 {
+					return options[0]
+				}
+				return ""
+			case <-app.StopCh():
+				if len(options) > 0 {
+					return options[0]
+				}
+				return ""
+			}
+		})
 		go session.EmitExtensionEvent("ui_ready")
 	}
 

@@ -109,6 +109,7 @@ type CodingSession struct {
 	planDecisionCb     func(plan string, steps []string) string
 	extensionMu        sync.RWMutex
 	extensionConfirmCb func(title, body string, defaultYes bool) bool
+	extensionSelectCb  func(title string, options []string) string
 	worktreeMu         sync.Mutex
 	originalCwd        string
 	worktreePath       string
@@ -420,12 +421,19 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 
 	// Initialize extensions
 	if len(opts.Extensions) > 0 {
-		sendExtensionMessage := func(text string, followUp bool) error {
+		sendExtensionMessage := func(text string, options extension.MessageOptions) error {
+			followUp := options.DeliverAs == "followUp"
 			source := "extension"
 			if followUp {
 				source = hiddenExtensionSource
 			}
-			msg := &CustomMessage{Source: source, Text: text}
+			msg := &CustomMessage{
+				Source:     source,
+				Text:       text,
+				CustomType: options.CustomType,
+				Display:    options.Display,
+				DeliverAs:  options.DeliverAs,
+			}
 			llmMsg := msg.ToLlmMessage()
 			if ag.GetState().IsStreaming {
 				if followUp {
@@ -460,11 +468,8 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 			return nil
 		}
 		extRunner.SetCallbacks(
-			func(text string) error {
-				return sendExtensionMessage(text, false)
-			},
-			func(text string) error {
-				return sendExtensionMessage(text, true)
+			func(text string, options extension.MessageOptions) error {
+				return sendExtensionMessage(text, options)
 			},
 			func(names []string) {
 				cs.SetActiveTools(names)
@@ -487,6 +492,9 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 			},
 			func(title, body string, defaultYes bool) bool {
 				return cs.requestExtensionConfirm(title, body, defaultYes)
+			},
+			func(title string, options []string) string {
+				return cs.requestExtensionSelect(title, options)
 			},
 		)
 

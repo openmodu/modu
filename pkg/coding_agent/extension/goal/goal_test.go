@@ -21,9 +21,13 @@ type fakeAPI struct {
 	commands map[string]extension.CommandHandler
 	handlers map[string][]extension.EventHandler
 	sent     []string
+	sentOpts []extension.MessageOptions
 	notices  []string
 	confirms []string
 	confirm  *bool
+	selects  []string
+	selectQ  []string
+	dir      string
 }
 
 func newFakeAPI() *fakeAPI {
@@ -54,22 +58,29 @@ func (f *fakeAPI) On(event string, h extension.EventHandler) {
 }
 
 func (f *fakeAPI) SendMessage(text string) error {
+	return f.SendMessageWithOptions(text, extension.MessageOptions{})
+}
+
+func (f *fakeAPI) SendMessageWithOptions(text string, opts extension.MessageOptions) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sent = append(f.sent, text)
+	f.sentOpts = append(f.sentOpts, opts)
 	return nil
 }
 
-func (f *fakeAPI) SendFollowUpMessage(text string) error { return f.SendMessage(text) }
-func (f *fakeAPI) SetActiveTools([]string)               {}
-func (f *fakeAPI) SetModel(string, string) error         { return nil }
-func (f *fakeAPI) GetCommands() []extension.Command      { return nil }
-func (f *fakeAPI) SessionID() string                     { return "test-session" }
-func (f *fakeAPI) SessionDir() string                    { return "" }
-func (f *fakeAPI) AgentDir() string                      { return "" }
-func (f *fakeAPI) Cwd() string                           { return "/tmp/project" }
-func (f *fakeAPI) IsIdle() bool                          { return true }
-func (f *fakeAPI) HasPendingMessages() bool              { return false }
+func (f *fakeAPI) SendFollowUpMessage(text string) error {
+	return f.SendMessageWithOptions(text, extension.MessageOptions{DeliverAs: "followUp"})
+}
+func (f *fakeAPI) SetActiveTools([]string)          {}
+func (f *fakeAPI) SetModel(string, string) error    { return nil }
+func (f *fakeAPI) GetCommands() []extension.Command { return nil }
+func (f *fakeAPI) SessionID() string                { return "test-session" }
+func (f *fakeAPI) SessionDir() string               { return f.dir }
+func (f *fakeAPI) AgentDir() string                 { return "" }
+func (f *fakeAPI) Cwd() string                      { return "/tmp/project" }
+func (f *fakeAPI) IsIdle() bool                     { return true }
+func (f *fakeAPI) HasPendingMessages() bool         { return false }
 func (f *fakeAPI) Notify(extensionName, text string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -83,6 +94,20 @@ func (f *fakeAPI) Confirm(title, body string, defaultYes bool) bool {
 		return *f.confirm
 	}
 	return defaultYes
+}
+func (f *fakeAPI) Select(title string, options []string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.selects = append(f.selects, title)
+	if len(f.selectQ) > 0 {
+		out := f.selectQ[0]
+		f.selectQ = f.selectQ[1:]
+		return out
+	}
+	if len(options) == 0 {
+		return ""
+	}
+	return options[0]
 }
 
 func (f *fakeAPI) sentCount() int {
@@ -98,6 +123,15 @@ func (f *fakeAPI) lastSent() string {
 		return ""
 	}
 	return f.sent[len(f.sent)-1]
+}
+
+func (f *fakeAPI) lastSentOptions() extension.MessageOptions {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.sentOpts) == 0 {
+		return extension.MessageOptions{}
+	}
+	return f.sentOpts[len(f.sentOpts)-1]
 }
 
 func (f *fakeAPI) fireAgentEnd() {
@@ -134,6 +168,7 @@ func initialized(t *testing.T) (*Extension, *fakeAPI) {
 	t.Helper()
 	ext := New(Options{})
 	api := newFakeAPI()
+	api.dir = t.TempDir()
 	if err := ext.Init(api); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
@@ -183,6 +218,9 @@ func TestSlashGoalStartsLoopAndInjectsContinuation(t *testing.T) {
 	}
 	if !strings.Contains(api.lastSent(), "<untrusted_objective>") {
 		t.Errorf("initial continuation missing untrusted envelope: %s", api.lastSent())
+	}
+	if got := api.lastSentOptions(); got.CustomType != goalContinuationType || got.DeliverAs != "followUp" || got.Display {
+		t.Fatalf("continuation message options mismatch: %+v", got)
 	}
 
 	api.fireAgentEnd()
@@ -339,6 +377,28 @@ func TestUpdateGoalCompleteStopsLoop(t *testing.T) {
 	}
 }
 
+func TestCreateGoalToolStartsAccountingDuringAgentTurn(t *testing.T) {
+	ext, api := initialized(t)
+	ext.mu.Lock()
+	ext.agentTurnInProgress = true
+	ext.mu.Unlock()
+
+	for _, tl := range api.tools {
+		if tl.Name() == "create_goal" {
+			if _, err := tl.Execute(context.Background(), "tc-create", map[string]any{"objective": "created in turn"}, nil); err != nil {
+				t.Fatalf("create_goal: %v", err)
+			}
+		}
+	}
+	g, _ := ext.store.Current()
+	ext.mu.Lock()
+	accountingStarted := ext.agentGoalID == g.ID && !ext.agentMeasuredFrom.IsZero()
+	ext.mu.Unlock()
+	if !accountingStarted {
+		t.Fatal("create_goal should begin accounting for goals created inside an agent turn")
+	}
+}
+
 func TestStaleAccountingClearsInMemoryState(t *testing.T) {
 	ext, _ := initialized(t)
 	first, err := ext.store.Start("first")
@@ -382,8 +442,7 @@ func TestGoalObjectiveReplacementCanBeRejected(t *testing.T) {
 	if err := api.runCommand(t, "goal", "first"); err != nil {
 		t.Fatalf("first /goal: %v", err)
 	}
-	reject := false
-	api.confirm = &reject
+	api.selectQ = []string{cancelReplaceChoice}
 	before := api.sentCount()
 	if err := api.runCommand(t, "goal", "second"); err != nil {
 		t.Fatalf("second /goal rejection should not error: %v", err)
@@ -395,12 +454,12 @@ func TestGoalObjectiveReplacementCanBeRejected(t *testing.T) {
 	if api.sentCount() != before {
 		t.Fatalf("rejected replacement should not queue continuation: got %d want %d", api.sentCount(), before)
 	}
-	if len(api.confirms) != 1 || !strings.Contains(api.confirms[0], "Replace goal?") {
-		t.Fatalf("replacement should ask for confirmation, got %#v", api.confirms)
+	if len(api.selects) != 1 || !strings.Contains(api.selects[0], "Replace goal?") {
+		t.Fatalf("replacement should ask for selection, got %#v", api.selects)
 	}
-	if !strings.Contains(api.confirms[0], "New objective: second") ||
-		strings.Contains(api.confirms[0], "Current:") {
-		t.Fatalf("replacement prompt should match pi-goal, got %#v", api.confirms)
+	if !strings.Contains(api.selects[0], "New objective: second") ||
+		strings.Contains(api.selects[0], "Current:") {
+		t.Fatalf("replacement prompt should match pi-goal, got %#v", api.selects)
 	}
 }
 
@@ -412,16 +471,15 @@ func TestUIReadyCanResumePausedGoal(t *testing.T) {
 	if err := api.runCommand(t, "goal-pause", ""); err != nil {
 		t.Fatalf("/goal-pause: %v", err)
 	}
-	accept := true
-	api.confirm = &accept
+	api.selectQ = []string{resumeGoalChoice}
 	before := api.sentCount()
 	api.fireEvent(agent.AgentEvent{Type: agent.EventType(extensionSessionStart), Reason: "resume"})
 	api.fire(extensionUIReady)
 	if api.sentCount() != before+1 {
 		t.Fatalf("ui_ready resume should queue one continuation: got %d want %d", api.sentCount(), before+1)
 	}
-	if len(api.confirms) == 0 || !strings.Contains(api.confirms[len(api.confirms)-1], "Resume paused goal?") {
-		t.Fatalf("ui_ready should ask for resume confirmation, got %#v", api.confirms)
+	if len(api.selects) == 0 || !strings.Contains(api.selects[len(api.selects)-1], "Resume paused goal?") {
+		t.Fatalf("ui_ready should ask for resume selection, got %#v", api.selects)
 	}
 }
 
@@ -435,8 +493,8 @@ func TestUIReadyDoesNotPromptPausedGoalOnStartup(t *testing.T) {
 	}
 	api.fireEvent(agent.AgentEvent{Type: agent.EventType(extensionSessionStart), Reason: "startup"})
 	api.fire(extensionUIReady)
-	if len(api.confirms) != 0 {
-		t.Fatalf("startup should not prompt to resume paused goal, got %#v", api.confirms)
+	if len(api.selects) != 0 {
+		t.Fatalf("startup should not prompt to resume paused goal, got %#v", api.selects)
 	}
 }
 

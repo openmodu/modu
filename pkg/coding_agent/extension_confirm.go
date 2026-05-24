@@ -27,6 +27,32 @@ func (s *CodingSession) SetExtensionConfirmCallback(fn func(title, body string, 
 	s.extensionMu.Unlock()
 }
 
+func (s *CodingSession) requestExtensionSelect(title string, options []string) string {
+	s.extensionMu.RLock()
+	cb := s.extensionSelectCb
+	s.extensionMu.RUnlock()
+	if len(options) == 0 {
+		return ""
+	}
+	if cb == nil {
+		return options[0]
+	}
+	choice := strings.TrimSpace(cb(title, append([]string(nil), options...)))
+	for _, option := range options {
+		if choice == option {
+			return choice
+		}
+	}
+	return options[0]
+}
+
+// SetExtensionSelectCallback wires interactive extension choice prompts.
+func (s *CodingSession) SetExtensionSelectCallback(fn func(title string, options []string) string) {
+	s.extensionMu.Lock()
+	s.extensionSelectCb = fn
+	s.extensionMu.Unlock()
+}
+
 // EmitExtensionEvent dispatches a host lifecycle event to registered
 // extensions. It is intentionally narrow: callers should use it for host/UI
 // readiness boundaries, not for synthetic agent transcript events.

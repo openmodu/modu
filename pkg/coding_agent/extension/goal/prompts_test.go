@@ -7,6 +7,7 @@ import (
 
 func TestBuildContinuationPromptContainsAuditAndUntrustedEnvelope(t *testing.T) {
 	g, _ := NewStore().Start("clone the 12 karpathy repos and write KARPATHY_INSIGHTS.md")
+	g.TimeUsedSeconds = 120
 	got := BuildContinuationPrompt(g)
 
 	// Load-bearing pieces from pi-goal's prompt that we deliberately keep.
@@ -15,6 +16,7 @@ func TestBuildContinuationPromptContainsAuditAndUntrustedEnvelope(t *testing.T) 
 		"user-provided data",
 		"<untrusted_objective>",
 		"</untrusted_objective>",
+		"- Time spent pursuing goal: 120 seconds",
 		"completion audit",
 		"prompt-to-artifact checklist",
 		"Do not rely on intent, partial progress, elapsed effort, memory",

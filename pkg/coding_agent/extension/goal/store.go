@@ -154,8 +154,10 @@ func (s *Store) StartWithBudget(objective string, tokenBudget *int) (Goal, error
 	return *g, nil
 }
 
-// ReplaceObjective creates a fresh active goal when the objective changes, or
-// updates the current active goal's budget when the objective is unchanged.
+// ReplaceObjective mirrors pi-goal updateGoal({objective}): it creates a
+// fresh active goal when the objective changes, resumes a matching nonterminal
+// goal, and preserves an existing budget unless a new budget is explicitly
+// provided.
 func (s *Store) ReplaceObjective(objective string, tokenBudget *int) (Goal, error) {
 	objective, err := validateObjective(objective)
 	if err != nil {
@@ -215,15 +217,29 @@ func (s *Store) ReplaceObjective(objective string, tokenBudget *int) (Goal, erro
 		return *g, nil
 	}
 
-	current.Status = statusAfterBudgetLimit(StatusActive, current.TokensUsed, tokenBudget)
-	current.TokenBudget = cloneIntPtr(tokenBudget)
+	nextTokenBudget := current.TokenBudget
+	if tokenBudget != nil {
+		nextTokenBudget = cloneIntPtr(tokenBudget)
+	}
+	previousStatus := current.Status
+	nextStatus := statusAfterExplicitStatusUpdate(current.Status, StatusActive, current.TokensUsed, nextTokenBudget)
+	current.Status = nextStatus
+	current.TokenBudget = cloneIntPtr(nextTokenBudget)
 	current.UpdatedAt = now
-	if current.Status == StatusActive {
-		current.LastStartedAt = &now
+	if nextStatus == StatusActive {
+		if previousStatus != StatusActive {
+			current.LastStartedAt = &now
+		}
 	} else {
 		current.LastStartedAt = nil
 	}
-	current.CompletedAt = nil
+	if nextStatus == StatusComplete {
+		if current.CompletedAt == nil {
+			current.CompletedAt = &now
+		}
+	} else {
+		current.CompletedAt = nil
+	}
 	if err := s.writeLocked(current); err != nil {
 		return Goal{}, err
 	}
@@ -241,6 +257,52 @@ func (s *Store) Resume() (Goal, error) {
 	return s.updateStatus(StatusActive)
 }
 
+// SetTokenBudget updates the current goal's token budget without changing the
+// objective or forcing a status transition other than budget limiting.
+func (s *Store) SetTokenBudget(tokenBudget int) (Goal, error) {
+	if err := validateTokenBudget(&tokenBudget); err != nil {
+		return Goal{}, err
+	}
+	return s.updateTokenBudget(&tokenBudget, false)
+}
+
+// ClearTokenBudget removes the current goal's token budget.
+func (s *Store) ClearTokenBudget() (Goal, error) {
+	return s.updateTokenBudget(nil, true)
+}
+
+func (s *Store) updateTokenBudget(tokenBudget *int, clear bool) (Goal, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, err := s.readLocked()
+	if err != nil {
+		return Goal{}, err
+	}
+	if current == nil {
+		return Goal{}, ErrNoGoal
+	}
+	nextTokenBudget := current.TokenBudget
+	if clear {
+		nextTokenBudget = nil
+	} else if tokenBudget != nil {
+		nextTokenBudget = cloneIntPtr(tokenBudget)
+	}
+	now := nowSeconds()
+	current.Status = statusAfterBudgetUpdate(current.Status, current.TokensUsed, nextTokenBudget)
+	current.TokenBudget = cloneIntPtr(nextTokenBudget)
+	current.UpdatedAt = now
+	if current.Status != StatusActive {
+		current.LastStartedAt = nil
+	}
+	if current.Status != StatusComplete {
+		current.CompletedAt = nil
+	}
+	if err := s.writeLocked(current); err != nil {
+		return Goal{}, err
+	}
+	return *current, nil
+}
+
 func (s *Store) updateStatus(status Status) (Goal, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -251,23 +313,24 @@ func (s *Store) updateStatus(status Status) (Goal, error) {
 	if current == nil {
 		return Goal{}, ErrNoGoal
 	}
-	if current.Status == StatusComplete {
-		return Goal{}, ErrAlreadyDone
-	}
-	if status == StatusActive && current.Status != StatusPaused && current.Status != StatusBudgetLimited {
-		return Goal{}, ErrNotPaused
-	}
 	now := nowSeconds()
-	nextStatus := statusAfterBudgetLimit(status, current.TokensUsed, current.TokenBudget)
-	if current.Status == StatusBudgetLimited && status == StatusPaused {
-		nextStatus = StatusBudgetLimited
-	}
+	previousStatus := current.Status
+	nextStatus := statusAfterExplicitStatusUpdate(current.Status, status, current.TokensUsed, current.TokenBudget)
 	current.Status = nextStatus
 	current.UpdatedAt = now
 	if nextStatus == StatusActive {
-		current.LastStartedAt = &now
+		if previousStatus != StatusActive {
+			current.LastStartedAt = &now
+		}
 	} else {
 		current.LastStartedAt = nil
+	}
+	if nextStatus == StatusComplete {
+		if current.CompletedAt == nil {
+			current.CompletedAt = &now
+		}
+	} else {
+		current.CompletedAt = nil
 	}
 	if err := s.writeLocked(current); err != nil {
 		return Goal{}, err
@@ -295,27 +358,7 @@ func (s *Store) Cancel() (Goal, error) {
 
 // MarkComplete transitions the current goal to complete and stamps CompletedAt.
 func (s *Store) MarkComplete() (Goal, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	current, err := s.readLocked()
-	if err != nil {
-		return Goal{}, err
-	}
-	if current == nil {
-		return Goal{}, ErrNoGoal
-	}
-	if current.Status == StatusComplete {
-		return Goal{}, ErrAlreadyDone
-	}
-	now := nowSeconds()
-	current.Status = StatusComplete
-	current.UpdatedAt = now
-	current.CompletedAt = &now
-	current.LastStartedAt = nil
-	if err := s.writeLocked(current); err != nil {
-		return Goal{}, err
-	}
-	return *current, nil
+	return s.updateStatus(StatusComplete)
 }
 
 // AccountUsage adds one agent turn's usage to the active goal.
@@ -361,13 +404,25 @@ func (s *Store) accountUsage(usage types.AgentUsage, elapsedSeconds int64, mode 
 
 // Current returns a value copy of the goal.
 func (s *Store) Current() (Goal, bool) {
+	g, ok, err := s.CurrentErr()
+	if err != nil {
+		return Goal{}, false
+	}
+	return g, ok
+}
+
+// CurrentErr returns the current goal and propagates file/schema errors.
+func (s *Store) CurrentErr() (Goal, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	current, err := s.readLocked()
-	if err != nil || current == nil {
-		return Goal{}, false
+	if err != nil {
+		return Goal{}, false, err
 	}
-	return *current, true
+	if current == nil {
+		return Goal{}, false, nil
+	}
+	return *current, true, nil
 }
 
 // Summary returns a human-readable description for slash command output.
@@ -535,6 +590,20 @@ func statusAfterBudgetLimit(status Status, tokensUsed int, tokenBudget *int) Sta
 		return StatusBudgetLimited
 	}
 	return status
+}
+
+func statusAfterExplicitStatusUpdate(currentStatus, requestedStatus Status, tokensUsed int, tokenBudget *int) Status {
+	if currentStatus == StatusBudgetLimited && requestedStatus == StatusPaused {
+		return StatusBudgetLimited
+	}
+	return statusAfterBudgetLimit(requestedStatus, tokensUsed, tokenBudget)
+}
+
+func statusAfterBudgetUpdate(currentStatus Status, tokensUsed int, tokenBudget *int) Status {
+	if currentStatus == StatusActive {
+		return statusAfterBudgetLimit(currentStatus, tokensUsed, tokenBudget)
+	}
+	return currentStatus
 }
 
 func statusAfterAccounting(status Status, tokensUsed int, tokenBudget *int, mode accountingMode) Status {

@@ -17,7 +17,8 @@ func BuildContinuationPrompt(g Goal) string {
 	b.WriteString("\n</untrusted_objective>\n\n")
 	b.WriteString("Budget:\n")
 	b.WriteString("- Time spent pursuing goal: ")
-	b.WriteString(formatElapsed(g.TimeUsedSeconds))
+	b.WriteString(int64Text(g.TimeUsedSeconds))
+	b.WriteString(" seconds")
 	b.WriteString("\n- Tokens used: ")
 	b.WriteString(intText(g.TokensUsed))
 	b.WriteString("\n- Token budget: ")
@@ -50,7 +51,8 @@ func BuildBudgetLimitedPrompt(g Goal) string {
 	b.WriteString("\n</untrusted_objective>\n\n")
 	b.WriteString("Budget:\n")
 	b.WriteString("- Time spent pursuing goal: ")
-	b.WriteString(formatElapsed(g.TimeUsedSeconds))
+	b.WriteString(int64Text(g.TimeUsedSeconds))
+	b.WriteString(" seconds")
 	b.WriteString("\n- Tokens used: ")
 	b.WriteString(intText(g.TokensUsed))
 	b.WriteString("\n- Token budget: ")
@@ -81,6 +83,10 @@ func remainingTokensText(g Goal) string {
 
 func intText(v int) string {
 	return strconv.Itoa(v)
+}
+
+func int64Text(v int64) string {
+	return strconv.FormatInt(v, 10)
 }
 
 func escapeXMLText(s string) string {

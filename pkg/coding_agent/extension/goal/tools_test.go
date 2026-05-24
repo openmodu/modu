@@ -2,7 +2,6 @@ package goal
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 
@@ -116,6 +115,9 @@ func TestGoalToolErrorResultsCarryIsErrorDetail(t *testing.T) {
 	if details["isError"] != true {
 		t.Fatalf("expected isError detail true, got %#v", details)
 	}
+	if !res.IsError {
+		t.Fatalf("expected top-level IsError true")
+	}
 	_, res = callToolResult(t, &getGoalTool{store: store}, nil)
 	details, ok = res.Details.(map[string]any)
 	if !ok {
@@ -123,6 +125,9 @@ func TestGoalToolErrorResultsCarryIsErrorDetail(t *testing.T) {
 	}
 	if details["isError"] != false {
 		t.Fatalf("expected isError detail false, got %#v", details)
+	}
+	if res.IsError {
+		t.Fatalf("expected top-level IsError false")
 	}
 }
 
@@ -161,19 +166,13 @@ func TestToolMetadata(t *testing.T) {
 	}
 }
 
-// We keep this assertion separate so a future Errors change drawing on
-// store error types is reflected here too; guards against silently
-// rewording the public ErrGoalActive sentinel.
-func TestUpdateGoalDoubleCompleteReturnsAlreadyDone(t *testing.T) {
+func TestUpdateGoalDoubleCompleteIsIdempotent(t *testing.T) {
 	store := NewStore()
 	store.Start("once")
 	store.MarkComplete()
 
 	out := callTool(t, &updateGoalTool{store: store}, map[string]any{"status": "complete"})
-	if !strings.Contains(out, "already complete") {
-		t.Errorf("expected 'already complete' surface message, got: %s", out)
-	}
-	if !errors.Is(ErrAlreadyDone, ErrAlreadyDone) {
-		t.Fatal("sentinel sanity check") // defensive: catches accidental sentinel rename
+	if !strings.Contains(out, `"status": "complete"`) || strings.Contains(out, "already complete") {
+		t.Errorf("expected idempotent complete response, got: %s", out)
 	}
 }

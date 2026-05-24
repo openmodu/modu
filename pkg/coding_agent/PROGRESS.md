@@ -175,6 +175,7 @@ High-priority gaps identified before this round:
   Goal runtime-state exposure plus TUI idle-status indicators for pursuing, paused, unmet, and achieved goals
   Extension notification events so goal command output is visible inside TUI scrollback instead of only stderr
   pi-goal command/tool/accounting parity for `/goal` parsing, replacement confirmation, clear feedback, completion accounting, resume-only paused prompts, and compact user-facing goal formatting
+  pi-goal protocol parity for goal tool top-level `isError`, select-style extension prompts, hidden follow-up message metadata, and seconds-based continuation budget prompts
 
 ## Still Missing
 

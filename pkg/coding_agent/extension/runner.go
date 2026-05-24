@@ -14,8 +14,7 @@ type Runner struct {
 	commands     []Command
 	hooks        []ToolHook
 	handlers     map[string][]EventHandler
-	sendMsg      func(text string) error
-	sendFollowUp func(text string) error
+	sendMsg      func(text string, options MessageOptions) error
 	setTools     func(names []string)
 	setModel     func(provider, modelID string) error
 	sessionID    func() string
@@ -26,6 +25,7 @@ type Runner struct {
 	hasPending   func() bool
 	notify       func(extensionName, text string)
 	confirm      func(title, body string, defaultYes bool) bool
+	selectChoice func(title string, options []string) string
 	mu           sync.RWMutex
 }
 
@@ -38,8 +38,7 @@ func NewRunner() *Runner {
 
 // SetCallbacks configures the callbacks for the extension API.
 func (r *Runner) SetCallbacks(
-	sendMsg func(text string) error,
-	sendFollowUp func(text string) error,
+	sendMsg func(text string, options MessageOptions) error,
 	setTools func(names []string),
 	setModel func(provider, modelID string) error,
 	sessionID func() string,
@@ -50,11 +49,11 @@ func (r *Runner) SetCallbacks(
 	hasPending func() bool,
 	notify func(extensionName, text string),
 	confirm func(title, body string, defaultYes bool) bool,
+	selectChoice func(title string, options []string) string,
 ) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sendMsg = sendMsg
-	r.sendFollowUp = sendFollowUp
 	r.setTools = setTools
 	r.setModel = setModel
 	r.sessionID = sessionID
@@ -65,6 +64,7 @@ func (r *Runner) SetCallbacks(
 	r.hasPending = hasPending
 	r.notify = notify
 	r.confirm = confirm
+	r.selectChoice = selectChoice
 }
 
 // Init initializes all extensions.
@@ -108,24 +108,23 @@ func (r *Runner) On(event string, handler EventHandler) {
 
 // SendMessage implements ExtensionAPI.
 func (r *Runner) SendMessage(text string) error {
+	return r.SendMessageWithOptions(text, MessageOptions{})
+}
+
+// SendMessageWithOptions implements ExtensionAPI.
+func (r *Runner) SendMessageWithOptions(text string, options MessageOptions) error {
 	r.mu.RLock()
 	fn := r.sendMsg
 	r.mu.RUnlock()
 	if fn == nil {
 		return fmt.Errorf("sendMessage not configured")
 	}
-	return fn(text)
+	return fn(text, options)
 }
 
 // SendFollowUpMessage implements ExtensionAPI.
 func (r *Runner) SendFollowUpMessage(text string) error {
-	r.mu.RLock()
-	fn := r.sendFollowUp
-	r.mu.RUnlock()
-	if fn == nil {
-		return r.SendMessage(text)
-	}
-	return fn(text)
+	return r.SendMessageWithOptions(text, MessageOptions{DeliverAs: "followUp"})
 }
 
 // SetActiveTools implements ExtensionAPI.
@@ -260,6 +259,20 @@ func (r *Runner) Confirm(title, body string, defaultYes bool) bool {
 		return defaultYes
 	}
 	return fn(title, body, defaultYes)
+}
+
+// Select implements ExtensionAPI.
+func (r *Runner) Select(title string, options []string) string {
+	r.mu.RLock()
+	fn := r.selectChoice
+	r.mu.RUnlock()
+	if fn == nil {
+		if len(options) == 0 {
+			return ""
+		}
+		return options[0]
+	}
+	return fn(title, append([]string(nil), options...))
 }
 
 // GetTools returns all tools registered by extensions.

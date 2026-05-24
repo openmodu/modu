@@ -18,6 +18,14 @@ type RuntimeStateProvider interface {
 	RuntimeState() any
 }
 
+// MessageOptions mirrors the extension message metadata exposed by pi-style
+// extensions for hidden follow-up prompts.
+type MessageOptions struct {
+	CustomType string
+	Display    bool
+	DeliverAs  string
+}
+
 // ExtensionAPI provides the API available to extensions.
 type ExtensionAPI interface {
 	// RegisterTool registers a new tool provided by the extension.
@@ -50,11 +58,15 @@ type ExtensionAPI interface {
 	HasPendingMessages() bool
 	// SendFollowUpMessage queues a follow-up message and triggers a turn if idle.
 	SendFollowUpMessage(text string) error
+	// SendMessageWithOptions injects a message with extension metadata.
+	SendMessageWithOptions(text string, options MessageOptions) error
 	// Notify sends a user-visible extension notification to the host UI.
 	Notify(extensionName, text string)
 	// Confirm asks the host UI for a yes/no decision. When no interactive UI is
 	// configured, implementations return defaultYes.
 	Confirm(title, body string, defaultYes bool) bool
+	// Select asks the host UI to choose one of the provided options.
+	Select(title string, options []string) string
 }
 
 // CommandHandler handles a slash command invocation.

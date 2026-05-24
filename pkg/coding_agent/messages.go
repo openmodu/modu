@@ -73,8 +73,11 @@ func (m *BranchSummaryMessage) ToLlmMessage() types.UserMessage {
 
 // CustomMessage represents an extension-injected message.
 type CustomMessage struct {
-	Source string `json:"source"` // Extension name
-	Text   string `json:"text"`
+	Source     string `json:"source"` // Extension name
+	Text       string `json:"text"`
+	CustomType string `json:"customType,omitempty"`
+	Display    bool   `json:"display,omitempty"`
+	DeliverAs  string `json:"deliverAs,omitempty"`
 }
 
 const nestedContextSource = "nested_context"

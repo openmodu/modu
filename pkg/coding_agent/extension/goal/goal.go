@@ -2,6 +2,7 @@ package goal
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -16,6 +17,12 @@ const (
 	extensionSessionStart = "session_start"
 	extensionUIReady      = "ui_ready"
 	extensionShutdown     = "session_shutdown"
+	goalContinuationType  = "pi-goal-continuation"
+	goalBudgetLimitType   = "pi-goal-budget-limit"
+	replaceGoalChoice     = "Replace current goal"
+	cancelReplaceChoice   = "Cancel"
+	resumeGoalChoice      = "Resume goal"
+	leaveGoalPausedChoice = "Leave paused"
 )
 
 // Extension wires persistent /goal support into a CodingSession.
@@ -50,7 +57,13 @@ func (e *Extension) Name() string { return "goal" }
 
 // RuntimeState exposes goal state for RuntimeState JSON and host UIs.
 func (e *Extension) RuntimeState() any {
-	g, ok := e.store.Current()
+	g, ok, err := e.store.CurrentErr()
+	if err != nil {
+		return map[string]any{
+			"active": false,
+			"error":  err.Error(),
+		}
+	}
 	if !ok {
 		return map[string]any{
 			"active": false,
@@ -89,7 +102,11 @@ func (e *Extension) Init(api extension.ExtensionAPI) error {
 		if sessionDir == "" {
 			agentDir := api.AgentDir()
 			if agentDir == "" {
-				return StoreRef{}
+				if home, err := os.UserHomeDir(); err == nil && home != "" {
+					agentDir = filepath.Join(home, ".pi", "agent")
+				} else {
+					return StoreRef{}
+				}
 			}
 			sessionDir = filepath.Join(agentDir, "extensions", "pi-goal", "no-session", cwdStoreKey(api.Cwd()))
 			return StoreRef{BaseDir: sessionDir, ThreadID: api.SessionID()}
@@ -107,7 +124,7 @@ func (e *Extension) Init(api extension.ExtensionAPI) error {
 	api.RegisterCommand("goal-cancel", "Clear the current goal", e.cmdClear)
 	api.RegisterCommand("goal-status", "Print the current goal's status", e.cmdStatus)
 
-	api.RegisterTool(&createGoalTool{store: e.store})
+	api.RegisterTool(&createGoalTool{store: e.store, onCreate: e.beginAgentGoalAccounting})
 	api.RegisterTool(&updateGoalTool{
 		store:          e.store,
 		beforeComplete: func() { e.accountCurrentAgentTurn(types.AgentUsage{}, false) },
@@ -142,12 +159,10 @@ func (e *Extension) cmdGoal(args string) error {
 }
 
 func (e *Extension) cmdSetObjective(objective string) error {
-	if current, ok := e.store.Current(); ok {
-		if !e.api.Confirm(
-			"Replace goal?",
-			fmt.Sprintf("New objective: %s", objective),
-			true,
-		) {
+	if current, ok, err := e.store.CurrentErr(); err != nil {
+		return err
+	} else if ok {
+		if e.api.Select(fmt.Sprintf("Replace goal?\nNew objective: %s", objective), []string{replaceGoalChoice, cancelReplaceChoice}) != replaceGoalChoice {
 			e.tell("Goal unchanged")
 			return nil
 		}
@@ -193,7 +208,10 @@ func (e *Extension) cmdResume(string) error {
 
 func (e *Extension) cmdClear(string) error {
 	e.accountCurrentAgentTurn(types.AgentUsage{}, false)
-	g, ok := e.store.Current()
+	g, ok, err := e.store.CurrentErr()
+	if err != nil {
+		return err
+	}
 	if !ok {
 		e.clearAgentGoalAccounting()
 		e.tell("No goal to clear\nThis thread does not currently have a goal.")
@@ -208,7 +226,10 @@ func (e *Extension) cmdClear(string) error {
 }
 
 func (e *Extension) cmdStatus(string) error {
-	g, ok := e.store.Current()
+	g, ok, err := e.store.CurrentErr()
+	if err != nil {
+		return err
+	}
 	if !ok {
 		e.tell(goalUsage + "\nNo goal is currently set.")
 		return nil
@@ -226,7 +247,13 @@ func (e *Extension) onAgentStart(_ agent.AgentEvent) {
 	e.completedThisTurnGoalID = ""
 	e.mu.Unlock()
 
-	if g, ok := e.store.Current(); ok && g.Status == StatusActive {
+	g, ok, err := e.store.CurrentErr()
+	if err != nil {
+		e.tell(fmt.Sprintf("goal: read failed: %v", err))
+		e.clearAgentGoalAccounting()
+		return
+	}
+	if ok && g.Status == StatusActive {
 		e.beginAgentGoalAccounting(g)
 		return
 	}
@@ -238,10 +265,16 @@ func (e *Extension) onSessionStart(event agent.AgentEvent) {
 	e.lastSessionStartReason = event.Reason
 	e.mu.Unlock()
 
-	if g, ok := e.store.Current(); ok && g.Status == StatusActive {
+	g, ok, err := e.store.CurrentErr()
+	if err != nil {
+		e.tell(fmt.Sprintf("goal: read failed: %v", err))
+		e.clearAgentGoalAccounting()
+		return
+	}
+	if ok && g.Status == StatusActive {
 		e.beginAgentGoalAccounting(g)
 		if ShouldQueueContinuationWhenIdle(&g, e.apiIsIdle(), e.apiHasPendingMessages()) {
-			if err := e.queueHiddenGoalPrompt(BuildContinuationPrompt(g)); err != nil {
+			if err := e.queueHiddenGoalPrompt(goalContinuationType, BuildContinuationPrompt(g)); err != nil {
 				e.tell(fmt.Sprintf("goal: startup continuation inject failed: %v", err))
 			}
 		}
@@ -251,19 +284,18 @@ func (e *Extension) onSessionStart(event agent.AgentEvent) {
 }
 
 func (e *Extension) onUIReady(_ agent.AgentEvent) {
-	g, ok := e.store.Current()
+	g, ok, err := e.store.CurrentErr()
+	if err != nil {
+		e.tell(fmt.Sprintf("goal: read failed: %v", err))
+		return
+	}
 	if !ok || g.Status != StatusPaused {
 		return
 	}
 	if e.sessionStartReason() != "resume" || !e.apiIsIdle() || e.apiHasPendingMessages() {
 		return
 	}
-	if !e.api.Confirm(
-		"Resume paused goal?",
-		fmt.Sprintf("Goal: %s", g.Objective),
-		false,
-	) {
-		e.tell("Goal remains paused")
+	if e.api.Select(fmt.Sprintf("Resume paused goal?\nGoal: %s", g.Objective), []string{resumeGoalChoice, leaveGoalPausedChoice}) != resumeGoalChoice {
 		return
 	}
 	if err := e.cmdResume(""); err != nil {
@@ -302,7 +334,7 @@ func (e *Extension) onAgentEnd(event agent.AgentEvent) {
 		// flips off, so we must not gate on IsIdle here; the pure
 		// after-agent-end policy only cares about pending user messages.
 		if ShouldQueueContinuationAfterAgentEnd(&g, e.apiHasPendingMessages()) {
-			if err := e.queueHiddenGoalPrompt(BuildContinuationPrompt(g)); err != nil {
+			if err := e.queueHiddenGoalPrompt(goalContinuationType, BuildContinuationPrompt(g)); err != nil {
 				e.tell(fmt.Sprintf("goal: continuation inject failed: %v (loop will halt)", err))
 			}
 		}
@@ -310,7 +342,7 @@ func (e *Extension) onAgentEnd(event agent.AgentEvent) {
 	}
 	e.clearAgentGoalAccounting()
 	if g.Status == StatusBudgetLimited && !e.apiHasPendingMessages() {
-		if err := e.queueHiddenGoalPrompt(BuildBudgetLimitedPrompt(g)); err != nil {
+		if err := e.queueHiddenGoalPrompt(goalBudgetLimitType, BuildBudgetLimitedPrompt(g)); err != nil {
 			e.tell(fmt.Sprintf("goal: budget-limit prompt inject failed: %v", err))
 		}
 	}
@@ -324,14 +356,18 @@ func (e *Extension) queueGoalContinuation(g Goal) error {
 	if !ShouldQueueContinuationWhenIdle(&g, e.apiIsIdle(), e.apiHasPendingMessages()) {
 		return nil
 	}
-	return e.queueHiddenGoalPrompt(BuildContinuationPrompt(g))
+	return e.queueHiddenGoalPrompt(goalContinuationType, BuildContinuationPrompt(g))
 }
 
-func (e *Extension) queueHiddenGoalPrompt(content string) error {
+func (e *Extension) queueHiddenGoalPrompt(customType, content string) error {
 	if e.api == nil {
 		return nil
 	}
-	return e.api.SendFollowUpMessage(content)
+	return e.api.SendMessageWithOptions(content, extension.MessageOptions{
+		CustomType: customType,
+		Display:    false,
+		DeliverAs:  "followUp",
+	})
 }
 
 // apiIsIdle and apiHasPendingMessages thin-wrap the API so the nil-api
@@ -420,7 +456,11 @@ func (e *Extension) accountCurrentAgentTurn(usage types.AgentUsage, includeCompl
 	measuredFrom := e.agentMeasuredFrom
 	e.mu.Unlock()
 	if goalID == "" {
-		g, ok := e.store.Current()
+		g, ok, err := e.store.CurrentErr()
+		if err != nil {
+			e.tell(fmt.Sprintf("goal: usage accounting failed: %v", err))
+			return Goal{}, false
+		}
 		return g, ok
 	}
 	elapsed := int64(0)

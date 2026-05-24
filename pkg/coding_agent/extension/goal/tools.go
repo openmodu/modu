@@ -10,7 +10,10 @@ import (
 	"github.com/openmodu/modu/pkg/types"
 )
 
-type createGoalTool struct{ store *Store }
+type createGoalTool struct {
+	store    *Store
+	onCreate func(Goal)
+}
 
 func (t *createGoalTool) Name() string  { return "create_goal" }
 func (t *createGoalTool) Label() string { return "Create Goal" }
@@ -42,12 +45,17 @@ func (t *createGoalTool) Execute(_ context.Context, _ string, args map[string]an
 	if err != nil {
 		return textResult(fmt.Sprintf("create_goal failed: %v", err), true), nil
 	}
-	if _, ok := t.store.Current(); ok {
+	if _, ok, err := t.store.CurrentErr(); err != nil {
+		return textResult(fmt.Sprintf("create_goal failed: %v", err), true), nil
+	} else if ok {
 		return textResult("cannot create a new goal because this thread already has a goal; use update_goal only when the existing goal is complete", true), nil
 	}
 	g, err := t.store.StartWithBudget(objective, budget)
 	if err != nil {
 		return textResult(fmt.Sprintf("create_goal failed: %v", err), true), nil
+	}
+	if t.onCreate != nil {
+		t.onCreate(g)
 	}
 	return textResult(formatGoalToolResponse(&g, false), false), nil
 }
@@ -115,7 +123,10 @@ func (t *getGoalTool) Parameters() any {
 }
 
 func (t *getGoalTool) Execute(_ context.Context, _ string, _ map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
-	g, ok := t.store.Current()
+	g, ok, err := t.store.CurrentErr()
+	if err != nil {
+		return textResult(fmt.Sprintf("get_goal failed: %v", err), true), nil
+	}
 	if !ok {
 		return textResult(formatGoalToolResponse(nil, false), false), nil
 	}
@@ -230,5 +241,6 @@ func textResult(s string, isError bool) agent.AgentToolResult {
 		Details: map[string]any{
 			"isError": isError,
 		},
+		IsError: isError,
 	}
 }

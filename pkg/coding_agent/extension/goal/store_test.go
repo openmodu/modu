@@ -53,7 +53,6 @@ func TestLifecyclePauseResumeComplete(t *testing.T) {
 		t.Errorf("after Pause want paused, got %q", g.Status)
 	}
 
-	// Resume only works from paused.
 	if _, err := s.Resume(); err != nil {
 		t.Fatalf("Resume from paused: %v", err)
 	}
@@ -61,9 +60,8 @@ func TestLifecyclePauseResumeComplete(t *testing.T) {
 		t.Errorf("after Resume want active, got %q", g.Status)
 	}
 
-	// Resume on active should fail.
-	if _, err := s.Resume(); !errors.Is(err, ErrNotPaused) {
-		t.Errorf("Resume on active want ErrNotPaused, got %v", err)
+	if _, err := s.Resume(); err != nil {
+		t.Errorf("Resume on active should be a valid pi-goal status update, got %v", err)
 	}
 
 	if _, err := s.MarkComplete(); err != nil {
@@ -72,18 +70,23 @@ func TestLifecyclePauseResumeComplete(t *testing.T) {
 	if g, _ := s.Current(); g.Status != StatusComplete {
 		t.Errorf("after Complete want complete, got %q", g.Status)
 	}
-	if g, _ := s.Current(); g.CompletedAt == nil {
+	completed, _ := s.Current()
+	if completed.CompletedAt == nil {
 		t.Error("CompletedAt should be stamped after MarkComplete")
 	}
 
-	// Double complete forbidden.
-	if _, err := s.MarkComplete(); !errors.Is(err, ErrAlreadyDone) {
-		t.Errorf("second MarkComplete want ErrAlreadyDone, got %v", err)
+	firstCompletedAt := *completed.CompletedAt
+	if _, err := s.MarkComplete(); err != nil {
+		t.Errorf("second MarkComplete should be idempotent, got %v", err)
 	}
-
-	// Pause on complete forbidden.
-	if _, err := s.Pause(); !errors.Is(err, ErrAlreadyDone) {
-		t.Errorf("Pause on complete want ErrAlreadyDone, got %v", err)
+	if g, _ := s.Current(); g.CompletedAt == nil || *g.CompletedAt != firstCompletedAt {
+		t.Errorf("second MarkComplete should preserve completedAt, got %+v", g.CompletedAt)
+	}
+	if _, err := s.Pause(); err != nil {
+		t.Errorf("Pause on complete should be a valid pi-goal status update, got %v", err)
+	}
+	if g, _ := s.Current(); g.Status != StatusPaused || g.CompletedAt != nil {
+		t.Errorf("Pause on complete should move to paused and clear completedAt, got %+v", g)
 	}
 }
 
@@ -319,16 +322,43 @@ func TestReplaceObjectiveBudgetTransitions(t *testing.T) {
 		t.Errorf("status should remain active after budget set, got %q", g.Status)
 	}
 
-	// budget set -> nil
+	// omitted budget preserves the current budget.
 	g, err = store.ReplaceObjective("steady objective", nil)
+	if err != nil {
+		t.Fatalf("preserve budget: %v", err)
+	}
+	if g.TokenBudget == nil || *g.TokenBudget != 99 {
+		t.Errorf("budget should be preserved, got %+v", g.TokenBudget)
+	}
+	if g.Status != StatusActive {
+		t.Errorf("status should remain active after budget-preserving objective update, got %q", g.Status)
+	}
+
+	g, err = store.ClearTokenBudget()
 	if err != nil {
 		t.Fatalf("clear budget: %v", err)
 	}
 	if g.TokenBudget != nil {
 		t.Errorf("budget should clear to nil, got %+v", g.TokenBudget)
 	}
-	if g.Status != StatusActive {
-		t.Errorf("status should remain active after budget clear, got %q", g.Status)
+}
+
+func TestTokenBudgetUpdateCanBudgetLimitActiveGoal(t *testing.T) {
+	store := NewStore()
+	budget := 100
+	g, err := store.StartWithBudget("budget update", &budget)
+	if err != nil {
+		t.Fatalf("StartWithBudget: %v", err)
+	}
+	if _, _, err := store.AccountUsage(types.AgentUsage{Input: 50}, 1, false, g.ID); err != nil {
+		t.Fatalf("AccountUsage: %v", err)
+	}
+	g, err = store.SetTokenBudget(40)
+	if err != nil {
+		t.Fatalf("SetTokenBudget: %v", err)
+	}
+	if g.Status != StatusBudgetLimited || g.TokenBudget == nil || *g.TokenBudget != 40 {
+		t.Fatalf("lowered budget should budget-limit active goal: %+v", g)
 	}
 }
 
