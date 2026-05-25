@@ -34,6 +34,15 @@ func TestOpenCreatesFileAndWrites(t *testing.T) {
 	}
 }
 
+func TestFormatStampUsesLocalTimezone(t *testing.T) {
+	loc := time.FixedZone("CST", 8*60*60)
+	got := formatStamp(time.Date(2026, 5, 25, 14, 9, 13, 1440000, loc))
+	want := "2026-05-25T14-09-13.001440000+08-00"
+	if got != want {
+		t.Fatalf("formatStamp() = %q, want %q", got, want)
+	}
+}
+
 func TestOpenRejectsEmptyID(t *testing.T) {
 	_, err := New(t.TempDir()).Open("")
 	if err == nil {

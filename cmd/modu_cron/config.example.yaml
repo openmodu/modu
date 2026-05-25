@@ -2,13 +2,27 @@
 # Cron expressions use the 6-field form (seconds first): "sec min hour dom mon dow".
 # Copy to ~/.modu_cron/config.yaml and edit.
 
+channels:
+  ops-webhook:
+    type: webhook
+    url_env: MODU_CRON_OPS_WEBHOOK_URL
+  telegram-home:
+    type: telegram
+    token_env: MODU_CRON_TG_TOKEN
+    chat_id_env: MODU_CRON_TG_CHAT_ID
+  feishu-alerts:
+    type: feishu_webhook
+    url_env: MODU_CRON_FEISHU_WEBHOOK_URL
+
 tasks:
   - id: heartbeat
     cron: "*/10 * * * * *"   # every 10 seconds
     prompt: "say hello"
     enabled: true
+    channels: [ops-webhook]
 
   - id: daily-summary
     cron: "0 0 9 * * *"      # 09:00 every day
     prompt: "summarize yesterday's commits in this repo"
     enabled: false
+    channels: [telegram-home, feishu-alerts]

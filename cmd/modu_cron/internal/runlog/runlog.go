@@ -1,6 +1,6 @@
 // Package runlog manages per-task run log files.
 //
-// Layout: <root>/<task_id>/<RFC3339-timestamp>.log
+// Layout: <root>/<task_id>/<local-RFC3339-timestamp>.log
 // Default root: ~/.modu_cron/logs.
 package runlog
 
@@ -117,7 +117,7 @@ func (s *Store) Open(taskID string) (*Run, error) {
 	// Filename includes nanoseconds so back-to-back Open calls (e.g. kill +
 	// restart within the same second under OverlapKill) get distinct names.
 	// Colons are replaced because they break Windows / some shells.
-	stamp := strings.ReplaceAll(time.Now().UTC().Format("2006-01-02T15:04:05.000000000Z"), ":", "-")
+	stamp := formatStamp(time.Now())
 	name := stamp + ".log"
 	path := filepath.Join(dir, name)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o644)
@@ -125,6 +125,10 @@ func (s *Store) Open(taskID string) (*Run, error) {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
 	return &Run{path: path, f: f}, nil
+}
+
+func formatStamp(t time.Time) string {
+	return strings.ReplaceAll(t.Local().Format("2006-01-02T15:04:05.000000000-07:00"), ":", "-")
 }
 
 // Run is one task execution's log file. Safe for concurrent Write calls.

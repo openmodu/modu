@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -37,6 +38,8 @@ type Task struct {
 	Enabled   bool          `yaml:"enabled"`
 	Timezone  string        `yaml:"timezone,omitempty"`
 	OnOverlap OverlapPolicy `yaml:"on_overlap,omitempty"`
+	Channel   string        `yaml:"channel,omitempty"`
+	Channels  []string      `yaml:"channels,omitempty"`
 }
 
 // Policy returns t.OnOverlap normalized; unknown / empty falls back to skip.
@@ -49,9 +52,48 @@ func (t Task) Policy() OverlapPolicy {
 	}
 }
 
+// NotificationChannels returns the task's configured channel names with
+// whitespace trimmed and duplicates removed. The singular channel field is
+// kept for concise one-channel configs; channels is preferred for many.
+func (t Task) NotificationChannels() []string {
+	var out []string
+	seen := make(map[string]bool)
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			return
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	add(t.Channel)
+	for _, name := range t.Channels {
+		add(name)
+	}
+	return out
+}
+
+// Channel describes one outbound completion-notification destination.
+//
+// Supported types:
+//   - webhook: POST a JSON payload to url / url_env.
+//   - telegram: send text via Telegram Bot API using token / token_env and
+//     chat_id / chat_id_env.
+//   - feishu_webhook: send text to a Feishu/Lark custom bot webhook.
+type Channel struct {
+	Type      string `yaml:"type"`
+	URL       string `yaml:"url,omitempty"`
+	URLEnv    string `yaml:"url_env,omitempty"`
+	Token     string `yaml:"token,omitempty"`
+	TokenEnv  string `yaml:"token_env,omitempty"`
+	ChatID    string `yaml:"chat_id,omitempty"`
+	ChatIDEnv string `yaml:"chat_id_env,omitempty"`
+}
+
 // Config is the on-disk shape of modu_cron's config file.
 type Config struct {
-	Tasks []Task `yaml:"tasks"`
+	Channels map[string]Channel `yaml:"channels,omitempty"`
+	Tasks    []Task             `yaml:"tasks"`
 }
 
 // DefaultPath returns ~/.modu_cron/config.yaml.

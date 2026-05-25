@@ -16,6 +16,7 @@ import (
 
 	"github.com/openmodu/modu/cmd/modu_cron/internal/config"
 	"github.com/openmodu/modu/cmd/modu_cron/internal/crontools"
+	"github.com/openmodu/modu/cmd/modu_cron/internal/notify"
 	"github.com/openmodu/modu/cmd/modu_cron/internal/provider"
 	"github.com/openmodu/modu/cmd/modu_cron/internal/runlog"
 	"github.com/openmodu/modu/cmd/modu_cron/internal/runner"
@@ -44,8 +45,11 @@ func Daemon(ctx context.Context, cfgPath string) error {
 	if err != nil {
 		return err
 	}
+	tgInbound := newTelegramInboundManager()
+	tgInbound.Reload(ctx, cfgPath)
 	defer func() {
 		log.Printf("shutting down...")
+		tgInbound.Stop()
 		<-sch.Stop().Done()
 	}()
 	log.Printf("modu_cron daemon started")
@@ -75,6 +79,7 @@ func Daemon(ctx context.Context, cfgPath string) error {
 			case syscall.SIGHUP:
 				log.Printf("SIGHUP received, reloading...")
 				sch = reloadScheduler(sch, cfgPath, runFn)
+				tgInbound.Reload(ctx, cfgPath)
 			default:
 				return nil // SIGINT / SIGTERM
 			}
@@ -98,6 +103,7 @@ func Daemon(ctx context.Context, cfgPath string) error {
 			armed = false
 			log.Printf("config file changed, reloading...")
 			sch = reloadScheduler(sch, cfgPath, runFn)
+			tgInbound.Reload(ctx, cfgPath)
 		}
 	}
 }
@@ -112,14 +118,27 @@ func buildRunner(cfgPath string) (scheduler.Runner, error) {
 		return nil, fmt.Errorf("getwd: %w", err)
 	}
 	log.Printf("agent runner: model=%s logs=%s", model.ID, runlog.DefaultRoot())
-	return runner.New(runner.Deps{
+	deps := runner.Deps{
 		Cwd:         cwd,
 		AgentDir:    coding_agent.DefaultAgentDir(),
 		Model:       model,
 		GetAPIKey:   getAPIKey,
 		Logs:        runlog.New(""),
 		CustomTools: crontools.New(cfgPath),
-	}), nil
+	}
+	sender := notify.NewSender()
+	return func(ctx context.Context, task config.Task) error {
+		res, runErr := runner.Execute(ctx, deps, task)
+		if len(task.NotificationChannels()) > 0 {
+			cfg, cfgErr := config.Load(cfgPath)
+			if cfgErr != nil {
+				log.Printf("task %s: notify config load failed: %v", task.ID, cfgErr)
+			} else if notifyErr := sender.Completion(ctx, cfg, task, res, runErr); notifyErr != nil {
+				log.Printf("task %s: notify failed: %v", task.ID, notifyErr)
+			}
+		}
+		return runErr
+	}, nil
 }
 
 // loadAndStart reads cfgPath, builds a Scheduler, starts it.

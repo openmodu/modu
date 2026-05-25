@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 // decodeLines parses the slim NDJSON output back into a slice of maps so
@@ -147,6 +148,19 @@ func TestSummaryWriterMalformedLineDropped(t *testing.T) {
 	lines := decodeLines(t, buf.String())
 	if len(lines) != 1 || lines[0]["type"] != "session_start" {
 		t.Errorf("malformed line should be dropped, healthy one kept: %+v", lines)
+	}
+}
+
+func TestFormatLogTimeUsesLocalTimezone(t *testing.T) {
+	oldLocal := time.Local
+	time.Local = time.FixedZone("CST", 8*60*60)
+	t.Cleanup(func() { time.Local = oldLocal })
+
+	instant := time.Date(2026, 5, 25, 6, 9, 13, 1440000, time.UTC)
+	got := formatLogTime(instant)
+	want := "2026-05-25T14:09:13.00144+08:00"
+	if got != want {
+		t.Fatalf("formatLogTime() = %q, want %q", got, want)
 	}
 }
 

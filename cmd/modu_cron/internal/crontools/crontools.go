@@ -6,15 +6,15 @@
 // task executions (queue/kill policies, or just two tasks firing in the
 // same second) cannot race on the YAML file.
 //
-// Caveat: daemon does not currently hot-reload config.yaml; an agent that
-// adds or removes a task must tell the user to restart the daemon for the
-// schedule to take effect. The tool descriptions communicate this.
+// The daemon hot-reloads config.yaml, so task changes take effect without
+// restart when the daemon is running.
 package crontools
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -45,7 +45,7 @@ type addTool struct{ cfgPath string }
 func (t *addTool) Name() string  { return "cron_add" }
 func (t *addTool) Label() string { return "Add Cron Task" }
 func (t *addTool) Description() string {
-	return `Add a new scheduled task to the modu_cron config. The cron expression uses the 6-field form (second minute hour day-of-month month day-of-week). The id must be unique. After adding, tell the user to restart the daemon (modu_cron daemon) for the schedule to take effect.`
+	return `Add a new scheduled task to the modu_cron config. The cron expression uses the 6-field form (second minute hour day-of-month month day-of-week). The id must be unique. The daemon hot-reloads config changes when it is running.`
 }
 
 func (t *addTool) Parameters() any {
@@ -72,6 +72,11 @@ func (t *addTool) Parameters() any {
 				"type":        "string",
 				"enum":        []string{"skip", "queue", "kill"},
 				"description": "Behavior when the previous run is still in flight (default skip)",
+			},
+			"channels": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"description": "Optional notification channel names to notify when the task completes",
 			},
 		},
 		"required": []string{"id", "cron", "prompt"},
@@ -101,6 +106,10 @@ func (t *addTool) Execute(ctx context.Context, _ string, args map[string]any, _ 
 			return errorResult(fmt.Sprintf("on_overlap must be skip|queue|kill, got %q", v)), nil
 		}
 	}
+	channels, err := parseChannels(args["channels"])
+	if err != nil {
+		return errorResult(err.Error()), nil
+	}
 
 	fileMu.Lock()
 	defer fileMu.Unlock()
@@ -120,11 +129,12 @@ func (t *addTool) Execute(ctx context.Context, _ string, args map[string]any, _ 
 		Prompt:    prompt,
 		Enabled:   enabled,
 		OnOverlap: overlap,
+		Channels:  channels,
 	})
 	if err := config.Save(t.cfgPath, cfg); err != nil {
 		return errorResult(fmt.Sprintf("save config: %v", err)), nil
 	}
-	return okResult(fmt.Sprintf("added task %q (cron=%q, enabled=%v). Restart the daemon for the schedule to take effect.", id, cronExpr, enabled), map[string]any{
+	return okResult(fmt.Sprintf("added task %q (cron=%q, enabled=%v). The daemon will hot-reload the config if it is running.", id, cronExpr, enabled), map[string]any{
 		"id":   id,
 		"path": t.cfgPath,
 	}), nil
@@ -134,9 +144,11 @@ func (t *addTool) Execute(ctx context.Context, _ string, args map[string]any, _ 
 
 type listTool struct{ cfgPath string }
 
-func (t *listTool) Name() string        { return "cron_list" }
-func (t *listTool) Label() string       { return "List Cron Tasks" }
-func (t *listTool) Description() string { return `List all tasks currently configured in modu_cron, with their cron expression, enabled flag, overlap policy, and prompt.` }
+func (t *listTool) Name() string  { return "cron_list" }
+func (t *listTool) Label() string { return "List Cron Tasks" }
+func (t *listTool) Description() string {
+	return `List all tasks currently configured in modu_cron, with their cron expression, enabled flag, overlap policy, notification channels, prompt, and configured notification channel names.`
+}
 
 func (t *listTool) Parameters() any {
 	return map[string]any{
@@ -153,7 +165,11 @@ func (t *listTool) Execute(ctx context.Context, _ string, _ map[string]any, _ ag
 		return errorResult(fmt.Sprintf("load config: %v", err)), nil
 	}
 	if len(cfg.Tasks) == 0 {
-		return okResult("(no tasks configured)", map[string]any{"count": 0}), nil
+		text := "(no tasks configured)"
+		if chText := configuredChannelsText(cfg); chText != "" {
+			text += "\n" + chText
+		}
+		return okResult(text, map[string]any{"count": 0}), nil
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%d task(s):\n", len(cfg.Tasks))
@@ -163,13 +179,37 @@ func (t *listTool) Execute(ctx context.Context, _ string, _ map[string]any, _ ag
 			enabled = "on"
 		}
 		policy := task.Policy()
-		fmt.Fprintf(&b, "- %s [%s, %s, %s]: %s\n", task.ID, task.Cron, enabled, policy, task.Prompt)
+		channelNames := task.NotificationChannels()
+		channelText := ""
+		if len(channelNames) > 0 {
+			channelText = ", channels=" + strings.Join(channelNames, "|")
+		}
+		fmt.Fprintf(&b, "- %s [%s, %s, %s%s]: %s\n", task.ID, task.Cron, enabled, policy, channelText, task.Prompt)
+	}
+	if chText := configuredChannelsText(cfg); chText != "" {
+		fmt.Fprintf(&b, "\n%s\n", chText)
 	}
 	tasksJSON, _ := json.Marshal(cfg.Tasks)
 	return okResult(strings.TrimRight(b.String(), "\n"), map[string]any{
 		"count": len(cfg.Tasks),
 		"tasks": json.RawMessage(tasksJSON),
 	}), nil
+}
+
+func configuredChannelsText(cfg *config.Config) string {
+	if cfg == nil || len(cfg.Channels) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(cfg.Channels))
+	for name, ch := range cfg.Channels {
+		typ := strings.TrimSpace(ch.Type)
+		if typ == "" {
+			typ = "unknown"
+		}
+		names = append(names, fmt.Sprintf("%s(%s)", name, typ))
+	}
+	sort.Strings(names)
+	return "configured channels: " + strings.Join(names, ", ")
 }
 
 // ─── cron_remove ───────────────────────────────────────────────────────────
@@ -179,7 +219,7 @@ type removeTool struct{ cfgPath string }
 func (t *removeTool) Name() string  { return "cron_remove" }
 func (t *removeTool) Label() string { return "Remove Cron Task" }
 func (t *removeTool) Description() string {
-	return `Remove a scheduled task from modu_cron config by id. Returns an error if no task matches. After removing, tell the user to restart the daemon for the change to take effect.`
+	return `Remove a scheduled task from modu_cron config by id. Returns an error if no task matches. The daemon hot-reloads config changes when it is running.`
 }
 
 func (t *removeTool) Parameters() any {
@@ -214,7 +254,7 @@ func (t *removeTool) Execute(ctx context.Context, _ string, args map[string]any,
 			if err := config.Save(t.cfgPath, cfg); err != nil {
 				return errorResult(fmt.Sprintf("save config: %v", err)), nil
 			}
-			return okResult(fmt.Sprintf("removed task %q. Restart the daemon for the change to take effect.", id), map[string]any{
+			return okResult(fmt.Sprintf("removed task %q. The daemon will hot-reload the config if it is running.", id), map[string]any{
 				"id":   id,
 				"path": t.cfgPath,
 			}), nil
@@ -240,4 +280,36 @@ func errorResult(text string) agent.AgentToolResult {
 			&types.TextContent{Type: "text", Text: text},
 		},
 	}
+}
+
+func parseChannels(v any) ([]string, error) {
+	if v == nil {
+		return nil, nil
+	}
+	values, ok := v.([]any)
+	if !ok {
+		if typed, ok := v.([]string); ok {
+			values = make([]any, 0, len(typed))
+			for _, s := range typed {
+				values = append(values, s)
+			}
+		} else {
+			return nil, fmt.Errorf("channels must be an array of strings")
+		}
+	}
+	var out []string
+	seen := make(map[string]bool)
+	for _, item := range values {
+		name, ok := item.(string)
+		if !ok {
+			return nil, fmt.Errorf("channels must be an array of strings")
+		}
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out, nil
 }
