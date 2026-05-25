@@ -86,6 +86,7 @@ Guidelines:
 - Pick an appropriate 6-field cron expression. Prefer descriptors like "@every 5m", "@hourly", "@daily", "@weekly" when they cleanly match the request. Otherwise emit a literal "sec min hour dom mon dow" expression.
 - Set enabled=true unless the user implies otherwise.
 - Set on_overlap to skip, queue, or kill according to wording cues; default to skip.
+- If the user names existing notification channels, pass them as channels. Do not invent channel names.
 - Optionally call cron_list first to avoid id collisions.
-- After cron_add succeeds, reply with ONE short sentence confirming what you scheduled (id, when it runs, and a brief paraphrase of the prompt). Remind the user to restart the daemon for the change to take effect.`
+- After cron_add succeeds, reply with ONE short sentence confirming what you scheduled (id, when it runs, and a brief paraphrase of the prompt).`
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/openmodu/modu/cmd/modu_cron/internal/config"
 	"github.com/openmodu/modu/cmd/modu_cron/internal/crontools"
+	"github.com/openmodu/modu/cmd/modu_cron/internal/notify"
 	"github.com/openmodu/modu/cmd/modu_cron/internal/provider"
 	"github.com/openmodu/modu/cmd/modu_cron/internal/runlog"
 	"github.com/openmodu/modu/cmd/modu_cron/internal/runner"
@@ -62,10 +63,20 @@ func Run(ctx context.Context, cfgPath, taskID string, out io.Writer) error {
 	if res.LogPath != "" {
 		fmt.Fprintf(out, "  log: %s\n", res.LogPath)
 	}
+	var notifyErr error
+	if len(task.NotificationChannels()) > 0 {
+		notifyErr = notify.NewSender().Completion(ctx, cfg, *task, res, runErr)
+		if notifyErr != nil {
+			fmt.Fprintf(out, "notify failed: %v\n", notifyErr)
+		}
+	}
 	dur := res.Ended.Sub(res.Started).Round(100 * time.Millisecond)
 	if runErr != nil {
 		fmt.Fprintf(out, "failed after %s\n", dur)
 		return runErr
+	}
+	if notifyErr != nil {
+		return notifyErr
 	}
 	fmt.Fprintf(out, "done in %s — view with: modu_cron logs %s --tail\n", dur, task.ID)
 	return nil

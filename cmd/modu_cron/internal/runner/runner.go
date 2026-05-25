@@ -82,7 +82,7 @@ func Execute(ctx context.Context, deps Deps, task config.Task) (Result, error) {
 		"type":       "run_start",
 		"task_id":    task.ID,
 		"prompt":     task.Prompt,
-		"started_at": res.Started.UTC().Format(time.RFC3339Nano),
+		"started_at": formatLogTime(res.Started),
 	})
 
 	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
@@ -153,11 +153,15 @@ func writeRunEnd(w io.Writer, res Result, err error) {
 		"type":        "run_end",
 		"status":      "ok",
 		"duration_ms": res.Ended.Sub(res.Started).Milliseconds(),
-		"ended_at":    res.Ended.UTC().Format(time.RFC3339Nano),
+		"ended_at":    formatLogTime(res.Ended),
 	}
 	if err != nil {
 		obj["status"] = "error"
 		obj["error"] = err.Error()
 	}
 	writeJSONLine(w, obj)
+}
+
+func formatLogTime(t time.Time) string {
+	return t.Local().Format(time.RFC3339Nano)
 }

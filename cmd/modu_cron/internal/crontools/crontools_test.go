@@ -61,13 +61,17 @@ func TestAddHappyPath(t *testing.T) {
 		"prompt":     "summarize",
 		"enabled":    true,
 		"on_overlap": "queue",
+		"channels":   []any{"ops", "mobile"},
 	})
-	if !strings.Contains(text, "added task \"daily\"") || !strings.Contains(text, "Restart") {
-		t.Errorf("missing add/restart phrasing: %q", text)
+	if !strings.Contains(text, "added task \"daily\"") || !strings.Contains(text, "hot-reload") {
+		t.Errorf("missing add/hot-reload phrasing: %q", text)
 	}
 	cfg, _ := config.Load(cfgPath)
 	if len(cfg.Tasks) != 1 || cfg.Tasks[0].ID != "daily" || cfg.Tasks[0].OnOverlap != config.OverlapQueue {
 		t.Errorf("config not persisted correctly: %+v", cfg.Tasks)
+	}
+	if got := cfg.Tasks[0].NotificationChannels(); len(got) != 2 || got[0] != "ops" || got[1] != "mobile" {
+		t.Errorf("channels not persisted correctly: %+v", got)
 	}
 }
 
@@ -138,6 +142,19 @@ func TestAddRejectsBadOverlap(t *testing.T) {
 	}
 }
 
+func TestAddRejectsBadChannels(t *testing.T) {
+	_, add, _, _ := freshTools(t)
+	text, _ := callTool(t, add, map[string]any{
+		"id":       "x",
+		"cron":     "@every 1m",
+		"prompt":   "p",
+		"channels": []any{"ops", 12},
+	})
+	if !strings.Contains(text, "array of strings") {
+		t.Errorf("expected channel error, got: %q", text)
+	}
+}
+
 func TestListEmpty(t *testing.T) {
 	_, _, list, _ := freshTools(t)
 	text, _ := callTool(t, list, nil)
@@ -148,10 +165,10 @@ func TestListEmpty(t *testing.T) {
 
 func TestListShowsTasks(t *testing.T) {
 	cfgPath, add, list, _ := freshTools(t)
-	callTool(t, add, map[string]any{"id": "a", "cron": "@every 1m", "prompt": "alpha"})
+	callTool(t, add, map[string]any{"id": "a", "cron": "@every 1m", "prompt": "alpha", "channels": []any{"ops"}})
 	callTool(t, add, map[string]any{"id": "b", "cron": "@every 5m", "prompt": "beta", "enabled": false})
 	text, res := callTool(t, list, nil)
-	if !strings.Contains(text, "- a [@every 1m, on, skip]: alpha") {
+	if !strings.Contains(text, "- a [@every 1m, on, skip, channels=ops]: alpha") {
 		t.Errorf("missing task a row:\n%s", text)
 	}
 	if !strings.Contains(text, "- b [@every 5m, off, skip]: beta") {
@@ -162,6 +179,25 @@ func TestListShowsTasks(t *testing.T) {
 		t.Errorf("expected count=2 in details, got %+v", res.Details)
 	}
 	_ = cfgPath
+}
+
+func TestListShowsConfiguredChannels(t *testing.T) {
+	cfgPath, _, list, _ := freshTools(t)
+	if err := config.Save(cfgPath, &config.Config{
+		Channels: map[string]config.Channel{
+			"tg":  {Type: "telegram"},
+			"ops": {Type: "webhook"},
+		},
+		Tasks: []config.Task{
+			{ID: "a", Cron: "@every 1m", Prompt: "alpha", Enabled: true, Channels: []string{"tg"}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	text, _ := callTool(t, list, nil)
+	if !strings.Contains(text, "configured channels: ops(webhook), tg(telegram)") {
+		t.Errorf("missing configured channels:\n%s", text)
+	}
 }
 
 func TestRemoveHappyPath(t *testing.T) {
