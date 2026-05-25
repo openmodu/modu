@@ -26,6 +26,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/openmodu/modu/cmd/modu_cron/internal/config"
 	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/providers/openai"
 	"github.com/openmodu/modu/pkg/types"
@@ -34,6 +35,18 @@ import (
 // Resolve returns the configured model and an API-key resolver. Returns
 // (nil, nil) when no provider env is set.
 func Resolve() (*types.Model, func(string) (string, error)) {
+	return ResolveWithConfig(nil)
+}
+
+// ResolveWithConfig returns the configured model and API-key resolver,
+// preferring config.yaml model settings over environment variables.
+func ResolveWithConfig(cfg *config.Config) (*types.Model, func(string) (string, error)) {
+	if cfg != nil {
+		if model, getKey, ok := resolveConfiguredModel(cfg.Model); ok {
+			return model, getKey
+		}
+	}
+
 	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
 		modelID := os.Getenv("ANTHROPIC_MODEL")
 		if modelID == "" {
@@ -109,6 +122,42 @@ func Resolve() (*types.Model, func(string) (string, error)) {
 	providers.Register(openai.New("lmstudio", openai.WithBaseURL(fallbackURL)))
 	return &types.Model{ID: fallbackModel, Name: fallbackModel + " (LM Studio, default)", ProviderID: "lmstudio", BaseURL: fallbackURL},
 		noKey
+}
+
+func resolveConfiguredModel(cfg config.ModelConfig) (*types.Model, func(string) (string, error), bool) {
+	providerID := strings.TrimSpace(cfg.Provider)
+	modelID := strings.TrimSpace(cfg.Model)
+	baseURL := strings.TrimSpace(cfg.BaseURL)
+	if providerID == "" || modelID == "" || baseURL == "" {
+		return nil, nil, false
+	}
+	key := strings.TrimSpace(cfg.APIKey)
+	if key == "" && strings.TrimSpace(cfg.APIKeyEnv) != "" {
+		key = os.Getenv(strings.TrimSpace(cfg.APIKeyEnv))
+	}
+	opts := []openai.Option{openai.WithBaseURL(baseURL)}
+	if key != "" {
+		opts = append(opts, openai.WithAPIKey(key))
+	}
+	headers := cfg.Headers
+	if providerID == "anthropic" {
+		if headers == nil {
+			headers = map[string]string{}
+		}
+		if headers["anthropic-version"] == "" {
+			headers["anthropic-version"] = "2023-06-01"
+		}
+	}
+	if len(headers) > 0 {
+		opts = append(opts, openai.WithHeaders(headers))
+	}
+	providers.Register(openai.New(providerID, opts...))
+	return &types.Model{
+		ID:         modelID,
+		Name:       modelID + " (" + providerID + ")",
+		ProviderID: providerID,
+		BaseURL:    baseURL,
+	}, staticKey(providerID, key), true
 }
 
 func staticKey(provider, key string) func(string) (string, error) {

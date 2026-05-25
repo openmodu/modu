@@ -11,6 +11,7 @@ import (
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/coding_agent/modes"
 
+	"github.com/openmodu/modu/cmd/modu_cron/internal/config"
 	"github.com/openmodu/modu/cmd/modu_cron/internal/crontools"
 	"github.com/openmodu/modu/cmd/modu_cron/internal/provider"
 )
@@ -29,12 +30,17 @@ func Add(ctx context.Context, cfgPath, description string, out io.Writer) error 
 		return fmt.Errorf("add: task description required (e.g. modu_cron add \"every morning at 8, run git log\")")
 	}
 
-	model, getAPIKey := provider.Resolve()
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return err
+	}
+	model, getAPIKey := provider.ResolveWithConfig(cfg)
 
-	cwd, err := os.Getwd()
+	fallbackCwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("getwd: %w", err)
 	}
+	cwd := config.ResolveWorkingDir(cfgPath, cfg, fallbackCwd)
 
 	// Restrict to the cron management tools only. Default CodingTools would
 	// give the agent Read/Write/Bash/etc., which is unnecessary scope for

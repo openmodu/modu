@@ -42,12 +42,12 @@ func Run(ctx context.Context, cfgPath, taskID string, out io.Writer) error {
 		return fmt.Errorf("run: task %q not found in %s", taskID, cfgPath)
 	}
 
-	model, getAPIKey := provider.Resolve()
-
-	cwd, err := os.Getwd()
+	fallbackCwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("getwd: %w", err)
 	}
+	model, getAPIKey := provider.ResolveWithConfig(cfg)
+	cwd := config.ResolveWorkingDir(cfgPath, cfg, fallbackCwd)
 
 	deps := runner.Deps{
 		Cwd:         cwd,

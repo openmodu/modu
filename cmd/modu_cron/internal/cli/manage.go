@@ -12,6 +12,7 @@ import (
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/coding_agent/modes"
 
+	"github.com/openmodu/modu/cmd/modu_cron/internal/config"
 	"github.com/openmodu/modu/cmd/modu_cron/internal/crontools"
 	"github.com/openmodu/modu/cmd/modu_cron/internal/provider"
 )
@@ -38,16 +39,20 @@ func ManageCron(ctx context.Context, opts ManageOptions, message string, out io.
 
 	model := opts.Model
 	getAPIKey := opts.GetAPIKey
+	cfg, err := config.Load(opts.CfgPath)
+	if err != nil {
+		return err
+	}
 	if model == nil || getAPIKey == nil {
-		model, getAPIKey = provider.Resolve()
+		model, getAPIKey = provider.ResolveWithConfig(cfg)
 	}
 	cwd := opts.Cwd
 	if cwd == "" {
-		var err error
-		cwd, err = os.Getwd()
+		fallbackCwd, err := os.Getwd()
 		if err != nil {
 			return fmt.Errorf("getwd: %w", err)
 		}
+		cwd = config.ResolveWorkingDir(opts.CfgPath, cfg, fallbackCwd)
 	}
 	agentDir := opts.AgentDir
 	if agentDir == "" {

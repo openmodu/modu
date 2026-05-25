@@ -31,10 +31,6 @@ const reloadDebounce = 300 * time.Millisecond
 // SIGHUP and config file changes (via fsnotify) trigger a hot reload that
 // swaps in a fresh Scheduler instance — in-flight runs of the old one
 // continue to completion in the background.
-//
-// Provider is resolved from environment variables; if none is configured the
-// daemon falls back to a no-op runner that just logs each tick — useful for
-// dry-running the schedule without spending API calls.
 func Daemon(ctx context.Context, cfgPath string) error {
 	runFn, err := buildRunner(cfgPath)
 	if err != nil {
@@ -108,32 +104,34 @@ func Daemon(ctx context.Context, cfgPath string) error {
 	}
 }
 
-// buildRunner resolves the provider and returns the scheduler.Runner to use
-// for every task. provider.Resolve always returns a model (with a LM Studio
-// fallback), so this never returns a nil runner.
+// buildRunner returns the scheduler.Runner to use for every task. Runtime
+// settings are loaded per execution so model/workdir/channel config changes
+// apply without restarting the daemon.
 func buildRunner(cfgPath string) (scheduler.Runner, error) {
-	model, getAPIKey := provider.Resolve()
-	cwd, err := os.Getwd()
+	fallbackCwd, err := os.Getwd()
 	if err != nil {
 		return nil, fmt.Errorf("getwd: %w", err)
 	}
-	log.Printf("agent runner: model=%s logs=%s", model.ID, runlog.DefaultRoot())
-	deps := runner.Deps{
-		Cwd:         cwd,
-		AgentDir:    coding_agent.DefaultAgentDir(),
-		Model:       model,
-		GetAPIKey:   getAPIKey,
-		Logs:        runlog.New(""),
-		CustomTools: crontools.New(cfgPath),
-	}
+	log.Printf("agent runner: logs=%s", runlog.DefaultRoot())
 	sender := notify.NewSender()
 	return func(ctx context.Context, task config.Task) error {
+		cfg, cfgErr := config.Load(cfgPath)
+		if cfgErr != nil {
+			return cfgErr
+		}
+		model, getAPIKey := provider.ResolveWithConfig(cfg)
+		cwd := config.ResolveWorkingDir(cfgPath, cfg, fallbackCwd)
+		deps := runner.Deps{
+			Cwd:         cwd,
+			AgentDir:    coding_agent.DefaultAgentDir(),
+			Model:       model,
+			GetAPIKey:   getAPIKey,
+			Logs:        runlog.New(""),
+			CustomTools: crontools.New(cfgPath),
+		}
 		res, runErr := runner.Execute(ctx, deps, task)
 		if len(task.NotificationChannels()) > 0 {
-			cfg, cfgErr := config.Load(cfgPath)
-			if cfgErr != nil {
-				log.Printf("task %s: notify config load failed: %v", task.ID, cfgErr)
-			} else if notifyErr := sender.Completion(ctx, cfg, task, res, runErr); notifyErr != nil {
+			if notifyErr := sender.Completion(ctx, cfg, task, res, runErr); notifyErr != nil {
 				log.Printf("task %s: notify failed: %v", task.ID, notifyErr)
 			}
 		}
@@ -208,6 +206,16 @@ func startFSWatch(cfgPath string) (*fsnotify.Watcher, chan fsnotify.Event) {
 		_ = w.Close()
 		return nil, nil
 	}
+	if cfg, err := config.LoadRuntime(cfgPath); err == nil {
+		taskDir := filepath.Dir(config.ResolveTasksPath(cfgPath, cfg))
+		if taskDir != "" && filepath.Clean(taskDir) != filepath.Clean(dir) {
+			if err := os.MkdirAll(taskDir, 0o755); err != nil {
+				log.Printf("create tasks dir %s failed: %v; task-file changes need SIGHUP", taskDir, err)
+			} else if err := w.Add(taskDir); err != nil {
+				log.Printf("fsnotify watch %s failed: %v; task-file changes need SIGHUP", taskDir, err)
+			}
+		}
+	}
 	return w, w.Events
 }
 
@@ -216,8 +224,12 @@ func startFSWatch(cfgPath string) (*fsnotify.Watcher, chan fsnotify.Event) {
 // too — filter to cfgPath, and ignore Chmod-only events (touch / mtime
 // bumps) which don't change content.
 func shouldReloadFor(ev fsnotify.Event, cfgPath string) bool {
-	if filepath.Clean(ev.Name) != filepath.Clean(cfgPath) {
-		return false
+	name := filepath.Clean(ev.Name)
+	if name != filepath.Clean(cfgPath) && name != filepath.Clean(config.DefaultTasksPath(cfgPath)) {
+		runtimeCfg, err := config.LoadRuntime(cfgPath)
+		if err != nil || name != filepath.Clean(config.ResolveTasksPath(cfgPath, runtimeCfg)) {
+			return false
+		}
 	}
 	if ev.Op == fsnotify.Chmod {
 		return false

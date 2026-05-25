@@ -2,6 +2,8 @@ package provider
 
 import (
 	"testing"
+
+	"github.com/openmodu/modu/cmd/modu_cron/internal/config"
 )
 
 func clearAllProviderEnv(t *testing.T) {
@@ -65,5 +67,25 @@ func TestResolveOpenAIBeatsFallback(t *testing.T) {
 	}
 	if model.ID != "gpt-4o-mini" {
 		t.Errorf("expected gpt-4o-mini, got %q", model.ID)
+	}
+}
+
+func TestResolveConfigBeatsEnv(t *testing.T) {
+	clearAllProviderEnv(t)
+	t.Setenv("OPENAI_API_KEY", "env-key")
+	cfg := &config.Config{Model: config.ModelConfig{
+		Provider:  "lmstudio",
+		Model:     "configured-model",
+		BaseURL:   "http://configured.invalid/v1",
+		APIKeyEnv: "LM_KEY",
+	}}
+	t.Setenv("LM_KEY", "cfg-key")
+	model, getKey := ResolveWithConfig(cfg)
+	if model.ProviderID != "lmstudio" || model.ID != "configured-model" || model.BaseURL != "http://configured.invalid/v1" {
+		t.Fatalf("configured model not used: %+v", model)
+	}
+	key, err := getKey("lmstudio")
+	if err != nil || key != "cfg-key" {
+		t.Fatalf("configured key not used: key=%q err=%v", key, err)
 	}
 }
