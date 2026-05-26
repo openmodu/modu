@@ -129,6 +129,9 @@ func TestLogsListAndTailRoundTrip(t *testing.T) {
 	if !strings.Contains(listOut.String(), "Task demo — 2 run(s)") {
 		t.Errorf("list output: %s", listOut.String())
 	}
+	if !strings.Contains(listOut.String(), "| FILE") || !strings.Contains(listOut.String(), "| SIZE") {
+		t.Errorf("list output should render a table: %s", listOut.String())
+	}
 
 	var tailOut bytes.Buffer
 	if err := Logs("demo", LogsOptions{Tail: true}, &tailOut); err != nil {

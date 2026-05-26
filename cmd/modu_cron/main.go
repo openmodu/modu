@@ -3,6 +3,7 @@
 // Dual-form CLI:
 //
 //	modu_cron daemon              run the scheduler loop
+//	modu_cron init                create config.yaml + tasks.yaml
 //	modu_cron list                list configured tasks
 //	modu_cron logs <id> [flags]   inspect a task's run history
 //	modu_cron add "<desc>"        add a task from a natural-language description
@@ -44,6 +45,8 @@ func main() {
 
 func dispatch(cmd string, args []string, cfgPath string) error {
 	switch cmd {
+	case "init":
+		return runInit(args, cfgPath)
 	case "daemon":
 		return cli.Daemon(context.Background(), cfgPath)
 	case "list":
@@ -71,6 +74,54 @@ func dispatch(cmd string, args []string, cfgPath string) error {
 		usage()
 		return fmt.Errorf("unknown subcommand: %s", cmd)
 	}
+}
+
+func runInit(args []string, cfgPath string) error {
+	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, `Usage:
+  modu_cron [-c <config>] init [flags]
+
+Creates an isolated runtime config and task file. By default the task file is
+tasks.yaml next to config.yaml, working_dir is the current directory, and the
+model points to the shared LM Studio endpoint.`)
+	}
+	force := fs.Bool("force", false, "overwrite existing config and task file")
+	nonInteractive := fs.Bool("non-interactive", false, "use defaults/flags without prompting")
+	workdir := fs.String("workdir", "", "agent working directory (default: current directory)")
+	tasksFile := fs.String("tasks-file", "", "task file path, relative to config dir unless absolute (default: tasks.yaml)")
+	modelProvider := fs.String("model-provider", "", "LLM provider id (default: lmstudio)")
+	model := fs.String("model", "", "LLM model id (default: qwen/qwen3.6-35b-a3b)")
+	modelBaseURL := fs.String("model-base-url", "", "OpenAI-compatible base URL (default: http://192.168.5.149:1234/v1)")
+	modelAPIKey := fs.String("model-api-key", "", "inline LLM API key")
+	modelAPIKeyEnv := fs.String("model-api-key-env", "", "env var containing LLM API key")
+	noTelegram := fs.Bool("no-telegram", false, "skip creating the default Telegram channel")
+	tgChannel := fs.String("telegram-channel", "", "Telegram channel name (default: telegram-home)")
+	tgToken := fs.String("telegram-token", "", "inline Telegram bot token")
+	tgTokenEnv := fs.String("telegram-token-env", "", "env var containing Telegram bot token (default: MODU_CRON_TG_TOKEN)")
+	tgChatID := fs.String("telegram-chat-id", "", "inline Telegram chat id")
+	tgChatIDEnv := fs.String("telegram-chat-id-env", "", "env var containing Telegram chat id (default: MODU_CRON_TG_CHAT_ID)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	return cli.Init(cfgPath, cli.InitOptions{
+		Force:             *force,
+		Interactive:       !*nonInteractive,
+		In:                os.Stdin,
+		WorkingDir:        *workdir,
+		TasksFile:         *tasksFile,
+		ModelProvider:     *modelProvider,
+		Model:             *model,
+		ModelBaseURL:      *modelBaseURL,
+		ModelAPIKey:       *modelAPIKey,
+		ModelAPIKeyEnv:    *modelAPIKeyEnv,
+		TelegramChannel:   *tgChannel,
+		DisableTelegram:   *noTelegram,
+		TelegramToken:     *tgToken,
+		TelegramTokenEnv:  *tgTokenEnv,
+		TelegramChatID:    *tgChatID,
+		TelegramChatIDEnv: *tgChatIDEnv,
+	}, os.Stdout)
 }
 
 func runRm(args []string, cfgPath string) error {
@@ -136,6 +187,7 @@ Usage:
   modu_cron [-c <config>] <subcommand> [args]
 
 Subcommands:
+  init              create config.yaml and tasks.yaml
   daemon            run the scheduler loop
   list              list configured tasks
   logs <id>         inspect a task's run history (--tail / --file / --json)

@@ -18,13 +18,19 @@ func List(cfgPath string, out io.Writer) error {
 		fmt.Fprintln(out, "(no tasks)")
 		return nil
 	}
-	fmt.Fprintf(out, "%-20s %-15s %-8s %s\n", "ID", "CRON", "ENABLED", "PROMPT")
+	rows := make([][]string, 0, len(cfg.Tasks))
 	for _, t := range cfg.Tasks {
 		enabled := "no"
 		if t.Enabled {
 			enabled = "yes"
 		}
-		fmt.Fprintf(out, "%-20s %-15s %-8s %s\n", t.ID, t.Cron, enabled, t.Prompt)
+		rows = append(rows, []string{t.ID, t.Cron, enabled, t.Prompt})
 	}
+	writeTable(out, []tableColumn{
+		{Header: "ID", Max: 24},
+		{Header: "CRON", Max: 24},
+		{Header: "ENABLED", Max: 7},
+		{Header: "PROMPT", Max: 72},
+	}, rows)
 	return nil
 }

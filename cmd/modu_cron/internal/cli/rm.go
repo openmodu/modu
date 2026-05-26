@@ -24,7 +24,7 @@ type RmOptions struct {
 	Out   io.Writer
 }
 
-// Rm removes the task with id taskID from cfgPath and writes the file back.
+// Rm removes the task with id taskID from cfgPath's task file.
 func Rm(cfgPath, taskID string, opts RmOptions) error {
 	if taskID == "" {
 		return fmt.Errorf("rm: task id required")
@@ -59,10 +59,11 @@ func Rm(cfgPath, taskID string, opts RmOptions) error {
 	}
 
 	cfg.Tasks = append(cfg.Tasks[:idx], cfg.Tasks[idx+1:]...)
-	if err := config.Save(cfgPath, cfg); err != nil {
+	taskPath := config.ResolveTasksPath(cfgPath, cfg)
+	if err := config.SaveTasks(taskPath, cfg.Tasks); err != nil {
 		return err
 	}
-	fmt.Fprintf(opts.Out, "removed task %q from %s\n", taskID, cfgPath)
+	fmt.Fprintf(opts.Out, "removed task %q from %s\n", taskID, taskPath)
 	return nil
 }
 

@@ -1,6 +1,15 @@
 # modu_cron sample configuration.
-# Cron expressions use the 6-field form (seconds first): "sec min hour dom mon dow".
-# Copy to ~/.modu_cron/config.yaml and edit.
+# Copy to ~/.modu_cron/config.yaml and edit, or run `modu_cron init`.
+
+working_dir: /path/to/project
+
+model:
+  provider: lmstudio
+  model: qwen/qwen3.6-35b-a3b
+  base_url: http://192.168.5.149:1234/v1
+  # api_key_env: OPENAI_API_KEY
+
+tasks_file: tasks.yaml
 
 channels:
   ops-webhook:
@@ -14,15 +23,22 @@ channels:
     type: feishu_webhook
     url_env: MODU_CRON_FEISHU_WEBHOOK_URL
 
-tasks:
-  - id: heartbeat
-    cron: "*/10 * * * * *"   # every 10 seconds
-    prompt: "say hello"
-    enabled: true
-    channels: [ops-webhook]
-
-  - id: daily-summary
-    cron: "0 0 9 * * *"      # 09:00 every day
-    prompt: "summarize yesterday's commits in this repo"
-    enabled: false
-    channels: [telegram-home, feishu-alerts]
+# Put cron tasks in ~/.modu_cron/tasks.yaml:
+#
+# tasks:
+#   - id: heartbeat
+#     cron: "*/10 * * * * *"   # every 10 seconds
+#     prompt: "say hello"
+#     enabled: true
+#     channels: [ops-webhook]
+#
+#   - id: daily-summary
+#     cron: "0 0 9 * * *"      # 09:00 every day
+#     prompt: "summarize yesterday's commits in this repo"
+#     enabled: false
+#     channels: [telegram-home, feishu-alerts]
+#
+# Cron expressions use the 6-field form (seconds first): "sec min hour dom mon dow".
+#
+# Legacy single-file configs with an inline `tasks:` block are still readable,
+# but new task changes are written to tasks_file.

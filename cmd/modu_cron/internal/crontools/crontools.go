@@ -1,6 +1,6 @@
 // Package crontools exposes cron_add / cron_list / cron_remove as
 // agent.AgentTool implementations, so the CodingSession driving each task
-// can manage the modu_cron config file via natural language.
+// can manage the modu_cron task file via natural language.
 //
 // All three tools serialize on the same package-level mutex so concurrent
 // task executions (queue/kill policies, or just two tasks firing in the
@@ -131,12 +131,13 @@ func (t *addTool) Execute(ctx context.Context, _ string, args map[string]any, _ 
 		OnOverlap: overlap,
 		Channels:  channels,
 	})
-	if err := config.Save(t.cfgPath, cfg); err != nil {
-		return errorResult(fmt.Sprintf("save config: %v", err)), nil
+	taskPath := config.ResolveTasksPath(t.cfgPath, cfg)
+	if err := config.SaveTasks(taskPath, cfg.Tasks); err != nil {
+		return errorResult(fmt.Sprintf("save tasks: %v", err)), nil
 	}
 	return okResult(fmt.Sprintf("added task %q (cron=%q, enabled=%v). The daemon will hot-reload the config if it is running.", id, cronExpr, enabled), map[string]any{
 		"id":   id,
-		"path": t.cfgPath,
+		"path": taskPath,
 	}), nil
 }
 
@@ -251,12 +252,13 @@ func (t *removeTool) Execute(ctx context.Context, _ string, args map[string]any,
 	for i, t2 := range cfg.Tasks {
 		if t2.ID == id {
 			cfg.Tasks = append(cfg.Tasks[:i], cfg.Tasks[i+1:]...)
-			if err := config.Save(t.cfgPath, cfg); err != nil {
-				return errorResult(fmt.Sprintf("save config: %v", err)), nil
+			taskPath := config.ResolveTasksPath(t.cfgPath, cfg)
+			if err := config.SaveTasks(taskPath, cfg.Tasks); err != nil {
+				return errorResult(fmt.Sprintf("save tasks: %v", err)), nil
 			}
 			return okResult(fmt.Sprintf("removed task %q. The daemon will hot-reload the config if it is running.", id), map[string]any{
 				"id":   id,
-				"path": t.cfgPath,
+				"path": taskPath,
 			}), nil
 		}
 	}

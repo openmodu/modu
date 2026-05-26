@@ -132,12 +132,18 @@ func (b *telegramInboundBot) handleMessage(ctx context.Context, chCtx channels.C
 	runCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 
-	model, getAPIKey := provider.Resolve()
-	cwd, err := os.Getwd()
+	cfg, err := config.Load(b.cfgPath)
 	if err != nil {
 		_ = chCtx.RespondInThread("error: " + err.Error())
 		return
 	}
+	model, getAPIKey := provider.ResolveWithConfig(cfg)
+	fallbackCwd, err := os.Getwd()
+	if err != nil {
+		_ = chCtx.RespondInThread("error: " + err.Error())
+		return
+	}
+	cwd := config.ResolveWorkingDir(b.cfgPath, cfg, fallbackCwd)
 	opts := ManageOptions{
 		CfgPath:   b.cfgPath,
 		Cwd:       cwd,
