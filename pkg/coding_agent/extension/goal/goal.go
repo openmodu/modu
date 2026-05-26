@@ -59,6 +59,19 @@ func New(opts Options) *Extension {
 	}
 }
 
+// init registers goal as a builtin extension. Hosts that want the goal
+// extension only need to anonymous-import this package; LoadEnabled then
+// picks it up.
+//
+// The factory uses Options{} (Out=nil) — the modu_code TUI cannot safely
+// receive Out writes (writing to stderr corrupts the inline-mode widget
+// layout). All goal feedback already reaches the user via api.Notify.
+func init() {
+	extension.Register("goal", func() extension.Extension {
+		return New(Options{})
+	})
+}
+
 func (e *Extension) Name() string { return "goal" }
 
 // RuntimeState exposes goal state for RuntimeState JSON and host UIs.

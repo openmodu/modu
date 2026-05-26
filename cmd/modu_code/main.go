@@ -29,7 +29,7 @@ import (
 
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/coding_agent/extension"
-	"github.com/openmodu/modu/pkg/coding_agent/extension/goal"
+	_ "github.com/openmodu/modu/pkg/coding_agent/extension/goal" // register builtin extension via init()
 	"github.com/openmodu/modu/pkg/coding_agent/modes"
 	"github.com/openmodu/modu/pkg/coding_agent/modes/rpc"
 
@@ -80,18 +80,14 @@ func main() {
 	// rows). All user-facing notifications still reach the scrollback via
 	// api.Notify -> SessionEventExtensionNotify -> a "section" uiBlock,
 	// which is the only path the TUI can safely render multi-line text.
-	goalExt := goal.New(goal.Options{})
-
-	// Phase 1 of the extension registry rollout: LoadEnabled is wired up
-	// but goal is still constructed inline. Until goal migrates onto the
-	// registry (phase 3), `~/.modu_code/extensions.yaml` only controls the
-	// extra extensions a user registers — goal is always-on.
-	registered, err := extension.LoadEnabled(extension.LoadOptions{})
+	// Resolve the active extension set from ~/.modu_code/extensions.yaml
+	// (falls back to every builtin when the file is absent — that keeps the
+	// default install behaviorally identical to "goal always on").
+	exts, err := extension.LoadEnabled(extension.LoadOptions{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to load extensions: %v\n", err)
 		os.Exit(1)
 	}
-	exts := append([]extension.Extension{goalExt}, registered...)
 
 	sessionOpts := coding_agent.CodingSessionOptions{
 		Cwd:             cwd,
