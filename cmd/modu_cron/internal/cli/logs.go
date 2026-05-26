@@ -64,10 +64,15 @@ func listRuns(store *runlog.Store, taskID string, out io.Writer) error {
 		return nil
 	}
 	fmt.Fprintf(out, "Task %s — %d run(s) in %s\n\n", taskID, len(entries), store.TaskDir(taskID))
-	fmt.Fprintf(out, "%-32s %10s  %s\n", "FILE", "SIZE", "MODIFIED")
+	rows := make([][]string, 0, len(entries))
 	for _, e := range entries {
-		fmt.Fprintf(out, "%-32s %10s  %s\n", e.Name, humanSize(e.Size), e.ModTime.Format("2006-01-02 15:04:05"))
+		rows = append(rows, []string{e.Name, humanSize(e.Size), e.ModTime.Format("2006-01-02 15:04:05")})
 	}
+	writeTable(out, []tableColumn{
+		{Header: "FILE", Max: 40},
+		{Header: "SIZE", Max: 10, Right: true},
+		{Header: "MODIFIED", Max: 19},
+	}, rows)
 	fmt.Fprintln(out, "\nUse --tail for the latest, or --file <name> for a specific run. Add --json for raw NDJSON.")
 	return nil
 }
