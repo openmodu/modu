@@ -35,6 +35,25 @@ type ForkOptions struct {
 	// MaxTurns caps how many model turns the child may take. Zero means
 	// "unlimited" (subject to the underlying agent's own limits).
 	MaxTurns int
+	// Background, when true, requests asynchronous execution. The host
+	// schedules the child on a goroutine and returns a task-id reference
+	// instead of the child's final reply. Hosts that don't support
+	// background execution may either ignore this flag or return an
+	// error — the extension must be prepared for both.
+	Background bool
+	// Isolation requests an isolation strategy for the child. Known
+	// values: "" (run in the caller's cwd) and "worktree" (host creates a
+	// fresh git worktree, binds file/shell tools to it, and cleans up on
+	// completion). Unknown values are treated as "".
+	Isolation string
+	// Skills lists skill identifiers to load into the child's system
+	// prompt. The host resolves each name through its skill registry and
+	// silently skips unknown entries.
+	Skills []string
+	// MemoryScope selects which memory bank to inject into the child's
+	// system prompt: "" / "none" / "user" / "project" / "both".
+	// Unknown values behave like "".
+	MemoryScope string
 }
 
 // Extension is the interface that all extensions must implement.

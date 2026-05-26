@@ -496,26 +496,12 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 			func(title string, options []string) string {
 				return cs.requestExtensionSelect(title, options)
 			},
-			// ForkSession: spawn a one-shot child agent from an extension.
-			// Translates ForkOptions into the existing subagent.Run
-			// pipeline so extensions get the same isolation, tool
-			// filtering, and permission-mode semantics as spawn_subagent.
-			// Each call constructs an ephemeral SubagentDefinition; no
-			// disk profile lookup happens here — the extension already
-			// resolved the profile it wants to run.
+			// ForkSession dispatches a child agent via the same plumbing
+			// spawn_subagent uses (skills/memory injection, optional
+			// worktree isolation, optional background execution).
+			// See (*CodingSession).forkSession for the per-mode breakdown.
 			func(ctx context.Context, opts extension.ForkOptions) (string, error) {
-				def := &subagent.SubagentDefinition{
-					Name:            "extension-fork",
-					SystemPrompt:    opts.SystemPrompt,
-					Tools:           opts.AllowedTools,
-					DisallowedTools: opts.DisallowedTools,
-					Model:           opts.Model,
-					ThinkingLevel:   agent.ThinkingLevel(opts.ThinkingLevel),
-					PermissionMode:  opts.PermissionMode,
-					MaxTurns:        opts.MaxTurns,
-				}
-				return subagent.Run(ctx, subagent.WithWorkingDirectory(def, cs.cwd),
-					opts.Task, cs.activeTools, cs.model, cs.getAPIKey, cs.streamFn)
+				return cs.forkSession(ctx, opts)
 			},
 		)
 

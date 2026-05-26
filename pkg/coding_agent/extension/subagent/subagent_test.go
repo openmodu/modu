@@ -419,6 +419,61 @@ func TestApplyConfigTypeMismatchErrors(t *testing.T) {
 	}
 }
 
+// TestProfilePassesBackgroundIsolationSkillsMemoryThrough verifies that
+// profile-declared Background / Isolation / Skills / MemoryScope land in
+// ForkOptions verbatim — the host (not the model) decides what to do with
+// them, but the extension must transmit them faithfully.
+func TestProfilePassesBackgroundIsolationSkillsMemoryThrough(t *testing.T) {
+	dir := t.TempDir()
+	// utils.ParseFrontmatter supports simple `key: value` lines; CSVs for
+	// list fields (tools/skills) are parsed by the loader's applyFrontmatter.
+	body := `---
+name: heavy
+description: heavy-duty profile
+background: true
+isolation: worktree
+skills: codebase-tools,bash-tools
+memory: project
+---
+You are a heavy worker.
+`
+	writeProfile(t, dir, "heavy", body)
+
+	ext := New()
+	ext.cfg.AgentsDir = dir
+	api := &fakeAPI{}
+	if err := ext.Init(api); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	tool := toolOf(t, api)
+
+	var captured extension.ForkOptions
+	api.forkFn = func(_ context.Context, opts extension.ForkOptions) (string, error) {
+		captured = opts
+		return "ok", nil
+	}
+
+	res, _ := tool.Execute(context.Background(), "id", map[string]any{
+		"agent": "heavy",
+		"task":  "go",
+	}, nil)
+	if res.IsError {
+		t.Fatalf("unexpected error: %s", textOf(res))
+	}
+	if !captured.Background {
+		t.Errorf("Background flag did not propagate: %+v", captured)
+	}
+	if captured.Isolation != "worktree" {
+		t.Errorf("Isolation=%q, want %q", captured.Isolation, "worktree")
+	}
+	if len(captured.Skills) != 2 || captured.Skills[0] != "codebase-tools" || captured.Skills[1] != "bash-tools" {
+		t.Errorf("Skills did not propagate: %v", captured.Skills)
+	}
+	if captured.MemoryScope != "project" {
+		t.Errorf("MemoryScope=%q, want %q", captured.MemoryScope, "project")
+	}
+}
+
 func TestDefaultModelAppliedWhenProfileLeavesItEmpty(t *testing.T) {
 	dir := t.TempDir()
 	writeProfile(t, dir, "r", frontmatterBody("r", "x"))

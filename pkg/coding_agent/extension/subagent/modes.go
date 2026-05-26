@@ -149,6 +149,11 @@ func forkOne(ctx context.Context, ext *Extension, agentName, task string) (strin
 // forkOptionsFor translates a stored SubagentDefinition into an
 // ExtensionAPI ForkOptions request, layering DefaultModel on top when the
 // profile leaves Model empty.
+//
+// Background / Isolation / Skills / MemoryScope come from the profile —
+// the model can't override them per call, which matches spawn_subagent's
+// semantics (those fields are part of the profile contract, not the
+// caller's choice).
 func forkOptionsFor(def *csubagent.SubagentDefinition, cfg Config, task string) extension.ForkOptions {
 	model := def.Model
 	if model == "" {
@@ -163,5 +168,9 @@ func forkOptionsFor(def *csubagent.SubagentDefinition, cfg Config, task string) 
 		ThinkingLevel:   string(def.ThinkingLevel),
 		PermissionMode:  def.PermissionMode,
 		MaxTurns:        def.MaxTurns,
+		Background:      def.Background,
+		Isolation:       def.Isolation,
+		Skills:          def.Skills,
+		MemoryScope:     def.MemoryScope,
 	}
 }
