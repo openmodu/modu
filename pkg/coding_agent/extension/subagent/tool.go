@@ -3,6 +3,7 @@ package subagent
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/types"
@@ -24,13 +25,31 @@ func newSubagentTool(ext *Extension) *subagentTool {
 func (t *subagentTool) Name() string  { return "subagent" }
 func (t *subagentTool) Label() string { return "Subagent" }
 
+// Description is computed each call rather than fixed so model prompts
+// always see the current list of discovered agents — replaces the system
+// prompt injection that the old spawn_subagent path used.
 func (t *subagentTool) Description() string {
-	return `Delegate a focused task to a named subagent profile. Supports three modes:
+	var b strings.Builder
+	b.WriteString(`Delegate a focused task to a named subagent profile. Supports three modes:
   - single (default): run one agent on one task and return its final reply.
-  - parallel: run multiple agent/task pairs concurrently; result is a JSON-like
-    summary keyed by call index.
-  - chain: run agent/task pairs sequentially, where each step's task may
-    contain {previous} which is replaced with the prior step's reply.`
+  - parallel: run multiple agent/task pairs concurrently; result aggregates
+    each agent's reply with a [index] header.
+  - chain: run agent/task pairs sequentially. {previous} in a task is
+    replaced with the prior step's reply before dispatch.`)
+	if t.ext != nil && t.ext.loader != nil {
+		defs := t.ext.loader.List()
+		if len(defs) > 0 {
+			b.WriteString("\n\nAvailable agents:")
+			for _, def := range defs {
+				desc := def.Description
+				if desc == "" {
+					desc = "(no description)"
+				}
+				fmt.Fprintf(&b, "\n  - %s: %s", def.Name, desc)
+			}
+		}
+	}
+	return b.String()
 }
 
 // Parallel returns true so the host can schedule this tool concurrently with
