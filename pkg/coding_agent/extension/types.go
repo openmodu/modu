@@ -18,6 +18,16 @@ type RuntimeStateProvider interface {
 	RuntimeState() any
 }
 
+// ConfigurableExtension is optionally implemented by extensions that accept
+// per-extension configuration. The map is loaded verbatim from the `config:`
+// block of one entry in extensions.yaml and applied **before** Init.
+//
+// Implementations are responsible for their own schema validation and should
+// return a descriptive error for unrecognized keys when validation matters.
+type ConfigurableExtension interface {
+	ApplyConfig(cfg map[string]any) error
+}
+
 // MessageOptions mirrors the extension message metadata exposed by pi-style
 // extensions for hidden follow-up prompts.
 type MessageOptions struct {

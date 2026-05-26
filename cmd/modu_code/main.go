@@ -82,6 +82,17 @@ func main() {
 	// which is the only path the TUI can safely render multi-line text.
 	goalExt := goal.New(goal.Options{})
 
+	// Phase 1 of the extension registry rollout: LoadEnabled is wired up
+	// but goal is still constructed inline. Until goal migrates onto the
+	// registry (phase 3), `~/.modu_code/extensions.yaml` only controls the
+	// extra extensions a user registers — goal is always-on.
+	registered, err := extension.LoadEnabled(extension.LoadOptions{})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to load extensions: %v\n", err)
+		os.Exit(1)
+	}
+	exts := append([]extension.Extension{goalExt}, registered...)
+
 	sessionOpts := coding_agent.CodingSessionOptions{
 		Cwd:             cwd,
 		AgentDir:        agentDir,
@@ -90,7 +101,7 @@ func main() {
 		GetAPIKey:       getAPIKey,
 		ScopedModels:    provider.ConfiguredModelIDs(),
 		ModelConfigPath: provider.ConfigPath(),
-		Extensions:      []extension.Extension{goalExt},
+		Extensions:      exts,
 	}
 	session, err := coding_agent.NewCodingSession(sessionOpts)
 	if err != nil {
