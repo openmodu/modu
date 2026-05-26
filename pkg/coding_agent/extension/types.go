@@ -1,8 +1,41 @@
 package extension
 
 import (
+	"context"
+
 	"github.com/openmodu/modu/pkg/agent"
 )
+
+// ForkOptions configures a one-shot child agent spawned by ExtensionAPI.ForkSession.
+// All fields are optional except Task; empty values fall back to whatever the
+// host's main session is using.
+type ForkOptions struct {
+	// SystemPrompt is the child agent's system prompt. Empty means "use a
+	// minimal default" — implementations should still produce something
+	// usable, but extensions are expected to provide a real prompt.
+	SystemPrompt string
+	// Task is the user message the child agent runs against. Required.
+	Task string
+	// AllowedTools restricts the child's tool set to the named tools.
+	// Empty means "inherit every tool the caller has active".
+	AllowedTools []string
+	// DisallowedTools removes tools after AllowedTools is applied.
+	// Names that aren't present are silently ignored.
+	DisallowedTools []string
+	// Model overrides the model ID the child uses. Empty means "use the
+	// caller's current model".
+	Model string
+	// ThinkingLevel maps to pkg/types.ThinkingLevel ("off"/"low"/...).
+	// Empty means "inherit".
+	ThinkingLevel string
+	// PermissionMode is a host-defined permission policy: known values
+	// today are "" (default) and "read-only". Unknown values are treated
+	// as default.
+	PermissionMode string
+	// MaxTurns caps how many model turns the child may take. Zero means
+	// "unlimited" (subject to the underlying agent's own limits).
+	MaxTurns int
+}
 
 // Extension is the interface that all extensions must implement.
 type Extension interface {
@@ -77,6 +110,12 @@ type ExtensionAPI interface {
 	Confirm(title, body string, defaultYes bool) bool
 	// Select asks the host UI to choose one of the provided options.
 	Select(title string, options []string) string
+	// ForkSession spawns a one-shot child agent with a custom system
+	// prompt and tool whitelist, returning the child's final assistant
+	// text. The child runs synchronously in the caller's goroutine until
+	// it stops or ctx is cancelled. Errors include child agent failures
+	// and host-side dispatch problems (e.g. fork support not wired).
+	ForkSession(ctx context.Context, opts ForkOptions) (string, error)
 }
 
 // CommandHandler handles a slash command invocation.

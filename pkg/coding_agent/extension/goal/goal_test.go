@@ -81,6 +81,9 @@ func (f *fakeAPI) AgentDir() string                 { return "" }
 func (f *fakeAPI) Cwd() string                      { return "/tmp/project" }
 func (f *fakeAPI) IsIdle() bool                     { return true }
 func (f *fakeAPI) HasPendingMessages() bool         { return false }
+func (f *fakeAPI) ForkSession(context.Context, extension.ForkOptions) (string, error) {
+	return "", nil
+}
 func (f *fakeAPI) Notify(extensionName, text string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -1,6 +1,7 @@
 package extension
 
 import (
+	"context"
 	"fmt"
 	"sync"
 
@@ -26,6 +27,7 @@ type Runner struct {
 	notify       func(extensionName, text string)
 	confirm      func(title, body string, defaultYes bool) bool
 	selectChoice func(title string, options []string) string
+	forkSession  func(ctx context.Context, opts ForkOptions) (string, error)
 	mu           sync.RWMutex
 }
 
@@ -37,6 +39,10 @@ func NewRunner() *Runner {
 }
 
 // SetCallbacks configures the callbacks for the extension API.
+//
+// forkSession may be nil — implementations of ExtensionAPI.ForkSession then
+// return an explanatory error so the calling extension can surface a clear
+// "fork not wired" message instead of nil-panicking.
 func (r *Runner) SetCallbacks(
 	sendMsg func(text string, options MessageOptions) error,
 	setTools func(names []string),
@@ -50,6 +56,7 @@ func (r *Runner) SetCallbacks(
 	notify func(extensionName, text string),
 	confirm func(title, body string, defaultYes bool) bool,
 	selectChoice func(title string, options []string) string,
+	forkSession func(ctx context.Context, opts ForkOptions) (string, error),
 ) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -65,6 +72,7 @@ func (r *Runner) SetCallbacks(
 	r.notify = notify
 	r.confirm = confirm
 	r.selectChoice = selectChoice
+	r.forkSession = forkSession
 }
 
 // Init initializes all extensions.
@@ -259,6 +267,17 @@ func (r *Runner) Confirm(title, body string, defaultYes bool) bool {
 		return defaultYes
 	}
 	return fn(title, body, defaultYes)
+}
+
+// ForkSession implements ExtensionAPI.
+func (r *Runner) ForkSession(ctx context.Context, opts ForkOptions) (string, error) {
+	r.mu.RLock()
+	fn := r.forkSession
+	r.mu.RUnlock()
+	if fn == nil {
+		return "", fmt.Errorf("ForkSession not configured by host")
+	}
+	return fn(ctx, opts)
 }
 
 // Select implements ExtensionAPI.
