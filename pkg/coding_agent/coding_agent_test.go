@@ -2,6 +2,7 @@ package coding_agent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/compaction"
 	"github.com/openmodu/modu/pkg/coding_agent/extension"
+	subagentext "github.com/openmodu/modu/pkg/coding_agent/extension/subagent"
 	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/session"
 	"github.com/openmodu/modu/pkg/coding_agent/skills"
 	"github.com/openmodu/modu/pkg/coding_agent/subagent"
@@ -41,6 +43,24 @@ func (t *testEchoTool) Execute(ctx context.Context, toolCallID string, args map[
 	return agent.AgentToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "echoed: " + value}},
 	}, nil
+}
+
+type testCwdTool struct {
+	cwd string
+}
+
+func (t *testCwdTool) Name() string        { return "echo" }
+func (t *testCwdTool) Label() string       { return "Cwd" }
+func (t *testCwdTool) Description() string { return "Report cwd " + t.cwd }
+func (t *testCwdTool) Parameters() any     { return map[string]any{"type": "object"} }
+func (t *testCwdTool) Parallel() bool      { return true }
+func (t *testCwdTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+	return agent.AgentToolResult{
+		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "tool-cwd:" + t.cwd}},
+	}, nil
+}
+func (t *testCwdTool) WithCwd(cwd string) agent.AgentTool {
+	return &testCwdTool{cwd: cwd}
 }
 
 type testHintTool struct{}
@@ -207,12 +227,16 @@ Return a short completion message.`
 			if msg, ok := last.(types.UserMessage); ok {
 				userText, _ = msg.Content.(string)
 			}
+			reply := "bg-result: " + userText
+			if strings.Contains(userText, "Continue this delegated subagent task.") {
+				reply = fmt.Sprintf("resume-messages:%d", len(llmCtx.Messages))
+			}
 			msg := &types.AssistantMessage{
 				Role:       "assistant",
 				ProviderID: model.ProviderID,
 				Model:      model.ID,
 				StopReason: "stop",
-				Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "bg-result: " + userText}},
+				Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: reply}},
 				Timestamp:  time.Now().UnixMilli(),
 			}
 			stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
@@ -236,22 +260,27 @@ Return a short completion message.`
 		Model:     model,
 		GetAPIKey: func(provider string) (string, error) { return "", nil },
 		StreamFn:  streamFn,
+		Extensions: []extension.Extension{
+			subagentext.New(),
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var spawnTool, outputTool agent.AgentTool
+	var spawnTool, outputTool, subagentTool agent.AgentTool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		switch tool.Name() {
 		case "spawn_subagent":
 			spawnTool = tool
 		case "task_output":
 			outputTool = tool
+		case "subagent":
+			subagentTool = tool
 		}
 	}
-	if spawnTool == nil || outputTool == nil {
-		t.Fatalf("expected spawn_subagent and task_output tools, got %v", session.GetActiveToolNames())
+	if spawnTool == nil || outputTool == nil || subagentTool == nil {
+		t.Fatalf("expected spawn_subagent, subagent, and task_output tools from extension, got %v", session.GetActiveToolNames())
 	}
 
 	result, err := spawnTool.Execute(context.Background(), "bg-1", map[string]any{
@@ -283,6 +312,344 @@ Return a short completion message.`
 	}
 	if !strings.Contains(output, "bg-result: hello") {
 		t.Fatalf("expected background task output, got %q", output)
+	}
+	if _, err := os.Stat(session.RuntimePaths().BackgroundTasksFile); err != nil {
+		t.Fatalf("expected persisted background task file: %v", err)
+	}
+	tasks := session.GetBackgroundTasks()
+	if len(tasks) != 1 || tasks[0].Agent != "helper" || tasks[0].Task != "hello" {
+		t.Fatalf("expected persisted subagent metadata, got %#v", tasks)
+	}
+	if tasks[0].RunDir == "" || tasks[0].StatusFile == "" || tasks[0].SessionFile == "" {
+		t.Fatalf("expected async run paths, got %#v", tasks[0])
+	}
+	if _, err := os.Stat(tasks[0].StatusFile); err != nil {
+		t.Fatalf("expected async run status file: %v", err)
+	}
+	if _, err := os.Stat(tasks[0].SessionFile); err != nil {
+		t.Fatalf("expected child session file: %v", err)
+	}
+	if err := os.Remove(session.RuntimePaths().BackgroundTasksFile); err != nil {
+		t.Fatalf("remove background task list to verify run status recovery: %v", err)
+	}
+
+	asyncOut := filepath.Join(dir, "async-output.md")
+	asyncRes, err := subagentTool.Execute(context.Background(), "bg-output-1", map[string]any{
+		"agent":      "helper",
+		"task":       "async output",
+		"async":      true,
+		"output":     asyncOut,
+		"outputMode": "file-only",
+	}, nil)
+	if err != nil || asyncRes.IsError {
+		t.Fatalf("async output subagent failed: err=%v res=%+v", err, asyncRes)
+	}
+	asyncDetails, _ := asyncRes.Details.(map[string]string)
+	asyncTaskID := asyncDetails["task_id"]
+	if asyncTaskID == "" {
+		t.Fatalf("expected async output task id, got %#v", asyncRes.Details)
+	}
+	for i := 0; i < 20; i++ {
+		res, err := outputTool.Execute(context.Background(), "out-async", map[string]any{
+			"task_id": asyncTaskID,
+		}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		output = extractTextBlocks(res.Content)
+		if strings.Contains(output, "Output saved to: "+asyncOut) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(output, "Output saved to: "+asyncOut) {
+		t.Fatalf("expected async output task to return saved-file reference, got %q", output)
+	}
+	data, err := os.ReadFile(asyncOut)
+	if err != nil {
+		t.Fatalf("expected async output file: %v", err)
+	}
+	if string(data) != "bg-result: async output" {
+		t.Fatalf("unexpected async output file content: %q", string(data))
+	}
+
+	session2, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  agentDir,
+		Model:     model,
+		GetAPIKey: func(provider string) (string, error) { return "", nil },
+		StreamFn:  streamFn,
+		Extensions: []extension.Extension{
+			subagentext.New(),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var outputTool2, subagentTool2 agent.AgentTool
+	for _, tool := range session2.GetAgent().GetState().Tools {
+		switch tool.Name() {
+		case "task_output":
+			outputTool2 = tool
+		case "subagent":
+			subagentTool2 = tool
+		}
+	}
+	if outputTool2 == nil || subagentTool2 == nil {
+		t.Fatalf("expected task_output and subagent in resumed session, got %v", session2.GetActiveToolNames())
+	}
+	res, err := outputTool2.Execute(context.Background(), "out-2", map[string]any{
+		"task_id": taskID,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := extractTextBlocks(res.Content); !strings.Contains(got, "bg-result: hello") {
+		t.Fatalf("expected persisted background output, got %q", got)
+	}
+
+	resumeRes, err := subagentTool2.Execute(context.Background(), "resume-1", map[string]any{
+		"action":  "resume",
+		"id":      taskID,
+		"message": "continue with prior context",
+	}, nil)
+	if err != nil || resumeRes.IsError {
+		t.Fatalf("resume failed: err=%v res=%+v", err, resumeRes)
+	}
+	resumeDetails, _ := resumeRes.Details.(map[string]string)
+	resumeTaskID := resumeDetails["task_id"]
+	if resumeTaskID == "" {
+		t.Fatalf("expected resume task id, got %#v", resumeRes.Details)
+	}
+	for i := 0; i < 20; i++ {
+		res, err = outputTool2.Execute(context.Background(), "out-3", map[string]any{
+			"task_id": resumeTaskID,
+		}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		output = extractTextBlocks(res.Content)
+		if strings.Contains(output, "resume-messages:3") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(output, "resume-messages:3") {
+		t.Fatalf("expected resume to include child session context, got %q", output)
+	}
+}
+
+func TestSubagentContextForkSeedsChildMessages(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := t.TempDir()
+	agentsDir := filepath.Join(agentDir, "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir, "helper.md"), []byte(`---
+name: helper
+description: counts messages
+---
+Return the child message count.
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	model := newTestModel()
+	streamFn := func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+		stream := types.NewEventStream()
+		go func() {
+			defer stream.Close()
+			msg := &types.AssistantMessage{
+				Role:       "assistant",
+				ProviderID: model.ProviderID,
+				Model:      model.ID,
+				StopReason: "stop",
+				Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: fmt.Sprintf("messages:%d", len(llmCtx.Messages))}},
+				Timestamp:  time.Now().UnixMilli(),
+			}
+			stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+			stream.Resolve(msg, nil)
+		}()
+		return stream, nil
+	}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  agentDir,
+		Model:     model,
+		GetAPIKey: func(provider string) (string, error) { return "", nil },
+		StreamFn:  streamFn,
+		Extensions: []extension.Extension{
+			subagentext.New(),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.agent.ReplaceMessages([]agent.AgentMessage{
+		types.UserMessage{Role: "user", Content: "parent question", Timestamp: time.Now().UnixMilli()},
+		&types.AssistantMessage{
+			Role:       "assistant",
+			ProviderID: model.ProviderID,
+			Model:      model.ID,
+			StopReason: "stop",
+			Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "parent answer"}},
+			Timestamp:  time.Now().UnixMilli(),
+		},
+	})
+
+	var subagentTool agent.AgentTool
+	for _, tool := range session.GetAgent().GetState().Tools {
+		if tool.Name() == "subagent" {
+			subagentTool = tool
+			break
+		}
+	}
+	if subagentTool == nil {
+		t.Fatalf("expected subagent tool, got %v", session.GetActiveToolNames())
+	}
+
+	res, err := subagentTool.Execute(context.Background(), "fresh", map[string]any{
+		"agent": "helper",
+		"task":  "fresh",
+	}, nil)
+	if err != nil || res.IsError {
+		t.Fatalf("fresh subagent failed: err=%v text=%q res=%+v", err, extractTextBlocks(res.Content), res)
+	}
+	if got := extractTextBlocks(res.Content); !strings.Contains(got, "messages:1") {
+		t.Fatalf("fresh context should only include task message, got %q", got)
+	}
+
+	res, err = subagentTool.Execute(context.Background(), "fork", map[string]any{
+		"agent":   "helper",
+		"task":    "fork",
+		"context": "fork",
+	}, nil)
+	if err != nil || res.IsError {
+		t.Fatalf("fork subagent failed: err=%v text=%q res=%+v", err, extractTextBlocks(res.Content), res)
+	}
+	if got := extractTextBlocks(res.Content); !strings.Contains(got, "messages:3") {
+		t.Fatalf("fork context should include parent messages plus task, got %q", got)
+	}
+}
+
+func TestSubagentCwdBindsChildWorkingDirectory(t *testing.T) {
+	root := t.TempDir()
+	childDir := filepath.Join(root, "nested")
+	if err := os.MkdirAll(childDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agentDir := t.TempDir()
+	agentsDir := filepath.Join(agentDir, "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir, "helper.md"), []byte(`---
+name: helper
+description: reports cwd
+tools: echo
+---
+System prompt for helper.
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	model := newTestModel()
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:         root,
+		AgentDir:    agentDir,
+		Model:       model,
+		CustomTools: []agent.AgentTool{&testCwdTool{}},
+		GetAPIKey:   func(provider string) (string, error) { return "", nil },
+		Extensions: []extension.Extension{
+			subagentext.New(),
+		},
+		StreamFn: func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+			stream := types.NewEventStream()
+			go func() {
+				defer stream.Close()
+				text := llmCtx.SystemPrompt
+				if len(llmCtx.Tools) > 0 {
+					text += "\n" + llmCtx.Tools[0].Description
+				}
+				msg := &types.AssistantMessage{
+					Role:       "assistant",
+					ProviderID: model.ProviderID,
+					Model:      model.ID,
+					StopReason: "stop",
+					Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: text}},
+					Timestamp:  time.Now().UnixMilli(),
+				}
+				stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+				stream.Resolve(msg, nil)
+			}()
+			return stream, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var subagentTool agent.AgentTool
+	for _, tool := range session.GetAgent().GetState().Tools {
+		if tool.Name() == "subagent" {
+			subagentTool = tool
+			break
+		}
+	}
+	if subagentTool == nil {
+		t.Fatalf("expected subagent tool, got %v", session.GetActiveToolNames())
+	}
+
+	res, err := subagentTool.Execute(context.Background(), "cwd", map[string]any{
+		"agent": "helper",
+		"task":  "report cwd",
+		"cwd":   "nested",
+	}, nil)
+	if err != nil || res.IsError {
+		t.Fatalf("cwd subagent failed: err=%v text=%q res=%+v", err, extractTextBlocks(res.Content), res)
+	}
+	got := extractTextBlocks(res.Content)
+	if !strings.Contains(got, "Working directory: "+childDir) {
+		t.Fatalf("child prompt missing cwd %q:\n%s", childDir, got)
+	}
+	if !strings.Contains(got, "Report cwd "+childDir) {
+		t.Fatalf("child tool was not rebound to cwd %q:\n%s", childDir, got)
+	}
+}
+
+// TestBackgroundTaskManagerCreateWithMetadataInDirRedirects covers the
+// host-level half of K.sessionDir: when a caller supplies runDirParent,
+// the manager places the per-task RunDir / StatusFile / SessionFile under
+// that path instead of the manager's default runRoot.
+func TestBackgroundTaskManagerCreateWithMetadataInDirRedirects(t *testing.T) {
+	defaultRoot := t.TempDir()
+	overrideRoot := t.TempDir()
+	mgr := newBackgroundTaskManager()
+	if err := mgr.SetStorePath(filepath.Join(defaultRoot, "background_tasks.json")); err != nil {
+		t.Fatal(err)
+	}
+
+	defaultID := mgr.CreateWithMetadata("subagent", "default-summary", "agentA", "task1", "", "")
+	overrideID := mgr.CreateWithMetadataInDir("subagent", "override-summary", "agentB", "task2", "", "", overrideRoot)
+
+	defaultTask, ok := mgr.Get(defaultID)
+	if !ok {
+		t.Fatalf("default task %s not found", defaultID)
+	}
+	if !strings.HasPrefix(defaultTask.RunDir, defaultRoot) {
+		t.Errorf("default task RunDir should land under %s, got %q", defaultRoot, defaultTask.RunDir)
+	}
+
+	overrideTask, ok := mgr.Get(overrideID)
+	if !ok {
+		t.Fatalf("override task %s not found", overrideID)
+	}
+	if !strings.HasPrefix(overrideTask.RunDir, overrideRoot) {
+		t.Errorf("override task RunDir should land under %s, got %q", overrideRoot, overrideTask.RunDir)
+	}
+	if !strings.HasPrefix(overrideTask.SessionFile, overrideRoot) {
+		t.Errorf("override task SessionFile should land under %s, got %q", overrideRoot, overrideTask.SessionFile)
+	}
+	if !strings.HasPrefix(overrideTask.StatusFile, overrideRoot) {
+		t.Errorf("override task StatusFile should land under %s, got %q", overrideRoot, overrideTask.StatusFile)
 	}
 }
 
@@ -1006,6 +1373,9 @@ Run pwd in bash and return the tool output.`
 		Model:     model,
 		GetAPIKey: func(provider string) (string, error) { return "", nil },
 		StreamFn:  streamFn,
+		Extensions: []extension.Extension{
+			subagentext.New(),
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1019,7 +1389,7 @@ Run pwd in bash and return the tool output.`
 		}
 	}
 	if spawnTool == nil {
-		t.Fatalf("expected spawn_subagent, got %v", session.GetActiveToolNames())
+		t.Fatalf("expected spawn_subagent from extension, got %v", session.GetActiveToolNames())
 	}
 
 	res, err := spawnTool.Execute(context.Background(), "iso-1", map[string]any{
@@ -2907,6 +3277,9 @@ func TestHarnessCompactHooksRun(t *testing.T) {
 		GetAPIKey: func(provider string) (string, error) {
 			return "", nil
 		},
+		Extensions: []extension.Extension{
+			subagentext.New(),
+		},
 		StreamFn: func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
 			stream := types.NewEventStream()
 			go func() {
@@ -2973,6 +3346,9 @@ func TestHarnessSubagentHooksRun(t *testing.T) {
 		GetAPIKey: func(provider string) (string, error) {
 			return "", nil
 		},
+		Extensions: []extension.Extension{
+			subagentext.New(),
+		},
 		StreamFn: func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
 			stream := types.NewEventStream()
 			go func() {
@@ -3017,7 +3393,7 @@ func TestHarnessSubagentHooksRun(t *testing.T) {
 		}
 	}
 	if tool == nil {
-		t.Fatal("expected spawn_subagent tool")
+		t.Fatal("expected spawn_subagent tool from extension")
 	}
 
 	_, err = tool.Execute(context.Background(), "spawn-1", map[string]any{"name": "reviewer", "task": "check code"}, nil)
@@ -3145,6 +3521,9 @@ func TestHarnessConfigAppendsEventLogs(t *testing.T) {
 		Model:       newTestModel(),
 		CustomTools: []agent.AgentTool{&testEchoTool{}},
 		GetAPIKey:   func(provider string) (string, error) { return "", nil },
+		Extensions: []extension.Extension{
+			subagentext.New(),
+		},
 		StreamFn: func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
 			stream := types.NewEventStream()
 			go func() {
@@ -3177,7 +3556,7 @@ func TestHarnessConfigAppendsEventLogs(t *testing.T) {
 		}
 	}
 	if echoTool == nil || spawnTool == nil {
-		t.Fatalf("expected echo and spawn_subagent, got %v", session.GetActiveToolNames())
+		t.Fatalf("expected echo and spawn_subagent from extension, got %v", session.GetActiveToolNames())
 	}
 
 	if _, err := echoTool.Execute(context.Background(), "echo-log-1", map[string]any{"value": "ok"}, nil); err != nil {
@@ -3229,6 +3608,9 @@ func TestHarnessConfigWritesLatestArtifacts(t *testing.T) {
 		Model:       newTestModel(),
 		CustomTools: []agent.AgentTool{&testEchoTool{}},
 		GetAPIKey:   func(provider string) (string, error) { return "", nil },
+		Extensions: []extension.Extension{
+			subagentext.New(),
+		},
 		StreamFn: func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
 			stream := types.NewEventStream()
 			go func() {
@@ -3261,7 +3643,7 @@ func TestHarnessConfigWritesLatestArtifacts(t *testing.T) {
 		}
 	}
 	if echoTool == nil || spawnTool == nil {
-		t.Fatalf("expected echo and spawn_subagent, got %v", session.GetActiveToolNames())
+		t.Fatalf("expected echo and spawn_subagent from extension, got %v", session.GetActiveToolNames())
 	}
 
 	if _, err := echoTool.Execute(context.Background(), "echo-artifact-1", map[string]any{"value": "ok"}, nil); err != nil {
@@ -3313,6 +3695,9 @@ func TestHarnessConfigWritesEventBridgeFiles(t *testing.T) {
 		Model:       newTestModel(),
 		CustomTools: []agent.AgentTool{&testEchoTool{}},
 		GetAPIKey:   func(provider string) (string, error) { return "", nil },
+		Extensions: []extension.Extension{
+			subagentext.New(),
+		},
 		StreamFn: func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
 			stream := types.NewEventStream()
 			go func() {
@@ -3345,7 +3730,7 @@ func TestHarnessConfigWritesEventBridgeFiles(t *testing.T) {
 		}
 	}
 	if echoTool == nil || spawnTool == nil {
-		t.Fatalf("expected echo and spawn_subagent, got %v", session.GetActiveToolNames())
+		t.Fatalf("expected echo and spawn_subagent from extension, got %v", session.GetActiveToolNames())
 	}
 
 	if _, err := echoTool.Execute(context.Background(), "echo-bridge-1", map[string]any{"value": "ok"}, nil); err != nil {

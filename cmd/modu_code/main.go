@@ -29,7 +29,8 @@ import (
 
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/coding_agent/extension"
-	"github.com/openmodu/modu/pkg/coding_agent/extension/goal"
+	_ "github.com/openmodu/modu/pkg/coding_agent/extension/goal"     // register builtin extension via init()
+	_ "github.com/openmodu/modu/pkg/coding_agent/extension/subagent" // register builtin extension via init()
 	"github.com/openmodu/modu/pkg/coding_agent/modes"
 	"github.com/openmodu/modu/pkg/coding_agent/modes/rpc"
 
@@ -80,7 +81,14 @@ func main() {
 	// rows). All user-facing notifications still reach the scrollback via
 	// api.Notify -> SessionEventExtensionNotify -> a "section" uiBlock,
 	// which is the only path the TUI can safely render multi-line text.
-	goalExt := goal.New(goal.Options{})
+	// Resolve the active extension set from ~/.modu_code/extensions.yaml
+	// (falls back to every builtin when the file is absent — that keeps the
+	// default install behaviorally identical to "goal always on").
+	exts, err := extension.LoadEnabled(extension.LoadOptions{})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to load extensions: %v\n", err)
+		os.Exit(1)
+	}
 
 	sessionOpts := coding_agent.CodingSessionOptions{
 		Cwd:             cwd,
@@ -90,7 +98,7 @@ func main() {
 		GetAPIKey:       getAPIKey,
 		ScopedModels:    provider.ConfiguredModelIDs(),
 		ModelConfigPath: provider.ConfigPath(),
-		Extensions:      []extension.Extension{goalExt},
+		Extensions:      exts,
 	}
 	session, err := coding_agent.NewCodingSession(sessionOpts)
 	if err != nil {

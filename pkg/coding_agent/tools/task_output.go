@@ -25,7 +25,7 @@ func NewTaskOutputTool(store BackgroundTaskStore) *TaskOutputTool {
 func (t *TaskOutputTool) Name() string  { return "task_output" }
 func (t *TaskOutputTool) Label() string { return "Task Output" }
 func (t *TaskOutputTool) Description() string {
-	return `Inspect the output of a background task created earlier in the current session.
+	return `Inspect the output of a background task created earlier in this project runtime.
 Provide task_id to fetch one task, or omit it to list all known background tasks.`
 }
 
@@ -53,6 +53,24 @@ func (t *TaskOutputTool) Execute(ctx context.Context, toolCallID string, args ma
 			return taskOutputResult(fmt.Sprintf("task %s not found", taskID)), nil
 		}
 		text := fmt.Sprintf("Task %s\nkind: %s\nstatus: %s\nsummary: %s", task.ID, task.Kind, task.Status, task.Summary)
+		if task.Agent != "" {
+			text += "\nagent: " + task.Agent
+		}
+		if task.ParentID != "" {
+			text += "\nparent: " + task.ParentID
+		}
+		if task.RunDir != "" {
+			text += "\nrun_dir: " + task.RunDir
+		}
+		if task.StatusFile != "" {
+			text += "\nstatus_file: " + task.StatusFile
+		}
+		if task.SessionFile != "" {
+			text += "\nsession_file: " + task.SessionFile
+		}
+		if task.OutputFile != "" {
+			text += "\noutput_file: " + task.OutputFile
+		}
 		if task.Output != "" {
 			text += "\n\noutput:\n" + task.Output
 		}

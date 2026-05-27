@@ -59,38 +59,42 @@ type HarnessSubagentRun struct {
 }
 
 type HarnessRuntimePaths struct {
-	Root             string `json:"root"`
-	RuntimeDir       string `json:"runtimeDir"`
-	RuntimeIndexFile string `json:"runtimeIndexFile"`
-	RuntimeStateFile string `json:"runtimeStateFile"`
-	TraceDir         string `json:"traceDir"`
-	TraceEventsFile  string `json:"traceEventsFile"`
-	TraceSummaryFile string `json:"traceSummaryFile"`
-	SessionsDir      string `json:"sessionsDir"`
-	PlansDir         string `json:"plansDir"`
-	PlanFile         string `json:"planFile"`
-	WorktreesDir     string `json:"worktreesDir"`
-	ToolResultsDir   string `json:"toolResultsDir"`
-	GlobalMemoryDir  string `json:"globalMemoryDir"`
-	ProjectMemoryDir string `json:"projectMemoryDir"`
+	Root                 string `json:"root"`
+	RuntimeDir           string `json:"runtimeDir"`
+	RuntimeIndexFile     string `json:"runtimeIndexFile"`
+	RuntimeStateFile     string `json:"runtimeStateFile"`
+	BackgroundTasksFile  string `json:"backgroundTasksFile"`
+	AsyncSubagentRunsDir string `json:"asyncSubagentRunsDir"`
+	TraceDir             string `json:"traceDir"`
+	TraceEventsFile      string `json:"traceEventsFile"`
+	TraceSummaryFile     string `json:"traceSummaryFile"`
+	SessionsDir          string `json:"sessionsDir"`
+	PlansDir             string `json:"plansDir"`
+	PlanFile             string `json:"planFile"`
+	WorktreesDir         string `json:"worktreesDir"`
+	ToolResultsDir       string `json:"toolResultsDir"`
+	GlobalMemoryDir      string `json:"globalMemoryDir"`
+	ProjectMemoryDir     string `json:"projectMemoryDir"`
 }
 
 func (p HarnessRuntimePaths) ToMap() map[string]any {
 	return map[string]any{
-		"root":               p.Root,
-		"runtime_dir":        p.RuntimeDir,
-		"runtime_index_file": p.RuntimeIndexFile,
-		"runtime_state_file": p.RuntimeStateFile,
-		"trace_dir":          p.TraceDir,
-		"trace_events_file":  p.TraceEventsFile,
-		"trace_summary_file": p.TraceSummaryFile,
-		"sessions_dir":       p.SessionsDir,
-		"plans_dir":          p.PlansDir,
-		"plan_file":          p.PlanFile,
-		"worktrees_dir":      p.WorktreesDir,
-		"tool_results_dir":   p.ToolResultsDir,
-		"global_memory_dir":  p.GlobalMemoryDir,
-		"project_memory_dir": p.ProjectMemoryDir,
+		"root":                    p.Root,
+		"runtime_dir":             p.RuntimeDir,
+		"runtime_index_file":      p.RuntimeIndexFile,
+		"runtime_state_file":      p.RuntimeStateFile,
+		"background_tasks_file":   p.BackgroundTasksFile,
+		"async_subagent_runs_dir": p.AsyncSubagentRunsDir,
+		"trace_dir":               p.TraceDir,
+		"trace_events_file":       p.TraceEventsFile,
+		"trace_summary_file":      p.TraceSummaryFile,
+		"sessions_dir":            p.SessionsDir,
+		"plans_dir":               p.PlansDir,
+		"plan_file":               p.PlanFile,
+		"worktrees_dir":           p.WorktreesDir,
+		"tool_results_dir":        p.ToolResultsDir,
+		"global_memory_dir":       p.GlobalMemoryDir,
+		"project_memory_dir":      p.ProjectMemoryDir,
 	}
 }
 
@@ -428,10 +432,12 @@ func (s *CodingSession) RuntimePaths() HarnessRuntimePaths {
 	plansDir := filepath.Join(s.agentDir, "plans", projectKey)
 	toolResultsDir := filepath.Join(s.agentDir, "tool-results", projectKey)
 	runtimeDir := filepath.Join(s.agentDir, "runtime", projectKey)
+	asyncSubagentRunsDir := filepath.Join(runtimeDir, "async-subagent-runs")
 	traceDir := filepath.Join(runtimeDir, "trace")
 	_ = os.MkdirAll(plansDir, 0o755)
 	_ = os.MkdirAll(toolResultsDir, 0o755)
 	_ = os.MkdirAll(runtimeDir, 0o755)
+	_ = os.MkdirAll(asyncSubagentRunsDir, 0o755)
 	_ = os.MkdirAll(traceDir, 0o755)
 
 	sessionsDir := filepath.Dir(s.messagesFilePath())
@@ -439,20 +445,22 @@ func (s *CodingSession) RuntimePaths() HarnessRuntimePaths {
 		sessionsDir = s.sessionManager.Dir()
 	}
 	return HarnessRuntimePaths{
-		Root:             s.agentDir,
-		RuntimeDir:       runtimeDir,
-		RuntimeIndexFile: filepath.Join(runtimeDir, "index.json"),
-		RuntimeStateFile: filepath.Join(runtimeDir, "state.json"),
-		TraceDir:         traceDir,
-		TraceEventsFile:  filepath.Join(traceDir, "events.jsonl"),
-		TraceSummaryFile: filepath.Join(traceDir, "summary.json"),
-		SessionsDir:      sessionsDir,
-		PlansDir:         plansDir,
-		PlanFile:         filepath.Join(plansDir, "latest.md"),
-		WorktreesDir:     filepath.Join(s.agentDir, "worktrees"),
-		ToolResultsDir:   toolResultsDir,
-		GlobalMemoryDir:  filepath.Join(s.agentDir, "memory"),
-		ProjectMemoryDir: filepath.Join(s.cwd, ".modu_code", "memory"),
+		Root:                 s.agentDir,
+		RuntimeDir:           runtimeDir,
+		RuntimeIndexFile:     filepath.Join(runtimeDir, "index.json"),
+		RuntimeStateFile:     filepath.Join(runtimeDir, "state.json"),
+		BackgroundTasksFile:  filepath.Join(runtimeDir, "background_tasks.json"),
+		AsyncSubagentRunsDir: asyncSubagentRunsDir,
+		TraceDir:             traceDir,
+		TraceEventsFile:      filepath.Join(traceDir, "events.jsonl"),
+		TraceSummaryFile:     filepath.Join(traceDir, "summary.json"),
+		SessionsDir:          sessionsDir,
+		PlansDir:             plansDir,
+		PlanFile:             filepath.Join(plansDir, "latest.md"),
+		WorktreesDir:         filepath.Join(s.agentDir, "worktrees"),
+		ToolResultsDir:       toolResultsDir,
+		GlobalMemoryDir:      filepath.Join(s.agentDir, "memory"),
+		ProjectMemoryDir:     filepath.Join(s.cwd, ".modu_code", "memory"),
 	}
 }
 
@@ -484,6 +492,12 @@ func (w *HarnessWrappedTool) Name() string        { return w.inner.Name() }
 func (w *HarnessWrappedTool) Label() string       { return w.inner.Label() }
 func (w *HarnessWrappedTool) Description() string { return w.inner.Description() }
 func (w *HarnessWrappedTool) Parameters() any     { return w.inner.Parameters() }
+func (w *HarnessWrappedTool) WithCwd(cwd string) agent.AgentTool {
+	if rebindable, ok := w.inner.(interface{ WithCwd(string) agent.AgentTool }); ok {
+		return &HarnessWrappedTool{inner: rebindable.WithCwd(cwd), session: w.session}
+	}
+	return w
+}
 
 func (w *HarnessWrappedTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
 	call := HarnessToolCall{ToolName: w.inner.Name(), Args: args}

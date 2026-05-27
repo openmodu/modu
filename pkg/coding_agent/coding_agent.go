@@ -253,19 +253,14 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		}
 	}
 
-	// Discover subagents and register spawn_subagent tool if any are found.
+	// Discover subagent profiles. The legacy spawn_subagent tool moved
+	// to the subagent extension (pkg/coding_agent/extension/subagent);
+	// we still load this loader because GetSubagents() exposes its list
+	// to host UIs that haven't migrated to ExtensionRuntimeStates.
 	subagentLoader := subagent.NewLoader()
 	subagentLoader.Discover(agentDir, opts.Cwd)
 	subagentLoader.DiscoverExtra(opts.ExtraSubagentDirs...)
 	taskMgr := newBackgroundTaskManager()
-	if cfg.FeatureSpawnSubagentTool() && subagentLoader.Count() > 0 {
-		activeTools = append(activeTools, tools.NewSpawnSubagentTool(opts.Cwd, agentDir, subagentLoader, activeTools, opts.Model, getAPIKey, streamFn, func(def *subagent.SubagentDefinition) *subagent.SubagentDefinition {
-			return prepareSubagentDefinition(def, skillMgr, memoryStore)
-		}, taskMgr, nil))
-		if subagentsPrompt := formatSubagentsForPrompt(subagentLoader.List()); subagentsPrompt != "" {
-			promptBuilder.AppendPrompt(subagentsPrompt)
-		}
-	}
 	systemPrompt := promptBuilder.Build()
 
 	// Create approval manager
@@ -352,6 +347,9 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 			"modelId":   opts.Model.ID,
 			"sessionId": cs.GetSessionID(),
 		})
+	}
+	if err := taskMgr.SetStorePath(cs.RuntimePaths().BackgroundTasksFile); err != nil {
+		return nil, fmt.Errorf("failed to load background tasks: %w", err)
 	}
 	approvalMgr.SetObserver(cs)
 	approvalMgr.SetBlocker(func(toolName string, args map[string]any) (bool, string) {
@@ -495,6 +493,64 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 			},
 			func(title string, options []string) string {
 				return cs.requestExtensionSelect(title, options)
+			},
+			func() []extension.TaskSnapshot {
+				tasks := cs.GetBackgroundTasks()
+				out := make([]extension.TaskSnapshot, 0, len(tasks))
+				for _, task := range tasks {
+					out = append(out, extension.TaskSnapshot{
+						ID:          task.ID,
+						Kind:        task.Kind,
+						Status:      task.Status,
+						Summary:     task.Summary,
+						Agent:       task.Agent,
+						Task:        task.Task,
+						ParentID:    task.ParentID,
+						RunDir:      task.RunDir,
+						StatusFile:  task.StatusFile,
+						SessionFile: task.SessionFile,
+						OutputFile:  task.OutputFile,
+						Output:      task.Output,
+						Error:       task.Error,
+						CreatedAt:   task.CreatedAt,
+						UpdatedAt:   task.UpdatedAt,
+					})
+				}
+				return out
+			},
+			func(id, reason string) (extension.TaskSnapshot, bool) {
+				if cs.taskManager == nil {
+					return extension.TaskSnapshot{}, false
+				}
+				task, ok := cs.taskManager.Interrupt(id, reason)
+				if !ok {
+					return extension.TaskSnapshot{}, false
+				}
+				return extension.TaskSnapshot{
+					ID:          task.ID,
+					Kind:        task.Kind,
+					Status:      task.Status,
+					Summary:     task.Summary,
+					Agent:       task.Agent,
+					Task:        task.Task,
+					ParentID:    task.ParentID,
+					RunDir:      task.RunDir,
+					StatusFile:  task.StatusFile,
+					SessionFile: task.SessionFile,
+					OutputFile:  task.OutputFile,
+					Output:      task.Output,
+					Error:       task.Error,
+					CreatedAt:   task.CreatedAt,
+					UpdatedAt:   task.UpdatedAt,
+				}, true
+			},
+			// ForkSession dispatches a child agent via the same plumbing
+			// exposed by extension/subagent and its spawn_subagent alias
+			// (skills/memory injection, optional worktree isolation,
+			// optional background execution).
+			// See (*CodingSession).forkSession for the per-mode breakdown.
+			func(ctx context.Context, opts extension.ForkOptions) (string, error) {
+				return cs.forkSession(ctx, opts)
 			},
 		)
 
@@ -1873,26 +1929,6 @@ func (s *CodingSession) switchSessionManager(newMgr *session.Manager) error {
 	}
 	s.writeRuntimeState()
 	return nil
-}
-
-// formatSubagentsForPrompt returns an XML block listing available subagents,
-// suitable for injection into the system prompt.
-func formatSubagentsForPrompt(defs []*subagent.SubagentDefinition) string {
-	if len(defs) == 0 {
-		return ""
-	}
-	var sb strings.Builder
-	sb.WriteString("\nThe following subagents are available via the spawn_subagent tool.\n")
-	sb.WriteString("Use spawn_subagent when a task is well-scoped and can be delegated to a specialist.\n\n")
-	sb.WriteString("<available_subagents>\n")
-	for _, def := range defs {
-		sb.WriteString("  <subagent>\n")
-		sb.WriteString("    <name>" + def.Name + "</name>\n")
-		sb.WriteString("    <description>" + def.Description + "</description>\n")
-		sb.WriteString("  </subagent>\n")
-	}
-	sb.WriteString("</available_subagents>")
-	return sb.String()
 }
 
 func prepareSubagentDefinition(def *subagent.SubagentDefinition, skillMgr *skills.Manager, memoryStore *MemoryStore) *subagent.SubagentDefinition {
