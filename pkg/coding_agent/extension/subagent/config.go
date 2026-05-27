@@ -28,6 +28,12 @@ type Config struct {
 	// An explicit `async: false` still wins. Parallel/chain batch async is
 	// not yet covered — see PARITY.md.
 	ForceTopLevelAsync bool
+	// IntercomMode controls when batch async children get an "Intercom"
+	// section auto-attached to their system prompt. Known values:
+	//   - "off"       never inject the section.
+	//   - "fork-only" only inject when context: fork is set on the call.
+	//   - "always"    inject whenever a batch task id is available (default).
+	IntercomMode string
 }
 
 // DefaultConfig returns the defaults applied when no `config:` block is
@@ -36,6 +42,7 @@ func DefaultConfig() Config {
 	return Config{
 		MaxDepth:       1,
 		TimeoutSeconds: 600,
+		IntercomMode:   "always",
 	}
 }
 
@@ -75,6 +82,17 @@ func (c *Config) apply(cfg map[string]any) error {
 				return err
 			}
 			c.ForceTopLevelAsync = b
+		case "intercom_mode", "intercom-mode":
+			s, err := asString(k, v)
+			if err != nil {
+				return err
+			}
+			switch s {
+			case "", "off", "fork-only", "always":
+				c.IntercomMode = s
+			default:
+				return fmt.Errorf("intercom_mode must be one of off|fork-only|always, got %q", s)
+			}
 		default:
 			return fmt.Errorf("unknown config key: %s", k)
 		}

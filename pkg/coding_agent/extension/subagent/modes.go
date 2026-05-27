@@ -101,6 +101,7 @@ func runParallel(ctx context.Context, ext *Extension, args map[string]any) (stri
 	topContext, _ := args["context"].(string)
 	topWorktree, _ := args["worktree"].(bool)
 	topSessionDir, _ := args["sessionDir"].(string)
+	topBatchTaskID, _ := args["_batchTaskID"].(string)
 	progressCreated := false
 	return runParallelCalls(ctx, ext, calls, parallelOptions{
 		chainDir:        topChainDir,
@@ -109,6 +110,7 @@ func runParallel(ctx context.Context, ext *Extension, args map[string]any) (stri
 		resolvedChain:   resolveChainDirForSubst(ext, topChainDir),
 		worktree:        topWorktree,
 		sessionDir:      topSessionDir,
+		batchTaskID:     topBatchTaskID,
 		progressCreated: &progressCreated,
 	})
 }
@@ -157,6 +159,7 @@ type parallelOptions struct {
 	failFast        bool
 	worktree        bool
 	sessionDir      string
+	batchTaskID     string
 	progressCreated *bool
 }
 
@@ -228,6 +231,7 @@ func runParallelCalls(ctx context.Context, ext *Extension, calls []callSpec, opt
 					isolation:     isolationOverride,
 					thinking:      call.thinking,
 					sessionDir:    opts.sessionDir,
+					batchTaskID:   opts.batchTaskID,
 				})
 			}
 			if err == nil {
@@ -287,6 +291,7 @@ func runChain(ctx context.Context, ext *Extension, args map[string]any) (string,
 	topContext, _ := args["context"].(string)
 	topChainDir, _ := args["chainDir"].(string)
 	topSessionDir, _ := args["sessionDir"].(string)
+	topBatchTaskID, _ := args["_batchTaskID"].(string)
 	topConcurrency, err := optionalPositiveInt(args["concurrency"])
 	if err != nil {
 		return "", err
@@ -323,6 +328,7 @@ func runChain(ctx context.Context, ext *Extension, args map[string]any) (string,
 				failFast:        step.failFast,
 				worktree:        step.worktree,
 				sessionDir:      topSessionDir,
+				batchTaskID:     topBatchTaskID,
 				progressCreated: &progressCreated,
 			})
 			if err != nil {
@@ -354,6 +360,7 @@ func runChain(ctx context.Context, ext *Extension, args map[string]any) (string,
 			progressFirst = true
 			progressCreated = true
 		}
+		batchTaskID, _ := args["_batchTaskID"].(string)
 		text, err := forkOne(ctx, ext, c.agent, task, callOptions{
 			outputPath:    outputPath,
 			outputMode:    c.outputMode,
@@ -367,6 +374,7 @@ func runChain(ctx context.Context, ext *Extension, args map[string]any) (string,
 			cwd:           c.cwd,
 			thinking:      c.thinking,
 			sessionDir:    topSessionDir,
+			batchTaskID:   batchTaskID,
 		})
 		if err != nil {
 			return "", fmt.Errorf("chain step %d (%s): %w", i, c.agent, err)
@@ -429,6 +437,10 @@ type callOptions struct {
 	// per-run files under a caller-supplied parent path. Only meaningful
 	// for background forks; ignored otherwise.
 	sessionDir string
+	// batchTaskID, when non-empty, is the synthetic id of the surrounding
+	// batch async run. Used to auto-attach an "Intercom" section to the
+	// child's system prompt so it knows where to send updates.
+	batchTaskID string
 }
 
 // decodeCallList validates and unpacks `args["parallel"]` / `args["chain"]`.
@@ -651,9 +663,13 @@ func forkOptionsFor(def *csubagent.SubagentDefinition, cfg Config, task string, 
 	if opts.background != nil {
 		background = *opts.background
 	}
+	sysPrompt := def.SystemPrompt
+	if augmented, ok := augmentSystemPromptWithIntercom(sysPrompt, cfg, opts); ok {
+		sysPrompt = augmented
+	}
 	return extension.ForkOptions{
 		Name:            def.Name,
-		SystemPrompt:    def.SystemPrompt,
+		SystemPrompt:    sysPrompt,
 		Task:            task,
 		AllowedTools:    def.Tools,
 		DisallowedTools: def.DisallowedTools,
@@ -672,6 +688,43 @@ func forkOptionsFor(def *csubagent.SubagentDefinition, cfg Config, task string, 
 		MemoryScope:     def.MemoryScope,
 		SessionDir:      strings.TrimSpace(opts.sessionDir),
 	}
+}
+
+// augmentSystemPromptWithIntercom appends an "Intercom" section to the
+// child's system prompt when:
+//   - the call carries a batch task id (only batch async paths set this);
+//   - the extension's IntercomMode allows it (off / fork-only / always).
+// Returns the new prompt and true when augmented; otherwise (sysPrompt, false).
+func augmentSystemPromptWithIntercom(sysPrompt string, cfg Config, opts callOptions) (string, bool) {
+	id := strings.TrimSpace(opts.batchTaskID)
+	if id == "" {
+		return sysPrompt, false
+	}
+	mode := strings.ToLower(strings.TrimSpace(cfg.IntercomMode))
+	if mode == "" {
+		mode = "always"
+	}
+	switch mode {
+	case "off":
+		return sysPrompt, false
+	case "fork-only":
+		if strings.ToLower(strings.TrimSpace(opts.contextMode)) != "fork" {
+			return sysPrompt, false
+		}
+	case "always":
+		// proceed
+	default:
+		// Unknown values are tolerated as "always" — apply policy is
+		// validated earlier in Config.apply, so we should never get here.
+	}
+	section := fmt.Sprintf(
+		"# Intercom\nYou are running as part of batch task `%s`. Use the `subagent_intercom_send` tool with `taskId=\"%s\"` to post status updates or partial results back to the orchestrator while you work.",
+		id, id,
+	)
+	if strings.TrimSpace(sysPrompt) == "" {
+		return section, true
+	}
+	return strings.TrimRight(sysPrompt, "\n") + "\n\n---\n\n" + section, true
 }
 
 func optionalBool(args map[string]any, key string) *bool {

@@ -119,6 +119,17 @@ func (f *fakeAPI) ForkSession(ctx context.Context, opts extension.ForkOptions) (
 	return "[forked] " + opts.Task, nil
 }
 
+// forkOptionsSnapshot returns a copy of the recorded ForkOptions under the
+// mutex. Tests that observe a background goroutine's writes must use this
+// instead of reading f.forkCalls directly.
+func (f *fakeAPI) forkOptionsSnapshot() []extension.ForkOptions {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]extension.ForkOptions, len(f.forkCalls))
+	copy(out, f.forkCalls)
+	return out
+}
+
 // writeProfile creates an agent profile .md file in dir and returns its path.
 // Frontmatter uses the existing utils.ParseFrontmatter format (key: value
 // per line, no `---` markers required) since that's what csubagent.Loader
@@ -1484,6 +1495,191 @@ func TestTasksEmptyArrayErrors(t *testing.T) {
 	}
 }
 
+// TestIntercomAutoAttachInjectsBatchTaskIDIntoBatchChildPrompts covers the
+// H auto-attach: every child of a batch async dispatch gets an
+// "# Intercom" section in its system prompt naming the batch task id and
+// pointing at the subagent_intercom_send tool. Default IntercomMode is
+// "always" so callers don't have to opt in.
+func TestIntercomAutoAttachInjectsBatchTaskIDIntoBatchChildPrompts(t *testing.T) {
+	_, api := newExtensionWithProfiles(t, map[string]string{
+		"scout": `---
+name: scout
+description: recon
+---
+You are scout. Stay focused.
+`,
+	})
+	tool := toolOf(t, api)
+
+	api.forkFn = func(_ context.Context, opts extension.ForkOptions) (string, error) {
+		return "ok:" + opts.Name, nil
+	}
+
+	res, err := tool.Execute(context.Background(), "intercom-attach", map[string]any{
+		"mode":  "parallel",
+		"async": true,
+		"parallel": []any{
+			map[string]any{"agent": "scout", "task": "t"},
+		},
+	}, nil)
+	if err != nil || res.IsError {
+		t.Fatalf("batch async failed: err=%v res=%+v", err, res)
+	}
+	taskID := extractTaskID(textOf(res))
+	if taskID == "" {
+		t.Fatalf("expected batch task id in reply: %s", textOf(res))
+	}
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if len(api.forkOptionsSnapshot()) > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	calls := api.forkOptionsSnapshot()
+	if len(calls) == 0 {
+		t.Fatalf("expected fork to be called")
+	}
+	prompt := calls[0].SystemPrompt
+	for _, want := range []string{
+		"You are scout. Stay focused.", // original prompt preserved
+		"# Intercom",
+		taskID,
+		"subagent_intercom_send",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("auto-attach prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestIntercomAutoAttachSkippedForSyncCalls(t *testing.T) {
+	_, api := newExtensionWithProfiles(t, map[string]string{
+		"scout": frontmatterBody("scout", "x"),
+	})
+	tool := toolOf(t, api)
+	var captured extension.ForkOptions
+	api.forkFn = func(_ context.Context, opts extension.ForkOptions) (string, error) {
+		captured = opts
+		return "ok", nil
+	}
+	res, err := tool.Execute(context.Background(), "intercom-sync", map[string]any{
+		"agent": "scout",
+		"task":  "t",
+	}, nil)
+	if err != nil || res.IsError {
+		t.Fatalf("sync call failed: err=%v res=%+v", err, res)
+	}
+	if strings.Contains(captured.SystemPrompt, "# Intercom") {
+		t.Errorf("sync call must not auto-attach an Intercom section:\n%s", captured.SystemPrompt)
+	}
+}
+
+func TestIntercomModeOffSuppressesAutoAttach(t *testing.T) {
+	_, api := newExtensionWithProfiles(t, map[string]string{
+		"scout": frontmatterBody("scout", "x"),
+	})
+	// The extension instance returned from newExtensionWithProfiles uses
+	// DefaultConfig() with IntercomMode="always"; we flip it off here to
+	// exercise the toggle.
+	for _, regTool := range api.registered {
+		if t, ok := regTool.(*subagentTool); ok {
+			t.ext.cfg.IntercomMode = "off"
+			break
+		}
+	}
+	tool := toolOf(t, api)
+	api.forkFn = func(_ context.Context, _ extension.ForkOptions) (string, error) {
+		return "ok", nil
+	}
+	res, err := tool.Execute(context.Background(), "mode-off", map[string]any{
+		"mode":  "parallel",
+		"async": true,
+		"parallel": []any{
+			map[string]any{"agent": "scout", "task": "t"},
+		},
+	}, nil)
+	if err != nil || res.IsError {
+		t.Fatalf("mode-off batch failed: err=%v res=%+v", err, res)
+	}
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if len(api.forkOptionsSnapshot()) > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	calls := api.forkOptionsSnapshot()
+	if len(calls) == 0 {
+		t.Fatalf("expected one fork call, got none")
+	}
+	if strings.Contains(calls[0].SystemPrompt, "# Intercom") {
+		t.Errorf("IntercomMode=off must skip auto-attach:\n%s", calls[0].SystemPrompt)
+	}
+}
+
+func TestIntercomModeForkOnlyRequiresForkContext(t *testing.T) {
+	_, api := newExtensionWithProfiles(t, map[string]string{
+		"scout": frontmatterBody("scout", "x"),
+	})
+	for _, regTool := range api.registered {
+		if t, ok := regTool.(*subagentTool); ok {
+			t.ext.cfg.IntercomMode = "fork-only"
+			break
+		}
+	}
+	tool := toolOf(t, api)
+	api.forkFn = func(_ context.Context, _ extension.ForkOptions) (string, error) {
+		return "ok", nil
+	}
+
+	// fresh context (default) → no auto-attach
+	_, _ = tool.Execute(context.Background(), "fork-only-fresh", map[string]any{
+		"mode":  "parallel",
+		"async": true,
+		"parallel": []any{
+			map[string]any{"agent": "scout", "task": "t"},
+		},
+	}, nil)
+
+	// fork context → auto-attach
+	_, _ = tool.Execute(context.Background(), "fork-only-fork", map[string]any{
+		"mode":    "parallel",
+		"async":   true,
+		"context": "fork",
+		"parallel": []any{
+			map[string]any{"agent": "scout", "task": "t"},
+		},
+	}, nil)
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if len(api.forkOptionsSnapshot()) >= 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	calls := api.forkOptionsSnapshot()
+	if len(calls) < 2 {
+		t.Fatalf("expected 2 fork calls, got %d", len(calls))
+	}
+	if strings.Contains(calls[0].SystemPrompt, "# Intercom") {
+		t.Errorf("fork-only mode + fresh context should skip auto-attach:\n%s", calls[0].SystemPrompt)
+	}
+	if !strings.Contains(calls[1].SystemPrompt, "# Intercom") {
+		t.Errorf("fork-only mode + fork context should auto-attach:\n%s", calls[1].SystemPrompt)
+	}
+}
+
+func TestConfigIntercomModeUnknownRejected(t *testing.T) {
+	ext := New()
+	err := ext.ApplyConfig(map[string]any{"intercom_mode": "weird"})
+	if err == nil || !strings.Contains(err.Error(), "intercom_mode must be one of") {
+		t.Errorf("expected validation error, got: %v", err)
+	}
+}
+
 // TestIntercomSendAndReadRoundtrip covers the minimum-viable H intercom
 // bridge: the `subagent_intercom_send` tool appends one JSONL message
 // per call, and `subagent action=intercom id=...` plays them back in
@@ -1677,6 +1873,162 @@ func TestClarifyOmittedSkipsConfirmation(t *testing.T) {
 	if confirmCalled != 0 {
 		t.Errorf("Confirm should not run when clarify is omitted, got %d calls", confirmCalled)
 	}
+}
+
+// TestControlNeedsAttentionTimerFires covers the second timer added on top
+// of the G skeleton: needsAttentionAfterMs also fires through the
+// notification channels when its threshold passes before the batch
+// completes.
+func TestControlNeedsAttentionTimerFires(t *testing.T) {
+	_, api := newExtensionWithProfiles(t, map[string]string{
+		"slow": frontmatterBody("slow", "x"),
+	})
+	tool := toolOf(t, api)
+
+	release := make(chan struct{})
+	api.forkFn = func(_ context.Context, _ extension.ForkOptions) (string, error) {
+		<-release
+		return "done", nil
+	}
+
+	res, err := tool.Execute(context.Background(), "ctrl-attn", map[string]any{
+		"mode":  "parallel",
+		"async": true,
+		"parallel": []any{
+			map[string]any{"agent": "slow", "task": "t"},
+		},
+		"control": map[string]any{
+			"needsAttentionAfterMs": 30,
+		},
+	}, nil)
+	if err != nil || res.IsError {
+		t.Fatalf("needs-attention batch failed: err=%v res=%+v", err, res)
+	}
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	var snap []string
+	for time.Now().Before(deadline) {
+		snap = api.noticesSnapshot()
+		if len(snap) > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(snap) == 0 || !strings.Contains(snap[0], "appears stuck past 30ms") {
+		t.Fatalf("expected needs-attention notice text, got %#v", snap)
+	}
+	close(release)
+}
+
+// TestControlNotifyOnFiltersEvents verifies that listing only one event
+// in notifyOn suppresses the others. Here we set both thresholds but
+// allowlist only "needs_attention".
+func TestControlNotifyOnFiltersEvents(t *testing.T) {
+	_, api := newExtensionWithProfiles(t, map[string]string{
+		"slow": frontmatterBody("slow", "x"),
+	})
+	tool := toolOf(t, api)
+	release := make(chan struct{})
+	api.forkFn = func(_ context.Context, _ extension.ForkOptions) (string, error) {
+		<-release
+		return "done", nil
+	}
+
+	res, err := tool.Execute(context.Background(), "ctrl-filter", map[string]any{
+		"mode":  "parallel",
+		"async": true,
+		"parallel": []any{
+			map[string]any{"agent": "slow", "task": "t"},
+		},
+		"control": map[string]any{
+			"activeNoticeAfterMs":   20,
+			"needsAttentionAfterMs": 40,
+			"notifyOn":              []any{"needs_attention"},
+		},
+	}, nil)
+	if err != nil || res.IsError {
+		t.Fatalf("filter call failed: err=%v res=%+v", err, res)
+	}
+
+	// Both timers will fire under the hood; only needs_attention's text
+	// should hit the notify channel.
+	time.Sleep(120 * time.Millisecond)
+	snap := api.noticesSnapshot()
+	if len(snap) == 0 {
+		t.Fatalf("expected at least one needs_attention notice, got nothing")
+	}
+	for _, n := range snap {
+		if strings.Contains(n, "still running past") {
+			t.Errorf("active_long_running should have been suppressed by notifyOn, got %q", n)
+		}
+	}
+	close(release)
+}
+
+// TestControlIntercomChannelRoutesToInbox covers the new
+// notifyChannels=["intercom"] route: the notice still lands somewhere,
+// but it lands in the batch task's intercom JSONL inbox rather than
+// (only) on api.Notify.
+func TestControlIntercomChannelRoutesToInbox(t *testing.T) {
+	agentDir := t.TempDir()
+	cwd := t.TempDir()
+	dir := t.TempDir()
+	writeProfile(t, dir, "slow", frontmatterBody("slow", "x"))
+	ext := New()
+	ext.cfg.AgentsDir = dir
+	api := &fakeAPI{agentDir: agentDir, cwd: cwd}
+	if err := ext.Init(api); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	tool := toolOf(t, api)
+	release := make(chan struct{})
+	api.forkFn = func(_ context.Context, _ extension.ForkOptions) (string, error) {
+		<-release
+		return "done", nil
+	}
+
+	res, err := tool.Execute(context.Background(), "ctrl-intercom", map[string]any{
+		"mode":  "parallel",
+		"async": true,
+		"parallel": []any{
+			map[string]any{"agent": "slow", "task": "t"},
+		},
+		"control": map[string]any{
+			"activeNoticeAfterMs": 30,
+			"notifyChannels":      []any{"intercom"},
+		},
+	}, nil)
+	if err != nil || res.IsError {
+		t.Fatalf("intercom-channel call failed: err=%v res=%+v", err, res)
+	}
+	taskID := extractTaskID(textOf(res))
+	if taskID == "" {
+		t.Fatalf("expected batch task id in reply: %s", textOf(res))
+	}
+
+	inboxPath := filepath.Join(agentDir, "tool-results", projectKey(cwd), "subagents", "intercom", taskID+".jsonl")
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(inboxPath); err == nil {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	data, err := os.ReadFile(inboxPath)
+	if err != nil {
+		t.Fatalf("expected intercom inbox to receive the notice: %v", err)
+	}
+	if !strings.Contains(string(data), "still running past 30ms") {
+		t.Errorf("intercom inbox missing notice text:\n%s", string(data))
+	}
+	if !strings.Contains(string(data), "control:active_long_running") {
+		t.Errorf("intercom inbox missing control 'from' label:\n%s", string(data))
+	}
+	// notifyChannels was intercom-only, so api.Notify should NOT have fired.
+	if snap := api.noticesSnapshot(); len(snap) != 0 {
+		t.Errorf("intercom-only channel should not call api.Notify, got %#v", snap)
+	}
+	close(release)
 }
 
 // TestControlActiveNoticeFiresOnLongRunningBatchAsync covers the G control

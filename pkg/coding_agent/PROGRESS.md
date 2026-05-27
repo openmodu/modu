@@ -212,6 +212,8 @@ High-priority gaps identified before this round:
   Added pi-style `control: { activeNoticeAfterMs }` skeleton for batch async runs (one-shot timer that emits api.Notify on threshold); remaining ControlOverrides fields are accepted in schema but not yet honored at runtime
   Added pi-style `clarify: true` non-TUI gate: builds a structured preview of the planned dispatch and gates it on `api.Confirm`; denial returns the preview as the tool result without dispatching
   Added pi-style file-based intercom MVP: new `subagent_intercom_send` tool writes to `tool-results/<project>/subagents/intercom/<taskID>.jsonl`, and `action: "intercom"` reads the inbox; full publisher/subscriber pipeline + auto-attach left deferred per PARITY.md
+  Expanded control overrides: added `needsAttentionAfterMs` second timer, `notifyOn` event-type filter, and `notifyChannels` routing including a new `intercom` route that appends the notice into the batch task's JSONL inbox; turn/token/tool-attempt-driven triggers stay deferred until host exposes the counters
+  Added intercom auto-attach for batch async children: each child gets an `# Intercom` system-prompt section naming its batch task id and pointing at `subagent_intercom_send`, gated by a new `intercom_mode` config (`off`/`fork-only`/`always`, default `always`)
 
 ## Still Missing
 

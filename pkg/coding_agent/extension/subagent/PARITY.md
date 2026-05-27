@@ -72,6 +72,17 @@ The reference snapshot is the `pi-subagents` tree at this repo's local clone
   `tool-results/<project>/subagents/intercom/<taskID>.jsonl`. Writers use
   the new `subagent_intercom_send` tool (registered alongside the
   subagent tool); readers use `action: "intercom"` with the same task id.
+- `intercom_mode` extension config (`off` / `fork-only` / `always`,
+  default `always`) governs whether batch async children get an
+  auto-attached `# Intercom` section in their system prompt that names
+  the batch task id and points at `subagent_intercom_send`.
+- Control timer parity expanded: both `activeNoticeAfterMs` and
+  `needsAttentionAfterMs` are wired with independent goroutines that
+  share a cancel channel. `notifyOn` filters events by name
+  (`active_long_running` / `needs_attention`). `notifyChannels` routes
+  notices to `event` (`api.Notify`) and `intercom` (writes the same
+  notice into the batch task's inbox); `async` is parsed but stays a
+  no-op until the host exposes a per-task notice slot.
 
 ### Async / background runs
 - `async: true` single override forces background; `async: false` overrides a
@@ -142,47 +153,75 @@ The reference snapshot is the `pi-subagents` tree at this repo's local clone
 
 ## What's missing
 
-Most of pi's surface now has an analog in the extension. The remaining
-pieces are deliberate omissions where pi's design depends on infrastructure
-we have not built yet.
+Each of the remaining items needs an external piece the extension cannot
+ship alone — either a host-level callback / counter the runtime does not
+expose, or a third-party client (TUI editor, Gist API). This is the
+honest stopping point for a pure-extension parity pass.
 
-### G (partial). Control overrides — `needsAttention*` / `failedToolAttempts*`
+### G (partial). Activity-counter-driven control fields
 **Pi ref:** `src/runs/shared/long-running-guard.ts`,
-`src/runs/shared/completion-guard.ts`, `src/runs/shared/subagent-control.ts`,
-`src/extension/control-notices.ts`, schema `ControlOverrides`.
+`src/runs/shared/completion-guard.ts`, `src/runs/shared/subagent-control.ts`.
 
-`activeNoticeAfterMs` is wired through `api.Notify`. The pi sibling fields
-(`needsAttentionAfterMs`, `activeNoticeAfterTurns`, `activeNoticeAfterTokens`,
-`failedToolAttemptsBeforeAttention`, `notifyOn`, `notifyChannels` beyond
-"event") are accepted by the schema but ignored at runtime — they require
-per-run activity tracking (token/turn accounting, tool failure callbacks)
-that the extension has no visibility into today. Filling them in cleanly
-needs a host design for feeding subagent control notices back into the
-parent's LLM context.
+Clock-based control fields (`activeNoticeAfterMs`, `needsAttentionAfterMs`)
+and routing fields (`notifyOn`, `notifyChannels`) are wired. What stays
+unimplemented:
 
-### H (partial). Full intercom bridge
+- `activeNoticeAfterTurns` — needs the host to expose per-child
+  assistant-turn counts during a run.
+- `activeNoticeAfterTokens` — needs per-child token usage from the host.
+- `failedToolAttemptsBeforeAttention` — needs a tool-failure callback
+  from the child agent's runtime.
+- `notifyChannels: "async"` — needs the host's task record to carry a
+  notice slot the extension can append into.
+
+Each requires extending `pkg/coding_agent/extension.ExtensionAPI` (or the
+child agent's lifecycle hooks) with new signals.
+
+### H (partial). Full publisher/subscriber intercom pipeline
 **Pi ref:** `src/intercom/*` (~750 LOC).
 
-The MVP file-based inbox + send tool is in place; pi additionally has a
-publisher/subscriber pipeline with retry, mode toggles
-(`off`/`fork-only`/`always`), and intercom-aware tool delivery (children
-get the bridge auto-attached). Those layers stay deferred until a real
-use case justifies the design work.
+MVP shipped: file-based JSONL inbox, send tool, read action, auto-attach
+to batch async children, three-mode toggle. What pi has on top:
+
+- Persistent subscription / wakeup notifications when a new message
+  lands (we only support polling via `action=intercom`).
+- Retry + at-least-once delivery semantics on the writer side.
+- Intercom-aware tool delivery beyond the explicit `subagent_intercom_send`
+  surface (e.g. wrapping a parent's tool calls so children see them as
+  intercom messages).
+
+Building those properly belongs at the host runtime layer, not in the
+extension.
 
 ### I (partial). `clarify` in-line edit
 **Pi ref:** `src/runs/foreground/chain-clarify.ts`,
-`src/slash/slash-commands.ts` (`/clarify` flow).
+`src/slash/slash-commands.ts`.
 
-We have preview + yes/no confirmation through `api.Confirm`. Pi's full
-flow lets the user *edit* the dispatch (rewrite task strings, swap agents)
-before approving. That needs a TUI editor; revisit when matching UI
-scaffolding lands.
+Preview + yes/no confirmation through `api.Confirm` is wired. The
+in-line *edit* half (rewrite tasks, swap agents) needs a TUI editor
+component; revisit when matching UI scaffolding lands. Orchestrators
+that want edit-then-confirm can still approximate this by:
+1. Calling with `clarify: true` to receive the preview text on denial.
+2. Issuing a fresh call with modified args.
 
 ### K. `share` (Gist upload)
 **Pi ref:** `src/runs/background/subagent-runner.ts` (share path).
 
-Needs a host-level session sharing pipeline (Gist API client + auth). Out
-of scope until that infrastructure exists.
+Needs a host-level session sharing pipeline (Gist API client + auth).
+Out of scope.
+
+## Done as MVP, full pi parity deferred
+
+The features below are intentionally MVPs — they cover the common case
+without porting pi's full implementation:
+
+- **H.intercom**: file-based inbox + auto-attach; no pub/sub bus.
+- **I.clarify**: preview + confirm; no in-line edit.
+- **G.control**: clock-based timers + routing; no turn/token/tool-attempt
+  triggers and no async-channel sink.
+
+Anything in this section that grows a stronger use case can be promoted
+to "what's done" without needing the full pi-subagents rewrite.
 
 ## Explicitly deferred / out of scope
 

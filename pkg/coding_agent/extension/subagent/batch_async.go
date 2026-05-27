@@ -143,6 +143,10 @@ func dispatchBatchAsync(ctx context.Context, ext *Extension, mode string, args m
 		}
 	}
 	stopNotice := controlActiveNoticeWatcher(ext, ctrl, task.ID, mode)
+	// Stash the batch task id so downstream runners can propagate it into
+	// each child's callOptions. The underscore-prefixed key marks this as
+	// an internal-only pseudo-arg.
+	args["_batchTaskID"] = task.ID
 	// Use a background-rooted context so the goroutine survives Execute
 	// returning. Take cancellation cues from the parent only by snapshotting
 	// what it needs before we detach (we don't, today — runParallel/runChain
