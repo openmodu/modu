@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/openmodu/modu/pkg/agent"
-	"github.com/openmodu/modu/pkg/coding_agent/subagent"
 	"github.com/openmodu/modu/pkg/coding_agent/tools"
 )
 
@@ -641,10 +640,6 @@ func (s *CodingSession) refreshToolsForCwd(cwd string) {
 			updated = append(updated, tools.NewFindTool(cwd))
 		case "ls":
 			updated = append(updated, tools.NewLsTool(cwd))
-		case "spawn_subagent":
-			updated = append(updated, tools.NewSpawnSubagentTool(cwd, s.agentDir, s.subagentLoader, updated, s.model, s.getAPIKey, s.streamFn, func(def *subagent.SubagentDefinition) *subagent.SubagentDefinition {
-				return prepareSubagentDefinition(def, s.skillManager, s.memoryStore)
-			}, s.taskManager, s))
 		default:
 			updated = append(updated, tool)
 		}

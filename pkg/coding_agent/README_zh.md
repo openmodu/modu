@@ -151,6 +151,28 @@ type ToolHook struct {
 
 Goal 状态也会暴露到 `RuntimeState().Extensions["goal"]`，TUI 底部状态行会显示 `Pursuing goal (...)`、`Goal paused (/goal resume)`、`Goal unmet (...)`、`Goal abandoned` 或 `Goal achieved (...)`。`/goal` 命令输出通过 extension notify 进入 TUI scrollback，print mode 仍会把同样文本写到 stderr。只有 session resume 后发现 paused goal 才会询问是否恢复；普通 startup 和 headless 模式保持 paused，避免无交互自动恢复。
 
+### Subagent 扩展
+
+`modu_code` 默认注册 `extension/subagent`。扩展总会注册 `subagent` 工具，因此即使还没有 Markdown profile，也能通过 `subagent({action:"list"})`、`subagent({action:"status"})` 和 `subagent({action:"doctor"})` 做可见性、runtime 后台任务状态和诊断。发现到 `~/.coding_agent/agents/` 或当前项目 `.coding_agent/agents/` 下的 profile 后，扩展还会注册兼容旧调用面的 `spawn_subagent` alias。`subagent` 支持 `single`、`parallel`、`chain` 三种执行模式，以及 `list`、`status`、`resume`、`interrupt`、`doctor` 管理动作；single 模式可传 `async: true` 启动一次性后台任务，或传 `async: false` 覆盖 profile 的 `background: true`。`spawn_subagent` 保留旧的 `{name, task}` 参数形状。两者都通过 `ExtensionAPI.ForkSession` 复用原有 subagent 执行能力：profile 中的 `tools`、`disallowed_tools`、`skills`、`memory`、`permission_mode`、`max_turns`、`background`、`isolation: worktree` 会传给 forked session。subagent lifecycle 仍会发出 harness `subagent_start` / `subagent_stop` 事件，运行时状态暴露在 `RuntimeState().Extensions["subagent"]`。
+
+`extension/subagent` 的 `max_depth` 现在会在运行时生效。默认 `max_depth: 1` 表示主会话可以启动 child，但 child 不能继续嵌套启动 subagent；设为 `0` 会禁用执行型 subagent 调用，只保留管理/诊断动作。
+
+后台 subagent 任务会写入 `RuntimePaths().BackgroundTasksFile`，并为每个任务维护 `RuntimePaths().AsyncSubagentRunsDir/<task-id>/status.json` 和 `session.jsonl`。因此同一项目 runtime 下重新创建 session 后，`task_output` 和 `subagent({action:"status"})` 仍能读取已完成任务的状态、输出和错误；即使列表文件丢失，也会从每个 run 的 `status.json` 恢复。`subagent({action:"status"})` 会按 `parentId` 缩进展示 follow-up run tree。`subagent({action:"interrupt", id:"..."})` 可取消当前进程内仍在运行的后台任务；`subagent({action:"resume", id:"...", message:"..."})` 会读取原任务的 child `session.jsonl` 作为上下文，重新启动一个后台 follow-up 任务，并把新任务标记为原任务的 child。
+
+执行型 `subagent` 调用支持 `output` 和 `outputMode`。`output` 为绝对路径时直接写入该路径；相对路径会写入 `tool-results/<project>/subagents/` 下。`outputMode:"inline"` 会在正常结果后附加保存路径引用；`outputMode:"file-only"` 只返回 `Output saved to: ...` 的紧凑引用。`parallel` / `chain` 的每个子项也可以单独声明 `output` / `outputMode`。异步任务会在完成时写入目标文件，`task_output`、`subagent status` 和 runtime snapshot 会暴露对应的 `output_file`。
+
+执行型 `subagent` 也支持 `reads`、`progress` 和 `chainDir`。`reads` 为文件列表时会在 child task 前注入 `Read from` 指令，`reads:false` 可关闭 profile 默认读取；`progress:true` 会创建/更新 `progress.md` 指令，默认位置是 `tool-results/<project>/subagents/progress.md`，传 `chainDir` 时使用该目录下的 `progress.md`。profile frontmatter 可配置 `reads` / `default_reads` 和 `progress` / `default_progress` 作为默认行为。
+
+`context:"fork"` 会把当前父会话消息复制到 child 初始上下文，默认或 `context:"fresh"` 则只发送本次 task。profile frontmatter 可用 `default_context: fork` 设置默认上下文；单次调用仍可用 `context:"fresh"` 覆盖。执行型调用还支持 `model` 和 `skill` override；`skill` 可传字符串、字符串数组、`true` 使用 profile skills，或 `false` 禁用 profile skills。
+
+并发执行既支持现有 `mode:"parallel"` + `parallel:[...]`，也支持 pi-style 顶层 `tasks:[...]`。`tasks`/`parallel` 子项可传 `count` 重复同一任务，顶层 `concurrency` 可限制本次并发 child 数。
+
+`chain` 支持混合串行和并行 group：`chain:[{agent:"scout", task:"..."}, {parallel:[{agent:"reviewer-a", task:"review {previous}"}, {agent:"reviewer-b", task:"review {previous}"}]}, {agent:"planner", task:"combine {previous}"}]`。parallel group 内每个 child 会收到上一串行步骤的 `{previous}`，group 聚合输出会作为下一步的 `{previous}`。
+
+执行型调用和 `parallel` / `tasks` / `chain` 子项支持 `cwd`。相对路径基于父 session cwd 解析；child 的环境提示和 file/shell 工具会绑定到该目录。包装过的工具如果实现 `WithCwd(string) agent.AgentTool`，也会随 child cwd 重新绑定。
+
+用户侧命令由同一个扩展注册：`/run <agent> <task>` 运行单个 profile，`/parallel <agent> <task> -> <agent> <task>` 并发运行多个 profile，`/chain <agent> <task> -> <agent> <task>` 串行运行并支持后续步骤中的 `{previous}`，`/subagents-doctor` 输出只读诊断。
+
 ### 5. 自动上下文压缩（Auto Compaction）
 
 当累计 token 用量超过模型 context window 的阈值百分比时，自动触发压缩：
@@ -247,6 +269,8 @@ type Extension interface {
 ### 9. 资源系统
 
 **技能**（Skills）：从 `~/.coding_agent/skills/` 和 `.coding_agent/skills/` 目录发现 Markdown/Text 文件，支持 YAML frontmatter 定义名称、描述、标签，注入系统提示词。
+
+**Subagent profiles**：从 `~/.coding_agent/agents/` 和 `.coding_agent/agents/` 目录发现 Markdown profile。项目 profile 会覆盖同名全局 profile；发现到至少一个 profile 时，`extension/subagent` 会向模型暴露 `subagent` 和兼容 alias `spawn_subagent` 工具。
 
 **Prompt templates**：从 `~/.coding_agent/prompts/` 和 `.coding_agent/prompts/` 目录发现 Markdown 模板。模板文件名或 frontmatter `name` 会注册为斜杠命令，模板里的 `{{input}}` / `{{args}}` 会替换为命令参数。
 

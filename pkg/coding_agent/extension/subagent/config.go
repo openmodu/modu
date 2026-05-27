@@ -2,15 +2,14 @@ package subagent
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 )
 
 // Config is the per-extension configuration loaded from the `config:` block
 // of extensions.yaml.
 type Config struct {
 	// AgentsDir is the directory scanned for *.md agent profile files.
-	// Defaults to ~/.modu_code/agents. Empty string disables discovery.
+	// Empty means use the host's standard agent discovery paths:
+	// {AgentDir}/agents and {Cwd}/.coding_agent/agents.
 	AgentsDir string
 	// DefaultModel is applied when the selected profile's Model field is
 	// empty. Empty here too means "inherit caller's current model".
@@ -23,26 +22,21 @@ type Config struct {
 	// means "no extension-imposed timeout" — context cancellation by the
 	// host still applies.
 	TimeoutSeconds int
+	// ForceTopLevelAsync mirrors pi's `forceTopLevelAsync` config. When true,
+	// a top-level single-mode call that omits the `async` argument defaults
+	// to background dispatch (overriding the profile's `background: false`).
+	// An explicit `async: false` still wins. Parallel/chain batch async is
+	// not yet covered — see PARITY.md.
+	ForceTopLevelAsync bool
 }
 
 // DefaultConfig returns the defaults applied when no `config:` block is
-// present in extensions.yaml. Notably AgentsDir falls back to the
-// well-known ~/.modu_code/agents/ path so a brand-new install can drop a
-// profile there and have it picked up without any YAML.
+// present in extensions.yaml.
 func DefaultConfig() Config {
 	return Config{
-		AgentsDir:      defaultAgentsDir(),
 		MaxDepth:       1,
 		TimeoutSeconds: 600,
 	}
-}
-
-func defaultAgentsDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return ""
-	}
-	return filepath.Join(home, ".modu_code", "agents")
 }
 
 // apply merges a yaml-decoded map into c. Unknown keys produce errors so a
@@ -75,6 +69,12 @@ func (c *Config) apply(cfg map[string]any) error {
 				return err
 			}
 			c.TimeoutSeconds = n
+		case "force_top_level_async", "force-top-level-async":
+			b, err := asBool(k, v)
+			if err != nil {
+				return err
+			}
+			c.ForceTopLevelAsync = b
 		default:
 			return fmt.Errorf("unknown config key: %s", k)
 		}
@@ -101,4 +101,12 @@ func asInt(k string, v any) (int, error) {
 	default:
 		return 0, fmt.Errorf("%s must be int, got %T", k, v)
 	}
+}
+
+func asBool(k string, v any) (bool, error) {
+	b, ok := v.(bool)
+	if !ok {
+		return false, fmt.Errorf("%s must be bool, got %T", k, v)
+	}
+	return b, nil
 }

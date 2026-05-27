@@ -24,8 +24,11 @@ type SubagentDefinition struct {
 	Effort            string
 	Isolation         string
 	Model             string // optional model ID override
+	DefaultContext    string
 	ThinkingLevel     agent.ThinkingLevel
 	MaxTurns          int
+	DefaultReads      []string
+	DefaultProgress   bool
 	SystemPrompt      string
 	FilePath          string
 	Source            string // "user" or "project"
@@ -84,12 +87,20 @@ func applyFrontmatter(fields map[string]string, def *SubagentDefinition) {
 			def.Isolation = value
 		case "model":
 			def.Model = value
+		case "default_context", "default-context":
+			def.DefaultContext = value
 		case "thinking", "thinking_level", "thinking-level":
 			def.ThinkingLevel = agent.ThinkingLevel(value)
 		case "max_turns", "max-turns":
 			if n, err := strconv.Atoi(value); err == nil && n > 0 {
 				def.MaxTurns = n
 			}
+		case "default_reads", "default-reads", "reads":
+			if !strings.EqualFold(strings.TrimSpace(value), "false") {
+				def.DefaultReads = appendCSV(def.DefaultReads, value)
+			}
+		case "default_progress", "default-progress", "progress":
+			def.DefaultProgress = strings.EqualFold(value, "true")
 		}
 	}
 }

@@ -176,6 +176,37 @@ High-priority gaps identified before this round:
   Extension notification events so goal command output is visible inside TUI scrollback instead of only stderr
   pi-goal command/tool/accounting parity for `/goal` parsing, replacement confirmation, clear feedback, completion accounting, resume-only paused prompts, and compact user-facing goal formatting
   pi-goal protocol parity for goal tool top-level `isError`, select-style extension prompts, hidden follow-up message metadata, and seconds-based continuation budget prompts
+  Migrated subagent parity work onto the first-class `extension/subagent` tool path, including standard `.coding_agent/agents` discovery, fork lifecycle harness events, runtime-state exposure, and updated tests away from legacy `spawn_subagent` expectations
+  Reintroduced legacy `spawn_subagent` as an `extension/subagent` compatibility alias backed by `ExtensionAPI.ForkSession`, so the old tool surface no longer depends on direct `CodingSession` registration
+  Added first-pass `subagent` management actions for `list`, runtime background `status`, and read-only `doctor` diagnostics
+  Added extension-owned `/run`, `/parallel`, `/chain`, and `/subagents-doctor` slash commands backed by the same subagent fork path
+  Persisted background task snapshots to the project runtime so async subagent results survive session recreation and remain readable through `task_output` / `subagent status`
+  Added single-call `subagent({async:true})` / `async:false` background override support to move closer to pi-subagents' caller-controlled async launch model
+  Added first-pass `subagent` async control actions: `interrupt` cancels live background tasks in-process, and `resume` restarts completed/failed/interrupted tasks as background follow-ups using persisted agent/task metadata
+  Added per-run async subagent directories with `status.json` under the project runtime, plus recovery from those status files when the aggregate background task list is missing
+  Added child `session.jsonl` persistence for async subagent runs and wired `resume` to seed follow-up runs with the previous child transcript
+  Rendered `subagent status` as a parent/child run tree using persisted `parentId`, so resumed follow-up runs are visible under their source run
+  Added `output` / `outputMode` support for execution-mode `subagent` calls, including per-step output files in parallel and chain runs plus `file-only` compact references
+  Extended async subagent completion to write configured `output` files and expose `output_file` through task output, status, and runtime snapshots
+  Added first-pass `reads` / `progress` support for execution-mode `subagent` calls and profile defaults, including shared `chainDir` progress files for parallel and chain runs
+  Enforced `extension/subagent` `max_depth` at runtime by carrying nested subagent depth through forked child contexts; `max_depth: 0` now disables execution calls
+  Added execution-mode `context: "fresh"|"fork"` plus `default_context` profile support, and per-call `model` / `skill` overrides for single, parallel, and chain subagent calls
+  Added pi-style top-level `tasks` parallel execution, per-item `count` expansion, automatic mode selection for `tasks`/`parallel`/`chain`, and top-level `concurrency` limiting
+  Added mixed chain parallel groups (`chain: [{parallel: [...]}]`) where group children receive `{previous}` and the aggregate group output feeds the next chain step
+  Added per-call `cwd` support for execution-mode subagent calls, including child environment prompts, file/shell tool rebinding, and `WithCwd` passthrough for wrapped custom tools
+  Recorded pi-subagents parity status under `pkg/coding_agent/extension/subagent/PARITY.md` covering done items, prioritised gaps, and deferred areas (intercom, clarify, packaged agents)
+  Added subagent tool-API agent CRUD: `get` returns a profile's full detail, `create` writes a new `.md` profile (kebab-case name, `cfg.AgentsDir` or `scope` target dir) and reloads the loader, `update` merges frontmatter + optional body and reloads, `delete` removes the file and reloads
+  Extended chain/parallel/single task substitution with pi-style `{task}` (chain's first sequential step's raw task) and `{chain_dir}` (resolved shared chain dir) on top of the existing `{previous}` flow
+  Added `chain[].failFast` on parallel groups: cancels in-flight siblings via ctx on the first failure and aborts the surrounding chain at that step
+  Added `force_top_level_async` extension config: defaults a top-level single-mode call's `async` to true when the caller omits it; explicit `async:false` still wins
+  Enriched subagent `doctor` output with profile source breakdown, subagents runtime dir + existence check, background subagent task count, and the active `force_top_level_async` flag
+  Added per-call `worktree: true` for top-level parallel/tasks and chain[].parallel groups: forces every affected child's `ForkOptions.Isolation` to "worktree", overriding the profile's own isolation
+  Added `agentScope: "user"|"project"|"both"` filter on subagent `list` / `get` so callers can scope discovery results by `SubagentDefinition.Source`; default "both" preserves prior behavior
+  Removed dead inline `pkg/coding_agent/tools/spawn_subagent.go` plus the deprecated `FeatureConfig.SpawnSubagentTool` field and accessor; the active `spawn_subagent` tool surface is the extension-owned compatibility alias
+  Added per-call `thinking` override on single mode, parallel items, and chain steps; empty inherits the profile's ThinkingLevel via the new `effectiveThinking` helper
+  Added init-time stale-run reconciler in the subagent extension: any recovered subagent task still reporting `running` from a prior session is rewritten on disk to `status: stale`, decorated as `[stale]` in `status` output, and counted in `doctor` (which downgrades to warning when stale runs exist)
+  Added top-level batch async for `mode:parallel|chain + async:true` (and the omitted-async `force_top_level_async` path): the extension reserves a synthetic `subagent-batch-N` task id, runs the dispatch in a goroutine using a background-rooted context, and merges the batch task into `status` output so callers can poll the aggregated result
+  Added pi-style `includeProgress: true` so the subagent tool result appends the `progress.md` body after a `## Progress` marker; works in single, parallel, chain, and batch async modes
 
 ## Still Missing
 

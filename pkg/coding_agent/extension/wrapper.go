@@ -24,6 +24,12 @@ func (w *WrappedTool) Name() string        { return w.inner.Name() }
 func (w *WrappedTool) Label() string       { return w.inner.Label() }
 func (w *WrappedTool) Description() string { return w.inner.Description() }
 func (w *WrappedTool) Parameters() any     { return w.inner.Parameters() }
+func (w *WrappedTool) WithCwd(cwd string) agent.AgentTool {
+	if rebindable, ok := w.inner.(interface{ WithCwd(string) agent.AgentTool }); ok {
+		return &WrappedTool{inner: rebindable.WithCwd(cwd), hooks: w.hooks}
+	}
+	return w
+}
 
 func (w *WrappedTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
 	// Run before hooks

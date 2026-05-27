@@ -74,3 +74,9 @@ func (l *Loader) List() []*SubagentDefinition {
 func (l *Loader) Count() int {
 	return len(l.definitions)
 }
+
+// Reset clears all loaded definitions so callers can re-run Discover after a
+// mutation (create/update/delete) without leaking the prior state.
+func (l *Loader) Reset() {
+	l.definitions = make(map[string]*SubagentDefinition)
+}

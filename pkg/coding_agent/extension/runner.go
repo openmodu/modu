@@ -10,25 +10,27 @@ import (
 
 // Runner manages the lifecycle of extensions and provides the ExtensionAPI.
 type Runner struct {
-	extensions   []Extension
-	tools        []agent.AgentTool
-	commands     []Command
-	hooks        []ToolHook
-	handlers     map[string][]EventHandler
-	sendMsg      func(text string, options MessageOptions) error
-	setTools     func(names []string)
-	setModel     func(provider, modelID string) error
-	sessionID    func() string
-	sessionDir   func() string
-	agentDir     func() string
-	cwd          func() string
-	isIdle       func() bool
-	hasPending   func() bool
-	notify       func(extensionName, text string)
-	confirm      func(title, body string, defaultYes bool) bool
-	selectChoice func(title string, options []string) string
-	forkSession  func(ctx context.Context, opts ForkOptions) (string, error)
-	mu           sync.RWMutex
+	extensions    []Extension
+	tools         []agent.AgentTool
+	commands      []Command
+	hooks         []ToolHook
+	handlers      map[string][]EventHandler
+	sendMsg       func(text string, options MessageOptions) error
+	setTools      func(names []string)
+	setModel      func(provider, modelID string) error
+	sessionID     func() string
+	sessionDir    func() string
+	agentDir      func() string
+	cwd           func() string
+	isIdle        func() bool
+	hasPending    func() bool
+	notify        func(extensionName, text string)
+	confirm       func(title, body string, defaultYes bool) bool
+	selectChoice  func(title string, options []string) string
+	tasks         func() []TaskSnapshot
+	interruptTask func(id, reason string) (TaskSnapshot, bool)
+	forkSession   func(ctx context.Context, opts ForkOptions) (string, error)
+	mu            sync.RWMutex
 }
 
 // NewRunner creates a new extension runner.
@@ -56,6 +58,8 @@ func (r *Runner) SetCallbacks(
 	notify func(extensionName, text string),
 	confirm func(title, body string, defaultYes bool) bool,
 	selectChoice func(title string, options []string) string,
+	tasks func() []TaskSnapshot,
+	interruptTask func(id, reason string) (TaskSnapshot, bool),
 	forkSession func(ctx context.Context, opts ForkOptions) (string, error),
 ) {
 	r.mu.Lock()
@@ -72,6 +76,8 @@ func (r *Runner) SetCallbacks(
 	r.notify = notify
 	r.confirm = confirm
 	r.selectChoice = selectChoice
+	r.tasks = tasks
+	r.interruptTask = interruptTask
 	r.forkSession = forkSession
 }
 
@@ -292,6 +298,28 @@ func (r *Runner) Select(title string, options []string) string {
 		return options[0]
 	}
 	return fn(title, append([]string(nil), options...))
+}
+
+// BackgroundTasks implements ExtensionAPI.
+func (r *Runner) BackgroundTasks() []TaskSnapshot {
+	r.mu.RLock()
+	fn := r.tasks
+	r.mu.RUnlock()
+	if fn == nil {
+		return nil
+	}
+	return fn()
+}
+
+// InterruptBackgroundTask implements ExtensionAPI.
+func (r *Runner) InterruptBackgroundTask(id, reason string) (TaskSnapshot, bool) {
+	r.mu.RLock()
+	fn := r.interruptTask
+	r.mu.RUnlock()
+	if fn == nil {
+		return TaskSnapshot{}, false
+	}
+	return fn(id, reason)
 }
 
 // GetTools returns all tools registered by extensions.

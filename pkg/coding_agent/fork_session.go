@@ -17,8 +17,8 @@ import (
 
 // forkSession is the host-side implementation of ExtensionAPI.ForkSession.
 //
-// It mirrors the dispatch tree used by tools.SpawnSubagentTool so extension
-// callers get the same capabilities as the inline spawn_subagent path:
+// It mirrors the old spawn_subagent dispatch tree so extension callers get
+// the same capabilities:
 //
 //   - opts.Background: schedule the child on a goroutine, return a task-id
 //     reference, surface completion through the session's taskManager.
@@ -32,8 +32,9 @@ import (
 // directives — extension callers therefore get the same system-prompt
 // augmentation spawn_subagent gives.
 func (cs *CodingSession) forkSession(ctx context.Context, opts extension.ForkOptions) (string, error) {
+	childCwd := cs.resolveChildCwd(opts.Cwd)
 	def := &subagent.SubagentDefinition{
-		Name:            "extension-fork",
+		Name:            forkName(opts),
 		SystemPrompt:    opts.SystemPrompt,
 		Tools:           append([]string(nil), opts.AllowedTools...),
 		DisallowedTools: append([]string(nil), opts.DisallowedTools...),
@@ -48,44 +49,93 @@ func (cs *CodingSession) forkSession(ctx context.Context, opts extension.ForkOpt
 	}
 	def = prepareSubagentDefinition(def, cs.skillManager, cs.memoryStore)
 
+	initialMessages, err := cs.initialMessagesForFork(opts.Context, opts.ParentTaskID)
+	if err != nil {
+		return "", err
+	}
+
 	if opts.Background {
-		return cs.forkInBackground(def, opts.Task)
+		return cs.forkInBackground(ctx, def, childCwd, initialMessages, opts.Task, opts.ParentTaskID, opts.OutputPath, opts.OutputMode)
 	}
-	if strings.EqualFold(opts.Isolation, "worktree") {
-		return cs.forkInWorktree(ctx, def, opts.Task)
-	}
-	return subagent.Run(
-		ctx,
-		subagent.WithWorkingDirectory(def, cs.cwd),
-		opts.Task,
-		cs.activeTools,
-		cs.model,
-		cs.getAPIKey,
-		cs.streamFn,
+	cs.OnSubagentStart(def.Name, opts.Task, false)
+	var (
+		result string
 	)
+	if strings.EqualFold(opts.Isolation, "worktree") {
+		result, err = cs.forkInWorktree(ctx, def, initialMessages, opts.Task)
+	} else {
+		tools := cs.activeTools
+		if childCwd != cs.cwd {
+			tools = rebindToolsToCwd(cs.activeTools, childCwd)
+		}
+		runResult, runErr := subagent.RunWithMessages(
+			ctx,
+			subagent.WithWorkingDirectory(def, childCwd),
+			initialMessages,
+			opts.Task,
+			tools,
+			cs.model,
+			cs.getAPIKey,
+			cs.streamFn,
+		)
+		result, err = runResult.Text, runErr
+	}
+	cs.OnSubagentStop(def.Name, opts.Task, false, result, err)
+	return result, err
 }
 
 // forkInBackground launches the child on its own goroutine. Returns a
 // short string the model can pass to task_output to follow up. If the
 // session has no task manager, surfaces a clear error instead of silently
 // dropping the request.
-func (cs *CodingSession) forkInBackground(def *subagent.SubagentDefinition, task string) (string, error) {
+func (cs *CodingSession) forkInBackground(ctx context.Context, def *subagent.SubagentDefinition, childCwd string, initialMessages []agent.AgentMessage, task, parentID, outputPath, outputMode string) (string, error) {
 	if cs.taskManager == nil {
 		return "", fmt.Errorf("background fork requested but task manager is not configured")
 	}
-	taskID := cs.taskManager.Create("subagent", fmt.Sprintf("extension-fork: %s", task))
+	name := "extension-fork"
+	if def != nil && strings.TrimSpace(def.Name) != "" {
+		name = def.Name
+	}
+	outputPath = cs.resolveForkOutputPath(outputPath)
+	taskID := cs.taskManager.CreateWithMetadata("subagent", fmt.Sprintf("%s: %s", name, task), name, task, parentID, outputPath)
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	cs.taskManager.RegisterCancel(taskID, cancel)
 	go func() {
-		// context.Background: the child outlives whatever ctx the model
-		// passed in. The task manager owns the lifecycle now.
-		text, err := subagent.Run(
-			context.Background(),
-			subagent.WithWorkingDirectory(def, cs.cwd),
+		defer cs.taskManager.UnregisterCancel(taskID)
+		if def != nil {
+			cs.OnSubagentStart(def.Name, task, true)
+		}
+		tools := cs.activeTools
+		if childCwd != cs.cwd {
+			tools = rebindToolsToCwd(cs.activeTools, childCwd)
+		}
+		result, err := subagent.RunWithMessages(
+			runCtx,
+			subagent.WithWorkingDirectory(def, childCwd),
+			initialMessages,
 			task,
-			cs.activeTools,
+			tools,
 			cs.model,
 			cs.getAPIKey,
 			cs.streamFn,
 		)
+		text := result.Text
+		if taskRecord, ok := cs.taskManager.Get(taskID); ok {
+			if writeErr := writeSubagentSessionFile(taskRecord.SessionFile, childCwd, cs.GetSessionID(), taskID, result.Messages); writeErr != nil && err == nil {
+				err = writeErr
+			}
+		}
+		if err == nil && strings.TrimSpace(outputPath) != "" {
+			savedText, saveErr := saveForkOutput(outputPath, outputMode, text)
+			if saveErr != nil {
+				err = saveErr
+			} else {
+				text = savedText
+			}
+		}
+		if def != nil {
+			cs.OnSubagentStop(def.Name, task, true, text, err)
+		}
 		if err != nil {
 			cs.taskManager.Fail(taskID, err.Error())
 			return
@@ -95,11 +145,78 @@ func (cs *CodingSession) forkInBackground(def *subagent.SubagentDefinition, task
 	return fmt.Sprintf("Started extension-fork in background. Use task_output with task_id=%s to inspect the result.", taskID), nil
 }
 
+func (cs *CodingSession) resolveChildCwd(cwd string) string {
+	cwd = strings.TrimSpace(cwd)
+	if cwd == "" {
+		return cs.cwd
+	}
+	if filepath.IsAbs(cwd) {
+		return filepath.Clean(cwd)
+	}
+	return filepath.Clean(filepath.Join(cs.cwd, cwd))
+}
+
+func (cs *CodingSession) resolveForkOutputPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" || filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(cs.RuntimePaths().ToolResultsDir, "subagents", path)
+}
+
+func saveForkOutput(path, mode, text string) (string, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		return "", err
+	}
+	ref := fmt.Sprintf("Output saved to: %s (%d bytes, %d lines).", path, len([]byte(text)), countLines(text))
+	if strings.EqualFold(strings.TrimSpace(mode), "file-only") {
+		return ref, nil
+	}
+	return strings.TrimSpace(text) + "\n\n" + ref, nil
+}
+
+func countLines(text string) int {
+	if text == "" {
+		return 0
+	}
+	return strings.Count(text, "\n") + 1
+}
+
+func (cs *CodingSession) loadSubagentParentMessages(parentID string) ([]agent.AgentMessage, error) {
+	if strings.TrimSpace(parentID) == "" || cs.taskManager == nil {
+		return nil, nil
+	}
+	parent, ok := cs.taskManager.Get(parentID)
+	if !ok || strings.TrimSpace(parent.SessionFile) == "" {
+		return nil, nil
+	}
+	return loadSubagentSessionMessages(parent.SessionFile)
+}
+
+func (cs *CodingSession) initialMessagesForFork(mode, parentID string) ([]agent.AgentMessage, error) {
+	if strings.TrimSpace(parentID) != "" {
+		return cs.loadSubagentParentMessages(parentID)
+	}
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", "fresh":
+		return nil, nil
+	case "fork":
+		if cs == nil || cs.agent == nil {
+			return nil, nil
+		}
+		return append([]agent.AgentMessage(nil), cs.agent.GetState().Messages...), nil
+	default:
+		return nil, fmt.Errorf("unknown fork context %q (expected fresh|fork)", mode)
+	}
+}
+
 // forkInWorktree creates a detached git worktree, rebinds file/shell
 // tools to that path, runs the child, and removes the worktree on exit.
-// Mirrors tools/spawn_subagent.go runInWorktree closely — the duplication
-// is short-lived (phase 3.2.B.4 removes the inline path).
-func (cs *CodingSession) forkInWorktree(ctx context.Context, def *subagent.SubagentDefinition, task string) (string, error) {
+// Mirrors the legacy spawn_subagent worktree behavior closely.
+func (cs *CodingSession) forkInWorktree(ctx context.Context, def *subagent.SubagentDefinition, initialMessages []agent.AgentMessage, task string) (string, error) {
 	root, err := gitTopLevelDir(cs.cwd)
 	if err != nil {
 		return "", fmt.Errorf("worktree isolation requires a git repository: %w", err)
@@ -118,21 +235,33 @@ func (cs *CodingSession) forkInWorktree(ctx context.Context, def *subagent.Subag
 		_, _ = runGitCommand(root, "worktree", "remove", "--force", path)
 	}()
 	rebound := rebindToolsToCwd(cs.activeTools, path)
-	return subagent.Run(
+	result, err := subagent.RunWithMessages(
 		ctx,
 		subagent.WithWorkingDirectory(def, path),
+		initialMessages,
 		task,
 		rebound,
 		cs.model,
 		cs.getAPIKey,
 		cs.streamFn,
 	)
+	if err != nil {
+		return "", err
+	}
+	return result.Text, nil
+}
+
+func forkName(opts extension.ForkOptions) string {
+	name := strings.TrimSpace(opts.Name)
+	if name == "" {
+		return "extension-fork"
+	}
+	return name
 }
 
 // rebindToolsToCwd returns a copy of tools where cwd-bound file/shell
 // tools point at the given path. Unknown tools pass through unchanged.
-// Duplicate of tools/spawn_subagent.go rebindToolsForCwd — both go away
-// once the inline spawn_subagent path is removed.
+// Duplicate of the legacy spawn_subagent tool rebinding behavior.
 func rebindToolsToCwd(allTools []agent.AgentTool, cwd string) []agent.AgentTool {
 	out := make([]agent.AgentTool, 0, len(allTools))
 	for _, tool := range allTools {
@@ -152,7 +281,11 @@ func rebindToolsToCwd(allTools []agent.AgentTool, cwd string) []agent.AgentTool 
 		case "ls":
 			out = append(out, tools.NewLsTool(cwd))
 		default:
-			out = append(out, tool)
+			if rebindable, ok := tool.(interface{ WithCwd(string) agent.AgentTool }); ok {
+				out = append(out, rebindable.WithCwd(cwd))
+			} else {
+				out = append(out, tool)
+			}
 		}
 	}
 	return out

@@ -10,6 +10,9 @@ import (
 // All fields are optional except Task; empty values fall back to whatever the
 // host's main session is using.
 type ForkOptions struct {
+	// Name is the child agent/profile name used for lifecycle reporting.
+	// Empty means the host may use a generic name.
+	Name string
 	// SystemPrompt is the child agent's system prompt. Empty means "use a
 	// minimal default" — implementations should still produce something
 	// usable, but extensions are expected to provide a real prompt.
@@ -25,6 +28,12 @@ type ForkOptions struct {
 	// Model overrides the model ID the child uses. Empty means "use the
 	// caller's current model".
 	Model string
+	// Context controls whether the child starts fresh or with a copy of the
+	// parent session messages. Known values: ""/"fresh" and "fork".
+	Context string
+	// Cwd requests a working directory for the child. Relative paths resolve
+	// against the parent session cwd.
+	Cwd string
 	// ThinkingLevel maps to pkg/types.ThinkingLevel ("off"/"low"/...).
 	// Empty means "inherit".
 	ThinkingLevel string
@@ -41,6 +50,14 @@ type ForkOptions struct {
 	// background execution may either ignore this flag or return an
 	// error — the extension must be prepared for both.
 	Background bool
+	// ParentTaskID links a background fork to the task that caused it, when
+	// the host persists task metadata.
+	ParentTaskID string
+	// OutputPath saves the child result to a file after execution.
+	OutputPath string
+	// OutputMode controls the returned text when OutputPath is set. Known
+	// value: "file-only"; empty means inline plus a saved-file reference.
+	OutputMode string
 	// Isolation requests an isolation strategy for the child. Known
 	// values: "" (run in the caller's cwd) and "worktree" (host creates a
 	// fresh git worktree, binds file/shell tools to it, and cleans up on
@@ -88,6 +105,25 @@ type MessageOptions struct {
 	DeliverAs  string
 }
 
+// TaskSnapshot is a lightweight view of a host-managed background task.
+type TaskSnapshot struct {
+	ID          string `json:"id"`
+	Kind        string `json:"kind"`
+	Status      string `json:"status"`
+	Summary     string `json:"summary"`
+	Agent       string `json:"agent,omitempty"`
+	Task        string `json:"task,omitempty"`
+	ParentID    string `json:"parentId,omitempty"`
+	RunDir      string `json:"runDir,omitempty"`
+	StatusFile  string `json:"statusFile,omitempty"`
+	SessionFile string `json:"sessionFile,omitempty"`
+	OutputFile  string `json:"outputFile,omitempty"`
+	Output      string `json:"output,omitempty"`
+	Error       string `json:"error,omitempty"`
+	CreatedAt   int64  `json:"createdAt,omitempty"`
+	UpdatedAt   int64  `json:"updatedAt,omitempty"`
+}
+
 // ExtensionAPI provides the API available to extensions.
 type ExtensionAPI interface {
 	// RegisterTool registers a new tool provided by the extension.
@@ -129,6 +165,12 @@ type ExtensionAPI interface {
 	Confirm(title, body string, defaultYes bool) bool
 	// Select asks the host UI to choose one of the provided options.
 	Select(title string, options []string) string
+	// BackgroundTasks returns a snapshot of host-managed background tasks.
+	BackgroundTasks() []TaskSnapshot
+	// InterruptBackgroundTask requests cancellation for a live host-managed
+	// background task. It returns false when the task is unknown or no longer
+	// live in this process.
+	InterruptBackgroundTask(id, reason string) (TaskSnapshot, bool)
 	// ForkSession spawns a one-shot child agent with a custom system
 	// prompt and tool whitelist, returning the child's final assistant
 	// text. The child runs synchronously in the caller's goroutine until

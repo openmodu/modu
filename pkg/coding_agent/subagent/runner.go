@@ -26,6 +26,31 @@ func Run(
 	getAPIKey func(string) (string, error),
 	streamFn agent.StreamFn,
 ) (string, error) {
+	result, err := RunWithMessages(ctx, def, nil, task, allTools, model, getAPIKey, streamFn)
+	if err != nil {
+		return "", err
+	}
+	return result.Text, nil
+}
+
+// RunResult contains a subagent's final text and full message transcript.
+type RunResult struct {
+	Text     string
+	Messages []agent.AgentMessage
+}
+
+// RunWithMessages executes a subagent using initialMessages as prior
+// conversation context, then appends task as the next user message.
+func RunWithMessages(
+	ctx context.Context,
+	def *SubagentDefinition,
+	initialMessages []agent.AgentMessage,
+	task string,
+	allTools []agent.AgentTool,
+	model *types.Model,
+	getAPIKey func(string) (string, error),
+	streamFn agent.StreamFn,
+) (RunResult, error) {
 	activeTools := filterTools(def.Tools, def.DisallowedTools, allTools)
 	activeTools = applyPermissionMode(activeTools, def.PermissionMode)
 
@@ -57,14 +82,20 @@ func Run(
 			Model:         activeModel,
 			ThinkingLevel: resolveThinkingLevel(def),
 			Tools:         activeTools,
+			Messages:      append([]agent.AgentMessage(nil), initialMessages...),
 		},
 	})
 
 	if err := ag.Prompt(ctx, task); err != nil {
-		return "", fmt.Errorf("subagent %q: %w", def.Name, err)
+		messages := ag.GetState().Messages
+		return RunResult{Messages: append([]agent.AgentMessage(nil), messages...)}, fmt.Errorf("subagent %q: %w", def.Name, err)
 	}
 
-	return extractLastAssistantText(ag.GetState().Messages), nil
+	messages := ag.GetState().Messages
+	return RunResult{
+		Text:     extractLastAssistantText(messages),
+		Messages: append([]agent.AgentMessage(nil), messages...),
+	}, nil
 }
 
 // WithWorkingDirectory returns a copy of def whose prompt explicitly names the
