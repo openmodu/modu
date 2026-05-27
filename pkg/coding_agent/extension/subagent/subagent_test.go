@@ -33,6 +33,7 @@ type fakeAPI struct {
 	forkFn      func(ctx context.Context, opts extension.ForkOptions) (string, error)
 	tasks       []extension.TaskSnapshot
 	interruptFn func(id, reason string) (extension.TaskSnapshot, bool)
+	confirmFn   func(title, body string, defaultYes bool) bool
 	agentDir    string
 	cwd         string
 }
@@ -68,10 +69,34 @@ func (f *fakeAPI) Cwd() string {
 	}
 	return "/tmp/project"
 }
-func (f *fakeAPI) IsIdle() bool                      { return true }
-func (f *fakeAPI) HasPendingMessages() bool          { return false }
-func (f *fakeAPI) Notify(_ string, text string)      { f.notices = append(f.notices, text) }
-func (f *fakeAPI) Confirm(string, string, bool) bool { return false }
+func (f *fakeAPI) IsIdle() bool             { return true }
+func (f *fakeAPI) HasPendingMessages() bool { return false }
+func (f *fakeAPI) Notify(_ string, text string) {
+	f.mu.Lock()
+	f.notices = append(f.notices, text)
+	f.mu.Unlock()
+}
+
+// noticesSnapshot returns a copy of the recorded notices under the mutex.
+// Tests must use this instead of reading f.notices directly when a
+// background goroutine (e.g. the control timer) may call Notify in
+// parallel.
+func (f *fakeAPI) noticesSnapshot() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.notices))
+	copy(out, f.notices)
+	return out
+}
+// confirmFn is an optional hook the test can install to drive the
+// host's confirmation gate (used by the clarify flow). When nil,
+// Confirm returns false to match the historical default.
+func (f *fakeAPI) Confirm(title, body string, defaultYes bool) bool {
+	if f.confirmFn != nil {
+		return f.confirmFn(title, body, defaultYes)
+	}
+	return false
+}
 func (f *fakeAPI) Select(string, []string) string    { return "" }
 func (f *fakeAPI) BackgroundTasks() []extension.TaskSnapshot {
 	return append([]extension.TaskSnapshot(nil), f.tasks...)
@@ -168,8 +193,22 @@ func TestInitNoProfilesRegistersManagementToolOnly(t *testing.T) {
 	if err := ext.Init(api); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	if len(api.registered) != 1 || api.registered[0].Name() != "subagent" {
-		t.Errorf("expected only subagent management tool when agents dir is empty, got %v", registeredToolNames(api))
+	// Always-on tools: the subagent management/exec tool plus the intercom
+	// send tool. The spawn_subagent compatibility alias only appears when
+	// at least one profile is discovered.
+	got := registeredToolNames(api)
+	want := map[string]bool{"subagent": false, "subagent_intercom_send": false}
+	for _, name := range got {
+		if _, ok := want[name]; ok {
+			want[name] = true
+		} else {
+			t.Errorf("unexpected tool %q registered with empty agents dir, got %v", name, got)
+		}
+	}
+	for name, present := range want {
+		if !present {
+			t.Errorf("expected %q to be registered, got %v", name, got)
+		}
 	}
 }
 
@@ -1442,6 +1481,561 @@ func TestTasksEmptyArrayErrors(t *testing.T) {
 	}, nil)
 	if !res.IsError || !strings.Contains(textOf(res), "non-empty") {
 		t.Errorf("expected tasks empty error, got: %s", textOf(res))
+	}
+}
+
+// TestIntercomSendAndReadRoundtrip covers the minimum-viable H intercom
+// bridge: the `subagent_intercom_send` tool appends one JSONL message
+// per call, and `subagent action=intercom id=...` plays them back in
+// order with the recorded `from` label.
+func TestIntercomSendAndReadRoundtrip(t *testing.T) {
+	agentDir := t.TempDir()
+	cwd := t.TempDir()
+	ext := New()
+	ext.cfg.AgentsDir = t.TempDir()
+	api := &fakeAPI{agentDir: agentDir, cwd: cwd}
+	if err := ext.Init(api); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	sendTool := registeredTool(t, api, "subagent_intercom_send")
+	for _, msg := range []map[string]any{
+		{"taskId": "subagent-batch-1", "message": "starting", "from": "scout"},
+		{"taskId": "subagent-batch-1", "message": "halfway", "from": "scout"},
+	} {
+		res, err := sendTool.Execute(context.Background(), "send", msg, nil)
+		if err != nil || res.IsError {
+			t.Fatalf("send %v failed: err=%v res=%+v", msg, err, res)
+		}
+	}
+
+	// File ended up under the agreed tool-results dir.
+	path := filepath.Join(agentDir, "tool-results", projectKey(cwd), "subagents", "intercom", "subagent-batch-1.jsonl")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("intercom file missing at %s: %v", path, err)
+	}
+	if !strings.Contains(string(data), `"text":"starting"`) || !strings.Contains(string(data), `"text":"halfway"`) {
+		t.Fatalf("intercom file missing messages:\n%s", string(data))
+	}
+
+	// action=intercom returns both messages in order.
+	subagentTool := toolOf(t, api)
+	res, err := subagentTool.Execute(context.Background(), "read", map[string]any{
+		"action": "intercom",
+		"id":     "subagent-batch-1",
+	}, nil)
+	if err != nil || res.IsError {
+		t.Fatalf("intercom read failed: err=%v res=%+v", err, res)
+	}
+	got := textOf(res)
+	for _, want := range []string{
+		"Intercom messages for task subagent-batch-1",
+		"[scout @",
+		"starting",
+		"halfway",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("intercom read missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestIntercomSendValidatesArgs(t *testing.T) {
+	_, api := newExtensionWithProfiles(t, map[string]string{})
+	sendTool := registeredTool(t, api, "subagent_intercom_send")
+
+	res, _ := sendTool.Execute(context.Background(), "bad-id", map[string]any{
+		"message": "x",
+	}, nil)
+	if !res.IsError || !strings.Contains(textOf(res), `"taskId" is required`) {
+		t.Errorf("expected taskId-required error, got %s", textOf(res))
+	}
+
+	res, _ = sendTool.Execute(context.Background(), "bad-msg", map[string]any{
+		"taskId": "task-1",
+	}, nil)
+	if !res.IsError || !strings.Contains(textOf(res), `"message" is required`) {
+		t.Errorf("expected message-required error, got %s", textOf(res))
+	}
+}
+
+func TestIntercomActionMissingInboxReturnsEmpty(t *testing.T) {
+	_, api := newExtensionWithProfiles(t, map[string]string{})
+	tool := toolOf(t, api)
+	res, err := tool.Execute(context.Background(), "no-inbox", map[string]any{
+		"action": "intercom",
+		"id":     "ghost-task",
+	}, nil)
+	if err != nil || res.IsError {
+		t.Fatalf("intercom read with no file should succeed, got err=%v res=%+v", err, res)
+	}
+	if !strings.Contains(textOf(res), "No intercom messages for task ghost-task") {
+		t.Errorf("expected empty-inbox message, got %s", textOf(res))
+	}
+}
+
+// TestClarifyConfirmedProceedsWithDispatch covers the I.clarify gate's
+// happy path: when the host returns true from api.Confirm, the dispatch
+// goes ahead and the underlying fork is invoked.
+func TestClarifyConfirmedProceedsWithDispatch(t *testing.T) {
+	_, api := newExtensionWithProfiles(t, map[string]string{
+		"r": frontmatterBody("r", "x"),
+	})
+	tool := toolOf(t, api)
+
+	var confirmCalled int
+	api.confirmFn = func(_, _ string, _ bool) bool {
+		confirmCalled++
+		return true
+	}
+	forkCalled := false
+	api.forkFn = func(_ context.Context, _ extension.ForkOptions) (string, error) {
+		forkCalled = true
+		return "dispatched", nil
+	}
+	res, err := tool.Execute(context.Background(), "clarify-yes", map[string]any{
+		"agent":   "r",
+		"task":    "do thing",
+		"clarify": true,
+	}, nil)
+	if err != nil || res.IsError {
+		t.Fatalf("clarify-confirmed call failed: err=%v res=%+v", err, res)
+	}
+	if confirmCalled != 1 {
+		t.Errorf("expected exactly one Confirm() call, got %d", confirmCalled)
+	}
+	if !forkCalled {
+		t.Errorf("expected fork to run after confirmation")
+	}
+	if !strings.Contains(textOf(res), "dispatched") {
+		t.Errorf("expected dispatched output, got:\n%s", textOf(res))
+	}
+}
+
+// TestClarifyDeniedAbortsBeforeDispatch covers the denial path: when the
+// host returns false from api.Confirm, no fork happens and the result
+// echoes the preview so the orchestrator can see what was rejected.
+func TestClarifyDeniedAbortsBeforeDispatch(t *testing.T) {
+	_, api := newExtensionWithProfiles(t, map[string]string{
+		"a": frontmatterBody("a", "x"),
+		"b": frontmatterBody("b", "y"),
+	})
+	tool := toolOf(t, api)
+	api.confirmFn = func(_, _ string, _ bool) bool { return false }
+	forkCalled := false
+	api.forkFn = func(_ context.Context, _ extension.ForkOptions) (string, error) {
+		forkCalled = true
+		return "should-not-run", nil
+	}
+	res, err := tool.Execute(context.Background(), "clarify-no", map[string]any{
+		"clarify": true,
+		"chain": []any{
+			map[string]any{"agent": "a", "task": "scan files"},
+			map[string]any{"agent": "b", "task": "plan from {previous}"},
+		},
+	}, nil)
+	if err != nil || res.IsError {
+		t.Fatalf("clarify-denied call should succeed at the tool level: err=%v res=%+v", err, res)
+	}
+	if forkCalled {
+		t.Errorf("denied clarify must not dispatch the fork")
+	}
+	got := textOf(res)
+	for _, want := range []string{
+		"Dispatch aborted via clarify gate",
+		"chain (2 steps)",
+		"scan files",
+		"plan from {previous}",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("clarify abort text missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestClarifyOmittedSkipsConfirmation(t *testing.T) {
+	_, api := newExtensionWithProfiles(t, map[string]string{
+		"r": frontmatterBody("r", "x"),
+	})
+	tool := toolOf(t, api)
+	var confirmCalled int
+	api.confirmFn = func(_, _ string, _ bool) bool {
+		confirmCalled++
+		return false
+	}
+	api.forkFn = func(_ context.Context, _ extension.ForkOptions) (string, error) {
+		return "ok", nil
+	}
+	res, err := tool.Execute(context.Background(), "clarify-off", map[string]any{
+		"agent": "r",
+		"task":  "t",
+	}, nil)
+	if err != nil || res.IsError {
+		t.Fatalf("default-clarify call failed: err=%v res=%+v", err, res)
+	}
+	if confirmCalled != 0 {
+		t.Errorf("Confirm should not run when clarify is omitted, got %d calls", confirmCalled)
+	}
+}
+
+// TestControlActiveNoticeFiresOnLongRunningBatchAsync covers the G control
+// skeleton: when batch async runs past `activeNoticeAfterMs`, the
+// extension emits an api.Notify with the batch task id. Once the run
+// completes the timer is reclaimed so no spurious notice fires.
+func TestControlActiveNoticeFiresOnLongRunningBatchAsync(t *testing.T) {
+	_, api := newExtensionWithProfiles(t, map[string]string{
+		"slow": frontmatterBody("slow", "x"),
+	})
+	tool := toolOf(t, api)
+
+	childRelease := make(chan struct{})
+	api.forkFn = func(_ context.Context, _ extension.ForkOptions) (string, error) {
+		<-childRelease
+		return "done", nil
+	}
+
+	res, err := tool.Execute(context.Background(), "ctrl-fire", map[string]any{
+		"mode":  "parallel",
+		"async": true,
+		"parallel": []any{
+			map[string]any{"agent": "slow", "task": "t"},
+		},
+		"control": map[string]any{
+			"activeNoticeAfterMs": 30,
+		},
+	}, nil)
+	if err != nil || res.IsError {
+		t.Fatalf("batch async with control failed: err=%v res=%+v", err, res)
+	}
+
+	// Wait long enough for the timer to fire while the child is blocked.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	var snap []string
+	for time.Now().Before(deadline) {
+		snap = api.noticesSnapshot()
+		if len(snap) > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(snap) == 0 {
+		t.Fatalf("expected api.Notify to fire after activeNoticeAfterMs, got no notices")
+	}
+	if !strings.Contains(snap[0], "still running past 30ms") {
+		t.Errorf("notice text missing threshold: %q", snap[0])
+	}
+	if !strings.Contains(snap[0], "subagent-batch-") {
+		t.Errorf("notice text should reference the batch task id: %q", snap[0])
+	}
+
+	close(childRelease)
+}
+
+// TestControlActiveNoticeSuppressedOnFastBatchAsync verifies the timer's
+// stop channel works: when the batch finishes before the threshold, no
+// notification fires.
+func TestControlActiveNoticeSuppressedOnFastBatchAsync(t *testing.T) {
+	ext, api := newExtensionWithProfiles(t, map[string]string{
+		"fast": frontmatterBody("fast", "x"),
+	})
+	tool := toolOf(t, api)
+	api.forkFn = func(_ context.Context, _ extension.ForkOptions) (string, error) {
+		return "done", nil
+	}
+
+	res, err := tool.Execute(context.Background(), "ctrl-quiet", map[string]any{
+		"mode":  "parallel",
+		"async": true,
+		"parallel": []any{
+			map[string]any{"agent": "fast", "task": "t"},
+		},
+		"control": map[string]any{
+			"activeNoticeAfterMs": 200,
+		},
+	}, nil)
+	if err != nil || res.IsError {
+		t.Fatalf("fast batch failed: err=%v res=%+v", err, res)
+	}
+
+	// Wait for the batch task to complete in-memory.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		snaps := ext.batchTasks.snapshots()
+		if len(snaps) == 1 && snaps[0].Status == "completed" {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	// Sleep past the original threshold to give a buggy timer time to fire.
+	time.Sleep(250 * time.Millisecond)
+	if snap := api.noticesSnapshot(); len(snap) != 0 {
+		t.Fatalf("expected zero notifications when batch finishes before threshold, got %#v", snap)
+	}
+}
+
+func TestControlOmittedDoesNotStartTimer(t *testing.T) {
+	_, api := newExtensionWithProfiles(t, map[string]string{
+		"w": frontmatterBody("w", "x"),
+	})
+	tool := toolOf(t, api)
+	api.forkFn = func(_ context.Context, _ extension.ForkOptions) (string, error) {
+		return "done", nil
+	}
+	res, err := tool.Execute(context.Background(), "ctrl-off", map[string]any{
+		"mode":  "parallel",
+		"async": true,
+		"parallel": []any{
+			map[string]any{"agent": "w", "task": "t"},
+		},
+	}, nil)
+	if err != nil || res.IsError {
+		t.Fatalf("default-control batch failed: err=%v res=%+v", err, res)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if snap := api.noticesSnapshot(); len(snap) != 0 {
+		t.Errorf("control omitted should yield no notices, got %#v", snap)
+	}
+}
+
+func TestControlInvalidValueErrors(t *testing.T) {
+	_, api := newExtensionWithProfiles(t, map[string]string{
+		"w": frontmatterBody("w", "x"),
+	})
+	tool := toolOf(t, api)
+	res, _ := tool.Execute(context.Background(), "ctrl-bad", map[string]any{
+		"mode":  "parallel",
+		"async": true,
+		"parallel": []any{
+			map[string]any{"agent": "w", "task": "t"},
+		},
+		"control": map[string]any{
+			"activeNoticeAfterMs": 0,
+		},
+	}, nil)
+	if !res.IsError || !strings.Contains(textOf(res), "activeNoticeAfterMs must be a positive integer") {
+		t.Errorf("expected control validation error, got: %s", textOf(res))
+	}
+}
+
+// TestSessionDirForwardsToForkOptionsForAllModes covers K.sessionDir at the
+// extension boundary: top-level `sessionDir` is propagated verbatim to each
+// child's ForkOptions for single, parallel, and chain modes so the host's
+// task manager can place per-run files under a caller-controlled parent.
+func TestSessionDirForwardsToForkOptionsForAllModes(t *testing.T) {
+	_, api := newExtensionWithProfiles(t, map[string]string{
+		"a": frontmatterBody("a", "x"),
+		"b": frontmatterBody("b", "y"),
+	})
+	tool := toolOf(t, api)
+
+	var (
+		mu       sync.Mutex
+		captured []extension.ForkOptions
+	)
+	api.forkFn = func(_ context.Context, opts extension.ForkOptions) (string, error) {
+		mu.Lock()
+		captured = append(captured, opts)
+		mu.Unlock()
+		return "ok:" + opts.Name, nil
+	}
+
+	// Single mode forwards sessionDir.
+	res, err := tool.Execute(context.Background(), "sd-single", map[string]any{
+		"agent":      "a",
+		"task":       "t",
+		"sessionDir": "shared/sessions",
+	}, nil)
+	if err != nil || res.IsError {
+		t.Fatalf("single sessionDir failed: err=%v res=%+v", err, res)
+	}
+
+	// Parallel mode forwards sessionDir to every child.
+	res, err = tool.Execute(context.Background(), "sd-par", map[string]any{
+		"mode":       "parallel",
+		"sessionDir": "shared/sessions",
+		"parallel": []any{
+			map[string]any{"agent": "a", "task": "p1"},
+			map[string]any{"agent": "b", "task": "p2"},
+		},
+	}, nil)
+	if err != nil || res.IsError {
+		t.Fatalf("parallel sessionDir failed: err=%v res=%+v", err, res)
+	}
+
+	// Chain (sequential + parallel group) forwards sessionDir to every child.
+	res, err = tool.Execute(context.Background(), "sd-chain", map[string]any{
+		"sessionDir": "shared/sessions",
+		"chain": []any{
+			map[string]any{"agent": "a", "task": "scan"},
+			map[string]any{"parallel": []any{
+				map[string]any{"agent": "b", "task": "review {previous}"},
+			}},
+		},
+	}, nil)
+	if err != nil || res.IsError {
+		t.Fatalf("chain sessionDir failed: err=%v res=%+v", err, res)
+	}
+
+	if len(captured) != 5 {
+		t.Fatalf("expected 5 fork calls, got %d", len(captured))
+	}
+	for i, opts := range captured {
+		if opts.SessionDir != "shared/sessions" {
+			t.Errorf("captured[%d].SessionDir=%q, want %q", i, opts.SessionDir, "shared/sessions")
+		}
+	}
+}
+
+func TestSessionDirOmittedLeavesForkOptionsEmpty(t *testing.T) {
+	_, api := newExtensionWithProfiles(t, map[string]string{
+		"a": frontmatterBody("a", "x"),
+	})
+	tool := toolOf(t, api)
+	var captured extension.ForkOptions
+	api.forkFn = func(_ context.Context, opts extension.ForkOptions) (string, error) {
+		captured = opts
+		return "ok", nil
+	}
+	res, err := tool.Execute(context.Background(), "sd-missing", map[string]any{
+		"agent": "a",
+		"task":  "t",
+	}, nil)
+	if err != nil || res.IsError {
+		t.Fatalf("default sessionDir call failed: err=%v res=%+v", err, res)
+	}
+	if captured.SessionDir != "" {
+		t.Errorf("expected empty SessionDir when arg omitted, got %q", captured.SessionDir)
+	}
+}
+
+// TestArtifactsWriteInputOutputMetadataPerRun covers the K.artifacts parity
+// item: with artifacts:true, a sync run writes input/output/metadata JSON
+// under the project's tool-results subagents/artifacts/<runID>/ tree, and
+// the tool result advertises the directory in a `[artifacts: ...]` tail.
+func TestArtifactsWriteInputOutputMetadataPerRun(t *testing.T) {
+	agentDir := t.TempDir()
+	cwd := t.TempDir()
+	dir := t.TempDir()
+	writeProfile(t, dir, "scout", frontmatterBody("scout", "recon"))
+	ext := New()
+	ext.cfg.AgentsDir = dir
+	api := &fakeAPI{agentDir: agentDir, cwd: cwd}
+	if err := ext.Init(api); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	api.forkFn = func(_ context.Context, _ extension.ForkOptions) (string, error) {
+		return "scout reply text", nil
+	}
+	tool := toolOf(t, api)
+
+	res, err := tool.Execute(context.Background(), "art-on", map[string]any{
+		"agent":     "scout",
+		"task":      "scan",
+		"artifacts": true,
+	}, nil)
+	if err != nil || res.IsError {
+		t.Fatalf("artifacts call failed: err=%v res=%+v", err, res)
+	}
+	got := textOf(res)
+	if !strings.Contains(got, "[artifacts: ") {
+		t.Fatalf("expected '[artifacts: <path>]' tail in result, got:\n%s", got)
+	}
+
+	// Locate the artifact dir from the tool result tail.
+	tail := got[strings.Index(got, "[artifacts: ")+len("[artifacts: "):]
+	dirPath := strings.TrimSuffix(strings.SplitN(tail, "]", 2)[0], "]")
+	for _, f := range []string{"input.json", "output.json", "metadata.json"} {
+		if _, statErr := os.Stat(filepath.Join(dirPath, f)); statErr != nil {
+			t.Errorf("expected %s under %s: %v", f, dirPath, statErr)
+		}
+	}
+	inputData, _ := os.ReadFile(filepath.Join(dirPath, "input.json"))
+	if !strings.Contains(string(inputData), `"mode": "single"`) || !strings.Contains(string(inputData), `"scan"`) {
+		t.Errorf("input.json missing mode/task info:\n%s", string(inputData))
+	}
+	outputData, _ := os.ReadFile(filepath.Join(dirPath, "output.json"))
+	if !strings.Contains(string(outputData), "scout reply text") {
+		t.Errorf("output.json should contain final text:\n%s", string(outputData))
+	}
+	metaData, _ := os.ReadFile(filepath.Join(dirPath, "metadata.json"))
+	for _, want := range []string{`"mode": "single"`, `"status": "completed"`, `"durationMs":`} {
+		if !strings.Contains(string(metaData), want) {
+			t.Errorf("metadata.json missing %q:\n%s", want, string(metaData))
+		}
+	}
+}
+
+func TestArtifactsOmittedWritesNoFiles(t *testing.T) {
+	agentDir := t.TempDir()
+	cwd := t.TempDir()
+	dir := t.TempDir()
+	writeProfile(t, dir, "scout", frontmatterBody("scout", "recon"))
+	ext := New()
+	ext.cfg.AgentsDir = dir
+	api := &fakeAPI{agentDir: agentDir, cwd: cwd}
+	if err := ext.Init(api); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	api.forkFn = func(_ context.Context, _ extension.ForkOptions) (string, error) {
+		return "ok", nil
+	}
+	tool := toolOf(t, api)
+	res, err := tool.Execute(context.Background(), "art-off", map[string]any{
+		"agent": "scout",
+		"task":  "scan",
+	}, nil)
+	if err != nil || res.IsError {
+		t.Fatalf("call failed: err=%v res=%+v", err, res)
+	}
+	if strings.Contains(textOf(res), "[artifacts:") {
+		t.Errorf("artifacts omitted should not advertise a path, got:\n%s", textOf(res))
+	}
+	// Artifacts root should not exist at all.
+	artRoot := filepath.Join(agentDir, "tool-results", projectKey(cwd), "subagents", "artifacts")
+	if _, statErr := os.Stat(artRoot); !os.IsNotExist(statErr) {
+		t.Errorf("artifacts dir should not exist when artifacts is omitted, got err=%v", statErr)
+	}
+}
+
+func TestArtifactsRecordsFailureFromDispatch(t *testing.T) {
+	agentDir := t.TempDir()
+	cwd := t.TempDir()
+	dir := t.TempDir()
+	writeProfile(t, dir, "scout", frontmatterBody("scout", "recon"))
+	ext := New()
+	ext.cfg.AgentsDir = dir
+	api := &fakeAPI{agentDir: agentDir, cwd: cwd}
+	if err := ext.Init(api); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	api.forkFn = func(_ context.Context, _ extension.ForkOptions) (string, error) {
+		return "", errors.New("boom")
+	}
+	tool := toolOf(t, api)
+	res, _ := tool.Execute(context.Background(), "art-fail", map[string]any{
+		"agent":     "scout",
+		"task":      "scan",
+		"artifacts": true,
+	}, nil)
+	if !res.IsError {
+		t.Fatalf("expected fork error to surface, got:\n%s", textOf(res))
+	}
+	// Walk the artifact root to find the per-run dir and confirm it
+	// recorded the failure.
+	artRoot := filepath.Join(agentDir, "tool-results", projectKey(cwd), "subagents", "artifacts")
+	entries, err := os.ReadDir(artRoot)
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("expected at least one artifact dir, err=%v entries=%v", err, entries)
+	}
+	metaPath := filepath.Join(artRoot, entries[0].Name(), "metadata.json")
+	metaData, _ := os.ReadFile(metaPath)
+	if !strings.Contains(string(metaData), `"status": "failed"`) {
+		t.Errorf("metadata.json should record failure status:\n%s", string(metaData))
+	}
+	outputData, _ := os.ReadFile(filepath.Join(artRoot, entries[0].Name(), "output.json"))
+	if !strings.Contains(string(outputData), "boom") {
+		t.Errorf("output.json should preserve the error message:\n%s", string(outputData))
 	}
 }
 

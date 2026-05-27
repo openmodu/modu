@@ -46,7 +46,8 @@ Management actions:
   - status: show runtime background subagent tasks; pass id for one task.
   - resume: restart a completed/failed/interrupted background task with a follow-up message.
   - interrupt: cancel a live background task in this process.
-  - doctor: show read-only setup diagnostics.`)
+  - doctor: show read-only setup diagnostics.
+  - intercom: read the per-task intercom inbox; pair with the subagent_intercom_send tool to send messages.`)
 	if t.ext != nil && t.ext.loader != nil {
 		defs := t.ext.loader.List()
 		if len(defs) > 0 {
@@ -79,7 +80,7 @@ func (t *subagentTool) Parameters() any {
 			},
 			"action": map[string]any{
 				"type":        "string",
-				"enum":        []string{"list", "get", "create", "update", "delete", "status", "resume", "interrupt", "doctor"},
+				"enum":        []string{"list", "get", "create", "update", "delete", "status", "resume", "interrupt", "doctor", "intercom"},
 				"description": "Management action. Omit for execution mode.",
 			},
 			"id": map[string]any{
@@ -163,6 +164,34 @@ func (t *subagentTool) Parameters() any {
 			"includeProgress": map[string]any{
 				"type":        "boolean",
 				"description": "When true, append the progress.md body to the tool result after a '---\\n\\n## Progress' marker. Useful for chained runs where the orchestrator wants the full trace alongside the final reply.",
+			},
+			"artifacts": map[string]any{
+				"type":        "boolean",
+				"description": "When true, write per-run debug artifacts (input/output/metadata) under tool-results/<project>/subagents/artifacts/<runID>/.",
+			},
+			"sessionDir": map[string]any{
+				"type":        "string",
+				"description": "Parent dir for background-child run files (session.jsonl, status.json). Relative paths resolve against the parent session cwd. Only meaningful for background forks.",
+			},
+			"clarify": map[string]any{
+				"type":        "boolean",
+				"description": "When true, show a preview of what would run and require host confirmation before dispatching. The non-TUI fallback uses api.Confirm — see PARITY.md for the in-line edit gap.",
+			},
+			"control": map[string]any{
+				"type": "object",
+				"description": "Subagent control overrides. Today only activeNoticeAfterMs is wired " +
+					"(emits api.Notify when a batch async run is still running past that many ms); " +
+					"other fields are accepted but not yet honored — see PARITY.md.",
+				"properties": map[string]any{
+					"enabled":                           map[string]any{"type": "boolean"},
+					"activeNoticeAfterMs":               map[string]any{"type": "integer", "minimum": 1},
+					"needsAttentionAfterMs":             map[string]any{"type": "integer", "minimum": 1},
+					"activeNoticeAfterTurns":            map[string]any{"type": "integer", "minimum": 1},
+					"activeNoticeAfterTokens":           map[string]any{"type": "integer", "minimum": 1},
+					"failedToolAttemptsBeforeAttention": map[string]any{"type": "integer", "minimum": 1},
+					"notifyOn":                          map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+					"notifyChannels":                    map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				},
 			},
 			"parallel": map[string]any{
 				"type":        "array",
@@ -288,6 +317,15 @@ func (t *subagentTool) Execute(ctx context.Context, _ string, args map[string]an
 		}
 	}
 
+	// Clarify gate: build a preview of what would run and confirm with the
+	// user before dispatching. Without a TUI we cannot offer an in-line
+	// edit step, so the gate is preview + yes/no.
+	if clarifyRequested(args) {
+		if proceed, abortText := runClarifyGate(t.ext, mode, args); !proceed {
+			return okResult(abortText, nil), nil
+		}
+	}
+
 	// Top-level parallel/chain/tasks calls can elect to run as a single
 	// background batch — either via `async:true` or via the
 	// force_top_level_async config. The single-mode async path is handled
@@ -298,6 +336,19 @@ func (t *subagentTool) Execute(ctx context.Context, _ string, args map[string]an
 			return errResult(fmt.Sprintf("subagent: %v", dispatchErr)), nil
 		}
 		return okResult(reply, detailsFromText(reply)), nil
+	}
+
+	// Optional per-run debug artifacts. The synchronous branch wraps the
+	// dispatch directly. The batch async branch handles its own artifact
+	// lifecycle inside dispatchBatchAsync so the run id matches the batch
+	// task id callers poll for.
+	var artRun *artifactRun
+	if isArtifactsRequested(args) {
+		var artErr error
+		artRun, artErr = startArtifactRun(t.ext, "", mode, args)
+		if artErr != nil {
+			return errResult(fmt.Sprintf("subagent: %v", artErr)), nil
+		}
 	}
 
 	var (
@@ -315,13 +366,19 @@ func (t *subagentTool) Execute(ctx context.Context, _ string, args map[string]an
 		return errResult(fmt.Sprintf("subagent: unknown mode %q (expected single|parallel|chain)", mode)), nil
 	}
 	if err != nil {
+		_ = artRun.complete("", err)
 		return errResult(fmt.Sprintf("subagent: %v", err)), nil
 	}
 	text, err = applyOutputOptions(t.ext, args, text)
 	if err != nil {
+		_ = artRun.complete(text, err)
 		return errResult(fmt.Sprintf("subagent: %v", err)), nil
 	}
 	text = appendIncludedProgress(t.ext, args, text)
+	if artRun != nil {
+		_ = artRun.complete(text, nil)
+		text = strings.TrimRight(text, "\n") + "\n\n[artifacts: " + artRun.path() + "]"
+	}
 	details := map[string]string{}
 	if agentName, _ := args["agent"].(string); agentName != "" {
 		details["subagent"] = agentName

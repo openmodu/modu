@@ -615,6 +615,44 @@ System prompt for helper.
 	}
 }
 
+// TestBackgroundTaskManagerCreateWithMetadataInDirRedirects covers the
+// host-level half of K.sessionDir: when a caller supplies runDirParent,
+// the manager places the per-task RunDir / StatusFile / SessionFile under
+// that path instead of the manager's default runRoot.
+func TestBackgroundTaskManagerCreateWithMetadataInDirRedirects(t *testing.T) {
+	defaultRoot := t.TempDir()
+	overrideRoot := t.TempDir()
+	mgr := newBackgroundTaskManager()
+	if err := mgr.SetStorePath(filepath.Join(defaultRoot, "background_tasks.json")); err != nil {
+		t.Fatal(err)
+	}
+
+	defaultID := mgr.CreateWithMetadata("subagent", "default-summary", "agentA", "task1", "", "")
+	overrideID := mgr.CreateWithMetadataInDir("subagent", "override-summary", "agentB", "task2", "", "", overrideRoot)
+
+	defaultTask, ok := mgr.Get(defaultID)
+	if !ok {
+		t.Fatalf("default task %s not found", defaultID)
+	}
+	if !strings.HasPrefix(defaultTask.RunDir, defaultRoot) {
+		t.Errorf("default task RunDir should land under %s, got %q", defaultRoot, defaultTask.RunDir)
+	}
+
+	overrideTask, ok := mgr.Get(overrideID)
+	if !ok {
+		t.Fatalf("override task %s not found", overrideID)
+	}
+	if !strings.HasPrefix(overrideTask.RunDir, overrideRoot) {
+		t.Errorf("override task RunDir should land under %s, got %q", overrideRoot, overrideTask.RunDir)
+	}
+	if !strings.HasPrefix(overrideTask.SessionFile, overrideRoot) {
+		t.Errorf("override task SessionFile should land under %s, got %q", overrideRoot, overrideTask.SessionFile)
+	}
+	if !strings.HasPrefix(overrideTask.StatusFile, overrideRoot) {
+		t.Errorf("override task StatusFile should land under %s, got %q", overrideRoot, overrideTask.StatusFile)
+	}
+}
+
 func TestPlanModeTools(t *testing.T) {
 	session := newTestSession(t, newTestModel())
 	var enterTool, exitTool agent.AgentTool

@@ -55,7 +55,7 @@ func (cs *CodingSession) forkSession(ctx context.Context, opts extension.ForkOpt
 	}
 
 	if opts.Background {
-		return cs.forkInBackground(ctx, def, childCwd, initialMessages, opts.Task, opts.ParentTaskID, opts.OutputPath, opts.OutputMode)
+		return cs.forkInBackground(ctx, def, childCwd, initialMessages, opts.Task, opts.ParentTaskID, opts.OutputPath, opts.OutputMode, cs.resolveForkSessionDir(opts.SessionDir))
 	}
 	cs.OnSubagentStart(def.Name, opts.Task, false)
 	var (
@@ -87,8 +87,10 @@ func (cs *CodingSession) forkSession(ctx context.Context, opts extension.ForkOpt
 // forkInBackground launches the child on its own goroutine. Returns a
 // short string the model can pass to task_output to follow up. If the
 // session has no task manager, surfaces a clear error instead of silently
-// dropping the request.
-func (cs *CodingSession) forkInBackground(ctx context.Context, def *subagent.SubagentDefinition, childCwd string, initialMessages []agent.AgentMessage, task, parentID, outputPath, outputMode string) (string, error) {
+// dropping the request. When sessionDirOverride is non-empty the task's
+// session.jsonl/status.json land under that parent dir; otherwise the
+// task manager picks its default run root.
+func (cs *CodingSession) forkInBackground(ctx context.Context, def *subagent.SubagentDefinition, childCwd string, initialMessages []agent.AgentMessage, task, parentID, outputPath, outputMode, sessionDirOverride string) (string, error) {
 	if cs.taskManager == nil {
 		return "", fmt.Errorf("background fork requested but task manager is not configured")
 	}
@@ -97,7 +99,7 @@ func (cs *CodingSession) forkInBackground(ctx context.Context, def *subagent.Sub
 		name = def.Name
 	}
 	outputPath = cs.resolveForkOutputPath(outputPath)
-	taskID := cs.taskManager.CreateWithMetadata("subagent", fmt.Sprintf("%s: %s", name, task), name, task, parentID, outputPath)
+	taskID := cs.taskManager.CreateWithMetadataInDir("subagent", fmt.Sprintf("%s: %s", name, task), name, task, parentID, outputPath, sessionDirOverride)
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	cs.taskManager.RegisterCancel(taskID, cancel)
 	go func() {
@@ -162,6 +164,18 @@ func (cs *CodingSession) resolveForkOutputPath(path string) string {
 		return path
 	}
 	return filepath.Join(cs.RuntimePaths().ToolResultsDir, "subagents", path)
+}
+
+// resolveForkSessionDir turns a caller-supplied session dir override into
+// an absolute path. Empty input passes through so the host's default run
+// root is used. Relative input resolves against the parent session's cwd
+// to match how Cwd/OutputPath are treated.
+func (cs *CodingSession) resolveForkSessionDir(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" || filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Clean(filepath.Join(cs.cwd, path))
 }
 
 func saveForkOutput(path, mode, text string) (string, error) {

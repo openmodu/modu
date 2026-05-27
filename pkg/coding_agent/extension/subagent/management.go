@@ -37,8 +37,10 @@ func runAction(ctx context.Context, ext *Extension, action string, args map[stri
 		return interruptTask(ext, args)
 	case "doctor":
 		return formatDoctor(ext), nil
+	case "intercom":
+		return runIntercomAction(ext, args)
 	default:
-		return "", fmt.Errorf("unknown action %q (expected list|get|create|update|delete|status|resume|interrupt|doctor)", action)
+		return "", fmt.Errorf("unknown action %q (expected list|get|create|update|delete|status|resume|interrupt|doctor|intercom)", action)
 	}
 }
 

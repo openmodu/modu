@@ -60,6 +60,7 @@ func (e *Extension) Init(api extension.ExtensionAPI) error {
 	e.loader = csubagent.NewLoader()
 	e.discover()
 	api.RegisterTool(newSubagentTool(e))
+	api.RegisterTool(newIntercomSendTool(e))
 	if e.loader.Count() > 0 {
 		api.RegisterTool(newLegacySpawnSubagentTool(e))
 	}

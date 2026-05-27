@@ -125,12 +125,30 @@ func dispatchBatchAsync(ctx context.Context, ext *Extension, mode string, args m
 	if ext == nil || ext.batchTasks == nil {
 		return "", fmt.Errorf("batch async unavailable: extension is not initialized")
 	}
+	ctrl, ctrlErr := decodeControlOptions(args["control"])
+	if ctrlErr != nil {
+		return "", ctrlErr
+	}
 	task := ext.batchTasks.reserve(mode)
+	// Optional per-run artifact bundle. Using the batch task id as the run
+	// id keeps the on-disk artifact dir and the caller-facing task_id in
+	// sync, so a `subagent status id=...` later can still locate the
+	// debug files.
+	var artRun *artifactRun
+	if isArtifactsRequested(args) {
+		var artErr error
+		if artRun, artErr = startArtifactRun(ext, task.ID, mode, args); artErr != nil {
+			ext.batchTasks.fail(task.ID, artErr)
+			return "", artErr
+		}
+	}
+	stopNotice := controlActiveNoticeWatcher(ext, ctrl, task.ID, mode)
 	// Use a background-rooted context so the goroutine survives Execute
 	// returning. Take cancellation cues from the parent only by snapshotting
 	// what it needs before we detach (we don't, today — runParallel/runChain
 	// only read args).
 	go func() {
+		defer stopNotice()
 		bgCtx := context.Background()
 		var (
 			out string
@@ -145,10 +163,12 @@ func dispatchBatchAsync(ctx context.Context, ext *Extension, mode string, args m
 			err = fmt.Errorf("unsupported batch mode %q", mode)
 		}
 		if err != nil {
+			_ = artRun.complete("", err)
 			ext.batchTasks.fail(task.ID, err)
 			return
 		}
 		out = appendIncludedProgress(ext, args, out)
+		_ = artRun.complete(out, nil)
 		ext.batchTasks.complete(task.ID, out)
 	}()
 	_ = ctx // currently unused; batch async detaches from the parent ctx

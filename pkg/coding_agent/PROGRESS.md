@@ -207,6 +207,11 @@ High-priority gaps identified before this round:
   Added init-time stale-run reconciler in the subagent extension: any recovered subagent task still reporting `running` from a prior session is rewritten on disk to `status: stale`, decorated as `[stale]` in `status` output, and counted in `doctor` (which downgrades to warning when stale runs exist)
   Added top-level batch async for `mode:parallel|chain + async:true` (and the omitted-async `force_top_level_async` path): the extension reserves a synthetic `subagent-batch-N` task id, runs the dispatch in a goroutine using a background-rooted context, and merges the batch task into `status` output so callers can poll the aggregated result
   Added pi-style `includeProgress: true` so the subagent tool result appends the `progress.md` body after a `## Progress` marker; works in single, parallel, chain, and batch async modes
+  Added pi-style `artifacts: true` per-run debug bundle (input/output/metadata JSON under tool-results/<project>/subagents/artifacts/<runID>/); for batch async the runID matches the synthetic batch task id so the on-disk bundle and the caller-visible id agree
+  Added pi-style `sessionDir` override for background children's session.jsonl/status.json via a new `ForkOptions.SessionDir` field, plumbed through `backgroundTaskManager.CreateWithMetadataInDir`
+  Added pi-style `control: { activeNoticeAfterMs }` skeleton for batch async runs (one-shot timer that emits api.Notify on threshold); remaining ControlOverrides fields are accepted in schema but not yet honored at runtime
+  Added pi-style `clarify: true` non-TUI gate: builds a structured preview of the planned dispatch and gates it on `api.Confirm`; denial returns the preview as the tool result without dispatching
+  Added pi-style file-based intercom MVP: new `subagent_intercom_send` tool writes to `tool-results/<project>/subagents/intercom/<taskID>.jsonl`, and `action: "intercom"` reads the inbox; full publisher/subscriber pipeline + auto-attach left deferred per PARITY.md
 
 ## Still Missing
 

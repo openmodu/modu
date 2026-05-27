@@ -71,6 +71,12 @@ type ForkOptions struct {
 	// system prompt: "" / "none" / "user" / "project" / "both".
 	// Unknown values behave like "".
 	MemoryScope string
+	// SessionDir, when non-empty, asks the host to place this child's
+	// per-run directory (containing session.jsonl + status.json) under a
+	// caller-supplied parent path instead of the host's default
+	// background-task run root. Relative paths resolve against the parent
+	// session cwd. Only meaningful for background forks; ignored otherwise.
+	SessionDir string
 }
 
 // Extension is the interface that all extensions must implement.

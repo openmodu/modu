@@ -45,6 +45,7 @@ func runSingle(ctx context.Context, ext *Extension, args map[string]any) (string
 	contextMode, _ := args["context"].(string)
 	cwd, _ := args["cwd"].(string)
 	thinking, _ := args["thinking"].(string)
+	sessionDir, _ := args["sessionDir"].(string)
 	task = applyTemplateVars(task, substitutions{
 		chainDir: resolveChainDirForSubst(ext, chainDir),
 	})
@@ -69,6 +70,7 @@ func runSingle(ctx context.Context, ext *Extension, args map[string]any) (string
 		contextMode:   contextMode,
 		cwd:           cwd,
 		thinking:      thinking,
+		sessionDir:    sessionDir,
 	})
 }
 
@@ -98,6 +100,7 @@ func runParallel(ctx context.Context, ext *Extension, args map[string]any) (stri
 	topChainDir, _ := args["chainDir"].(string)
 	topContext, _ := args["context"].(string)
 	topWorktree, _ := args["worktree"].(bool)
+	topSessionDir, _ := args["sessionDir"].(string)
 	progressCreated := false
 	return runParallelCalls(ctx, ext, calls, parallelOptions{
 		chainDir:        topChainDir,
@@ -105,6 +108,7 @@ func runParallel(ctx context.Context, ext *Extension, args map[string]any) (stri
 		concurrency:     concurrency,
 		resolvedChain:   resolveChainDirForSubst(ext, topChainDir),
 		worktree:        topWorktree,
+		sessionDir:      topSessionDir,
 		progressCreated: &progressCreated,
 	})
 }
@@ -152,6 +156,7 @@ type parallelOptions struct {
 	resolvedChain   string
 	failFast        bool
 	worktree        bool
+	sessionDir      string
 	progressCreated *bool
 }
 
@@ -222,6 +227,7 @@ func runParallelCalls(ctx context.Context, ext *Extension, calls []callSpec, opt
 					cwd:           call.cwd,
 					isolation:     isolationOverride,
 					thinking:      call.thinking,
+					sessionDir:    opts.sessionDir,
 				})
 			}
 			if err == nil {
@@ -280,6 +286,7 @@ func runChain(ctx context.Context, ext *Extension, args map[string]any) (string,
 	progressCreated := false
 	topContext, _ := args["context"].(string)
 	topChainDir, _ := args["chainDir"].(string)
+	topSessionDir, _ := args["sessionDir"].(string)
 	topConcurrency, err := optionalPositiveInt(args["concurrency"])
 	if err != nil {
 		return "", err
@@ -315,6 +322,7 @@ func runChain(ctx context.Context, ext *Extension, args map[string]any) (string,
 				resolvedChain:   resolvedChain,
 				failFast:        step.failFast,
 				worktree:        step.worktree,
+				sessionDir:      topSessionDir,
 				progressCreated: &progressCreated,
 			})
 			if err != nil {
@@ -358,6 +366,7 @@ func runChain(ctx context.Context, ext *Extension, args map[string]any) (string,
 			contextMode:   topContext,
 			cwd:           c.cwd,
 			thinking:      c.thinking,
+			sessionDir:    topSessionDir,
 		})
 		if err != nil {
 			return "", fmt.Errorf("chain step %d (%s): %w", i, c.agent, err)
@@ -416,6 +425,10 @@ type callOptions struct {
 	// thinking, when set, overrides the profile's ThinkingLevel for this
 	// call only. Empty means "inherit profile".
 	thinking string
+	// sessionDir, when non-empty, requests the host to place this child's
+	// per-run files under a caller-supplied parent path. Only meaningful
+	// for background forks; ignored otherwise.
+	sessionDir string
 }
 
 // decodeCallList validates and unpacks `args["parallel"]` / `args["chain"]`.
@@ -657,6 +670,7 @@ func forkOptionsFor(def *csubagent.SubagentDefinition, cfg Config, task string, 
 		Isolation:       effectiveIsolation(def, opts.isolation),
 		Skills:          effectiveSkills(def, opts.skill),
 		MemoryScope:     def.MemoryScope,
+		SessionDir:      strings.TrimSpace(opts.sessionDir),
 	}
 }
 

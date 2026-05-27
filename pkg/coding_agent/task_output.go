@@ -55,6 +55,17 @@ func (m *backgroundTaskManager) Create(kind, summary string) string {
 }
 
 func (m *backgroundTaskManager) CreateWithMetadata(kind, summary, agentName, task, parentID, outputFile string) string {
+	return m.CreateWithMetadataInDir(kind, summary, agentName, task, parentID, outputFile, "")
+}
+
+// CreateWithMetadataInDir is like CreateWithMetadata but lets the caller
+// override the per-task run dir parent. When runDirParent is empty the
+// manager falls back to its global runRoot, preserving the default layout
+// (status.json / session.jsonl land under runRoot/<id>/). When set, the
+// task's RunDir becomes runDirParent/<id> and status / session files land
+// there. Used by extension callers that want to keep child session files
+// adjacent to a caller-controlled directory.
+func (m *backgroundTaskManager) CreateWithMetadataInDir(kind, summary, agentName, task, parentID, outputFile, runDirParent string) string {
 	m.mu.Lock()
 	m.nextID++
 	id := fmt.Sprintf("task-%d", m.nextID)
@@ -70,6 +81,9 @@ func (m *backgroundTaskManager) CreateWithMetadata(kind, summary, agentName, tas
 		OutputFile: outputFile,
 		CreatedAt:  now,
 		UpdatedAt:  now,
+	}
+	if strings.TrimSpace(runDirParent) != "" {
+		taskRecord.RunDir = filepath.Join(runDirParent, id)
 	}
 	taskRecord = m.withRunPathsLocked(taskRecord)
 	m.tasks[id] = taskRecord
@@ -259,10 +273,17 @@ func (m *backgroundTaskManager) ensureRunPathsLocked() {
 }
 
 func (m *backgroundTaskManager) withRunPathsLocked(task taskoutput.Task) taskoutput.Task {
-	if strings.TrimSpace(task.ID) == "" || strings.TrimSpace(m.runRoot) == "" || task.Kind != "subagent" {
+	if strings.TrimSpace(task.ID) == "" || task.Kind != "subagent" {
 		return task
 	}
 	if strings.TrimSpace(task.RunDir) == "" {
+		// Default: derive from the manager's runRoot. When neither RunDir
+		// nor runRoot is set there's nowhere to place the per-task files;
+		// callers (e.g. SessionDir override) can still pre-set RunDir to
+		// land the artifacts under a custom parent.
+		if strings.TrimSpace(m.runRoot) == "" {
+			return task
+		}
 		task.RunDir = filepath.Join(m.runRoot, task.ID)
 	}
 	if strings.TrimSpace(task.StatusFile) == "" {

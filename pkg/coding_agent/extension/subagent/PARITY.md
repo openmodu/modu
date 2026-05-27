@@ -51,6 +51,27 @@ The reference snapshot is the `pi-subagents` tree at this repo's local clone
 - `includeProgress: true` appends the call's `progress.md` body to the
   tool result after a `## Progress` marker. Works in single, parallel,
   chain, and batch async modes.
+- `artifacts: true` writes per-run input/output/metadata JSON under
+  `tool-results/<project>/subagents/artifacts/<runID>/`; the tool reply
+  advertises the directory in an `[artifacts: <path>]` tail. For batch
+  async the runID is the synthetic batch task id so the on-disk bundle
+  and the caller-visible task id agree.
+- `sessionDir` overrides where background children's session.jsonl /
+  status.json land (relative to parent session cwd). Propagated through
+  `ForkOptions.SessionDir` and a new `taskManager.CreateWithMetadataInDir`
+  host method.
+- `control: { activeNoticeAfterMs, ... }` skeleton: when set, batch async
+  runs schedule a one-shot timer that calls `api.Notify` if the run is
+  still in flight past the threshold; the rest of pi's ControlOverrides
+  fields are accepted but not yet honored.
+- `clarify: true` invokes the host's `api.Confirm` with a structured
+  preview of the dispatch (mode + agent/task lists + flags) before any
+  fork runs. Denial returns the preview as the tool result without
+  dispatching. No in-line editor — see deferred section.
+- File-based intercom MVP: every task can receive messages in
+  `tool-results/<project>/subagents/intercom/<taskID>.jsonl`. Writers use
+  the new `subagent_intercom_send` tool (registered alongside the
+  subagent tool); readers use `action: "intercom"` with the same task id.
 
 ### Async / background runs
 - `async: true` single override forces background; `async: false` overrides a
@@ -121,52 +142,47 @@ The reference snapshot is the `pi-subagents` tree at this repo's local clone
 
 ## What's missing
 
-The remaining items are not "small patches" — each one needs host- or
-infrastructure-level work that the extension can't ship alone. They stay
-parked here rather than getting half-implemented inside the extension.
+Most of pi's surface now has an analog in the extension. The remaining
+pieces are deliberate omissions where pi's design depends on infrastructure
+we have not built yet.
 
-### G. `control` overrides (long-running / needs-attention notifications)
+### G (partial). Control overrides — `needsAttention*` / `failedToolAttempts*`
 **Pi ref:** `src/runs/shared/long-running-guard.ts`,
-`src/runs/shared/completion-guard.ts`,
-`src/runs/shared/subagent-control.ts`,
+`src/runs/shared/completion-guard.ts`, `src/runs/shared/subagent-control.ts`,
 `src/extension/control-notices.ts`, schema `ControlOverrides`.
 
-Pi tracks per-run heuristics (`needsAttentionAfterMs`, `activeNoticeAfterMs`,
-`failedToolAttemptsBeforeAttention`, etc.) and pushes notices through events
-and intercom back into the parent agent's flow. Implementing the
-configuration surface alone would be misleading: without a notification
-loop that the parent's LLM context actually consumes, the notices are
-write-only and don't change behavior. Needs a host design for "feed
-subagent control notices back as parent context" before the schema is
-worth wiring.
+`activeNoticeAfterMs` is wired through `api.Notify`. The pi sibling fields
+(`needsAttentionAfterMs`, `activeNoticeAfterTurns`, `activeNoticeAfterTokens`,
+`failedToolAttemptsBeforeAttention`, `notifyOn`, `notifyChannels` beyond
+"event") are accepted by the schema but ignored at runtime — they require
+per-run activity tracking (token/turn accounting, tool failure callbacks)
+that the extension has no visibility into today. Filling them in cleanly
+needs a host design for feeding subagent control notices back into the
+parent's LLM context.
 
-### H. Intercom bridge
+### H (partial). Full intercom bridge
 **Pi ref:** `src/intercom/*` (~750 LOC).
 
-Agent-to-agent message bus between parent and background children. New
-infrastructure addition, not a patch — there is no analogue in the current
-host. Stays deferred until there is a concrete use case (currently the
-only motivation is pi parity for its own sake).
+The MVP file-based inbox + send tool is in place; pi additionally has a
+publisher/subscriber pipeline with retry, mode toggles
+(`off`/`fork-only`/`always`), and intercom-aware tool delivery (children
+get the bridge auto-attached). Those layers stay deferred until a real
+use case justifies the design work.
 
-### I. `clarify` TUI preview/edit
+### I (partial). `clarify` in-line edit
 **Pi ref:** `src/runs/foreground/chain-clarify.ts`,
 `src/slash/slash-commands.ts` (`/clarify` flow).
 
-TUI-driven preview/edit before execution. The execution side could be
-sketched in the extension, but the TUI half is the point of the feature.
-Wait for the matching TUI scaffolding.
+We have preview + yes/no confirmation through `api.Confirm`. Pi's full
+flow lets the user *edit* the dispatch (rewrite task strings, swap agents)
+before approving. That needs a TUI editor; revisit when matching UI
+scaffolding lands.
 
-### K. Misc params on `SubagentParams` (partial)
-- `includeProgress` — **done** (see "What's done" above).
-- `sessionDir` — needs a new `ForkOptions.SessionDir` field plus
-  per-task plumbing in the host's `backgroundTaskManager`. Pure
-  extension-layer change cannot redirect where child session logs land.
-- `share` (upload session to Gist) — needs a host-level session sharing
-  pipeline. Out of scope.
-- `artifacts` — pi-subagents writes per-run debug artifacts (input.json,
-  output.json, metadata.json) under its own results dir. We don't have a
-  matching artifact pipeline; the parameter currently has no meaningful
-  effect.
+### K. `share` (Gist upload)
+**Pi ref:** `src/runs/background/subagent-runner.ts` (share path).
+
+Needs a host-level session sharing pipeline (Gist API client + auth). Out
+of scope until that infrastructure exists.
 
 ## Explicitly deferred / out of scope
 
