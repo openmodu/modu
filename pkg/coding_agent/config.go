@@ -97,13 +97,12 @@ type OTelConfig struct {
 }
 
 type FeatureConfig struct {
-	MemoryTool        *bool `json:"memoryTool,omitempty"`
-	TodoTool          *bool `json:"todoTool,omitempty"`
-	TaskOutputTool    *bool `json:"taskOutputTool,omitempty"`
-	PlanMode          *bool `json:"planMode,omitempty"`
-	WorktreeMode      *bool `json:"worktreeMode,omitempty"`
-	SpawnSubagentTool *bool `json:"spawnSubagentTool,omitempty"`
-	HarnessActions    *bool `json:"harnessActions,omitempty"`
+	MemoryTool     *bool `json:"memoryTool,omitempty"`
+	TodoTool       *bool `json:"todoTool,omitempty"`
+	TaskOutputTool *bool `json:"taskOutputTool,omitempty"`
+	PlanMode       *bool `json:"planMode,omitempty"`
+	WorktreeMode   *bool `json:"worktreeMode,omitempty"`
+	HarnessActions *bool `json:"harnessActions,omitempty"`
 }
 
 type PermissionConfig struct {
@@ -250,13 +249,12 @@ func DefaultConfig() *Config {
 			},
 		},
 		Features: FeatureConfig{
-			MemoryTool:        boolPtr(true),
-			TodoTool:          boolPtr(true),
-			TaskOutputTool:    boolPtr(false), // opt-in: only needed for background task workflows
-			PlanMode:          boolPtr(true),
-			WorktreeMode:      boolPtr(true),
-			SpawnSubagentTool: boolPtr(true),
-			HarnessActions:    boolPtr(true),
+			MemoryTool:     boolPtr(true),
+			TodoTool:       boolPtr(true),
+			TaskOutputTool: boolPtr(false), // opt-in: only needed for background task workflows
+			PlanMode:       boolPtr(true),
+			WorktreeMode:   boolPtr(true),
+			HarnessActions: boolPtr(true),
 		},
 		Permissions: PermissionConfig{},
 	}
@@ -300,9 +298,6 @@ func (c *Config) FeatureTaskOutputTool() bool {
 func (c *Config) FeaturePlanMode() bool { return c == nil || featureEnabled(c.Features.PlanMode) }
 func (c *Config) FeatureWorktreeMode() bool {
 	return c == nil || featureEnabled(c.Features.WorktreeMode)
-}
-func (c *Config) FeatureSpawnSubagentTool() bool {
-	return c == nil || featureEnabled(c.Features.SpawnSubagentTool)
 }
 func (c *Config) FeatureHarnessActions() bool {
 	return c == nil || featureEnabled(c.Features.HarnessActions)
