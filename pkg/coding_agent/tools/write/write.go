@@ -16,7 +16,7 @@ type WriteTool struct {
 	cwd string
 }
 
-func NewTool(cwd string) *WriteTool {
+func NewTool(cwd string) agent.Tool {
 	return &WriteTool{cwd: cwd}
 }
 

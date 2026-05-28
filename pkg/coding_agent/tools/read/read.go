@@ -29,7 +29,7 @@ type ReadTool struct {
 	cwd string
 }
 
-func NewTool(cwd string) *ReadTool {
+func NewTool(cwd string) agent.Tool {
 	return &ReadTool{cwd: cwd}
 }
 

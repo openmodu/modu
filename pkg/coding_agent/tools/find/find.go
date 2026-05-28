@@ -21,7 +21,7 @@ type FindTool struct {
 	cwd string
 }
 
-func NewTool(cwd string) *FindTool {
+func NewTool(cwd string) agent.Tool {
 	return &FindTool{cwd: cwd}
 }
 

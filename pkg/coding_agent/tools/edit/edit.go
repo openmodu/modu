@@ -17,7 +17,7 @@ type EditTool struct {
 	cwd string
 }
 
-func NewTool(cwd string) *EditTool {
+func NewTool(cwd string) agent.Tool {
 	return &EditTool{cwd: cwd}
 }
 

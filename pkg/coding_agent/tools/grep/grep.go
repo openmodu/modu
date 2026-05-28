@@ -23,7 +23,7 @@ type GrepTool struct {
 	cwd string
 }
 
-func NewTool(cwd string) *GrepTool {
+func NewTool(cwd string) agent.Tool {
 	return &GrepTool{cwd: cwd}
 }
 

@@ -19,7 +19,7 @@ type LsTool struct {
 	cwd string
 }
 
-func NewTool(cwd string) *LsTool {
+func NewTool(cwd string) agent.Tool {
 	return &LsTool{cwd: cwd}
 }
 
