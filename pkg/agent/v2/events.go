@@ -53,6 +53,10 @@ func (s *EventStream) Push(event Event) {
 	}
 }
 
+func (s *EventStream) Emit(event Event) {
+	s.Push(event)
+}
+
 func (s *EventStream) Resolve(messages []AgentMessage, err error) {
 	if s != nil {
 		s.underlying.Resolve(messages, err)
@@ -73,7 +77,29 @@ func (s *EventStream) Result() ([]AgentMessage, error) {
 	return s.underlying.Result()
 }
 
-func emitMessage(stream *EventStream, message AgentMessage) {
-	stream.Push(Event{Type: EventTypeMessageStart, Message: message})
-	stream.Push(Event{Type: EventTypeMessageEnd, Message: message})
+func emitEvent(sink EventSink, event Event) {
+	if sink != nil {
+		sink.Emit(event)
+	}
+}
+
+func emitMessageTo(sink EventSink, message AgentMessage) {
+	emitEvent(sink, Event{Type: EventTypeMessageStart, Message: message})
+	emitEvent(sink, Event{Type: EventTypeMessageEnd, Message: message})
+}
+
+type discardEvents struct{}
+
+func (discardEvents) Emit(Event) {}
+
+func resolveEvents(sink EventSink, messages []AgentMessage, err error) {
+	if stream, ok := sink.(*EventStream); ok {
+		stream.Resolve(messages, err)
+	}
+}
+
+func closeEvents(sink EventSink) {
+	if stream, ok := sink.(*EventStream); ok {
+		stream.Close()
+	}
 }

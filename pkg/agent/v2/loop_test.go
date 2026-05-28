@@ -18,8 +18,8 @@ type fakeLLM struct {
 func (f *fakeLLM) Complete(ctx context.Context, input LLMInput) (*types.AssistantMessage, error) {
 	msg := f.messages[f.calls]
 	f.calls++
-	input.Events.Push(Event{Type: EventTypeMessageStart, Message: *msg})
-	input.Events.Push(Event{Type: EventTypeMessageEnd, Message: *msg})
+	emitEvent(input.Events, Event{Type: EventTypeMessageStart, Message: *msg})
+	emitEvent(input.Events, Event{Type: EventTypeMessageEnd, Message: *msg})
 	return msg, nil
 }
 
@@ -245,8 +245,11 @@ func TestV1CompatCompleteWithRetrySuccess(t *testing.T) {
 
 	msg, err := (DefaultLLM{}).Complete(context.Background(), LLMInput{
 		Context: AgentContext{},
-		Config:  Config{Model: model, StreamFn: streamFn},
-		Events:  events,
+		Options: LLMOptions{
+			Model:    model,
+			StreamFn: streamFn,
+		},
+		Events: events,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -273,8 +276,12 @@ func TestV1CompatCompleteWithRetryRetriesTransient(t *testing.T) {
 
 	msg, err := (DefaultLLM{}).Complete(context.Background(), LLMInput{
 		Context: AgentContext{},
-		Config:  Config{Model: model, StreamFn: streamFn, MaxRetryDelayMs: 10},
-		Events:  events,
+		Options: LLMOptions{
+			Model:           model,
+			StreamFn:        streamFn,
+			MaxRetryDelayMs: 10,
+		},
+		Events: events,
 	})
 	if err != nil {
 		t.Fatalf("expected success after retries, got: %v", err)
@@ -301,14 +308,37 @@ func TestV1CompatCompleteWithRetryNoPermanentRetry(t *testing.T) {
 
 	_, err := (DefaultLLM{}).Complete(context.Background(), LLMInput{
 		Context: AgentContext{},
-		Config:  Config{Model: model, StreamFn: streamFn},
-		Events:  events,
+		Options: LLMOptions{
+			Model:    model,
+			StreamFn: streamFn,
+		},
+		Events: events,
 	})
 	if err == nil {
 		t.Fatal("expected error for permanent failure")
 	}
 	if atomic.LoadInt32(&attempts) != 1 {
 		t.Fatalf("permanent errors should not retry, got %d attempts", atomic.LoadInt32(&attempts))
+	}
+}
+
+func TestV2DefaultLLMUsesStreamDefaultWhenStreamFnMissing(t *testing.T) {
+	events := NewEventStream()
+	drain(events)
+	defer events.Close()
+
+	_, err := (DefaultLLM{}).Complete(context.Background(), LLMInput{
+		Context: AgentContext{},
+		Options: LLMOptions{
+			Model: &types.Model{ID: "mock", ProviderID: "missing-provider"},
+		},
+		Events: events,
+	})
+	if err == nil {
+		t.Fatal("expected missing provider error")
+	}
+	if got := err.Error(); got != `no provider registered for "missing-provider"` {
+		t.Fatalf("expected StreamDefault provider lookup error, got %q", got)
 	}
 }
 

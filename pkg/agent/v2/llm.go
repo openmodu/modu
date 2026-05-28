@@ -27,8 +27,8 @@ func (DefaultLLM) Complete(ctx context.Context, input LLMInput) (*types.Assistan
 
 func completeWithRetry(ctx context.Context, input LLMInput) (*types.AssistantMessage, error) {
 	maxDelayMs := defaultMaxDelayMs
-	if input.Config.MaxRetryDelayMs > 0 {
-		maxDelayMs = input.Config.MaxRetryDelayMs
+	if input.Options.MaxRetryDelayMs > 0 {
+		maxDelayMs = input.Options.MaxRetryDelayMs
 	}
 
 	var lastErr error
@@ -51,24 +51,25 @@ func completeWithRetry(ctx context.Context, input LLMInput) (*types.AssistantMes
 }
 
 func completeOnce(ctx context.Context, input LLMInput) (*types.AssistantMessage, error) {
-	if err := requireModel(input.Config.Model); err != nil {
+	if err := requireModel(input.Options.Model); err != nil {
 		return nil, err
 	}
-	if input.Config.StreamFn == nil {
-		return nil, fmt.Errorf("stream function is required")
+	streamFn := input.Options.StreamFn
+	if streamFn == nil {
+		streamFn = StreamDefault
 	}
 
 	messages := input.Context.Messages
-	if input.Config.TransformContext != nil {
-		next, err := input.Config.TransformContext(ctx, messages)
+	if input.Options.TransformContext != nil {
+		next, err := input.Options.TransformContext(ctx, messages)
 		if err != nil {
 			return nil, err
 		}
 		messages = next
 	}
 
-	if input.Config.ConvertToLLM != nil {
-		next, err := input.Config.ConvertToLLM(messages)
+	if input.Options.ConvertToLLM != nil {
+		next, err := input.Options.ConvertToLLM(messages)
 		if err != nil {
 			return nil, err
 		}
@@ -77,30 +78,30 @@ func completeOnce(ctx context.Context, input LLMInput) (*types.AssistantMessage,
 		messages = defaultConvertToLLM(messages)
 	}
 
-	apiKey := input.Config.APIKey
-	if input.Config.GetAPIKey != nil {
-		key, err := input.Config.GetAPIKey(input.Config.Model.ProviderID)
+	apiKey := input.Options.APIKey
+	if input.Options.GetAPIKey != nil {
+		key, err := input.Options.GetAPIKey(input.Options.Model.ProviderID)
 		if err == nil && key != "" {
 			apiKey = key
 		}
 	}
 
-	response, err := input.Config.StreamFn(ctx, input.Config.Model, &types.LLMContext{
+	response, err := streamFn(ctx, input.Options.Model, &types.LLMContext{
 		SystemPrompt: input.Context.SystemPrompt,
 		Messages:     []types.AgentMessage(messages),
 		Tools:        toolDefinitions(input.Context.Tools),
 	}, &types.SimpleStreamOptions{
 		StreamOptions: types.StreamOptions{
-			Temperature:     input.Config.Temperature,
-			MaxTokens:       input.Config.MaxTokens,
+			Temperature:     input.Options.Temperature,
+			MaxTokens:       input.Options.MaxTokens,
 			APIKey:          apiKey,
-			CacheRetention:  input.Config.CacheRetention,
-			SessionID:       input.Config.SessionID,
-			Headers:         input.Config.Headers,
-			MaxRetryDelayMs: input.Config.MaxRetryDelayMs,
+			CacheRetention:  input.Options.CacheRetention,
+			SessionID:       input.Options.SessionID,
+			Headers:         input.Options.Headers,
+			MaxRetryDelayMs: input.Options.MaxRetryDelayMs,
 		},
-		Reasoning:       input.Config.Reasoning,
-		ThinkingBudgets: input.Config.ThinkingBudgets,
+		Reasoning:       input.Options.Reasoning,
+		ThinkingBudgets: input.Options.ThinkingBudgets,
 	})
 	if err != nil {
 		return nil, err
@@ -119,20 +120,20 @@ func defaultConvertToLLM(messages []AgentMessage) []AgentMessage {
 	return out
 }
 
-func collectAssistantMessage(response types.EventStream, events *EventStream) (*types.AssistantMessage, error) {
+func collectAssistantMessage(response types.EventStream, events EventSink) (*types.AssistantMessage, error) {
 	addedStart := false
 	for event := range response.Events() {
 		switch event.Type {
 		case types.EventStart:
 			if event.Partial != nil {
 				addedStart = true
-				events.Push(Event{Type: EventTypeMessageStart, Message: *event.Partial})
+				emitEvent(events, Event{Type: EventTypeMessageStart, Message: *event.Partial})
 			}
 		case types.EventTextStart, types.EventTextDelta, types.EventTextEnd,
 			types.EventThinkingStart, types.EventThinkingDelta, types.EventThinkingEnd,
 			types.EventToolCallStart, types.EventToolCallDelta, types.EventToolCallEnd:
 			if event.Partial != nil {
-				events.Push(Event{Type: EventTypeMessageUpdate, Message: *event.Partial, StreamEvent: &event})
+				emitEvent(events, Event{Type: EventTypeMessageUpdate, Message: *event.Partial, StreamEvent: &event})
 			}
 		case types.EventDone, types.EventError:
 			finalMessage, err := response.Result()
@@ -143,9 +144,9 @@ func collectAssistantMessage(response types.EventStream, events *EventStream) (*
 				return nil, fmt.Errorf("missing final message")
 			}
 			if !addedStart {
-				events.Push(Event{Type: EventTypeMessageStart, Message: *finalMessage})
+				emitEvent(events, Event{Type: EventTypeMessageStart, Message: *finalMessage})
 			}
-			events.Push(Event{Type: EventTypeMessageEnd, Message: *finalMessage})
+			emitEvent(events, Event{Type: EventTypeMessageEnd, Message: *finalMessage})
 			return finalMessage, nil
 		}
 	}

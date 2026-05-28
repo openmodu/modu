@@ -12,6 +12,14 @@ The split is intentionally small:
 retry, tool approval, tool execution, and parallel tool batches live behind
 those interfaces instead of inside the loop.
 
+Runtime-only behaviour is supplied through `RuntimeHooks`, not public `Config`.
+This keeps queue polling, tool approval, and max-step resume handling out of the
+configuration object callers persist or pass around.
+
+Events are emitted through the small `EventSink` interface. `EventStream` is the
+default sink, but tests and alternate runtimes can use a recorder without
+draining channels.
+
 `Agent` is a thin stateful facade over `Loop`. It owns state, subscriptions,
 prompt helpers, steering/follow-up queues, and interrupt resume state, while
 the execution path still goes through the inverted `Loop -> LLM/Tools`
@@ -25,6 +33,7 @@ result, err := loop.Run(ctx, agent.LoopInput{
     Prompts: []agent.AgentMessage{userMessage},
     Context: agent.AgentContext{Tools: []agent.Tool{tool}},
     Config:  agent.Config{Model: model, StreamFn: streamFn},
+    Runtime: agent.RuntimeHooks{},
     Events:  events,
 })
 ```
@@ -32,6 +41,8 @@ result, err := loop.Run(ctx, agent.LoopInput{
 The default implementations currently preserve these V1 behaviours:
 
 - transient LLM errors retry with exponential backoff
+- nil `StreamFn` uses `StreamDefault`, which looks up the provider by
+  `model.ProviderID`
 - nil `ConvertToLLM` filters messages to provider-compatible roles
 - tool arguments are validated against JSON schema before execution
 - tool calls can run in parallel when tools implement `ParallelTool`

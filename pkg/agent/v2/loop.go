@@ -21,14 +21,9 @@ func (l *Loop) Run(ctx context.Context, input LoopInput) (LoopResult, error) {
 	if l == nil {
 		l = NewLoop(nil, nil)
 	}
-	stream := input.Events
-	if stream == nil {
-		stream = NewEventStream()
-		go func() {
-			for range stream.Events() {
-			}
-		}()
-		defer stream.Close()
+	events := input.Events
+	if events == nil {
+		events = discardEvents{}
 	}
 
 	newMessages := append([]AgentMessage{}, input.Prompts...)
@@ -38,30 +33,30 @@ func (l *Loop) Run(ctx context.Context, input LoopInput) (LoopResult, error) {
 		Tools:        input.Context.Tools,
 	}
 
-	stream.Push(Event{Type: EventTypeAgentStart})
+	emitEvent(events, Event{Type: EventTypeAgentStart})
 	for _, prompt := range input.Prompts {
-		emitMessage(stream, prompt)
+		emitMessageTo(events, prompt)
 	}
 
 	stepCount := 0
-	pending := getMessages(input.Config.GetSteeringMessages)
+	pending := getMessages(input.Runtime.GetSteeringMessages)
 	for {
 		if ctx.Err() != nil {
-			return finish(stream, newMessages, ctx.Err())
+			return finish(events, newMessages, ctx.Err())
 		}
 		if len(pending) > 0 {
-			appendMessages(stream, &current, &newMessages, pending)
+			appendMessages(events, &current, &newMessages, pending)
 			pending = nil
 		}
 		if input.Config.MaxSteps > 0 && stepCount >= input.Config.MaxSteps {
 			interrupt := &InterruptEvent{Reason: InterruptReasonMaxSteps, StepCount: stepCount}
-			stream.Push(Event{Type: EventTypeInterrupt, Interrupt: interrupt})
-			if input.Config.onMaxStepsReached == nil {
-				return finish(stream, newMessages, nil)
+			emitEvent(events, Event{Type: EventTypeInterrupt, Interrupt: interrupt})
+			if input.Runtime.OnMaxStepsReached == nil {
+				return finish(events, newMessages, nil)
 			}
-			decision := input.Config.onMaxStepsReached(stepCount)
+			decision := input.Runtime.OnMaxStepsReached(stepCount)
 			if !decision.Allow {
-				return finish(stream, newMessages, nil)
+				return finish(events, newMessages, nil)
 			}
 			if decision.Message != "" {
 				pending = []AgentMessage{types.UserMessage{Role: RoleUser, Content: decision.Message}}
@@ -70,30 +65,30 @@ func (l *Loop) Run(ctx context.Context, input LoopInput) (LoopResult, error) {
 			continue
 		}
 
-		stream.Push(Event{Type: EventTypeTurnStart})
+		emitEvent(events, Event{Type: EventTypeTurnStart})
 		assistantMessage, err := l.LLM.Complete(ctx, LLMInput{
 			Context: current,
-			Config:  input.Config,
-			Events:  stream,
+			Options: llmOptions(input.Config),
+			Events:  events,
 		})
 		if err != nil {
-			return finish(stream, newMessages, err)
+			return finish(events, newMessages, err)
 		}
 		stepCount++
 		newMessages = append(newMessages, assistantMessage)
 		current.Messages = append(current.Messages, assistantMessage)
 
 		if assistantMessage.StopReason == "error" || assistantMessage.StopReason == "aborted" {
-			stream.Push(Event{Type: EventTypeTurnEnd, Message: assistantMessage})
-			return finish(stream, newMessages, nil)
+			emitEvent(events, Event{Type: EventTypeTurnEnd, Message: assistantMessage})
+			return finish(events, newMessages, nil)
 		}
 
 		toolCalls := extractToolCalls(assistantMessage)
 		if len(toolCalls) == 0 {
-			stream.Push(Event{Type: EventTypeTurnEnd, Message: assistantMessage})
-			followUps := getMessages(input.Config.GetFollowUpMessages)
+			emitEvent(events, Event{Type: EventTypeTurnEnd, Message: assistantMessage})
+			followUps := getMessages(input.Runtime.GetFollowUpMessages)
 			if len(followUps) == 0 {
-				return finish(stream, newMessages, nil)
+				return finish(events, newMessages, nil)
 			}
 			pending = followUps
 			continue
@@ -102,40 +97,59 @@ func (l *Loop) Run(ctx context.Context, input LoopInput) (LoopResult, error) {
 		toolOutput, err := l.Tools.Execute(ctx, ToolInput{
 			Tools:               current.Tools,
 			Calls:               toolCalls,
-			Events:              stream,
-			ApproveTool:         input.Config.ApproveTool,
-			GetSteeringMessages: input.Config.GetSteeringMessages,
+			Events:              events,
+			ApproveTool:         input.Runtime.ApproveTool,
+			GetSteeringMessages: input.Runtime.GetSteeringMessages,
 			EnableInterrupts:    input.Config.EnableInterrupts,
 		})
 		if err != nil {
-			return finish(stream, newMessages, err)
+			return finish(events, newMessages, err)
 		}
 		for _, message := range toolOutput.Messages {
 			current.Messages = append(current.Messages, message)
 			newMessages = append(newMessages, message)
 		}
-		stream.Push(Event{Type: EventTypeTurnEnd, Message: assistantMessage, ToolResults: toolOutput.Results})
+		emitEvent(events, Event{Type: EventTypeTurnEnd, Message: assistantMessage, ToolResults: toolOutput.Results})
 
 		if len(toolOutput.Steering) > 0 {
 			pending = toolOutput.Steering
 		} else {
-			pending = getMessages(input.Config.GetSteeringMessages)
+			pending = getMessages(input.Runtime.GetSteeringMessages)
 		}
 	}
 }
 
-func appendMessages(stream *EventStream, current *AgentContext, newMessages *[]AgentMessage, messages []AgentMessage) {
+func appendMessages(events EventSink, current *AgentContext, newMessages *[]AgentMessage, messages []AgentMessage) {
 	for _, message := range messages {
-		emitMessage(stream, message)
+		emitMessageTo(events, message)
 		current.Messages = append(current.Messages, message)
 		*newMessages = append(*newMessages, message)
 	}
 }
 
-func finish(stream *EventStream, messages []AgentMessage, err error) (LoopResult, error) {
-	stream.Push(Event{Type: EventTypeAgentEnd, Messages: messages})
-	stream.Resolve(messages, err)
+func finish(events EventSink, messages []AgentMessage, err error) (LoopResult, error) {
+	emitEvent(events, Event{Type: EventTypeAgentEnd, Messages: messages})
+	resolveEvents(events, messages, err)
 	return LoopResult{Messages: messages}, err
+}
+
+func llmOptions(config Config) LLMOptions {
+	return LLMOptions{
+		Model:            config.Model,
+		StreamFn:         config.StreamFn,
+		ConvertToLLM:     config.ConvertToLLM,
+		TransformContext: config.TransformContext,
+		GetAPIKey:        config.GetAPIKey,
+		Temperature:      config.Temperature,
+		MaxTokens:        config.MaxTokens,
+		APIKey:           config.APIKey,
+		CacheRetention:   config.CacheRetention,
+		SessionID:        config.SessionID,
+		Headers:          config.Headers,
+		Reasoning:        config.Reasoning,
+		ThinkingBudgets:  config.ThinkingBudgets,
+		MaxRetryDelayMs:  config.MaxRetryDelayMs,
+	}
 }
 
 func getMessages(fn func() ([]AgentMessage, error)) []AgentMessage {

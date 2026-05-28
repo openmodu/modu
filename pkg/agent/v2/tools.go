@@ -84,7 +84,7 @@ func runToolBatch(ctx context.Context, input ToolInput, calls []types.ToolCallCo
 	prepared := make([]preparedCall, len(calls))
 	for i, call := range calls {
 		prepared[i] = prepareToolCall(input, call)
-		input.Events.Push(Event{Type: EventTypeToolExecutionStart, ToolCallID: call.ID, ToolName: call.Name, Args: call.Arguments, Parallel: parallel})
+		emitEvent(input.Events, Event{Type: EventTypeToolExecutionStart, ToolCallID: call.ID, ToolName: call.Name, Args: call.Arguments, Parallel: parallel})
 	}
 
 	runOne := func(i int) {
@@ -105,7 +105,7 @@ func runToolBatch(ctx context.Context, input ToolInput, calls []types.ToolCallCo
 	}
 
 	for _, result := range out {
-		emitMessage(input.Events, result)
+		emitMessageTo(input.Events, result)
 	}
 	return out
 }
@@ -128,7 +128,7 @@ func prepareToolCall(input ToolInput, call types.ToolCallContent) preparedCall {
 	}
 	if input.ApproveTool != nil {
 		if input.EnableInterrupts {
-			input.Events.Push(Event{
+			emitEvent(input.Events, Event{
 				Type: EventTypeInterrupt,
 				Interrupt: &InterruptEvent{
 					Reason:     InterruptReasonToolApproval,
@@ -157,7 +157,7 @@ func executePreparedCall(ctx context.Context, input ToolInput, call types.ToolCa
 		isError = true
 	} else {
 		r, err := prepared.tool.Execute(ctx, call.ID, prepared.args, func(partial ToolResult) {
-			input.Events.Push(Event{Type: EventTypeToolExecutionUpdate, ToolCallID: call.ID, ToolName: call.Name, Args: call.Arguments, Partial: partial, Parallel: parallel})
+			emitEvent(input.Events, Event{Type: EventTypeToolExecutionUpdate, ToolCallID: call.ID, ToolName: call.Name, Args: call.Arguments, Partial: partial, Parallel: parallel})
 		})
 		if err != nil {
 			r = errorToolResult(err.Error())
@@ -168,7 +168,7 @@ func executePreparedCall(ctx context.Context, input ToolInput, call types.ToolCa
 		result = r
 	}
 
-	input.Events.Push(Event{
+	emitEvent(input.Events, Event{
 		Type:       EventTypeToolExecutionEnd,
 		ToolCallID: call.ID,
 		ToolName:   call.Name,
@@ -196,10 +196,10 @@ func errorToolResult(message string) ToolResult {
 	}
 }
 
-func skipToolCall(call types.ToolCallContent, events *EventStream) types.ToolResultMessage {
+func skipToolCall(call types.ToolCallContent, events EventSink) types.ToolResultMessage {
 	result := errorToolResult("Skipped due to queued user message.")
-	events.Push(Event{Type: EventTypeToolExecutionStart, ToolCallID: call.ID, ToolName: call.Name, Args: call.Arguments})
-	events.Push(Event{Type: EventTypeToolExecutionEnd, ToolCallID: call.ID, ToolName: call.Name, Args: call.Arguments, Result: result, IsError: true})
+	emitEvent(events, Event{Type: EventTypeToolExecutionStart, ToolCallID: call.ID, ToolName: call.Name, Args: call.Arguments})
+	emitEvent(events, Event{Type: EventTypeToolExecutionEnd, ToolCallID: call.ID, ToolName: call.Name, Args: call.Arguments, Result: result, IsError: true})
 	message := types.ToolResultMessage{
 		Role:       RoleToolResult,
 		ToolCallID: call.ID,
@@ -209,7 +209,7 @@ func skipToolCall(call types.ToolCallContent, events *EventStream) types.ToolRes
 		IsError:    true,
 		Timestamp:  time.Now().UnixMilli(),
 	}
-	emitMessage(events, message)
+	emitMessageTo(events, message)
 	return message
 }
 
