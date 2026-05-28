@@ -12,7 +12,6 @@ import (
 	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/extension"
 	"github.com/openmodu/modu/pkg/coding_agent/subagent"
-	"github.com/openmodu/modu/pkg/coding_agent/tools"
 )
 
 // forkSession is the host-side implementation of ExtensionAPI.ForkSession.
@@ -66,7 +65,7 @@ func (cs *CodingSession) forkSession(ctx context.Context, opts extension.ForkOpt
 	} else {
 		tools := cs.activeTools
 		if childCwd != cs.cwd {
-			tools = rebindToolsToCwd(cs.activeTools, childCwd)
+			tools = cs.rebindToolsToCwd(childCwd)
 		}
 		runResult, runErr := subagent.RunWithMessages(
 			ctx,
@@ -109,7 +108,7 @@ func (cs *CodingSession) forkInBackground(ctx context.Context, def *subagent.Sub
 		}
 		tools := cs.activeTools
 		if childCwd != cs.cwd {
-			tools = rebindToolsToCwd(cs.activeTools, childCwd)
+			tools = cs.rebindToolsToCwd(childCwd)
 		}
 		result, err := subagent.RunWithMessages(
 			runCtx,
@@ -248,7 +247,7 @@ func (cs *CodingSession) forkInWorktree(ctx context.Context, def *subagent.Subag
 		// it manually via `git worktree prune`.
 		_, _ = runGitCommand(root, "worktree", "remove", "--force", path)
 	}()
-	rebound := rebindToolsToCwd(cs.activeTools, path)
+	rebound := cs.rebindToolsToCwd(path)
 	result, err := subagent.RunWithMessages(
 		ctx,
 		subagent.WithWorkingDirectory(def, path),
@@ -273,33 +272,19 @@ func forkName(opts extension.ForkOptions) string {
 	return name
 }
 
-// rebindToolsToCwd returns a copy of tools where cwd-bound file/shell
-// tools point at the given path. Unknown tools pass through unchanged.
-// Duplicate of the legacy spawn_subagent tool rebinding behavior.
-func rebindToolsToCwd(allTools []agent.Tool, cwd string) []agent.Tool {
-	out := make([]agent.Tool, 0, len(allTools))
-	for _, tool := range allTools {
-		switch tool.Name() {
-		case "read":
-			out = append(out, tools.NewReadTool(cwd))
-		case "write":
-			out = append(out, tools.NewWriteTool(cwd))
-		case "edit":
-			out = append(out, tools.NewEditTool(cwd))
-		case "bash":
-			out = append(out, tools.NewBashTool(cwd))
-		case "grep":
-			out = append(out, tools.NewGrepTool(cwd))
-		case "find":
-			out = append(out, tools.NewFindTool(cwd))
-		case "ls":
-			out = append(out, tools.NewLsTool(cwd))
-		default:
-			if rebindable, ok := tool.(interface{ WithCwd(string) agent.Tool }); ok {
-				out = append(out, rebindable.WithCwd(cwd))
-			} else {
-				out = append(out, tool)
-			}
+// rebindToolsToCwd returns a copy of tools where cwd-bound tools point at the
+// given path. Unknown tools pass through unchanged.
+func (cs *CodingSession) rebindToolsToCwd(cwd string) []agent.Tool {
+	out := make([]agent.Tool, 0, len(cs.activeTools))
+	for _, tool := range cs.activeTools {
+		if rebound, ok := cs.toolProvider.Rebind(tool, agent.ToolContext{Cwd: cwd}); ok {
+			out = append(out, rebound)
+			continue
+		}
+		if rebindable, ok := tool.(interface{ WithCwd(string) agent.Tool }); ok {
+			out = append(out, rebindable.WithCwd(cwd))
+		} else {
+			out = append(out, tool)
 		}
 	}
 	return out

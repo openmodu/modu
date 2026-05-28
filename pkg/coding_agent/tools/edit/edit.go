@@ -1,4 +1,4 @@
-package tools
+package edit
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/coding_agent/tools/common"
 	"github.com/openmodu/modu/pkg/types"
 	"golang.org/x/text/unicode/norm"
 )
@@ -16,7 +17,7 @@ type EditTool struct {
 	cwd string
 }
 
-func NewEditTool(cwd string) *EditTool {
+func NewTool(cwd string) *EditTool {
 	return &EditTool{cwd: cwd}
 }
 
@@ -58,23 +59,23 @@ func (t *EditTool) Execute(ctx context.Context, toolCallID string, args map[stri
 	replaceAll, _ := args["replace_all"].(bool)
 
 	if pathArg == "" {
-		return errorResult("path is required"), nil
+		return common.ErrorResult("path is required"), nil
 	}
 	if oldText == "" {
-		return errorResult("old_text is required"), nil
+		return common.ErrorResult("old_text is required"), nil
 	}
 
-	resolved, err := ResolveReadPath(pathArg, t.cwd)
+	resolved, err := common.ResolveReadPath(pathArg, t.cwd)
 	if err != nil {
-		return errorResult(fmt.Sprintf("failed to resolve path: %v", err)), nil
+		return common.ErrorResult(fmt.Sprintf("failed to resolve path: %v", err)), nil
 	}
 
 	data, err := os.ReadFile(resolved)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return errorResult(fmt.Sprintf("file not found: %s", pathArg)), nil
+			return common.ErrorResult(fmt.Sprintf("file not found: %s", pathArg)), nil
 		}
-		return errorResult(fmt.Sprintf("failed to read file: %v", err)), nil
+		return common.ErrorResult(fmt.Sprintf("failed to read file: %v", err)), nil
 	}
 
 	content := string(data)
@@ -109,9 +110,9 @@ func (t *EditTool) Execute(ctx context.Context, toolCallID string, args map[stri
 		if count == 0 {
 			// fallback check with basic normalizeWhitespace (just in case)
 			if strings.Contains(normalizeWhitespace(normalContent), normalizeWhitespace(normalOld)) {
-				return errorResult(fmt.Sprintf("old_text not found with exact match in %s, but a fuzzy match was found. Please ensure whitespace and indentation match exactly.", pathArg)), nil
+				return common.ErrorResult(fmt.Sprintf("old_text not found with exact match in %s, but a fuzzy match was found. Please ensure whitespace and indentation match exactly.", pathArg)), nil
 			}
-			return errorResult(fmt.Sprintf("old_text not found in %s. Make sure the text matches exactly.", pathArg)), nil
+			return common.ErrorResult(fmt.Sprintf("old_text not found in %s. Make sure the text matches exactly.", pathArg)), nil
 		}
 
 		usedFuzzy = true
@@ -120,7 +121,7 @@ func (t *EditTool) Execute(ctx context.Context, toolCallID string, args map[stri
 	}
 
 	if count > 1 && !replaceAll {
-		return errorResult(fmt.Sprintf("old_text appears %d times in %s. Use replace_all=true to replace all occurrences, or provide more context to make the match unique.", count, pathArg)), nil
+		return common.ErrorResult(fmt.Sprintf("old_text appears %d times in %s. Use replace_all=true to replace all occurrences, or provide more context to make the match unique.", count, pathArg)), nil
 	}
 
 	// Perform replacement
@@ -137,7 +138,7 @@ func (t *EditTool) Execute(ctx context.Context, toolCallID string, args map[stri
 	}
 
 	if err := os.WriteFile(resolved, []byte(newContent), 0o644); err != nil {
-		return errorResult(fmt.Sprintf("failed to write file: %v", err)), nil
+		return common.ErrorResult(fmt.Sprintf("failed to write file: %v", err)), nil
 	}
 
 	// Generate a simple diff summary

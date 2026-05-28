@@ -9,12 +9,21 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/coding_agent/tools/bash"
+	"github.com/openmodu/modu/pkg/coding_agent/tools/common"
+	"github.com/openmodu/modu/pkg/coding_agent/tools/edit"
+	"github.com/openmodu/modu/pkg/coding_agent/tools/find"
+	"github.com/openmodu/modu/pkg/coding_agent/tools/grep"
+	"github.com/openmodu/modu/pkg/coding_agent/tools/ls"
+	"github.com/openmodu/modu/pkg/coding_agent/tools/read"
+	"github.com/openmodu/modu/pkg/coding_agent/tools/write"
 	"github.com/openmodu/modu/pkg/types"
 )
 
 func TestTruncateHead(t *testing.T) {
 	content := strings.Repeat("line\n", 3000)
-	result := TruncateHead(content, TruncateOptions{MaxLines: 100})
+	result := common.TruncateHead(content, common.TruncateOptions{MaxLines: 100})
 	if !result.WasTruncated {
 		t.Fatal("expected truncation")
 	}
@@ -25,7 +34,7 @@ func TestTruncateHead(t *testing.T) {
 
 func TestTruncateTail(t *testing.T) {
 	content := strings.Repeat("line\n", 3000)
-	result := TruncateTail(content, TruncateOptions{MaxLines: 100})
+	result := common.TruncateTail(content, common.TruncateOptions{MaxLines: 100})
 	if !result.WasTruncated {
 		t.Fatal("expected truncation")
 	}
@@ -36,12 +45,12 @@ func TestTruncateTail(t *testing.T) {
 
 func TestTruncateLine(t *testing.T) {
 	short := "hello"
-	if TruncateLine(short, 10) != short {
+	if common.TruncateLine(short, 10) != short {
 		t.Fatal("short line should not be truncated")
 	}
 
 	long := strings.Repeat("x", 600)
-	result := TruncateLine(long, 500)
+	result := common.TruncateLine(long, 500)
 	if len(result) <= 500 {
 		// result should be 500 chars + "..."
 	}
@@ -62,7 +71,7 @@ func TestFormatSize(t *testing.T) {
 		{1073741824, "1.0GB"},
 	}
 	for _, tt := range tests {
-		got := FormatSize(tt.bytes)
+		got := common.FormatSize(tt.bytes)
 		if got != tt.expected {
 			t.Errorf("FormatSize(%d) = %s, want %s", tt.bytes, got, tt.expected)
 		}
@@ -81,7 +90,7 @@ func TestExpandPath(t *testing.T) {
 		{`"double"`, "double"},
 	}
 	for _, tt := range tests {
-		got := ExpandPath(tt.input)
+		got := common.ExpandPath(tt.input)
 		if got != tt.expected {
 			t.Errorf("ExpandPath(%q) = %q, want %q", tt.input, got, tt.expected)
 		}
@@ -89,12 +98,12 @@ func TestExpandPath(t *testing.T) {
 }
 
 func TestResolveToCwd(t *testing.T) {
-	got := ResolveToCwd("foo/bar.go", "/tmp/project")
+	got := common.ResolveToCwd("foo/bar.go", "/tmp/project")
 	if got != "/tmp/project/foo/bar.go" {
 		t.Errorf("ResolveToCwd = %q, want /tmp/project/foo/bar.go", got)
 	}
 
-	got = ResolveToCwd("/absolute/path.go", "/tmp/project")
+	got = common.ResolveToCwd("/absolute/path.go", "/tmp/project")
 	if got != "/absolute/path.go" {
 		t.Errorf("ResolveToCwd = %q, want /absolute/path.go", got)
 	}
@@ -105,7 +114,7 @@ func TestReadTool(t *testing.T) {
 	filePath := filepath.Join(dir, "test.txt")
 	os.WriteFile(filePath, []byte("line1\nline2\nline3\n"), 0o644)
 
-	tool := NewReadTool(dir)
+	tool := read.NewTool(dir)
 
 	if tool.Name() != "read" {
 		t.Fatalf("expected name 'read', got %s", tool.Name())
@@ -136,7 +145,7 @@ func TestReadToolWithOffset(t *testing.T) {
 	}
 	os.WriteFile(filePath, []byte(content.String()), 0o644)
 
-	tool := NewReadTool(dir)
+	tool := read.NewTool(dir)
 	result, err := tool.Execute(context.Background(), "test-id", map[string]any{
 		"path":   "test.txt",
 		"offset": float64(3),
@@ -154,7 +163,7 @@ func TestReadToolWithOffset(t *testing.T) {
 
 func TestWriteTool(t *testing.T) {
 	dir := t.TempDir()
-	tool := NewWriteTool(dir)
+	tool := write.NewTool(dir)
 
 	result, err := tool.Execute(context.Background(), "test-id", map[string]any{
 		"path":    "newfile.txt",
@@ -177,7 +186,7 @@ func TestWriteTool(t *testing.T) {
 
 func TestWriteToolSubdirectory(t *testing.T) {
 	dir := t.TempDir()
-	tool := NewWriteTool(dir)
+	tool := write.NewTool(dir)
 
 	_, err := tool.Execute(context.Background(), "test-id", map[string]any{
 		"path":    "sub/dir/file.txt",
@@ -198,7 +207,7 @@ func TestEditTool(t *testing.T) {
 	filePath := filepath.Join(dir, "edit_test.go")
 	os.WriteFile(filePath, []byte("func hello() {\n\tfmt.Println(\"hello\")\n}\n"), 0o644)
 
-	tool := NewEditTool(dir)
+	tool := edit.NewTool(dir)
 
 	result, err := tool.Execute(context.Background(), "test-id", map[string]any{
 		"path":     "edit_test.go",
@@ -241,7 +250,7 @@ func TestEditToolReplaceAll(t *testing.T) {
 	filePath := filepath.Join(dir, "test.txt")
 	os.WriteFile(filePath, []byte("foo bar foo baz foo"), 0o644)
 
-	tool := NewEditTool(dir)
+	tool := edit.NewTool(dir)
 	result, err := tool.Execute(context.Background(), "test-id", map[string]any{
 		"path":        "test.txt",
 		"old_text":    "foo",
@@ -264,7 +273,7 @@ func TestEditToolReplaceAll(t *testing.T) {
 }
 
 func TestBashTool(t *testing.T) {
-	tool := NewBashTool(t.TempDir())
+	tool := bash.NewTool(t.TempDir())
 
 	result, err := tool.Execute(context.Background(), "test-id", map[string]any{
 		"command": "echo hello && echo world",
@@ -280,7 +289,7 @@ func TestBashTool(t *testing.T) {
 }
 
 func TestBashToolExitCode(t *testing.T) {
-	tool := NewBashTool(t.TempDir())
+	tool := bash.NewTool(t.TempDir())
 
 	result, err := tool.Execute(context.Background(), "test-id", map[string]any{
 		"command": "exit 42",
@@ -301,7 +310,7 @@ func TestLsTool(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "b.go"), []byte(""), 0o644)
 	os.MkdirAll(filepath.Join(dir, "subdir"), 0o755)
 
-	tool := NewLsTool(dir)
+	tool := ls.NewTool(dir)
 	result, err := tool.Execute(context.Background(), "test-id", map[string]any{}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -321,7 +330,7 @@ func TestGrepTool(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "test.go"), []byte("func main() {\n\tfmt.Println(\"hello\")\n}\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, "other.txt"), []byte("nothing here\n"), 0o644)
 
-	tool := NewGrepTool(dir)
+	tool := grep.NewTool(dir)
 	result, err := tool.Execute(context.Background(), "test-id", map[string]any{
 		"pattern": "Println",
 	}, nil)
@@ -342,7 +351,7 @@ func TestFindTool(t *testing.T) {
 	os.MkdirAll(filepath.Join(dir, "sub"), 0o755)
 	os.WriteFile(filepath.Join(dir, "sub", "lib.go"), []byte(""), 0o644)
 
-	tool := NewFindTool(dir)
+	tool := find.NewTool(dir)
 	result, err := tool.Execute(context.Background(), "test-id", map[string]any{
 		"pattern": "*.go",
 	}, nil)
@@ -447,6 +456,37 @@ func TestReadOnlyTools(t *testing.T) {
 	}
 }
 
+func TestDefaultProviderBuildsAndRebindsTools(t *testing.T) {
+	provider := NewProvider(ToolSetReadOnly)
+	tools := provider.Tools(agent.ToolContext{
+		Cwd: "/tmp/a",
+		Features: map[string]bool{
+			FeatureMemory: true,
+		},
+		Values: map[string]any{
+			ValueMemoryStore: fakeMemoryStore{},
+		},
+	})
+	names := toolNames(tools)
+	for _, name := range []string{"read", "grep", "find", "ls", "memo"} {
+		if !containsName(names, name) {
+			t.Fatalf("expected %s in provider tools, got %v", name, names)
+		}
+	}
+	if containsName(names, "write") || containsName(names, "bash") {
+		t.Fatalf("read-only provider should not include write/bash, got %v", names)
+	}
+
+	rebound, ok := provider.Rebind(read.NewTool("/tmp/a"), agent.ToolContext{Cwd: "/tmp/b"})
+	if !ok || rebound.Name() != "read" {
+		t.Fatalf("expected read tool to rebind, got %T %v", rebound, ok)
+	}
+	_, ok = provider.Rebind(testUnknownTool{}, agent.ToolContext{Cwd: "/tmp/b"})
+	if ok {
+		t.Fatal("expected unknown tool not to rebind")
+	}
+}
+
 func TestGitPreflightTool(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
@@ -497,6 +537,43 @@ func TestGitPreflightTool(t *testing.T) {
 	if state.LastCommit == nil || state.LastCommit.Hash == "" {
 		t.Fatalf("expected last commit, got %#v", state.LastCommit)
 	}
+}
+
+type fakeMemoryStore struct{}
+
+func (fakeMemoryStore) ReadLongTerm() string               { return "" }
+func (fakeMemoryStore) WriteLongTerm(content string) error { return nil }
+func (fakeMemoryStore) ReadGlobalLongTerm() string         { return "" }
+func (fakeMemoryStore) WriteGlobalLongTerm(content string) error {
+	return nil
+}
+func (fakeMemoryStore) AppendToday(content string) error { return nil }
+
+type testUnknownTool struct{}
+
+func (testUnknownTool) Name() string        { return "unknown" }
+func (testUnknownTool) Label() string       { return "Unknown" }
+func (testUnknownTool) Description() string { return "Unknown" }
+func (testUnknownTool) Parameters() any     { return nil }
+func (testUnknownTool) Execute(context.Context, string, map[string]any, agent.ToolUpdateCallback) (agent.ToolResult, error) {
+	return agent.ToolResult{}, nil
+}
+
+func toolNames(tools []agent.Tool) []string {
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		names = append(names, tool.Name())
+	}
+	return names
+}
+
+func containsName(names []string, want string) bool {
+	for _, name := range names {
+		if name == want {
+			return true
+		}
+	}
+	return false
 }
 
 func extractText(content []types.ContentBlock) string {

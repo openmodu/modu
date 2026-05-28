@@ -9,10 +9,15 @@ The split is intentionally small:
 - `Loop`: owns the ReAct control flow.
 - `LLM`: turns an `AgentContext` into one assistant message.
 - `Tools`: executes tool calls and returns tool-result messages.
+- `ToolManager`: supplies and rebinds tool sets for host runtimes.
 
 `Loop` depends only on the `LLM` and `Tools` interfaces. Provider streaming,
 retry, tool approval, tool execution, and parallel tool batches live behind
 those interfaces instead of inside the loop.
+
+Host applications build concrete tool sets through `ToolProvider` /
+`ToolManager` from this package. The agent kernel defines the dependency
+boundary; packages such as `pkg/coding_agent/tools` provide concrete managers.
 
 Runtime-only behaviour is supplied through `RuntimeHooks`, not public `Config`.
 This keeps queue polling, tool approval, and max-step resume handling out of the

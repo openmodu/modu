@@ -25,6 +25,41 @@ type Tool interface {
 	Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate ToolUpdateCallback) (ToolResult, error)
 }
 
+type ToolContext struct {
+	Cwd        string
+	BaseTools  []Tool
+	ExtraTools []Tool
+	Features   map[string]bool
+	Values     map[string]any
+}
+
+func (c ToolContext) FeatureEnabled(name string) bool {
+	if c.Features == nil {
+		return false
+	}
+	return c.Features[name]
+}
+
+func (c ToolContext) Value(name string) any {
+	if c.Values == nil {
+		return nil
+	}
+	return c.Values[name]
+}
+
+type ToolProvider interface {
+	Tools(ctx ToolContext) []Tool
+}
+
+type ToolRebinder interface {
+	Rebind(tool Tool, ctx ToolContext) (Tool, bool)
+}
+
+type ToolManager interface {
+	ToolProvider
+	ToolRebinder
+}
+
 type ParallelTool interface {
 	Parallel() bool
 }

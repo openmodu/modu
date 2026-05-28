@@ -1,4 +1,4 @@
-package tools
+package grep
 
 import (
 	"bufio"
@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/coding_agent/tools/common"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -22,7 +23,7 @@ type GrepTool struct {
 	cwd string
 }
 
-func NewGrepTool(cwd string) *GrepTool {
+func NewTool(cwd string) *GrepTool {
 	return &GrepTool{cwd: cwd}
 }
 
@@ -72,12 +73,12 @@ func (t *GrepTool) Parameters() any {
 func (t *GrepTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	pattern, _ := args["pattern"].(string)
 	if pattern == "" {
-		return errorResult("pattern is required"), nil
+		return common.ErrorResult("pattern is required"), nil
 	}
 
 	searchPath := t.cwd
 	if p, ok := args["path"].(string); ok && p != "" {
-		searchPath = ResolveToCwd(p, t.cwd)
+		searchPath = common.ResolveToCwd(p, t.cwd)
 	}
 
 	glob, _ := args["glob"].(string)
@@ -85,11 +86,11 @@ func (t *GrepTool) Execute(ctx context.Context, toolCallID string, args map[stri
 	literal, _ := args["literal"].(bool)
 	contextLines := 0
 	if v, ok := args["context"]; ok {
-		contextLines = toInt(v)
+		contextLines = common.ToInt(v)
 	}
 	limit := defaultGrepLimit
 	if v, ok := args["limit"]; ok {
-		limit = toInt(v)
+		limit = common.ToInt(v)
 		if limit <= 0 {
 			limit = defaultGrepLimit
 		}
@@ -142,7 +143,7 @@ func (t *GrepTool) executeRipgrep(ctx context.Context, rgPath, pattern, searchPa
 				}, nil
 			}
 		}
-		return errorResult(fmt.Sprintf("ripgrep error: %v", err)), nil
+		return common.ErrorResult(fmt.Sprintf("ripgrep error: %v", err)), nil
 	}
 
 	result := string(output)
@@ -150,7 +151,7 @@ func (t *GrepTool) executeRipgrep(ctx context.Context, rgPath, pattern, searchPa
 	// Truncate long lines
 	lines := strings.Split(result, "\n")
 	for i, line := range lines {
-		lines[i] = TruncateLine(line, GrepMaxLineLen)
+		lines[i] = common.TruncateLine(line, common.GrepMaxLineLen)
 	}
 	result = strings.Join(lines, "\n")
 
@@ -183,7 +184,7 @@ func (t *GrepTool) executeBuiltin(ctx context.Context, pattern, searchPath, glob
 	}
 	re, err := regexp.Compile(flags + pattern)
 	if err != nil {
-		return errorResult(fmt.Sprintf("invalid regex pattern: %v", err)), nil
+		return common.ErrorResult(fmt.Sprintf("invalid regex pattern: %v", err)), nil
 	}
 
 	var results []string
@@ -242,7 +243,7 @@ func (t *GrepTool) executeBuiltin(ctx context.Context, pattern, searchPath, glob
 				if matchCount > limit {
 					break
 				}
-				truncatedLine := TruncateLine(line, GrepMaxLineLen)
+				truncatedLine := common.TruncateLine(line, common.GrepMaxLineLen)
 				results = append(results, fmt.Sprintf("%s:%d:%s", relPath, lineNum, truncatedLine))
 				matchFiles[path] = struct{}{}
 			}
@@ -252,7 +253,7 @@ func (t *GrepTool) executeBuiltin(ctx context.Context, pattern, searchPath, glob
 	})
 
 	if err != nil && err != context.Canceled && err != context.DeadlineExceeded {
-		return errorResult(fmt.Sprintf("search error: %v", err)), nil
+		return common.ErrorResult(fmt.Sprintf("search error: %v", err)), nil
 	}
 
 	if len(results) == 0 {

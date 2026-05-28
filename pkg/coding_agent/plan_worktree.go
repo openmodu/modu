@@ -623,26 +623,11 @@ func (s *CodingSession) refreshDynamicSystemPrompt() {
 func (s *CodingSession) refreshToolsForCwd(cwd string) {
 	var updated []agent.Tool
 	for _, tool := range s.activeTools {
-		switch tool.Name() {
-		case "read":
-			updated = append(updated, tools.NewReadTool(cwd))
-		case "git_preflight":
-			updated = append(updated, tools.NewGitPreflightTool(cwd))
-		case "write":
-			updated = append(updated, tools.NewWriteTool(cwd))
-		case "edit":
-			updated = append(updated, tools.NewEditTool(cwd))
-		case "bash":
-			updated = append(updated, tools.NewBashTool(cwd))
-		case "grep":
-			updated = append(updated, tools.NewGrepTool(cwd))
-		case "find":
-			updated = append(updated, tools.NewFindTool(cwd))
-		case "ls":
-			updated = append(updated, tools.NewLsTool(cwd))
-		default:
-			updated = append(updated, tool)
+		if rebound, ok := s.toolProvider.Rebind(tool, agent.ToolContext{Cwd: cwd}); ok {
+			updated = append(updated, rebound)
+			continue
 		}
+		updated = append(updated, tool)
 	}
 	updated = wrapHarnessTools(updated, s)
 	s.activeTools = updated

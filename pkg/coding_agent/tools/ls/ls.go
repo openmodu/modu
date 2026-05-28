@@ -1,4 +1,4 @@
-package tools
+package ls
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/coding_agent/tools/common"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -18,7 +19,7 @@ type LsTool struct {
 	cwd string
 }
 
-func NewLsTool(cwd string) *LsTool {
+func NewTool(cwd string) *LsTool {
 	return &LsTool{cwd: cwd}
 }
 
@@ -47,12 +48,12 @@ func (t *LsTool) Parameters() any {
 func (t *LsTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	dirPath := t.cwd
 	if p, ok := args["path"].(string); ok && p != "" {
-		dirPath = ResolveToCwd(p, t.cwd)
+		dirPath = common.ResolveToCwd(p, t.cwd)
 	}
 
 	limit := defaultLsLimit
 	if v, ok := args["limit"]; ok {
-		limit = toInt(v)
+		limit = common.ToInt(v)
 		if limit <= 0 {
 			limit = defaultLsLimit
 		}
@@ -61,9 +62,9 @@ func (t *LsTool) Execute(ctx context.Context, toolCallID string, args map[string
 	entries, err := os.ReadDir(dirPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return errorResult(fmt.Sprintf("directory not found: %s", dirPath)), nil
+			return common.ErrorResult(fmt.Sprintf("directory not found: %s", dirPath)), nil
 		}
-		return errorResult(fmt.Sprintf("failed to read directory: %v", err)), nil
+		return common.ErrorResult(fmt.Sprintf("failed to read directory: %v", err)), nil
 	}
 
 	var names []string

@@ -1,4 +1,4 @@
-package tools
+package bash
 
 import (
 	"bytes"
@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/coding_agent/tools/common"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -37,7 +38,7 @@ type BashTool struct {
 	cwd string
 }
 
-func NewBashTool(cwd string) *BashTool {
+func NewTool(cwd string) *BashTool {
 	return &BashTool{cwd: cwd}
 }
 
@@ -73,12 +74,12 @@ func (t *BashTool) Parameters() any {
 func (t *BashTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	command, _ := args["command"].(string)
 	if command == "" {
-		return errorResult("command is required"), nil
+		return common.ErrorResult("command is required"), nil
 	}
 
 	timeout := defaultBashTimeout
 	if v, ok := args["timeout"]; ok {
-		timeout = toInt(v)
+		timeout = common.ToInt(v)
 		if timeout <= 0 {
 			timeout = defaultBashTimeout
 		}
@@ -98,7 +99,7 @@ func (t *BashTool) Execute(ctx context.Context, toolCallID string, args map[stri
 		cmd.Stderr = nil
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		if err := cmd.Start(); err != nil {
-			return errorResult(fmt.Sprintf("failed to start background command: %v", err)), nil
+			return common.ErrorResult(fmt.Sprintf("failed to start background command: %v", err)), nil
 		}
 		pid := cmd.Process.Pid
 		// Reap the process asynchronously to avoid zombies.
@@ -139,9 +140,9 @@ func (t *BashTool) Execute(ctx context.Context, toolCallID string, args map[stri
 	result := output.String()
 
 	// Truncate output
-	truncated := TruncateTail(result, TruncateOptions{
-		MaxLines: BashMaxLines,
-		MaxBytes: DefaultMaxBytes,
+	truncated := common.TruncateTail(result, common.TruncateOptions{
+		MaxLines: common.BashMaxLines,
+		MaxBytes: common.DefaultMaxBytes,
 	})
 
 	exitCode := 0
@@ -159,7 +160,7 @@ func (t *BashTool) Execute(ctx context.Context, toolCallID string, args map[stri
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
 		} else if !timedOut {
-			return errorResult(fmt.Sprintf("failed to execute command: %v", err)), nil
+			return common.ErrorResult(fmt.Sprintf("failed to execute command: %v", err)), nil
 		}
 	}
 

@@ -119,6 +119,17 @@ tools.ReadOnlyTools(cwd)  // 显式只读工具：read, grep, find, ls
 tools.AllTools(cwd)       // 显式全量工具：read, write, edit, bash, grep, find, ls
 ```
 
+会话不直接构造具体工具包，而是依赖 `pkg/agent` 定义的工具管理抽象：
+
+```go
+type ToolManager interface {
+    Tools(ctx agent.ToolContext) []agent.Tool
+    Rebind(tool agent.Tool, ctx agent.ToolContext) (agent.Tool, bool)
+}
+```
+
+`CodingSessionOptions.ToolProvider` 可替换默认 manager。`pkg/coding_agent/tools.DefaultProvider` 是该接口的具体实现，负责内置工具、feature-gated 工具和 cwd rebind；调用方仍可通过 `Tools` / `CustomTools` 提供基础工具和附加工具。
+
 ### 3. Hook 系统（扩展钩子）
 
 通过 Extension 机制注册 `ToolHook`，透明拦截所有工具调用：

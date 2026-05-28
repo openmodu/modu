@@ -17,6 +17,7 @@ import (
 	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/session"
 	"github.com/openmodu/modu/pkg/coding_agent/skills"
 	"github.com/openmodu/modu/pkg/coding_agent/subagent"
+	"github.com/openmodu/modu/pkg/coding_agent/tools"
 	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/types"
 )
@@ -34,6 +35,38 @@ func (t *testEchoTool) Parameters() any {
 		},
 		"required": []string{"value"},
 	}
+}
+
+type namedTestTool string
+
+func (t namedTestTool) Name() string        { return string(t) }
+func (t namedTestTool) Label() string       { return string(t) }
+func (t namedTestTool) Description() string { return string(t) }
+func (t namedTestTool) Parameters() any {
+	return map[string]any{"type": "object", "properties": map[string]any{}}
+}
+func (t namedTestTool) Execute(context.Context, string, map[string]any, agent.ToolUpdateCallback) (agent.ToolResult, error) {
+	return agent.ToolResult{}, nil
+}
+
+type testToolProvider struct {
+	ctx       agent.ToolContext
+	rebindCwd string
+}
+
+func (p *testToolProvider) Tools(ctx agent.ToolContext) []agent.Tool {
+	p.ctx = ctx
+	out := []agent.Tool{namedTestTool("provider_tool")}
+	out = append(out, ctx.ExtraTools...)
+	return out
+}
+
+func (p *testToolProvider) Rebind(tool agent.Tool, ctx agent.ToolContext) (agent.Tool, bool) {
+	p.rebindCwd = ctx.Cwd
+	if tool.Name() == "provider_tool" {
+		return namedTestTool("provider_tool_rebound"), true
+	}
+	return nil, false
 }
 func (t *testEchoTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	value, _ := args["value"].(string)
@@ -120,6 +153,45 @@ func TestNewCodingSession(t *testing.T) {
 	cfg := session.GetConfig()
 	if cfg == nil {
 		t.Fatal("config should not be nil")
+	}
+}
+
+func TestNewCodingSessionUsesToolProvider(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	provider := &testToolProvider{}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:          dir,
+		AgentDir:     agentDir,
+		Model:        newTestModel(),
+		CustomTools:  []agent.Tool{namedTestTool("custom_tool")},
+		ToolProvider: provider,
+		GetAPIKey:    func(provider string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := session.GetActiveToolNames()
+	if !containsTool(names, "provider_tool_rebound") || !containsTool(names, "custom_tool") {
+		t.Fatalf("expected provider and custom tools, got %v", names)
+	}
+	if containsTool(names, "read") {
+		t.Fatalf("expected custom provider to own default tool construction, got %v", names)
+	}
+	if provider.ctx.Cwd != dir {
+		t.Fatalf("expected provider cwd %q, got %q", dir, provider.ctx.Cwd)
+	}
+	if !provider.ctx.FeatureEnabled(tools.FeatureMemory) || !provider.ctx.FeatureEnabled(tools.FeatureTodo) {
+		t.Fatalf("expected feature flags in provider context, got %#v", provider.ctx.Features)
+	}
+
+	session.refreshToolsForCwd(filepath.Join(dir, "child"))
+	names = session.GetActiveToolNames()
+	if !containsTool(names, "provider_tool_rebound") {
+		t.Fatalf("expected provider rebind to update tool, got %v", names)
+	}
+	if provider.rebindCwd != filepath.Join(dir, "child") {
+		t.Fatalf("expected rebind cwd to be delegated, got %q", provider.rebindCwd)
 	}
 }
 

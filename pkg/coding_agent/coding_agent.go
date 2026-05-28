@@ -42,6 +42,9 @@ type CodingSessionOptions struct {
 	Tools []agent.Tool
 	// CustomTools are additional tools provided by the caller.
 	CustomTools []agent.Tool
+	// ToolProvider constructs and rebinds session tools. If nil, the default
+	// coding tool provider is used.
+	ToolProvider agent.ToolManager
 	// Extensions are extensions to initialize.
 	Extensions []extension.Extension
 	// CustomSystemPrompt overrides the default system prompt.
@@ -75,6 +78,7 @@ type CodingSession struct {
 	promptBuilder  *SystemPromptBuilder
 	model          *types.Model
 	activeTools    []agent.Tool
+	toolProvider   agent.ToolManager
 	slashCommands  map[string]SlashCommand
 	getAPIKey      func(provider string) (string, error)
 	streamFn       agent.StreamFn
@@ -156,32 +160,28 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	memoryStore := NewMemoryStore(agentDir, opts.Cwd)
 
 	// Set up tools
-	activeTools := opts.Tools
-	if activeTools == nil {
-		activeTools = tools.CodingTools(opts.Cwd)
+	toolProvider := opts.ToolProvider
+	if toolProvider == nil {
+		toolProvider = tools.NewProvider(tools.ToolSetCoding)
 	}
-	if len(opts.CustomTools) > 0 {
-		activeTools = append(activeTools, opts.CustomTools...)
-	}
-
-	// Always include the memory tool
-	if cfg.FeatureMemoryTool() {
-		activeTools = append(activeTools, tools.NewMemoryTool(memoryStore))
-	}
-	if cfg.FeatureTodoTool() {
-		activeTools = append(activeTools, tools.NewTodoWriteTool(todoStoreAdapter{session: nil}))
-	}
-	if cfg.FeatureTaskOutputTool() {
-		activeTools = append(activeTools, tools.NewTaskOutputTool(nil))
-	}
-	if cfg.FeaturePlanMode() {
-		activeTools = append(activeTools, tools.NewEnterPlanModeTool(planModeAdapter{session: nil}))
-		activeTools = append(activeTools, tools.NewExitPlanModeTool(planModeAdapter{session: nil}))
-	}
-	if cfg.FeatureWorktreeMode() {
-		activeTools = append(activeTools, tools.NewEnterWorktreeTool(worktreeAdapter{session: nil}))
-		activeTools = append(activeTools, tools.NewExitWorktreeTool(worktreeAdapter{session: nil}))
-	}
+	activeTools := toolProvider.Tools(agent.ToolContext{
+		Cwd:        opts.Cwd,
+		BaseTools:  opts.Tools,
+		ExtraTools: opts.CustomTools,
+		Features: map[string]bool{
+			tools.FeatureMemory:       cfg.FeatureMemoryTool(),
+			tools.FeatureTodo:         cfg.FeatureTodoTool(),
+			tools.FeatureTaskOutput:   cfg.FeatureTaskOutputTool(),
+			tools.FeaturePlanMode:     cfg.FeaturePlanMode(),
+			tools.FeatureWorktreeMode: cfg.FeatureWorktreeMode(),
+		},
+		Values: map[string]any{
+			tools.ValueMemoryStore: memoryStore,
+			tools.ValueTodoStore:   todoStoreAdapter{session: nil},
+			tools.ValuePlanMode:    planModeAdapter{session: nil},
+			tools.ValueWorktree:    worktreeAdapter{session: nil},
+		},
+	})
 
 	// Create session manager
 	sessionMgr, err := session.NewManager(agentDir, opts.Cwd)
@@ -289,6 +289,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		promptBuilder:   promptBuilder,
 		model:           opts.Model,
 		activeTools:     activeTools,
+		toolProvider:    toolProvider,
 		slashCommands:   make(map[string]SlashCommand),
 		getAPIKey:       getAPIKey,
 		streamFn:        streamFn,

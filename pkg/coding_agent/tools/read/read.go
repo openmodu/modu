@@ -1,4 +1,4 @@
-package tools
+package read
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/coding_agent/tools/common"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -28,7 +29,7 @@ type ReadTool struct {
 	cwd string
 }
 
-func NewReadTool(cwd string) *ReadTool {
+func NewTool(cwd string) *ReadTool {
 	return &ReadTool{cwd: cwd}
 }
 
@@ -62,24 +63,24 @@ func (t *ReadTool) Parameters() any {
 func (t *ReadTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	pathArg, _ := args["path"].(string)
 	if pathArg == "" {
-		return errorResult("path is required"), nil
+		return common.ErrorResult("path is required"), nil
 	}
 
-	resolved, err := ResolveReadPath(pathArg, t.cwd)
+	resolved, err := common.ResolveReadPath(pathArg, t.cwd)
 	if err != nil {
-		return errorResult(fmt.Sprintf("failed to resolve path: %v", err)), nil
+		return common.ErrorResult(fmt.Sprintf("failed to resolve path: %v", err)), nil
 	}
 
 	info, err := os.Stat(resolved)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return errorResult(fmt.Sprintf("file not found: %s", pathArg)), nil
+			return common.ErrorResult(fmt.Sprintf("file not found: %s", pathArg)), nil
 		}
-		return errorResult(fmt.Sprintf("failed to stat file: %v", err)), nil
+		return common.ErrorResult(fmt.Sprintf("failed to stat file: %v", err)), nil
 	}
 
 	if info.IsDir() {
-		return errorResult(fmt.Sprintf("%s is a directory, not a file. Use ls to list directory contents.", pathArg)), nil
+		return common.ErrorResult(fmt.Sprintf("%s is a directory, not a file. Use ls to list directory contents.", pathArg)), nil
 	}
 
 	ext := strings.ToLower(filepath.Ext(resolved))
@@ -93,7 +94,7 @@ func (t *ReadTool) Execute(ctx context.Context, toolCallID string, args map[stri
 func (t *ReadTool) readImage(path, mimeType string) (agent.ToolResult, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return errorResult(fmt.Sprintf("failed to read image: %v", err)), nil
+		return common.ErrorResult(fmt.Sprintf("failed to read image: %v", err)), nil
 	}
 
 	// Detect MIME type from content if needed
@@ -120,7 +121,7 @@ func (t *ReadTool) readImage(path, mimeType string) (agent.ToolResult, error) {
 func (t *ReadTool) readText(path string, info os.FileInfo, args map[string]any) (agent.ToolResult, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return errorResult(fmt.Sprintf("failed to read file: %v", err)), nil
+		return common.ErrorResult(fmt.Sprintf("failed to read file: %v", err)), nil
 	}
 
 	content := string(data)
@@ -133,16 +134,16 @@ func (t *ReadTool) readText(path string, info os.FileInfo, args map[string]any) 
 	// Parse offset and limit
 	offset := 0
 	if v, ok := args["offset"]; ok {
-		offset = toInt(v)
+		offset = common.ToInt(v)
 		if offset > 0 {
 			offset-- // Convert to 0-based
 		}
 	}
-	limit := ReadMaxLines
+	limit := common.ReadMaxLines
 	if v, ok := args["limit"]; ok {
-		limit = toInt(v)
+		limit = common.ToInt(v)
 		if limit <= 0 {
-			limit = ReadMaxLines
+			limit = common.ReadMaxLines
 		}
 	}
 
@@ -197,30 +198,4 @@ func (t *ReadTool) readText(path string, info os.FileInfo, args map[string]any) 
 			"truncated": truncated,
 		},
 	}, nil
-}
-
-func toInt(v any) int {
-	switch n := v.(type) {
-	case int:
-		return n
-	case int64:
-		return int(n)
-	case float64:
-		return int(n)
-	case float32:
-		return int(n)
-	default:
-		return 0
-	}
-}
-
-func errorResult(msg string) agent.ToolResult {
-	return agent.ToolResult{
-		Content: []types.ContentBlock{
-			&types.TextContent{
-				Type: "text",
-				Text: msg,
-			},
-		},
-	}
 }

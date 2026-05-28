@@ -19,6 +19,7 @@ type CreateSessionOptions struct {
 	ScopedModels   []string
 	Tools          []agent.Tool
 	CustomTools    []agent.Tool
+	ToolProvider   agent.ToolManager
 	Extensions     []extension.Extension
 	SystemPrompt   string
 	GetAPIKey      func(provider string) (string, error)
@@ -70,6 +71,7 @@ func CreateSession(opts CreateSessionOptions) (*CreateSessionResult, error) {
 		ThinkingLevel:      opts.ThinkingLevel,
 		Tools:              opts.Tools,
 		CustomTools:        opts.CustomTools,
+		ToolProvider:       opts.ToolProvider,
 		Extensions:         opts.Extensions,
 		CustomSystemPrompt: opts.SystemPrompt,
 		GetAPIKey:          opts.GetAPIKey,

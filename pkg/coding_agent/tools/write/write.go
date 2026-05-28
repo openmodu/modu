@@ -1,4 +1,4 @@
-package tools
+package write
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/coding_agent/tools/common"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -15,7 +16,7 @@ type WriteTool struct {
 	cwd string
 }
 
-func NewWriteTool(cwd string) *WriteTool {
+func NewTool(cwd string) *WriteTool {
 	return &WriteTool{cwd: cwd}
 }
 
@@ -47,20 +48,20 @@ func (t *WriteTool) Execute(ctx context.Context, toolCallID string, args map[str
 	content, _ := args["content"].(string)
 
 	if pathArg == "" {
-		return errorResult("path is required"), nil
+		return common.ErrorResult("path is required"), nil
 	}
 
-	resolved := ResolveToCwd(pathArg, t.cwd)
+	resolved := common.ResolveToCwd(pathArg, t.cwd)
 
 	// Create parent directories
 	dir := filepath.Dir(resolved)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return errorResult(fmt.Sprintf("failed to create directories: %v", err)), nil
+		return common.ErrorResult(fmt.Sprintf("failed to create directories: %v", err)), nil
 	}
 
 	// Write the file
 	if err := os.WriteFile(resolved, []byte(content), 0o644); err != nil {
-		return errorResult(fmt.Sprintf("failed to write file: %v", err)), nil
+		return common.ErrorResult(fmt.Sprintf("failed to write file: %v", err)), nil
 	}
 
 	bytes := len([]byte(content))
@@ -69,7 +70,7 @@ func (t *WriteTool) Execute(ctx context.Context, toolCallID string, args map[str
 		Content: []types.ContentBlock{
 			&types.TextContent{
 				Type: "text",
-				Text: fmt.Sprintf("Successfully wrote %s to %s", FormatSize(int64(bytes)), pathArg),
+				Text: fmt.Sprintf("Successfully wrote %s to %s", common.FormatSize(int64(bytes)), pathArg),
 			},
 		},
 		Details: map[string]any{

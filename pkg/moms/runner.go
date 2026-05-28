@@ -13,7 +13,7 @@ import (
 
 	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/channels"
-	"github.com/openmodu/modu/pkg/coding_agent/tools"
+	"github.com/openmodu/modu/pkg/coding_agent/tools/edit"
 	"github.com/openmodu/modu/pkg/skills"
 	skillstools "github.com/openmodu/modu/pkg/skills/tools"
 	"github.com/openmodu/modu/pkg/types"
@@ -301,7 +301,7 @@ func (r *Runner) getOrCreateAgent(chatDir, workspacePath string, chCtx channels.
 		NewBashSandboxTool(r.sandbox),
 		NewReadTool(cwd),
 		NewWriteTool(),
-		tools.NewEditTool(cwd),
+		edit.NewTool(cwd),
 		NewAttachTool(func(filePath, title string) error {
 			return chCtx.UploadFile(filePath, title)
 		}),

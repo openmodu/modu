@@ -1,4 +1,4 @@
-package tools
+package find
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/coding_agent/tools/common"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -20,7 +21,7 @@ type FindTool struct {
 	cwd string
 }
 
-func NewFindTool(cwd string) *FindTool {
+func NewTool(cwd string) *FindTool {
 	return &FindTool{cwd: cwd}
 }
 
@@ -54,17 +55,17 @@ func (t *FindTool) Parameters() any {
 func (t *FindTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	pattern, _ := args["pattern"].(string)
 	if pattern == "" {
-		return errorResult("pattern is required"), nil
+		return common.ErrorResult("pattern is required"), nil
 	}
 
 	searchPath := t.cwd
 	if p, ok := args["path"].(string); ok && p != "" {
-		searchPath = ResolveToCwd(p, t.cwd)
+		searchPath = common.ResolveToCwd(p, t.cwd)
 	}
 
 	limit := defaultFindLimit
 	if v, ok := args["limit"]; ok {
-		limit = toInt(v)
+		limit = common.ToInt(v)
 		if limit <= 0 {
 			limit = defaultFindLimit
 		}
@@ -194,7 +195,7 @@ func (t *FindTool) executeBuiltin(ctx context.Context, pattern, searchPath strin
 	})
 
 	if err != nil && err != context.Canceled && err != context.DeadlineExceeded {
-		return errorResult(fmt.Sprintf("search error: %v", err)), nil
+		return common.ErrorResult(fmt.Sprintf("search error: %v", err)), nil
 	}
 
 	if len(results) == 0 {

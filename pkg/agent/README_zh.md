@@ -10,9 +10,13 @@
 - `Loop`：负责 ReAct 控制流。
 - `LLM`：把 `AgentContext` 转换成一条 assistant 消息。
 - `Tools`：执行 tool call，并返回 tool result 消息。
+- `ToolManager`：为 host runtime 提供和重绑定工具集合。
 
 `Loop` 只依赖 `LLM` 和 `Tools` 接口。Provider streaming、重试、工具审批、
 工具执行和并行工具批次都放在接口背后，而不是塞进 loop 本身。
+
+Host 应用通过本包的 `ToolProvider` / `ToolManager` 构造具体工具集合。
+Agent 内核定义依赖边界，`pkg/coding_agent/tools` 这类包只负责提供具体实现。
 
 运行期行为通过 `RuntimeHooks` 注入，例如 steering/follow-up 队列、工具审批和
 max-step resume 处理。事件通过 `EventSink` 输出，默认实现是 `EventStream`。
@@ -55,4 +59,3 @@ defer unsubscribe()
 
 err := a.Prompt(ctx, "Hello")
 ```
-
