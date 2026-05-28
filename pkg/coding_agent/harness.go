@@ -65,9 +65,6 @@ type HarnessRuntimePaths struct {
 	RuntimeStateFile     string `json:"runtimeStateFile"`
 	BackgroundTasksFile  string `json:"backgroundTasksFile"`
 	AsyncSubagentRunsDir string `json:"asyncSubagentRunsDir"`
-	TraceDir             string `json:"traceDir"`
-	TraceEventsFile      string `json:"traceEventsFile"`
-	TraceSummaryFile     string `json:"traceSummaryFile"`
 	SessionsDir          string `json:"sessionsDir"`
 	PlansDir             string `json:"plansDir"`
 	PlanFile             string `json:"planFile"`
@@ -85,9 +82,6 @@ func (p HarnessRuntimePaths) ToMap() map[string]any {
 		"runtime_state_file":      p.RuntimeStateFile,
 		"background_tasks_file":   p.BackgroundTasksFile,
 		"async_subagent_runs_dir": p.AsyncSubagentRunsDir,
-		"trace_dir":               p.TraceDir,
-		"trace_events_file":       p.TraceEventsFile,
-		"trace_summary_file":      p.TraceSummaryFile,
 		"sessions_dir":            p.SessionsDir,
 		"plans_dir":               p.PlansDir,
 		"plan_file":               p.PlanFile,
@@ -433,12 +427,10 @@ func (s *CodingSession) RuntimePaths() HarnessRuntimePaths {
 	toolResultsDir := filepath.Join(s.agentDir, "tool-results", projectKey)
 	runtimeDir := filepath.Join(s.agentDir, "runtime", projectKey)
 	asyncSubagentRunsDir := filepath.Join(runtimeDir, "async-subagent-runs")
-	traceDir := filepath.Join(runtimeDir, "trace")
 	_ = os.MkdirAll(plansDir, 0o755)
 	_ = os.MkdirAll(toolResultsDir, 0o755)
 	_ = os.MkdirAll(runtimeDir, 0o755)
 	_ = os.MkdirAll(asyncSubagentRunsDir, 0o755)
-	_ = os.MkdirAll(traceDir, 0o755)
 
 	sessionsDir := filepath.Dir(s.messagesFilePath())
 	if s.sessionManager != nil {
@@ -451,9 +443,6 @@ func (s *CodingSession) RuntimePaths() HarnessRuntimePaths {
 		RuntimeStateFile:     filepath.Join(runtimeDir, "state.json"),
 		BackgroundTasksFile:  filepath.Join(runtimeDir, "background_tasks.json"),
 		AsyncSubagentRunsDir: asyncSubagentRunsDir,
-		TraceDir:             traceDir,
-		TraceEventsFile:      filepath.Join(traceDir, "events.jsonl"),
-		TraceSummaryFile:     filepath.Join(traceDir, "summary.json"),
 		SessionsDir:          sessionsDir,
 		PlansDir:             plansDir,
 		PlanFile:             filepath.Join(plansDir, "latest.md"),

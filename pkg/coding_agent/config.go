@@ -62,38 +62,6 @@ type Config struct {
 
 	// Permissions controls host-side tool permission policy.
 	Permissions PermissionConfig `json:"permissions,omitempty"`
-
-	// Tracing controls cloud-native telemetry export.
-	Tracing TracingConfig `json:"tracing,omitempty"`
-}
-
-type TracingConfig struct {
-	// Recorder controls the file-based trace recorder.
-	Recorder RecorderConfig `json:"recorder,omitempty"`
-	// OTel controls the OpenTelemetry exporter.
-	OTel OTelConfig `json:"otel,omitempty"`
-}
-
-type RecorderConfig struct {
-	// Enabled controls whether the file-based recorder is active. Default: true.
-	Enabled *bool `json:"enabled,omitempty"`
-	// MaxFileSizeMB is the maximum size of the events.jsonl file in MB before rotation.
-	// 0 means no limit. Default: 50.
-	MaxFileSizeMB int `json:"maxFileSizeMb,omitempty"`
-	// MaxRotatedFiles is the number of rotated event files to keep. Default: 3.
-	MaxRotatedFiles int `json:"maxRotatedFiles,omitempty"`
-}
-
-type OTelConfig struct {
-	Enabled        *bool             `json:"enabled,omitempty"`
-	Exporter       string            `json:"exporter,omitempty"`
-	Endpoint       string            `json:"endpoint,omitempty"`
-	Headers        map[string]string `json:"headers,omitempty"`
-	Insecure       *bool             `json:"insecure,omitempty"`
-	ServiceName    string            `json:"serviceName,omitempty"`
-	ServiceVersion string            `json:"serviceVersion,omitempty"`
-	InstanceID     string            `json:"instanceId,omitempty"`
-	SamplingRatio  float64           `json:"samplingRatio,omitempty"`
 }
 
 type FeatureConfig struct {
@@ -303,35 +271,6 @@ func (c *Config) FeatureHarnessActions() bool {
 	return c == nil || featureEnabled(c.Features.HarnessActions)
 }
 
-func (c *Config) TracingRecorderEnabled() bool {
-	if c == nil || c.Tracing.Recorder.Enabled == nil {
-		return true // enabled by default
-	}
-	return *c.Tracing.Recorder.Enabled
-}
-
-func (c *Config) TracingRecorderMaxFileSizeMB() int {
-	if c == nil || c.Tracing.Recorder.MaxFileSizeMB <= 0 {
-		return 50
-	}
-	return c.Tracing.Recorder.MaxFileSizeMB
-}
-
-func (c *Config) TracingRecorderMaxRotatedFiles() int {
-	if c == nil || c.Tracing.Recorder.MaxRotatedFiles <= 0 {
-		return 3
-	}
-	return c.Tracing.Recorder.MaxRotatedFiles
-}
-
-func (c *Config) TracingOTelEnabled() bool {
-	return c != nil && c.Tracing.OTel.Enabled != nil && *c.Tracing.OTel.Enabled
-}
-
-func (c *Config) TracingOTelInsecure() bool {
-	return c != nil && c.Tracing.OTel.Insecure != nil && *c.Tracing.OTel.Insecure
-}
-
 func (a HarnessAction) normalizedType() string {
 	return strings.ToLower(strings.TrimSpace(a.Type))
 }
@@ -367,19 +306,6 @@ func ValidateConfig(cfg *Config) error {
 	}
 	if err := validateHarnessConfig(cfg.Harness); err != nil {
 		return err
-	}
-	return validateTracingConfig(cfg.Tracing)
-}
-
-func validateTracingConfig(cfg TracingConfig) error {
-	exporter := strings.ToLower(strings.TrimSpace(cfg.OTel.Exporter))
-	switch exporter {
-	case "", "otlphttp", "stdout":
-	default:
-		return fmt.Errorf("tracing.otel.exporter must be otlphttp or stdout")
-	}
-	if cfg.OTel.SamplingRatio < 0 || cfg.OTel.SamplingRatio > 1 {
-		return fmt.Errorf("tracing.otel.samplingRatio must be between 0 and 1")
 	}
 	return nil
 }

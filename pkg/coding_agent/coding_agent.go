@@ -25,10 +25,7 @@ import (
 	"github.com/openmodu/modu/pkg/coding_agent/subagent"
 	"github.com/openmodu/modu/pkg/coding_agent/tools"
 	"github.com/openmodu/modu/pkg/providers"
-	sessiontrace "github.com/openmodu/modu/pkg/trace"
 	"github.com/openmodu/modu/pkg/types"
-	"github.com/openmodu/modu/pkg/utils"
-	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 // CodingSessionOptions configures a new CodingSession.
@@ -59,8 +56,6 @@ type CodingSessionOptions struct {
 	ScopedModels []string
 	// ModelConfigPath records the model config file path for diagnostics.
 	ModelConfigPath string
-	// OTelTracerProvider reuses an existing OpenTelemetry tracer provider when set.
-	OTelTracerProvider oteltrace.TracerProvider
 }
 
 // CodingSession is the main entry point for the coding agent system.
@@ -116,8 +111,6 @@ type CodingSession struct {
 	contextMu          sync.Mutex
 	loadedContexts     map[string]struct{}
 	harness            *harnessState
-	traceRecorder      *sessiontrace.Recorder
-	otelBridge         *sessiontrace.OTelBridge
 
 	// approvalManager handles tool execution approval.
 	approvalManager *ApprovalManager
@@ -310,44 +303,6 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		harness:         newHarnessState(),
 		approvalManager: approvalMgr,
 	}
-	if cfg.TracingRecorderEnabled() {
-		tracePaths := cs.RuntimePaths()
-		traceRecorder, traceErr := sessiontrace.NewRecorder(sessiontrace.Options{
-			SessionID:        cs.GetSessionID(),
-			Cwd:              opts.Cwd,
-			Provider:         opts.Model.ProviderID,
-			ModelID:          opts.Model.ID,
-			EventsFile:       tracePaths.TraceEventsFile,
-			SummaryFile:      tracePaths.TraceSummaryFile,
-			MaxFileSizeBytes: int64(cfg.TracingRecorderMaxFileSizeMB()) * 1024 * 1024,
-			MaxRotatedFiles:  cfg.TracingRecorderMaxRotatedFiles(),
-		})
-		if traceErr != nil {
-			return nil, fmt.Errorf("failed to init trace recorder: %w", traceErr)
-		}
-		cs.traceRecorder = traceRecorder
-		_ = cs.traceRecorder.RecordSessionEvent("session_start", map[string]any{
-			"source":    "startup",
-			"cwd":       opts.Cwd,
-			"provider":  opts.Model.ProviderID,
-			"modelId":   opts.Model.ID,
-			"sessionId": cs.GetSessionID(),
-		})
-	}
-	if bridgeOpts, ok := cs.otelOptions(opts); ok {
-		bridge, bridgeErr := sessiontrace.NewOTelBridge(context.Background(), bridgeOpts)
-		if bridgeErr != nil {
-			return nil, fmt.Errorf("failed to init otel bridge: %w", bridgeErr)
-		}
-		cs.otelBridge = bridge
-		cs.otelBridge.RecordSessionEvent("session_start", map[string]any{
-			"source":    "startup",
-			"cwd":       opts.Cwd,
-			"provider":  opts.Model.ProviderID,
-			"modelId":   opts.Model.ID,
-			"sessionId": cs.GetSessionID(),
-		})
-	}
 	if err := taskMgr.SetStorePath(cs.RuntimePaths().BackgroundTasksFile); err != nil {
 		return nil, fmt.Errorf("failed to load background tasks: %w", err)
 	}
@@ -373,12 +328,6 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	ag.Subscribe(func(event agent.Event) {
 		if cs.extensions != nil {
 			cs.extensions.EmitEvent(event)
-		}
-		if cs.traceRecorder != nil {
-			_ = cs.traceRecorder.RecordEvent(event)
-		}
-		if cs.otelBridge != nil {
-			cs.otelBridge.RecordEvent(event)
 		}
 		if event.Type == agent.EventTypeMessageEnd {
 			addUsage := func(u types.AgentUsage) {
@@ -665,14 +614,6 @@ func (s *CodingSession) Prompt(ctx context.Context, text string) error {
 func (s *CodingSession) Close(reason string) {
 	if s.extensions != nil {
 		s.extensions.EmitEvent(agent.Event{Type: agent.EventType("session_shutdown")})
-	}
-	if s.traceRecorder != nil {
-		_ = s.traceRecorder.RecordSessionEvent("session_end", map[string]any{"reason": reason})
-		_ = s.traceRecorder.Close()
-	}
-	if s.otelBridge != nil {
-		s.otelBridge.RecordSessionEvent("session_end", map[string]any{"reason": reason})
-		_ = s.otelBridge.Close(context.Background(), reason)
 	}
 	s.runHarnessSessionEnd(reason)
 	s.writeRuntimeState()
@@ -1505,112 +1446,8 @@ func (s *CodingSession) SubscribeSession(fn func(SessionEvent)) func() {
 	})
 }
 
-func (s *CodingSession) TraceSummary() sessiontrace.Summary {
-	if s.traceRecorder == nil {
-		return sessiontrace.Summary{}
-	}
-	return s.traceRecorder.Summary()
-}
-
 func (s *CodingSession) emitSessionEvent(event SessionEvent) {
-	if s.traceRecorder != nil {
-		_ = s.traceRecorder.RecordSessionEvent(string(event.Type), sessionEventMeta(event))
-	}
-	if s.otelBridge != nil {
-		s.otelBridge.RecordSessionEvent(string(event.Type), sessionEventMeta(event))
-	}
 	s.eventBus.Emit(sessionEventChannel, event)
-}
-
-func (s *CodingSession) otelOptions(opts CodingSessionOptions) (sessiontrace.OTelOptions, bool) {
-	if opts.OTelTracerProvider == nil && !s.config.TracingOTelEnabled() {
-		return sessiontrace.OTelOptions{}, false
-	}
-	serviceName := strings.TrimSpace(s.config.Tracing.OTel.ServiceName)
-	if serviceName == "" {
-		serviceName = "modu-coding-agent"
-	}
-	return sessiontrace.OTelOptions{
-		Provider:       opts.OTelTracerProvider,
-		Exporter:       s.config.Tracing.OTel.Exporter,
-		Endpoint:       s.config.Tracing.OTel.Endpoint,
-		Headers:        utils.CopyMap(s.config.Tracing.OTel.Headers),
-		Insecure:       s.config.TracingOTelInsecure(),
-		ServiceName:    serviceName,
-		ServiceVersion: strings.TrimSpace(s.config.Tracing.OTel.ServiceVersion),
-		InstanceID:     strings.TrimSpace(s.config.Tracing.OTel.InstanceID),
-		SamplingRatio:  s.config.Tracing.OTel.SamplingRatio,
-		SessionID:      s.GetSessionID(),
-		Cwd:            s.cwd,
-		ModelProvider:  opts.Model.ProviderID,
-		ModelID:        opts.Model.ID,
-	}, true
-}
-
-func sessionEventMeta(event SessionEvent) map[string]any {
-	meta := map[string]any{}
-	if event.Attempt != 0 {
-		meta["attempt"] = event.Attempt
-	}
-	if event.MaxAttempts != 0 {
-		meta["maxAttempts"] = event.MaxAttempts
-	}
-	if event.DelayMs != 0 {
-		meta["delayMs"] = event.DelayMs
-	}
-	if event.ErrorMessage != "" {
-		meta["errorMessage"] = event.ErrorMessage
-	}
-	if event.Success != nil {
-		meta["success"] = *event.Success
-	}
-	if event.Provider != "" {
-		meta["provider"] = event.Provider
-	}
-	if event.ModelID != "" {
-		meta["modelId"] = event.ModelID
-	}
-	if event.Level != "" {
-		meta["level"] = event.Level
-	}
-	if event.OldCwd != "" {
-		meta["oldCwd"] = event.OldCwd
-	}
-	if event.NewCwd != "" {
-		meta["newCwd"] = event.NewCwd
-		meta["cwd"] = event.NewCwd
-	}
-	if event.Path != "" {
-		meta["path"] = event.Path
-	}
-	if event.SubagentName != "" {
-		meta["subagentName"] = event.SubagentName
-	}
-	if event.SubagentTask != "" {
-		meta["subagentTask"] = event.SubagentTask
-	}
-	if event.SubagentBackground {
-		meta["subagentBackground"] = true
-	}
-	if event.SubagentResult != "" {
-		meta["subagentResult"] = event.SubagentResult
-	}
-	if event.ToolName != "" {
-		meta["toolName"] = event.ToolName
-	}
-	if event.Reason != "" {
-		meta["reason"] = event.Reason
-	}
-	if event.ExtensionName != "" {
-		meta["extensionName"] = event.ExtensionName
-	}
-	if event.Message != "" {
-		meta["message"] = event.Message
-	}
-	if len(meta) == 0 {
-		return nil
-	}
-	return meta
 }
 
 // GetSessionFile returns the session file path.

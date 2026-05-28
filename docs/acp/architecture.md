@@ -10,7 +10,7 @@
 | G2 — 融入 modu 抽象 | ACP agent 被包装成 `providers.Provider`，上层 `pkg/agent` 无感使用 |
 | G3 — 多 agent 并发 | 通过 swarm/mailbox 把多个 ACP agent 并发调度 |
 | G4 — 远端触发 | HTTP API 接受外部 `POST /tasks`，任务进 mailbox 队列 |
-| G5 — 全链路可观测 | 所有事件进 `pkg/trace`，跨 agent 执行过程可回放 |
+| G5 — 基础审计 | gateway 记录关键任务状态，跨 agent 回放后续独立设计 |
 | G6 — iOS 可用（最后做） | 提供稳定的 HTTP + SSE 接口供 iOS 调用 |
 
 **非目标**：
@@ -286,12 +286,11 @@ claude-code-acp → session/request_permission → ACP client
 - **权限审批**：危险操作（shell / write）默认 `default` 模式，必须经过 `approve` API；iOS 侧要有明确的允许/拒绝 UI
 - **Tailscale 推荐**：gateway 监听内网接口即可，不对公网暴露
 
-## 9. 可观测性
+## 9. 审计
 
-复用 `pkg/trace`：
-- 每个 ACP client 初始化时 attach 一个 `trace.Recorder`
-- 所有 `Event` 和 mailbox event 都进 trace，可回放
-- gateway 同时写入 `trace/gateway-*.jsonl`，用于审计 iOS 下发的任务
+- gateway 记录 iOS 下发任务的关键状态
+- ACP event 到 modu `Event` 的转换保持纯函数，便于后续接入新的观测系统
+- 跨 agent 回放不再依赖内置 trace 包，后续单独设计
 
 ## 10. 风险与缓解
 
