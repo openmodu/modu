@@ -121,11 +121,23 @@ func prepareToolCall(input ToolInput, call types.ToolCallContent) preparedCall {
 	if tool == nil {
 		return preparedCall{denyMsg: "Tool not found"}
 	}
-	args := call.Arguments
-	if args == nil {
-		args = map[string]any{}
+	toolDef := types.ToolDefinition{Name: tool.Name(), Description: tool.Description(), Parameters: tool.Parameters()}
+	args, err := ValidateToolArguments(toolDef, call)
+	if err != nil {
+		return preparedCall{denyMsg: err.Error()}
 	}
 	if input.ApproveTool != nil {
+		if input.EnableInterrupts {
+			input.Events.Push(Event{
+				Type: EventTypeInterrupt,
+				Interrupt: &InterruptEvent{
+					Reason:     InterruptReasonToolApproval,
+					ToolCallID: call.ID,
+					ToolName:   call.Name,
+					ToolArgs:   args,
+				},
+			})
+		}
 		decision, err := input.ApproveTool(call.Name, call.ID, args)
 		if err != nil {
 			return preparedCall{denyMsg: fmt.Sprintf("Tool approval error: %v", err)}

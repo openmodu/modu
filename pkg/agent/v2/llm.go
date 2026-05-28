@@ -67,13 +67,14 @@ func completeOnce(ctx context.Context, input LLMInput) (*types.AssistantMessage,
 		messages = next
 	}
 
-	llmMessages := []types.AgentMessage(messages)
 	if input.Config.ConvertToLLM != nil {
 		next, err := input.Config.ConvertToLLM(messages)
 		if err != nil {
 			return nil, err
 		}
-		llmMessages = next
+		messages = next
+	} else {
+		messages = defaultConvertToLLM(messages)
 	}
 
 	apiKey := input.Config.APIKey
@@ -86,7 +87,7 @@ func completeOnce(ctx context.Context, input LLMInput) (*types.AssistantMessage,
 
 	response, err := input.Config.StreamFn(ctx, input.Config.Model, &types.LLMContext{
 		SystemPrompt: input.Context.SystemPrompt,
-		Messages:     llmMessages,
+		Messages:     []types.AgentMessage(messages),
 		Tools:        toolDefinitions(input.Context.Tools),
 	}, &types.SimpleStreamOptions{
 		StreamOptions: types.StreamOptions{
@@ -105,6 +106,17 @@ func completeOnce(ctx context.Context, input LLMInput) (*types.AssistantMessage,
 		return nil, err
 	}
 	return collectAssistantMessage(response, input.Events)
+}
+
+func defaultConvertToLLM(messages []AgentMessage) []AgentMessage {
+	out := make([]AgentMessage, 0, len(messages))
+	for _, message := range messages {
+		switch roleOf(message) {
+		case RoleUser, RoleAssistant, RoleToolResult:
+			out = append(out, message)
+		}
+	}
+	return out
 }
 
 func collectAssistantMessage(response types.EventStream, events *EventStream) (*types.AssistantMessage, error) {

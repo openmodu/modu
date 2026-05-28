@@ -9,6 +9,8 @@ import (
 type AgentMessage = types.AgentMessage
 type ThinkingLevel = types.ThinkingLevel
 
+type ExecutionMode string
+
 const (
 	RoleUser       = "user"
 	RoleAssistant  = "assistant"
@@ -20,6 +22,9 @@ const (
 	ThinkingLevelMedium  = types.ThinkingLevelMedium
 	ThinkingLevelHigh    = types.ThinkingLevelHigh
 	ThinkingLevelXHigh   = types.ThinkingLevelXHigh
+
+	ExecutionModeAll        ExecutionMode = "all"
+	ExecutionModeOneAtATime ExecutionMode = "one-at-a-time"
 )
 
 type AgentContext struct {
@@ -30,6 +35,7 @@ type AgentContext struct {
 
 type Config struct {
 	Model               *types.Model
+	InitialState        *State
 	StreamFn            StreamFn
 	ConvertToLLM        func(messages []AgentMessage) ([]types.AgentMessage, error)
 	TransformContext    func(ctx context.Context, messages []AgentMessage) ([]AgentMessage, error)
@@ -37,6 +43,7 @@ type Config struct {
 	GetSteeringMessages func() ([]AgentMessage, error)
 	GetFollowUpMessages func() ([]AgentMessage, error)
 	ApproveTool         func(toolName, toolCallID string, args map[string]any) (ToolApprovalDecision, error)
+	EnableInterrupts    bool
 
 	Temperature     *float64
 	MaxTokens       *int
@@ -48,6 +55,10 @@ type Config struct {
 	ThinkingBudgets *types.ThinkingBudgets
 	MaxRetryDelayMs int
 	MaxSteps        int
+	SteeringMode    ExecutionMode
+	FollowUpMode    ExecutionMode
+
+	onMaxStepsReached func(stepCount int) ResumeDecision
 }
 
 type StreamFn func(ctx context.Context, model *types.Model, llmCtx *types.LLMContext, opts *types.SimpleStreamOptions) (types.EventStream, error)
@@ -88,6 +99,7 @@ type ToolInput struct {
 	Events              *EventStream
 	ApproveTool         func(toolName, toolCallID string, args map[string]any) (ToolApprovalDecision, error)
 	GetSteeringMessages func() ([]AgentMessage, error)
+	EnableInterrupts    bool
 }
 
 type ToolOutput struct {

@@ -18,6 +18,7 @@ const (
 	EventTypeToolExecutionStart  EventType = "tool_execution_start"
 	EventTypeToolExecutionUpdate EventType = "tool_execution_update"
 	EventTypeToolExecutionEnd    EventType = "tool_execution_end"
+	EventTypeInterrupt           EventType = "interrupt"
 )
 
 type Event struct {
@@ -35,6 +36,7 @@ type Event struct {
 	Parallel   bool
 
 	StreamEvent *types.StreamEvent
+	Interrupt   *InterruptEvent
 }
 
 type EventStream struct {

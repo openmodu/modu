@@ -54,7 +54,20 @@ func (l *Loop) Run(ctx context.Context, input LoopInput) (LoopResult, error) {
 			pending = nil
 		}
 		if input.Config.MaxSteps > 0 && stepCount >= input.Config.MaxSteps {
-			return finish(stream, newMessages, nil)
+			interrupt := &InterruptEvent{Reason: InterruptReasonMaxSteps, StepCount: stepCount}
+			stream.Push(Event{Type: EventTypeInterrupt, Interrupt: interrupt})
+			if input.Config.onMaxStepsReached == nil {
+				return finish(stream, newMessages, nil)
+			}
+			decision := input.Config.onMaxStepsReached(stepCount)
+			if !decision.Allow {
+				return finish(stream, newMessages, nil)
+			}
+			if decision.Message != "" {
+				pending = []AgentMessage{types.UserMessage{Role: RoleUser, Content: decision.Message}}
+			}
+			stepCount = 0
+			continue
 		}
 
 		stream.Push(Event{Type: EventTypeTurnStart})
@@ -92,6 +105,7 @@ func (l *Loop) Run(ctx context.Context, input LoopInput) (LoopResult, error) {
 			Events:              stream,
 			ApproveTool:         input.Config.ApproveTool,
 			GetSteeringMessages: input.Config.GetSteeringMessages,
+			EnableInterrupts:    input.Config.EnableInterrupts,
 		})
 		if err != nil {
 			return finish(stream, newMessages, err)
