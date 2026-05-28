@@ -38,7 +38,7 @@ type BashTool struct {
 	cwd string
 }
 
-func NewTool(cwd string) *BashTool {
+func NewTool(cwd string) agent.Tool {
 	return &BashTool{cwd: cwd}
 }
 

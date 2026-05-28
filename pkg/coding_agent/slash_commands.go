@@ -69,16 +69,6 @@ func BuiltinCommands() []SlashCommand {
 			Handler:     cmdFork,
 		},
 		{
-			Name:        "settings",
-			Description: "Show current settings",
-			Handler:     cmdSettings,
-		},
-		{
-			Name:        "state",
-			Description: "Show unified runtime state snapshot",
-			Handler:     cmdState,
-		},
-		{
 			Name:        "tools",
 			Description: "List active tools",
 			Handler:     cmdTools,
@@ -139,16 +129,6 @@ func cmdFork(session *CodingSession, args string) error {
 		return fmt.Errorf("usage: /fork <entryId>")
 	}
 	return session.Fork(entryID)
-}
-
-func cmdSettings(session *CodingSession, _ string) error {
-	fmt.Print(session.EffectiveConfigJSON())
-	return nil
-}
-
-func cmdState(session *CodingSession, _ string) error {
-	fmt.Print(session.RuntimeStateJSON())
-	return nil
 }
 
 func cmdTools(session *CodingSession, _ string) error {
