@@ -30,7 +30,7 @@ type PrintOptions struct {
 
 // RunPrint executes print mode: sends prompts sequentially and outputs results.
 // In text mode, outputs only the final assistant text.
-// In JSON mode, outputs a session header then each AgentEvent as a JSON line.
+// In JSON mode, outputs a session header then each Event as a JSON line.
 func RunPrint(ctx context.Context, opts PrintOptions) error {
 	if opts.Output == nil {
 		opts.Output = os.Stdout
@@ -54,7 +54,7 @@ func runPrintText(ctx context.Context, opts PrintOptions) error {
 	var lastAssistantText string
 
 	// Subscribe to capture assistant messages
-	unsub := opts.Session.Subscribe(func(event agent.AgentEvent) {
+	unsub := opts.Session.Subscribe(func(event agent.Event) {
 		if event.Type == agent.EventTypeMessageEnd {
 			if msg, ok := event.Message.(types.AssistantMessage); ok {
 				for _, block := range msg.Content {
@@ -99,7 +99,7 @@ func runPrintJSON(ctx context.Context, opts PrintOptions) error {
 	// Subscribe to stream all events as JSON lines.
 	// For message_update events the Partial field (cumulative text) is stripped
 	// so each line is truly incremental — only the delta is included.
-	unsub := opts.Session.Subscribe(func(event agent.AgentEvent) {
+	unsub := opts.Session.Subscribe(func(event agent.Event) {
 		line := map[string]any{"type": string(event.Type)}
 
 		if event.ToolName != "" {

@@ -45,7 +45,7 @@ func (t *CalculatorTool) Parameters() any {
 	}
 }
 
-func (t *CalculatorTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *CalculatorTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	op, _ := args["operation"].(string)
 	a := toFloat(args["a"])
 	b := toFloat(args["b"])
@@ -65,7 +65,7 @@ func (t *CalculatorTool) Execute(ctx context.Context, toolCallID string, args ma
 		desc = fmt.Sprintf("%.2f * %.2f = %.2f", a, b, result)
 	case "divide":
 		if b == 0 {
-			return agent.AgentToolResult{
+			return agent.ToolResult{
 				Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "Error: division by zero"}},
 				Details: map[string]any{},
 			}, nil
@@ -79,13 +79,13 @@ func (t *CalculatorTool) Execute(ctx context.Context, toolCallID string, args ma
 		result = math.Pow(a, b)
 		desc = fmt.Sprintf("%.2f ^ %.2f = %.2f", a, b, result)
 	default:
-		return agent.AgentToolResult{
+		return agent.ToolResult{
 			Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "Unknown operation: " + op}},
 			Details: map[string]any{},
 		}, nil
 	}
 
-	return agent.AgentToolResult{
+	return agent.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: desc}},
 		Details: map[string]any{"result": result},
 	}, nil
@@ -105,9 +105,9 @@ func (t *GetTimeTool) Parameters() any {
 	}
 }
 
-func (t *GetTimeTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *GetTimeTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	now := time.Now().Format("2006-01-02 15:04:05 MST")
-	return agent.AgentToolResult{
+	return agent.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: now}},
 		Details: map[string]any{"time": now},
 	}, nil
@@ -146,11 +146,11 @@ func main() {
 		ProviderID: providerID,
 	}
 
-	a := agent.NewAgent(agent.AgentConfig{
-		InitialState: &agent.AgentState{
+	a := agent.NewAgent(agent.Config{
+		InitialState: &agent.State{
 			SystemPrompt: "You are a helpful assistant. When asked math questions, use the calculator tool. When asked about the time, use the get_current_time tool. Always respond in the same language as the user.",
 			Model:        model,
-			Tools: []agent.AgentTool{
+			Tools: []agent.Tool{
 				&CalculatorTool{},
 				&GetTimeTool{},
 			},
@@ -158,7 +158,7 @@ func main() {
 	})
 
 	// Subscribe to events for observability
-	a.Subscribe(func(event agent.AgentEvent) {
+	a.Subscribe(func(event agent.Event) {
 		switch event.Type {
 		case agent.EventTypeAgentStart:
 			fmt.Println("\n=== Agent Start ===")
@@ -186,7 +186,7 @@ func main() {
 				fmt.Printf("   Args: %v\n", args)
 			}
 		case agent.EventTypeToolExecutionEnd:
-			if result, ok := event.Result.(agent.AgentToolResult); ok {
+			if result, ok := event.Result.(agent.ToolResult); ok {
 				for _, c := range result.Content {
 					if tc, ok := c.(*types.TextContent); ok {
 						fmt.Printf("   Result: %s\n", tc.Text)

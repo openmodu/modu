@@ -68,12 +68,12 @@ func Add(ctx context.Context, cfgPath, description string, out io.Writer) error 
 	})
 }
 
-func filterCronTools(all []agent.AgentTool, names ...string) []agent.AgentTool {
+func filterCronTools(all []agent.Tool, names ...string) []agent.Tool {
 	keep := map[string]bool{}
 	for _, n := range names {
 		keep[n] = true
 	}
-	out := make([]agent.AgentTool, 0, len(names))
+	out := make([]agent.Tool, 0, len(names))
 	for _, t := range all {
 		if keep[t.Name()] {
 			out = append(out, t)

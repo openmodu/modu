@@ -620,10 +620,10 @@ func TestRenderEditToolOutputSyntaxHighlightsWhenFilePathKnown(t *testing.T) {
 
 func TestHandleToolExecutionEndUpdatesByToolCallID(t *testing.T) {
 	m := newUIModel(context.Background(), nil, nil, "", nil, nil, "")
-	m.handleAgentEvent(agent.AgentEvent{Type: agent.EventTypeToolExecutionStart, ToolCallID: "call-1", ToolName: "bash"})
-	m.handleAgentEvent(agent.AgentEvent{Type: agent.EventTypeToolExecutionStart, ToolCallID: "call-2", ToolName: "bash"})
+	m.handleAgentEvent(agent.Event{Type: agent.EventTypeToolExecutionStart, ToolCallID: "call-1", ToolName: "bash"})
+	m.handleAgentEvent(agent.Event{Type: agent.EventTypeToolExecutionStart, ToolCallID: "call-2", ToolName: "bash"})
 
-	m.handleAgentEvent(agent.AgentEvent{
+	m.handleAgentEvent(agent.Event{
 		Type:       agent.EventTypeToolExecutionEnd,
 		ToolCallID: "call-2",
 		ToolName:   "bash",

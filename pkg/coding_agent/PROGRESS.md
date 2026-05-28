@@ -16,6 +16,9 @@ High-priority gaps identified before this round:
 
 ## Completed In This Round
 
+- Removed the session-level `/state` and `/settings` built-in slash commands
+  that exposed runtime/config snapshots containing harness details. TUI-local
+  `/settings` remains owned by the UI layer.
 - Added file-backed multi-model configuration for `cmd/modu_code`, runtime `/model` switching, and active-model persistence.
 - Added a TUI model picker for `cmd/modu_code` so `/model` opens an arrow-key selection flow.
 - Wired discovered context files into the system prompt build path.

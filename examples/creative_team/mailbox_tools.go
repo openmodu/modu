@@ -14,8 +14,8 @@ import (
 )
 
 // NewMailboxTools returns the mailbox tools for a given client.
-func NewMailboxTools(c *client.MailboxClient) []agent.AgentTool {
-	return []agent.AgentTool{
+func NewMailboxTools(c *client.MailboxClient) []agent.Tool {
+	return []agent.Tool{
 		&getDiscussionTool{c: c},
 		&postMessageTool{c: c},
 		&getTaskTool{c: c},
@@ -47,7 +47,7 @@ func (t *getDiscussionTool) Parameters() any {
 		"required": []string{"task_id"},
 	}
 }
-func (t *getDiscussionTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *getDiscussionTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	taskID, _ := args["task_id"].(string)
 	if taskID == "" {
 		return toolText("task_id is required"), nil
@@ -96,7 +96,7 @@ func (t *postMessageTool) Parameters() any {
 		"required": []string{"to", "task_id", "text"},
 	}
 }
-func (t *postMessageTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *postMessageTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	to, _ := args["to"].(string)
 	taskID, _ := args["task_id"].(string)
 	text, _ := args["text"].(string)
@@ -129,7 +129,7 @@ func (t *listProjectsTool) Description() string {
 func (t *listProjectsTool) Parameters() any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
-func (t *listProjectsTool) Execute(ctx context.Context, _ string, _ map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *listProjectsTool) Execute(ctx context.Context, _ string, _ map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	projects, err := t.c.ListProjects(ctx)
 	if err != nil {
 		return toolText(fmt.Sprintf("error: %v", err)), nil
@@ -166,7 +166,7 @@ func (t *getProjectTool) Parameters() any {
 		"required": []string{"project_id"},
 	}
 }
-func (t *getProjectTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *getProjectTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	projectID, _ := args["project_id"].(string)
 	if projectID == "" {
 		return toolText("project_id is required"), nil
@@ -205,7 +205,7 @@ func (t *getTaskTool) Parameters() any {
 		"required": []string{"task_id"},
 	}
 }
-func (t *getTaskTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *getTaskTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	taskID, _ := args["task_id"].(string)
 	if taskID == "" {
 		return toolText("task_id is required"), nil
@@ -215,12 +215,12 @@ func (t *getTaskTool) Execute(ctx context.Context, _ string, args map[string]any
 		return toolText(fmt.Sprintf("error: %v", err)), nil
 	}
 	info := map[string]any{
-		"id":           task.ID,
-		"status":       task.Status,
-		"description":  task.Description,
-		"assignees":    task.Assignees,
-		"result":       task.Result,
-		"created_at":   task.CreatedAt.Format(time.RFC3339),
+		"id":          task.ID,
+		"status":      task.Status,
+		"description": task.Description,
+		"assignees":   task.Assignees,
+		"result":      task.Result,
+		"created_at":  task.CreatedAt.Format(time.RFC3339),
 	}
 	if task.ProjectID != "" {
 		info["project_id"] = task.ProjectID
@@ -257,7 +257,7 @@ func (t *completeTaskTool) Parameters() any {
 		"required": []string{"task_id", "result"},
 	}
 }
-func (t *completeTaskTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *completeTaskTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	taskID, _ := args["task_id"].(string)
 	result, _ := args["result"].(string)
 	if taskID == "" || result == "" {
@@ -282,7 +282,7 @@ func (t *listAgentsTool) Description() string {
 func (t *listAgentsTool) Parameters() any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
-func (t *listAgentsTool) Execute(ctx context.Context, _ string, _ map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *listAgentsTool) Execute(ctx context.Context, _ string, _ map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	ids, err := t.c.ListAgents(ctx)
 	if err != nil {
 		return toolText(fmt.Sprintf("error: %v", err)), nil
@@ -301,8 +301,8 @@ func (t *listAgentsTool) Execute(ctx context.Context, _ string, _ map[string]any
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-func toolText(s string) agent.AgentToolResult {
-	return agent.AgentToolResult{
+func toolText(s string) agent.ToolResult {
+	return agent.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: s}},
 	}
 }

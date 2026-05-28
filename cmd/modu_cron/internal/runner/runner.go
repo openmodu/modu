@@ -47,7 +47,7 @@ type Deps struct {
 	Model       *types.Model
 	GetAPIKey   func(provider string) (string, error)
 	Logs        *runlog.Store
-	CustomTools []agent.AgentTool
+	CustomTools []agent.Tool
 }
 
 // Result describes one completed execution. LogPath is populated even if the

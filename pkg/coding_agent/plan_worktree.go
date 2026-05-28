@@ -266,19 +266,19 @@ func (s *CodingSession) ListPlanRevisions() []PlanRevision {
 
 func (s *CodingSession) replacePlanTools() {
 	if !s.config.FeaturePlanMode() {
-		s.activeTools = removeAgentToolByName(s.activeTools, "enter_plan_mode")
-		s.activeTools = removeAgentToolByName(s.activeTools, "exit_plan_mode")
-		stateTools := removeAgentToolByName(s.agent.GetState().Tools, "enter_plan_mode")
-		stateTools = removeAgentToolByName(stateTools, "exit_plan_mode")
+		s.activeTools = removeToolByName(s.activeTools, "enter_plan_mode")
+		s.activeTools = removeToolByName(s.activeTools, "exit_plan_mode")
+		stateTools := removeToolByName(s.agent.GetState().Tools, "enter_plan_mode")
+		stateTools = removeToolByName(stateTools, "exit_plan_mode")
 		s.agent.SetTools(stateTools)
 		return
 	}
 	enter := tools.NewEnterPlanModeTool(planModeAdapter{session: s})
 	exit := tools.NewExitPlanModeTool(planModeAdapter{session: s})
-	s.activeTools = replaceAgentTool(s.activeTools, enter)
-	s.activeTools = replaceAgentTool(s.activeTools, exit)
-	stateTools := replaceAgentTool(s.agent.GetState().Tools, enter)
-	stateTools = replaceAgentTool(stateTools, exit)
+	s.activeTools = replaceTool(s.activeTools, enter)
+	s.activeTools = replaceTool(s.activeTools, exit)
+	stateTools := replaceTool(s.agent.GetState().Tools, enter)
+	stateTools = replaceTool(stateTools, exit)
 	s.agent.SetTools(stateTools)
 }
 
@@ -482,19 +482,19 @@ func pathExists(path string) bool {
 
 func (s *CodingSession) replaceWorktreeTools() {
 	if !s.config.FeatureWorktreeMode() {
-		s.activeTools = removeAgentToolByName(s.activeTools, "enter_worktree")
-		s.activeTools = removeAgentToolByName(s.activeTools, "exit_worktree")
-		stateTools := removeAgentToolByName(s.agent.GetState().Tools, "enter_worktree")
-		stateTools = removeAgentToolByName(stateTools, "exit_worktree")
+		s.activeTools = removeToolByName(s.activeTools, "enter_worktree")
+		s.activeTools = removeToolByName(s.activeTools, "exit_worktree")
+		stateTools := removeToolByName(s.agent.GetState().Tools, "enter_worktree")
+		stateTools = removeToolByName(stateTools, "exit_worktree")
 		s.agent.SetTools(stateTools)
 		return
 	}
 	enter := tools.NewEnterWorktreeTool(worktreeAdapter{session: s})
 	exit := tools.NewExitWorktreeTool(worktreeAdapter{session: s})
-	s.activeTools = replaceAgentTool(s.activeTools, enter)
-	s.activeTools = replaceAgentTool(s.activeTools, exit)
-	stateTools := replaceAgentTool(s.agent.GetState().Tools, enter)
-	stateTools = replaceAgentTool(stateTools, exit)
+	s.activeTools = replaceTool(s.activeTools, enter)
+	s.activeTools = replaceTool(s.activeTools, exit)
+	stateTools := replaceTool(s.agent.GetState().Tools, enter)
+	stateTools = replaceTool(stateTools, exit)
 	s.agent.SetTools(stateTools)
 }
 
@@ -621,28 +621,13 @@ func (s *CodingSession) refreshDynamicSystemPrompt() {
 }
 
 func (s *CodingSession) refreshToolsForCwd(cwd string) {
-	var updated []agent.AgentTool
+	var updated []agent.Tool
 	for _, tool := range s.activeTools {
-		switch tool.Name() {
-		case "read":
-			updated = append(updated, tools.NewReadTool(cwd))
-		case "git_preflight":
-			updated = append(updated, tools.NewGitPreflightTool(cwd))
-		case "write":
-			updated = append(updated, tools.NewWriteTool(cwd))
-		case "edit":
-			updated = append(updated, tools.NewEditTool(cwd))
-		case "bash":
-			updated = append(updated, tools.NewBashTool(cwd))
-		case "grep":
-			updated = append(updated, tools.NewGrepTool(cwd))
-		case "find":
-			updated = append(updated, tools.NewFindTool(cwd))
-		case "ls":
-			updated = append(updated, tools.NewLsTool(cwd))
-		default:
-			updated = append(updated, tool)
+		if rebound, ok := s.toolProvider.Rebind(tool, agent.ToolContext{Cwd: cwd}); ok {
+			updated = append(updated, rebound)
+			continue
 		}
+		updated = append(updated, tool)
 	}
 	updated = wrapHarnessTools(updated, s)
 	s.activeTools = updated

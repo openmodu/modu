@@ -237,8 +237,8 @@ func parseTimestamp(raw json.RawMessage) int64 {
 
 // MessageData holds message-related entry data.
 type MessageData struct {
-	Role    agent.MessageRole `json:"role"`
-	Content any               `json:"content"`
+	Role    string `json:"role"`
+	Content any    `json:"content"`
 }
 
 // ModelChangeData holds model change entry data.

@@ -40,17 +40,17 @@ func (a todoStoreAdapter) SetTodos(items []tools.TodoItem) {
 
 func (s *CodingSession) replaceTodoTool() {
 	if !s.config.FeatureTodoTool() {
-		s.activeTools = removeAgentToolByName(s.activeTools, "todo_write")
-		s.agent.SetTools(removeAgentToolByName(s.agent.GetState().Tools, "todo_write"))
+		s.activeTools = removeToolByName(s.activeTools, "todo_write")
+		s.agent.SetTools(removeToolByName(s.agent.GetState().Tools, "todo_write"))
 		return
 	}
 	todoTool := tools.NewTodoWriteTool(todoStoreAdapter{session: s})
-	s.activeTools = replaceAgentTool(s.activeTools, todoTool)
-	s.agent.SetTools(replaceAgentTool(s.agent.GetState().Tools, todoTool))
+	s.activeTools = replaceTool(s.activeTools, todoTool)
+	s.agent.SetTools(replaceTool(s.agent.GetState().Tools, todoTool))
 }
 
-func replaceAgentTool(list []agent.AgentTool, replacement agent.AgentTool) []agent.AgentTool {
-	out := make([]agent.AgentTool, 0, len(list))
+func replaceTool(list []agent.Tool, replacement agent.Tool) []agent.Tool {
+	out := make([]agent.Tool, 0, len(list))
 	replaced := false
 	for _, tool := range list {
 		if tool.Name() == replacement.Name() {

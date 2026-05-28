@@ -11,7 +11,7 @@ import (
 // Runner manages the lifecycle of extensions and provides the ExtensionAPI.
 type Runner struct {
 	extensions    []Extension
-	tools         []agent.AgentTool
+	tools         []agent.Tool
 	commands      []Command
 	hooks         []ToolHook
 	handlers      map[string][]EventHandler
@@ -96,7 +96,7 @@ func (r *Runner) Init(extensions []Extension) error {
 }
 
 // RegisterTool implements ExtensionAPI.
-func (r *Runner) RegisterTool(tool agent.AgentTool) {
+func (r *Runner) RegisterTool(tool agent.Tool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.tools = append(r.tools, tool)
@@ -323,16 +323,16 @@ func (r *Runner) InterruptBackgroundTask(id, reason string) (TaskSnapshot, bool)
 }
 
 // GetTools returns all tools registered by extensions.
-func (r *Runner) GetTools() []agent.AgentTool {
+func (r *Runner) GetTools() []agent.Tool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	result := make([]agent.AgentTool, len(r.tools))
+	result := make([]agent.Tool, len(r.tools))
 	copy(result, r.tools)
 	return result
 }
 
 // EmitEvent dispatches an event to all registered handlers.
-func (r *Runner) EmitEvent(event agent.AgentEvent) {
+func (r *Runner) EmitEvent(event agent.Event) {
 	r.mu.RLock()
 	handlers := r.handlers[string(event.Type)]
 	r.mu.RUnlock()

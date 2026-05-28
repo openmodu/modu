@@ -64,7 +64,7 @@ func (t *InstallSkillTool) Parameters() any {
 	}
 }
 
-func (t *InstallSkillTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *InstallSkillTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	// Serialize installs at workspace level to prevent concurrent directory operations.
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -169,4 +169,4 @@ func validateInstallIdentifier(identifier string) error {
 }
 
 // Compile-time interface check.
-var _ agent.AgentTool = (*InstallSkillTool)(nil)
+var _ agent.Tool = (*InstallSkillTool)(nil)

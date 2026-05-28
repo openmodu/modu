@@ -49,7 +49,7 @@ func (t *intercomSendTool) Parameters() any {
 	}
 }
 
-func (t *intercomSendTool) Execute(_ context.Context, _ string, args map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *intercomSendTool) Execute(_ context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	taskID, _ := args["taskId"].(string)
 	message, _ := args["message"].(string)
 	from, _ := args["from"].(string)
@@ -62,7 +62,7 @@ func (t *intercomSendTool) Execute(_ context.Context, _ string, args map[string]
 	if err := appendIntercomMessage(t.ext, taskID, from, message); err != nil {
 		return errResult(fmt.Sprintf("subagent_intercom_send: %v", err)), nil
 	}
-	return agent.AgentToolResult{
+	return agent.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: fmt.Sprintf("Message sent to intercom for task %s.", taskID)}},
 	}, nil
 }

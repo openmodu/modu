@@ -62,12 +62,12 @@ type GitCommitSummary struct {
 	Subject string `json:"subject"`
 }
 
-func (t *GitPreflightTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *GitPreflightTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	state := GitPreflightState{}
 	root, err := t.gitOutput(ctx, "rev-parse", "--show-toplevel")
 	if err != nil {
 		text := "Not a git repository."
-		return agent.AgentToolResult{
+		return agent.ToolResult{
 			Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: text}},
 			Details: map[string]any{"inGitRepository": false},
 		}, nil
@@ -94,7 +94,7 @@ func (t *GitPreflightTool) Execute(ctx context.Context, toolCallID string, args 
 	}
 
 	data, _ := json.MarshalIndent(state, "", "  ")
-	return agent.AgentToolResult{
+	return agent.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: string(data)}},
 		Details: map[string]any{
 			"inGitRepository": state.InGitRepository,

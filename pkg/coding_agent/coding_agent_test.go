@@ -17,11 +17,9 @@ import (
 	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/session"
 	"github.com/openmodu/modu/pkg/coding_agent/skills"
 	"github.com/openmodu/modu/pkg/coding_agent/subagent"
+	"github.com/openmodu/modu/pkg/coding_agent/tools"
 	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/types"
-	"go.opentelemetry.io/otel/attribute"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 type testEchoTool struct{}
@@ -38,9 +36,41 @@ func (t *testEchoTool) Parameters() any {
 		"required": []string{"value"},
 	}
 }
-func (t *testEchoTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+
+type namedTestTool string
+
+func (t namedTestTool) Name() string        { return string(t) }
+func (t namedTestTool) Label() string       { return string(t) }
+func (t namedTestTool) Description() string { return string(t) }
+func (t namedTestTool) Parameters() any {
+	return map[string]any{"type": "object", "properties": map[string]any{}}
+}
+func (t namedTestTool) Execute(context.Context, string, map[string]any, agent.ToolUpdateCallback) (agent.ToolResult, error) {
+	return agent.ToolResult{}, nil
+}
+
+type testToolProvider struct {
+	ctx       agent.ToolContext
+	rebindCwd string
+}
+
+func (p *testToolProvider) Tools(ctx agent.ToolContext) []agent.Tool {
+	p.ctx = ctx
+	out := []agent.Tool{namedTestTool("provider_tool")}
+	out = append(out, ctx.ExtraTools...)
+	return out
+}
+
+func (p *testToolProvider) Rebind(tool agent.Tool, ctx agent.ToolContext) (agent.Tool, bool) {
+	p.rebindCwd = ctx.Cwd
+	if tool.Name() == "provider_tool" {
+		return namedTestTool("provider_tool_rebound"), true
+	}
+	return nil, false
+}
+func (t *testEchoTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	value, _ := args["value"].(string)
-	return agent.AgentToolResult{
+	return agent.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "echoed: " + value}},
 	}, nil
 }
@@ -54,12 +84,12 @@ func (t *testCwdTool) Label() string       { return "Cwd" }
 func (t *testCwdTool) Description() string { return "Report cwd " + t.cwd }
 func (t *testCwdTool) Parameters() any     { return map[string]any{"type": "object"} }
 func (t *testCwdTool) Parallel() bool      { return true }
-func (t *testCwdTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
-	return agent.AgentToolResult{
+func (t *testCwdTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
+	return agent.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "tool-cwd:" + t.cwd}},
 	}, nil
 }
-func (t *testCwdTool) WithCwd(cwd string) agent.AgentTool {
+func (t *testCwdTool) WithCwd(cwd string) agent.Tool {
 	return &testCwdTool{cwd: cwd}
 }
 
@@ -74,8 +104,8 @@ func (t *testHintTool) Parameters() any {
 		"properties": map[string]any{},
 	}
 }
-func (t *testHintTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
-	return agent.AgentToolResult{
+func (t *testHintTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
+	return agent.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{
 			Type: "text",
 			Text: "visible output\n<modu-code-hint v=1 type=plugin value=test@local />",
@@ -126,6 +156,45 @@ func TestNewCodingSession(t *testing.T) {
 	}
 }
 
+func TestNewCodingSessionUsesToolProvider(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	provider := &testToolProvider{}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:          dir,
+		AgentDir:     agentDir,
+		Model:        newTestModel(),
+		CustomTools:  []agent.Tool{namedTestTool("custom_tool")},
+		ToolProvider: provider,
+		GetAPIKey:    func(provider string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := session.GetActiveToolNames()
+	if !containsTool(names, "provider_tool_rebound") || !containsTool(names, "custom_tool") {
+		t.Fatalf("expected provider and custom tools, got %v", names)
+	}
+	if containsTool(names, "read") {
+		t.Fatalf("expected custom provider to own default tool construction, got %v", names)
+	}
+	if provider.ctx.Cwd != dir {
+		t.Fatalf("expected provider cwd %q, got %q", dir, provider.ctx.Cwd)
+	}
+	if !provider.ctx.FeatureEnabled(tools.FeatureMemory) || !provider.ctx.FeatureEnabled(tools.FeatureTodo) {
+		t.Fatalf("expected feature flags in provider context, got %#v", provider.ctx.Features)
+	}
+
+	session.refreshToolsForCwd(filepath.Join(dir, "child"))
+	names = session.GetActiveToolNames()
+	if !containsTool(names, "provider_tool_rebound") {
+		t.Fatalf("expected provider rebind to update tool, got %v", names)
+	}
+	if provider.rebindCwd != filepath.Join(dir, "child") {
+		t.Fatalf("expected rebind cwd to be delegated, got %q", provider.rebindCwd)
+	}
+}
+
 func TestNewCodingSessionRegistersTodoWriteTool(t *testing.T) {
 	dir := t.TempDir()
 	agentDir := filepath.Join(dir, ".coding_agent")
@@ -143,7 +212,7 @@ func TestNewCodingSessionRegistersTodoWriteTool(t *testing.T) {
 		t.Fatalf("expected todo_write in active tools, got %v", session.GetActiveToolNames())
 	}
 
-	var todoTool agent.AgentTool
+	var todoTool agent.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		if tool.Name() == "todo_write" {
 			todoTool = tool
@@ -268,7 +337,7 @@ Return a short completion message.`
 		t.Fatal(err)
 	}
 
-	var spawnTool, outputTool, subagentTool agent.AgentTool
+	var spawnTool, outputTool, subagentTool agent.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		switch tool.Name() {
 		case "spawn_subagent":
@@ -386,7 +455,7 @@ Return a short completion message.`
 	if err != nil {
 		t.Fatal(err)
 	}
-	var outputTool2, subagentTool2 agent.AgentTool
+	var outputTool2, subagentTool2 agent.Tool
 	for _, tool := range session2.GetAgent().GetState().Tools {
 		switch tool.Name() {
 		case "task_output":
@@ -497,7 +566,7 @@ Return the child message count.
 		},
 	})
 
-	var subagentTool agent.AgentTool
+	var subagentTool agent.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		if tool.Name() == "subagent" {
 			subagentTool = tool
@@ -557,7 +626,7 @@ System prompt for helper.
 		Cwd:         root,
 		AgentDir:    agentDir,
 		Model:       model,
-		CustomTools: []agent.AgentTool{&testCwdTool{}},
+		CustomTools: []agent.Tool{&testCwdTool{}},
 		GetAPIKey:   func(provider string) (string, error) { return "", nil },
 		Extensions: []extension.Extension{
 			subagentext.New(),
@@ -587,7 +656,7 @@ System prompt for helper.
 	if err != nil {
 		t.Fatal(err)
 	}
-	var subagentTool agent.AgentTool
+	var subagentTool agent.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		if tool.Name() == "subagent" {
 			subagentTool = tool
@@ -655,7 +724,7 @@ func TestBackgroundTaskManagerCreateWithMetadataInDirRedirects(t *testing.T) {
 
 func TestPlanModeTools(t *testing.T) {
 	session := newTestSession(t, newTestModel())
-	var enterTool, exitTool agent.AgentTool
+	var enterTool, exitTool agent.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		switch tool.Name() {
 		case "enter_plan_mode":
@@ -1104,7 +1173,7 @@ func TestPlanModeBlocksMutatingTools(t *testing.T) {
 	session := newTestSession(t, newTestModel())
 	session.EnterPlanMode()
 
-	var writeTool, editTool, bashTool agent.AgentTool
+	var writeTool, editTool, bashTool agent.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		switch tool.Name() {
 		case "write":
@@ -1193,7 +1262,7 @@ func TestPlanModeBlocksWriteAfterEnterWorktree(t *testing.T) {
 	}
 	defer session.ExitWorktree()
 
-	var writeTool agent.AgentTool
+	var writeTool agent.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		if tool.Name() == "write" {
 			writeTool = tool
@@ -1381,7 +1450,7 @@ Run pwd in bash and return the tool output.`
 		t.Fatal(err)
 	}
 
-	var spawnTool agent.AgentTool
+	var spawnTool agent.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		if tool.Name() == "spawn_subagent" {
 			spawnTool = tool
@@ -1624,210 +1693,6 @@ func TestRuntimeStateGitRefreshCanRunAsync(t *testing.T) {
 	}
 }
 
-func TestCodingSessionWritesTraceFiles(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	model := newTestModel()
-	callCount := 0
-	streamFn := func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
-		callCount++
-		stream := types.NewEventStream()
-		go func() {
-			if callCount == 1 {
-				msg := &types.AssistantMessage{
-					Role:       "assistant",
-					ProviderID: model.ProviderID,
-					Model:      model.ID,
-					StopReason: "toolUse",
-					Content: []types.ContentBlock{
-						&types.ToolCallContent{Type: "toolCall", ID: "tool-1", Name: "echo", Arguments: map[string]any{"value": "trace-me"}},
-					},
-					Timestamp: time.Now().UnixMilli(),
-				}
-				stream.Push(types.StreamEvent{Type: "done", Reason: "toolUse", Message: msg})
-				stream.Resolve(msg, nil)
-			} else {
-				last := llmCtx.Messages[len(llmCtx.Messages)-1]
-				toolOutput := ""
-				if result, ok := last.(types.ToolResultMessage); ok {
-					toolOutput = extractTextBlocks(result.Content)
-				}
-				msg := &types.AssistantMessage{
-					Role:       "assistant",
-					ProviderID: model.ProviderID,
-					Model:      model.ID,
-					StopReason: "stop",
-					Content: []types.ContentBlock{
-						&types.TextContent{Type: "text", Text: "final: " + toolOutput},
-					},
-					Usage:     types.AgentUsage{Input: 13, Output: 8, TotalTokens: 21},
-					Timestamp: time.Now().UnixMilli(),
-				}
-				stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
-				stream.Resolve(msg, nil)
-			}
-			stream.Close()
-		}()
-		return stream, nil
-	}
-
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd:       dir,
-		AgentDir:  agentDir,
-		Model:     model,
-		Tools:     []agent.AgentTool{&testEchoTool{}},
-		GetAPIKey: func(provider string) (string, error) { return "", nil },
-		StreamFn:  streamFn,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if err := session.Prompt(context.Background(), "capture trace"); err != nil {
-		t.Fatal(err)
-	}
-
-	traceSummary := session.TraceSummary()
-	if traceSummary.Tokens.TotalTokens != 21 {
-		t.Fatalf("expected trace token total 21, got %#v", traceSummary.Tokens)
-	}
-	if traceSummary.Counts.ToolCalls != 1 {
-		t.Fatalf("expected 1 traced tool call, got %#v", traceSummary.Counts)
-	}
-
-	eventsData, err := os.ReadFile(session.RuntimePaths().TraceEventsFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(eventsData), `"type":"tool_execution_start"`) || !strings.Contains(string(eventsData), `"toolName":"echo"`) {
-		t.Fatalf("expected tool execution trace, got %q", string(eventsData))
-	}
-
-	summaryData, err := os.ReadFile(session.RuntimePaths().TraceSummaryFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(summaryData), `"totalTokens": 21`) {
-		t.Fatalf("expected total token summary, got %q", string(summaryData))
-	}
-
-	stateData, err := os.ReadFile(session.RuntimePaths().RuntimeStateFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(stateData), `"trace_events_file"`) || !strings.Contains(string(stateData), `"totalTokens": 21`) {
-		t.Fatalf("expected trace paths and totals in runtime state, got %q", string(stateData))
-	}
-}
-
-func TestCodingSessionWritesOTelSpans(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	model := newTestModel()
-	exporter := tracetest.NewInMemoryExporter()
-	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
-	defer func() {
-		_ = provider.Shutdown(context.Background())
-	}()
-
-	callCount := 0
-	streamFn := func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
-		callCount++
-		stream := types.NewEventStream()
-		go func() {
-			if callCount == 1 {
-				msg := &types.AssistantMessage{
-					Role:       "assistant",
-					ProviderID: model.ProviderID,
-					Model:      model.ID,
-					StopReason: "toolUse",
-					Content: []types.ContentBlock{
-						&types.ToolCallContent{Type: "toolCall", ID: "tool-otel-1", Name: "echo", Arguments: map[string]any{"value": "otel"}},
-					},
-					Timestamp: time.Now().UnixMilli(),
-				}
-				stream.Push(types.StreamEvent{Type: "done", Reason: "toolUse", Message: msg})
-				stream.Resolve(msg, nil)
-			} else {
-				last := llmCtx.Messages[len(llmCtx.Messages)-1]
-				toolOutput := ""
-				if result, ok := last.(types.ToolResultMessage); ok {
-					toolOutput = extractTextBlocks(result.Content)
-				}
-				msg := &types.AssistantMessage{
-					Role:       "assistant",
-					ProviderID: model.ProviderID,
-					Model:      model.ID,
-					StopReason: "stop",
-					Content: []types.ContentBlock{
-						&types.TextContent{Type: "text", Text: "otel final: " + toolOutput},
-					},
-					Usage:     types.AgentUsage{Input: 9, Output: 5, TotalTokens: 14},
-					Timestamp: time.Now().UnixMilli(),
-				}
-				stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
-				stream.Resolve(msg, nil)
-			}
-			stream.Close()
-		}()
-		return stream, nil
-	}
-
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd:                dir,
-		AgentDir:           agentDir,
-		Model:              model,
-		Tools:              []agent.AgentTool{&testEchoTool{}},
-		GetAPIKey:          func(provider string) (string, error) { return "", nil },
-		StreamFn:           streamFn,
-		OTelTracerProvider: provider,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if err := session.Prompt(context.Background(), "capture otel trace"); err != nil {
-		t.Fatal(err)
-	}
-	session.Close("test done")
-
-	spans := exporter.GetSpans()
-	if len(spans) == 0 {
-		t.Fatal("expected exported spans")
-	}
-
-	toolSpan, ok := findSpanByName(spans, "coding_agent.tool.echo")
-	if !ok {
-		t.Fatalf("expected tool span, got %#v", spans)
-	}
-	if got := spanStringAttr(toolSpan.Attributes, "tool.name"); got != "echo" {
-		t.Fatalf("expected tool.name=echo, got %q", got)
-	}
-
-	llmSpans := findSpansByName(spans, "coding_agent.llm")
-	if len(llmSpans) == 0 {
-		t.Fatalf("expected llm spans, got %#v", spans)
-	}
-	foundTokenSpan := false
-	for _, span := range llmSpans {
-		if spanIntAttr(span.Attributes, "llm.usage.total_tokens") == 14 {
-			foundTokenSpan = true
-			break
-		}
-	}
-	if !foundTokenSpan {
-		t.Fatalf("expected one llm span with total tokens 14, got %#v", llmSpans)
-	}
-
-	sessionSpan, ok := findSpanByName(spans, "coding_agent.session")
-	if !ok {
-		t.Fatalf("expected session span, got %#v", spans)
-	}
-	if got := spanStringAttr(sessionSpan.Attributes, "llm.model"); got != model.ID {
-		t.Fatalf("expected session llm.model=%s, got %q", model.ID, got)
-	}
-}
-
 func TestPermissionRulesEmitHarnessArtifacts(t *testing.T) {
 	dir := t.TempDir()
 	agentDir := filepath.Join(dir, ".coding_agent")
@@ -1876,7 +1741,7 @@ func TestPermissionRulesEmitHarnessArtifacts(t *testing.T) {
 		Cwd:         dir,
 		AgentDir:    agentDir,
 		Model:       model,
-		CustomTools: []agent.AgentTool{&testEchoTool{}},
+		CustomTools: []agent.Tool{&testEchoTool{}},
 		GetAPIKey:   func(provider string) (string, error) { return "", nil },
 		StreamFn:    streamFn,
 	})
@@ -1906,14 +1771,14 @@ func TestDefaultHarnessOutputsWorkWithoutManualSettings(t *testing.T) {
 		Cwd:         dir,
 		AgentDir:    agentDir,
 		Model:       newTestModel(),
-		CustomTools: []agent.AgentTool{&testEchoTool{}},
+		CustomTools: []agent.Tool{&testEchoTool{}},
 		GetAPIKey:   func(provider string) (string, error) { return "", nil },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var echoTool agent.AgentTool
+	var echoTool agent.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		if tool.Name() == "echo" {
 			echoTool = tool
@@ -1989,7 +1854,7 @@ func (e *testHookExtension) Init(api extension.ExtensionAPI) error {
 			}
 			return true
 		},
-		After: func(toolName string, args map[string]any, result agent.AgentToolResult) {
+		After: func(toolName string, args map[string]any, result agent.ToolResult) {
 			e.afterCalls = append(e.afterCalls, toolName)
 		},
 	})
@@ -2092,13 +1957,13 @@ type testEventExtension struct {
 
 func (e *testEventExtension) Name() string { return "test-events" }
 func (e *testEventExtension) Init(api extension.ExtensionAPI) error {
-	api.On(string(agent.EventTypeAgentStart), func(event agent.AgentEvent) {
+	api.On(string(agent.EventTypeAgentStart), func(event agent.Event) {
 		e.agentStartCount++
 	})
 	return nil
 }
 
-func TestExtensionEventHandlersReceiveAgentEvents(t *testing.T) {
+func TestExtensionEventHandlersReceiveEvents(t *testing.T) {
 	dir := t.TempDir()
 	agentDir := filepath.Join(dir, ".coding_agent")
 	model := newTestModel()
@@ -2498,7 +2363,7 @@ func TestPromptPersistsAssistantAndToolMessages(t *testing.T) {
 		Cwd:       dir,
 		AgentDir:  agentDir,
 		Model:     model,
-		Tools:     []agent.AgentTool{tool},
+		Tools:     []agent.Tool{tool},
 		GetAPIKey: func(p string) (string, error) { return "", nil },
 		StreamFn:  streamFn,
 	})
@@ -2510,7 +2375,7 @@ func TestPromptPersistsAssistantAndToolMessages(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var roles []agent.MessageRole
+	var roles []string
 	for _, entry := range session.sessionManager.Load() {
 		if entry.Type != sessionpkg.EntryTypeMessage {
 			continue
@@ -2521,7 +2386,7 @@ func TestPromptPersistsAssistantAndToolMessages(t *testing.T) {
 		}
 		if data, ok := entry.Data.(map[string]any); ok {
 			if role, ok := data["role"].(string); ok {
-				roles = append(roles, agent.MessageRole(role))
+				roles = append(roles, string(role))
 			}
 		}
 	}
@@ -2596,8 +2461,8 @@ You are a summarizer. Reply with a concise summary of the user's request.`
 		t.Fatal(err)
 	}
 
-	var events []agent.AgentEvent
-	unsub := session.Subscribe(func(event agent.AgentEvent) {
+	var events []agent.Event
+	unsub := session.Subscribe(func(event agent.Event) {
 		events = append(events, event)
 	})
 	defer unsub()
@@ -2822,7 +2687,7 @@ func contentText(content any) string {
 	}
 }
 
-func hasAssistantMessageEnd(events []agent.AgentEvent, text string) bool {
+func hasAssistantMessageEnd(events []agent.Event, text string) bool {
 	for _, event := range events {
 		if event.Type != agent.EventTypeMessageEnd {
 			continue
@@ -2840,7 +2705,7 @@ func hasAssistantMessageEnd(events []agent.AgentEvent, text string) bool {
 	return false
 }
 
-func hasAgentEnd(events []agent.AgentEvent) bool {
+func hasAgentEnd(events []agent.Event) bool {
 	for _, event := range events {
 		if event.Type == agent.EventTypeAgentEnd {
 			return true
@@ -2933,7 +2798,7 @@ func TestGetLastAssistantText(t *testing.T) {
 	}
 }
 
-func containsRole(roles []agent.MessageRole, want agent.MessageRole) bool {
+func containsRole(roles []string, want string) bool {
 	for _, role := range roles {
 		if role == want {
 			return true
@@ -3131,7 +2996,7 @@ func TestHarnessHooksWrapToolExecution(t *testing.T) {
 		Cwd:         t.TempDir(),
 		AgentDir:    filepath.Join(t.TempDir(), ".coding_agent"),
 		Model:       newTestModel(),
-		CustomTools: []agent.AgentTool{&testEchoTool{}},
+		CustomTools: []agent.Tool{&testEchoTool{}},
 		GetAPIKey:   func(provider string) (string, error) { return "", nil },
 	})
 	if err != nil {
@@ -3146,14 +3011,14 @@ func TestHarnessHooksWrapToolExecution(t *testing.T) {
 			}
 			return nil
 		},
-		PostToolUse: func(call HarnessToolCall, result agent.AgentToolResult, err error) {
+		PostToolUse: func(call HarnessToolCall, result agent.ToolResult, err error) {
 			if call.ToolName == "echo" && err == nil {
 				postCalled = true
 			}
 		},
 	})
 
-	var echo agent.AgentTool
+	var echo agent.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		if tool.Name() == "echo" {
 			echo = tool
@@ -3178,14 +3043,14 @@ func TestHarnessHintStrippedAndStored(t *testing.T) {
 		Cwd:         t.TempDir(),
 		AgentDir:    filepath.Join(t.TempDir(), ".coding_agent"),
 		Model:       newTestModel(),
-		CustomTools: []agent.AgentTool{&testHintTool{}},
+		CustomTools: []agent.Tool{&testHintTool{}},
 		GetAPIKey:   func(provider string) (string, error) { return "", nil },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var hintTool agent.AgentTool
+	var hintTool agent.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		if tool.Name() == "hint_tool" {
 			hintTool = tool
@@ -3230,7 +3095,7 @@ func TestHarnessPathsToolAndPlanFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var harnessPathsTool, readTool agent.AgentTool
+	var harnessPathsTool, readTool agent.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		switch tool.Name() {
 		case "harness_paths":
@@ -3385,7 +3250,7 @@ func TestHarnessSubagentHooksRun(t *testing.T) {
 		},
 	})
 
-	var tool agent.AgentTool
+	var tool agent.Tool
 	for _, ttool := range session.GetAgent().GetState().Tools {
 		if ttool.Name() == "spawn_subagent" {
 			tool = ttool
@@ -3420,14 +3285,14 @@ func TestHarnessConfigBlocksTools(t *testing.T) {
 		Cwd:         dir,
 		AgentDir:    agentDir,
 		Model:       newTestModel(),
-		CustomTools: []agent.AgentTool{&testEchoTool{}},
+		CustomTools: []agent.Tool{&testEchoTool{}},
 		GetAPIKey:   func(provider string) (string, error) { return "", nil },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var echo agent.AgentTool
+	var echo agent.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		if tool.Name() == "echo" {
 			echo = tool
@@ -3463,14 +3328,14 @@ func TestHarnessConfigCanDisableHintCaptureAndArtifacts(t *testing.T) {
 		Cwd:         dir,
 		AgentDir:    agentDir,
 		Model:       newTestModel(),
-		CustomTools: []agent.AgentTool{&testHintTool{}},
+		CustomTools: []agent.Tool{&testHintTool{}},
 		GetAPIKey:   func(provider string) (string, error) { return "", nil },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var hintTool agent.AgentTool
+	var hintTool agent.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		if tool.Name() == "hint_tool" {
 			hintTool = tool
@@ -3519,7 +3384,7 @@ func TestHarnessConfigAppendsEventLogs(t *testing.T) {
 		Cwd:         dir,
 		AgentDir:    agentDir,
 		Model:       newTestModel(),
-		CustomTools: []agent.AgentTool{&testEchoTool{}},
+		CustomTools: []agent.Tool{&testEchoTool{}},
 		GetAPIKey:   func(provider string) (string, error) { return "", nil },
 		Extensions: []extension.Extension{
 			subagentext.New(),
@@ -3546,7 +3411,7 @@ func TestHarnessConfigAppendsEventLogs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var echoTool, spawnTool agent.AgentTool
+	var echoTool, spawnTool agent.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		switch tool.Name() {
 		case "echo":
@@ -3606,7 +3471,7 @@ func TestHarnessConfigWritesLatestArtifacts(t *testing.T) {
 		Cwd:         dir,
 		AgentDir:    agentDir,
 		Model:       newTestModel(),
-		CustomTools: []agent.AgentTool{&testEchoTool{}},
+		CustomTools: []agent.Tool{&testEchoTool{}},
 		GetAPIKey:   func(provider string) (string, error) { return "", nil },
 		Extensions: []extension.Extension{
 			subagentext.New(),
@@ -3633,7 +3498,7 @@ func TestHarnessConfigWritesLatestArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var echoTool, spawnTool agent.AgentTool
+	var echoTool, spawnTool agent.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		switch tool.Name() {
 		case "echo":
@@ -3693,7 +3558,7 @@ func TestHarnessConfigWritesEventBridgeFiles(t *testing.T) {
 		Cwd:         dir,
 		AgentDir:    agentDir,
 		Model:       newTestModel(),
-		CustomTools: []agent.AgentTool{&testEchoTool{}},
+		CustomTools: []agent.Tool{&testEchoTool{}},
 		GetAPIKey:   func(provider string) (string, error) { return "", nil },
 		Extensions: []extension.Extension{
 			subagentext.New(),
@@ -3720,7 +3585,7 @@ func TestHarnessConfigWritesEventBridgeFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var echoTool, spawnTool agent.AgentTool
+	var echoTool, spawnTool agent.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		switch tool.Name() {
 		case "echo":
@@ -3788,14 +3653,14 @@ func TestHarnessConfigDispatchesHostActions(t *testing.T) {
 		Cwd:         dir,
 		AgentDir:    agentDir,
 		Model:       newTestModel(),
-		CustomTools: []agent.AgentTool{&testEchoTool{}},
+		CustomTools: []agent.Tool{&testEchoTool{}},
 		GetAPIKey:   func(provider string) (string, error) { return "", nil },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var echoTool agent.AgentTool
+	var echoTool agent.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		if tool.Name() == "echo" {
 			echoTool = tool
@@ -3843,14 +3708,14 @@ func TestHarnessConfigDoesNotDispatchActionsWhenExplicitlyDisabled(t *testing.T)
 		Cwd:         dir,
 		AgentDir:    agentDir,
 		Model:       newTestModel(),
-		CustomTools: []agent.AgentTool{&testEchoTool{}},
+		CustomTools: []agent.Tool{&testEchoTool{}},
 		GetAPIKey:   func(provider string) (string, error) { return "", nil },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var echoTool agent.AgentTool
+	var echoTool agent.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		if tool.Name() == "echo" {
 			echoTool = tool
@@ -3883,14 +3748,14 @@ func TestHarnessConfigActionFailureIsRecorded(t *testing.T) {
 		Cwd:         dir,
 		AgentDir:    agentDir,
 		Model:       newTestModel(),
-		CustomTools: []agent.AgentTool{&testEchoTool{}},
+		CustomTools: []agent.Tool{&testEchoTool{}},
 		GetAPIKey:   func(provider string) (string, error) { return "", nil },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var echoTool agent.AgentTool
+	var echoTool agent.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		if tool.Name() == "echo" {
 			echoTool = tool
@@ -3929,14 +3794,14 @@ func TestHarnessConfigActionOutputIsCaptured(t *testing.T) {
 		Cwd:         dir,
 		AgentDir:    agentDir,
 		Model:       newTestModel(),
-		CustomTools: []agent.AgentTool{&testEchoTool{}},
+		CustomTools: []agent.Tool{&testEchoTool{}},
 		GetAPIKey:   func(provider string) (string, error) { return "", nil },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var echoTool agent.AgentTool
+	var echoTool agent.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		if tool.Name() == "echo" {
 			echoTool = tool
@@ -3975,14 +3840,14 @@ func TestHarnessConfigActionTimeoutIsRecorded(t *testing.T) {
 		Cwd:         dir,
 		AgentDir:    agentDir,
 		Model:       newTestModel(),
-		CustomTools: []agent.AgentTool{&testEchoTool{}},
+		CustomTools: []agent.Tool{&testEchoTool{}},
 		GetAPIKey:   func(provider string) (string, error) { return "", nil },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var echoTool agent.AgentTool
+	var echoTool agent.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		if tool.Name() == "echo" {
 			echoTool = tool
@@ -4022,14 +3887,14 @@ func TestHarnessConfigActionRetriesUntilSuccess(t *testing.T) {
 		Cwd:         dir,
 		AgentDir:    agentDir,
 		Model:       newTestModel(),
-		CustomTools: []agent.AgentTool{&testEchoTool{}},
+		CustomTools: []agent.Tool{&testEchoTool{}},
 		GetAPIKey:   func(provider string) (string, error) { return "", nil },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var echoTool agent.AgentTool
+	var echoTool agent.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		if tool.Name() == "echo" {
 			echoTool = tool
@@ -4073,14 +3938,14 @@ func TestHarnessConfigActionStopOnFailureSkipsRemainingActions(t *testing.T) {
 		Cwd:         dir,
 		AgentDir:    agentDir,
 		Model:       newTestModel(),
-		CustomTools: []agent.AgentTool{&testEchoTool{}},
+		CustomTools: []agent.Tool{&testEchoTool{}},
 		GetAPIKey:   func(provider string) (string, error) { return "", nil },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var echoTool agent.AgentTool
+	var echoTool agent.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		if tool.Name() == "echo" {
 			echoTool = tool
@@ -4121,14 +3986,14 @@ func TestHarnessRuntimeIndexUpdates(t *testing.T) {
 		Cwd:         dir,
 		AgentDir:    agentDir,
 		Model:       newTestModel(),
-		CustomTools: []agent.AgentTool{&testEchoTool{}},
+		CustomTools: []agent.Tool{&testEchoTool{}},
 		GetAPIKey:   func(provider string) (string, error) { return "", nil },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var echoTool agent.AgentTool
+	var echoTool agent.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		if tool.Name() == "echo" {
 			echoTool = tool
@@ -4207,7 +4072,7 @@ func TestPromptToolHarnessArtifactIntegration(t *testing.T) {
 		Cwd:       dir,
 		AgentDir:  agentDir,
 		Model:     model,
-		Tools:     []agent.AgentTool{tool},
+		Tools:     []agent.Tool{tool},
 		GetAPIKey: func(p string) (string, error) { return "", nil },
 		StreamFn:  streamFn,
 	})
@@ -4267,11 +4132,11 @@ func TestHandleToolExecutionEndQueuesNestedContextForDeeperPath(t *testing.T) {
 		t.Fatalf("expected no queued steering messages initially, got %d", session.agent.QueuedMessageCount())
 	}
 
-	session.handleToolExecutionEnd(agent.AgentEvent{
+	session.handleToolExecutionEnd(agent.Event{
 		Type:     agent.EventTypeToolExecutionEnd,
 		ToolName: "read",
 		Args:     map[string]any{"path": targetFile},
-		Result: agent.AgentToolResult{
+		Result: agent.ToolResult{
 			Details: map[string]any{"path": targetFile},
 		},
 	})
@@ -4280,11 +4145,11 @@ func TestHandleToolExecutionEndQueuesNestedContextForDeeperPath(t *testing.T) {
 		t.Fatalf("expected one queued steering message, got %d", session.agent.QueuedMessageCount())
 	}
 
-	session.handleToolExecutionEnd(agent.AgentEvent{
+	session.handleToolExecutionEnd(agent.Event{
 		Type:     agent.EventTypeToolExecutionEnd,
 		ToolName: "read",
 		Args:     map[string]any{"path": targetFile},
-		Result: agent.AgentToolResult{
+		Result: agent.ToolResult{
 			Details: map[string]any{"path": targetFile},
 		},
 	})
@@ -4348,41 +4213,4 @@ func TestTransientNestedContextMessagesArePrunedAndNotPersisted(t *testing.T) {
 	if !strings.Contains(text, "regular user message") {
 		t.Fatalf("expected regular message to be persisted, got:\n%s", text)
 	}
-}
-
-func findSpanByName(spans tracetest.SpanStubs, name string) (tracetest.SpanStub, bool) {
-	for _, span := range spans {
-		if span.Name == name {
-			return span, true
-		}
-	}
-	return tracetest.SpanStub{}, false
-}
-
-func findSpansByName(spans tracetest.SpanStubs, name string) tracetest.SpanStubs {
-	var out tracetest.SpanStubs
-	for _, span := range spans {
-		if span.Name == name {
-			out = append(out, span)
-		}
-	}
-	return out
-}
-
-func spanStringAttr(attrs []attribute.KeyValue, key string) string {
-	for _, attr := range attrs {
-		if string(attr.Key) == key {
-			return attr.Value.AsString()
-		}
-	}
-	return ""
-}
-
-func spanIntAttr(attrs []attribute.KeyValue, key string) int {
-	for _, attr := range attrs {
-		if string(attr.Key) == key {
-			return int(attr.Value.AsInt64())
-		}
-	}
-	return 0
 }

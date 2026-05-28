@@ -24,7 +24,7 @@ import (
 // Most ExtensionAPI methods return zero values — the subagent extension
 // only touches RegisterTool and ForkSession in normal flow.
 type fakeAPI struct {
-	registered []agent.AgentTool
+	registered []agent.Tool
 	commands   map[string]extension.CommandHandler
 	notices    []string
 
@@ -38,7 +38,7 @@ type fakeAPI struct {
 	cwd         string
 }
 
-func (f *fakeAPI) RegisterTool(t agent.AgentTool) { f.registered = append(f.registered, t) }
+func (f *fakeAPI) RegisterTool(t agent.Tool) { f.registered = append(f.registered, t) }
 func (f *fakeAPI) RegisterCommand(name string, _ string, h extension.CommandHandler) {
 	if f.commands == nil {
 		f.commands = map[string]extension.CommandHandler{}
@@ -88,6 +88,7 @@ func (f *fakeAPI) noticesSnapshot() []string {
 	copy(out, f.notices)
 	return out
 }
+
 // confirmFn is an optional hook the test can install to drive the
 // host's confirmation gate (used by the clarify flow). When nil,
 // Confirm returns false to match the historical default.
@@ -97,7 +98,7 @@ func (f *fakeAPI) Confirm(title, body string, defaultYes bool) bool {
 	}
 	return false
 }
-func (f *fakeAPI) Select(string, []string) string    { return "" }
+func (f *fakeAPI) Select(string, []string) string { return "" }
 func (f *fakeAPI) BackgroundTasks() []extension.TaskSnapshot {
 	return append([]extension.TaskSnapshot(nil), f.tasks...)
 }
@@ -162,12 +163,12 @@ func newExtensionWithProfiles(t *testing.T, profiles map[string]string) (*Extens
 	return ext, api
 }
 
-func toolOf(t *testing.T, api *fakeAPI) agent.AgentTool {
+func toolOf(t *testing.T, api *fakeAPI) agent.Tool {
 	t.Helper()
 	return registeredTool(t, api, "subagent")
 }
 
-func registeredTool(t *testing.T, api *fakeAPI, name string) agent.AgentTool {
+func registeredTool(t *testing.T, api *fakeAPI, name string) agent.Tool {
 	t.Helper()
 	for _, tool := range api.registered {
 		if tool.Name() == name {
@@ -2639,6 +2640,7 @@ func TestBatchAsyncExplicitAsyncFalseOverridesForce(t *testing.T) {
 //   - records the task id so status / doctor display it as stale in the
 //     current session even though the host's in-memory snapshot still says
 //     "running".
+//
 // Tasks of other kinds (bash etc.) and non-running statuses are untouched.
 func TestStaleRunReconcilerMarksRunningSubagentsStale(t *testing.T) {
 	runRoot := t.TempDir()
@@ -2754,8 +2756,8 @@ System prompt.
 	tool := toolOf(t, api)
 
 	var (
-		mu        sync.Mutex
-		captured  []extension.ForkOptions
+		mu       sync.Mutex
+		captured []extension.ForkOptions
 	)
 	api.forkFn = func(_ context.Context, opts extension.ForkOptions) (string, error) {
 		mu.Lock()
@@ -2868,8 +2870,8 @@ func newExtensionWithUserAndProjectProfiles(t *testing.T, userProfiles, projectP
 func TestListActionAgentScopeFiltersBySource(t *testing.T) {
 	_, api := newExtensionWithUserAndProjectProfiles(t,
 		map[string]string{
-			"user-only":  frontmatterBody("user-only", "user profile"),
-			"shared":     frontmatterBody("shared", "user version"),
+			"user-only": frontmatterBody("user-only", "user profile"),
+			"shared":    frontmatterBody("shared", "user version"),
 		},
 		map[string]string{
 			"project-only": frontmatterBody("project-only", "project profile"),
@@ -3218,8 +3220,8 @@ func TestForceTopLevelAsyncOffPreservesProfileBackground(t *testing.T) {
 // the surrounding chain before any later step runs.
 func TestChainParallelGroupFailFastCancelsSiblingsAndAbortsChain(t *testing.T) {
 	_, api := newExtensionWithProfiles(t, map[string]string{
-		"fast-fail":   frontmatterBody("fast-fail", "errors immediately"),
-		"slow-finish": frontmatterBody("slow-finish", "waits for ctx"),
+		"fast-fail":     frontmatterBody("fast-fail", "errors immediately"),
+		"slow-finish":   frontmatterBody("slow-finish", "waits for ctx"),
 		"never-reached": frontmatterBody("never-reached", "should not run"),
 	})
 	tool := toolOf(t, api)
@@ -3884,7 +3886,7 @@ func TestDefaultModelAppliedWhenProfileLeavesItEmpty(t *testing.T) {
 
 // textOf concatenates every TextContent block in a tool result. Used to
 // keep assertions concise.
-func textOf(res agent.AgentToolResult) string {
+func textOf(res agent.ToolResult) string {
 	var b strings.Builder
 	for _, block := range res.Content {
 		if tc, ok := block.(*types.TextContent); ok {

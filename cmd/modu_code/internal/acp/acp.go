@@ -148,7 +148,7 @@ func (s *Server) handlePrompt(ctx context.Context, id int64, msg *rpcMsg) {
 	}
 
 	// Subscribe to agent events and forward text deltas as session/update.
-	unsub := s.session.Subscribe(func(ev agent.AgentEvent) {
+	unsub := s.session.Subscribe(func(ev agent.Event) {
 		if ev.Type != agent.EventTypeMessageUpdate || ev.StreamEvent == nil {
 			return
 		}

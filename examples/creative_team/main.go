@@ -74,7 +74,7 @@ func setupModel() *types.Model {
 
 // ── LLM 工具函数 ──────────────────────────────────────────────────────────────
 
-func newCodingSession(model *types.Model, systemPrompt, agentDir string, tools []agent.AgentTool) *coding_agent.CodingSession {
+func newCodingSession(model *types.Model, systemPrompt, agentDir string, tools []agent.Tool) *coding_agent.CodingSession {
 	// Use agentDir as Cwd too so that CodingSession doesn't pick up CLAUDE.md
 	// or other context files from the repo root and pollute the system prompt.
 	cs, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
@@ -99,7 +99,6 @@ func llmCall(ctx context.Context, cs *coding_agent.CodingSession, prompt string)
 	cs.WaitForIdle()
 	return cs.GetLastAssistantText()
 }
-
 
 // ── 子命令：mailbox ───────────────────────────────────────────────────────────
 

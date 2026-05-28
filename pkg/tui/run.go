@@ -214,7 +214,7 @@ func RunWithOptions(ctx context.Context, session *coding_agent.CodingSession, mo
 		go session.EmitExtensionEvent("ui_ready")
 	}
 
-	unsub := session.Subscribe(func(ev agent.AgentEvent) {
+	unsub := session.Subscribe(func(ev agent.Event) {
 		app.QueueUpdate(func() {
 			root.handleAgentEvent(ev)
 		})

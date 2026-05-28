@@ -1,5 +1,5 @@
 // Package crontools exposes cron_add / cron_list / cron_remove as
-// agent.AgentTool implementations, so the CodingSession driving each task
+// agent.Tool implementations, so the CodingSession driving each task
 // can manage the modu_cron task file via natural language.
 //
 // All three tools serialize on the same package-level mutex so concurrent
@@ -30,8 +30,8 @@ import (
 var fileMu sync.Mutex
 
 // New returns the three cron-management tools bound to cfgPath.
-func New(cfgPath string) []agent.AgentTool {
-	return []agent.AgentTool{
+func New(cfgPath string) []agent.Tool {
+	return []agent.Tool{
 		&addTool{cfgPath: cfgPath},
 		&listTool{cfgPath: cfgPath},
 		&removeTool{cfgPath: cfgPath},
@@ -83,7 +83,7 @@ func (t *addTool) Parameters() any {
 	}
 }
 
-func (t *addTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *addTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	id, _ := args["id"].(string)
 	cronExpr, _ := args["cron"].(string)
 	prompt, _ := args["prompt"].(string)
@@ -158,7 +158,7 @@ func (t *listTool) Parameters() any {
 	}
 }
 
-func (t *listTool) Execute(ctx context.Context, _ string, _ map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *listTool) Execute(ctx context.Context, _ string, _ map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	fileMu.Lock()
 	defer fileMu.Unlock()
 	cfg, err := config.Load(t.cfgPath)
@@ -236,7 +236,7 @@ func (t *removeTool) Parameters() any {
 	}
 }
 
-func (t *removeTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *removeTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	id, _ := args["id"].(string)
 	if id == "" {
 		return errorResult("id is required"), nil
@@ -267,8 +267,8 @@ func (t *removeTool) Execute(ctx context.Context, _ string, args map[string]any,
 
 // ─── helpers ───────────────────────────────────────────────────────────────
 
-func okResult(text string, details map[string]any) agent.AgentToolResult {
-	return agent.AgentToolResult{
+func okResult(text string, details map[string]any) agent.ToolResult {
+	return agent.ToolResult{
 		Content: []types.ContentBlock{
 			&types.TextContent{Type: "text", Text: text},
 		},
@@ -276,8 +276,8 @@ func okResult(text string, details map[string]any) agent.AgentToolResult {
 	}
 }
 
-func errorResult(text string) agent.AgentToolResult {
-	return agent.AgentToolResult{
+func errorResult(text string) agent.ToolResult {
+	return agent.ToolResult{
 		Content: []types.ContentBlock{
 			&types.TextContent{Type: "text", Text: text},
 		},

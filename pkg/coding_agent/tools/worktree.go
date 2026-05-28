@@ -29,7 +29,7 @@ func (t *EnterWorktreeTool) Description() string {
 func (t *EnterWorktreeTool) Parameters() any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
-func (t *EnterWorktreeTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *EnterWorktreeTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	if t.manager == nil {
 		return worktreeToolResult("worktree manager is not configured"), nil
 	}
@@ -56,7 +56,7 @@ func (t *ExitWorktreeTool) Description() string {
 func (t *ExitWorktreeTool) Parameters() any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
-func (t *ExitWorktreeTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *ExitWorktreeTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	if t.manager == nil {
 		return worktreeToolResult("worktree manager is not configured"), nil
 	}
@@ -66,8 +66,8 @@ func (t *ExitWorktreeTool) Execute(ctx context.Context, toolCallID string, args 
 	return worktreeToolResult("exited worktree"), nil
 }
 
-func worktreeToolResult(text string) agent.AgentToolResult {
-	return agent.AgentToolResult{
+func worktreeToolResult(text string) agent.ToolResult {
+	return agent.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: text}},
 	}
 }

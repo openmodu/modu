@@ -308,7 +308,7 @@ func (e *Extension) setWatching(v bool) {
 	e.watching = v
 }
 
-func (e *Extension) onAgentStart(_ agent.AgentEvent) {
+func (e *Extension) onAgentStart(_ agent.Event) {
 	e.mu.Lock()
 	e.agentTurnInProgress = true
 	e.completedThisTurnGoalID = ""
@@ -327,7 +327,7 @@ func (e *Extension) onAgentStart(_ agent.AgentEvent) {
 	e.clearAgentGoalAccounting()
 }
 
-func (e *Extension) onSessionStart(event agent.AgentEvent) {
+func (e *Extension) onSessionStart(event agent.Event) {
 	e.mu.Lock()
 	e.lastSessionStartReason = event.Reason
 	e.mu.Unlock()
@@ -350,7 +350,7 @@ func (e *Extension) onSessionStart(event agent.AgentEvent) {
 	e.clearAgentGoalAccounting()
 }
 
-func (e *Extension) onUIReady(_ agent.AgentEvent) {
+func (e *Extension) onUIReady(_ agent.Event) {
 	g, ok, err := e.store.CurrentErr()
 	if err != nil {
 		e.tell(fmt.Sprintf("goal: read failed: %v", err))
@@ -370,14 +370,14 @@ func (e *Extension) onUIReady(_ agent.AgentEvent) {
 	}
 }
 
-func (e *Extension) onSessionShutdown(_ agent.AgentEvent) {
+func (e *Extension) onSessionShutdown(_ agent.Event) {
 	if e.hasAgentGoalAccounting() {
 		e.accountCurrentAgentTurn(types.AgentUsage{}, false)
 	}
 	e.clearAgentGoalAccounting()
 }
 
-func (e *Extension) onAgentEnd(event agent.AgentEvent) {
+func (e *Extension) onAgentEnd(event agent.Event) {
 	includeComplete := e.completedGoalThisTurn() != ""
 	g, ok := e.accountCurrentAgentTurn(collectUsage(event.Messages), includeComplete)
 

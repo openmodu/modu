@@ -2,7 +2,7 @@
 //
 //  1. Session lifecycle FSM  — Status transitions idle→running→paused→running→completed
 //  2. Interrupt / Resume     — Tool approval and max-steps via EventTypeInterrupt + Agent.Resume()
-//  3. Sub-agent as first-class tool — inline sub-agent shares the same AgentTool interface
+//  3. Sub-agent as first-class tool — inline sub-agent shares the same Tool interface
 //
 // Run:
 //
@@ -44,12 +44,12 @@ func (t *SafeSearchTool) Parameters() any {
 		"required": []string{"query"},
 	}
 }
-func (t *SafeSearchTool) Execute(_ context.Context, _ string, args map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *SafeSearchTool) Execute(_ context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	query, _ := args["query"].(string)
 	// Simulated result
 	result := fmt.Sprintf("[search result for '%s']: Found 3 relevant articles. Top result: "+
 		"'A comprehensive overview of %s — published 2025.'", query, query)
-	return agent.AgentToolResult{
+	return agent.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: result}},
 	}, nil
 }
@@ -73,32 +73,32 @@ func (t *DangerousActionTool) Parameters() any {
 		"required": []string{"action"},
 	}
 }
-func (t *DangerousActionTool) Execute(_ context.Context, _ string, args map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *DangerousActionTool) Execute(_ context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	action, _ := args["action"].(string)
 	payload, _ := args["payload"].(string)
 	result := fmt.Sprintf("[dangerous_action executed] action=%q payload=%q — done.", action, payload)
-	return agent.AgentToolResult{
+	return agent.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: result}},
 	}, nil
 }
 
-// ─── Tool: SubAgentTool (inline sub-agent, no mailbox) ───────────────────────
+// ─── Tool: SubTool (inline sub-agent, no mailbox) ───────────────────────
 //
 // Demonstrates "sub-agent as first-class tool": the orchestrator calls this tool
 // exactly like any other tool; internally it spins up a fully independent Agent
 // with its own conversation, runs it to completion, and returns the result.
 // No mailbox, no polling — just a synchronous blocking Execute().
 
-type SubAgentTool struct {
+type SubTool struct {
 	model *types.Model
 }
 
-func (t *SubAgentTool) Name() string  { return "delegate_to_subagent" }
-func (t *SubAgentTool) Label() string { return "Delegate to Sub-Agent" }
-func (t *SubAgentTool) Description() string {
+func (t *SubTool) Name() string  { return "delegate_to_subagent" }
+func (t *SubTool) Label() string { return "Delegate to Sub-Agent" }
+func (t *SubTool) Description() string {
 	return "Delegate a research sub-task to a specialised sub-agent and return its answer."
 }
-func (t *SubAgentTool) Parameters() any {
+func (t *SubTool) Parameters() any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -110,32 +110,32 @@ func (t *SubAgentTool) Parameters() any {
 		"required": []string{"task"},
 	}
 }
-func (t *SubAgentTool) Execute(ctx context.Context, _ string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *SubTool) Execute(ctx context.Context, _ string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	task, _ := args["task"].(string)
 
-	onUpdate(agent.AgentToolResult{
+	onUpdate(agent.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "Sub-agent starting…"}},
 	})
 
 	// Spin up an independent sub-agent. It has its own tools (only SafeSearch),
 	// its own conversation, and no interrupt/resume overhead.
-	sub := agent.NewAgent(agent.AgentConfig{
-		InitialState: &agent.AgentState{
+	sub := agent.NewAgent(agent.Config{
+		InitialState: &agent.State{
 			SystemPrompt: "You are a research specialist. Answer the given task concisely using the safe_search tool.",
 			Model:        t.model,
-			Tools:        []agent.AgentTool{&SafeSearchTool{}},
+			Tools:        []agent.Tool{&SafeSearchTool{}},
 		},
 	})
 
 	var answer strings.Builder
-	sub.Subscribe(func(ev agent.AgentEvent) {
+	sub.Subscribe(func(ev agent.Event) {
 		if ev.Type == agent.EventTypeMessageUpdate && ev.StreamEvent != nil && ev.StreamEvent.Type == "text_delta" {
 			answer.WriteString(ev.StreamEvent.Delta)
 		}
 	})
 
 	if err := sub.Prompt(ctx, task); err != nil {
-		return agent.AgentToolResult{
+		return agent.ToolResult{
 			Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "sub-agent error: " + err.Error()}},
 		}, nil
 	}
@@ -145,11 +145,11 @@ func (t *SubAgentTool) Execute(ctx context.Context, _ string, args map[string]an
 		result = "(sub-agent returned no text)"
 	}
 
-	onUpdate(agent.AgentToolResult{
+	onUpdate(agent.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "Sub-agent completed."}},
 	})
 
-	return agent.AgentToolResult{
+	return agent.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: result}},
 		Details: map[string]any{"delegated_task": task},
 	}, nil
@@ -189,7 +189,7 @@ func handleInterrupt(ev *agent.InterruptEvent) agent.ResumeDecision {
 
 // ─── Event printer ───────────────────────────────────────────────────────────
 
-func printEvent(ev agent.AgentEvent) {
+func printEvent(ev agent.Event) {
 	switch ev.Type {
 	case agent.EventTypeAgentStart:
 		fmt.Printf("\n┌── agent_start\n")
@@ -235,19 +235,19 @@ func main() {
 	fmt.Println("Demo 1: Session lifecycle + Interrupt/Resume")
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
-	a := agent.NewAgent(agent.AgentConfig{
+	a := agent.NewAgent(agent.Config{
 		// EnableInterrupts wires the interrupt/resume pattern:
 		//   - tool calls emit EventTypeInterrupt (tool_use_approval) + pause
 		//   - MaxSteps exceeded emits EventTypeInterrupt (max_steps_reached) + pause
-		//   - AgentState.Status tracks: idle→running→paused→running→completed
+		//   - State.Status tracks: idle→running→paused→running→completed
 		EnableInterrupts: true,
 		MaxSteps:         3,
-		InitialState: &agent.AgentState{
+		InitialState: &agent.State{
 			SystemPrompt: "You are a helpful assistant. " +
 				"First use safe_search to look up the topic, " +
 				"then call dangerous_action to send a summary email to the user.",
 			Model: model,
-			Tools: []agent.AgentTool{
+			Tools: []agent.Tool{
 				&SafeSearchTool{},
 				&DangerousActionTool{},
 			},
@@ -256,7 +256,7 @@ func main() {
 
 	// Subscribe for UI + interrupt handling.
 	// When we get EventTypeInterrupt, we ask the user and call Resume().
-	a.Subscribe(func(ev agent.AgentEvent) {
+	a.Subscribe(func(ev agent.Event) {
 		printEvent(ev)
 
 		if ev.Type == agent.EventTypeInterrupt && ev.Interrupt != nil {
@@ -292,20 +292,20 @@ func main() {
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	fmt.Println()
 	fmt.Println("The orchestrator has a single tool: delegate_to_subagent.")
-	fmt.Println("Sub-agents are just AgentTool implementations — no mailbox, no polling.")
+	fmt.Println("Sub-agents are just Tool implementations — no mailbox, no polling.")
 	fmt.Println()
 
-	orchestrator := agent.NewAgent(agent.AgentConfig{
-		InitialState: &agent.AgentState{
+	orchestrator := agent.NewAgent(agent.Config{
+		InitialState: &agent.State{
 			SystemPrompt: "You are an orchestrator. Use delegate_to_subagent to hand off research tasks.",
 			Model:        model,
-			Tools: []agent.AgentTool{
-				&SubAgentTool{model: model},
+			Tools: []agent.Tool{
+				&SubTool{model: model},
 			},
 		},
 	})
 
-	orchestrator.Subscribe(func(ev agent.AgentEvent) {
+	orchestrator.Subscribe(func(ev agent.Event) {
 		printEvent(ev)
 	})
 

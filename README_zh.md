@@ -59,8 +59,8 @@ func main() {
 	}
 
 	// 2. 创建 Agent
-	a := agent.NewAgent(agent.AgentConfig{
-		InitialState: &agent.AgentState{
+	a := agent.NewAgent(agent.Config{
+		InitialState: &agent.State{
 			SystemPrompt: "You are a helpful assistant.",
 			Model:        model,
 		},

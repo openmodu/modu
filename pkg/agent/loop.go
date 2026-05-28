@@ -1,0 +1,203 @@
+package agent
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/openmodu/modu/pkg/types"
+)
+
+func NewLoop(llm LLM, tools Tools) *Loop {
+	if llm == nil {
+		llm = DefaultLLM{}
+	}
+	if tools == nil {
+		tools = DefaultTools{}
+	}
+	return &Loop{LLM: llm, Tools: tools}
+}
+
+func (l *Loop) Run(ctx context.Context, input LoopInput) (LoopResult, error) {
+	if l == nil {
+		l = NewLoop(nil, nil)
+	}
+	events := input.Events
+	if events == nil {
+		events = discardEvents{}
+	}
+
+	newMessages := append([]AgentMessage{}, input.Prompts...)
+	current := AgentContext{
+		SystemPrompt: input.Context.SystemPrompt,
+		Messages:     append(append([]AgentMessage{}, input.Context.Messages...), input.Prompts...),
+		Tools:        input.Context.Tools,
+	}
+
+	emitEvent(events, Event{Type: EventTypeAgentStart})
+	for _, prompt := range input.Prompts {
+		emitMessageTo(events, prompt)
+	}
+
+	stepCount := 0
+	pending := getMessages(input.Runtime.GetSteeringMessages)
+	for {
+		if ctx.Err() != nil {
+			return finish(events, newMessages, ctx.Err())
+		}
+		if len(pending) > 0 {
+			appendMessages(events, &current, &newMessages, pending)
+			pending = nil
+		}
+		if input.Config.MaxSteps > 0 && stepCount >= input.Config.MaxSteps {
+			interrupt := &InterruptEvent{Reason: InterruptReasonMaxSteps, StepCount: stepCount}
+			emitEvent(events, Event{Type: EventTypeInterrupt, Interrupt: interrupt})
+			if input.Runtime.OnMaxStepsReached == nil {
+				return finish(events, newMessages, nil)
+			}
+			decision := input.Runtime.OnMaxStepsReached(stepCount)
+			if !decision.Allow {
+				return finish(events, newMessages, nil)
+			}
+			if decision.Message != "" {
+				pending = []AgentMessage{types.UserMessage{Role: RoleUser, Content: decision.Message}}
+			}
+			stepCount = 0
+			continue
+		}
+
+		emitEvent(events, Event{Type: EventTypeTurnStart})
+		assistantMessage, err := l.LLM.Complete(ctx, LLMInput{
+			Context: current,
+			Options: llmOptions(input.Config),
+			Events:  events,
+		})
+		if err != nil {
+			return finish(events, newMessages, err)
+		}
+		stepCount++
+		newMessages = append(newMessages, assistantMessage)
+		current.Messages = append(current.Messages, assistantMessage)
+
+		if assistantMessage.StopReason == "error" || assistantMessage.StopReason == "aborted" {
+			emitEvent(events, Event{Type: EventTypeTurnEnd, Message: assistantMessage})
+			return finish(events, newMessages, nil)
+		}
+
+		toolCalls := extractToolCalls(assistantMessage)
+		if len(toolCalls) == 0 {
+			emitEvent(events, Event{Type: EventTypeTurnEnd, Message: assistantMessage})
+			followUps := getMessages(input.Runtime.GetFollowUpMessages)
+			if len(followUps) == 0 {
+				return finish(events, newMessages, nil)
+			}
+			pending = followUps
+			continue
+		}
+
+		toolOutput, err := l.Tools.Execute(ctx, ToolInput{
+			Tools:               current.Tools,
+			Calls:               toolCalls,
+			Events:              events,
+			ApproveTool:         input.Runtime.ApproveTool,
+			GetSteeringMessages: input.Runtime.GetSteeringMessages,
+			EnableInterrupts:    input.Config.EnableInterrupts,
+		})
+		if err != nil {
+			return finish(events, newMessages, err)
+		}
+		for _, message := range toolOutput.Messages {
+			current.Messages = append(current.Messages, message)
+			newMessages = append(newMessages, message)
+		}
+		emitEvent(events, Event{Type: EventTypeTurnEnd, Message: assistantMessage, ToolResults: toolOutput.Results})
+
+		if len(toolOutput.Steering) > 0 {
+			pending = toolOutput.Steering
+		} else {
+			pending = getMessages(input.Runtime.GetSteeringMessages)
+		}
+	}
+}
+
+func appendMessages(events EventSink, current *AgentContext, newMessages *[]AgentMessage, messages []AgentMessage) {
+	for _, message := range messages {
+		emitMessageTo(events, message)
+		current.Messages = append(current.Messages, message)
+		*newMessages = append(*newMessages, message)
+	}
+}
+
+func finish(events EventSink, messages []AgentMessage, err error) (LoopResult, error) {
+	emitEvent(events, Event{Type: EventTypeAgentEnd, Messages: messages})
+	resolveEvents(events, messages, err)
+	return LoopResult{Messages: messages}, err
+}
+
+func llmOptions(config Config) LLMOptions {
+	return LLMOptions{
+		Model:            config.Model,
+		StreamFn:         config.StreamFn,
+		ConvertToLLM:     config.ConvertToLLM,
+		TransformContext: config.TransformContext,
+		GetAPIKey:        config.GetAPIKey,
+		Temperature:      config.Temperature,
+		MaxTokens:        config.MaxTokens,
+		APIKey:           config.APIKey,
+		CacheRetention:   config.CacheRetention,
+		SessionID:        config.SessionID,
+		Headers:          config.Headers,
+		Reasoning:        config.Reasoning,
+		ThinkingBudgets:  config.ThinkingBudgets,
+		MaxRetryDelayMs:  config.MaxRetryDelayMs,
+	}
+}
+
+func getMessages(fn func() ([]AgentMessage, error)) []AgentMessage {
+	if fn == nil {
+		return nil
+	}
+	messages, err := fn()
+	if err != nil {
+		return nil
+	}
+	return messages
+}
+
+func extractToolCalls(message *types.AssistantMessage) []types.ToolCallContent {
+	if message == nil {
+		return nil
+	}
+	out := make([]types.ToolCallContent, 0)
+	for _, block := range message.Content {
+		if call, ok := block.(*types.ToolCallContent); ok {
+			out = append(out, *call)
+		}
+	}
+	return out
+}
+
+func roleOf(message AgentMessage) string {
+	switch m := message.(type) {
+	case types.UserMessage:
+		return m.Role
+	case *types.UserMessage:
+		return m.Role
+	case types.AssistantMessage:
+		return m.Role
+	case *types.AssistantMessage:
+		return m.Role
+	case types.ToolResultMessage:
+		return m.Role
+	case *types.ToolResultMessage:
+		return m.Role
+	default:
+		return ""
+	}
+}
+
+func requireModel(model *types.Model) error {
+	if model == nil {
+		return fmt.Errorf("model is required")
+	}
+	return nil
+}

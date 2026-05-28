@@ -570,8 +570,8 @@ model := &types.Model{ID: "gpt-4o", ProviderID: "my-provider"}
 `pkg/agent.Agent` 支持 Tool Use，Worker 可以在处理任务时调用外部工具（搜索、代码执行等），对 Mailbox 层完全透明：
 
 ```go
-llm := agent.NewAgent(agent.AgentConfig{
-    InitialState: &agent.AgentState{
+llm := agent.NewAgent(agent.Config{
+    InitialState: &agent.State{
         SystemPrompt: systemPrompt,
         Model:        model,
         Tools:        []types.Tool{searchTool, codeTool},

@@ -58,7 +58,7 @@ func (t *legacySpawnSubagentTool) Parameters() any {
 	}
 }
 
-func (t *legacySpawnSubagentTool) Execute(ctx context.Context, _ string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *legacySpawnSubagentTool) Execute(ctx context.Context, _ string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	name, _ := args["name"].(string)
 	task, _ := args["task"].(string)
 	if name == "" {

@@ -6,14 +6,14 @@ import (
 	"github.com/openmodu/modu/pkg/agent"
 )
 
-// WrappedTool wraps an AgentTool with extension hooks.
+// WrappedTool wraps an Tool with extension hooks.
 type WrappedTool struct {
-	inner agent.AgentTool
+	inner agent.Tool
 	hooks []ToolHook
 }
 
 // WrapTool creates a new wrapped tool with the given hooks.
-func WrapTool(tool agent.AgentTool, hooks []ToolHook) agent.AgentTool {
+func WrapTool(tool agent.Tool, hooks []ToolHook) agent.Tool {
 	if len(hooks) == 0 {
 		return tool
 	}
@@ -24,19 +24,19 @@ func (w *WrappedTool) Name() string        { return w.inner.Name() }
 func (w *WrappedTool) Label() string       { return w.inner.Label() }
 func (w *WrappedTool) Description() string { return w.inner.Description() }
 func (w *WrappedTool) Parameters() any     { return w.inner.Parameters() }
-func (w *WrappedTool) WithCwd(cwd string) agent.AgentTool {
-	if rebindable, ok := w.inner.(interface{ WithCwd(string) agent.AgentTool }); ok {
+func (w *WrappedTool) WithCwd(cwd string) agent.Tool {
+	if rebindable, ok := w.inner.(interface{ WithCwd(string) agent.Tool }); ok {
 		return &WrappedTool{inner: rebindable.WithCwd(cwd), hooks: w.hooks}
 	}
 	return w
 }
 
-func (w *WrappedTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (w *WrappedTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	// Run before hooks
 	for _, hook := range w.hooks {
 		if hook.Before != nil {
 			if !hook.Before(w.inner.Name(), args) {
-				return agent.AgentToolResult{}, nil // Cancelled by hook
+				return agent.ToolResult{}, nil // Cancelled by hook
 			}
 		}
 	}
@@ -65,11 +65,11 @@ func (w *WrappedTool) Execute(ctx context.Context, toolCallID string, args map[s
 }
 
 // WrapTools wraps multiple tools with the given hooks.
-func WrapTools(tools []agent.AgentTool, hooks []ToolHook) []agent.AgentTool {
+func WrapTools(tools []agent.Tool, hooks []ToolHook) []agent.Tool {
 	if len(hooks) == 0 {
 		return tools
 	}
-	wrapped := make([]agent.AgentTool, len(tools))
+	wrapped := make([]agent.Tool, len(tools))
 	for i, tool := range tools {
 		wrapped[i] = WrapTool(tool, hooks)
 	}
