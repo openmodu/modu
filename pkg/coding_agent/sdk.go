@@ -17,8 +17,8 @@ type CreateSessionOptions struct {
 	Model          *types.Model
 	ThinkingLevel  agent.ThinkingLevel
 	ScopedModels   []string
-	Tools          []agent.AgentTool
-	CustomTools    []agent.AgentTool
+	Tools          []agent.Tool
+	CustomTools    []agent.Tool
 	Extensions     []extension.Extension
 	SystemPrompt   string
 	GetAPIKey      func(provider string) (string, error)

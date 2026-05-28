@@ -276,8 +276,8 @@ func forkName(opts extension.ForkOptions) string {
 // rebindToolsToCwd returns a copy of tools where cwd-bound file/shell
 // tools point at the given path. Unknown tools pass through unchanged.
 // Duplicate of the legacy spawn_subagent tool rebinding behavior.
-func rebindToolsToCwd(allTools []agent.AgentTool, cwd string) []agent.AgentTool {
-	out := make([]agent.AgentTool, 0, len(allTools))
+func rebindToolsToCwd(allTools []agent.Tool, cwd string) []agent.Tool {
+	out := make([]agent.Tool, 0, len(allTools))
 	for _, tool := range allTools {
 		switch tool.Name() {
 		case "read":
@@ -295,7 +295,7 @@ func rebindToolsToCwd(allTools []agent.AgentTool, cwd string) []agent.AgentTool 
 		case "ls":
 			out = append(out, tools.NewLsTool(cwd))
 		default:
-			if rebindable, ok := tool.(interface{ WithCwd(string) agent.AgentTool }); ok {
+			if rebindable, ok := tool.(interface{ WithCwd(string) agent.Tool }); ok {
 				out = append(out, rebindable.WithCwd(cwd))
 			} else {
 				out = append(out, tool)

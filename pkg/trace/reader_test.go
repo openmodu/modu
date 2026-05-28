@@ -26,7 +26,7 @@ func writeTestTrace(t *testing.T) (string, *Recorder) {
 		t.Fatal(err)
 	}
 
-	events := []agent.AgentEvent{
+	events := []agent.Event{
 		{Type: agent.EventTypeAgentStart},
 		{Type: agent.EventTypeTurnStart},
 		{Type: agent.EventTypeMessageEnd, Message: types.AssistantMessage{
@@ -35,11 +35,11 @@ func writeTestTrace(t *testing.T) (string, *Recorder) {
 			Usage:   types.AgentUsage{Input: 100, Output: 50, TotalTokens: 150},
 		}},
 		{Type: agent.EventTypeToolExecutionStart, ToolCallID: "t1", ToolName: "read", Args: map[string]any{"path": "/a.go"}},
-		{Type: agent.EventTypeToolExecutionEnd, ToolCallID: "t1", ToolName: "read", Result: agent.AgentToolResult{
+		{Type: agent.EventTypeToolExecutionEnd, ToolCallID: "t1", ToolName: "read", Result: agent.ToolResult{
 			Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "file content"}},
 		}},
 		{Type: agent.EventTypeToolExecutionStart, ToolCallID: "t2", ToolName: "bash", Args: map[string]any{"cmd": "go test"}},
-		{Type: agent.EventTypeToolExecutionEnd, ToolCallID: "t2", ToolName: "bash", IsError: true, Result: agent.AgentToolResult{
+		{Type: agent.EventTypeToolExecutionEnd, ToolCallID: "t2", ToolName: "bash", IsError: true, Result: agent.ToolResult{
 			Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "FAIL"}},
 		}},
 		{Type: agent.EventTypeInterrupt, Interrupt: &agent.InterruptEvent{Reason: "approval", StepCount: 3}},
@@ -47,7 +47,7 @@ func writeTestTrace(t *testing.T) (string, *Recorder) {
 		{Type: agent.EventTypeAgentEnd},
 	}
 	for _, e := range events {
-		if err := recorder.RecordAgentEvent(e); err != nil {
+		if err := recorder.RecordEvent(e); err != nil {
 			t.Fatal(err)
 		}
 	}

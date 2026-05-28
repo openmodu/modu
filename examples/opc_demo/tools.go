@@ -33,8 +33,8 @@ func runOPC(ctx context.Context, args ...string) (string, error) {
 	return output, err
 }
 
-func textResult(text string) agent.AgentToolResult {
-	return agent.AgentToolResult{
+func textResult(text string) agent.ToolResult {
+	return agent.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: text}},
 	}
 }
@@ -43,9 +43,11 @@ func textResult(text string) agent.AgentToolResult {
 
 type TTSTool struct{}
 
-func (t *TTSTool) Name() string        { return "opc_tts" }
-func (t *TTSTool) Label() string       { return "OPC TTS" }
-func (t *TTSTool) Description() string { return "Generate speech audio from text using edge-tts or qwen engine" }
+func (t *TTSTool) Name() string  { return "opc_tts" }
+func (t *TTSTool) Label() string { return "OPC TTS" }
+func (t *TTSTool) Description() string {
+	return "Generate speech audio from text using edge-tts or qwen engine"
+}
 func (t *TTSTool) Parameters() any {
 	return map[string]any{
 		"type": "object",
@@ -66,7 +68,7 @@ func (t *TTSTool) Parameters() any {
 	}
 }
 
-func (t *TTSTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *TTSTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	text, _ := args["text"].(string)
 	if text == "" {
 		return textResult("Error: text is required"), nil
@@ -94,9 +96,11 @@ func (t *TTSTool) Execute(ctx context.Context, _ string, args map[string]any, _ 
 
 type SayTool struct{}
 
-func (t *SayTool) Name() string        { return "opc_say" }
-func (t *SayTool) Label() string       { return "OPC Say" }
-func (t *SayTool) Description() string { return "Generate speech and play on a device (TTS + playback)" }
+func (t *SayTool) Name() string  { return "opc_say" }
+func (t *SayTool) Label() string { return "OPC Say" }
+func (t *SayTool) Description() string {
+	return "Generate speech and play on a device (TTS + playback)"
+}
 func (t *SayTool) Parameters() any {
 	return map[string]any{
 		"type": "object",
@@ -112,7 +116,7 @@ func (t *SayTool) Parameters() any {
 	}
 }
 
-func (t *SayTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *SayTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	text, _ := args["text"].(string)
 	if text == "" {
 		return textResult("Error: text is required"), nil
@@ -135,9 +139,11 @@ func (t *SayTool) Execute(ctx context.Context, _ string, args map[string]any, _ 
 
 type ASRTool struct{}
 
-func (t *ASRTool) Name() string        { return "opc_asr" }
-func (t *ASRTool) Label() string       { return "OPC ASR" }
-func (t *ASRTool) Description() string { return "Transcribe audio to text, JSON, SRT, or ASS subtitles" }
+func (t *ASRTool) Name() string  { return "opc_asr" }
+func (t *ASRTool) Label() string { return "OPC ASR" }
+func (t *ASRTool) Description() string {
+	return "Transcribe audio to text, JSON, SRT, or ASS subtitles"
+}
 func (t *ASRTool) Parameters() any {
 	return map[string]any{
 		"type": "object",
@@ -154,7 +160,7 @@ func (t *ASRTool) Parameters() any {
 	}
 }
 
-func (t *ASRTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *ASRTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	audio, _ := args["audio"].(string)
 	if audio == "" {
 		return textResult("Error: audio file path is required"), nil
@@ -190,7 +196,7 @@ func (t *VoicesTool) Parameters() any {
 	}
 }
 
-func (t *VoicesTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *VoicesTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	cmdArgs := []string{"voices"}
 	cmdArgs = appendStringArg(cmdArgs, args, "engine", "-e")
 	output, err := runOPC(ctx, cmdArgs...)
@@ -204,9 +210,11 @@ func (t *VoicesTool) Execute(ctx context.Context, _ string, args map[string]any,
 
 type DiscoverTool struct{}
 
-func (t *DiscoverTool) Name() string        { return "opc_discover" }
-func (t *DiscoverTool) Label() string       { return "OPC Discover" }
-func (t *DiscoverTool) Description() string { return "Discover AirPlay and DLNA playback devices on the network" }
+func (t *DiscoverTool) Name() string  { return "opc_discover" }
+func (t *DiscoverTool) Label() string { return "OPC Discover" }
+func (t *DiscoverTool) Description() string {
+	return "Discover AirPlay and DLNA playback devices on the network"
+}
 func (t *DiscoverTool) Parameters() any {
 	return map[string]any{
 		"type": "object",
@@ -216,7 +224,7 @@ func (t *DiscoverTool) Parameters() any {
 	}
 }
 
-func (t *DiscoverTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *DiscoverTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	cmdArgs := []string{"discover"}
 	if setDefault, _ := args["set_default"].(bool); setDefault {
 		cmdArgs = append(cmdArgs, "--set-default")
@@ -250,7 +258,7 @@ func (t *ConfigTool) Parameters() any {
 	}
 }
 
-func (t *ConfigTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *ConfigTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	cmdArgs := []string{"config"}
 	if show, _ := args["show"].(bool); show {
 		cmdArgs = append(cmdArgs, "--show")
@@ -301,7 +309,7 @@ func (t *ASRSplitTool) Parameters() any {
 	}
 }
 
-func (t *ASRSplitTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *ASRSplitTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	linesJSON, _ := args["lines_json"].(string)
 	line := int(toFloat(args["line"]))
 	after, _ := args["after"].(string)

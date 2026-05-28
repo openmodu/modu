@@ -184,8 +184,8 @@ func (s *CodingSession) writeRuntimeState() {
 	_ = os.WriteFile(paths.RuntimeStateFile, append(data, '\n'), 0o600)
 }
 
-func removeAgentToolByName(list []agent.AgentTool, name string) []agent.AgentTool {
-	out := make([]agent.AgentTool, 0, len(list))
+func removeToolByName(list []agent.Tool, name string) []agent.Tool {
+	out := make([]agent.Tool, 0, len(list))
 	for _, tool := range list {
 		if tool.Name() == name {
 			continue

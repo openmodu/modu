@@ -30,12 +30,12 @@ func (t *HarnessPathsTool) Parameters() any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
 
-func (t *HarnessPathsTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *HarnessPathsTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	if t.provider == nil {
 		return textResult("harness paths provider is not configured"), nil
 	}
 	details := t.provider.HarnessPathsMap()
-	return agent.AgentToolResult{
+	return agent.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{
 			Type: "text",
 			Text: fmt.Sprintf("Harness runtime paths are available in details. Use read/ls with the absolute paths if needed."),

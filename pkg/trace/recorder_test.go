@@ -35,13 +35,13 @@ func TestRecorderWritesEventsAndAggregatesTokens(t *testing.T) {
 	if err := recorder.RecordSessionEvent("session_start", map[string]any{"source": "test"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := recorder.RecordAgentEvent(agent.AgentEvent{Type: agent.EventTypeAgentStart}); err != nil {
+	if err := recorder.RecordEvent(agent.Event{Type: agent.EventTypeAgentStart}); err != nil {
 		t.Fatal(err)
 	}
-	if err := recorder.RecordAgentEvent(agent.AgentEvent{Type: agent.EventTypeTurnStart}); err != nil {
+	if err := recorder.RecordEvent(agent.Event{Type: agent.EventTypeTurnStart}); err != nil {
 		t.Fatal(err)
 	}
-	if err := recorder.RecordAgentEvent(agent.AgentEvent{
+	if err := recorder.RecordEvent(agent.Event{
 		Type: agent.EventTypeMessageEnd,
 		Message: types.AssistantMessage{
 			Role: "assistant",
@@ -54,7 +54,7 @@ func TestRecorderWritesEventsAndAggregatesTokens(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := recorder.RecordAgentEvent(agent.AgentEvent{
+	if err := recorder.RecordEvent(agent.Event{
 		Type:       agent.EventTypeToolExecutionStart,
 		ToolCallID: "tool-1",
 		ToolName:   "read",
@@ -62,11 +62,11 @@ func TestRecorderWritesEventsAndAggregatesTokens(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := recorder.RecordAgentEvent(agent.AgentEvent{
+	if err := recorder.RecordEvent(agent.Event{
 		Type:       agent.EventTypeToolExecutionEnd,
 		ToolCallID: "tool-1",
 		ToolName:   "read",
-		Result: agent.AgentToolResult{
+		Result: agent.ToolResult{
 			Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "file content"}},
 			Details: map[string]any{"path": "/tmp/demo.txt"},
 		},
@@ -111,7 +111,7 @@ func TestRecorderWritesEventsAndAggregatesTokens(t *testing.T) {
 func TestRecorderAllEventTypes(t *testing.T) {
 	recorder, dir := newTestRecorder(t)
 
-	events := []agent.AgentEvent{
+	events := []agent.Event{
 		{Type: agent.EventTypeAgentStart},
 		{Type: agent.EventTypeTurnStart},
 		{Type: agent.EventTypeMessageStart, Message: types.UserMessage{Role: "user", Content: "hello"}},
@@ -124,7 +124,7 @@ func TestRecorderAllEventTypes(t *testing.T) {
 		}},
 		{Type: agent.EventTypeToolExecutionStart, ToolCallID: "t1", ToolName: "bash", Args: map[string]any{"cmd": "ls"}},
 		{Type: agent.EventTypeToolExecutionUpdate, ToolCallID: "t1", ToolName: "bash"},
-		{Type: agent.EventTypeToolExecutionEnd, ToolCallID: "t1", ToolName: "bash", Result: agent.AgentToolResult{
+		{Type: agent.EventTypeToolExecutionEnd, ToolCallID: "t1", ToolName: "bash", Result: agent.ToolResult{
 			Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "output"}},
 		}},
 		{Type: agent.EventTypeInterrupt, Interrupt: &agent.InterruptEvent{Reason: "max_steps", StepCount: 5}},
@@ -133,8 +133,8 @@ func TestRecorderAllEventTypes(t *testing.T) {
 	}
 
 	for _, e := range events {
-		if err := recorder.RecordAgentEvent(e); err != nil {
-			t.Fatalf("RecordAgentEvent(%s): %v", e.Type, err)
+		if err := recorder.RecordEvent(e); err != nil {
+			t.Fatalf("RecordEvent(%s): %v", e.Type, err)
 		}
 	}
 
@@ -172,24 +172,24 @@ func TestRecorderAllEventTypes(t *testing.T) {
 func TestRecorderToolDuration(t *testing.T) {
 	recorder, dir := newTestRecorder(t)
 
-	if err := recorder.RecordAgentEvent(agent.AgentEvent{Type: agent.EventTypeAgentStart}); err != nil {
+	if err := recorder.RecordEvent(agent.Event{Type: agent.EventTypeAgentStart}); err != nil {
 		t.Fatal(err)
 	}
-	if err := recorder.RecordAgentEvent(agent.AgentEvent{Type: agent.EventTypeTurnStart}); err != nil {
+	if err := recorder.RecordEvent(agent.Event{Type: agent.EventTypeTurnStart}); err != nil {
 		t.Fatal(err)
 	}
-	if err := recorder.RecordAgentEvent(agent.AgentEvent{
+	if err := recorder.RecordEvent(agent.Event{
 		Type:       agent.EventTypeToolExecutionStart,
 		ToolCallID: "t1",
 		ToolName:   "bash",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := recorder.RecordAgentEvent(agent.AgentEvent{
+	if err := recorder.RecordEvent(agent.Event{
 		Type:       agent.EventTypeToolExecutionEnd,
 		ToolCallID: "t1",
 		ToolName:   "bash",
-		Result: agent.AgentToolResult{
+		Result: agent.ToolResult{
 			Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "ok"}},
 		},
 	}); err != nil {
@@ -221,13 +221,13 @@ func TestRecorderToolDuration(t *testing.T) {
 func TestRecorderCostTracking(t *testing.T) {
 	recorder, _ := newTestRecorder(t)
 
-	if err := recorder.RecordAgentEvent(agent.AgentEvent{Type: agent.EventTypeAgentStart}); err != nil {
+	if err := recorder.RecordEvent(agent.Event{Type: agent.EventTypeAgentStart}); err != nil {
 		t.Fatal(err)
 	}
-	if err := recorder.RecordAgentEvent(agent.AgentEvent{Type: agent.EventTypeTurnStart}); err != nil {
+	if err := recorder.RecordEvent(agent.Event{Type: agent.EventTypeTurnStart}); err != nil {
 		t.Fatal(err)
 	}
-	if err := recorder.RecordAgentEvent(agent.AgentEvent{
+	if err := recorder.RecordEvent(agent.Event{
 		Type: agent.EventTypeMessageEnd,
 		Message: types.AssistantMessage{
 			Role:    "assistant",
@@ -264,7 +264,7 @@ func TestRecorderCostTracking(t *testing.T) {
 func TestRecorderClose(t *testing.T) {
 	recorder, dir := newTestRecorder(t)
 
-	if err := recorder.RecordAgentEvent(agent.AgentEvent{Type: agent.EventTypeAgentStart}); err != nil {
+	if err := recorder.RecordEvent(agent.Event{Type: agent.EventTypeAgentStart}); err != nil {
 		t.Fatal(err)
 	}
 	if err := recorder.Close(); err != nil {
@@ -298,7 +298,7 @@ func TestRecorderConcurrency(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_ = recorder.RecordAgentEvent(agent.AgentEvent{Type: agent.EventTypeAgentStart})
+			_ = recorder.RecordEvent(agent.Event{Type: agent.EventTypeAgentStart})
 			_ = recorder.RecordSessionEvent("ping", map[string]any{"x": 1})
 		}()
 	}
@@ -322,10 +322,10 @@ func TestRecorderNoFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := recorder.RecordAgentEvent(agent.AgentEvent{Type: agent.EventTypeAgentStart}); err != nil {
+	if err := recorder.RecordEvent(agent.Event{Type: agent.EventTypeAgentStart}); err != nil {
 		t.Fatal(err)
 	}
-	if err := recorder.RecordAgentEvent(agent.AgentEvent{Type: agent.EventTypeTurnStart}); err != nil {
+	if err := recorder.RecordEvent(agent.Event{Type: agent.EventTypeTurnStart}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -338,33 +338,33 @@ func TestRecorderNoFiles(t *testing.T) {
 func TestRecorderErrorCounting(t *testing.T) {
 	recorder, _ := newTestRecorder(t)
 
-	if err := recorder.RecordAgentEvent(agent.AgentEvent{Type: agent.EventTypeAgentStart}); err != nil {
+	if err := recorder.RecordEvent(agent.Event{Type: agent.EventTypeAgentStart}); err != nil {
 		t.Fatal(err)
 	}
-	if err := recorder.RecordAgentEvent(agent.AgentEvent{Type: agent.EventTypeTurnStart}); err != nil {
+	if err := recorder.RecordEvent(agent.Event{Type: agent.EventTypeTurnStart}); err != nil {
 		t.Fatal(err)
 	}
 	// Tool error
-	if err := recorder.RecordAgentEvent(agent.AgentEvent{
+	if err := recorder.RecordEvent(agent.Event{
 		Type:       agent.EventTypeToolExecutionStart,
 		ToolCallID: "t1",
 		ToolName:   "bash",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := recorder.RecordAgentEvent(agent.AgentEvent{
+	if err := recorder.RecordEvent(agent.Event{
 		Type:       agent.EventTypeToolExecutionEnd,
 		ToolCallID: "t1",
 		ToolName:   "bash",
 		IsError:    true,
-		Result: agent.AgentToolResult{
+		Result: agent.ToolResult{
 			Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "command failed"}},
 		},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	// Agent end with error
-	if err := recorder.RecordAgentEvent(agent.AgentEvent{
+	if err := recorder.RecordEvent(agent.Event{
 		Type:    agent.EventTypeAgentEnd,
 		IsError: true,
 	}); err != nil {
@@ -424,7 +424,7 @@ func TestRecorderRotation(t *testing.T) {
 
 	// Write enough events to trigger at least one rotation.
 	for i := 0; i < 20; i++ {
-		if err := recorder.RecordAgentEvent(agent.AgentEvent{Type: agent.EventTypeAgentStart}); err != nil {
+		if err := recorder.RecordEvent(agent.Event{Type: agent.EventTypeAgentStart}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -465,7 +465,7 @@ func TestRecorderDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := recorder.RecordAgentEvent(agent.AgentEvent{Type: agent.EventTypeAgentStart}); err != nil {
+	if err := recorder.RecordEvent(agent.Event{Type: agent.EventTypeAgentStart}); err != nil {
 		t.Fatal(err)
 	}
 	if err := recorder.Close(); err != nil {

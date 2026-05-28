@@ -236,14 +236,14 @@ pkg/acp/bridge/
 
 **对外 API**
 ```go
-// Translate 把一个 ACP session/update notification 转成 0..N 个 modu AgentEvent
-func Translate(msg *jsonrpc.Message) ([]agent.AgentEvent, error)
+// Translate 把一个 ACP session/update notification 转成 0..N 个 modu Event
+func Translate(msg *jsonrpc.Message) ([]agent.Event, error)
 ```
 
 **设计要点**
 - 纯函数，无 IO，无状态
 - 对未知 `sessionUpdate` 返回 `nil, nil`（静默忽略）而不是 error — 兼容协议演进
-- ClaudeCode 的 `_meta.claudeCode` 扩展字段在 bridge 里把它 flatten 到 AgentEvent 的 meta 里
+- ClaudeCode 的 `_meta.claudeCode` 扩展字段在 bridge 里把它 flatten 到 Event 的 meta 里
 
 **测试用例（每个 fixture 一个 case）**
 - `agent_message_chunk` → `EventTypeMessageUpdate` + `text_delta`
@@ -325,7 +325,7 @@ pkg/acp/manager/
 
 **对外 API**
 ```go
-type AgentConfig struct {
+type Config struct {
     ID             string
     Name           string
     Command        string
@@ -335,7 +335,7 @@ type AgentConfig struct {
 }
 
 type Config struct {
-    Agents        []AgentConfig
+    Agents        []Config
     DefaultAgent  string
     Gateway       GatewayConfig
 }
@@ -506,7 +506,7 @@ curl -N -H "Authorization: Bearer $MODU_ACP_TOKEN" \
 |---|---|
 | ✅ **MS0** 文档评审 | 架构 + roadmap 通过 review |
 | **MS1** 协议层可用 | M1+M2+M3 全绿，能起 fake 子进程收发 JSON-RPC |
-| **MS2** 单 agent 跑通 | M4+M5 完成，`examples/acp_spike` 能跑 mock agent，产出 modu AgentEvent 流 |
+| **MS2** 单 agent 跑通 | M4+M5 完成，`examples/acp_spike` 能跑 mock agent，产出 modu Event 流 |
 | **MS3** 可配置多 agent | M6 完成，配置文件驱动多 agent 池 |
 | **MS4** 远端可用 | M7 完成，`curl` 能端到端 |
 | **MS5** E2E 绿灯 | M8 完成，`test_e2e.sh` exit 0 |

@@ -15,7 +15,7 @@ import (
 
 // callTool exercises one tool's Execute against a fresh cfgPath. Returns the
 // flat text of the first TextContent block plus the raw result.
-func callTool(t *testing.T, tool agent.AgentTool, args map[string]any) (string, agent.AgentToolResult) {
+func callTool(t *testing.T, tool agent.Tool, args map[string]any) (string, agent.ToolResult) {
 	t.Helper()
 	res, err := tool.Execute(context.Background(), "call-1", args, nil)
 	if err != nil {
@@ -31,7 +31,7 @@ func callTool(t *testing.T, tool agent.AgentTool, args map[string]any) (string, 
 	return tc.Text, res
 }
 
-func freshTools(t *testing.T) (cfgPath string, add, list, rm agent.AgentTool) {
+func freshTools(t *testing.T) (cfgPath string, add, list, rm agent.Tool) {
 	t.Helper()
 	cfgPath = filepath.Join(t.TempDir(), "config.yaml")
 	tools := New(cfgPath)
@@ -46,7 +46,7 @@ func TestToolMetadata(t *testing.T) {
 	if add.Name() != "cron_add" || list.Name() != "cron_list" || rm.Name() != "cron_remove" {
 		t.Errorf("unexpected names: %s, %s, %s", add.Name(), list.Name(), rm.Name())
 	}
-	for _, tl := range []agent.AgentTool{add, list, rm} {
+	for _, tl := range []agent.Tool{add, list, rm} {
 		if tl.Label() == "" || tl.Description() == "" || tl.Parameters() == nil {
 			t.Errorf("%s: empty metadata", tl.Name())
 		}

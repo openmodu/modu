@@ -60,5 +60,5 @@ func (s *CodingSession) EmitExtensionEvent(eventType string) {
 	if s == nil || s.extensions == nil || strings.TrimSpace(eventType) == "" {
 		return
 	}
-	s.extensions.EmitEvent(agent.AgentEvent{Type: agent.EventType(eventType)})
+	s.extensions.EmitEvent(agent.Event{Type: agent.EventType(eventType)})
 }

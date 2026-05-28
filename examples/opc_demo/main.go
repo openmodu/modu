@@ -54,12 +54,12 @@ func main() {
 		ProviderID: providerID,
 	}
 
-	a := agent.NewAgent(agent.AgentConfig{
-		InitialState: &agent.AgentState{
+	a := agent.NewAgent(agent.Config{
+		InitialState: &agent.State{
 			SystemPrompt:  systemPrompt,
 			Model:         model,
 			ThinkingLevel: agent.ThinkingLevelLow,
-			Tools: []agent.AgentTool{
+			Tools: []agent.Tool{
 				&TTSTool{},
 				&SayTool{},
 				&ASRTool{},
@@ -72,7 +72,7 @@ func main() {
 	})
 
 	// Event stream rendering
-	a.Subscribe(func(event agent.AgentEvent) {
+	a.Subscribe(func(event agent.Event) {
 		switch event.Type {
 		case agent.EventTypeMessageUpdate:
 			if event.StreamEvent != nil && event.StreamEvent.Type == "text_delta" {

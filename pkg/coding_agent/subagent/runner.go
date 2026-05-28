@@ -21,7 +21,7 @@ func Run(
 	ctx context.Context,
 	def *SubagentDefinition,
 	task string,
-	allTools []agent.AgentTool,
+	allTools []agent.Tool,
 	model *types.Model,
 	getAPIKey func(string) (string, error),
 	streamFn agent.StreamFn,
@@ -46,7 +46,7 @@ func RunWithMessages(
 	def *SubagentDefinition,
 	initialMessages []agent.AgentMessage,
 	task string,
-	allTools []agent.AgentTool,
+	allTools []agent.Tool,
 	model *types.Model,
 	getAPIKey func(string) (string, error),
 	streamFn agent.StreamFn,
@@ -74,10 +74,10 @@ func RunWithMessages(
 		wrappedStreamFn = limitTurns(streamFn, def.MaxTurns)
 	}
 
-	ag := agent.NewAgent(agent.AgentConfig{
+	ag := agent.NewAgent(agent.Config{
 		GetAPIKey: getAPIKey,
 		StreamFn:  wrappedStreamFn,
-		InitialState: &agent.AgentState{
+		InitialState: &agent.State{
 			SystemPrompt:  systemPrompt,
 			Model:         activeModel,
 			ThinkingLevel: resolveThinkingLevel(def),
@@ -122,8 +122,8 @@ func WithWorkingDirectory(def *SubagentDefinition, cwd string) *SubagentDefiniti
 
 // filterTools returns the subset of allTools whose Name() matches wantNames.
 // Unrecognised names are logged and skipped.
-func filterTools(wantNames, disallowedNames []string, allTools []agent.AgentTool) []agent.AgentTool {
-	toolMap := make(map[string]agent.AgentTool, len(allTools))
+func filterTools(wantNames, disallowedNames []string, allTools []agent.Tool) []agent.Tool {
+	toolMap := make(map[string]agent.Tool, len(allTools))
 	for _, t := range allTools {
 		toolMap[t.Name()] = t
 	}
@@ -137,7 +137,7 @@ func filterTools(wantNames, disallowedNames []string, allTools []agent.AgentTool
 	}
 
 	if len(wantNames) == 0 {
-		var result []agent.AgentTool
+		var result []agent.Tool
 		for _, t := range allTools {
 			if _, blocked := disallowed[t.Name()]; blocked {
 				continue
@@ -147,7 +147,7 @@ func filterTools(wantNames, disallowedNames []string, allTools []agent.AgentTool
 		return result
 	}
 
-	var result []agent.AgentTool
+	var result []agent.Tool
 	for _, name := range wantNames {
 		name = strings.TrimSpace(name)
 		if t, ok := toolMap[name]; ok {
@@ -162,12 +162,12 @@ func filterTools(wantNames, disallowedNames []string, allTools []agent.AgentTool
 	return result
 }
 
-func applyPermissionMode(tools []agent.AgentTool, mode string) []agent.AgentTool {
+func applyPermissionMode(tools []agent.Tool, mode string) []agent.Tool {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "", "default", "normal":
 		return tools
 	case "read-only", "readonly", "read_only":
-		var result []agent.AgentTool
+		var result []agent.Tool
 		for _, t := range tools {
 			if isReadOnlyToolName(t.Name()) {
 				result = append(result, t)

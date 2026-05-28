@@ -133,7 +133,7 @@ type TaskSnapshot struct {
 // ExtensionAPI provides the API available to extensions.
 type ExtensionAPI interface {
 	// RegisterTool registers a new tool provided by the extension.
-	RegisterTool(tool agent.AgentTool)
+	RegisterTool(tool agent.Tool)
 	// RegisterCommand registers a slash command handler.
 	RegisterCommand(name, description string, handler CommandHandler)
 	// AddHook registers a hook that wraps tool execution.
@@ -189,7 +189,7 @@ type ExtensionAPI interface {
 type CommandHandler func(args string) error
 
 // EventHandler handles an agent event.
-type EventHandler func(event agent.AgentEvent)
+type EventHandler func(event agent.Event)
 
 // Command represents a registered slash command.
 type Command struct {
@@ -203,7 +203,7 @@ type ToolHook struct {
 	// Before is called before tool execution. Return false to cancel.
 	Before func(toolName string, args map[string]any) bool
 	// After is called after tool execution with the result.
-	After func(toolName string, args map[string]any, result agent.AgentToolResult)
+	After func(toolName string, args map[string]any, result agent.ToolResult)
 	// Transform allows modifying the tool result before returning it.
-	Transform func(toolName string, result agent.AgentToolResult) agent.AgentToolResult
+	Transform func(toolName string, result agent.ToolResult) agent.ToolResult
 }

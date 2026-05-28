@@ -28,7 +28,7 @@ type HarnessToolCall struct {
 
 type HarnessHook struct {
 	PreToolUse        func(call HarnessToolCall) error
-	PostToolUse       func(call HarnessToolCall, result agent.AgentToolResult, err error)
+	PostToolUse       func(call HarnessToolCall, result agent.ToolResult, err error)
 	PreCompact        func(messageCount int) error
 	PostCompact       func(result *compaction.Result, err error)
 	SubagentStart     func(run HarnessSubagentRun)
@@ -332,7 +332,7 @@ func (s *CodingSession) installConfigHarnessHooks() {
 			}
 			return nil
 		},
-		PostToolUse: func(call HarnessToolCall, result agent.AgentToolResult, err error) {
+		PostToolUse: func(call HarnessToolCall, result agent.ToolResult, err error) {
 			entry := map[string]any{
 				"event":    "post_tool_use",
 				"category": "tool_use",
@@ -466,13 +466,13 @@ func (s *CodingSession) RuntimePaths() HarnessRuntimePaths {
 
 func (s *CodingSession) installHarnessLayer() {
 	pathsTool := tools.NewHarnessPathsTool(s)
-	s.activeTools = replaceAgentTool(s.activeTools, pathsTool)
+	s.activeTools = replaceTool(s.activeTools, pathsTool)
 	s.activeTools = wrapHarnessTools(s.activeTools, s)
 	s.agent.SetTools(s.activeTools)
 }
 
-func wrapHarnessTools(list []agent.AgentTool, session *CodingSession) []agent.AgentTool {
-	out := make([]agent.AgentTool, len(list))
+func wrapHarnessTools(list []agent.Tool, session *CodingSession) []agent.Tool {
+	out := make([]agent.Tool, len(list))
 	for i, tool := range list {
 		if _, ok := tool.(*HarnessWrappedTool); ok {
 			out[i] = tool
@@ -484,7 +484,7 @@ func wrapHarnessTools(list []agent.AgentTool, session *CodingSession) []agent.Ag
 }
 
 type HarnessWrappedTool struct {
-	inner   agent.AgentTool
+	inner   agent.Tool
 	session *CodingSession
 }
 
@@ -492,17 +492,17 @@ func (w *HarnessWrappedTool) Name() string        { return w.inner.Name() }
 func (w *HarnessWrappedTool) Label() string       { return w.inner.Label() }
 func (w *HarnessWrappedTool) Description() string { return w.inner.Description() }
 func (w *HarnessWrappedTool) Parameters() any     { return w.inner.Parameters() }
-func (w *HarnessWrappedTool) WithCwd(cwd string) agent.AgentTool {
-	if rebindable, ok := w.inner.(interface{ WithCwd(string) agent.AgentTool }); ok {
+func (w *HarnessWrappedTool) WithCwd(cwd string) agent.Tool {
+	if rebindable, ok := w.inner.(interface{ WithCwd(string) agent.Tool }); ok {
 		return &HarnessWrappedTool{inner: rebindable.WithCwd(cwd), session: w.session}
 	}
 	return w
 }
 
-func (w *HarnessWrappedTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (w *HarnessWrappedTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	call := HarnessToolCall{ToolName: w.inner.Name(), Args: args}
 	if w.session != nil && w.session.planModeBlocksTool(call.ToolName) {
-		return agent.AgentToolResult{
+		return agent.ToolResult{
 			Content: []types.ContentBlock{&types.TextContent{
 				Type: "text",
 				Text: planModeBlockMessage(call.ToolName),
@@ -511,7 +511,7 @@ func (w *HarnessWrappedTool) Execute(ctx context.Context, toolCallID string, arg
 		}, nil
 	}
 	if err := w.session.runHarnessPreToolHooks(call); err != nil {
-		return agent.AgentToolResult{
+		return agent.ToolResult{
 			Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: err.Error()}},
 			Details: map[string]any{"isError": true},
 		}, nil
@@ -563,7 +563,7 @@ func (s *CodingSession) runHarnessPreToolHooks(call HarnessToolCall) error {
 	return nil
 }
 
-func (s *CodingSession) runHarnessPostToolHooks(call HarnessToolCall, result agent.AgentToolResult, err error) {
+func (s *CodingSession) runHarnessPostToolHooks(call HarnessToolCall, result agent.ToolResult, err error) {
 	if s.harness == nil {
 		return
 	}
@@ -668,7 +668,7 @@ func (s *CodingSession) onSubagentStop(run HarnessSubagentRun, result string, er
 	}
 }
 
-func (s *CodingSession) stripHarnessHints(call HarnessToolCall, result agent.AgentToolResult) agent.AgentToolResult {
+func (s *CodingSession) stripHarnessHints(call HarnessToolCall, result agent.ToolResult) agent.ToolResult {
 	if s.harness == nil || !s.config.HarnessCaptureHints() {
 		return result
 	}
@@ -730,7 +730,7 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func (s *CodingSession) writeToolResultArtifact(call HarnessToolCall, result agent.AgentToolResult, err error) {
+func (s *CodingSession) writeToolResultArtifact(call HarnessToolCall, result agent.ToolResult, err error) {
 	if s.config != nil && !s.config.HarnessPersistToolResults() {
 		return
 	}

@@ -16,13 +16,13 @@ import (
 const defaultPreviewLimit = 240
 
 type Options struct {
-	SessionID       string
-	Cwd             string
-	Provider        string
-	ModelID         string
-	EventsFile      string
-	SummaryFile     string
-	PreviewLimit    int
+	SessionID        string
+	Cwd              string
+	Provider         string
+	ModelID          string
+	EventsFile       string
+	SummaryFile      string
+	PreviewLimit     int
 	MaxFileSizeBytes int64
 	MaxRotatedFiles  int
 }
@@ -189,8 +189,8 @@ func (r *Recorder) Close() error {
 	return r.flushSummaryLocked()
 }
 
-func (r *Recorder) RecordAgentEvent(event agent.AgentEvent) error {
-	built, ok := r.buildAgentEvent(event)
+func (r *Recorder) RecordEvent(event agent.Event) error {
+	built, ok := r.buildEvent(event)
 	if !ok {
 		return nil
 	}
@@ -200,7 +200,7 @@ func (r *Recorder) RecordAgentEvent(event agent.AgentEvent) error {
 	return r.appendEventLocked(built)
 }
 
-func (r *Recorder) buildAgentEvent(event agent.AgentEvent) (Event, bool) {
+func (r *Recorder) buildEvent(event agent.Event) (Event, bool) {
 	switch event.Type {
 	case agent.EventTypeAgentStart:
 		return Event{
@@ -428,7 +428,7 @@ func (r *Recorder) flushSummaryLocked() error {
 	return nil
 }
 
-func interruptMeta(event agent.AgentEvent) map[string]any {
+func interruptMeta(event agent.Event) map[string]any {
 	if event.Interrupt == nil {
 		return nil
 	}
@@ -469,9 +469,9 @@ func summarizeMessage(msg agent.AgentMessage, limit int) (string, string, types.
 
 func summarizeToolResult(result any, limit int) (string, any) {
 	switch v := result.(type) {
-	case agent.AgentToolResult:
+	case agent.ToolResult:
 		return previewContentBlocks(v.Content, limit), sanitizeAny(v.Details)
-	case *agent.AgentToolResult:
+	case *agent.ToolResult:
 		if v == nil {
 			return "", nil
 		}

@@ -15,8 +15,8 @@ import (
 )
 
 // backgroundResult returns a success result for a background process.
-func backgroundResult(pid int) agent.AgentToolResult {
-	return agent.AgentToolResult{
+func backgroundResult(pid int) agent.ToolResult {
+	return agent.ToolResult{
 		Content: []types.ContentBlock{
 			&types.TextContent{
 				Type: "text",
@@ -70,7 +70,7 @@ func (t *BashTool) Parameters() any {
 	}
 }
 
-func (t *BashTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *BashTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	command, _ := args["command"].(string)
 	if command == "" {
 		return errorResult("command is required"), nil
@@ -183,7 +183,7 @@ func (t *BashTool) Execute(ctx context.Context, toolCallID string, args map[stri
 		text = "(no output)"
 	}
 
-	return agent.AgentToolResult{
+	return agent.ToolResult{
 		Content: []types.ContentBlock{
 			&types.TextContent{
 				Type: "text",

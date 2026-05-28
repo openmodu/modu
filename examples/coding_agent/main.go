@@ -53,7 +53,7 @@ func (e *auditHookExtension) Init(api extension.ExtensionAPI) error {
 		},
 
 		// After: audit log for every completed tool call
-		After: func(toolName string, args map[string]any, result agent.AgentToolResult) {
+		After: func(toolName string, args map[string]any, result agent.ToolResult) {
 			e.mu.Lock()
 			defer e.mu.Unlock()
 			e.afterCalls = append(e.afterCalls, toolName)
@@ -61,7 +61,7 @@ func (e *auditHookExtension) Init(api extension.ExtensionAPI) error {
 		},
 
 		// Transform: append a watermark to text results
-		Transform: func(toolName string, result agent.AgentToolResult) agent.AgentToolResult {
+		Transform: func(toolName string, result agent.ToolResult) agent.ToolResult {
 			e.mu.Lock()
 			defer e.mu.Unlock()
 			e.transforms++
@@ -131,7 +131,7 @@ func main() {
 	}
 
 	// Subscribe to events
-	unsubscribe := session.Subscribe(func(event agent.AgentEvent) {
+	unsubscribe := session.Subscribe(func(event agent.Event) {
 		switch event.Type {
 		case agent.EventTypeAgentStart:
 			fmt.Println("\n=== Agent Started ===")
@@ -162,7 +162,7 @@ func main() {
 			}
 		case agent.EventTypeToolExecutionEnd:
 			fmt.Printf("<< Result:\n")
-			if result, ok := event.Result.(agent.AgentToolResult); ok {
+			if result, ok := event.Result.(agent.ToolResult); ok {
 				for _, block := range result.Content {
 					var text string
 					switch tc := block.(type) {
@@ -201,7 +201,7 @@ func main() {
 		},
 		{
 			name:   "Search Code",
-			prompt: "Use the grep tool to find all files containing 'AgentTool' in the pkg/ directory. How many files reference this interface?",
+			prompt: "Use the grep tool to find all files containing 'Tool' in the pkg/ directory. How many files reference this interface?",
 		},
 		{
 			name:   "Write File",

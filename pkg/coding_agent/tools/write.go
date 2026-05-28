@@ -42,7 +42,7 @@ func (t *WriteTool) Parameters() any {
 	}
 }
 
-func (t *WriteTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *WriteTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	pathArg, _ := args["path"].(string)
 	content, _ := args["content"].(string)
 
@@ -65,7 +65,7 @@ func (t *WriteTool) Execute(ctx context.Context, toolCallID string, args map[str
 
 	bytes := len([]byte(content))
 
-	return agent.AgentToolResult{
+	return agent.ToolResult{
 		Content: []types.ContentBlock{
 			&types.TextContent{
 				Type: "text",

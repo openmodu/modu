@@ -11,7 +11,7 @@ import (
 // handleAgentEvent forwards the event to the model layer for state updates,
 // then mirrors specific transitions onto the TUI: assistant blocks and
 // completed tool blocks are pushed to scrollback once each.
-func (r *goTUIRoot) handleAgentEvent(ev agent.AgentEvent) {
+func (r *goTUIRoot) handleAgentEvent(ev agent.Event) {
 	r.model.handleAgentEvent(ev)
 
 	switch ev.Type {

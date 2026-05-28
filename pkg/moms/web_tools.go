@@ -435,7 +435,7 @@ func (p *glmSearchProvider) Search(ctx context.Context, query string, count int)
 }
 
 // -----------------------------------------------------------------------
-// WebSearchAgentTool implements agent.AgentTool
+// WebSearchTool implements agent.Tool
 
 // WebSearchConfig holds configuration for the web search tool.
 type WebSearchConfig struct {
@@ -452,15 +452,15 @@ type WebSearchConfig struct {
 	GLMURL           string
 }
 
-// WebSearchAgentTool wraps a search provider as an agent.AgentTool.
-type WebSearchAgentTool struct {
+// WebSearchTool wraps a search provider as an agent.Tool.
+type WebSearchTool struct {
 	provider   webSearchProvider
 	maxResults int
 }
 
-// NewWebSearchAgentTool creates a WebSearchAgentTool from config.
+// NewWebSearchTool creates a WebSearchTool from config.
 // Returns nil, nil if no provider is configured.
-func NewWebSearchAgentTool(cfg WebSearchConfig) (*WebSearchAgentTool, error) {
+func NewWebSearchTool(cfg WebSearchConfig) (*WebSearchTool, error) {
 	if cfg.MaxResults <= 0 {
 		cfg.MaxResults = webDefaultMaxResults
 	}
@@ -529,15 +529,15 @@ func NewWebSearchAgentTool(cfg WebSearchConfig) (*WebSearchAgentTool, error) {
 		return nil, nil
 	}
 
-	return &WebSearchAgentTool{provider: provider, maxResults: cfg.MaxResults}, nil
+	return &WebSearchTool{provider: provider, maxResults: cfg.MaxResults}, nil
 }
 
-func (t *WebSearchAgentTool) Name() string  { return "web_search" }
-func (t *WebSearchAgentTool) Label() string { return "Web Search" }
-func (t *WebSearchAgentTool) Description() string {
+func (t *WebSearchTool) Name() string  { return "web_search" }
+func (t *WebSearchTool) Label() string { return "Web Search" }
+func (t *WebSearchTool) Description() string {
 	return "Search the web for current information. Returns titles, URLs, and snippets from search results."
 }
-func (t *WebSearchAgentTool) Parameters() any {
+func (t *WebSearchTool) Parameters() any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -556,7 +556,7 @@ func (t *WebSearchAgentTool) Parameters() any {
 	}
 }
 
-func (t *WebSearchAgentTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *WebSearchTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	query, ok := args["query"].(string)
 	if !ok || query == "" {
 		return errorToolResult("query is required"), nil
@@ -569,13 +569,13 @@ func (t *WebSearchAgentTool) Execute(ctx context.Context, _ string, args map[str
 	if err != nil {
 		return errorToolResult(fmt.Sprintf("search failed: %v", err)), nil
 	}
-	return agent.AgentToolResult{
+	return agent.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: result}},
 	}, nil
 }
 
 // -----------------------------------------------------------------------
-// WebFetchAgentTool implements agent.AgentTool
+// WebFetchTool implements agent.Tool
 
 // WebFetchConfig holds configuration for the web fetch tool.
 type WebFetchConfig struct {
@@ -584,15 +584,15 @@ type WebFetchConfig struct {
 	FetchLimitBytes int64
 }
 
-// WebFetchAgentTool fetches URLs and extracts readable text.
-type WebFetchAgentTool struct {
+// WebFetchTool fetches URLs and extracts readable text.
+type WebFetchTool struct {
 	maxChars        int
 	client          *http.Client
 	fetchLimitBytes int64
 }
 
-// NewWebFetchAgentTool creates a WebFetchAgentTool.
-func NewWebFetchAgentTool(cfg WebFetchConfig) (*WebFetchAgentTool, error) {
+// NewWebFetchTool creates a WebFetchTool.
+func NewWebFetchTool(cfg WebFetchConfig) (*WebFetchTool, error) {
 	if cfg.MaxChars <= 0 {
 		cfg.MaxChars = webDefaultMaxChars
 	}
@@ -609,15 +609,15 @@ func NewWebFetchAgentTool(cfg WebFetchConfig) (*WebFetchAgentTool, error) {
 		}
 		return nil
 	}
-	return &WebFetchAgentTool{maxChars: cfg.MaxChars, client: client, fetchLimitBytes: cfg.FetchLimitBytes}, nil
+	return &WebFetchTool{maxChars: cfg.MaxChars, client: client, fetchLimitBytes: cfg.FetchLimitBytes}, nil
 }
 
-func (t *WebFetchAgentTool) Name() string  { return "web_fetch" }
-func (t *WebFetchAgentTool) Label() string { return "Web Fetch" }
-func (t *WebFetchAgentTool) Description() string {
+func (t *WebFetchTool) Name() string  { return "web_fetch" }
+func (t *WebFetchTool) Label() string { return "Web Fetch" }
+func (t *WebFetchTool) Description() string {
 	return "Fetch a URL and extract readable content (HTML to text). Use this to get weather info, news, articles, or any web content."
 }
-func (t *WebFetchAgentTool) Parameters() any {
+func (t *WebFetchTool) Parameters() any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
@@ -635,7 +635,7 @@ func (t *WebFetchAgentTool) Parameters() any {
 	}
 }
 
-func (t *WebFetchAgentTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *WebFetchTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	urlStr, ok := args["url"].(string)
 	if !ok || urlStr == "" {
 		return errorToolResult("url is required"), nil
@@ -714,7 +714,7 @@ func (t *WebFetchAgentTool) Execute(ctx context.Context, _ string, args map[stri
 		"text":      text,
 	}, "", "  ")
 
-	return agent.AgentToolResult{
+	return agent.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: string(result)}},
 	}, nil
 }

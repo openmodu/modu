@@ -4,8 +4,8 @@ import "github.com/openmodu/modu/pkg/coding_agent/tools"
 
 func (s *CodingSession) replaceTaskOutputTool() {
 	if !s.config.FeatureTaskOutputTool() {
-		s.activeTools = removeAgentToolByName(s.activeTools, "task_output")
-		s.agent.SetTools(removeAgentToolByName(s.agent.GetState().Tools, "task_output"))
+		s.activeTools = removeToolByName(s.activeTools, "task_output")
+		s.agent.SetTools(removeToolByName(s.agent.GetState().Tools, "task_output"))
 		return
 	}
 	var store tools.BackgroundTaskStore
@@ -13,6 +13,6 @@ func (s *CodingSession) replaceTaskOutputTool() {
 		store = s.taskManager
 	}
 	taskTool := tools.NewTaskOutputTool(store)
-	s.activeTools = replaceAgentTool(s.activeTools, taskTool)
-	s.agent.SetTools(replaceAgentTool(s.agent.GetState().Tools, taskTool))
+	s.activeTools = replaceTool(s.activeTools, taskTool)
+	s.agent.SetTools(replaceTool(s.agent.GetState().Tools, taskTool))
 }

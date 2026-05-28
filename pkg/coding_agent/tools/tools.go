@@ -5,8 +5,8 @@ import (
 )
 
 // CodingTools returns the core coding tools: read, bash, edit, write.
-func CodingTools(cwd string) []agent.AgentTool {
-	return []agent.AgentTool{
+func CodingTools(cwd string) []agent.Tool {
+	return []agent.Tool{
 		NewReadTool(cwd),
 		NewBashTool(cwd),
 		NewEditTool(cwd),
@@ -15,8 +15,8 @@ func CodingTools(cwd string) []agent.AgentTool {
 }
 
 // ReadOnlyTools returns read-only tools: read, grep, find, ls.
-func ReadOnlyTools(cwd string) []agent.AgentTool {
-	return []agent.AgentTool{
+func ReadOnlyTools(cwd string) []agent.Tool {
+	return []agent.Tool{
 		NewReadTool(cwd),
 		NewGrepTool(cwd),
 		NewFindTool(cwd),
@@ -25,8 +25,8 @@ func ReadOnlyTools(cwd string) []agent.AgentTool {
 }
 
 // AllTools returns all available built-in coding tools.
-func AllTools(cwd string) []agent.AgentTool {
-	return []agent.AgentTool{
+func AllTools(cwd string) []agent.Tool {
+	return []agent.Tool{
 		NewReadTool(cwd),
 		NewWriteTool(cwd),
 		NewEditTool(cwd),

@@ -78,9 +78,9 @@ func TestOTelBridgeSessionSpan(t *testing.T) {
 func TestOTelBridgeTurnAndToolSpans(t *testing.T) {
 	bridge, exporter := newTestBridge(t)
 
-	bridge.RecordAgentEvent(agent.AgentEvent{Type: agent.EventTypeAgentStart})
-	bridge.RecordAgentEvent(agent.AgentEvent{Type: agent.EventTypeTurnStart})
-	bridge.RecordAgentEvent(agent.AgentEvent{
+	bridge.RecordEvent(agent.Event{Type: agent.EventTypeAgentStart})
+	bridge.RecordEvent(agent.Event{Type: agent.EventTypeTurnStart})
+	bridge.RecordEvent(agent.Event{
 		Type: agent.EventTypeMessageEnd,
 		Message: types.AssistantMessage{
 			Role: "assistant",
@@ -91,32 +91,32 @@ func TestOTelBridgeTurnAndToolSpans(t *testing.T) {
 			StopReason: "end_turn",
 		},
 	})
-	bridge.RecordAgentEvent(agent.AgentEvent{
+	bridge.RecordEvent(agent.Event{
 		Type:       agent.EventTypeToolExecutionStart,
 		ToolCallID: "tc-1",
 		ToolName:   "read",
 		Args:       map[string]any{"path": "/tmp/test.txt"},
 	})
-	bridge.RecordAgentEvent(agent.AgentEvent{
+	bridge.RecordEvent(agent.Event{
 		Type:       agent.EventTypeToolExecutionUpdate,
 		ToolCallID: "tc-1",
 		ToolName:   "read",
 	})
-	bridge.RecordAgentEvent(agent.AgentEvent{
+	bridge.RecordEvent(agent.Event{
 		Type:       agent.EventTypeToolExecutionEnd,
 		ToolCallID: "tc-1",
 		ToolName:   "read",
-		Result: agent.AgentToolResult{
+		Result: agent.ToolResult{
 			Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "file content"}},
 		},
 	})
-	bridge.RecordAgentEvent(agent.AgentEvent{
+	bridge.RecordEvent(agent.Event{
 		Type: agent.EventTypeTurnEnd,
 		ToolResults: []types.ToolResultMessage{
 			{Role: "tool_result"},
 		},
 	})
-	bridge.RecordAgentEvent(agent.AgentEvent{Type: agent.EventTypeAgentEnd})
+	bridge.RecordEvent(agent.Event{Type: agent.EventTypeAgentEnd})
 
 	if err := bridge.Close(context.Background(), "done"); err != nil {
 		t.Fatal(err)
@@ -165,17 +165,17 @@ func TestOTelBridgeTurnAndToolSpans(t *testing.T) {
 func TestOTelBridgeInterrupt(t *testing.T) {
 	bridge, exporter := newTestBridge(t)
 
-	bridge.RecordAgentEvent(agent.AgentEvent{Type: agent.EventTypeAgentStart})
-	bridge.RecordAgentEvent(agent.AgentEvent{Type: agent.EventTypeTurnStart})
-	bridge.RecordAgentEvent(agent.AgentEvent{
+	bridge.RecordEvent(agent.Event{Type: agent.EventTypeAgentStart})
+	bridge.RecordEvent(agent.Event{Type: agent.EventTypeTurnStart})
+	bridge.RecordEvent(agent.Event{
 		Type: agent.EventTypeInterrupt,
 		Interrupt: &agent.InterruptEvent{
 			Reason:    "max_steps",
 			StepCount: 10,
 		},
 	})
-	bridge.RecordAgentEvent(agent.AgentEvent{Type: agent.EventTypeTurnEnd})
-	bridge.RecordAgentEvent(agent.AgentEvent{Type: agent.EventTypeAgentEnd})
+	bridge.RecordEvent(agent.Event{Type: agent.EventTypeTurnEnd})
+	bridge.RecordEvent(agent.Event{Type: agent.EventTypeAgentEnd})
 
 	if err := bridge.Close(context.Background(), "interrupted"); err != nil {
 		t.Fatal(err)
@@ -229,7 +229,7 @@ func TestOTelBridgeNilSafety(t *testing.T) {
 	// Nil bridge should not panic
 	var bridge *OTelBridge
 	bridge.RecordSessionEvent("test", nil)
-	bridge.RecordAgentEvent(agent.AgentEvent{Type: agent.EventTypeAgentStart})
+	bridge.RecordEvent(agent.Event{Type: agent.EventTypeAgentStart})
 	if err := bridge.Close(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,7 @@ func TestOTelBridgeConcurrency(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			bridge.RecordAgentEvent(agent.AgentEvent{Type: agent.EventTypeAgentStart})
+			bridge.RecordEvent(agent.Event{Type: agent.EventTypeAgentStart})
 			bridge.RecordSessionEvent("ping", map[string]any{"i": 1})
 		}()
 	}
@@ -256,9 +256,9 @@ func TestOTelBridgeConcurrency(t *testing.T) {
 func TestOTelBridgeCostAttributes(t *testing.T) {
 	bridge, exporter := newTestBridge(t)
 
-	bridge.RecordAgentEvent(agent.AgentEvent{Type: agent.EventTypeAgentStart})
-	bridge.RecordAgentEvent(agent.AgentEvent{Type: agent.EventTypeTurnStart})
-	bridge.RecordAgentEvent(agent.AgentEvent{
+	bridge.RecordEvent(agent.Event{Type: agent.EventTypeAgentStart})
+	bridge.RecordEvent(agent.Event{Type: agent.EventTypeTurnStart})
+	bridge.RecordEvent(agent.Event{
 		Type: agent.EventTypeMessageEnd,
 		Message: types.AssistantMessage{
 			Role: "assistant",
@@ -284,8 +284,8 @@ func TestOTelBridgeCostAttributes(t *testing.T) {
 			StopReason: "end_turn",
 		},
 	})
-	bridge.RecordAgentEvent(agent.AgentEvent{Type: agent.EventTypeTurnEnd})
-	bridge.RecordAgentEvent(agent.AgentEvent{Type: agent.EventTypeAgentEnd})
+	bridge.RecordEvent(agent.Event{Type: agent.EventTypeTurnEnd})
+	bridge.RecordEvent(agent.Event{Type: agent.EventTypeAgentEnd})
 
 	if err := bridge.Close(context.Background(), "done"); err != nil {
 		t.Fatal(err)

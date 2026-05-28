@@ -76,7 +76,7 @@ func (r *RpcMode) Run(ctx context.Context) error {
 	})
 
 	// Subscribe to agent events and forward full event data
-	unsubAgent := r.session.Subscribe(func(event agent.AgentEvent) {
+	unsubAgent := r.session.Subscribe(func(event agent.Event) {
 		data := map[string]any{"eventType": string(event.Type)}
 		if event.ToolName != "" {
 			data["toolName"] = event.ToolName

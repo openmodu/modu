@@ -66,7 +66,7 @@ func (m *ApprovalManager) SetBlocker(fn func(toolName string, args map[string]an
 	m.blocker = fn
 }
 
-// Approve is the AgentConfig.ApproveTool implementation.
+// Approve is the Config.ApproveTool implementation.
 func (m *ApprovalManager) Approve(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
 	// exit_plan_mode runs its own interactive plan-approval gate inside the
 	// tool (so the user's rejection feedback can flow back to the model), so

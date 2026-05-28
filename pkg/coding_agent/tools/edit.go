@@ -51,7 +51,7 @@ func (t *EditTool) Parameters() any {
 	}
 }
 
-func (t *EditTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *EditTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	pathArg, _ := args["path"].(string)
 	oldText, _ := args["old_text"].(string)
 	newText, _ := args["new_text"].(string)
@@ -153,7 +153,7 @@ func (t *EditTool) Execute(ctx context.Context, toolCallID string, args map[stri
 		msgText = fmt.Sprintf("Successfully edited %s (%d replacement(s) using fuzzy match)\n\n%s", pathArg, replacements, diff)
 	}
 
-	return agent.AgentToolResult{
+	return agent.ToolResult{
 		Content: []types.ContentBlock{
 			&types.TextContent{
 				Type: "text",

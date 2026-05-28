@@ -190,7 +190,7 @@ func (b *OTelBridge) RecordSessionEvent(eventType string, meta map[string]any) {
 	b.sessionSpan.AddEvent(eventType, oteltrace.WithAttributes(attributesFromMap(meta)...))
 }
 
-func (b *OTelBridge) RecordAgentEvent(event agent.AgentEvent) {
+func (b *OTelBridge) RecordEvent(event agent.Event) {
 	if b == nil || b.sessionSpan == nil {
 		return
 	}
@@ -347,7 +347,7 @@ func (b *OTelBridge) recordMessageEndLocked(msg agent.AgentMessage) {
 	}
 }
 
-func (b *OTelBridge) startToolLocked(event agent.AgentEvent) {
+func (b *OTelBridge) startToolLocked(event agent.Event) {
 	parent := b.turnCtx
 	if parent == nil {
 		parent = b.sessionCtx
@@ -368,7 +368,7 @@ func (b *OTelBridge) startToolLocked(event agent.AgentEvent) {
 	b.toolSpans[event.ToolCallID] = activeSpan{ctx: ctx, span: span}
 }
 
-func (b *OTelBridge) endToolLocked(event agent.AgentEvent) {
+func (b *OTelBridge) endToolLocked(event agent.Event) {
 	active, ok := b.toolSpans[event.ToolCallID]
 	if !ok {
 		return

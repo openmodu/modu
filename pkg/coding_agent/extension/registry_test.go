@@ -10,7 +10,7 @@ type stubExt struct {
 	cfg  map[string]any
 }
 
-func (s *stubExt) Name() string         { return s.name }
+func (s *stubExt) Name() string            { return s.name }
 func (s *stubExt) Init(ExtensionAPI) error { return nil }
 
 // configurableStub also implements ConfigurableExtension so config_test can

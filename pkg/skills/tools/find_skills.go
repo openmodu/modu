@@ -54,7 +54,7 @@ func (t *FindSkillsTool) Parameters() any {
 	}
 }
 
-func (t *FindSkillsTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *FindSkillsTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	query, _ := args["query"].(string)
 	query = strings.ToLower(strings.TrimSpace(query))
 	if query == "" {
@@ -121,14 +121,14 @@ func formatSearchResults(query string, results []skills.SearchResult, cached boo
 	return sb.String()
 }
 
-func textResult(text string) agent.AgentToolResult {
-	return agent.AgentToolResult{
+func textResult(text string) agent.ToolResult {
+	return agent.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: text}},
 	}
 }
 
-func errorResult(msg string) agent.AgentToolResult {
-	return agent.AgentToolResult{
+func errorResult(msg string) agent.ToolResult {
+	return agent.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: msg}},
 		Details: map[string]any{"isError": true},
 	}

@@ -59,7 +59,7 @@ func (t *ReadTool) Parameters() any {
 	}
 }
 
-func (t *ReadTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *ReadTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	pathArg, _ := args["path"].(string)
 	if pathArg == "" {
 		return errorResult("path is required"), nil
@@ -90,7 +90,7 @@ func (t *ReadTool) Execute(ctx context.Context, toolCallID string, args map[stri
 	return t.readText(resolved, info, args)
 }
 
-func (t *ReadTool) readImage(path, mimeType string) (agent.AgentToolResult, error) {
+func (t *ReadTool) readImage(path, mimeType string) (agent.ToolResult, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to read image: %v", err)), nil
@@ -106,7 +106,7 @@ func (t *ReadTool) readImage(path, mimeType string) (agent.AgentToolResult, erro
 
 	encoded := base64.StdEncoding.EncodeToString(data)
 
-	return agent.AgentToolResult{
+	return agent.ToolResult{
 		Content: []types.ContentBlock{
 			&types.ImageContent{
 				Type:     "image",
@@ -117,7 +117,7 @@ func (t *ReadTool) readImage(path, mimeType string) (agent.AgentToolResult, erro
 	}, nil
 }
 
-func (t *ReadTool) readText(path string, info os.FileInfo, args map[string]any) (agent.AgentToolResult, error) {
+func (t *ReadTool) readText(path string, info os.FileInfo, args map[string]any) (agent.ToolResult, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to read file: %v", err)), nil
@@ -150,7 +150,7 @@ func (t *ReadTool) readText(path string, info os.FileInfo, args map[string]any) 
 	if offset > 0 && offset < len(lines) {
 		lines = lines[offset:]
 	} else if offset >= len(lines) {
-		return agent.AgentToolResult{
+		return agent.ToolResult{
 			Content: []types.ContentBlock{
 				&types.TextContent{
 					Type: "text",
@@ -183,7 +183,7 @@ func (t *ReadTool) readText(path string, info os.FileInfo, args map[string]any) 
 			totalLines-len(lines), startLine, startLine+len(lines)-1, totalLines+offset)
 	}
 
-	return agent.AgentToolResult{
+	return agent.ToolResult{
 		Content: []types.ContentBlock{
 			&types.TextContent{
 				Type: "text",
@@ -214,8 +214,8 @@ func toInt(v any) int {
 	}
 }
 
-func errorResult(msg string) agent.AgentToolResult {
-	return agent.AgentToolResult{
+func errorResult(msg string) agent.ToolResult {
+	return agent.ToolResult{
 		Content: []types.ContentBlock{
 			&types.TextContent{
 				Type: "text",

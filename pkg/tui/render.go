@@ -698,12 +698,12 @@ func shortenUIPath(path string) string {
 
 // ─── Result text extraction ──────────────────────
 
-func fullResultText(ev agent.AgentEvent) string {
+func fullResultText(ev agent.Event) string {
 	if ev.Result == nil {
 		return ""
 	}
 	// Primary path: AgentToolResult carries a typed content slice.
-	if r, ok := ev.Result.(agent.AgentToolResult); ok {
+	if r, ok := ev.Result.(agent.ToolResult); ok {
 		return contentBlocksText(r.Content)
 	}
 	// Fallback paths for legacy or third-party tool implementations.

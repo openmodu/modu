@@ -59,7 +59,7 @@ type SlashCommand struct {
 //   - nil msg, non-session/update, or unknown sessionUpdate → (nil, nil).
 //   - available_commands_update → empty non-nil slice (known-but-ignored).
 //   - malformed params → error.
-func Translate(msg *jsonrpc.Message) ([]agent.AgentEvent, error) {
+func Translate(msg *jsonrpc.Message) ([]agent.Event, error) {
 	if msg == nil || msg.Method != "session/update" {
 		return nil, nil
 	}
@@ -80,7 +80,7 @@ func Translate(msg *jsonrpc.Message) ([]agent.AgentEvent, error) {
 		if u.ToolCallID == "" {
 			return nil, nil
 		}
-		return []agent.AgentEvent{{
+		return []agent.Event{{
 			Type:       agent.EventTypeToolExecutionStart,
 			ToolCallID: u.ToolCallID,
 			ToolName:   toolNameOf(u),
@@ -97,19 +97,19 @@ func Translate(msg *jsonrpc.Message) ([]agent.AgentEvent, error) {
 		// Known but produces no AgentEvent — callers who need the command
 		// list should read it from a higher layer. Return an empty (non-nil)
 		// slice so tests can distinguish this from the unknown case.
-		return []agent.AgentEvent{}, nil
+		return []agent.Event{}, nil
 
 	default:
 		return nil, nil
 	}
 }
 
-func translateToolUpdate(u sessionUpdate) []agent.AgentEvent {
+func translateToolUpdate(u sessionUpdate) []agent.Event {
 	hasError := u.Error != "" ||
 		(u.Meta != nil && u.Meta.ClaudeCode != nil && u.Meta.ClaudeCode.Error != "")
 
 	if u.Status == "completed" || hasError {
-		ev := agent.AgentEvent{
+		ev := agent.Event{
 			Type:       agent.EventTypeToolExecutionEnd,
 			ToolCallID: u.ToolCallID,
 			ToolName:   toolNameOf(u),
@@ -123,10 +123,10 @@ func translateToolUpdate(u sessionUpdate) []agent.AgentEvent {
 		default:
 			ev.Result = u.Content
 		}
-		return []agent.AgentEvent{ev}
+		return []agent.Event{ev}
 	}
 
-	return []agent.AgentEvent{{
+	return []agent.Event{{
 		Type:       agent.EventTypeToolExecutionUpdate,
 		ToolCallID: u.ToolCallID,
 		ToolName:   toolNameOf(u),
@@ -134,12 +134,12 @@ func translateToolUpdate(u sessionUpdate) []agent.AgentEvent {
 	}}
 }
 
-func textDelta(content json.RawMessage, evType types.StreamEventType) []agent.AgentEvent {
+func textDelta(content json.RawMessage, evType types.StreamEventType) []agent.Event {
 	text := extractText(content)
 	if text == "" {
 		return nil
 	}
-	return []agent.AgentEvent{{
+	return []agent.Event{{
 		Type: agent.EventTypeMessageUpdate,
 		StreamEvent: &types.StreamEvent{
 			Type:  evType,

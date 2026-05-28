@@ -45,7 +45,7 @@ func (t *BashSandboxTool) Parameters() any {
 	}
 }
 
-func (t *BashSandboxTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *BashSandboxTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	command, _ := args["command"].(string)
 	if command == "" {
 		return errorToolResult("command is required"), nil
@@ -81,7 +81,7 @@ func (t *BashSandboxTool) Execute(ctx context.Context, _ string, args map[string
 	if text == "" {
 		text = "(no output)"
 	}
-	return agent.AgentToolResult{
+	return agent.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: text}},
 		Details: map[string]any{"exitCode": res.ExitCode, "timedOut": res.TimedOut},
 	}, nil
@@ -124,7 +124,7 @@ func (t *AttachTool) Parameters() any {
 	}
 }
 
-func (t *AttachTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *AttachTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	path, _ := args["path"].(string)
 	if path == "" {
 		return errorToolResult("path is required"), nil
@@ -133,7 +133,7 @@ func (t *AttachTool) Execute(ctx context.Context, _ string, args map[string]any,
 	if err := t.uploadFn(path, title); err != nil {
 		return errorToolResult(fmt.Sprintf("failed to send file: %v", err)), nil
 	}
-	return agent.AgentToolResult{
+	return agent.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: fmt.Sprintf("File sent: %s", path)}},
 	}, nil
 }
@@ -163,7 +163,7 @@ func (t *ReadTool) Parameters() any {
 		"required": []string{"path"},
 	}
 }
-func (t *ReadTool) Execute(_ context.Context, _ string, args map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *ReadTool) Execute(_ context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	path, _ := args["path"].(string)
 	if path == "" {
 		return errorToolResult("path is required"), nil
@@ -173,7 +173,7 @@ func (t *ReadTool) Execute(_ context.Context, _ string, args map[string]any, _ a
 		return errorToolResult(fmt.Sprintf("read error: %v", err)), nil
 	}
 	text := TruncateStr(string(data), 200000)
-	return agent.AgentToolResult{
+	return agent.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: text}},
 	}, nil
 }
@@ -198,7 +198,7 @@ func (t *WriteTool) Parameters() any {
 		"required": []string{"path", "content"},
 	}
 }
-func (t *WriteTool) Execute(_ context.Context, _ string, args map[string]any, _ agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *WriteTool) Execute(_ context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	path, _ := args["path"].(string)
 	content, _ := args["content"].(string)
 	if path == "" {
@@ -210,7 +210,7 @@ func (t *WriteTool) Execute(_ context.Context, _ string, args map[string]any, _ 
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return errorToolResult(fmt.Sprintf("write error: %v", err)), nil
 	}
-	return agent.AgentToolResult{
+	return agent.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: fmt.Sprintf("Wrote %d bytes to %s", len(content), path)}},
 	}, nil
 }
@@ -218,8 +218,8 @@ func (t *WriteTool) Execute(_ context.Context, _ string, args map[string]any, _ 
 // -----------------------------------------------------------------------
 // helpers
 
-func errorToolResult(msg string) agent.AgentToolResult {
-	return agent.AgentToolResult{
+func errorToolResult(msg string) agent.ToolResult {
+	return agent.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: msg}},
 		Details: map[string]any{"isError": true},
 	}

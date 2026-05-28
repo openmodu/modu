@@ -93,13 +93,13 @@ func TailEvents(path string, n int) ([]Event, error) {
 
 // EventStats computes aggregate statistics from a list of events.
 type EventStats struct {
-	TotalEvents    int            `json:"totalEvents"`
-	ByType         map[string]int `json:"byType"`
-	ByTool         map[string]int `json:"byTool"`
-	ErrorCount     int            `json:"errorCount"`
-	TotalDurationMs int64         `json:"totalDurationMs"`
-	ToolDurations  map[string]int64 `json:"toolDurations"`
-	TimeSpanMs     int64          `json:"timeSpanMs"`
+	TotalEvents     int              `json:"totalEvents"`
+	ByType          map[string]int   `json:"byType"`
+	ByTool          map[string]int   `json:"byTool"`
+	ErrorCount      int              `json:"errorCount"`
+	TotalDurationMs int64            `json:"totalDurationMs"`
+	ToolDurations   map[string]int64 `json:"toolDurations"`
+	TimeSpanMs      int64            `json:"timeSpanMs"`
 }
 
 // ComputeStats computes aggregate statistics from a list of events.

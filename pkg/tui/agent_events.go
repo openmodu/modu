@@ -8,7 +8,7 @@ import (
 	"github.com/openmodu/modu/pkg/types"
 )
 
-func (m *uiModel) handleAgentEvent(ev agent.AgentEvent) {
+func (m *uiModel) handleAgentEvent(ev agent.Event) {
 	switch ev.Type {
 	case agent.EventTypeAgentStart:
 		m.queryActive = true

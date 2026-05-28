@@ -135,7 +135,7 @@ func (r *Runner) Run(parentCtx context.Context, chCtx channels.ChannelContext) R
 	var runErr error
 
 	// Subscribe to agent events.
-	unsubscribe := a.Subscribe(func(ev agent.AgentEvent) {
+	unsubscribe := a.Subscribe(func(ev agent.Event) {
 		switch ev.Type {
 		case agent.EventTypeToolExecutionStart:
 			callID := ev.ToolCallID
@@ -154,7 +154,7 @@ func (r *Runner) Run(parentCtx context.Context, chCtx channels.ChannelContext) R
 			toolName := ev.ToolName
 			isError := ev.IsError
 			result := ""
-			if res, ok := ev.Result.(agent.AgentToolResult); ok {
+			if res, ok := ev.Result.(agent.ToolResult); ok {
 				result = extractResultText(res)
 			}
 			fmt.Printf("[tool/end] chat=%d id=%s tool=%s isError=%v result_len=%d\n",
@@ -297,7 +297,7 @@ func (r *Runner) getOrCreateAgent(chatDir, workspacePath string, chCtx channels.
 
 	// Create tools.
 	cwd := chatDir
-	agentTools := []agent.AgentTool{
+	agentTools := []agent.Tool{
 		NewBashSandboxTool(r.sandbox),
 		NewReadTool(cwd),
 		NewWriteTool(),
@@ -320,7 +320,7 @@ func (r *Runner) getOrCreateAgent(chatDir, workspacePath string, chCtx channels.
 		agentTools = append(agentTools, searchTool)
 	}
 	if fetchEnabled := os.Getenv("MOMS_WEB_FETCH"); fetchEnabled == "true" || fetchEnabled == "1" {
-		fetchTool, err := NewWebFetchAgentTool(WebFetchConfig{
+		fetchTool, err := NewWebFetchTool(WebFetchConfig{
 			Proxy: os.Getenv("MOMS_WEB_PROXY"),
 		})
 		if err != nil {
@@ -330,9 +330,9 @@ func (r *Runner) getOrCreateAgent(chatDir, workspacePath string, chCtx channels.
 		}
 	}
 
-	a := agent.NewAgent(agent.AgentConfig{
+	a := agent.NewAgent(agent.Config{
 		GetAPIKey: r.getAPIKey,
-		InitialState: &agent.AgentState{
+		InitialState: &agent.State{
 			SystemPrompt:     systemPrompt,
 			Model:            model,
 			ThinkingLevel:    agent.ThinkingLevelOff,
@@ -402,7 +402,7 @@ func loadContextMessages(chatDir string) ([]agent.AgentMessage, error) {
 	return messages, nil
 }
 
-// newWebSearchToolFromEnv creates a WebSearchAgentTool from environment variables.
+// newWebSearchToolFromEnv creates a WebSearchTool from environment variables.
 // Returns nil, nil if MOMS_WEB_SEARCH is not set.
 //
 // Environment variables:
@@ -412,7 +412,7 @@ func loadContextMessages(chatDir string) ([]agent.AgentMessage, error) {
 //   - MOMS_BRAVE_API_KEY, MOMS_TAVILY_API_KEY, MOMS_TAVILY_BASE_URL
 //   - MOMS_PERPLEXITY_API_KEY, MOMS_SEARXNG_URL
 //   - MOMS_GLM_API_KEY, MOMS_GLM_SEARCH_ENGINE, MOMS_GLM_BASE_URL
-func newWebSearchToolFromEnv() (*WebSearchAgentTool, error) {
+func newWebSearchToolFromEnv() (*WebSearchTool, error) {
 	provider := os.Getenv("MOMS_WEB_SEARCH")
 	if provider == "" {
 		return nil, nil
@@ -423,7 +423,7 @@ func newWebSearchToolFromEnv() (*WebSearchAgentTool, error) {
 			maxResults = n
 		}
 	}
-	return NewWebSearchAgentTool(WebSearchConfig{
+	return NewWebSearchTool(WebSearchConfig{
 		Provider:         provider,
 		MaxResults:       maxResults,
 		Proxy:            os.Getenv("MOMS_WEB_PROXY"),
@@ -438,8 +438,8 @@ func newWebSearchToolFromEnv() (*WebSearchAgentTool, error) {
 	})
 }
 
-// extractResultText extracts text from AgentToolResult.
-func extractResultText(r agent.AgentToolResult) string {
+// extractResultText extracts text from ToolResult.
+func extractResultText(r agent.ToolResult) string {
 	for _, block := range r.Content {
 		if tc, ok := block.(*types.TextContent); ok && tc != nil {
 			return tc.Text

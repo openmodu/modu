@@ -33,7 +33,7 @@ func (t *EnterPlanModeTool) Description() string {
 func (t *EnterPlanModeTool) Parameters() any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
-func (t *EnterPlanModeTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *EnterPlanModeTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	if t.manager != nil {
 		t.manager.EnterPlanMode()
 	}
@@ -74,7 +74,7 @@ func (t *ExitPlanModeTool) Parameters() any {
 		"required": []string{"plan"},
 	}
 }
-func (t *ExitPlanModeTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *ExitPlanModeTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	plan, _ := args["plan"].(string)
 	var steps []string
 	if raw, ok := args["steps"].([]any); ok {
@@ -90,8 +90,8 @@ func (t *ExitPlanModeTool) Execute(ctx context.Context, toolCallID string, args 
 	return planToolResult(t.manager.SubmitPlan(ctx, plan, steps)), nil
 }
 
-func planToolResult(text string) agent.AgentToolResult {
-	return agent.AgentToolResult{
+func planToolResult(text string) agent.ToolResult {
+	return agent.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: text}},
 	}
 }

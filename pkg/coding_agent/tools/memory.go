@@ -72,7 +72,7 @@ func (t *MemoryTool) Parameters() any {
 	}
 }
 
-func (t *MemoryTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *MemoryTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	if t.store == nil {
 		return textResult("Error: memory store is not configured for this session"), nil
 	}
@@ -127,9 +127,9 @@ func (t *MemoryTool) Execute(ctx context.Context, toolCallID string, args map[st
 	}
 }
 
-// textResult creates a simple text AgentToolResult.
-func textResult(text string) agent.AgentToolResult {
-	return agent.AgentToolResult{
+// textResult creates a simple text ToolResult.
+func textResult(text string) agent.ToolResult {
+	return agent.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: text}},
 		Details: map[string]any{"result": text},
 	}

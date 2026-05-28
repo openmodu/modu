@@ -23,6 +23,7 @@ const (
 
 type Event struct {
 	Type        EventType
+	Reason      string
 	Messages    []AgentMessage
 	Message     AgentMessage
 	ToolResults []types.ToolResultMessage

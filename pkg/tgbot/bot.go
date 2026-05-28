@@ -55,7 +55,7 @@ func Start(
 
 		thinkCh := make(chan string, 4)
 
-		unsub := session.Subscribe(func(ev agent.AgentEvent) {
+		unsub := session.Subscribe(func(ev agent.Event) {
 			if ev.Type != agent.EventTypeMessageEnd {
 				return
 			}

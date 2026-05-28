@@ -101,7 +101,7 @@ func TestLoopExecutesToolAndContinues(t *testing.T) {
 	}
 }
 
-func TestV1CompatLoopBasic(t *testing.T) {
+func TestAgentLoopBasic(t *testing.T) {
 	model := &types.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
 	user := types.UserMessage{Role: RoleUser, Content: "Hello", Timestamp: time.Now().UnixMilli()}
 
@@ -143,7 +143,7 @@ func TestV1CompatLoopBasic(t *testing.T) {
 	}
 }
 
-func TestV1CompatLoopToolCalls(t *testing.T) {
+func TestAgentLoopToolCalls(t *testing.T) {
 	model := &types.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
 	tool := &fakeTool{}
 	callIndex := 0
@@ -206,7 +206,7 @@ func TestV1CompatLoopToolCalls(t *testing.T) {
 	}
 }
 
-func TestV1CompatIsRetryableError(t *testing.T) {
+func TestAgentIsRetryableError(t *testing.T) {
 	tests := []struct {
 		err       error
 		retryable bool
@@ -233,7 +233,7 @@ func TestV1CompatIsRetryableError(t *testing.T) {
 	}
 }
 
-func TestV1CompatCompleteWithRetrySuccess(t *testing.T) {
+func TestAgentCompleteWithRetrySuccess(t *testing.T) {
 	model := &types.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
 	events := NewEventStream()
 	drain(events)
@@ -259,7 +259,7 @@ func TestV1CompatCompleteWithRetrySuccess(t *testing.T) {
 	}
 }
 
-func TestV1CompatCompleteWithRetryRetriesTransient(t *testing.T) {
+func TestAgentCompleteWithRetryRetriesTransient(t *testing.T) {
 	model := &types.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
 	events := NewEventStream()
 	drain(events)
@@ -294,7 +294,7 @@ func TestV1CompatCompleteWithRetryRetriesTransient(t *testing.T) {
 	}
 }
 
-func TestV1CompatCompleteWithRetryNoPermanentRetry(t *testing.T) {
+func TestAgentCompleteWithRetryNoPermanentRetry(t *testing.T) {
 	model := &types.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
 	events := NewEventStream()
 	drain(events)
@@ -342,7 +342,7 @@ func TestV2DefaultLLMUsesStreamDefaultWhenStreamFnMissing(t *testing.T) {
 	}
 }
 
-func TestV1CompatPromptWithImagesPassesMessageToLLM(t *testing.T) {
+func TestAgentPromptWithImagesPassesMessageToLLM(t *testing.T) {
 	model := &types.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
 	events := NewEventStream()
 	drain(events)
@@ -381,7 +381,7 @@ func TestV1CompatPromptWithImagesPassesMessageToLLM(t *testing.T) {
 	}
 }
 
-func TestV1CompatDefaultConvertToLLMFiltersProviderMessages(t *testing.T) {
+func TestAgentDefaultConvertToLLMFiltersProviderMessages(t *testing.T) {
 	model := &types.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
 	events := NewEventStream()
 	drain(events)
@@ -411,7 +411,7 @@ func TestV1CompatDefaultConvertToLLMFiltersProviderMessages(t *testing.T) {
 	}
 }
 
-func TestV1CompatToolArgumentsValidateAgainstSchema(t *testing.T) {
+func TestAgentToolArgumentsValidateAgainstSchema(t *testing.T) {
 	tool := &schemaTool{}
 	events := NewEventStream()
 	drain(events)
@@ -438,7 +438,7 @@ func TestV1CompatToolArgumentsValidateAgainstSchema(t *testing.T) {
 	}
 }
 
-func TestV1CompatAgentClearMessages(t *testing.T) {
+func TestAgentAgentClearMessages(t *testing.T) {
 	agent := NewAgent(Config{})
 	agent.AppendMessage(types.UserMessage{Role: RoleUser, Content: "hello", Timestamp: time.Now().UnixMilli()})
 	if len(agent.GetState().Messages) != 1 {
@@ -450,7 +450,7 @@ func TestV1CompatAgentClearMessages(t *testing.T) {
 	}
 }
 
-func TestV1CompatAgentModeGetters(t *testing.T) {
+func TestAgentAgentModeGetters(t *testing.T) {
 	agent := NewAgent(Config{
 		SteeringMode: ExecutionModeAll,
 		FollowUpMode: ExecutionModeOneAtATime,
@@ -463,7 +463,7 @@ func TestV1CompatAgentModeGetters(t *testing.T) {
 	}
 }
 
-func TestV1CompatAgentQueuedMessageCounts(t *testing.T) {
+func TestAgentAgentQueuedMessageCounts(t *testing.T) {
 	agent := NewAgent(Config{})
 	agent.Steer(types.UserMessage{Role: RoleUser, Content: "change direction"})
 	agent.FollowUp(types.UserMessage{Role: RoleUser, Content: "after this"})
@@ -478,7 +478,7 @@ func TestV1CompatAgentQueuedMessageCounts(t *testing.T) {
 	}
 }
 
-func TestV1CompatAgentQueuedMessagesAndDropLast(t *testing.T) {
+func TestAgentAgentQueuedMessagesAndDropLast(t *testing.T) {
 	agent := NewAgent(Config{})
 	agent.Steer(types.UserMessage{Role: RoleUser, Content: "change direction"})
 	agent.FollowUp(types.UserMessage{Role: RoleUser, Content: "after this"})
@@ -510,7 +510,7 @@ func TestV1CompatAgentQueuedMessagesAndDropLast(t *testing.T) {
 	}
 }
 
-func TestV1CompatAgentSessionIDGetterSetter(t *testing.T) {
+func TestAgentAgentSessionIDGetterSetter(t *testing.T) {
 	agent := NewAgent(Config{SessionID: "initial"})
 	if agent.GetSessionID() != "initial" {
 		t.Fatal("expected session ID 'initial'")
@@ -521,7 +521,7 @@ func TestV1CompatAgentSessionIDGetterSetter(t *testing.T) {
 	}
 }
 
-func TestV1CompatAgentThinkingBudgetsGetterSetter(t *testing.T) {
+func TestAgentAgentThinkingBudgetsGetterSetter(t *testing.T) {
 	agent := NewAgent(Config{})
 	if agent.GetThinkingBudgets() != nil {
 		t.Fatal("expected nil thinking budgets by default")
@@ -533,7 +533,7 @@ func TestV1CompatAgentThinkingBudgetsGetterSetter(t *testing.T) {
 	}
 }
 
-func TestV1CompatAgentMaxRetryDelayMsGetterSetter(t *testing.T) {
+func TestAgentAgentMaxRetryDelayMsGetterSetter(t *testing.T) {
 	agent := NewAgent(Config{MaxRetryDelayMs: 5000})
 	if agent.GetMaxRetryDelayMs() != 5000 {
 		t.Fatalf("expected 5000, got %d", agent.GetMaxRetryDelayMs())
@@ -544,7 +544,7 @@ func TestV1CompatAgentMaxRetryDelayMsGetterSetter(t *testing.T) {
 	}
 }
 
-func TestV1CompatAgentStateSettersAndReset(t *testing.T) {
+func TestAgentAgentStateSettersAndReset(t *testing.T) {
 	model := &types.Model{ID: "mock", ProviderID: "openai"}
 	tool := &fakeTool{}
 	agent := NewAgent(Config{})
@@ -573,7 +573,7 @@ func TestV1CompatAgentStateSettersAndReset(t *testing.T) {
 	}
 }
 
-func TestV1CompatAgentContinueConsumesQueuedSteering(t *testing.T) {
+func TestAgentAgentContinueConsumesQueuedSteering(t *testing.T) {
 	model := &types.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
 	var received [][]types.AgentMessage
 	streamFn := func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
@@ -607,7 +607,7 @@ func TestV1CompatAgentContinueConsumesQueuedSteering(t *testing.T) {
 	}
 }
 
-func TestV1CompatAgentPromptWithImages(t *testing.T) {
+func TestAgentAgentPromptWithImages(t *testing.T) {
 	model := &types.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
 	var received []types.AgentMessage
 	streamFn := func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
@@ -641,7 +641,7 @@ func TestV1CompatAgentPromptWithImages(t *testing.T) {
 	}
 }
 
-func TestV1CompatAgentErrorMessageAppendedOnFailure(t *testing.T) {
+func TestAgentAgentErrorMessageAppendedOnFailure(t *testing.T) {
 	model := &types.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
 	streamFn := func(ctx context.Context, _ *types.Model, _ *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
 		return nil, fmt.Errorf("HTTP 401 Unauthorized")
@@ -678,7 +678,7 @@ func TestV1CompatAgentErrorMessageAppendedOnFailure(t *testing.T) {
 	}
 }
 
-func TestV1CompatAgentInterruptsForToolApprovalAndResumes(t *testing.T) {
+func TestAgentAgentInterruptsForToolApprovalAndResumes(t *testing.T) {
 	model := &types.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
 	tool := &fakeTool{}
 	callIndex := 0
@@ -748,7 +748,7 @@ func TestV1CompatAgentInterruptsForToolApprovalAndResumes(t *testing.T) {
 	}
 }
 
-func TestV1CompatAgentInterruptsAtMaxStepsAndResumes(t *testing.T) {
+func TestAgentAgentInterruptsAtMaxStepsAndResumes(t *testing.T) {
 	model := &types.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
 	callIndex := 0
 	streamFn := func(ctx context.Context, _ *types.Model, _ *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
@@ -800,7 +800,7 @@ func TestV1CompatAgentInterruptsAtMaxStepsAndResumes(t *testing.T) {
 	}
 }
 
-func TestV1CompatAgentAbortCancelsPrompt(t *testing.T) {
+func TestAgentAgentAbortCancelsPrompt(t *testing.T) {
 	model := &types.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
 	started := make(chan struct{})
 	streamFn := func(ctx context.Context, _ *types.Model, _ *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {

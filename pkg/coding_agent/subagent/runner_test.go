@@ -19,8 +19,8 @@ func (t *testTool) Name() string        { return t.name }
 func (t *testTool) Label() string       { return t.name }
 func (t *testTool) Description() string { return t.name }
 func (t *testTool) Parameters() any     { return nil }
-func (t *testTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
-	return agent.AgentToolResult{}, nil
+func (t *testTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
+	return agent.ToolResult{}, nil
 }
 
 func TestRunRespectsToolFilteringAndThinkingLevel(t *testing.T) {
@@ -63,7 +63,7 @@ func TestRunRespectsToolFilteringAndThinkingLevel(t *testing.T) {
 		context.Background(),
 		def,
 		"do it",
-		[]agent.AgentTool{&testTool{name: "read"}, &testTool{name: "bash"}},
+		[]agent.Tool{&testTool{name: "read"}, &testTool{name: "bash"}},
 		model,
 		func(string) (string, error) { return "", nil },
 		streamFn,
@@ -200,7 +200,7 @@ func TestRunUsesEffortWhenThinkingLevelNotExplicit(t *testing.T) {
 		context.Background(),
 		def,
 		"do work",
-		[]agent.AgentTool{},
+		[]agent.Tool{},
 		model,
 		func(string) (string, error) { return "", nil },
 		streamFn,
@@ -256,7 +256,7 @@ func TestRunReadOnlyPermissionModeFiltersMutatingTools(t *testing.T) {
 		context.Background(),
 		def,
 		"inspect",
-		[]agent.AgentTool{
+		[]agent.Tool{
 			&testTool{name: "read"},
 			&testTool{name: "find"},
 			&testTool{name: "bash"},
@@ -323,7 +323,7 @@ func TestRunRespectsMaxTurns(t *testing.T) {
 		context.Background(),
 		def,
 		"loop",
-		[]agent.AgentTool{&testTool{name: "read"}},
+		[]agent.Tool{&testTool{name: "read"}},
 		model,
 		func(string) (string, error) { return "", nil },
 		streamFn,

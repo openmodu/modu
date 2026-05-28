@@ -188,7 +188,7 @@ func runCodingSession(
 	log.Printf("[%s] CodingSession ready, sending prompt to LLM", agentID)
 
 	// Subscribe to agent events for live logging
-	cs.Subscribe(func(e agent.AgentEvent) {
+	cs.Subscribe(func(e agent.Event) {
 		switch e.Type {
 		case agent.EventTypeTurnStart:
 			log.Printf("[%s] ▶ LLM turn start", agentID)

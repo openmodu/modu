@@ -44,7 +44,7 @@ func (t *LsTool) Parameters() any {
 	}
 }
 
-func (t *LsTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *LsTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	dirPath := t.cwd
 	if p, ok := args["path"].(string); ok && p != "" {
 		dirPath = ResolveToCwd(p, t.cwd)
@@ -95,7 +95,7 @@ func (t *LsTool) Execute(ctx context.Context, toolCallID string, args map[string
 		text = "(empty directory)"
 	}
 
-	return agent.AgentToolResult{
+	return agent.ToolResult{
 		Content: []types.ContentBlock{
 			&types.TextContent{Type: "text", Text: text},
 		},

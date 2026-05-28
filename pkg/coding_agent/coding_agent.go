@@ -42,9 +42,9 @@ type CodingSessionOptions struct {
 	// ThinkingLevel controls reasoning depth.
 	ThinkingLevel agent.ThinkingLevel
 	// Tools are the tools to make available. If nil, defaults to CodingTools.
-	Tools []agent.AgentTool
+	Tools []agent.Tool
 	// CustomTools are additional tools provided by the caller.
-	CustomTools []agent.AgentTool
+	CustomTools []agent.Tool
 	// Extensions are extensions to initialize.
 	Extensions []extension.Extension
 	// CustomSystemPrompt overrides the default system prompt.
@@ -79,7 +79,7 @@ type CodingSession struct {
 	agentDir       string
 	promptBuilder  *SystemPromptBuilder
 	model          *types.Model
-	activeTools    []agent.AgentTool
+	activeTools    []agent.Tool
 	slashCommands  map[string]SlashCommand
 	getAPIKey      func(provider string) (string, error)
 	streamFn       agent.StreamFn
@@ -268,10 +268,10 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	approvalMgr.SetRules(cfg.Permissions)
 
 	// Create the underlying agent
-	ag := agent.NewAgent(agent.AgentConfig{
+	ag := agent.NewAgent(agent.Config{
 		GetAPIKey:   getAPIKey,
 		ApproveTool: approvalMgr.Approve,
-		InitialState: &agent.AgentState{
+		InitialState: &agent.State{
 			SystemPrompt:  systemPrompt,
 			Model:         opts.Model,
 			ThinkingLevel: cfg.ThinkingLevel,
@@ -370,15 +370,15 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	}
 
 	// Subscribe to events for token usage tracking (auto-compaction)
-	ag.Subscribe(func(event agent.AgentEvent) {
+	ag.Subscribe(func(event agent.Event) {
 		if cs.extensions != nil {
 			cs.extensions.EmitEvent(event)
 		}
 		if cs.traceRecorder != nil {
-			_ = cs.traceRecorder.RecordAgentEvent(event)
+			_ = cs.traceRecorder.RecordEvent(event)
 		}
 		if cs.otelBridge != nil {
-			cs.otelBridge.RecordAgentEvent(event)
+			cs.otelBridge.RecordEvent(event)
 		}
 		if event.Type == agent.EventTypeMessageEnd {
 			addUsage := func(u types.AgentUsage) {
@@ -582,7 +582,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 				},
 			}
 		}
-		extRunner.EmitEvent(agent.AgentEvent{Type: agent.EventType("session_start"), Reason: "startup"})
+		extRunner.EmitEvent(agent.Event{Type: agent.EventType("session_start"), Reason: "startup"})
 	}
 
 	cs.installHarnessLayer()
@@ -664,7 +664,7 @@ func (s *CodingSession) Prompt(ctx context.Context, text string) error {
 
 func (s *CodingSession) Close(reason string) {
 	if s.extensions != nil {
-		s.extensions.EmitEvent(agent.AgentEvent{Type: agent.EventType("session_shutdown")})
+		s.extensions.EmitEvent(agent.Event{Type: agent.EventType("session_shutdown")})
 	}
 	if s.traceRecorder != nil {
 		_ = s.traceRecorder.RecordSessionEvent("session_end", map[string]any{"reason": reason})
@@ -697,7 +697,7 @@ func (s *CodingSession) FollowUp(text string) {
 }
 
 // Subscribe registers an event listener. Returns an unsubscribe function.
-func (s *CodingSession) Subscribe(fn func(agent.AgentEvent)) func() {
+func (s *CodingSession) Subscribe(fn func(agent.Event)) func() {
 	return s.agent.Subscribe(fn)
 }
 
@@ -708,7 +708,7 @@ func (s *CodingSession) SetActiveTools(names []string) {
 		nameSet[n] = true
 	}
 
-	var active []agent.AgentTool
+	var active []agent.Tool
 	for _, tool := range s.activeTools {
 		if nameSet[tool.Name()] {
 			active = append(active, tool)
@@ -790,7 +790,7 @@ func (s *CodingSession) GetActiveToolNames() []string {
 	return names
 }
 
-func (s *CodingSession) handleToolExecutionEnd(event agent.AgentEvent) {
+func (s *CodingSession) handleToolExecutionEnd(event agent.Event) {
 	if s.resources == nil {
 		return
 	}
@@ -820,7 +820,7 @@ func (s *CodingSession) handleToolExecutionEnd(event agent.AgentEvent) {
 	}).ToLlmMessage())
 }
 
-func extractToolPaths(event agent.AgentEvent) []string {
+func extractToolPaths(event agent.Event) []string {
 	var paths []string
 	seen := make(map[string]struct{})
 	add := func(path string) {
@@ -835,7 +835,7 @@ func extractToolPaths(event agent.AgentEvent) []string {
 		paths = append(paths, path)
 	}
 
-	if result, ok := event.Result.(agent.AgentToolResult); ok {
+	if result, ok := event.Result.(agent.ToolResult); ok {
 		if details, ok := result.Details.(map[string]any); ok {
 			collectToolPathsFromDetails(details, add)
 		}
@@ -1925,7 +1925,7 @@ func (s *CodingSession) switchSessionManager(newMgr *session.Manager) error {
 	s.agent.ReplaceMessages(messages)
 	s.lastSavedIndex = len(messages)
 	if s.extensions != nil {
-		s.extensions.EmitEvent(agent.AgentEvent{Type: agent.EventType("session_start"), Reason: "resume"})
+		s.extensions.EmitEvent(agent.Event{Type: agent.EventType("session_start"), Reason: "resume"})
 	}
 	s.writeRuntimeState()
 	return nil
@@ -2056,7 +2056,7 @@ func (s *CodingSession) handleMessageEnd(msg agent.AgentMessage) {
 	_ = s.SaveMessages()
 }
 
-func (s *CodingSession) currentLeafMessageMatches(role agent.MessageRole, content any) bool {
+func (s *CodingSession) currentLeafMessageMatches(role string, content any) bool {
 	if s.sessionManager == nil {
 		return false
 	}
@@ -2075,7 +2075,7 @@ func (s *CodingSession) currentLeafMessageMatches(role agent.MessageRole, conten
 	return data.Role == role && reflect.DeepEqual(data.Content, content)
 }
 
-func sessionMessageData(msg agent.AgentMessage) (agent.MessageRole, any, bool) {
+func sessionMessageData(msg agent.AgentMessage) (string, any, bool) {
 	switch m := msg.(type) {
 	case types.UserMessage:
 		return agent.RoleUser, m.Content, true

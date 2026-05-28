@@ -84,7 +84,7 @@ Write safe code by default. Avoid command injection, SQL injection, path travers
 // SystemPromptBuilder constructs the system prompt from multiple sources.
 type SystemPromptBuilder struct {
 	customPrompt  string
-	tools         []agent.AgentTool
+	tools         []agent.Tool
 	contextFiles  []string
 	skillsPrompt  string
 	appendPrompts []string
@@ -105,7 +105,7 @@ func (b *SystemPromptBuilder) SetCustomPrompt(prompt string) *SystemPromptBuilde
 }
 
 // SetTools sets the active tools whose descriptions will be included.
-func (b *SystemPromptBuilder) SetTools(tools []agent.AgentTool) *SystemPromptBuilder {
+func (b *SystemPromptBuilder) SetTools(tools []agent.Tool) *SystemPromptBuilder {
 	b.tools = tools
 	return b
 }

@@ -41,7 +41,7 @@ func (t *TaskOutputTool) Parameters() any {
 	}
 }
 
-func (t *TaskOutputTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.AgentToolUpdateCallback) (agent.AgentToolResult, error) {
+func (t *TaskOutputTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	if t.store == nil {
 		return taskOutputResult("background task store is not configured"), nil
 	}
@@ -92,8 +92,8 @@ func (t *TaskOutputTool) Execute(ctx context.Context, toolCallID string, args ma
 	return taskOutputResult(strings.Join(lines, "\n")), nil
 }
 
-func taskOutputResult(text string) agent.AgentToolResult {
-	return agent.AgentToolResult{
+func taskOutputResult(text string) agent.ToolResult {
+	return agent.ToolResult{
 		Content: []types.ContentBlock{
 			&types.TextContent{Type: "text", Text: text},
 		},

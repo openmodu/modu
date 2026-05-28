@@ -13,9 +13,11 @@ import (
 
 // artifactRun captures the on-disk debug artifacts for one subagent
 // dispatch. When the caller sets `artifacts: true`, we write
-//   input.json    — the args that drove the dispatch
-//   output.json   — the final result text + any error
-//   metadata.json — timing + mode + run id
+//
+//	input.json    — the args that drove the dispatch
+//	output.json   — the final result text + any error
+//	metadata.json — timing + mode + run id
+//
 // under tool-results/<project>/subagents/artifacts/<runID>/.
 //
 // The artifact set mirrors pi-subagents' per-run debug layout but uses our
