@@ -1873,13 +1873,13 @@ func TestMaybeAutoCompact_BelowThreshold(t *testing.T) {
 	session := newTestSession(t, newTestModelWithContext(10000))
 
 	// Set totalTokens below threshold (80% of 10000 = 8000)
-	session.totalTokens = 5000
+	session.ctxMgr.AddUsage(5000)
 
 	session.agent.AppendMessage(types.UserMessage{Role: "user", Content: "msg1"})
 	session.agent.AppendMessage(types.UserMessage{Role: "user", Content: "msg2"})
 	msgsBefore := len(session.agent.GetState().Messages)
 
-	session.maybeAutoCompact(context.Background())
+	session.ctxMgr.MaybeAutoCompact(context.Background())
 
 	msgsAfter := len(session.agent.GetState().Messages)
 	if msgsAfter != msgsBefore {
@@ -1912,19 +1912,19 @@ func TestMaybeAutoCompact_AboveThreshold(t *testing.T) {
 	}
 
 	// Set totalTokens above threshold (80% of 128000 = 102400)
-	session.totalTokens = 105000
+	session.ctxMgr.AddUsage(105000)
 
 	msgsBefore := len(session.agent.GetState().Messages)
 
-	session.maybeAutoCompact(context.Background())
+	session.ctxMgr.MaybeAutoCompact(context.Background())
 
 	msgsAfter := len(session.agent.GetState().Messages)
 	if msgsAfter >= msgsBefore {
 		t.Fatalf("should compact above threshold: before=%d after=%d", msgsBefore, msgsAfter)
 	}
 
-	if session.totalTokens != 0 {
-		t.Fatalf("expected totalTokens reset to 0, got %d", session.totalTokens)
+	if session.ctxMgr.Tokens() != 0 {
+		t.Fatalf("expected totalTokens reset to 0, got %d", session.ctxMgr.Tokens())
 	}
 }
 
@@ -2808,14 +2808,14 @@ func TestMaybeAutoCompact_DisabledByConfig(t *testing.T) {
 	session := newTestSession(t, newTestModelWithContext(10000))
 
 	session.config.AutoCompaction = false
-	session.totalTokens = 9000
+	session.ctxMgr.AddUsage(9000)
 
 	for i := 0; i < 10; i++ {
 		session.agent.AppendMessage(types.UserMessage{Role: "user", Content: "msg"})
 	}
 	msgsBefore := len(session.agent.GetState().Messages)
 
-	session.maybeAutoCompact(context.Background())
+	session.ctxMgr.MaybeAutoCompact(context.Background())
 
 	msgsAfter := len(session.agent.GetState().Messages)
 	if msgsAfter != msgsBefore {
@@ -2941,7 +2941,7 @@ func TestHandleToolExecutionEndQueuesNestedContextForDeeperPath(t *testing.T) {
 		t.Fatalf("expected no queued steering messages initially, got %d", session.agent.QueuedMessageCount())
 	}
 
-	session.handleToolExecutionEnd(agent.Event{
+	session.ctxMgr.OnToolExecutionEnd(agent.Event{
 		Type:     agent.EventTypeToolExecutionEnd,
 		ToolName: "read",
 		Args:     map[string]any{"path": targetFile},
@@ -2954,7 +2954,7 @@ func TestHandleToolExecutionEndQueuesNestedContextForDeeperPath(t *testing.T) {
 		t.Fatalf("expected one queued steering message, got %d", session.agent.QueuedMessageCount())
 	}
 
-	session.handleToolExecutionEnd(agent.Event{
+	session.ctxMgr.OnToolExecutionEnd(agent.Event{
 		Type:     agent.EventTypeToolExecutionEnd,
 		ToolName: "read",
 		Args:     map[string]any{"path": targetFile},
@@ -2998,7 +2998,7 @@ func TestTransientNestedContextMessagesArePrunedAndNotPersisted(t *testing.T) {
 	session.handleMessageEnd(hiddenFollowUp)
 	session.agent.AppendMessage(normal)
 	session.handleMessageEnd(normal)
-	session.pruneTransientContextMessages()
+	session.ctxMgr.PruneTransient()
 
 	msgs := session.agent.GetState().Messages
 	if len(msgs) != 1 {

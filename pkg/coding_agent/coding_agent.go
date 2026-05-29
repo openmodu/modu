@@ -16,12 +16,14 @@ import (
 
 	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/compaction"
+	"github.com/openmodu/modu/pkg/coding_agent/contextmgr"
 	"github.com/openmodu/modu/pkg/coding_agent/eventbus"
 	"github.com/openmodu/modu/pkg/coding_agent/extension"
 	"github.com/openmodu/modu/pkg/coding_agent/prompts"
 	"github.com/openmodu/modu/pkg/coding_agent/resource"
 	"github.com/openmodu/modu/pkg/coding_agent/session"
 	"github.com/openmodu/modu/pkg/coding_agent/subagent"
+	"github.com/openmodu/modu/pkg/coding_agent/systemprompt"
 	"github.com/openmodu/modu/pkg/coding_agent/tools"
 	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/skills"
@@ -75,7 +77,7 @@ type CodingSession struct {
 	subagentLoader *subagent.Loader
 	cwd            string
 	agentDir       string
-	promptBuilder  *SystemPromptBuilder
+	promptBuilder  *systemprompt.Builder
 	model          *types.Model
 	activeTools    []agent.Tool
 	toolProvider   agent.ToolManager
@@ -83,8 +85,9 @@ type CodingSession struct {
 	getAPIKey      func(provider string) (string, error)
 	streamFn       agent.StreamFn
 	lastSavedIndex int
-	// totalTokens tracks accumulated token usage for auto-compaction.
-	totalTokens     int
+	// ctxMgr owns conversation-window concerns (token accounting,
+	// auto-compaction, dynamic path-context injection, transient pruning).
+	ctxMgr          *contextmgr.Manager
 	retryManager    *RetryManager
 	eventBus        eventbus.EventBusController
 	scopedModels    []string
@@ -93,7 +96,6 @@ type CodingSession struct {
 
 	// RPC parity fields
 	sessionName    string
-	isCompacting   bool
 	bashCancel     context.CancelFunc
 	bashMu         sync.Mutex
 	sessionStarted int64
@@ -112,8 +114,6 @@ type CodingSession struct {
 	worktreeMu         sync.Mutex
 	originalCwd        string
 	worktreePath       string
-	contextMu          sync.Mutex
-	loadedContexts     map[string]struct{}
 
 	// approvalManager handles tool execution approval.
 	approvalManager *ApprovalManager
@@ -202,9 +202,9 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	_ = promptMgr.Discover()
 
 	// Build system prompt
-	promptBuilder := NewSystemPromptBuilder(opts.Cwd)
+	promptBuilder := systemprompt.NewBuilder(opts.Cwd)
 	promptBuilder.SetModel(opts.Model)
-	promptBuilder.SetMemoryStore(memoryStore)
+	promptBuilder.SetMemoryProvider(memoryStore)
 	promptBuilder.SetTools(activeTools)
 	for _, ctxFile := range resourceSnapshot.ContextFiles {
 		promptBuilder.AddContextFile(ctxFile.Path)
@@ -299,9 +299,18 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		thinkingLevel:   cfg.ThinkingLevel,
 		sessionStarted:  time.Now().UnixMilli(),
 		taskManager:     taskMgr,
-		loadedContexts:  make(map[string]struct{}),
 		approvalManager: approvalMgr,
 	}
+	cs.ctxMgr = contextmgr.New(contextmgr.Deps{
+		Agent:          ag,
+		Resources:      loader,
+		SessionManager: sessionMgr,
+		StreamFn:       func() agent.StreamFn { return cs.streamFn },
+		APIKey:         getAPIKey,
+		Host:           cs,
+	})
+	cs.ctxMgr.SetModel(opts.Model)
+	cs.ctxMgr.SetPolicy(cs.compactionPolicy())
 	if err := taskMgr.SetStorePath(cs.RuntimePaths().BackgroundTasksFile); err != nil {
 		return nil, fmt.Errorf("failed to load background tasks: %w", err)
 	}
@@ -318,9 +327,11 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	cs.replaceTaskOutputTool()
 	cs.replacePlanTools()
 	cs.replaceWorktreeTools()
+	initialContexts := make([]string, 0, len(resourceSnapshot.ContextFiles))
 	for _, ctxFile := range resourceSnapshot.ContextFiles {
-		cs.loadedContexts[ctxFile.Path] = struct{}{}
+		initialContexts = append(initialContexts, ctxFile.Path)
 	}
+	cs.ctxMgr.MarkInitialContext(initialContexts)
 
 	// Subscribe to events for token usage tracking (auto-compaction)
 	ag.Subscribe(func(event agent.Event) {
@@ -333,7 +344,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 				if t == 0 {
 					t = u.Input + u.Output
 				}
-				cs.totalTokens += t
+				cs.ctxMgr.AddUsage(t)
 			}
 			if msg, ok := event.Message.(types.AssistantMessage); ok {
 				addUsage(msg.Usage)
@@ -344,11 +355,11 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 			return
 		}
 		if event.Type == agent.EventTypeToolExecutionEnd && !event.IsError {
-			cs.handleToolExecutionEnd(event)
+			cs.ctxMgr.OnToolExecutionEnd(event)
 			return
 		}
 		if event.Type == agent.EventTypeAgentEnd {
-			cs.pruneTransientContextMessages()
+			cs.ctxMgr.PruneTransient()
 			go cs.refreshGitRuntimeState()
 			cs.writeRuntimeState()
 		}
@@ -594,7 +605,7 @@ func (s *CodingSession) Prompt(ctx context.Context, text string) error {
 	}
 
 	// Auto-compaction: check if we should compact after the agent finishes
-	s.maybeAutoCompact(ctx)
+	s.ctxMgr.MaybeAutoCompact(ctx)
 
 	return nil
 }
@@ -727,180 +738,12 @@ func (s *CodingSession) GetActiveToolNames() []string {
 	return names
 }
 
-func (s *CodingSession) handleToolExecutionEnd(event agent.Event) {
-	if s.resources == nil {
-		return
-	}
-	switch event.ToolName {
-	case "read", "edit", "write", "grep", "find", "ls":
-	default:
-		return
-	}
-
-	paths := extractToolPaths(event)
-	if len(paths) == 0 {
-		return
-	}
-
-	newContexts := s.collectNewContextFiles(paths)
-	if len(newContexts) == 0 {
-		return
-	}
-
-	text := formatDynamicContextMessage(paths, newContexts)
-	if text == "" {
-		return
-	}
-	s.agent.Steer((&CustomMessage{
-		Source: nestedContextSource,
-		Text:   text,
-	}).ToLlmMessage())
-}
-
-func extractToolPaths(event agent.Event) []string {
-	var paths []string
-	seen := make(map[string]struct{})
-	add := func(path string) {
-		path = strings.TrimSpace(path)
-		if path == "" {
-			return
-		}
-		if _, ok := seen[path]; ok {
-			return
-		}
-		seen[path] = struct{}{}
-		paths = append(paths, path)
-	}
-
-	if result, ok := event.Result.(agent.ToolResult); ok {
-		if details, ok := result.Details.(map[string]any); ok {
-			collectToolPathsFromDetails(details, add)
-		}
-	}
-	if args, ok := event.Args.(map[string]any); ok {
-		collectToolPathsFromDetails(args, add)
-	}
-	return paths
-}
-
-func collectToolPathsFromDetails(details map[string]any, add func(string)) {
-	if path, _ := details["path"].(string); path != "" {
-		add(path)
-	}
-	switch matched := details["matched_paths"].(type) {
-	case []string:
-		for _, path := range matched {
-			add(path)
-		}
-	case []any:
-		for _, raw := range matched {
-			if path, ok := raw.(string); ok {
-				add(path)
-			}
-		}
-	}
-}
-
-func (s *CodingSession) collectNewContextFiles(paths []string) []resource.ContextFile {
-	if len(paths) == 0 {
-		return nil
-	}
-
-	// Load context files outside the lock: this involves filesystem I/O and
-	// a git subprocess, both of which are expensive to hold a mutex across.
-	var candidates []resource.ContextFile
-	for _, path := range paths {
-		candidates = append(candidates, s.resources.LoadContextFilesForPath(path)...)
-	}
-
-	s.contextMu.Lock()
-	defer s.contextMu.Unlock()
-
-	var out []resource.ContextFile
-	for _, file := range candidates {
-		if _, seen := s.loadedContexts[file.Path]; seen {
-			continue
-		}
-		s.loadedContexts[file.Path] = struct{}{}
-		out = append(out, file)
-	}
-	return out
-}
-
-func formatDynamicContextMessage(targetPaths []string, files []resource.ContextFile) string {
-	const (
-		maxFileBytes  = 4 * 1024
-		maxTotalBytes = 12 * 1024
-	)
-
-	if len(files) == 0 {
-		return ""
-	}
-
-	var parts []string
-	parts = append(parts, "Additional path-specific instructions became relevant after accessing:")
-	for _, path := range targetPaths {
-		parts = append(parts, "- "+path)
-	}
-
-	remaining := maxTotalBytes
-	for _, file := range files {
-		if remaining <= 0 {
-			break
-		}
-		content := strings.TrimSpace(file.Content)
-		if content == "" {
-			continue
-		}
-		limit := min(maxFileBytes, remaining)
-		if len(content) > limit {
-			content = truncateWithNotice(content, limit, file.Name)
-		}
-		if len(content) == 0 {
-			continue
-		}
-		parts = append(parts, fmt.Sprintf("# Path Context: %s\n%s", file.Name, content))
-		remaining -= len(content)
-	}
-
-	if len(parts) == 1 {
-		return ""
-	}
-	return strings.Join(parts, "\n\n")
-}
-
-func (s *CodingSession) pruneTransientContextMessages() {
-	state := s.agent.GetState()
-	if len(state.Messages) == 0 {
-		return
-	}
-
-	// Scan first to avoid allocation when there is nothing to prune.
-	hasTransient := false
-	for _, msg := range state.Messages {
-		if isTransientContextMessage(msg) {
-			hasTransient = true
-			break
-		}
-	}
-	if !hasTransient {
-		return
-	}
-
-	filtered := make([]agent.AgentMessage, 0, len(state.Messages))
-	for _, msg := range state.Messages {
-		if !isTransientContextMessage(msg) {
-			filtered = append(filtered, msg)
-		}
-	}
-	s.agent.ReplaceMessages(filtered)
-}
-
 // SetModel changes the active model.
 func (s *CodingSession) SetModel(model *types.Model) {
 	changed := s.model == nil || s.model.ProviderID != model.ProviderID || s.model.ID != model.ID
 	s.model = model
 	s.agent.SetModel(model)
+	s.ctxMgr.SetModel(model)
 	if s.promptBuilder != nil {
 		s.promptBuilder.SetModel(model)
 	}
@@ -953,69 +796,6 @@ func (s *CodingSession) SetModelByName(name string) error {
 	return nil
 }
 
-// Compact triggers context compaction.
-func (s *CodingSession) Compact(ctx context.Context) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	s.isCompacting = true
-	defer func() { s.isCompacting = false }()
-
-	state := s.agent.GetState()
-
-	result, err := compaction.Compact(ctx, state.Messages, compaction.Options{
-		PreserveRecent: s.config.CompactionSettings.PreserveRecentMessages,
-		Model:          s.model,
-		GetAPIKey:      s.getAPIKey,
-		StreamFn:       s.streamFn,
-	})
-	if err != nil {
-		return fmt.Errorf("compaction failed: %w", err)
-	}
-
-	// Replace messages
-	s.agent.ReplaceMessages(result.Messages)
-
-	// Reset token counter after compaction
-	s.totalTokens = 0
-
-	// Record compaction
-	_ = s.sessionManager.Append(session.NewEntry(session.EntryTypeCompaction, "", session.CompactionData{
-		Summary:       result.Summary,
-		OriginalCount: result.OriginalCount,
-		NewCount:      result.NewCount,
-	}))
-
-	s.emitSessionEvent(SessionEvent{Type: SessionEventCompactionDone})
-
-	return nil
-}
-
-// defaultContextWindow is the assumed context window when not available from the model.
-const defaultContextWindow = 128000
-
-// maybeAutoCompact checks whether auto-compaction should be triggered
-// based on accumulated token usage vs. the assumed context window.
-func (s *CodingSession) maybeAutoCompact(ctx context.Context) {
-	if !s.config.AutoCompaction {
-		return
-	}
-	if s.model == nil {
-		return
-	}
-
-	threshold := s.config.CompactionSettings.MaxContextPercentage
-	if threshold <= 0 {
-		threshold = 80.0
-	}
-
-	usagePercent := float64(s.totalTokens) / float64(defaultContextWindow) * 100.0
-	if usagePercent >= threshold {
-		s.emitSessionEvent(SessionEvent{Type: SessionEventCompactionStart})
-		_ = s.Compact(ctx)
-	}
-}
 
 // Fork creates a new branch from the given entry ID.
 func (s *CodingSession) Fork(entryID string) error {
@@ -1404,6 +1184,7 @@ func (s *CodingSession) GetSessionID() string {
 // SetAutoCompaction enables or disables auto-compaction.
 func (s *CodingSession) SetAutoCompaction(enabled bool) {
 	s.config.AutoCompaction = enabled
+	s.ctxMgr.SetPolicy(s.compactionPolicy())
 	s.writeRuntimeState()
 }
 
@@ -1508,7 +1289,7 @@ func (s *CodingSession) GetSessionName() string {
 
 // IsCompacting returns whether compaction is currently in progress.
 func (s *CodingSession) IsCompacting() bool {
-	return s.isCompacting
+	return s.ctxMgr.IsCompacting()
 }
 
 // GetLastAssistantText returns the text content of the last assistant message.
@@ -1575,7 +1356,7 @@ func (s *CodingSession) GetSessionStats() SessionStats {
 	msgs := s.agent.GetState().Messages
 	now := time.Now().UnixMilli()
 	return SessionStats{
-		TotalTokens:    s.totalTokens,
+		TotalTokens:    s.ctxMgr.Tokens(),
 		MessageCount:   len(msgs),
 		SessionStarted: s.sessionStarted,
 		DurationMs:     now - s.sessionStarted,
@@ -1839,7 +1620,7 @@ func (s *CodingSession) executeSkill(ctx context.Context, skill *skills.Skill, a
 	if err != nil {
 		return err
 	}
-	s.maybeAutoCompact(ctx)
+	s.ctxMgr.MaybeAutoCompact(ctx)
 	return nil
 }
 

@@ -1,4 +1,7 @@
-package coding_agent
+// Package systemprompt assembles the agent's system prompt from its many
+// sources (base prompt, tool descriptions, context files, skills, memory,
+// environment, and active-mode blocks) through a single Build path.
+package systemprompt
 
 import (
 	"fmt"
@@ -16,6 +19,9 @@ const (
 	maxTotalContextBytes  = 48 * 1024
 	maxMemoryContextBytes = 16 * 1024
 )
+
+// sectionSeparator joins every top-level section of the assembled prompt.
+const sectionSeparator = "\n\n---\n\n"
 
 const defaultSystemPrompt = `You are an expert software engineer operating as a terminal assistant. Coding work is your specialty, but you can also answer general questions and perform safe non-coding tasks when the user asks. You have tools to read, write, and edit files, run shell commands, and search code. You work in the user's working directory and can make changes directly when the task requires it.
 
@@ -81,67 +87,83 @@ When asked to review, audit, or analyse a package or module:
 
 Write safe code by default. Avoid command injection, SQL injection, path traversal, and hardcoded secrets. If you notice a security issue in existing code, flag it explicitly.`
 
-// SystemPromptBuilder constructs the system prompt from multiple sources.
-type SystemPromptBuilder struct {
+// MemoryProvider supplies the persistent memory context block. *MemoryStore in
+// the parent package satisfies this; the interface keeps this package free of a
+// dependency back on coding_agent.
+type MemoryProvider interface {
+	GetMemoryContext() string
+}
+
+// Builder constructs the system prompt from multiple sources.
+type Builder struct {
 	customPrompt  string
 	tools         []agent.Tool
 	contextFiles  []string
 	skillsPrompt  string
 	appendPrompts []string
 	cwd           string
-	memoryStore   *MemoryStore
+	memory        MemoryProvider
 	model         *types.Model
+	modeBlocks    []string
 }
 
-// NewSystemPromptBuilder creates a new system prompt builder.
-func NewSystemPromptBuilder(cwd string) *SystemPromptBuilder {
-	return &SystemPromptBuilder{cwd: cwd}
+// NewBuilder creates a new system prompt builder bound to a working directory.
+func NewBuilder(cwd string) *Builder {
+	return &Builder{cwd: cwd}
 }
 
 // SetCustomPrompt sets a custom base prompt (replaces the default).
-func (b *SystemPromptBuilder) SetCustomPrompt(prompt string) *SystemPromptBuilder {
+func (b *Builder) SetCustomPrompt(prompt string) *Builder {
 	b.customPrompt = prompt
 	return b
 }
 
 // SetTools sets the active tools whose descriptions will be included.
-func (b *SystemPromptBuilder) SetTools(tools []agent.Tool) *SystemPromptBuilder {
+func (b *Builder) SetTools(tools []agent.Tool) *Builder {
 	b.tools = tools
 	return b
 }
 
 // AddContextFile adds a context file path to be loaded.
-func (b *SystemPromptBuilder) AddContextFile(path string) *SystemPromptBuilder {
+func (b *Builder) AddContextFile(path string) *Builder {
 	b.contextFiles = append(b.contextFiles, path)
 	return b
 }
 
 // SetSkillsPrompt sets the pre-formatted skills prompt (XML format per Agent Skills spec).
-func (b *SystemPromptBuilder) SetSkillsPrompt(prompt string) *SystemPromptBuilder {
+func (b *Builder) SetSkillsPrompt(prompt string) *Builder {
 	b.skillsPrompt = prompt
 	return b
 }
 
 // AppendPrompt adds additional prompt text from settings or extensions.
-func (b *SystemPromptBuilder) AppendPrompt(prompt string) *SystemPromptBuilder {
+func (b *Builder) AppendPrompt(prompt string) *Builder {
 	b.appendPrompts = append(b.appendPrompts, prompt)
 	return b
 }
 
-// SetMemoryStore sets the persistent memory store.
-func (b *SystemPromptBuilder) SetMemoryStore(store *MemoryStore) *SystemPromptBuilder {
-	b.memoryStore = store
+// SetMemoryProvider sets the persistent memory source.
+func (b *Builder) SetMemoryProvider(provider MemoryProvider) *Builder {
+	b.memory = provider
 	return b
 }
 
 // SetModel sets the model currently connected to the session.
-func (b *SystemPromptBuilder) SetModel(model *types.Model) *SystemPromptBuilder {
+func (b *Builder) SetModel(model *types.Model) *Builder {
 	b.model = model
 	return b
 }
 
+// SetModeBlocks replaces the active-mode blocks (e.g. plan mode, worktree)
+// appended after the environment section. Passing nil clears them, so callers
+// can re-set the current set on every prompt refresh.
+func (b *Builder) SetModeBlocks(blocks []string) *Builder {
+	b.modeBlocks = blocks
+	return b
+}
+
 // Build constructs the final system prompt.
-func (b *SystemPromptBuilder) Build() string {
+func (b *Builder) Build() string {
 	var parts []string
 
 	// 1. Base prompt
@@ -213,8 +235,8 @@ func (b *SystemPromptBuilder) Build() string {
 	}
 
 	// 6. Memory Context
-	if b.memoryStore != nil {
-		memCtx := b.memoryStore.GetMemoryContext()
+	if b.memory != nil {
+		memCtx := b.memory.GetMemoryContext()
 		if memCtx != "" {
 			if len(memCtx) > maxMemoryContextBytes {
 				memCtx = truncateWithNotice(memCtx, maxMemoryContextBytes, "memory context")
@@ -239,13 +261,16 @@ func (b *SystemPromptBuilder) Build() string {
 			envLines = append(envLines, fmt.Sprintf("- Connected model display name: %s", b.model.Name))
 		}
 	}
-	envInfo := strings.Join(envLines, "\n")
-	parts = append(parts, envInfo)
+	parts = append(parts, strings.Join(envLines, "\n"))
 
-	return strings.Join(parts, "\n\n---\n\n")
+	// 8. Active-mode blocks (plan mode, worktree) — appended last so the
+	// stable prompt above is unaffected by transient mode changes.
+	parts = append(parts, b.modeBlocks...)
+
+	return strings.Join(parts, sectionSeparator)
 }
 
-func (b *SystemPromptBuilder) loadContextFile(path string, maxBytes int) (string, int) {
+func (b *Builder) loadContextFile(path string, maxBytes int) (string, int) {
 	if maxBytes <= 0 {
 		return "", 0
 	}
