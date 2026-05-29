@@ -21,10 +21,10 @@ import (
 	"github.com/openmodu/modu/pkg/coding_agent/prompts"
 	"github.com/openmodu/modu/pkg/coding_agent/resource"
 	"github.com/openmodu/modu/pkg/coding_agent/session"
-	"github.com/openmodu/modu/pkg/coding_agent/skills"
 	"github.com/openmodu/modu/pkg/coding_agent/subagent"
 	"github.com/openmodu/modu/pkg/coding_agent/tools"
 	"github.com/openmodu/modu/pkg/providers"
+	"github.com/openmodu/modu/pkg/skills"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -196,7 +196,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 
 	// Initialize skills and prompt templates.
 	skillMgr := skills.NewManager(agentDir, opts.Cwd)
-	skillMgr.SetExtraPaths(resourceSnapshot.SkillPaths)
+	skillMgr.SetExtraPaths(skillPathRefs(resourceSnapshot.SkillPaths))
 	_ = skillMgr.Discover()
 	promptMgr := prompts.NewManager(agentDir, opts.Cwd)
 	promptMgr.SetExtraPaths(resourceSnapshot.PromptPaths)
@@ -667,12 +667,21 @@ func (s *CodingSession) refreshResourcePaths() resource.ResourceSnapshot {
 	}
 	snapshot := s.resources.LoadResources()
 	if s.skillManager != nil {
-		s.skillManager.SetExtraPaths(snapshot.SkillPaths)
+		s.skillManager.SetExtraPaths(skillPathRefs(snapshot.SkillPaths))
 	}
 	if s.promptManager != nil {
 		s.promptManager.SetExtraPaths(snapshot.PromptPaths)
 	}
 	return snapshot
+}
+
+// skillPathRefs converts resource package refs into skill discovery refs.
+func skillPathRefs(refs []resource.ResourceRef) []skills.PathRef {
+	out := make([]skills.PathRef, len(refs))
+	for i, r := range refs {
+		out[i] = skills.PathRef{Path: r.Path, Source: r.Source}
+	}
+	return out
 }
 
 // SkillInfo is a minimal view of a skill for display purposes.

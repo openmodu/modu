@@ -1,4 +1,4 @@
-package tools
+package backendtask
 
 import (
 	"context"
@@ -18,7 +18,7 @@ type TaskOutputTool struct {
 	store BackgroundTaskStore
 }
 
-func NewTaskOutputTool(store BackgroundTaskStore) *TaskOutputTool {
+func NewTaskOutputTool(store BackgroundTaskStore) agent.Tool {
 	return &TaskOutputTool{store: store}
 }
 

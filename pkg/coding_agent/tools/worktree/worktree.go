@@ -1,4 +1,4 @@
-package tools
+package worktree
 
 import (
 	"context"
@@ -17,18 +17,22 @@ type EnterWorktreeTool struct {
 	manager WorktreeManager
 }
 
-func NewEnterWorktreeTool(manager WorktreeManager) *EnterWorktreeTool {
+func NewEnterWorktreeTool(manager WorktreeManager) agent.Tool {
 	return &EnterWorktreeTool{manager: manager}
 }
 
-func (t *EnterWorktreeTool) Name() string  { return "enter_worktree" }
+func (t *EnterWorktreeTool) Name() string { return "enter_worktree" }
+
 func (t *EnterWorktreeTool) Label() string { return "Enter Worktree" }
+
 func (t *EnterWorktreeTool) Description() string {
 	return "Create a temporary git worktree for isolated editing and switch the session into it."
 }
+
 func (t *EnterWorktreeTool) Parameters() any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
+
 func (t *EnterWorktreeTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	if t.manager == nil {
 		return worktreeToolResult("worktree manager is not configured"), nil
@@ -44,18 +48,22 @@ type ExitWorktreeTool struct {
 	manager WorktreeManager
 }
 
-func NewExitWorktreeTool(manager WorktreeManager) *ExitWorktreeTool {
+func NewExitWorktreeTool(manager WorktreeManager) agent.Tool {
 	return &ExitWorktreeTool{manager: manager}
 }
 
-func (t *ExitWorktreeTool) Name() string  { return "exit_worktree" }
+func (t *ExitWorktreeTool) Name() string { return "exit_worktree" }
+
 func (t *ExitWorktreeTool) Label() string { return "Exit Worktree" }
+
 func (t *ExitWorktreeTool) Description() string {
 	return "Exit the active temporary worktree and restore the original working directory."
 }
+
 func (t *ExitWorktreeTool) Parameters() any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
+
 func (t *ExitWorktreeTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	if t.manager == nil {
 		return worktreeToolResult("worktree manager is not configured"), nil

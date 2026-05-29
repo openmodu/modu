@@ -15,10 +15,10 @@ import (
 	"github.com/openmodu/modu/pkg/coding_agent/extension"
 	subagentext "github.com/openmodu/modu/pkg/coding_agent/extension/subagent"
 	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/session"
-	"github.com/openmodu/modu/pkg/coding_agent/skills"
 	"github.com/openmodu/modu/pkg/coding_agent/subagent"
 	"github.com/openmodu/modu/pkg/coding_agent/tools"
 	"github.com/openmodu/modu/pkg/providers"
+	"github.com/openmodu/modu/pkg/skills"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -1629,6 +1629,42 @@ func TestRuntimeStateFileAndJSON(t *testing.T) {
 	}
 }
 
+func TestGitRuntimeStateInspect(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hello\nworld\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "scratch.txt"), []byte("new\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("git", "add", "README.md")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add failed: %v\n%s", err, string(out))
+	}
+
+	session := &CodingSession{}
+	state := session.gitRuntimeStateForCwd(dir)
+	if state["available"] != true || state["inGitRepository"] != true {
+		t.Fatalf("unexpected git state: %#v", state)
+	}
+	if stats, ok := state["stagedStats"].(map[string]any); !ok || stats["files"].(float64) == 0 {
+		t.Fatalf("expected staged stats, got %#v", state["stagedStats"])
+	}
+	untracked, ok := state["untrackedFiles"].([]any)
+	if !ok || len(untracked) != 1 || untracked[0] != "scratch.txt" {
+		t.Fatalf("expected scratch.txt as untracked, got %#v", state["untrackedFiles"])
+	}
+	if last, ok := state["lastCommit"].(map[string]any); !ok || last["hash"] == "" {
+		t.Fatalf("expected last commit, got %#v", state["lastCommit"])
+	}
+}
+
 func TestRuntimeStateGitRefreshCanRunAsync(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
@@ -3082,7 +3118,7 @@ func TestHarnessHintStrippedAndStored(t *testing.T) {
 	}
 }
 
-func TestHarnessPathsToolAndPlanFile(t *testing.T) {
+func TestHarnessPlanFileReadable(t *testing.T) {
 	dir := t.TempDir()
 	agentDir := filepath.Join(t.TempDir(), ".coding_agent")
 	session, err := NewCodingSession(CodingSessionOptions{
@@ -3095,32 +3131,21 @@ func TestHarnessPathsToolAndPlanFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var harnessPathsTool, readTool agent.Tool
+	var readTool agent.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		switch tool.Name() {
-		case "harness_paths":
-			harnessPathsTool = tool
 		case "read":
 			readTool = tool
 		}
 	}
-	if harnessPathsTool == nil || readTool == nil {
-		t.Fatalf("expected harness_paths and read tools, got %v", session.GetActiveToolNames())
+	if readTool == nil {
+		t.Fatalf("expected read tool, got %v", session.GetActiveToolNames())
 	}
 
 	session.ExitPlanMode("ship feature safely", nil)
 	paths := session.RuntimePaths()
 	if _, err := os.Stat(paths.PlanFile); err != nil {
 		t.Fatalf("expected plan file to exist: %v", err)
-	}
-
-	result, err := harnessPathsTool.Execute(context.Background(), "paths-1", map[string]any{}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	details, _ := result.Details.(map[string]any)
-	if details["plan_file"] != paths.PlanFile {
-		t.Fatalf("expected plan_file detail %q, got %#v", paths.PlanFile, details)
 	}
 
 	readResult, err := readTool.Execute(context.Background(), "read-plan", map[string]any{"path": paths.PlanFile}, nil)

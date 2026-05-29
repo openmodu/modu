@@ -2,7 +2,7 @@ package coding_agent
 
 import (
 	"github.com/openmodu/modu/pkg/agent"
-	"github.com/openmodu/modu/pkg/coding_agent/tools"
+	"github.com/openmodu/modu/pkg/coding_agent/tools/planning"
 )
 
 // TodoItem represents one task tracked during a coding session.
@@ -15,19 +15,19 @@ type todoStoreAdapter struct {
 	session *CodingSession
 }
 
-func (a todoStoreAdapter) GetTodos() []tools.TodoItem {
+func (a todoStoreAdapter) GetTodos() []planning.TodoItem {
 	if a.session == nil {
 		return nil
 	}
 	items := a.session.GetTodos()
-	out := make([]tools.TodoItem, len(items))
+	out := make([]planning.TodoItem, len(items))
 	for i, item := range items {
-		out[i] = tools.TodoItem{Content: item.Content, Status: item.Status}
+		out[i] = planning.TodoItem{Content: item.Content, Status: item.Status}
 	}
 	return out
 }
 
-func (a todoStoreAdapter) SetTodos(items []tools.TodoItem) {
+func (a todoStoreAdapter) SetTodos(items []planning.TodoItem) {
 	if a.session == nil {
 		return
 	}
@@ -44,7 +44,7 @@ func (s *CodingSession) replaceTodoTool() {
 		s.agent.SetTools(removeToolByName(s.agent.GetState().Tools, "todo_write"))
 		return
 	}
-	todoTool := tools.NewTodoWriteTool(todoStoreAdapter{session: s})
+	todoTool := planning.NewTodoWriteTool(todoStoreAdapter{session: s})
 	s.activeTools = replaceTool(s.activeTools, todoTool)
 	s.agent.SetTools(replaceTool(s.agent.GetState().Tools, todoTool))
 }

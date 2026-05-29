@@ -1,18 +1,47 @@
+// Package skills provides local skill discovery and loading.
+//
+// Skills are Markdown files (with optional YAML frontmatter) discovered from
+// configurable roots. Discovered skill metadata is injected into the agent
+// system prompt so the model knows what specialized instructions are available.
 package skills
 
 import (
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
 
-	"github.com/openmodu/modu/pkg/coding_agent/resource"
 	"github.com/openmodu/modu/pkg/utils"
 )
 
-// Skill represents a discovered skill with its metadata and content.
+const (
+	// MaxNameLength caps a skill name; longer names are rejected.
+	MaxNameLength = 64
+	// MaxDescriptionLength caps a skill description; longer ones are rejected.
+	MaxDescriptionLength = 1024
+	// MaxMetadataBytes caps the prefix read during discovery. Skill bodies are
+	// loaded separately when a skill is invoked.
+	MaxMetadataBytes = 64 * 1024
+)
+
+// namePattern validates skill names: alphanumeric segments joined by hyphens.
+var namePattern = regexp.MustCompile(`^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$`)
+
+var ignoreFileNames = []string{".gitignore", ".ignore", ".fdignore"}
+
+// PathRef points to an extra skill file or directory to discover, tagged with
+// a source label for provenance.
+type PathRef struct {
+	Path   string
+	Source string
+}
+
+// Skill represents a discovered skill. Discovery populates metadata and path
+// fields only; Content is loaded lazily by Manager.Get.
 type Skill struct {
 	Name                   string            `json:"name"`
 	Description            string            `json:"description"`
@@ -25,8 +54,6 @@ type Skill struct {
 	DisableModelInvocation bool              `json:"disableModelInvocation"`
 }
 
-var ignoreFileNames = []string{".gitignore", ".ignore", ".fdignore"}
-
 // Manager handles skill discovery and loading. All public accessors rediscover
 // from disk before reading the skill map, so changes to skill files are picked
 // up without restarting the session.
@@ -36,10 +63,11 @@ type Manager struct {
 
 	mu         sync.RWMutex
 	skills     map[string]*Skill
-	extraPaths []resource.ResourceRef
+	extraPaths []PathRef
 }
 
-// NewManager creates a new skill manager.
+// NewManager creates a new skill manager. Global skills live under
+// {agentDir}/skills and project skills under {cwd}/.coding_agent/skills.
 func NewManager(agentDir, cwd string) *Manager {
 	return &Manager{
 		agentDir: agentDir,
@@ -48,10 +76,12 @@ func NewManager(agentDir, cwd string) *Manager {
 	}
 }
 
-func (m *Manager) SetExtraPaths(paths []resource.ResourceRef) {
+// SetExtraPaths registers additional skill files or directories (e.g. from
+// resource packages) to include in discovery.
+func (m *Manager) SetExtraPaths(paths []PathRef) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.extraPaths = append([]resource.ResourceRef(nil), paths...)
+	m.extraPaths = append([]PathRef(nil), paths...)
 }
 
 // Discover scans the global and project skill directories and atomically
@@ -62,22 +92,22 @@ func (m *Manager) SetExtraPaths(paths []resource.ResourceRef) {
 // Discovery rules:
 //   - Direct .md files at the skills directory root
 //   - Recursive SKILL.md files under subdirectories
-//   - Project skills override global skills with the same name
+//   - Project skills override global skills with the same name (first wins)
 func (m *Manager) Discover() error {
 	fresh := make(map[string]*Skill)
-
-	globalDir := filepath.Join(m.agentDir, "skills")
-	if err := loadIntoMap(fresh, globalDir, "user"); err != nil && !os.IsNotExist(err) {
-		return err
-	}
 
 	projectDir := filepath.Join(m.cwd, ".coding_agent", "skills")
 	if err := loadIntoMap(fresh, projectDir, "project"); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 
+	globalDir := filepath.Join(m.agentDir, "skills")
+	if err := loadIntoMap(fresh, globalDir, "user"); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
 	m.mu.RLock()
-	extraPaths := append([]resource.ResourceRef(nil), m.extraPaths...)
+	extraPaths := append([]PathRef(nil), m.extraPaths...)
 	m.mu.RUnlock()
 	for _, ref := range extraPaths {
 		_ = loadPathIntoMap(fresh, ref.Path, ref.Source)
@@ -94,8 +124,18 @@ func (m *Manager) Discover() error {
 func (m *Manager) Get(name string) (*Skill, bool) {
 	_ = m.Discover()
 	m.mu.RLock()
-	defer m.mu.RUnlock()
 	s, ok := m.skills[name]
+	if ok {
+		s = cloneSkill(s)
+	}
+	m.mu.RUnlock()
+	if !ok {
+		return nil, false
+	}
+	if err := loadSkillContent(s); err != nil {
+		slog.Warn("failed to load skill content", "source", s.Source, "path", s.FilePath, "name", s.Name, "error", err)
+		return nil, false
+	}
 	return s, ok
 }
 
@@ -106,7 +146,7 @@ func (m *Manager) List() []*Skill {
 	defer m.mu.RUnlock()
 	result := make([]*Skill, 0, len(m.skills))
 	for _, s := range m.skills {
-		result = append(result, s)
+		result = append(result, cloneSkill(s))
 	}
 	return result
 }
@@ -185,7 +225,7 @@ func loadPathIntoMap(dst map[string]*Skill, path, source string) error {
 	if !info.Mode().IsRegular() || !strings.HasSuffix(filepath.Base(path), ".md") {
 		return nil
 	}
-	skill, err := loadSkillFile(path, source)
+	skill, err := loadSkillMetadataFile(path, source)
 	if err != nil {
 		return err
 	}
@@ -267,7 +307,7 @@ func loadFromDirInternal(dst map[string]*Skill, dir, source string, includeRootF
 			continue
 		}
 
-		skill, err := loadSkillFile(fullPath, source)
+		skill, err := loadSkillMetadataFile(fullPath, source)
 		if err != nil {
 			continue // Skip malformed skills
 		}
@@ -281,50 +321,114 @@ func loadFromDirInternal(dst map[string]*Skill, dir, source string, includeRootF
 	return nil
 }
 
-func loadSkillFile(path, source string) (*Skill, error) {
-	data, err := os.ReadFile(path)
+func loadSkillMetadataFile(path, source string) (*Skill, error) {
+	fields, ok, err := readSkillMetadataFields(path)
 	if err != nil {
 		return nil, err
 	}
 
-	content := string(data)
 	skillDir := filepath.Dir(path)
+	isSkillMd := filepath.Base(path) == "SKILL.md"
 	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 
 	// For SKILL.md, use parent directory name
-	if filepath.Base(path) == "SKILL.md" {
+	if isSkillMd {
 		name = filepath.Base(skillDir)
 	}
 
 	skill := &Skill{
 		Name:     name,
-		Content:  content,
 		FilePath: path,
 		BaseDir:  skillDir,
 		Source:   source,
 		Metadata: make(map[string]string),
 	}
 
-	fields, body, ok := utils.ParseFrontmatter(content)
 	if ok {
-		skill.Content = body
 		applyFrontmatter(fields, skill)
 	}
 
-	// Replace relative paths that exist on disk with absolute paths,
-	// so the LLM never needs to resolve them manually.
-	skill.Content = resolveRelativePaths(skill.Content, skillDir)
+	// SKILL.md skills must declare a description per the Agent Skills spec.
+	// Flat .md files without frontmatter remain valid for backward compat.
+	if skill.Description == "" && isSkillMd {
+		return nil, fmt.Errorf("skill %q: missing description", name)
+	}
 
-	// Skills without description are not loaded (per Agent Skills spec)
-	if skill.Description == "" {
-		// Still allow loading for backward compat with flat .md files
-		// that don't have frontmatter — they use their content as the skill
-		if filepath.Base(path) == "SKILL.md" {
-			return nil, fmt.Errorf("skill %q: missing description", name)
-		}
+	if err := validateSkill(skill); err != nil {
+		slog.Warn("invalid skill", "source", source, "path", path, "name", skill.Name, "error", err)
+		return nil, err
 	}
 
 	return skill, nil
+}
+
+func readSkillMetadataFields(path string) (map[string]string, bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, false, err
+	}
+	defer f.Close()
+
+	data, err := io.ReadAll(io.LimitReader(f, MaxMetadataBytes))
+	if err != nil {
+		return nil, false, err
+	}
+	fields, _, ok := utils.ParseFrontmatter(string(data))
+	return fields, ok, nil
+}
+
+func loadSkillContent(skill *Skill) error {
+	if skill == nil {
+		return fmt.Errorf("skill is nil")
+	}
+	data, err := os.ReadFile(skill.FilePath)
+	if err != nil {
+		return err
+	}
+	content := string(data)
+	if _, body, ok := utils.ParseFrontmatter(content); ok {
+		content = body
+	}
+	// Replace relative paths that exist on disk with absolute paths,
+	// so the LLM never needs to resolve them manually.
+	skill.Content = resolveRelativePaths(content, skill.BaseDir)
+	return nil
+}
+
+func cloneSkill(s *Skill) *Skill {
+	if s == nil {
+		return nil
+	}
+	clone := *s
+	if len(s.Tags) > 0 {
+		clone.Tags = append([]string(nil), s.Tags...)
+	}
+	if len(s.Metadata) > 0 {
+		clone.Metadata = make(map[string]string, len(s.Metadata))
+		for k, v := range s.Metadata {
+			clone.Metadata[k] = v
+		}
+	}
+	return &clone
+}
+
+// validateSkill enforces name and description limits. An empty description is
+// tolerated here (flat .md backward-compat); the SKILL.md description-required
+// rule is checked separately in loadSkillMetadataFile.
+func validateSkill(s *Skill) error {
+	if s.Name == "" {
+		return fmt.Errorf("name is required")
+	}
+	if len(s.Name) > MaxNameLength {
+		return fmt.Errorf("name exceeds %d characters", MaxNameLength)
+	}
+	if !namePattern.MatchString(s.Name) {
+		return fmt.Errorf("name %q must be alphanumeric with hyphens", s.Name)
+	}
+	if len(s.Description) > MaxDescriptionLength {
+		return fmt.Errorf("description exceeds %d characters", MaxDescriptionLength)
+	}
+	return nil
 }
 
 // isIgnored checks if a filename matches any of the simple ignore patterns.

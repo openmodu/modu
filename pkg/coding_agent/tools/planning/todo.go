@@ -1,4 +1,4 @@
-package tools
+package planning
 
 import (
 	"context"
@@ -26,7 +26,7 @@ type TodoWriteTool struct {
 	store TodoStore
 }
 
-func NewTodoWriteTool(store TodoStore) *TodoWriteTool {
+func NewTodoWriteTool(store TodoStore) agent.Tool {
 	return &TodoWriteTool{store: store}
 }
 

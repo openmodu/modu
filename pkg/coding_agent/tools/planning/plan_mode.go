@@ -1,4 +1,4 @@
-package tools
+package planning
 
 import (
 	"context"
@@ -21,7 +21,7 @@ type EnterPlanModeTool struct {
 	manager PlanModeManager
 }
 
-func NewEnterPlanModeTool(manager PlanModeManager) *EnterPlanModeTool {
+func NewEnterPlanModeTool(manager PlanModeManager) agent.Tool {
 	return &EnterPlanModeTool{manager: manager}
 }
 
@@ -44,7 +44,7 @@ type ExitPlanModeTool struct {
 	manager PlanModeManager
 }
 
-func NewExitPlanModeTool(manager PlanModeManager) *ExitPlanModeTool {
+func NewExitPlanModeTool(manager PlanModeManager) agent.Tool {
 	return &ExitPlanModeTool{manager: manager}
 }
 

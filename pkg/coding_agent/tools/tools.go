@@ -2,12 +2,16 @@ package tools
 
 import (
 	"github.com/openmodu/modu/pkg/agent"
+	backendtask "github.com/openmodu/modu/pkg/coding_agent/tools/backend_task"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/bash"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/edit"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/find"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/grep"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/ls"
+	memorytool "github.com/openmodu/modu/pkg/coding_agent/tools/memory"
+	"github.com/openmodu/modu/pkg/coding_agent/tools/planning"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/read"
+	worktreetool "github.com/openmodu/modu/pkg/coding_agent/tools/worktree"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/write"
 )
 
@@ -49,21 +53,21 @@ func (p DefaultProvider) Tools(ctx agent.ToolContext) []agent.Tool {
 	}
 	out = append(out, ctx.ExtraTools...)
 	if ctx.FeatureEnabled(FeatureMemory) {
-		out = append(out, NewMemoryTool(valueAs[MemoryStore](ctx, ValueMemoryStore)))
+		out = append(out, memorytool.NewMemoryTool(valueAs[memorytool.MemoryStore](ctx, ValueMemoryStore)))
 	}
 	if ctx.FeatureEnabled(FeatureTodo) {
-		out = append(out, NewTodoWriteTool(valueAs[TodoStore](ctx, ValueTodoStore)))
+		out = append(out, planning.NewTodoWriteTool(valueAs[planning.TodoStore](ctx, ValueTodoStore)))
 	}
 	if ctx.FeatureEnabled(FeatureTaskOutput) {
-		out = append(out, NewTaskOutputTool(valueAs[BackgroundTaskStore](ctx, ValueTaskStore)))
+		out = append(out, backendtask.NewTaskOutputTool(valueAs[backendtask.BackgroundTaskStore](ctx, ValueTaskStore)))
 	}
 	if ctx.FeatureEnabled(FeaturePlanMode) {
-		planMode := valueAs[PlanModeManager](ctx, ValuePlanMode)
-		out = append(out, NewEnterPlanModeTool(planMode), NewExitPlanModeTool(planMode))
+		planMode := valueAs[planning.PlanModeManager](ctx, ValuePlanMode)
+		out = append(out, planning.NewEnterPlanModeTool(planMode), planning.NewExitPlanModeTool(planMode))
 	}
 	if ctx.FeatureEnabled(FeatureWorktreeMode) {
-		worktree := valueAs[WorktreeManager](ctx, ValueWorktree)
-		out = append(out, NewEnterWorktreeTool(worktree), NewExitWorktreeTool(worktree))
+		worktree := valueAs[worktreetool.WorktreeManager](ctx, ValueWorktree)
+		out = append(out, worktreetool.NewEnterWorktreeTool(worktree), worktreetool.NewExitWorktreeTool(worktree))
 	}
 	return out
 }
@@ -72,8 +76,6 @@ func (p DefaultProvider) Rebind(tool agent.Tool, ctx agent.ToolContext) (agent.T
 	switch tool.Name() {
 	case "read":
 		return read.NewTool(ctx.Cwd), true
-	case "git_preflight":
-		return NewGitPreflightTool(ctx.Cwd), true
 	case "write":
 		return write.NewTool(ctx.Cwd), true
 	case "edit":

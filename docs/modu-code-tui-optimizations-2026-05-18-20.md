@@ -135,7 +135,7 @@ Plan mode was tightened both behaviorally and visually.
 
 Relevant files:
 
-- `pkg/coding_agent/tools/plan_mode.go`
+- `pkg/coding_agent/tools/planning/plan_mode.go`
 - `pkg/coding_agent/plan_worktree.go`
 - `pkg/tui/approval.go`
 - `pkg/tui/plan_worktree_panel.go`

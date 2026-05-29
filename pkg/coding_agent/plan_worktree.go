@@ -11,7 +11,8 @@ import (
 	"time"
 
 	"github.com/openmodu/modu/pkg/agent"
-	"github.com/openmodu/modu/pkg/coding_agent/tools"
+	"github.com/openmodu/modu/pkg/coding_agent/tools/planning"
+	worktreetool "github.com/openmodu/modu/pkg/coding_agent/tools/worktree"
 )
 
 type planModeAdapter struct {
@@ -273,8 +274,8 @@ func (s *CodingSession) replacePlanTools() {
 		s.agent.SetTools(stateTools)
 		return
 	}
-	enter := tools.NewEnterPlanModeTool(planModeAdapter{session: s})
-	exit := tools.NewExitPlanModeTool(planModeAdapter{session: s})
+	enter := planning.NewEnterPlanModeTool(planModeAdapter{session: s})
+	exit := planning.NewExitPlanModeTool(planModeAdapter{session: s})
 	s.activeTools = replaceTool(s.activeTools, enter)
 	s.activeTools = replaceTool(s.activeTools, exit)
 	stateTools := replaceTool(s.agent.GetState().Tools, enter)
@@ -489,8 +490,8 @@ func (s *CodingSession) replaceWorktreeTools() {
 		s.agent.SetTools(stateTools)
 		return
 	}
-	enter := tools.NewEnterWorktreeTool(worktreeAdapter{session: s})
-	exit := tools.NewExitWorktreeTool(worktreeAdapter{session: s})
+	enter := worktreetool.NewEnterWorktreeTool(worktreeAdapter{session: s})
+	exit := worktreetool.NewExitWorktreeTool(worktreeAdapter{session: s})
 	s.activeTools = replaceTool(s.activeTools, enter)
 	s.activeTools = replaceTool(s.activeTools, exit)
 	stateTools := replaceTool(s.agent.GetState().Tools, enter)

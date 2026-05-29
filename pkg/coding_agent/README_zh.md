@@ -48,15 +48,18 @@ pkg/coding_agent/
 ├── messages.go               # 自定义消息类型（Bash/Compaction/Branch/Custom）
 ├── slash_commands.go         # 内置斜杠命令（/model, /compact, /tree 等）
 ├── tools/                    # 内置编码工具
-│   ├── read.go               #   文件读取（行号、分页、图片 base64）
-│   ├── write.go              #   文件写入（自动建目录）
-│   ├── edit.go               #   精确替换编辑（歧义检测、replace_all、diff）
-│   ├── bash.go               #   Shell 命令执行（超时、进程组 kill）
-│   ├── grep.go               #   内容搜索（rg 优先，Go 内置回退）
-│   ├── find.go               #   文件查找（fd 优先，Go 内置回退）
-│   ├── ls.go                 #   目录列表（大小写不敏感排序）
-│   ├── truncate.go           #   输出截断（Head/Tail/Line）
-│   ├── path_utils.go         #   路径解析（~展开、NFD/NFC 兼容）
+│   ├── read/read.go          #   文件读取（行号、分页、图片 base64）
+│   ├── write/write.go        #   文件写入（自动建目录）
+│   ├── edit/edit.go          #   精确替换编辑（歧义检测、replace_all、diff）
+│   ├── bash/bash.go          #   Shell 命令执行（超时、进程组 kill）
+│   ├── grep/grep.go          #   内容搜索（rg 优先，Go 内置回退）
+│   ├── find/find.go          #   文件查找（fd 优先，Go 内置回退）
+│   ├── ls/ls.go              #   目录列表（大小写不敏感排序）
+│   ├── planning/             #   plan mode 和 todo_write
+│   ├── memory/               #   memory 写入工具
+│   ├── worktree/             #   worktree 进入/退出工具
+│   ├── backend_task/         #   后台任务结果查询工具
+│   ├── common/               #   路径解析和输出截断等共享工具逻辑
 │   └── tools.go              #   工具集合工厂（AllTools/CodingTools/ReadOnlyTools）
 ├── session/                  # 会话持久化
 │   ├── entry.go              #   会话条目定义（9 种 EntryType）
@@ -98,7 +101,7 @@ pkg/coding_agent/
 
 | 工具 | 功能 | 关键特性 |
 |------|------|----------|
-| `read` | 文件读取 | 行号格式化、offset/limit 分页、图片自动 base64 |
+| `read` | 文件读取 | 行号格式化、offset/limit 分页、图片自动 base64，兼容 `file_path` alias |
 | `bash` | 命令执行 | 可配置超时（默认 120s）、进程组级 kill、输出尾部截断 |
 | `edit` | 精确编辑 | 精确字符串匹配替换、歧义检测、replace_all、CRLF 兼容 |
 | `write` | 文件写入 | 自动创建父目录、返回写入字节数 |
@@ -279,7 +282,7 @@ type Extension interface {
 
 ### 9. 资源系统
 
-**技能**（Skills）：从 `~/.coding_agent/skills/` 和 `.coding_agent/skills/` 目录发现 Markdown/Text 文件，支持 YAML frontmatter 定义名称、描述、标签，注入系统提示词。
+**技能**（Skills）：从 `~/.coding_agent/skills/` 和 `.coding_agent/skills/` 目录发现 Markdown/Text 文件，支持 YAML frontmatter 定义名称、描述、标签。系统提示词只注入技能索引（名称、描述、路径和 base_dir），正文在显式调用技能或 subagent profile 引用时按需加载。
 
 **Subagent profiles**：从 `~/.coding_agent/agents/` 和 `.coding_agent/agents/` 目录发现 Markdown profile。项目 profile 会覆盖同名全局 profile；发现到至少一个 profile 时，`extension/subagent` 会向模型暴露 `subagent` 和兼容 alias `spawn_subagent` 工具。
 
