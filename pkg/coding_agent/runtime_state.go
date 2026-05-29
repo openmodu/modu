@@ -24,7 +24,6 @@ type RuntimeStateSnapshot struct {
 	Paths        map[string]any    `json:"paths"`
 	Todos        []TodoItem        `json:"todos"`
 	Tasks        []BackgroundTask  `json:"tasks"`
-	HarnessHints int               `json:"harnessHints"`
 }
 
 // cachedGitState holds the last-known git state so that writeRuntimeState
@@ -101,12 +100,6 @@ func (s *CodingSession) RuntimeState() RuntimeStateSnapshot {
 		model["id"] = s.model.ID
 		model["provider"] = s.model.ProviderID
 	}
-	hintCount := 0
-	if s.harness != nil {
-		s.harness.mu.RLock()
-		hintCount = len(s.harness.pendingHints)
-		s.harness.mu.RUnlock()
-	}
 	todos := s.GetTodos()
 	tasks := s.GetBackgroundTasks()
 	return RuntimeStateSnapshot{
@@ -127,7 +120,6 @@ func (s *CodingSession) RuntimeState() RuntimeStateSnapshot {
 			"task_output_tool": s.config.FeatureTaskOutputTool(),
 			"plan_mode":        s.config.FeaturePlanMode(),
 			"worktree_mode":    s.config.FeatureWorktreeMode(),
-			"harness_actions":  s.config.FeatureHarnessActions() && s.config.HarnessEnableActions(),
 		},
 		Counts: map[string]int{
 			"messages": len(s.GetMessages()),
@@ -145,7 +137,6 @@ func (s *CodingSession) RuntimeState() RuntimeStateSnapshot {
 		Paths:        s.RuntimePaths().ToMap(),
 		Todos:        todos,
 		Tasks:        tasks,
-		HarnessHints: hintCount,
 	}
 }
 

@@ -114,7 +114,6 @@ type CodingSession struct {
 	worktreePath       string
 	contextMu          sync.Mutex
 	loadedContexts     map[string]struct{}
-	harness            *harnessState
 
 	// approvalManager handles tool execution approval.
 	approvalManager *ApprovalManager
@@ -301,7 +300,6 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		sessionStarted:  time.Now().UnixMilli(),
 		taskManager:     taskMgr,
 		loadedContexts:  make(map[string]struct{}),
-		harness:         newHarnessState(),
 		approvalManager: approvalMgr,
 	}
 	if err := taskMgr.SetStorePath(cs.RuntimePaths().BackgroundTasksFile); err != nil {
@@ -320,7 +318,6 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	cs.replaceTaskOutputTool()
 	cs.replacePlanTools()
 	cs.replaceWorktreeTools()
-	cs.installConfigHarnessHooks()
 	for _, ctxFile := range resourceSnapshot.ContextFiles {
 		cs.loadedContexts[ctxFile.Path] = struct{}{}
 	}
@@ -351,11 +348,6 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 			return
 		}
 		if event.Type == agent.EventTypeAgentEnd {
-			if errText := strings.TrimSpace(cs.agent.GetState().Error); errText != "" {
-				cs.runHarnessStopFailure(fmt.Errorf("%s", errText))
-			} else {
-				cs.runHarnessStop()
-			}
 			cs.pruneTransientContextMessages()
 			go cs.refreshGitRuntimeState()
 			cs.writeRuntimeState()
@@ -536,7 +528,6 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	}
 
 	cs.installHarnessLayer()
-	cs.runHarnessSessionStart("startup")
 	cs.writeRuntimeState()
 
 	return cs, nil
@@ -582,13 +573,9 @@ func (s *CodingSession) Prompt(ctx context.Context, text string) error {
 		// Check skills when no prompt template claimed the slash command.
 		if !expandedTemplate && s.skillManager != nil {
 			if skill, ok := s.skillManager.Get(cmdName); ok {
-				return s.executeSkill(ctx, input, skill, cmdArgs)
+				return s.executeSkill(ctx, skill, cmdArgs)
 			}
 		}
-	}
-
-	if err := s.runHarnessUserPromptSubmit(text); err != nil {
-		return err
 	}
 
 	// Record to session
@@ -616,7 +603,6 @@ func (s *CodingSession) Close(reason string) {
 	if s.extensions != nil {
 		s.extensions.EmitEvent(agent.Event{Type: agent.EventType("session_shutdown")})
 	}
-	s.runHarnessSessionEnd(reason)
 	s.writeRuntimeState()
 }
 
@@ -978,16 +964,12 @@ func (s *CodingSession) Compact(ctx context.Context) error {
 
 	state := s.agent.GetState()
 
-	if preErr := s.runHarnessPreCompact(len(state.Messages)); preErr != nil {
-		return fmt.Errorf("compaction blocked by harness: %w", preErr)
-	}
 	result, err := compaction.Compact(ctx, state.Messages, compaction.Options{
 		PreserveRecent: s.config.CompactionSettings.PreserveRecentMessages,
 		Model:          s.model,
 		GetAPIKey:      s.getAPIKey,
 		StreamFn:       s.streamFn,
 	})
-	s.runHarnessPostCompact(result, err)
 	if err != nil {
 		return fmt.Errorf("compaction failed: %w", err)
 	}
@@ -1833,14 +1815,10 @@ func memoryContextForScope(store *MemoryStore, scope string) string {
 	return ""
 }
 
-func (s *CodingSession) executeSkill(ctx context.Context, originalInput string, skill *skills.Skill, args string) error {
+func (s *CodingSession) executeSkill(ctx context.Context, skill *skills.Skill, args string) error {
 	task := strings.TrimSpace(args)
 	if task == "" {
 		task = "Use this skill for the user's request."
-	}
-
-	if err := s.runHarnessUserPromptSubmit(originalInput); err != nil {
-		return err
 	}
 
 	s.refreshDynamicSystemPrompt()

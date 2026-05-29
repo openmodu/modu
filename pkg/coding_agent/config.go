@@ -2,10 +2,8 @@ package coding_agent
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/openmodu/modu/pkg/agent"
 )
@@ -70,7 +68,6 @@ type FeatureConfig struct {
 	TaskOutputTool *bool `json:"taskOutputTool,omitempty"`
 	PlanMode       *bool `json:"planMode,omitempty"`
 	WorktreeMode   *bool `json:"worktreeMode,omitempty"`
-	HarnessActions *bool `json:"harnessActions,omitempty"`
 }
 
 type PermissionConfig struct {
@@ -81,80 +78,8 @@ type PermissionConfig struct {
 }
 
 type HarnessConfig struct {
-	// EnableActions allows host-side action dispatch. Defaults to true.
-	EnableActions *bool `json:"enableActions,omitempty"`
 	// BlockTools denies matching tool names before execution.
 	BlockTools []string `json:"blockTools,omitempty"`
-	// CaptureHints strips and stores harness-only hint tags from tool output.
-	CaptureHints *bool `json:"captureHints,omitempty"`
-	// PersistToolResults writes plain-text tool artifacts to the runtime tree.
-	PersistToolResults *bool `json:"persistToolResults,omitempty"`
-	// LogFiles appends JSONL event records for selected harness lifecycle events.
-	LogFiles HarnessLogFiles `json:"logFiles,omitempty"`
-	// ArtifactFiles overwrites the latest structured event snapshot for selected lifecycle events.
-	ArtifactFiles HarnessArtifactFiles `json:"artifactFiles,omitempty"`
-	// BridgeDirs writes one structured event file per occurrence for external watchers.
-	BridgeDirs HarnessBridgeDirs `json:"bridgeDirs,omitempty"`
-	// Actions executes host-side actions for selected lifecycle events.
-	Actions HarnessActions `json:"actions,omitempty"`
-	// ActionPolicy constrains allowed host-side actions.
-	ActionPolicy HarnessActionPolicy `json:"actionPolicy,omitempty"`
-}
-
-type HarnessLogFiles struct {
-	ToolUse    string `json:"toolUse,omitempty"`
-	Compact    string `json:"compact,omitempty"`
-	Subagent   string `json:"subagent,omitempty"`
-	Session    string `json:"session,omitempty"`
-	Permission string `json:"permission,omitempty"`
-}
-
-type HarnessArtifactFiles struct {
-	ToolUse    string `json:"toolUse,omitempty"`
-	Compact    string `json:"compact,omitempty"`
-	Subagent   string `json:"subagent,omitempty"`
-	Session    string `json:"session,omitempty"`
-	Permission string `json:"permission,omitempty"`
-}
-
-type HarnessBridgeDirs struct {
-	ToolUse    string `json:"toolUse,omitempty"`
-	Compact    string `json:"compact,omitempty"`
-	Subagent   string `json:"subagent,omitempty"`
-	Session    string `json:"session,omitempty"`
-	Permission string `json:"permission,omitempty"`
-}
-
-type HarnessActions struct {
-	ToolUse    []HarnessAction `json:"toolUse,omitempty"`
-	Compact    []HarnessAction `json:"compact,omitempty"`
-	Subagent   []HarnessAction `json:"subagent,omitempty"`
-	Session    []HarnessAction `json:"session,omitempty"`
-	Permission []HarnessAction `json:"permission,omitempty"`
-}
-
-type HarnessAction struct {
-	Type      string             `json:"type,omitempty"`
-	Command   string             `json:"command,omitempty"`
-	Args      []string           `json:"args,omitempty"`
-	Dir       string             `json:"dir,omitempty"`
-	TimeoutMs int                `json:"timeoutMs,omitempty"`
-	Retry     HarnessActionRetry `json:"retry,omitempty"`
-	OnFailure string             `json:"onFailure,omitempty"`
-}
-
-type HarnessActionRetry struct {
-	MaxAttempts int `json:"maxAttempts,omitempty"`
-	DelayMs     int `json:"delayMs,omitempty"`
-}
-
-type HarnessActionPolicy struct {
-	RequireAbsoluteCommand bool     `json:"requireAbsoluteCommand,omitempty"`
-	AllowCommandPrefixes   []string `json:"allowCommandPrefixes,omitempty"`
-	DenyCommandPrefixes    []string `json:"denyCommandPrefixes,omitempty"`
-	AllowDirPrefixes       []string `json:"allowDirPrefixes,omitempty"`
-	DenyDirPrefixes        []string `json:"denyDirPrefixes,omitempty"`
-	MaxTimeoutMs           int      `json:"maxTimeoutMs,omitempty"`
 }
 
 // CompactionConfig controls context compaction behavior.
@@ -177,9 +102,6 @@ type RetryConfig struct {
 
 // DefaultConfig returns a config with sensible defaults.
 func DefaultConfig() *Config {
-	enableActions := true
-	captureHints := true
-	persistToolResults := true
 	return &Config{
 		ThinkingLevel:  agent.ThinkingLevelMedium,
 		AutoCompaction: true,
@@ -187,69 +109,18 @@ func DefaultConfig() *Config {
 			MaxContextPercentage:   80.0,
 			PreserveRecentMessages: 4,
 		},
-		Harness: HarnessConfig{
-			EnableActions:      &enableActions,
-			CaptureHints:       &captureHints,
-			PersistToolResults: &persistToolResults,
-			ActionPolicy: HarnessActionPolicy{
-				RequireAbsoluteCommand: true,
-			},
-			LogFiles: HarnessLogFiles{
-				ToolUse:    "logs/tool-use.jsonl",
-				Compact:    "logs/compact.jsonl",
-				Subagent:   "logs/subagent.jsonl",
-				Session:    "logs/session.jsonl",
-				Permission: "logs/permission.jsonl",
-			},
-			ArtifactFiles: HarnessArtifactFiles{
-				ToolUse:    "artifacts/tool-use-latest.json",
-				Compact:    "artifacts/compact-latest.json",
-				Subagent:   "artifacts/subagent-latest.json",
-				Session:    "artifacts/session-latest.json",
-				Permission: "artifacts/permission-latest.json",
-			},
-			BridgeDirs: HarnessBridgeDirs{
-				ToolUse:    "bridge/tool-use",
-				Compact:    "bridge/compact",
-				Subagent:   "bridge/subagent",
-				Session:    "bridge/session",
-				Permission: "bridge/permission",
-			},
-		},
 		Features: FeatureConfig{
 			MemoryTool:     boolPtr(true),
 			TodoTool:       boolPtr(true),
 			TaskOutputTool: boolPtr(false), // opt-in: only needed for background task workflows
 			PlanMode:       boolPtr(true),
 			WorktreeMode:   boolPtr(true),
-			HarnessActions: boolPtr(true),
 		},
 		Permissions: PermissionConfig{},
 	}
 }
 
 func boolPtr(v bool) *bool { return &v }
-
-func (c *Config) HarnessEnableActions() bool {
-	if c == nil || c.Harness.EnableActions == nil {
-		return true
-	}
-	return *c.Harness.EnableActions
-}
-
-func (c *Config) HarnessCaptureHints() bool {
-	if c == nil || c.Harness.CaptureHints == nil {
-		return true
-	}
-	return *c.Harness.CaptureHints
-}
-
-func (c *Config) HarnessPersistToolResults() bool {
-	if c == nil || c.Harness.PersistToolResults == nil {
-		return true
-	}
-	return *c.Harness.PersistToolResults
-}
 
 func featureEnabled(flag *bool) bool {
 	if flag == nil {
@@ -266,13 +137,6 @@ func (c *Config) FeatureTaskOutputTool() bool {
 func (c *Config) FeaturePlanMode() bool { return c == nil || featureEnabled(c.Features.PlanMode) }
 func (c *Config) FeatureWorktreeMode() bool {
 	return c == nil || featureEnabled(c.Features.WorktreeMode)
-}
-func (c *Config) FeatureHarnessActions() bool {
-	return c == nil || featureEnabled(c.Features.HarnessActions)
-}
-
-func (a HarnessAction) normalizedType() string {
-	return strings.ToLower(strings.TrimSpace(a.Type))
 }
 
 // LoadConfig loads configuration from global and project-level settings files.
@@ -301,103 +165,6 @@ func LoadConfig(agentDir, cwd string) (*Config, error) {
 }
 
 func ValidateConfig(cfg *Config) error {
-	if cfg == nil {
-		return nil
-	}
-	if err := validateHarnessConfig(cfg.Harness); err != nil {
-		return err
-	}
-	return nil
-}
-
-func validateHarnessConfig(cfg HarnessConfig) error {
-	check := func(actions []HarnessAction) error {
-		for _, action := range actions {
-			if action.normalizedType() != "exec" {
-				continue
-			}
-			if action.TimeoutMs < 0 {
-				return fmt.Errorf("harness action timeoutMs must be >= 0")
-			}
-			switch strings.ToLower(strings.TrimSpace(action.OnFailure)) {
-			case "", "continue", "stop":
-			default:
-				return fmt.Errorf("harness action onFailure must be continue or stop")
-			}
-			if action.Retry.MaxAttempts < 0 {
-				return fmt.Errorf("harness action retry.maxAttempts must be >= 0")
-			}
-			if action.Retry.DelayMs < 0 {
-				return fmt.Errorf("harness action retry.delayMs must be >= 0")
-			}
-			if cfg.ActionPolicy.MaxTimeoutMs > 0 && action.TimeoutMs > cfg.ActionPolicy.MaxTimeoutMs {
-				return fmt.Errorf("harness action timeout exceeds policy: %d > %d", action.TimeoutMs, cfg.ActionPolicy.MaxTimeoutMs)
-			}
-			cmd := strings.TrimSpace(action.Command)
-			if cmd == "" || strings.Contains(cmd, "{{") {
-				goto checkDir
-			}
-			if err := validateHarnessActionCommand(cfg.ActionPolicy, cmd); err != nil {
-				return err
-			}
-		checkDir:
-			dir := strings.TrimSpace(action.Dir)
-			if dir == "" || strings.Contains(dir, "{{") {
-				continue
-			}
-			if !filepath.IsAbs(dir) {
-				continue
-			}
-			for _, denied := range cfg.ActionPolicy.DenyDirPrefixes {
-				if denied = strings.TrimSpace(denied); denied != "" && strings.HasPrefix(dir, denied) {
-					return fmt.Errorf("harness action dir denied by policy: %s", dir)
-				}
-			}
-			if len(cfg.ActionPolicy.AllowDirPrefixes) > 0 {
-				allowed := false
-				for _, prefix := range cfg.ActionPolicy.AllowDirPrefixes {
-					if prefix = strings.TrimSpace(prefix); prefix != "" && strings.HasPrefix(dir, prefix) {
-						allowed = true
-						break
-					}
-				}
-				if !allowed {
-					return fmt.Errorf("harness action dir not allowed by policy: %s", dir)
-				}
-			}
-		}
-		return nil
-	}
-	if err := check(cfg.Actions.ToolUse); err != nil {
-		return err
-	}
-	if err := check(cfg.Actions.Compact); err != nil {
-		return err
-	}
-	return check(cfg.Actions.Subagent)
-}
-
-func validateHarnessActionCommand(policy HarnessActionPolicy, cmd string) error {
-	if policy.RequireAbsoluteCommand && !filepath.IsAbs(cmd) {
-		return fmt.Errorf("harness action command must be absolute: %s", cmd)
-	}
-	for _, denied := range policy.DenyCommandPrefixes {
-		if denied = strings.TrimSpace(denied); denied != "" && strings.HasPrefix(cmd, denied) {
-			return fmt.Errorf("harness action command denied by policy: %s", cmd)
-		}
-	}
-	if len(policy.AllowCommandPrefixes) > 0 {
-		allowed := false
-		for _, prefix := range policy.AllowCommandPrefixes {
-			if prefix = strings.TrimSpace(prefix); prefix != "" && strings.HasPrefix(cmd, prefix) {
-				allowed = true
-				break
-			}
-		}
-		if !allowed {
-			return fmt.Errorf("harness action command not allowed by policy: %s", cmd)
-		}
-	}
 	return nil
 }
 
