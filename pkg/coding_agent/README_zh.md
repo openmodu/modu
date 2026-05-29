@@ -48,13 +48,16 @@ pkg/coding_agent/
 ├── messages.go               # 自定义消息类型（Bash/Compaction/Branch/Custom）
 ├── slash_commands.go         # 内置斜杠命令（/model, /compact, /tree 等）
 ├── tools/                    # 内置编码工具
-│   ├── read.go               #   文件读取（行号、分页、图片 base64）
-│   ├── write.go              #   文件写入（自动建目录）
-│   ├── edit.go               #   精确替换编辑（歧义检测、replace_all、diff）
-│   ├── bash.go               #   Shell 命令执行（超时、进程组 kill）
-│   ├── grep.go               #   内容搜索（rg 优先，Go 内置回退）
-│   ├── find.go               #   文件查找（fd 优先，Go 内置回退）
-│   ├── ls.go                 #   目录列表（大小写不敏感排序）
+│   ├── read/read.go          #   文件读取（行号、分页、图片 base64）
+│   ├── write/write.go        #   文件写入（自动建目录）
+│   ├── edit/edit.go          #   精确替换编辑（歧义检测、replace_all、diff）
+│   ├── bash/bash.go          #   Shell 命令执行（超时、进程组 kill）
+│   ├── grep/grep.go          #   内容搜索（rg 优先，Go 内置回退）
+│   ├── find/find.go          #   文件查找（fd 优先，Go 内置回退）
+│   ├── ls/ls.go              #   目录列表（大小写不敏感排序）
+│   ├── planning/             #   plan mode 和 todo_write
+│   ├── memory/               #   memory 写入工具
+│   ├── worktree/             #   worktree 进入/退出工具
 │   ├── truncate.go           #   输出截断（Head/Tail/Line）
 │   ├── path_utils.go         #   路径解析（~展开、NFD/NFC 兼容）
 │   └── tools.go              #   工具集合工厂（AllTools/CodingTools/ReadOnlyTools）

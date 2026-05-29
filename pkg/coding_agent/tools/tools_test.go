@@ -2,9 +2,7 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,6 +14,7 @@ import (
 	"github.com/openmodu/modu/pkg/coding_agent/tools/find"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/grep"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/ls"
+	"github.com/openmodu/modu/pkg/coding_agent/tools/planning"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/read"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/write"
 	"github.com/openmodu/modu/pkg/types"
@@ -394,23 +393,23 @@ func TestFindTool(t *testing.T) {
 }
 
 type testTodoStore struct {
-	todos []TodoItem
+	todos []planning.TodoItem
 }
 
-func (s *testTodoStore) GetTodos() []TodoItem {
-	out := make([]TodoItem, len(s.todos))
+func (s *testTodoStore) GetTodos() []planning.TodoItem {
+	out := make([]planning.TodoItem, len(s.todos))
 	copy(out, s.todos)
 	return out
 }
 
-func (s *testTodoStore) SetTodos(items []TodoItem) {
-	s.todos = make([]TodoItem, len(items))
+func (s *testTodoStore) SetTodos(items []planning.TodoItem) {
+	s.todos = make([]planning.TodoItem, len(items))
 	copy(s.todos, items)
 }
 
 func TestTodoWriteTool(t *testing.T) {
 	store := &testTodoStore{}
-	tool := NewTodoWriteTool(store)
+	tool := planning.NewTodoWriteTool(store)
 
 	result, err := tool.Execute(context.Background(), "todo-1", map[string]any{
 		"todos": []any{
@@ -433,7 +432,7 @@ func TestTodoWriteTool(t *testing.T) {
 
 func TestTodoWriteToolRejectsMultipleInProgress(t *testing.T) {
 	store := &testTodoStore{}
-	tool := NewTodoWriteTool(store)
+	tool := planning.NewTodoWriteTool(store)
 
 	result, err := tool.Execute(context.Background(), "todo-2", map[string]any{
 		"todos": []any{
@@ -512,58 +511,6 @@ func TestDefaultProviderBuildsAndRebindsTools(t *testing.T) {
 	_, ok = provider.Rebind(testUnknownTool{}, agent.ToolContext{Cwd: "/tmp/b"})
 	if ok {
 		t.Fatal("expected unknown tool not to rebind")
-	}
-}
-
-func TestGitPreflightTool(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git not available")
-	}
-	dir := t.TempDir()
-	run := func(args ...string) {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
-		}
-	}
-	run("init")
-	run("config", "user.email", "test@example.com")
-	run("config", "user.name", "test")
-	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("one\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	run("add", "a.txt")
-	run("commit", "-m", "init")
-	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("one\ntwo\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "b.txt"), []byte("new\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	run("add", "a.txt")
-
-	tool := NewGitPreflightTool(dir)
-	result, err := tool.Execute(context.Background(), "git-1", map[string]any{}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var state GitPreflightState
-	if err := json.Unmarshal([]byte(extractText(result.Content)), &state); err != nil {
-		t.Fatal(err)
-	}
-	if !state.InGitRepository || state.RepoRoot == "" {
-		t.Fatalf("unexpected git state: %#v", state)
-	}
-	if state.StagedStats.Files == 0 {
-		t.Fatalf("expected staged stats, got %#v", state.StagedStats)
-	}
-	if len(state.UntrackedFiles) != 1 || state.UntrackedFiles[0] != "b.txt" {
-		t.Fatalf("expected untracked b.txt, got %#v", state.UntrackedFiles)
-	}
-	if state.LastCommit == nil || state.LastCommit.Hash == "" {
-		t.Fatalf("expected last commit, got %#v", state.LastCommit)
 	}
 }
 

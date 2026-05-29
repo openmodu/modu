@@ -1629,6 +1629,42 @@ func TestRuntimeStateFileAndJSON(t *testing.T) {
 	}
 }
 
+func TestGitRuntimeStateInspect(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	dir := t.TempDir()
+	initGitRepo(t, dir)
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hello\nworld\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "scratch.txt"), []byte("new\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("git", "add", "README.md")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add failed: %v\n%s", err, string(out))
+	}
+
+	session := &CodingSession{}
+	state := session.gitRuntimeStateForCwd(dir)
+	if state["available"] != true || state["inGitRepository"] != true {
+		t.Fatalf("unexpected git state: %#v", state)
+	}
+	if stats, ok := state["stagedStats"].(map[string]any); !ok || stats["files"].(float64) == 0 {
+		t.Fatalf("expected staged stats, got %#v", state["stagedStats"])
+	}
+	untracked, ok := state["untrackedFiles"].([]any)
+	if !ok || len(untracked) != 1 || untracked[0] != "scratch.txt" {
+		t.Fatalf("expected scratch.txt as untracked, got %#v", state["untrackedFiles"])
+	}
+	if last, ok := state["lastCommit"].(map[string]any); !ok || last["hash"] == "" {
+		t.Fatalf("expected last commit, got %#v", state["lastCommit"])
+	}
+}
+
 func TestRuntimeStateGitRefreshCanRunAsync(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")

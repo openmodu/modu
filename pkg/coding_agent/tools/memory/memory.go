@@ -1,4 +1,4 @@
-package tools
+package memory
 
 import (
 	"context"
@@ -7,10 +7,6 @@ import (
 	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/types"
 )
-
-func init() {
-	// Let the session instantiate the tool since it requires the MemoryStore
-}
 
 // MemoryStore defines the interface for the backend storage used by the memory tool.
 type MemoryStore interface {
@@ -27,7 +23,7 @@ type MemoryTool struct {
 }
 
 // NewMemoryTool creates a new memory tool instance.
-func NewMemoryTool(store MemoryStore) *MemoryTool {
+func NewMemoryTool(store MemoryStore) agent.Tool {
 	return &MemoryTool{store: store}
 }
 
