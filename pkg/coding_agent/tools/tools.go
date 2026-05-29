@@ -2,6 +2,7 @@ package tools
 
 import (
 	"github.com/openmodu/modu/pkg/agent"
+	backendtask "github.com/openmodu/modu/pkg/coding_agent/tools/backend_task"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/bash"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/edit"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/find"
@@ -58,7 +59,7 @@ func (p DefaultProvider) Tools(ctx agent.ToolContext) []agent.Tool {
 		out = append(out, planning.NewTodoWriteTool(valueAs[planning.TodoStore](ctx, ValueTodoStore)))
 	}
 	if ctx.FeatureEnabled(FeatureTaskOutput) {
-		out = append(out, NewTaskOutputTool(valueAs[BackgroundTaskStore](ctx, ValueTaskStore)))
+		out = append(out, backendtask.NewTaskOutputTool(valueAs[backendtask.BackgroundTaskStore](ctx, ValueTaskStore)))
 	}
 	if ctx.FeatureEnabled(FeaturePlanMode) {
 		planMode := valueAs[planning.PlanModeManager](ctx, ValuePlanMode)

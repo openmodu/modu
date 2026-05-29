@@ -58,8 +58,8 @@ pkg/coding_agent/
 │   ├── planning/             #   plan mode 和 todo_write
 │   ├── memory/               #   memory 写入工具
 │   ├── worktree/             #   worktree 进入/退出工具
-│   ├── truncate.go           #   输出截断（Head/Tail/Line）
-│   ├── path_utils.go         #   路径解析（~展开、NFD/NFC 兼容）
+│   ├── backend_task/         #   后台任务结果查询工具
+│   ├── common/               #   路径解析和输出截断等共享工具逻辑
 │   └── tools.go              #   工具集合工厂（AllTools/CodingTools/ReadOnlyTools）
 ├── session/                  # 会话持久化
 │   ├── entry.go              #   会话条目定义（9 种 EntryType）
