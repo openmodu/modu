@@ -15,10 +15,10 @@ import (
 	"github.com/openmodu/modu/pkg/coding_agent/extension"
 	subagentext "github.com/openmodu/modu/pkg/coding_agent/extension/subagent"
 	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/session"
-	"github.com/openmodu/modu/pkg/coding_agent/skills"
 	"github.com/openmodu/modu/pkg/coding_agent/subagent"
 	"github.com/openmodu/modu/pkg/coding_agent/tools"
 	"github.com/openmodu/modu/pkg/providers"
+	"github.com/openmodu/modu/pkg/skills"
 	"github.com/openmodu/modu/pkg/types"
 )
 
