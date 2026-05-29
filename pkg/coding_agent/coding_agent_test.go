@@ -3082,7 +3082,7 @@ func TestHarnessHintStrippedAndStored(t *testing.T) {
 	}
 }
 
-func TestHarnessPathsToolAndPlanFile(t *testing.T) {
+func TestHarnessPlanFileReadable(t *testing.T) {
 	dir := t.TempDir()
 	agentDir := filepath.Join(t.TempDir(), ".coding_agent")
 	session, err := NewCodingSession(CodingSessionOptions{
@@ -3095,32 +3095,21 @@ func TestHarnessPathsToolAndPlanFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var harnessPathsTool, readTool agent.Tool
+	var readTool agent.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		switch tool.Name() {
-		case "harness_paths":
-			harnessPathsTool = tool
 		case "read":
 			readTool = tool
 		}
 	}
-	if harnessPathsTool == nil || readTool == nil {
-		t.Fatalf("expected harness_paths and read tools, got %v", session.GetActiveToolNames())
+	if readTool == nil {
+		t.Fatalf("expected read tool, got %v", session.GetActiveToolNames())
 	}
 
 	session.ExitPlanMode("ship feature safely", nil)
 	paths := session.RuntimePaths()
 	if _, err := os.Stat(paths.PlanFile); err != nil {
 		t.Fatalf("expected plan file to exist: %v", err)
-	}
-
-	result, err := harnessPathsTool.Execute(context.Background(), "paths-1", map[string]any{}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	details, _ := result.Details.(map[string]any)
-	if details["plan_file"] != paths.PlanFile {
-		t.Fatalf("expected plan_file detail %q, got %#v", paths.PlanFile, details)
 	}
 
 	readResult, err := readTool.Execute(context.Background(), "read-plan", map[string]any{"path": paths.PlanFile}, nil)

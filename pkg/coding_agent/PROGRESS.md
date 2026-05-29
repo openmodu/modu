@@ -57,7 +57,7 @@ High-priority gaps identified before this round:
 - Marked dynamic nested-context messages as transient so they do not persist into long-term session history or saved transcripts.
 - Added a lightweight session-scoped harness hook layer around tool execution.
 - Added a harness-only hint side channel by stripping `<modu-code-hint .../>` tags from tool-visible text output while recording them for the host runtime.
-- Added harness-managed runtime path exposure through a new `harness_paths` tool and session API.
+- Removed the agent-facing `harness_paths` tool; harness runtime paths remain available through session/runtime state APIs.
 - Persisted the latest recorded plan to a harness-managed plan file under the runtime `plans/` tree.
 - Extended harness hooks with compaction lifecycle callbacks (`PreCompact` / `PostCompact`).
 - Extended harness hooks with subagent lifecycle callbacks (`SubagentStart` / `SubagentStop`).

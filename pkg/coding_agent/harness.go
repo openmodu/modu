@@ -17,7 +17,6 @@ import (
 
 	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/compaction"
-	"github.com/openmodu/modu/pkg/coding_agent/tools"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -90,10 +89,6 @@ func (p HarnessRuntimePaths) ToMap() map[string]any {
 		"global_memory_dir":       p.GlobalMemoryDir,
 		"project_memory_dir":      p.ProjectMemoryDir,
 	}
-}
-
-func (s *CodingSession) HarnessPathsMap() map[string]any {
-	return s.RuntimePaths().ToMap()
 }
 
 type harnessState struct {
@@ -454,8 +449,6 @@ func (s *CodingSession) RuntimePaths() HarnessRuntimePaths {
 }
 
 func (s *CodingSession) installHarnessLayer() {
-	pathsTool := tools.NewHarnessPathsTool(s)
-	s.activeTools = replaceTool(s.activeTools, pathsTool)
 	s.activeTools = wrapHarnessTools(s.activeTools, s)
 	s.agent.SetTools(s.activeTools)
 }
