@@ -279,7 +279,7 @@ type Extension interface {
 
 ### 9. 资源系统
 
-**技能**（Skills）：从 `~/.coding_agent/skills/` 和 `.coding_agent/skills/` 目录发现 Markdown/Text 文件，支持 YAML frontmatter 定义名称、描述、标签，注入系统提示词。
+**技能**（Skills）：从 `~/.coding_agent/skills/` 和 `.coding_agent/skills/` 目录发现 Markdown/Text 文件，支持 YAML frontmatter 定义名称、描述、标签。系统提示词只注入技能索引（名称、描述、路径和 base_dir），正文在显式调用技能或 subagent profile 引用时按需加载。
 
 **Subagent profiles**：从 `~/.coding_agent/agents/` 和 `.coding_agent/agents/` 目录发现 Markdown profile。项目 profile 会覆盖同名全局 profile；发现到至少一个 profile 时，`extension/subagent` 会向模型暴露 `subagent` 和兼容 alias `spawn_subagent` 工具。
 

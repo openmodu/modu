@@ -1,12 +1,13 @@
 // Package skills provides local skill discovery and loading.
 //
 // Skills are Markdown files (with optional YAML frontmatter) discovered from
-// configurable roots. Discovered skills are injected into the agent system
-// prompt so the model knows what specialized instructions are available.
+// configurable roots. Discovered skill metadata is injected into the agent
+// system prompt so the model knows what specialized instructions are available.
 package skills
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -22,6 +23,9 @@ const (
 	MaxNameLength = 64
 	// MaxDescriptionLength caps a skill description; longer ones are rejected.
 	MaxDescriptionLength = 1024
+	// MaxMetadataBytes caps the prefix read during discovery. Skill bodies are
+	// loaded separately when a skill is invoked.
+	MaxMetadataBytes = 64 * 1024
 )
 
 // namePattern validates skill names: alphanumeric segments joined by hyphens.
@@ -36,7 +40,8 @@ type PathRef struct {
 	Source string
 }
 
-// Skill represents a discovered skill with its metadata and content.
+// Skill represents a discovered skill. Discovery populates metadata and path
+// fields only; Content is loaded lazily by Manager.Get.
 type Skill struct {
 	Name                   string            `json:"name"`
 	Description            string            `json:"description"`
@@ -119,8 +124,18 @@ func (m *Manager) Discover() error {
 func (m *Manager) Get(name string) (*Skill, bool) {
 	_ = m.Discover()
 	m.mu.RLock()
-	defer m.mu.RUnlock()
 	s, ok := m.skills[name]
+	if ok {
+		s = cloneSkill(s)
+	}
+	m.mu.RUnlock()
+	if !ok {
+		return nil, false
+	}
+	if err := loadSkillContent(s); err != nil {
+		slog.Warn("failed to load skill content", "source", s.Source, "path", s.FilePath, "name", s.Name, "error", err)
+		return nil, false
+	}
 	return s, ok
 }
 
@@ -131,7 +146,7 @@ func (m *Manager) List() []*Skill {
 	defer m.mu.RUnlock()
 	result := make([]*Skill, 0, len(m.skills))
 	for _, s := range m.skills {
-		result = append(result, s)
+		result = append(result, cloneSkill(s))
 	}
 	return result
 }
@@ -210,7 +225,7 @@ func loadPathIntoMap(dst map[string]*Skill, path, source string) error {
 	if !info.Mode().IsRegular() || !strings.HasSuffix(filepath.Base(path), ".md") {
 		return nil
 	}
-	skill, err := loadSkillFile(path, source)
+	skill, err := loadSkillMetadataFile(path, source)
 	if err != nil {
 		return err
 	}
@@ -292,7 +307,7 @@ func loadFromDirInternal(dst map[string]*Skill, dir, source string, includeRootF
 			continue
 		}
 
-		skill, err := loadSkillFile(fullPath, source)
+		skill, err := loadSkillMetadataFile(fullPath, source)
 		if err != nil {
 			continue // Skip malformed skills
 		}
@@ -306,13 +321,12 @@ func loadFromDirInternal(dst map[string]*Skill, dir, source string, includeRootF
 	return nil
 }
 
-func loadSkillFile(path, source string) (*Skill, error) {
-	data, err := os.ReadFile(path)
+func loadSkillMetadataFile(path, source string) (*Skill, error) {
+	fields, ok, err := readSkillMetadataFields(path)
 	if err != nil {
 		return nil, err
 	}
 
-	content := string(data)
 	skillDir := filepath.Dir(path)
 	isSkillMd := filepath.Base(path) == "SKILL.md"
 	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
@@ -324,22 +338,15 @@ func loadSkillFile(path, source string) (*Skill, error) {
 
 	skill := &Skill{
 		Name:     name,
-		Content:  content,
 		FilePath: path,
 		BaseDir:  skillDir,
 		Source:   source,
 		Metadata: make(map[string]string),
 	}
 
-	fields, body, ok := utils.ParseFrontmatter(content)
 	if ok {
-		skill.Content = body
 		applyFrontmatter(fields, skill)
 	}
-
-	// Replace relative paths that exist on disk with absolute paths,
-	// so the LLM never needs to resolve them manually.
-	skill.Content = resolveRelativePaths(skill.Content, skillDir)
 
 	// SKILL.md skills must declare a description per the Agent Skills spec.
 	// Flat .md files without frontmatter remain valid for backward compat.
@@ -355,9 +362,59 @@ func loadSkillFile(path, source string) (*Skill, error) {
 	return skill, nil
 }
 
+func readSkillMetadataFields(path string) (map[string]string, bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, false, err
+	}
+	defer f.Close()
+
+	data, err := io.ReadAll(io.LimitReader(f, MaxMetadataBytes))
+	if err != nil {
+		return nil, false, err
+	}
+	fields, _, ok := utils.ParseFrontmatter(string(data))
+	return fields, ok, nil
+}
+
+func loadSkillContent(skill *Skill) error {
+	if skill == nil {
+		return fmt.Errorf("skill is nil")
+	}
+	data, err := os.ReadFile(skill.FilePath)
+	if err != nil {
+		return err
+	}
+	content := string(data)
+	if _, body, ok := utils.ParseFrontmatter(content); ok {
+		content = body
+	}
+	// Replace relative paths that exist on disk with absolute paths,
+	// so the LLM never needs to resolve them manually.
+	skill.Content = resolveRelativePaths(content, skill.BaseDir)
+	return nil
+}
+
+func cloneSkill(s *Skill) *Skill {
+	if s == nil {
+		return nil
+	}
+	clone := *s
+	if len(s.Tags) > 0 {
+		clone.Tags = append([]string(nil), s.Tags...)
+	}
+	if len(s.Metadata) > 0 {
+		clone.Metadata = make(map[string]string, len(s.Metadata))
+		for k, v := range s.Metadata {
+			clone.Metadata[k] = v
+		}
+	}
+	return &clone
+}
+
 // validateSkill enforces name and description limits. An empty description is
 // tolerated here (flat .md backward-compat); the SKILL.md description-required
-// rule is checked separately in loadSkillFile.
+// rule is checked separately in loadSkillMetadataFile.
 func validateSkill(s *Skill) error {
 	if s.Name == "" {
 		return fmt.Errorf("name is required")
