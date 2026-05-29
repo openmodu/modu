@@ -47,6 +47,10 @@ func (t *ReadTool) Parameters() any {
 				"type":        "string",
 				"description": "The file path to read (absolute or relative to cwd)",
 			},
+			"file_path": map[string]any{
+				"type":        "string",
+				"description": "Alias for path, accepted for compatibility.",
+			},
 			"offset": map[string]any{
 				"type":        "integer",
 				"description": "Line number to start reading from (1-based). Optional.",
@@ -56,12 +60,18 @@ func (t *ReadTool) Parameters() any {
 				"description": "Maximum number of lines to read. Optional, defaults to 2000.",
 			},
 		},
-		"required": []string{"path"},
+		"anyOf": []map[string]any{
+			{"required": []string{"path"}},
+			{"required": []string{"file_path"}},
+		},
 	}
 }
 
 func (t *ReadTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
 	pathArg, _ := args["path"].(string)
+	if pathArg == "" {
+		pathArg, _ = args["file_path"].(string)
+	}
 	if pathArg == "" {
 		return common.ErrorResult("path is required"), nil
 	}

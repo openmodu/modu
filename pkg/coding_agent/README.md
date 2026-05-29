@@ -98,7 +98,7 @@ pkg/coding_agent/
 
 | 工具 | 功能 | 关键特性 |
 |------|------|----------|
-| `read` | 文件读取 | 行号格式化、offset/limit 分页、图片自动 base64 |
+| `read` | 文件读取 | 行号格式化、offset/limit 分页、图片自动 base64，兼容 `file_path` alias |
 | `bash` | 命令执行 | 可配置超时（默认 120s）、进程组级 kill、输出尾部截断 |
 | `edit` | 精确编辑 | 精确字符串匹配替换、歧义检测、replace_all、CRLF 兼容 |
 | `write` | 文件写入 | 自动创建父目录、返回写入字节数 |

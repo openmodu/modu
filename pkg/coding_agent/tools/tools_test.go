@@ -136,6 +136,34 @@ func TestReadTool(t *testing.T) {
 	}
 }
 
+func TestReadToolAcceptsFilePathAlias(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "test.txt")
+	os.WriteFile(filePath, []byte("line1\nline2\n"), 0o644)
+
+	tool := read.NewTool(dir)
+	args, err := agent.ValidateToolArguments(types.ToolDefinition{
+		Name:       tool.Name(),
+		Parameters: tool.Parameters(),
+	}, types.ToolCallContent{
+		Name: "read",
+		Arguments: map[string]any{
+			"file_path": "test.txt",
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected file_path alias to validate: %v", err)
+	}
+
+	result, err := tool.Execute(context.Background(), "test-id", args, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := extractText(result.Content); !strings.Contains(text, "line1") {
+		t.Fatalf("expected content to contain line1, got: %s", text)
+	}
+}
+
 func TestReadToolWithOffset(t *testing.T) {
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "test.txt")
