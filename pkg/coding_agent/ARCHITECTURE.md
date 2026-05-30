@@ -162,9 +162,9 @@ intent is honest, not aspirational.
    *CodingSession)` is L5. The engine keeps a `self *CodingSession` back-pointer
    for the few callbacks (slash-command handlers) whose signature needs the
    façade.
-3. **`harness.go` has split personality.** It mixes `RuntimePaths` (foundation),
-   the tool wrapper (kernel↔tools glue), and session-event emitters (kernel).
-   Three layers in one file.
+3. ~~**`harness.go` has split personality.**~~ **Resolved.** Split by concern
+   into `runtime_paths.go` (the on-disk layout), `tool_gate.go` (the kernel↔tools
+   pre-execution gate), and the session-event emitters folded into `events.go`.
 4. ~~**Services reach the kernel by back-reference.**~~ **Resolved.** Every L2
    service is now a package reaching the kernel through a narrow Host interface
    (`bash.Host`, `plan.Host`, `worktree.Host`, `contextmgr.Host`); `todo` needs
@@ -173,9 +173,13 @@ intent is honest, not aspirational.
    `PlanFile`/`PlansDir`, `*ModeEnabled`, `EmitWorktree*`). Tool registration
    (`replace*Tools`) stays kernel-side, with the service controller supplied as
    the tool's manager.
-5. **No service registry.** The kernel holds ~7 concrete component fields plus
-   ~25 other fields. A registry keyed by contract would make the kernel agnostic
-   to which services are present (and make features truly optional).
+5. **No service registry — and that is the right call (not a violation).** The
+   kernel holds ~7 concrete, typed component fields (`ctxMgr`, `bash`, `todos`,
+   `taskManager`, `plan`, `worktree`, `extPrompts`). A registry keyed by contract
+   was considered and rejected: the services are *always* present (only their
+   *tools* are feature-gated, via `replace*Tools`), so a registry would trade
+   type-safe direct access (`s.plan.X`) for untyped map lookups plus nil checks —
+   more ceremony for optionality the code does not need. Direct fields stay.
 
 ## 5. What is already aligned
 

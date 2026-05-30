@@ -58,3 +58,88 @@ type SessionEvent struct {
 }
 
 const sessionEventChannel = "session_event"
+
+type HarnessToolCall struct {
+	ToolName string
+	Args     map[string]any
+}
+
+type HarnessSubagentRun struct {
+	Name       string `json:"name"`
+	Task       string `json:"task"`
+	Background bool   `json:"background"`
+}
+
+func (s *engine) runHarnessPermissionRequest(call HarnessToolCall) {
+	s.emitSessionEvent(SessionEvent{
+		Type:     SessionEventPermissionReq,
+		ToolName: call.ToolName,
+	})
+}
+
+func (s *engine) runHarnessPermissionDenied(call HarnessToolCall, reason string) {
+	s.emitSessionEvent(SessionEvent{
+		Type:     SessionEventPermissionDeny,
+		ToolName: call.ToolName,
+		Reason:   reason,
+	})
+}
+
+func (s *engine) runHarnessCwdChanged(oldCwd, newCwd string) {
+	s.emitSessionEvent(SessionEvent{
+		Type:   SessionEventCwdChanged,
+		OldCwd: oldCwd,
+		NewCwd: newCwd,
+	})
+}
+
+func (s *engine) runHarnessWorktreeCreate(path string) {
+	s.emitSessionEvent(SessionEvent{
+		Type: SessionEventWorktreeCreate,
+		Path: path,
+	})
+}
+
+func (s *engine) runHarnessWorktreeRemove(path string) {
+	s.emitSessionEvent(SessionEvent{
+		Type: SessionEventWorktreeRemove,
+		Path: path,
+	})
+}
+
+func (s *engine) OnSubagentStart(name, task string, background bool) {
+	s.onSubagentStart(HarnessSubagentRun{Name: name, Task: task, Background: background})
+}
+
+func (s *engine) OnSubagentStop(name, task string, background bool, result string, err error) {
+	s.onSubagentStop(HarnessSubagentRun{Name: name, Task: task, Background: background}, result, err)
+}
+
+func (s *engine) onSubagentStart(run HarnessSubagentRun) {
+	s.emitSessionEvent(SessionEvent{
+		Type:               SessionEventSubagentStart,
+		SubagentName:       run.Name,
+		SubagentTask:       run.Task,
+		SubagentBackground: run.Background,
+	})
+}
+
+func (s *engine) onSubagentStop(run HarnessSubagentRun, result string, err error) {
+	evt := SessionEvent{
+		Type:               SessionEventSubagentStop,
+		SubagentName:       run.Name,
+		SubagentTask:       run.Task,
+		SubagentBackground: run.Background,
+	}
+	if result != "" {
+		preview := result
+		if len(preview) > 240 {
+			preview = preview[:237] + "..."
+		}
+		evt.SubagentResult = preview
+	}
+	if err != nil {
+		evt.ErrorMessage = err.Error()
+	}
+	s.emitSessionEvent(evt)
+}
