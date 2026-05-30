@@ -83,6 +83,10 @@ enough to implement, verify, and commit independently.
 - Default TUI path moved to Bubble Tea inline runtime: Bubble Tea renders the
   bottom input/selector/approval widget, while completed transcript blocks are
   printed above the program into terminal scrollback for selection/copy.
+- Bubble Tea inline runtime now prints the Agenvoy-style bordered multi-line header
+  information into scrollback on startup and after model switches, with Telegram
+  shown as `channel` instead of `mode`, without keeping a persistent header row
+  in the live renderer.
 
 ## Next
 
@@ -143,3 +147,6 @@ enough to implement, verify, and commit independently.
   passed after restoring the default inline selectable TUI path.
 - 2026-05-30: `go test ./cmd/modu_code ./cmd/modu_code/internal/provider ./pkg/tui ./pkg/slash ./pkg/coding_agent`
   passed for the Bubble Tea inline selectable-scrollback runtime.
+- 2026-05-30: `go test ./cmd/modu_code ./cmd/modu_code/internal/provider ./pkg/tui ./pkg/slash ./pkg/coding_agent`
+  passed for the non-persistent multi-line inline header, channel labeling, and
+  input prompt marker update.

@@ -335,6 +335,9 @@ func (b *bubbleTUI) Init() tea.Cmd {
 	if b.session != nil {
 		b.session.RefreshRuntimeStateAsync()
 	}
+	if b.inline {
+		return tea.Sequence(b.printInlineHeaderCmd(), bubbleTick())
+	}
 	return bubbleTick()
 }
 
@@ -378,8 +381,7 @@ func (b *bubbleTUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case bubbleShellDoneMsg:
 		return b.handleShellDone(msg)
 	case bubbleModelSwitchDoneMsg:
-		b.handleModelSwitchDone(msg)
-		return b, nil
+		return b, b.handleModelSwitchDone(msg)
 	case bubbleExternalInfoMsg:
 		block := uiBlock{Kind: "section", Title: "modu_code", Content: msg.text, Timestamp: time.Now()}
 		b.appendBlock(block)
@@ -1191,11 +1193,11 @@ func (b *bubbleTUI) confirmModelSelect() tea.Cmd {
 	}
 }
 
-func (b *bubbleTUI) handleModelSwitchDone(msg bubbleModelSwitchDoneMsg) {
+func (b *bubbleTUI) handleModelSwitchDone(msg bubbleModelSwitchDoneMsg) tea.Cmd {
 	if msg.err != nil {
 		b.model.errMsg = msg.err.Error()
 		b.model.statusMsg = "model unchanged"
-		return
+		return nil
 	}
 	if b.session != nil {
 		b.model.model = b.session.GetModel()
@@ -1206,6 +1208,7 @@ func (b *bubbleTUI) handleModelSwitchDone(msg bubbleModelSwitchDoneMsg) {
 	} else {
 		b.model.statusMsg = "model unchanged"
 	}
+	return b.printInlineHeaderCmd()
 }
 
 func (b *bubbleTUI) toggleScopedModelSelection() {
@@ -1489,6 +1492,13 @@ func (b *bubbleTUI) printBlockCmd(block uiBlock) tea.Cmd {
 	return b.printStringCmd(b.model.renderSingleBlock(block))
 }
 
+func (b *bubbleTUI) printInlineHeaderCmd() tea.Cmd {
+	if !b.inline {
+		return nil
+	}
+	return b.printStringCmd(b.renderInlineHeader())
+}
+
 func (b *bubbleTUI) printStringCmd(s string) tea.Cmd {
 	if !b.inline {
 		return nil
@@ -1744,6 +1754,63 @@ func (b *bubbleTUI) renderInlineLive() string {
 
 func (b *bubbleTUI) renderHeader() string {
 	width := max(24, b.width)
+	return lipgloss.NewStyle().Width(width).Render(b.renderHeaderLine(width))
+}
+
+func (b *bubbleTUI) renderInlineHeader() string {
+	width := max(24, b.width-2)
+	contentWidth := max(12, width-6)
+	info := b.headerInfo()
+	lines := []string{uiWhiteText.Bold(true).Render("modu_code")}
+	lines = append(lines, uiDimText.Render("model  ")+uiWhiteText.Render(info.model))
+	if info.cwd != "" {
+		lines = append(lines, uiDimText.Render("cwd    ")+uiWhiteText.Render(info.cwd))
+	}
+	mode := "default"
+	if len(info.modes) > 0 {
+		mode = strings.Join(info.modes, " · ")
+	}
+	lines = append(lines, uiDimText.Render("mode   ")+uiWhiteText.Render(mode))
+	if info.channel != "" {
+		lines = append(lines, uiDimText.Render("channel ")+uiWhiteText.Render(info.channel))
+	}
+	return uiBubbleHeader.Width(contentWidth).Render(strings.Join(lines, "\n"))
+}
+
+func (b *bubbleTUI) renderHeaderLine(width int) string {
+	info := b.headerInfo()
+	var leftParts []string
+	leftParts = append(leftParts, uiWhiteText.Bold(true).Render("* modu_code"))
+	if info.cwd != "" {
+		leftParts = append(leftParts, uiDimText.Render(info.cwd))
+	}
+
+	rightParts := []string{uiDimText.Render(info.model)}
+	for _, mode := range info.modes {
+		rightParts = append(rightParts, uiSecondaryText.Render(mode))
+	}
+	if info.channel != "" {
+		rightParts = append(rightParts, uiSecondaryText.Render(info.channel))
+	}
+
+	left := strings.Join(leftParts, uiDimText.Render(" · "))
+	right := strings.Join(rightParts, uiDimText.Render(" · "))
+	pad := width - lipgloss.Width(left) - lipgloss.Width(right)
+	if pad < 1 {
+		pad = 1
+	}
+	return left + strings.Repeat(" ", pad) + right
+}
+
+type bubbleHeaderInfo struct {
+	model   string
+	cwd     string
+	modes   []string
+	channel string
+}
+
+func (b *bubbleTUI) headerInfo() bubbleHeaderInfo {
+	info := bubbleHeaderInfo{model: "none"}
 	model := "none"
 	if b.session != nil && b.session.GetModel() != nil {
 		m := b.session.GetModel()
@@ -1759,7 +1826,11 @@ func (b *bubbleTUI) renderHeader() string {
 		if strings.TrimSpace(model) == "" {
 			model = b.modelInfo.ID
 		}
+		if b.modelInfo.ProviderID != "" {
+			model += " (" + b.modelInfo.ProviderID + "/" + b.modelInfo.ID + ")"
+		}
 	}
+	info.model = model
 
 	cwd := ""
 	if b.session != nil {
@@ -1771,35 +1842,19 @@ func (b *bubbleTUI) renderHeader() string {
 	if cwd != "" {
 		cwd = shortenUIPath(cwd)
 	}
-
-	var leftParts []string
-	leftParts = append(leftParts, uiWhiteText.Bold(true).Render("* modu_code"))
-	if cwd != "" {
-		leftParts = append(leftParts, uiDimText.Render(cwd))
-	}
-
-	var rightParts []string
-	rightParts = append(rightParts, uiDimText.Render(model))
+	info.cwd = cwd
 	if b.session != nil {
 		if b.session.IsPlanMode() {
-			rightParts = append(rightParts, uiSecondaryText.Render("plan"))
+			info.modes = append(info.modes, "plan")
 		}
 		if b.session.ActiveWorktree() != "" {
-			rightParts = append(rightParts, uiSecondaryText.Render("worktree"))
+			info.modes = append(info.modes, "worktree")
 		}
 	}
 	if b.model.tgUsername != "" {
-		rightParts = append(rightParts, uiSecondaryText.Render("@"+b.model.tgUsername))
+		info.channel = "@" + strings.TrimPrefix(b.model.tgUsername, "@")
 	}
-
-	left := strings.Join(leftParts, uiDimText.Render(" · "))
-	right := strings.Join(rightParts, uiDimText.Render(" · "))
-	pad := width - lipgloss.Width(left) - lipgloss.Width(right)
-	if pad < 1 {
-		pad = 1
-	}
-	line := left + strings.Repeat(" ", pad) + right
-	return lipgloss.NewStyle().Width(width).Render(line)
+	return info
 }
 
 func (b *bubbleTUI) renderInputControl() string {
@@ -2054,7 +2109,7 @@ func (b *bubbleTUI) renderInput() string {
 		rng := ranges[idx]
 		prefix := "  "
 		if idx == 0 {
-			prefix = uiPrimaryText.Render("> ")
+			prefix = uiPrimaryText.Render("❯ ")
 		}
 		var row strings.Builder
 		row.WriteString(prefix)
