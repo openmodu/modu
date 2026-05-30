@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/openmodu/modu/pkg/agent"
-	"github.com/openmodu/modu/pkg/coding_agent/extension"
-	"github.com/openmodu/modu/pkg/coding_agent/subagent"
+	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
+	"github.com/openmodu/modu/pkg/coding_agent/plugins/subagent"
 )
 
 // forkSession is the host-side implementation of ExtensionAPI.ForkSession.
@@ -30,7 +30,7 @@ import (
 // prepareSubagentDefinition has layered in skills / memory / harness-block
 // directives — extension callers therefore get the same system-prompt
 // augmentation spawn_subagent gives.
-func (cs *CodingSession) forkSession(ctx context.Context, opts extension.ForkOptions) (string, error) {
+func (cs *engine) forkSession(ctx context.Context, opts extension.ForkOptions) (string, error) {
 	childCwd := cs.resolveChildCwd(opts.Cwd)
 	def := &subagent.SubagentDefinition{
 		Name:            forkName(opts),
@@ -89,7 +89,7 @@ func (cs *CodingSession) forkSession(ctx context.Context, opts extension.ForkOpt
 // dropping the request. When sessionDirOverride is non-empty the task's
 // session.jsonl/status.json land under that parent dir; otherwise the
 // task manager picks its default run root.
-func (cs *CodingSession) forkInBackground(ctx context.Context, def *subagent.SubagentDefinition, childCwd string, initialMessages []agent.AgentMessage, task, parentID, outputPath, outputMode, sessionDirOverride string) (string, error) {
+func (cs *engine) forkInBackground(ctx context.Context, def *subagent.SubagentDefinition, childCwd string, initialMessages []agent.AgentMessage, task, parentID, outputPath, outputMode, sessionDirOverride string) (string, error) {
 	if cs.taskManager == nil {
 		return "", fmt.Errorf("background fork requested but task manager is not configured")
 	}
@@ -146,7 +146,7 @@ func (cs *CodingSession) forkInBackground(ctx context.Context, def *subagent.Sub
 	return fmt.Sprintf("Started extension-fork in background. Use task_output with task_id=%s to inspect the result.", taskID), nil
 }
 
-func (cs *CodingSession) resolveChildCwd(cwd string) string {
+func (cs *engine) resolveChildCwd(cwd string) string {
 	cwd = strings.TrimSpace(cwd)
 	if cwd == "" {
 		return cs.cwd
@@ -157,7 +157,7 @@ func (cs *CodingSession) resolveChildCwd(cwd string) string {
 	return filepath.Clean(filepath.Join(cs.cwd, cwd))
 }
 
-func (cs *CodingSession) resolveForkOutputPath(path string) string {
+func (cs *engine) resolveForkOutputPath(path string) string {
 	path = strings.TrimSpace(path)
 	if path == "" || filepath.IsAbs(path) {
 		return path
@@ -169,7 +169,7 @@ func (cs *CodingSession) resolveForkOutputPath(path string) string {
 // an absolute path. Empty input passes through so the host's default run
 // root is used. Relative input resolves against the parent session's cwd
 // to match how Cwd/OutputPath are treated.
-func (cs *CodingSession) resolveForkSessionDir(path string) string {
+func (cs *engine) resolveForkSessionDir(path string) string {
 	path = strings.TrimSpace(path)
 	if path == "" || filepath.IsAbs(path) {
 		return path
@@ -198,7 +198,7 @@ func countLines(text string) int {
 	return strings.Count(text, "\n") + 1
 }
 
-func (cs *CodingSession) loadSubagentParentMessages(parentID string) ([]agent.AgentMessage, error) {
+func (cs *engine) loadSubagentParentMessages(parentID string) ([]agent.AgentMessage, error) {
 	if strings.TrimSpace(parentID) == "" || cs.taskManager == nil {
 		return nil, nil
 	}
@@ -209,7 +209,7 @@ func (cs *CodingSession) loadSubagentParentMessages(parentID string) ([]agent.Ag
 	return loadSubagentSessionMessages(parent.SessionFile)
 }
 
-func (cs *CodingSession) initialMessagesForFork(mode, parentID string) ([]agent.AgentMessage, error) {
+func (cs *engine) initialMessagesForFork(mode, parentID string) ([]agent.AgentMessage, error) {
 	if strings.TrimSpace(parentID) != "" {
 		return cs.loadSubagentParentMessages(parentID)
 	}
@@ -229,7 +229,7 @@ func (cs *CodingSession) initialMessagesForFork(mode, parentID string) ([]agent.
 // forkInWorktree creates a detached git worktree, rebinds file/shell
 // tools to that path, runs the child, and removes the worktree on exit.
 // Mirrors the legacy spawn_subagent worktree behavior closely.
-func (cs *CodingSession) forkInWorktree(ctx context.Context, def *subagent.SubagentDefinition, initialMessages []agent.AgentMessage, task string) (string, error) {
+func (cs *engine) forkInWorktree(ctx context.Context, def *subagent.SubagentDefinition, initialMessages []agent.AgentMessage, task string) (string, error) {
 	root, err := gitTopLevelDir(cs.cwd)
 	if err != nil {
 		return "", fmt.Errorf("worktree isolation requires a git repository: %w", err)
@@ -274,7 +274,7 @@ func forkName(opts extension.ForkOptions) string {
 
 // rebindToolsToCwd returns a copy of tools where cwd-bound tools point at the
 // given path. Unknown tools pass through unchanged.
-func (cs *CodingSession) rebindToolsToCwd(cwd string) []agent.Tool {
+func (cs *engine) rebindToolsToCwd(cwd string) []agent.Tool {
 	out := make([]agent.Tool, 0, len(cs.activeTools))
 	for _, tool := range cs.activeTools {
 		if rebound, ok := cs.toolProvider.Rebind(tool, agent.ToolContext{Cwd: cwd}); ok {

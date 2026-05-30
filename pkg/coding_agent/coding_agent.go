@@ -1,29 +1,30 @@
 package coding_agent
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"html"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"reflect"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/openmodu/modu/pkg/agent"
-	"github.com/openmodu/modu/pkg/coding_agent/compaction"
-	"github.com/openmodu/modu/pkg/coding_agent/eventbus"
-	"github.com/openmodu/modu/pkg/coding_agent/extension"
-	"github.com/openmodu/modu/pkg/coding_agent/prompts"
-	"github.com/openmodu/modu/pkg/coding_agent/resource"
-	"github.com/openmodu/modu/pkg/coding_agent/session"
-	"github.com/openmodu/modu/pkg/coding_agent/subagent"
+	"github.com/openmodu/modu/pkg/coding_agent/foundation/config"
+	"github.com/openmodu/modu/pkg/coding_agent/foundation/eventbus"
+	"github.com/openmodu/modu/pkg/coding_agent/foundation/resource"
+	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
+	"github.com/openmodu/modu/pkg/coding_agent/plugins/prompts"
+	"github.com/openmodu/modu/pkg/coding_agent/plugins/subagent"
+	"github.com/openmodu/modu/pkg/coding_agent/services/approval"
+	"github.com/openmodu/modu/pkg/coding_agent/services/bash"
+	"github.com/openmodu/modu/pkg/coding_agent/services/contextmgr"
+	"github.com/openmodu/modu/pkg/coding_agent/services/memory"
+	"github.com/openmodu/modu/pkg/coding_agent/services/plan"
+	"github.com/openmodu/modu/pkg/coding_agent/services/retry"
+	"github.com/openmodu/modu/pkg/coding_agent/services/session"
+	"github.com/openmodu/modu/pkg/coding_agent/services/systemprompt"
+	"github.com/openmodu/modu/pkg/coding_agent/services/todo"
+	"github.com/openmodu/modu/pkg/coding_agent/services/worktree"
 	"github.com/openmodu/modu/pkg/coding_agent/tools"
-	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/skills"
 	"github.com/openmodu/modu/pkg/types"
 )
@@ -61,67 +62,64 @@ type CodingSessionOptions struct {
 	ModelConfigPath string
 }
 
-// CodingSession is the main entry point for the coding agent system.
-type CodingSession struct {
-	agent          *agent.Agent
-	sessionManager *session.Manager
-	sessionTree    *session.Tree
-	config         *Config
-	extensions     *extension.Runner
-	skillManager   *skills.Manager
-	promptManager  *prompts.Manager
-	resources      *resource.Loader
-	memoryStore    *MemoryStore
-	subagentLoader *subagent.Loader
-	cwd            string
-	agentDir       string
-	promptBuilder  *SystemPromptBuilder
-	model          *types.Model
-	activeTools    []agent.Tool
-	toolProvider   agent.ToolManager
-	slashCommands  map[string]SlashCommand
-	getAPIKey      func(provider string) (string, error)
-	streamFn       agent.StreamFn
-	lastSavedIndex int
-	// totalTokens tracks accumulated token usage for auto-compaction.
-	totalTokens     int
-	retryManager    *RetryManager
+// engine is the L1 kernel: it owns all session state, runs agent turns, wires
+// the L2 services, and exposes the kernel capability surface they depend on.
+// The host-facing API (L5) lives on CodingSession, which embeds *engine.
+type engine struct {
+	// self points back to the host façade, for the few callbacks whose
+	// signature requires a *CodingSession (e.g. slash-command handlers).
+	self *CodingSession
+
+	agent           *agent.Agent
+	sessionManager  *session.Manager
+	sessionTree     *session.Tree
+	config          *config.Config
+	extensions      *extension.Runner
+	skillManager    *skills.Manager
+	promptManager   *prompts.Manager
+	resources       *resource.Loader
+	memoryStore     *memory.Store
+	subagentLoader  *subagent.Loader
+	cwd             string
+	agentDir        string
+	promptBuilder   *systemprompt.Builder
+	model           *types.Model
+	activeTools     []agent.Tool
+	toolProvider    agent.ToolManager
+	slashCommands   map[string]SlashCommand
+	getAPIKey       func(provider string) (string, error)
+	streamFn        agent.StreamFn
+	lastSavedIndex  int
+	retryManager    *retry.Manager
 	eventBus        eventbus.EventBusController
 	scopedModels    []string
 	modelConfigPath string
 	thinkingLevel   agent.ThinkingLevel
+	sessionName     string
+	sessionStarted  int64
 
-	// RPC parity fields
-	sessionName    string
-	isCompacting   bool
-	bashCancel     context.CancelFunc
-	bashMu         sync.Mutex
-	sessionStarted int64
-	todoMu         sync.RWMutex
-	todos          []TodoItem
-	taskManager    *backgroundTaskManager
-	planMode       bool
-	planMu         sync.RWMutex
-	// planDecisionCb presents the plan to the user and returns the decision:
-	// "approve", "approve_auto", "reject", or "reject:<feedback>". nil means
-	// headless — the plan is auto-approved.
-	planDecisionCb     func(plan string, steps []string) string
-	extensionMu        sync.RWMutex
-	extensionConfirmCb func(title, body string, defaultYes bool) bool
-	extensionSelectCb  func(title string, options []string) string
-	worktreeMu         sync.Mutex
-	originalCwd        string
-	worktreePath       string
-	contextMu          sync.Mutex
-	loadedContexts     map[string]struct{}
-	harness            *harnessState
+	// Session components — each owns its own state behind a narrow API.
+	ctxMgr      *contextmgr.Manager    // conversation window: tokens, compaction, nested context
+	bash        *bash.Runner           // inline !command execution + cancellation
+	todos       *todo.Store            // session todo list
+	taskManager *backgroundTaskManager // background async tasks
+	plan        *plan.Controller       // plan mode
+	worktree    *worktree.Controller   // isolated git worktree
+	extPrompts  extensionPrompts       // host confirm/select callbacks
 
 	// approvalManager handles tool execution approval.
-	approvalManager *ApprovalManager
+	approvalManager *approval.Manager
 
 	// gitCache holds the last-known git state to avoid spawning git subprocesses
 	// on every writeRuntimeState call.
 	gitCache cachedGitState
+}
+
+// CodingSession is the L5 host façade: it embeds the kernel engine (promoting
+// all kernel methods) and adds the host-facing API (model/session/config
+// management, introspection, export). External drivers (rpc, sdk, tui) use it.
+type CodingSession struct {
+	*engine
 }
 
 // NewCodingSession creates and initializes a new coding session.
@@ -146,9 +144,9 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	}
 
 	// Load config
-	cfg, err := LoadConfig(agentDir, opts.Cwd)
+	cfg, err := config.Load(agentDir, opts.Cwd)
 	if err != nil {
-		cfg = DefaultConfig()
+		cfg = config.Default()
 	}
 
 	// Override config with options
@@ -157,7 +155,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	}
 
 	// Initialize memory store (global ~/.coding_agent/memory + project <cwd>/memory)
-	memoryStore := NewMemoryStore(agentDir, opts.Cwd)
+	memoryStore := memory.New(agentDir, opts.Cwd)
 
 	// Set up tools
 	toolProvider := opts.ToolProvider
@@ -178,8 +176,8 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		Values: map[string]any{
 			tools.ValueMemoryStore: memoryStore,
 			tools.ValueTodoStore:   todoStoreAdapter{session: nil},
-			tools.ValuePlanMode:    planModeAdapter{session: nil},
-			tools.ValueWorktree:    worktreeAdapter{session: nil},
+			tools.ValuePlanMode:    plan.New(nil),
+			tools.ValueWorktree:    worktree.New(nil),
 		},
 	})
 
@@ -203,9 +201,9 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	_ = promptMgr.Discover()
 
 	// Build system prompt
-	promptBuilder := NewSystemPromptBuilder(opts.Cwd)
+	promptBuilder := systemprompt.NewBuilder(opts.Cwd)
 	promptBuilder.SetModel(opts.Model)
-	promptBuilder.SetMemoryStore(memoryStore)
+	promptBuilder.SetMemoryProvider(memoryStore)
 	promptBuilder.SetTools(activeTools)
 	for _, ctxFile := range resourceSnapshot.ContextFiles {
 		promptBuilder.AddContextFile(ctxFile.Path)
@@ -257,7 +255,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	systemPrompt := promptBuilder.Build()
 
 	// Create approval manager
-	approvalMgr := NewApprovalManager()
+	approvalMgr := approval.New()
 	approvalMgr.SetRules(cfg.Permissions)
 
 	// Create the underlying agent
@@ -273,7 +271,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		StreamFn: streamFn,
 	})
 
-	cs := &CodingSession{
+	cs := &engine{
 		agent:           ag,
 		sessionManager:  sessionMgr,
 		sessionTree:     session.NewTree(sessionMgr),
@@ -293,17 +291,16 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		slashCommands:   make(map[string]SlashCommand),
 		getAPIKey:       getAPIKey,
 		streamFn:        streamFn,
-		retryManager:    NewRetryManager(cfg.RetrySettings, cfg.AutoRetry),
+		retryManager:    retry.New(cfg.RetrySettings, cfg.AutoRetry),
 		eventBus:        eventbus.NewEventBus(),
 		scopedModels:    resolveScopedModels(cfg.ScopedModels, opts.ScopedModels),
 		modelConfigPath: opts.ModelConfigPath,
 		thinkingLevel:   cfg.ThinkingLevel,
 		sessionStarted:  time.Now().UnixMilli(),
 		taskManager:     taskMgr,
-		loadedContexts:  make(map[string]struct{}),
-		harness:         newHarnessState(),
 		approvalManager: approvalMgr,
 	}
+	cs.wireComponents()
 	if err := taskMgr.SetStorePath(cs.RuntimePaths().BackgroundTasksFile); err != nil {
 		return nil, fmt.Errorf("failed to load background tasks: %w", err)
 	}
@@ -320,10 +317,11 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	cs.replaceTaskOutputTool()
 	cs.replacePlanTools()
 	cs.replaceWorktreeTools()
-	cs.installConfigHarnessHooks()
+	initialContexts := make([]string, 0, len(resourceSnapshot.ContextFiles))
 	for _, ctxFile := range resourceSnapshot.ContextFiles {
-		cs.loadedContexts[ctxFile.Path] = struct{}{}
+		initialContexts = append(initialContexts, ctxFile.Path)
 	}
+	cs.ctxMgr.MarkInitialContext(initialContexts)
 
 	// Subscribe to events for token usage tracking (auto-compaction)
 	ag.Subscribe(func(event agent.Event) {
@@ -336,7 +334,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 				if t == 0 {
 					t = u.Input + u.Output
 				}
-				cs.totalTokens += t
+				cs.ctxMgr.AddUsage(t)
 			}
 			if msg, ok := event.Message.(types.AssistantMessage); ok {
 				addUsage(msg.Usage)
@@ -347,16 +345,11 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 			return
 		}
 		if event.Type == agent.EventTypeToolExecutionEnd && !event.IsError {
-			cs.handleToolExecutionEnd(event)
+			cs.ctxMgr.OnToolExecutionEnd(event)
 			return
 		}
 		if event.Type == agent.EventTypeAgentEnd {
-			if errText := strings.TrimSpace(cs.agent.GetState().Error); errText != "" {
-				cs.runHarnessStopFailure(fmt.Errorf("%s", errText))
-			} else {
-				cs.runHarnessStop()
-			}
-			cs.pruneTransientContextMessages()
+			cs.ctxMgr.PruneTransient()
 			go cs.refreshGitRuntimeState()
 			cs.writeRuntimeState()
 		}
@@ -536,21 +529,36 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	}
 
 	cs.installHarnessLayer()
-	cs.runHarnessSessionStart("startup")
 	cs.writeRuntimeState()
 
-	return cs, nil
+	sess := &CodingSession{engine: cs}
+	cs.self = sess
+	return sess, nil
 }
 
-func resolveScopedModels(configured, explicit []string) []string {
-	if len(explicit) > 0 {
-		return append([]string(nil), explicit...)
-	}
-	return append([]string(nil), configured...)
+// wireComponents constructs the session's stateful sub-components and wires
+// their dependencies. It runs once, after the session struct is populated, so
+// every component can read what it needs from s.
+func (s *engine) wireComponents() {
+	s.todos = todo.NewStore()
+	s.todos.OnChange = func() { s.writeRuntimeState() }
+	s.plan = plan.New(s)
+	s.worktree = worktree.New(s)
+	s.bash = bash.New(s)
+	s.ctxMgr = contextmgr.New(contextmgr.Deps{
+		Agent:          s.agent,
+		Resources:      s.resources,
+		SessionManager: s.sessionManager,
+		StreamFn:       func() agent.StreamFn { return s.streamFn },
+		APIKey:         s.getAPIKey,
+		Host:           s,
+	})
+	s.ctxMgr.SetModel(s.model)
+	s.ctxMgr.SetPolicy(s.compactionPolicy())
 }
 
 // Prompt sends a user message and starts processing.
-func (s *CodingSession) Prompt(ctx context.Context, text string) error {
+func (s *engine) Prompt(ctx context.Context, text string) error {
 	input := strings.TrimSpace(text)
 
 	// Check for slash commands
@@ -563,7 +571,7 @@ func (s *CodingSession) Prompt(ctx context.Context, text string) error {
 		}
 
 		if cmd, ok := s.slashCommands[cmdName]; ok {
-			err := cmd.Handler(s, cmdArgs)
+			err := cmd.Handler(s.self, cmdArgs)
 			s.writeRuntimeState()
 			return err
 		}
@@ -582,13 +590,9 @@ func (s *CodingSession) Prompt(ctx context.Context, text string) error {
 		// Check skills when no prompt template claimed the slash command.
 		if !expandedTemplate && s.skillManager != nil {
 			if skill, ok := s.skillManager.Get(cmdName); ok {
-				return s.executeSkill(ctx, input, skill, cmdArgs)
+				return s.executeSkill(ctx, skill, cmdArgs)
 			}
 		}
-	}
-
-	if err := s.runHarnessUserPromptSubmit(text); err != nil {
-		return err
 	}
 
 	// Record to session
@@ -607,21 +611,20 @@ func (s *CodingSession) Prompt(ctx context.Context, text string) error {
 	}
 
 	// Auto-compaction: check if we should compact after the agent finishes
-	s.maybeAutoCompact(ctx)
+	s.ctxMgr.MaybeAutoCompact(ctx)
 
 	return nil
 }
 
-func (s *CodingSession) Close(reason string) {
+func (s *engine) Close(reason string) {
 	if s.extensions != nil {
 		s.extensions.EmitEvent(agent.Event{Type: agent.EventType("session_shutdown")})
 	}
-	s.runHarnessSessionEnd(reason)
 	s.writeRuntimeState()
 }
 
 // Steer injects a high-priority message during processing.
-func (s *CodingSession) Steer(text string) {
+func (s *engine) Steer(text string) {
 	msg := types.UserMessage{
 		Role:    "user",
 		Content: text,
@@ -630,7 +633,7 @@ func (s *CodingSession) Steer(text string) {
 }
 
 // FollowUp queues a message for processing after the current task.
-func (s *CodingSession) FollowUp(text string) {
+func (s *engine) FollowUp(text string) {
 	msg := types.UserMessage{
 		Role:    "user",
 		Content: text,
@@ -639,816 +642,43 @@ func (s *CodingSession) FollowUp(text string) {
 }
 
 // Subscribe registers an event listener. Returns an unsubscribe function.
-func (s *CodingSession) Subscribe(fn func(agent.Event)) func() {
+func (s *engine) Subscribe(fn func(agent.Event)) func() {
 	return s.agent.Subscribe(fn)
 }
 
-// SetActiveTools sets which tools are active by name.
-func (s *CodingSession) SetActiveTools(names []string) {
-	nameSet := make(map[string]bool)
-	for _, n := range names {
-		nameSet[n] = true
-	}
-
-	var active []agent.Tool
-	for _, tool := range s.activeTools {
-		if nameSet[tool.Name()] {
-			active = append(active, tool)
-		}
-	}
-
-	s.agent.SetTools(active)
-	s.writeRuntimeState()
-}
-
-func (s *CodingSession) refreshResourcePaths() resource.ResourceSnapshot {
-	if s.resources == nil {
-		return resource.ResourceSnapshot{}
-	}
-	snapshot := s.resources.LoadResources()
-	if s.skillManager != nil {
-		s.skillManager.SetExtraPaths(skillPathRefs(snapshot.SkillPaths))
-	}
-	if s.promptManager != nil {
-		s.promptManager.SetExtraPaths(snapshot.PromptPaths)
-	}
-	return snapshot
-}
-
-// skillPathRefs converts resource package refs into skill discovery refs.
-func skillPathRefs(refs []resource.ResourceRef) []skills.PathRef {
-	out := make([]skills.PathRef, len(refs))
-	for i, r := range refs {
-		out[i] = skills.PathRef{Path: r.Path, Source: r.Source}
-	}
-	return out
-}
-
-// SkillInfo is a minimal view of a skill for display purposes.
-type SkillInfo struct {
-	Name        string
-	Description string
-	Source      string // "user" or "project"
-}
-
-// SubagentInfo is a minimal view of a discovered subagent definition.
-type SubagentInfo struct {
-	Name        string
-	Description string
-	Source      string // "user" or "project"
-	FilePath    string
-}
-
-// GetSkills returns all discovered skills.
-func (s *CodingSession) GetSkills() []SkillInfo {
-	if s.skillManager == nil {
-		return nil
-	}
-	s.refreshResourcePaths()
-	list := s.skillManager.List()
-	out := make([]SkillInfo, len(list))
-	for i, sk := range list {
-		out[i] = SkillInfo{Name: sk.Name, Description: sk.Description, Source: sk.Source}
-	}
-	return out
-}
-
-// GetSubagents returns all discovered subagent definitions.
-func (s *CodingSession) GetSubagents() []SubagentInfo {
-	if s.subagentLoader == nil {
-		return nil
-	}
-	list := s.subagentLoader.List()
-	out := make([]SubagentInfo, len(list))
-	for i, def := range list {
-		out[i] = SubagentInfo{
-			Name:        def.Name,
-			Description: def.Description,
-			Source:      def.Source,
-			FilePath:    def.FilePath,
-		}
-	}
-	return out
-}
-
-// GetActiveToolNames returns the names of currently active tools.
-func (s *CodingSession) GetActiveToolNames() []string {
-	state := s.agent.GetState()
-	names := make([]string, len(state.Tools))
-	for i, t := range state.Tools {
-		names[i] = t.Name()
-	}
-	return names
-}
-
-func (s *CodingSession) handleToolExecutionEnd(event agent.Event) {
-	if s.resources == nil {
-		return
-	}
-	switch event.ToolName {
-	case "read", "edit", "write", "grep", "find", "ls":
-	default:
-		return
-	}
-
-	paths := extractToolPaths(event)
-	if len(paths) == 0 {
-		return
-	}
-
-	newContexts := s.collectNewContextFiles(paths)
-	if len(newContexts) == 0 {
-		return
-	}
-
-	text := formatDynamicContextMessage(paths, newContexts)
-	if text == "" {
-		return
-	}
-	s.agent.Steer((&CustomMessage{
-		Source: nestedContextSource,
-		Text:   text,
-	}).ToLlmMessage())
-}
-
-func extractToolPaths(event agent.Event) []string {
-	var paths []string
-	seen := make(map[string]struct{})
-	add := func(path string) {
-		path = strings.TrimSpace(path)
-		if path == "" {
-			return
-		}
-		if _, ok := seen[path]; ok {
-			return
-		}
-		seen[path] = struct{}{}
-		paths = append(paths, path)
-	}
-
-	if result, ok := event.Result.(agent.ToolResult); ok {
-		if details, ok := result.Details.(map[string]any); ok {
-			collectToolPathsFromDetails(details, add)
-		}
-	}
-	if args, ok := event.Args.(map[string]any); ok {
-		collectToolPathsFromDetails(args, add)
-	}
-	return paths
-}
-
-func collectToolPathsFromDetails(details map[string]any, add func(string)) {
-	if path, _ := details["path"].(string); path != "" {
-		add(path)
-	}
-	switch matched := details["matched_paths"].(type) {
-	case []string:
-		for _, path := range matched {
-			add(path)
-		}
-	case []any:
-		for _, raw := range matched {
-			if path, ok := raw.(string); ok {
-				add(path)
-			}
-		}
-	}
-}
-
-func (s *CodingSession) collectNewContextFiles(paths []string) []resource.ContextFile {
-	if len(paths) == 0 {
-		return nil
-	}
-
-	// Load context files outside the lock: this involves filesystem I/O and
-	// a git subprocess, both of which are expensive to hold a mutex across.
-	var candidates []resource.ContextFile
-	for _, path := range paths {
-		candidates = append(candidates, s.resources.LoadContextFilesForPath(path)...)
-	}
-
-	s.contextMu.Lock()
-	defer s.contextMu.Unlock()
-
-	var out []resource.ContextFile
-	for _, file := range candidates {
-		if _, seen := s.loadedContexts[file.Path]; seen {
-			continue
-		}
-		s.loadedContexts[file.Path] = struct{}{}
-		out = append(out, file)
-	}
-	return out
-}
-
-func formatDynamicContextMessage(targetPaths []string, files []resource.ContextFile) string {
-	const (
-		maxFileBytes  = 4 * 1024
-		maxTotalBytes = 12 * 1024
-	)
-
-	if len(files) == 0 {
-		return ""
-	}
-
-	var parts []string
-	parts = append(parts, "Additional path-specific instructions became relevant after accessing:")
-	for _, path := range targetPaths {
-		parts = append(parts, "- "+path)
-	}
-
-	remaining := maxTotalBytes
-	for _, file := range files {
-		if remaining <= 0 {
-			break
-		}
-		content := strings.TrimSpace(file.Content)
-		if content == "" {
-			continue
-		}
-		limit := min(maxFileBytes, remaining)
-		if len(content) > limit {
-			content = truncateWithNotice(content, limit, file.Name)
-		}
-		if len(content) == 0 {
-			continue
-		}
-		parts = append(parts, fmt.Sprintf("# Path Context: %s\n%s", file.Name, content))
-		remaining -= len(content)
-	}
-
-	if len(parts) == 1 {
-		return ""
-	}
-	return strings.Join(parts, "\n\n")
-}
-
-func (s *CodingSession) pruneTransientContextMessages() {
-	state := s.agent.GetState()
-	if len(state.Messages) == 0 {
-		return
-	}
-
-	// Scan first to avoid allocation when there is nothing to prune.
-	hasTransient := false
-	for _, msg := range state.Messages {
-		if isTransientContextMessage(msg) {
-			hasTransient = true
-			break
-		}
-	}
-	if !hasTransient {
-		return
-	}
-
-	filtered := make([]agent.AgentMessage, 0, len(state.Messages))
-	for _, msg := range state.Messages {
-		if !isTransientContextMessage(msg) {
-			filtered = append(filtered, msg)
-		}
-	}
-	s.agent.ReplaceMessages(filtered)
-}
-
-// SetModel changes the active model.
-func (s *CodingSession) SetModel(model *types.Model) {
-	changed := s.model == nil || s.model.ProviderID != model.ProviderID || s.model.ID != model.ID
-	s.model = model
-	s.agent.SetModel(model)
-	if s.promptBuilder != nil {
-		s.promptBuilder.SetModel(model)
-	}
-	if changed {
-		_ = s.ClearConversation()
-	}
-	s.refreshDynamicSystemPrompt()
-
-	_ = s.sessionManager.Append(session.NewEntry(session.EntryTypeModelChange, "", session.ModelChangeData{
-		Provider: model.ProviderID,
-		ModelID:  model.ID,
-	}))
-	s.writeRuntimeState()
-	s.emitSessionEvent(SessionEvent{
-		Type:     SessionEventModelChange,
-		Provider: model.ProviderID,
-		ModelID:  model.ID,
-	})
-}
-
-// SetModelByID changes the active model by provider and model ID.
-func (s *CodingSession) SetModelByID(provider, modelID string) error {
-	llmModel := providers.GetModel(provider, modelID)
-	if llmModel == nil {
-		return fmt.Errorf("model not found: %s/%s", provider, modelID)
-	}
-	s.SetModel(llmModel)
-	return nil
-}
-
-// SetModelByName changes the active model by configured display name or model ID.
-func (s *CodingSession) SetModelByName(name string) error {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return fmt.Errorf("model name is required")
-	}
-	var matches []*types.Model
-	for _, model := range s.GetAvailableModels() {
-		if model.Name == name || model.ID == name || model.ProviderID+"/"+model.ID == name || model.ProviderID+":"+model.ID == name {
-			matches = append(matches, model)
-		}
-	}
-	if len(matches) == 0 {
-		return fmt.Errorf("model not found: %s", name)
-	}
-	if len(matches) > 1 {
-		return fmt.Errorf("model %q is ambiguous; use /model <provider> <modelId>", name)
-	}
-	s.SetModel(matches[0])
-	return nil
-}
-
-// Compact triggers context compaction.
-func (s *CodingSession) Compact(ctx context.Context) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
-	s.isCompacting = true
-	defer func() { s.isCompacting = false }()
-
-	state := s.agent.GetState()
-
-	if preErr := s.runHarnessPreCompact(len(state.Messages)); preErr != nil {
-		return fmt.Errorf("compaction blocked by harness: %w", preErr)
-	}
-	result, err := compaction.Compact(ctx, state.Messages, compaction.Options{
-		PreserveRecent: s.config.CompactionSettings.PreserveRecentMessages,
-		Model:          s.model,
-		GetAPIKey:      s.getAPIKey,
-		StreamFn:       s.streamFn,
-	})
-	s.runHarnessPostCompact(result, err)
-	if err != nil {
-		return fmt.Errorf("compaction failed: %w", err)
-	}
-
-	// Replace messages
-	s.agent.ReplaceMessages(result.Messages)
-
-	// Reset token counter after compaction
-	s.totalTokens = 0
-
-	// Record compaction
-	_ = s.sessionManager.Append(session.NewEntry(session.EntryTypeCompaction, "", session.CompactionData{
-		Summary:       result.Summary,
-		OriginalCount: result.OriginalCount,
-		NewCount:      result.NewCount,
-	}))
-
-	s.emitSessionEvent(SessionEvent{Type: SessionEventCompactionDone})
-
-	return nil
-}
-
-// defaultContextWindow is the assumed context window when not available from the model.
-const defaultContextWindow = 128000
-
-// maybeAutoCompact checks whether auto-compaction should be triggered
-// based on accumulated token usage vs. the assumed context window.
-func (s *CodingSession) maybeAutoCompact(ctx context.Context) {
-	if !s.config.AutoCompaction {
-		return
-	}
-	if s.model == nil {
-		return
-	}
-
-	threshold := s.config.CompactionSettings.MaxContextPercentage
-	if threshold <= 0 {
-		threshold = 80.0
-	}
-
-	usagePercent := float64(s.totalTokens) / float64(defaultContextWindow) * 100.0
-	if usagePercent >= threshold {
-		s.emitSessionEvent(SessionEvent{Type: SessionEventCompactionStart})
-		_ = s.Compact(ctx)
-	}
-}
-
-// Fork creates a new branch from the given entry ID.
-func (s *CodingSession) Fork(entryID string) error {
-	return s.sessionManager.Fork(entryID)
-}
-
-// GetSessionLeafID returns the current persisted session leaf entry ID.
-func (s *CodingSession) GetSessionLeafID() string {
-	if s.sessionManager == nil {
-		return ""
-	}
-	return s.sessionManager.LastID()
-}
-
-// GetSessionBranches returns branch points in the current session tree.
-func (s *CodingSession) GetSessionBranches() []SessionBranchInfo {
-	if s.sessionTree == nil {
-		return nil
-	}
-	branches := s.sessionTree.GetBranches()
-	out := make([]SessionBranchInfo, 0, len(branches))
-	for _, branch := range branches {
-		out = append(out, SessionBranchInfo{
-			ID:         branch.ID,
-			ParentID:   branch.ParentID,
-			Label:      branch.Label,
-			EntryCount: len(branch.Entries),
-		})
-	}
-	return out
-}
-
-// GetSessionTreeNodes returns a depth-first view of the current session tree.
-func (s *CodingSession) GetSessionTreeNodes() []SessionTreeNode {
-	if s.sessionManager == nil || s.sessionTree == nil {
-		return nil
-	}
-	entries := s.sessionManager.Load()
-	lookup := make(map[string]session.SessionEntry, len(entries))
-	visible := make(map[string]struct{})
-	for _, entry := range entries {
-		lookup[entry.ID] = entry
-		if visibleSessionTreeEntry(entry) {
-			visible[entry.ID] = struct{}{}
-		}
-	}
-	children := make(map[string][]session.SessionEntry)
-	for _, entry := range entries {
-		if !visibleSessionTreeEntry(entry) {
-			continue
-		}
-		parentID := nearestVisibleSessionParent(entry.ParentID, lookup, visible)
-		children[parentID] = append(children[parentID], entry)
-	}
-	currentPath := make(map[string]struct{})
-	for _, entry := range s.sessionTree.GetCurrentPath() {
-		currentPath[entry.ID] = struct{}{}
-	}
-	currentID := s.sessionManager.LastID()
-	var out []SessionTreeNode
-	var walk func(parentID string, depth int)
-	walk = func(parentID string, depth int) {
-		for _, entry := range children[parentID] {
-			_, inPath := currentPath[entry.ID]
-			node := SessionTreeNode{
-				ID:            entry.ID,
-				ParentID:      nearestVisibleSessionParent(entry.ParentID, lookup, visible),
-				Type:          string(entry.Type),
-				Role:          sessionEntryRole(entry),
-				Label:         sessionTreeNodeLabel(entry, s.sessionManager.GetLabel(entry.ID)),
-				Preview:       sessionEntryPreview(entry),
-				Depth:         depth,
-				ChildCount:    len(children[entry.ID]),
-				Current:       entry.ID == currentID,
-				InCurrentPath: inPath,
-				Timestamp:     entry.Timestamp,
-			}
-			out = append(out, node)
-			walk(entry.ID, depth+1)
-		}
-	}
-	walk("", 0)
-	return out
-}
-
-func nearestVisibleSessionParent(parentID string, lookup map[string]session.SessionEntry, visible map[string]struct{}) string {
-	for parentID != "" {
-		if _, ok := visible[parentID]; ok {
-			return parentID
-		}
-		parent, ok := lookup[parentID]
-		if !ok {
-			return ""
-		}
-		parentID = parent.ParentID
-	}
-	return ""
-}
-
-func sessionTreeNodeLabel(entry session.SessionEntry, explicit string) string {
-	if strings.TrimSpace(explicit) != "" {
-		return explicit
-	}
-	if entry.Type != session.EntryTypeBranchSummary {
-		return ""
-	}
-	switch data := entry.Data.(type) {
-	case session.BranchSummaryData:
-		return branchSummaryLabel(data.FromID)
-	case map[string]any:
-		fromID, _ := data["fromId"].(string)
-		return branchSummaryLabel(fromID)
-	default:
-		return ""
-	}
-}
-
-func branchSummaryLabel(fromID string) string {
-	fromID = strings.TrimSpace(fromID)
-	if fromID == "" {
-		return ""
-	}
-	if len(fromID) > 8 {
-		fromID = fromID[:8]
-	}
-	return "from #" + fromID
-}
-
-func visibleSessionTreeEntry(entry session.SessionEntry) bool {
-	switch entry.Type {
-	case session.EntryTypeMessage, session.EntryTypeBranchSummary, session.EntryTypeCompaction, session.EntryTypeModelChange:
-		return true
-	default:
-		return false
-	}
-}
-
-func sessionEntryRole(entry session.SessionEntry) string {
-	if entry.Type != session.EntryTypeMessage {
-		return ""
-	}
-	switch data := entry.Data.(type) {
-	case session.MessageData:
-		return string(data.Role)
-	case map[string]any:
-		role, _ := data["role"].(string)
-		return role
-	default:
-		return ""
-	}
-}
-
-func sessionEntryPreview(entry session.SessionEntry) string {
-	switch data := entry.Data.(type) {
-	case session.MessageData:
-		return previewAnyContent(data.Content)
-	case session.BranchSummaryData:
-		return data.Summary
-	case session.CompactionData:
-		return data.Summary
-	case session.ModelChangeData:
-		if data.Provider != "" {
-			return data.Provider + "/" + data.ModelID
-		}
-		return data.ModelID
-	case map[string]any:
-		if summary, _ := data["summary"].(string); summary != "" {
-			return summary
-		}
-		if content, ok := data["content"]; ok {
-			return previewAnyContent(content)
-		}
-		if model, _ := data["modelId"].(string); model != "" {
-			provider, _ := data["provider"].(string)
-			if provider != "" {
-				return provider + "/" + model
-			}
-			return model
-		}
-	}
-	return ""
-}
-
-func previewAnyContent(content any) string {
-	switch value := content.(type) {
-	case string:
-		return value
-	case []types.ContentBlock:
-		var parts []string
-		for _, block := range value {
-			if text, ok := block.(*types.TextContent); ok && text != nil && text.Text != "" {
-				parts = append(parts, text.Text)
-			}
-		}
-		return strings.Join(parts, " ")
-	case []any:
-		var parts []string
-		for _, block := range value {
-			if m, ok := block.(map[string]any); ok {
-				text, _ := m["text"].(string)
-				if text != "" {
-					parts = append(parts, text)
-				}
-			}
-		}
-		return strings.Join(parts, " ")
-	default:
-		return fmt.Sprint(value)
-	}
-}
-
-// CreateBranchedSession creates a new session file from the path to entryID.
-func (s *CodingSession) CreateBranchedSession(entryID string) (string, error) {
-	if s.sessionManager == nil {
-		return "", fmt.Errorf("session manager not available")
-	}
-	path, err := s.sessionManager.CreateBranchedSession(entryID)
-	if err != nil {
-		return "", err
-	}
-	s.sessionTree = session.NewTree(s.sessionManager)
-	_, _ = s.RestoreMessages()
-	s.writeRuntimeState()
-	return path, nil
-}
-
-// NavigateTree navigates to a specific point in the session tree.
-func (s *CodingSession) NavigateTree(entryID string) error {
-	if s.sessionManager == nil || s.sessionTree == nil {
-		return fmt.Errorf("session tree not available")
-	}
-	path := s.sessionTree.GetPath(entryID)
-	if len(path) == 0 {
-		return fmt.Errorf("entry %s not found", entryID)
-	}
-	if entryID == s.sessionManager.LastID() {
-		_, err := s.RestoreMessages()
-		return err
-	}
-	var msgs []types.AgentMessage
-	for _, entry := range path {
-		if entry.Type != session.EntryTypeMessage {
-			continue
-		}
-		if msg, ok := agentMessageFromSessionData(entry.Data); ok && msg != nil {
-			msgs = append(msgs, msg)
-		}
-	}
-	summary, err := compaction.GenerateBranchSummary(context.Background(), msgs, compaction.BranchSummaryOptions{})
-	if err != nil {
-		return err
-	}
-	if _, err := s.sessionManager.BranchWithSummary(entryID, summary); err != nil {
-		return err
-	}
-	s.sessionTree = session.NewTree(s.sessionManager)
-	_, err = s.RestoreMessages()
-	s.writeRuntimeState()
-	return err
-}
-
 // GetAgent returns the underlying agent.
-func (s *CodingSession) GetAgent() *agent.Agent {
+func (s *engine) GetAgent() *agent.Agent {
 	return s.agent
 }
 
 // WaitForIdle blocks until the agent is idle.
-func (s *CodingSession) WaitForIdle() {
+func (s *engine) WaitForIdle() {
 	s.agent.WaitForIdle()
 }
 
 // Abort cancels the current operation.
-func (s *CodingSession) Abort() {
+func (s *engine) Abort() {
 	s.agent.Abort()
 }
 
-// GetConfig returns the current configuration.
-func (s *CodingSession) GetConfig() *Config {
-	return s.config
-}
-
-func (s *CodingSession) EffectiveConfigJSON() string {
-	if s.config == nil {
-		return "{}\n"
-	}
-	payload := map[string]any{
-		"config": s.config,
-		"paths": map[string]string{
-			"global":  filepath.Join(s.agentDir, "settings.json"),
-			"project": filepath.Join(s.cwd, ".coding_agent", "settings.json"),
-		},
-	}
-	data, err := json.MarshalIndent(payload, "", "  ")
-	if err != nil {
-		return "{}\n"
-	}
-	return string(data) + "\n"
-}
-
-// CycleModel cycles to the next model in the scopedModels list.
-// Returns the new model, or nil if no scoped models are configured.
-func (s *CodingSession) CycleModel() *types.Model {
-	if len(s.scopedModels) == 0 {
-		return nil
-	}
-
-	currentID := s.model.ID
-	nextIdx := 0
-	for i, id := range s.scopedModels {
-		if id == currentID {
-			nextIdx = (i + 1) % len(s.scopedModels)
-			break
-		}
-	}
-
-	nextID := s.scopedModels[nextIdx]
-	llmModel := providers.GetModel("", nextID)
-	var model *types.Model
-	if llmModel != nil {
-		model = llmModel
-	} else {
-		model = &types.Model{ID: nextID, Name: nextID}
-	}
-
-	s.SetModel(model)
-	return model
-}
-
-// CycleThinkingLevel cycles through: off -> low -> medium -> high -> off.
-func (s *CodingSession) CycleThinkingLevel() agent.ThinkingLevel {
-	var next agent.ThinkingLevel
-	switch s.thinkingLevel {
-	case agent.ThinkingLevelOff:
-		next = agent.ThinkingLevelLow
-	case agent.ThinkingLevelLow:
-		next = agent.ThinkingLevelMedium
-	case agent.ThinkingLevelMedium:
-		next = agent.ThinkingLevelHigh
-	case agent.ThinkingLevelHigh:
-		next = agent.ThinkingLevelOff
-	default:
-		next = agent.ThinkingLevelLow
-	}
-
-	s.SetThinkingLevel(next)
-	return next
-}
-
-// SetThinkingLevel sets the thinking level.
-func (s *CodingSession) SetThinkingLevel(level agent.ThinkingLevel) {
-	s.thinkingLevel = level
-	s.agent.SetThinkingLevel(level)
-	_ = s.sessionManager.Append(session.NewEntry(session.EntryTypeThinkingChange, "", session.ThinkingChangeData{
-		Level: level,
-	}))
-	s.emitSessionEvent(SessionEvent{
-		Type:  SessionEventThinkingChange,
-		Level: string(level),
-	})
-	s.writeRuntimeState()
-}
-
-// GetThinkingLevel returns the current thinking level.
-func (s *CodingSession) GetThinkingLevel() agent.ThinkingLevel {
-	return s.thinkingLevel
-}
-
-// GetModel returns the current model.
-func (s *CodingSession) GetModel() *types.Model {
-	return s.model
-}
-
 // IsStreaming returns whether the agent is currently streaming.
-func (s *CodingSession) IsStreaming() bool {
+func (s *engine) IsStreaming() bool {
 	return s.agent.GetState().IsStreaming
 }
 
-// GetSessionID returns the current session ID.
-func (s *CodingSession) GetSessionID() string {
-	if s.sessionManager != nil {
-		return s.sessionManager.SessionID()
-	}
-	return s.agent.GetSessionID()
-}
-
-// SetAutoCompaction enables or disables auto-compaction.
-func (s *CodingSession) SetAutoCompaction(enabled bool) {
-	s.config.AutoCompaction = enabled
-	s.writeRuntimeState()
-}
-
-// SetAutoRetry enables or disables auto-retry.
-func (s *CodingSession) SetAutoRetry(enabled bool) {
-	s.config.AutoRetry = enabled
-	s.retryManager.SetEnabled(enabled)
-}
-
-// AbortRetry cancels any pending retry wait.
-func (s *CodingSession) AbortRetry() {
-	s.retryManager.AbortRetry()
-}
-
 // GetMessages returns the current message history.
-func (s *CodingSession) GetMessages() []agent.AgentMessage {
+func (s *engine) GetMessages() []agent.AgentMessage {
 	return s.agent.GetState().Messages
 }
 
 // GetEventBus returns the session's event bus.
-func (s *CodingSession) GetEventBus() eventbus.EventBusController {
+func (s *engine) GetEventBus() eventbus.EventBusController {
 	return s.eventBus
 }
 
 // SubscribeSession registers a handler for session-level events.
 // Returns an unsubscribe function.
-func (s *CodingSession) SubscribeSession(fn func(SessionEvent)) func() {
+func (s *engine) SubscribeSession(fn func(SessionEvent)) func() {
 	return s.eventBus.On(sessionEventChannel, func(data any) {
 		if event, ok := data.(SessionEvent); ok {
 			fn(event)
@@ -1456,81 +686,17 @@ func (s *CodingSession) SubscribeSession(fn func(SessionEvent)) func() {
 	})
 }
 
-func (s *CodingSession) emitSessionEvent(event SessionEvent) {
+func (s *engine) emitSessionEvent(event SessionEvent) {
 	s.eventBus.Emit(sessionEventChannel, event)
 }
 
-// GetSessionFile returns the session file path.
-func (s *CodingSession) GetSessionFile() string {
-	return s.sessionManager.FilePath()
-}
-
-// ListSessions returns persisted sessions for the current working directory.
-func (s *CodingSession) ListSessions() ([]session.SessionInfo, error) {
-	return session.List(s.agentDir, s.cwd)
-}
-
-func (s *CodingSession) ListSessionInfos() ([]SessionInfo, error) {
-	return s.ListSessions()
-}
-
-// ListAllSessions returns persisted sessions across all working directories.
-func (s *CodingSession) ListAllSessions() ([]session.SessionInfo, error) {
-	return session.ListAll(s.agentDir)
-}
-
-func (s *CodingSession) ListAllSessionInfos() ([]SessionInfo, error) {
-	return s.ListAllSessions()
-}
-
-// ForkFromSession creates and switches to a new session copied from sessionFile.
-func (s *CodingSession) ForkFromSession(sessionFile string) error {
-	mgr, err := session.ForkFrom(s.agentDir, sessionFile, s.cwd)
-	if err != nil {
-		return err
-	}
-	return s.switchSessionManager(mgr)
-}
-
-// DeleteSession removes a saved session file, except the active session.
-func (s *CodingSession) DeleteSession(sessionFile string) error {
-	current, err := filepath.Abs(s.GetSessionFile())
-	if err != nil {
-		return err
-	}
-	target, err := filepath.Abs(sessionFile)
-	if err != nil {
-		return err
-	}
-	if current == target {
-		return fmt.Errorf("refusing to delete the active session")
-	}
-	return session.Delete(s.agentDir, sessionFile)
-}
-
-// SetSessionName sets the display name for this session.
-func (s *CodingSession) SetSessionName(name string) {
-	s.sessionName = name
-	if s.sessionManager != nil {
-		_ = s.sessionManager.AppendSessionInfo(name)
-	}
-}
-
-// GetSessionName returns the display name for this session.
-func (s *CodingSession) GetSessionName() string {
-	if s.sessionManager != nil {
-		return s.sessionManager.SessionName()
-	}
-	return s.sessionName
-}
-
 // IsCompacting returns whether compaction is currently in progress.
-func (s *CodingSession) IsCompacting() bool {
-	return s.isCompacting
+func (s *engine) IsCompacting() bool {
+	return s.ctxMgr.IsCompacting()
 }
 
 // GetLastAssistantText returns the text content of the last assistant message.
-func (s *CodingSession) GetLastAssistantText() string {
+func (s *engine) GetLastAssistantText() string {
 	msgs := s.agent.GetState().Messages
 	for i := len(msgs) - 1; i >= 0; i-- {
 		msg, ok := msgs[i].(types.AssistantMessage)
@@ -1550,235 +716,7 @@ func (s *CodingSession) GetLastAssistantText() string {
 	return ""
 }
 
-// GetForkMessages returns user messages from the session history, suitable for forking.
-func (s *CodingSession) GetForkMessages() []ForkMessage {
-	entries := s.sessionTree.GetCurrentPath()
-	var result []ForkMessage
-	for _, entry := range entries {
-		if entry.Type != session.EntryTypeMessage {
-			continue
-		}
-		data, ok := entry.Data.(session.MessageData)
-		if !ok {
-			// Try map-based extraction (from JSON deserialization)
-			if m, ok := entry.Data.(map[string]any); ok {
-				role, _ := m["role"].(string)
-				if role != string(agent.RoleUser) {
-					continue
-				}
-				content, _ := m["content"].(string)
-				result = append(result, ForkMessage{
-					EntryID: entry.ID,
-					Role:    role,
-					Content: content,
-				})
-			}
-			continue
-		}
-		if data.Role != agent.RoleUser {
-			continue
-		}
-		content, _ := data.Content.(string)
-		result = append(result, ForkMessage{
-			EntryID: entry.ID,
-			Role:    string(data.Role),
-			Content: content,
-		})
-	}
-	return result
-}
-
-// GetSessionStats returns aggregate statistics for the current session.
-func (s *CodingSession) GetSessionStats() SessionStats {
-	msgs := s.agent.GetState().Messages
-	now := time.Now().UnixMilli()
-	return SessionStats{
-		TotalTokens:    s.totalTokens,
-		MessageCount:   len(msgs),
-		SessionStarted: s.sessionStarted,
-		DurationMs:     now - s.sessionStarted,
-	}
-}
-
-// GetAvailableModels returns all registered models from all providers.
-func (s *CodingSession) GetAvailableModels() []*types.Model {
-	if len(s.scopedModels) > 0 {
-		result := make([]*types.Model, 0, len(s.scopedModels))
-		for _, id := range s.scopedModels {
-			if model := providers.GetModel("", id); model != nil {
-				result = append(result, model)
-			}
-		}
-		return result
-	}
-	var result []*types.Model
-	for _, p := range providers.GetAllProviders() {
-		result = append(result, providers.GetModels(p)...)
-	}
-	return result
-}
-
-// GetAllAvailableModels returns all registered models, ignoring session scope.
-func (s *CodingSession) GetAllAvailableModels() []*types.Model {
-	var result []*types.Model
-	for _, p := range providers.GetAllProviders() {
-		result = append(result, providers.GetModels(p)...)
-	}
-	return result
-}
-
-// GetScopedModelIDs returns the session-local model scope used for cycling.
-func (s *CodingSession) GetScopedModelIDs() []string {
-	return append([]string(nil), s.scopedModels...)
-}
-
-// SetScopedModelIDs updates the session-local model scope used for cycling.
-func (s *CodingSession) SetScopedModelIDs(ids []string) {
-	s.scopedModels = resolveScopedModels(nil, ids)
-	s.writeRuntimeState()
-}
-
-// ReloadResources reloads dynamic resources and refreshes the prompt.
-func (s *CodingSession) ReloadResources() {
-	s.refreshResourcePaths()
-	s.refreshDynamicSystemPrompt()
-	s.writeRuntimeState()
-}
-
-// ExecuteBash executes a shell command and returns the result.
-func (s *CodingSession) ExecuteBash(ctx context.Context, command string, timeoutMs int) (*BashResult, error) {
-	if timeoutMs <= 0 {
-		timeoutMs = 30000
-	}
-
-	bashCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutMs)*time.Millisecond)
-
-	s.bashMu.Lock()
-	s.bashCancel = cancel
-	s.bashMu.Unlock()
-
-	defer func() {
-		cancel()
-		s.bashMu.Lock()
-		s.bashCancel = nil
-		s.bashMu.Unlock()
-	}()
-
-	cmd := exec.CommandContext(bashCtx, "sh", "-c", command)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	cmd.Dir = s.cwd
-
-	err := cmd.Run()
-	exitCode := 0
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			exitCode = exitErr.ExitCode()
-		} else {
-			return nil, err
-		}
-	}
-
-	return &BashResult{
-		Stdout:   stdout.String(),
-		Stderr:   stderr.String(),
-		ExitCode: exitCode,
-	}, nil
-}
-
-// AbortBash cancels the currently running bash command, if any.
-func (s *CodingSession) AbortBash() {
-	s.bashMu.Lock()
-	defer s.bashMu.Unlock()
-	if s.bashCancel != nil {
-		s.bashCancel()
-	}
-}
-
-// ExportHTML writes the session messages as a simple HTML file.
-func (s *CodingSession) ExportHTML(path string) error {
-	msgs := s.agent.GetState().Messages
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-
-	var buf bytes.Buffer
-	buf.WriteString("<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>Session Export</title></head><body>\n")
-
-	for _, msg := range msgs {
-		role := "unknown"
-		content := ""
-
-		switch m := msg.(type) {
-		case types.UserMessage:
-			role = "user"
-			if str, ok := m.Content.(string); ok {
-				content = str
-			}
-		case *types.UserMessage:
-			role = "user"
-			if str, ok := m.Content.(string); ok {
-				content = str
-			}
-		case types.AssistantMessage:
-			role = "assistant"
-			for _, block := range m.Content {
-				if tc, ok := block.(*types.TextContent); ok && tc != nil {
-					content += tc.Text
-				}
-			}
-		case *types.AssistantMessage:
-			role = "assistant"
-			for _, block := range m.Content {
-				if tc, ok := block.(*types.TextContent); ok && tc != nil {
-					content += tc.Text
-				}
-			}
-		}
-
-		buf.WriteString(fmt.Sprintf("<div class=\"message %s\"><strong>%s:</strong><pre>%s</pre></div>\n",
-			role, role, html.EscapeString(content)))
-	}
-
-	buf.WriteString("</body></html>\n")
-	return os.WriteFile(path, buf.Bytes(), 0o644)
-}
-
-// SwitchSession loads messages from a different session file and replaces the current agent messages.
-func (s *CodingSession) SwitchSession(sessionFile string) error {
-	newMgr, err := session.NewManagerFromFile(sessionFile)
-	if err != nil {
-		return fmt.Errorf("failed to load session: %w", err)
-	}
-	return s.switchSessionManager(newMgr)
-}
-
-func (s *CodingSession) switchSessionManager(newMgr *session.Manager) error {
-	var messages []agent.AgentMessage
-	newTree := session.NewTree(newMgr)
-	for _, entry := range newTree.GetCurrentPath() {
-		if entry.Type != session.EntryTypeMessage {
-			continue
-		}
-		if msg, ok := agentMessageFromSessionData(entry.Data); ok && msg != nil {
-			messages = append(messages, msg)
-		}
-	}
-
-	s.sessionManager = newMgr
-	s.sessionTree = newTree
-	s.sessionName = newMgr.SessionName()
-	s.agent.ReplaceMessages(messages)
-	s.lastSavedIndex = len(messages)
-	if s.extensions != nil {
-		s.extensions.EmitEvent(agent.Event{Type: agent.EventType("session_start"), Reason: "resume"})
-	}
-	s.writeRuntimeState()
-	return nil
-}
-
-func prepareSubagentDefinition(def *subagent.SubagentDefinition, skillMgr *skills.Manager, memoryStore *MemoryStore) *subagent.SubagentDefinition {
+func prepareSubagentDefinition(def *subagent.SubagentDefinition, skillMgr *skills.Manager, memoryStore *memory.Store) *subagent.SubagentDefinition {
 	if def == nil {
 		return nil
 	}
@@ -1815,7 +753,7 @@ func prepareSubagentDefinition(def *subagent.SubagentDefinition, skillMgr *skill
 	return &clone
 }
 
-func memoryContextForScope(store *MemoryStore, scope string) string {
+func memoryContextForScope(store *memory.Store, scope string) string {
 	switch strings.ToLower(strings.TrimSpace(scope)) {
 	case "", "none":
 		return ""
@@ -1833,14 +771,10 @@ func memoryContextForScope(store *MemoryStore, scope string) string {
 	return ""
 }
 
-func (s *CodingSession) executeSkill(ctx context.Context, originalInput string, skill *skills.Skill, args string) error {
+func (s *engine) executeSkill(ctx context.Context, skill *skills.Skill, args string) error {
 	task := strings.TrimSpace(args)
 	if task == "" {
 		task = "Use this skill for the user's request."
-	}
-
-	if err := s.runHarnessUserPromptSubmit(originalInput); err != nil {
-		return err
 	}
 
 	s.refreshDynamicSystemPrompt()
@@ -1861,11 +795,11 @@ func (s *CodingSession) executeSkill(ctx context.Context, originalInput string, 
 	if err != nil {
 		return err
 	}
-	s.maybeAutoCompact(ctx)
+	s.ctxMgr.MaybeAutoCompact(ctx)
 	return nil
 }
 
-func (s *CodingSession) skillPrompt(skill *skills.Skill) string {
+func (s *engine) skillPrompt(skill *skills.Skill) string {
 	var parts []string
 	parts = append(parts, fmt.Sprintf("The user explicitly invoked the %q skill. Use the instructions below for this turn.", skill.Name))
 	parts = append(parts, skill.Content)
@@ -1873,7 +807,7 @@ func (s *CodingSession) skillPrompt(skill *skills.Skill) string {
 	return strings.Join(parts, "\n\n---\n\n")
 }
 
-func (s *CodingSession) handleMessageEnd(msg agent.AgentMessage) {
+func (s *engine) handleMessageEnd(msg agent.AgentMessage) {
 	if msg == nil {
 		return
 	}
@@ -1903,7 +837,7 @@ func (s *CodingSession) handleMessageEnd(msg agent.AgentMessage) {
 	_ = s.SaveMessages()
 }
 
-func (s *CodingSession) currentLeafMessageMatches(role string, content any) bool {
+func (s *engine) currentLeafMessageMatches(role string, content any) bool {
 	if s.sessionManager == nil {
 		return false
 	}

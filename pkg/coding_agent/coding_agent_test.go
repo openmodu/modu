@@ -11,11 +11,12 @@ import (
 	"time"
 
 	"github.com/openmodu/modu/pkg/agent"
-	"github.com/openmodu/modu/pkg/coding_agent/compaction"
-	"github.com/openmodu/modu/pkg/coding_agent/extension"
-	subagentext "github.com/openmodu/modu/pkg/coding_agent/extension/subagent"
-	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/session"
-	"github.com/openmodu/modu/pkg/coding_agent/subagent"
+	"github.com/openmodu/modu/pkg/coding_agent/foundation/config"
+	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
+	subagentext "github.com/openmodu/modu/pkg/coding_agent/plugins/extension/subagent"
+	"github.com/openmodu/modu/pkg/coding_agent/plugins/subagent"
+	"github.com/openmodu/modu/pkg/coding_agent/services/memory"
+	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/services/session"
 	"github.com/openmodu/modu/pkg/coding_agent/tools"
 	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/skills"
@@ -91,26 +92,6 @@ func (t *testCwdTool) Execute(ctx context.Context, toolCallID string, args map[s
 }
 func (t *testCwdTool) WithCwd(cwd string) agent.Tool {
 	return &testCwdTool{cwd: cwd}
-}
-
-type testHintTool struct{}
-
-func (t *testHintTool) Name() string        { return "hint_tool" }
-func (t *testHintTool) Label() string       { return "Hint Tool" }
-func (t *testHintTool) Description() string { return "Emit a harness hint in output" }
-func (t *testHintTool) Parameters() any {
-	return map[string]any{
-		"type":       "object",
-		"properties": map[string]any{},
-	}
-}
-func (t *testHintTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
-	return agent.ToolResult{
-		Content: []types.ContentBlock{&types.TextContent{
-			Type: "text",
-			Text: "visible output\n<modu-code-hint v=1 type=plugin value=test@local />",
-		}},
-	}, nil
 }
 
 func TestNewCodingSession(t *testing.T) {
@@ -316,10 +297,10 @@ Return a short completion message.`
 	}
 
 	// Enable task_output explicitly for this test (it's off by default).
-	cfg := DefaultConfig()
-	cfg.Features.TaskOutputTool = boolPtr(true)
+	cfg := config.Default()
+	cfg.Features.TaskOutputTool = config.Ptr(true)
 	settingsPath := filepath.Join(agentDir, "settings.json")
-	if err := SaveConfig(cfg, settingsPath); err != nil {
+	if err := config.Save(cfg, settingsPath); err != nil {
 		t.Fatal(err)
 	}
 
@@ -741,7 +722,7 @@ func TestPlanModeTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !session.planMode {
+	if !session.IsPlanMode() {
 		t.Fatal("expected plan mode enabled")
 	}
 
@@ -752,7 +733,7 @@ func TestPlanModeTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if session.planMode {
+	if session.IsPlanMode() {
 		t.Fatal("expected plan mode disabled")
 	}
 	todos := session.GetTodos()
@@ -765,287 +746,6 @@ func TestPlanModeTools(t *testing.T) {
 }
 
 // TestPlanGateAutoAllowed verifies the agent-level approval gate lets
-// exit_plan_mode through unconditionally — the real interactive approval is
-// driven inside the tool (so rejection feedback can reach the model).
-func TestPlanGateAutoAllowed(t *testing.T) {
-	m := NewApprovalManager()
-	m.DenyAlways("exit_plan_mode")
-	m.SetRules(PermissionConfig{DenyTools: []string{"exit_plan_mode"}})
-	called := false
-	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
-		called = true
-		return agent.ToolApprovalDeny, nil
-	})
-	if d, _ := m.Approve("exit_plan_mode", "c0", nil); d != agent.ToolApprovalAllow {
-		t.Fatalf("agent gate must auto-allow exit_plan_mode, got %v", d)
-	}
-	if called {
-		t.Fatal("exit_plan_mode must not hit the generic approval callback")
-	}
-}
-
-func TestApprovalManagerAutoAllowsReadOnlyTools(t *testing.T) {
-	m := NewApprovalManager()
-	called := false
-	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
-		called = true
-		return agent.ToolApprovalDeny, nil
-	})
-	for _, toolName := range []string{"read", "grep", "find", "ls"} {
-		if d, _ := m.Approve(toolName, "call-"+toolName, nil); d != agent.ToolApprovalAllow {
-			t.Fatalf("expected %s to auto-allow, got %v", toolName, d)
-		}
-	}
-	if called {
-		t.Fatal("read-only tools should not hit the interactive approval callback")
-	}
-}
-
-func TestApprovalManagerAutoAllowsGoalStateTools(t *testing.T) {
-	m := NewApprovalManager()
-	m.SetRules(PermissionConfig{DenyTools: []string{"update_goal"}})
-	called := false
-	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
-		called = true
-		return agent.ToolApprovalDeny, nil
-	})
-	for _, toolName := range []string{"create_goal", "get_goal", "update_goal"} {
-		if d, _ := m.Approve(toolName, "call-"+toolName, nil); d != agent.ToolApprovalAllow {
-			t.Fatalf("expected %s to auto-allow, got %v", toolName, d)
-		}
-	}
-	if called {
-		t.Fatal("goal state tools should not hit the interactive approval callback")
-	}
-}
-
-func TestApprovalManagerDenyRulesOverrideReadOnlyAutoAllow(t *testing.T) {
-	m := NewApprovalManager()
-	m.SetRules(PermissionConfig{DenyTools: []string{"read"}})
-	if d, _ := m.Approve("read", "call-read", nil); d != agent.ToolApprovalDeny {
-		t.Fatalf("expected denyTools to override read auto-allow, got %v", d)
-	}
-}
-
-func TestApprovalManagerDenyRulesOverrideCachedBashAllow(t *testing.T) {
-	m := NewApprovalManager()
-	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
-		return agent.ToolApprovalAllowAlways, nil
-	})
-	args := map[string]any{"command": "rm -rf /tmp/nope"}
-	if d, _ := m.Approve("bash", "call-allow", args); d != agent.ToolApprovalAllowAlways {
-		t.Fatalf("expected initial bash approval to cache, got %v", d)
-	}
-
-	m.SetRules(PermissionConfig{DenyTools: []string{"bash"}})
-	if d, _ := m.Approve("bash", "call-deny", args); d != agent.ToolApprovalDeny {
-		t.Fatalf("expected denyTools to override cached bash allow, got %v", d)
-	}
-}
-
-func TestApprovalManagerAutoAllowsSafeBashCommands(t *testing.T) {
-	m := NewApprovalManager()
-	called := false
-	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
-		called = true
-		return agent.ToolApprovalDeny, nil
-	})
-	for _, command := range []string{
-		"pwd",
-		"git status --short",
-		"go test ./pkg/tui",
-		"curl -sS http://127.0.0.1:7081/",
-		"rg -n ApprovalManager pkg/coding_agent 2>/dev/null",
-		"bash -lc 'git status --short'",
-		"curl -sS -o /dev/null http://127.0.0.1:7081/",
-		"python <<'PY'\nprint('inspect')\nPY",
-	} {
-		if d, _ := m.Approve("bash", "call-safe", map[string]any{"command": command}); d != agent.ToolApprovalAllow {
-			t.Fatalf("expected safe bash command %q to auto-allow, got %v", command, d)
-		}
-	}
-	if called {
-		t.Fatal("safe bash commands should not hit the interactive approval callback")
-	}
-}
-
-func TestApprovalManagerAllowBashPrefixesRestrictsSafeBashAutoAllow(t *testing.T) {
-	m := NewApprovalManager()
-	m.SetRules(PermissionConfig{AllowBashPrefixes: []string{"git status"}})
-	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
-		t.Fatalf("allowBashPrefixes should decide safe bash command before callback for %s %#v", name, args)
-		return agent.ToolApprovalDeny, nil
-	})
-	if d, _ := m.Approve("bash", "call-allowed", map[string]any{"command": "git status --short"}); d != agent.ToolApprovalAllow {
-		t.Fatalf("expected matching safe bash command to be allowed, got %v", d)
-	}
-	if d, _ := m.Approve("bash", "call-denied", map[string]any{"command": "pwd"}); d != agent.ToolApprovalDeny {
-		t.Fatalf("expected non-matching safe bash command to be denied by allowBashPrefixes, got %v", d)
-	}
-}
-
-func TestApprovalManagerScopesInteractiveBashAllowAlwaysToCommand(t *testing.T) {
-	m := NewApprovalManager()
-	calls := 0
-	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
-		calls++
-		switch calls {
-		case 1:
-			return agent.ToolApprovalAllowAlways, nil
-		case 2:
-			return agent.ToolApprovalDeny, nil
-		default:
-			t.Fatalf("unexpected approval callback call %d for %s %#v", calls, name, args)
-			return agent.ToolApprovalDeny, nil
-		}
-	})
-
-	dangerArgs := map[string]any{"command": "rm -rf /tmp/nope"}
-	if d, _ := m.Approve("bash", "call-danger-1", dangerArgs); d != agent.ToolApprovalAllowAlways {
-		t.Fatalf("expected first bash command to return allow_always, got %v", d)
-	}
-	if d, _ := m.Approve("bash", "call-danger-2", dangerArgs); d != agent.ToolApprovalAllow {
-		t.Fatalf("expected identical bash command to be cached as allow, got %v", d)
-	}
-	if calls != 1 {
-		t.Fatalf("expected identical bash command not to prompt again, got %d callbacks", calls)
-	}
-	if d, _ := m.Approve("bash", "call-danger-other", map[string]any{"command": "rm -rf /tmp/other"}); d != agent.ToolApprovalDeny {
-		t.Fatalf("expected different bash command to ask callback and deny, got %v", d)
-	}
-	if calls != 2 {
-		t.Fatalf("expected different bash command to prompt, got %d callbacks", calls)
-	}
-}
-
-func TestApprovalManagerScopesInteractiveBashDenyAlwaysToCommand(t *testing.T) {
-	m := NewApprovalManager()
-	calls := 0
-	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
-		calls++
-		switch calls {
-		case 1:
-			return agent.ToolApprovalDenyAlways, nil
-		case 2:
-			return agent.ToolApprovalAllow, nil
-		default:
-			t.Fatalf("unexpected approval callback call %d for %s %#v", calls, name, args)
-			return agent.ToolApprovalDeny, nil
-		}
-	})
-
-	dangerArgs := map[string]any{"command": "rm -rf /tmp/nope"}
-	if d, _ := m.Approve("bash", "call-danger-1", dangerArgs); d != agent.ToolApprovalDenyAlways {
-		t.Fatalf("expected first bash command to return deny_always, got %v", d)
-	}
-	if d, _ := m.Approve("bash", "call-danger-2", dangerArgs); d != agent.ToolApprovalDeny {
-		t.Fatalf("expected identical bash command to be cached as deny, got %v", d)
-	}
-	if calls != 1 {
-		t.Fatalf("expected identical denied bash command not to prompt again, got %d callbacks", calls)
-	}
-	if d, _ := m.Approve("bash", "call-other-danger", map[string]any{"command": "rm -rf /tmp/other"}); d != agent.ToolApprovalAllow {
-		t.Fatalf("expected different bash command to ask callback and allow, got %v", d)
-	}
-	if calls != 2 {
-		t.Fatalf("expected different bash command to prompt, got %d callbacks", calls)
-	}
-}
-
-func TestApprovalManagerProgrammaticBashAllowAlwaysRemainsToolWideForNonDangerousCommands(t *testing.T) {
-	m := NewApprovalManager()
-	m.AllowAlways("bash")
-	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
-		t.Fatalf("programmatic bash allow should not prompt for %s %#v", name, args)
-		return agent.ToolApprovalDeny, nil
-	})
-	if d, _ := m.Approve("bash", "call-1", map[string]any{"command": "go test ./pkg/tui"}); d != agent.ToolApprovalAllow {
-		t.Fatalf("expected first bash command to be allowed, got %v", d)
-	}
-	if d, _ := m.Approve("bash", "call-2", map[string]any{"command": "git status --short"}); d != agent.ToolApprovalAllow {
-		t.Fatalf("expected second bash command to be allowed by tool-wide rule, got %v", d)
-	}
-}
-
-func TestApprovalManagerDangerousBashBypassesToolWideAllow(t *testing.T) {
-	m := NewApprovalManager()
-	m.AllowAlways("bash")
-	calls := 0
-	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
-		calls++
-		return agent.ToolApprovalDeny, nil
-	})
-	if d, _ := m.Approve("bash", "call-danger", map[string]any{"command": "rm -rf /tmp/nope"}); d != agent.ToolApprovalDeny {
-		t.Fatalf("expected dangerous bash command to require approval and deny, got %v", d)
-	}
-	if calls != 1 {
-		t.Fatalf("expected dangerous bash command to prompt despite tool-wide allow, got %d callbacks", calls)
-	}
-}
-
-func TestApprovalManagerDangerousBashWrapperBypassesToolWideAllow(t *testing.T) {
-	m := NewApprovalManager()
-	m.AllowAlways("bash")
-	calls := 0
-	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
-		calls++
-		return agent.ToolApprovalDeny, nil
-	})
-	if d, _ := m.Approve("bash", "call-danger", map[string]any{"command": "bash -lc 'rm -rf /tmp/nope'"}); d != agent.ToolApprovalDeny {
-		t.Fatalf("expected dangerous wrapped bash command to require approval and deny, got %v", d)
-	}
-	if calls != 1 {
-		t.Fatalf("expected dangerous wrapped bash command to prompt despite tool-wide allow, got %d callbacks", calls)
-	}
-}
-
-func TestApprovalManagerDangerousBashBypassesAllowPrefix(t *testing.T) {
-	m := NewApprovalManager()
-	m.SetRules(PermissionConfig{AllowBashPrefixes: []string{"rm "}})
-	calls := 0
-	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
-		calls++
-		return agent.ToolApprovalDeny, nil
-	})
-	if d, _ := m.Approve("bash", "call-danger", map[string]any{"command": "rm -rf /tmp/nope"}); d != agent.ToolApprovalDeny {
-		t.Fatalf("expected dangerous bash command to bypass allow prefix and deny, got %v", d)
-	}
-	if calls != 1 {
-		t.Fatalf("expected dangerous bash command to prompt despite allow prefix, got %d callbacks", calls)
-	}
-}
-
-func TestApprovalManagerDangerousBashStillCachesExactCommand(t *testing.T) {
-	m := NewApprovalManager()
-	calls := 0
-	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
-		calls++
-		switch calls {
-		case 1:
-			return agent.ToolApprovalAllowAlways, nil
-		case 2:
-			return agent.ToolApprovalDeny, nil
-		default:
-			t.Fatalf("unexpected approval callback call %d for %s %#v", calls, name, args)
-			return agent.ToolApprovalDeny, nil
-		}
-	})
-
-	dangerArgs := map[string]any{"command": "rm -rf /tmp/nope"}
-	if d, _ := m.Approve("bash", "call-danger-1", dangerArgs); d != agent.ToolApprovalAllowAlways {
-		t.Fatalf("expected first dangerous bash command to return allow_always, got %v", d)
-	}
-	if d, _ := m.Approve("bash", "call-danger-2", dangerArgs); d != agent.ToolApprovalAllow {
-		t.Fatalf("expected identical dangerous bash command to be cached as allow, got %v", d)
-	}
-	if d, _ := m.Approve("bash", "call-danger-3", map[string]any{"command": "rm -rf /tmp/other"}); d != agent.ToolApprovalDeny {
-		t.Fatalf("expected different dangerous bash command to ask callback and deny, got %v", d)
-	}
-	if calls != 2 {
-		t.Fatalf("expected only exact dangerous command to be cached, got %d callbacks", calls)
-	}
-}
-
 func TestPlanModeApprovalBlocksMutatingToolsBeforeCallback(t *testing.T) {
 	session := newTestSession(t, newTestModel())
 	session.EnterPlanMode()
@@ -1079,7 +779,7 @@ func TestSubmitPlanApprove(t *testing.T) {
 	session.EnterPlanMode()
 	session.SetPlanDecisionCallback(func(plan string, steps []string) string { return "approve" })
 
-	adapter := planModeAdapter{session: session}
+	adapter := session.plan
 	msg := adapter.SubmitPlan(context.Background(), "do work", []string{"a", "b"})
 
 	if session.IsPlanMode() {
@@ -1118,19 +818,6 @@ func TestClearPlanRemovesPlanArtifactAndTodos(t *testing.T) {
 	}
 }
 
-func TestSessionTreeBranchSummaryFallbackLabel(t *testing.T) {
-	entry := sessionpkg.SessionEntry{
-		Type: sessionpkg.EntryTypeBranchSummary,
-		Data: sessionpkg.BranchSummaryData{FromID: "1234567890abcdef"},
-	}
-	if got := sessionTreeNodeLabel(entry, ""); got != "from #12345678" {
-		t.Fatalf("expected branch summary fallback label, got %q", got)
-	}
-	if got := sessionTreeNodeLabel(entry, "manual label"); got != "manual label" {
-		t.Fatalf("expected explicit label to win, got %q", got)
-	}
-}
-
 // TestSubmitPlanAutoAccept covers approve_auto: edits are auto-allowed for the
 // rest of the session.
 func TestSubmitPlanAutoAccept(t *testing.T) {
@@ -1138,7 +825,7 @@ func TestSubmitPlanAutoAccept(t *testing.T) {
 	session.EnterPlanMode()
 	session.SetPlanDecisionCallback(func(plan string, steps []string) string { return "approve_auto" })
 
-	planModeAdapter{session: session}.SubmitPlan(context.Background(), "p", []string{"x"})
+	session.plan.SubmitPlan(context.Background(), "p", []string{"x"})
 
 	for _, tool := range []string{"write", "edit", "bash"} {
 		if d, _ := session.approvalManager.Approve(tool, "t", nil); d != agent.ToolApprovalAllow {
@@ -1156,7 +843,7 @@ func TestSubmitPlanReject(t *testing.T) {
 		return "reject:use the existing helper instead"
 	})
 
-	msg := planModeAdapter{session: session}.SubmitPlan(context.Background(), "p", []string{"x"})
+	msg := session.plan.SubmitPlan(context.Background(), "p", []string{"x"})
 
 	if !session.IsPlanMode() {
 		t.Fatal("expected to remain in plan mode after rejection")
@@ -1499,18 +1186,12 @@ func TestCodingSessionRequiresModel(t *testing.T) {
 }
 
 func TestDefaultConfig(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := config.Default()
 	if cfg.ThinkingLevel == "" {
 		t.Fatal("thinking level should have default")
 	}
 	if !cfg.AutoCompaction {
 		t.Fatal("auto compaction should be on by default")
-	}
-	if !cfg.HarnessEnableActions() {
-		t.Fatal("harness actions should be enabled by default")
-	}
-	if cfg.Harness.LogFiles.ToolUse == "" || cfg.Harness.ArtifactFiles.ToolUse == "" || cfg.Harness.BridgeDirs.ToolUse == "" {
-		t.Fatalf("expected default harness outputs, got %#v", cfg.Harness)
 	}
 }
 
@@ -1524,7 +1205,7 @@ func TestLoadConfigMissing(t *testing.T) {
 	if err := os.MkdirAll(cwd, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := LoadConfig(agentDir, cwd)
+	cfg, err := config.Load(agentDir, cwd)
 	if err != nil {
 		t.Fatalf("loading missing config should not error: %v", err)
 	}
@@ -1548,7 +1229,7 @@ func TestLoadConfigFromFile(t *testing.T) {
 	configContent := `{"thinkingLevel":"high","autoCompaction":false}`
 	os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(configContent), 0o644)
 
-	cfg, err := LoadConfig(agentDir, dir)
+	cfg, err := config.Load(agentDir, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1557,59 +1238,6 @@ func TestLoadConfigFromFile(t *testing.T) {
 	}
 	if cfg.AutoCompaction {
 		t.Fatal("auto compaction should be false from config")
-	}
-}
-
-func TestLoadConfigRejectsDisallowedHarnessActionCommand(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, "agent")
-	if err := os.MkdirAll(agentDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	configContent := `{"harness":{"actions":{"toolUse":[{"type":"exec","command":"sh"}]}}}`
-	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(configContent), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadConfig(agentDir, dir); err == nil {
-		t.Fatal("expected invalid harness action command to be rejected")
-	}
-}
-
-func TestLoadConfigRejectsDisallowedHarnessActionDir(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, "agent")
-	cwd := filepath.Join(dir, "repo")
-	if err := os.MkdirAll(agentDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(cwd, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	configContent := `{"harness":{"actionPolicy":{"allowDirPrefixes":["/tmp/safe"]},"actions":{"toolUse":[{"type":"exec","command":"/bin/sh","dir":"/tmp/unsafe"}]}}}`
-	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(configContent), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadConfig(agentDir, cwd); err == nil || !strings.Contains(err.Error(), "dir not allowed by policy") {
-		t.Fatalf("expected dir policy error, got %v", err)
-	}
-}
-
-func TestLoadConfigRejectsInvalidHarnessActionOnFailure(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, "agent")
-	cwd := filepath.Join(dir, "repo")
-	if err := os.MkdirAll(agentDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(cwd, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	configContent := `{"harness":{"actions":{"toolUse":[{"type":"exec","command":"/bin/sh","onFailure":"panic"}]}}}`
-	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(configContent), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadConfig(agentDir, cwd); err == nil || !strings.Contains(err.Error(), "onFailure") {
-		t.Fatalf("expected onFailure validation error, got %v", err)
 	}
 }
 
@@ -1726,130 +1354,6 @@ func TestRuntimeStateGitRefreshCanRunAsync(t *testing.T) {
 		default:
 			time.Sleep(10 * time.Millisecond)
 		}
-	}
-}
-
-func TestPermissionRulesEmitHarnessArtifacts(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	if err := os.MkdirAll(agentDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	configContent := `{"permissions":{"denyTools":["echo"]}}`
-	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(configContent), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	model := newTestModel()
-	callCount := 0
-	streamFn := func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
-		callCount++
-		stream := types.NewEventStream()
-		go func() {
-			var msg *types.AssistantMessage
-			if callCount == 1 {
-				msg = &types.AssistantMessage{
-					Role:       "assistant",
-					ProviderID: model.ProviderID,
-					Model:      model.ID,
-					StopReason: "toolUse",
-					Content: []types.ContentBlock{
-						&types.ToolCallContent{Type: "toolCall", ID: "tool-1", Name: "echo", Arguments: map[string]any{"value": "hi"}},
-					},
-					Timestamp: time.Now().UnixMilli(),
-				}
-			} else {
-				msg = &types.AssistantMessage{
-					Role:       "assistant",
-					ProviderID: model.ProviderID,
-					Model:      model.ID,
-					StopReason: "stop",
-					Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "done"}},
-					Timestamp:  time.Now().UnixMilli(),
-				}
-			}
-			stream.Push(types.StreamEvent{Type: "done", Reason: msg.StopReason, Message: msg})
-			stream.Resolve(msg, nil)
-			stream.Close()
-		}()
-		return stream, nil
-	}
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd:         dir,
-		AgentDir:    agentDir,
-		Model:       model,
-		CustomTools: []agent.Tool{&testEchoTool{}},
-		GetAPIKey:   func(provider string) (string, error) { return "", nil },
-		StreamFn:    streamFn,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := session.Prompt(context.Background(), "test"); err != nil {
-		t.Fatal(err)
-	}
-	artifactPath := filepath.Join(agentDir, "artifacts", "permission-latest.json")
-	data, err := os.ReadFile(artifactPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(data), `"event": "permission_denied"`) || !strings.Contains(string(data), `"tool": "echo"`) {
-		t.Fatalf("expected permission artifact, got %q", string(data))
-	}
-}
-
-func TestDefaultHarnessOutputsWorkWithoutManualSettings(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	if err := os.MkdirAll(agentDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd:         dir,
-		AgentDir:    agentDir,
-		Model:       newTestModel(),
-		CustomTools: []agent.Tool{&testEchoTool{}},
-		GetAPIKey:   func(provider string) (string, error) { return "", nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var echoTool agent.Tool
-	for _, tool := range session.GetAgent().GetState().Tools {
-		if tool.Name() == "echo" {
-			echoTool = tool
-			break
-		}
-	}
-	if echoTool == nil {
-		t.Fatal("expected echo tool")
-	}
-	if _, err := echoTool.Execute(context.Background(), "echo-auto-default-1", map[string]any{"value": "ok"}, nil); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg := session.GetConfig()
-	checkExists := func(target string) {
-		path := target
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(agentDir, path)
-		}
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("expected default harness output at %s, got %v", path, err)
-		}
-	}
-	checkExists(cfg.Harness.LogFiles.ToolUse)
-	checkExists(cfg.Harness.ArtifactFiles.ToolUse)
-	bridgeDir := cfg.Harness.BridgeDirs.ToolUse
-	if !filepath.IsAbs(bridgeDir) {
-		bridgeDir = filepath.Join(agentDir, bridgeDir)
-	}
-	entries, err := os.ReadDir(bridgeDir)
-	if err != nil || len(entries) == 0 {
-		t.Fatalf("expected default bridge events in %s, err=%v", bridgeDir, err)
-	}
-	if _, err := os.Stat(session.RuntimePaths().RuntimeIndexFile); err != nil {
-		t.Fatalf("expected runtime index file, got %v", err)
 	}
 }
 
@@ -2077,13 +1581,13 @@ func TestMaybeAutoCompact_BelowThreshold(t *testing.T) {
 	session := newTestSession(t, newTestModelWithContext(10000))
 
 	// Set totalTokens below threshold (80% of 10000 = 8000)
-	session.totalTokens = 5000
+	session.ctxMgr.AddUsage(5000)
 
 	session.agent.AppendMessage(types.UserMessage{Role: "user", Content: "msg1"})
 	session.agent.AppendMessage(types.UserMessage{Role: "user", Content: "msg2"})
 	msgsBefore := len(session.agent.GetState().Messages)
 
-	session.maybeAutoCompact(context.Background())
+	session.ctxMgr.MaybeAutoCompact(context.Background())
 
 	msgsAfter := len(session.agent.GetState().Messages)
 	if msgsAfter != msgsBefore {
@@ -2116,70 +1620,21 @@ func TestMaybeAutoCompact_AboveThreshold(t *testing.T) {
 	}
 
 	// Set totalTokens above threshold (80% of 128000 = 102400)
-	session.totalTokens = 105000
+	session.ctxMgr.AddUsage(105000)
 
 	msgsBefore := len(session.agent.GetState().Messages)
 
-	session.maybeAutoCompact(context.Background())
+	session.ctxMgr.MaybeAutoCompact(context.Background())
 
 	msgsAfter := len(session.agent.GetState().Messages)
 	if msgsAfter >= msgsBefore {
 		t.Fatalf("should compact above threshold: before=%d after=%d", msgsBefore, msgsAfter)
 	}
 
-	if session.totalTokens != 0 {
-		t.Fatalf("expected totalTokens reset to 0, got %d", session.totalTokens)
+	if session.ctxMgr.Tokens() != 0 {
+		t.Fatalf("expected totalTokens reset to 0, got %d", session.ctxMgr.Tokens())
 	}
 }
-
-// --- Retry Manager Tests ---
-
-func TestIsRetryableError(t *testing.T) {
-	tests := []struct {
-		msg      string
-		expected bool
-	}{
-		{"server overloaded", true},
-		{"rate limit exceeded", true},
-		{"429 too many requests", true},
-		{"HTTP 502 bad gateway", true},
-		{"HTTP 503 service unavailable", true},
-		{"normal error", false},
-		{"invalid input", false},
-		{"temporarily unavailable", true},
-	}
-	for _, tt := range tests {
-		if got := IsRetryableError(tt.msg); got != tt.expected {
-			t.Errorf("IsRetryableError(%q) = %v, want %v", tt.msg, got, tt.expected)
-		}
-	}
-}
-
-func TestRetryManagerReset(t *testing.T) {
-	rm := NewRetryManager(RetryConfig{MaxRetries: 2, BaseDelayMs: 10, MaxDelayMs: 100}, true)
-	rm.Reset()
-	if !rm.IsEnabled() {
-		t.Fatal("should be enabled")
-	}
-}
-
-func TestRetryManagerDisabled(t *testing.T) {
-	rm := NewRetryManager(RetryConfig{}, false)
-	if rm.IsEnabled() {
-		t.Fatal("should be disabled")
-	}
-	rm.SetEnabled(true)
-	if !rm.IsEnabled() {
-		t.Fatal("should be enabled after SetEnabled(true)")
-	}
-}
-
-func TestRetryManagerAbort(t *testing.T) {
-	rm := NewRetryManager(RetryConfig{MaxRetries: 3, BaseDelayMs: 10, MaxDelayMs: 100}, true)
-	rm.AbortRetry()
-}
-
-// --- CycleModel Tests ---
 
 func TestCycleModelNoScoped(t *testing.T) {
 	session := newTestSession(t, newTestModel())
@@ -2767,7 +2222,7 @@ func TestPrepareSubagentDefinitionInjectsSkillsAndMemory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mem := NewMemoryStore(agentDir, dir)
+	mem := memory.New(agentDir, dir)
 	if err := mem.WriteGlobalLongTerm("global note"); err != nil {
 		t.Fatal(err)
 	}
@@ -3012,109 +2467,18 @@ func TestMaybeAutoCompact_DisabledByConfig(t *testing.T) {
 	session := newTestSession(t, newTestModelWithContext(10000))
 
 	session.config.AutoCompaction = false
-	session.totalTokens = 9000
+	session.ctxMgr.AddUsage(9000)
 
 	for i := 0; i < 10; i++ {
 		session.agent.AppendMessage(types.UserMessage{Role: "user", Content: "msg"})
 	}
 	msgsBefore := len(session.agent.GetState().Messages)
 
-	session.maybeAutoCompact(context.Background())
+	session.ctxMgr.MaybeAutoCompact(context.Background())
 
 	msgsAfter := len(session.agent.GetState().Messages)
 	if msgsAfter != msgsBefore {
 		t.Fatal("should not compact when AutoCompaction is disabled")
-	}
-}
-
-func TestHarnessHooksWrapToolExecution(t *testing.T) {
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd:         t.TempDir(),
-		AgentDir:    filepath.Join(t.TempDir(), ".coding_agent"),
-		Model:       newTestModel(),
-		CustomTools: []agent.Tool{&testEchoTool{}},
-		GetAPIKey:   func(provider string) (string, error) { return "", nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var preCalled, postCalled bool
-	session.RegisterHarnessHook(HarnessHook{
-		PreToolUse: func(call HarnessToolCall) error {
-			if call.ToolName == "echo" {
-				preCalled = true
-			}
-			return nil
-		},
-		PostToolUse: func(call HarnessToolCall, result agent.ToolResult, err error) {
-			if call.ToolName == "echo" && err == nil {
-				postCalled = true
-			}
-		},
-	})
-
-	var echo agent.Tool
-	for _, tool := range session.GetAgent().GetState().Tools {
-		if tool.Name() == "echo" {
-			echo = tool
-			break
-		}
-	}
-	if echo == nil {
-		t.Fatal("expected wrapped echo tool")
-	}
-
-	_, err = echo.Execute(context.Background(), "echo-1", map[string]any{"value": "ok"}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !preCalled || !postCalled {
-		t.Fatalf("expected harness hooks to run, pre=%v post=%v", preCalled, postCalled)
-	}
-}
-
-func TestHarnessHintStrippedAndStored(t *testing.T) {
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd:         t.TempDir(),
-		AgentDir:    filepath.Join(t.TempDir(), ".coding_agent"),
-		Model:       newTestModel(),
-		CustomTools: []agent.Tool{&testHintTool{}},
-		GetAPIKey:   func(provider string) (string, error) { return "", nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var hintTool agent.Tool
-	for _, tool := range session.GetAgent().GetState().Tools {
-		if tool.Name() == "hint_tool" {
-			hintTool = tool
-			break
-		}
-	}
-	if hintTool == nil {
-		t.Fatal("expected wrapped hint tool")
-	}
-
-	result, err := hintTool.Execute(context.Background(), "hint-1", map[string]any{}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := result.Content[0].(*types.TextContent).Text
-	if strings.Contains(text, "modu-code-hint") {
-		t.Fatalf("expected hint tag to be stripped, got %q", text)
-	}
-	hints := session.GetPendingHarnessHints()
-	if len(hints) != 1 || hints[0].Value != "test@local" {
-		t.Fatalf("expected stored harness hint, got %#v", hints)
-	}
-	entries, err := os.ReadDir(session.RuntimePaths().ToolResultsDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) == 0 {
-		t.Fatal("expected tool result artifact to be written")
 	}
 }
 
@@ -3154,144 +2518,6 @@ func TestHarnessPlanFileReadable(t *testing.T) {
 	}
 	if !strings.Contains(readResult.Content[0].(*types.TextContent).Text, "ship feature safely") {
 		t.Fatalf("expected read tool to access harness plan file, got %#v", readResult.Content)
-	}
-}
-
-func TestHarnessCompactHooksRun(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(t.TempDir(), ".coding_agent")
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd:      dir,
-		AgentDir: agentDir,
-		Model:    newTestModel(),
-		GetAPIKey: func(provider string) (string, error) {
-			return "", nil
-		},
-		Extensions: []extension.Extension{
-			subagentext.New(),
-		},
-		StreamFn: func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
-			stream := types.NewEventStream()
-			go func() {
-				msg := &types.AssistantMessage{
-					Role:       "assistant",
-					ProviderID: "mock",
-					Model:      "mock",
-					StopReason: "stop",
-					Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "summary ok"}},
-					Timestamp:  time.Now().UnixMilli(),
-				}
-				stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
-				stream.Resolve(msg, nil)
-				stream.Close()
-			}()
-			return stream, nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "one"})
-	session.GetAgent().AppendMessage(types.AssistantMessage{Role: "assistant", Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "two"}}})
-	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "three"})
-	session.GetAgent().AppendMessage(types.AssistantMessage{Role: "assistant", Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "four"}}})
-	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "five"})
-
-	var preCount, postCount int
-	session.RegisterHarnessHook(HarnessHook{
-		PreCompact: func(messageCount int) error {
-			preCount = messageCount
-			return nil
-		},
-		PostCompact: func(result *compaction.Result, err error) {
-			if err == nil && result != nil {
-				postCount = result.NewCount
-			}
-		},
-	})
-
-	if err := session.Compact(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if preCount != 5 || postCount == 0 {
-		t.Fatalf("expected compact hooks to run, pre=%d post=%d", preCount, postCount)
-	}
-}
-
-func TestHarnessSubagentHooksRun(t *testing.T) {
-	root := t.TempDir()
-	agentDir := filepath.Join(root, ".coding_agent")
-	agentsDir := filepath.Join(agentDir, "agents")
-	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(agentsDir, "reviewer.md"), []byte("review stuff"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd:      root,
-		AgentDir: agentDir,
-		Model:    newTestModel(),
-		GetAPIKey: func(provider string) (string, error) {
-			return "", nil
-		},
-		Extensions: []extension.Extension{
-			subagentext.New(),
-		},
-		StreamFn: func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
-			stream := types.NewEventStream()
-			go func() {
-				msg := &types.AssistantMessage{
-					Role:       "assistant",
-					ProviderID: "mock",
-					Model:      "mock",
-					StopReason: "stop",
-					Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "subagent ok"}},
-					Timestamp:  time.Now().UnixMilli(),
-				}
-				stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
-				stream.Resolve(msg, nil)
-				stream.Close()
-			}()
-			return stream, nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var started, stopped bool
-	session.RegisterHarnessHook(HarnessHook{
-		SubagentStart: func(run HarnessSubagentRun) {
-			if run.Name == "reviewer" {
-				started = true
-			}
-		},
-		SubagentStop: func(run HarnessSubagentRun, result string, err error) {
-			if run.Name == "reviewer" && err == nil && result == "subagent ok" {
-				stopped = true
-			}
-		},
-	})
-
-	var tool agent.Tool
-	for _, ttool := range session.GetAgent().GetState().Tools {
-		if ttool.Name() == "spawn_subagent" {
-			tool = ttool
-			break
-		}
-	}
-	if tool == nil {
-		t.Fatal("expected spawn_subagent tool from extension")
-	}
-
-	_, err = tool.Execute(context.Background(), "spawn-1", map[string]any{"name": "reviewer", "task": "check code"}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !started || !stopped {
-		t.Fatalf("expected subagent hooks to run, started=%v stopped=%v", started, stopped)
 	}
 }
 
@@ -3338,789 +2564,6 @@ func TestHarnessConfigBlocksTools(t *testing.T) {
 	}
 }
 
-func TestHarnessConfigCanDisableHintCaptureAndArtifacts(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	if err := os.MkdirAll(agentDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	configContent := `{"harness":{"captureHints":false,"persistToolResults":false}}`
-	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(configContent), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd:         dir,
-		AgentDir:    agentDir,
-		Model:       newTestModel(),
-		CustomTools: []agent.Tool{&testHintTool{}},
-		GetAPIKey:   func(provider string) (string, error) { return "", nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var hintTool agent.Tool
-	for _, tool := range session.GetAgent().GetState().Tools {
-		if tool.Name() == "hint_tool" {
-			hintTool = tool
-			break
-		}
-	}
-	if hintTool == nil {
-		t.Fatal("expected hint tool")
-	}
-
-	result, err := hintTool.Execute(context.Background(), "hint-2", map[string]any{}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := extractTextBlocks(result.Content)
-	if !strings.Contains(text, "<modu-code-hint") {
-		t.Fatalf("expected hint tag to remain visible when capture is disabled, got %q", text)
-	}
-	if hints := session.GetPendingHarnessHints(); len(hints) != 0 {
-		t.Fatalf("expected no stored hints, got %#v", hints)
-	}
-	entries, err := os.ReadDir(session.RuntimePaths().ToolResultsDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("expected no tool artifacts, got %d entries", len(entries))
-	}
-}
-
-func TestHarnessConfigAppendsEventLogs(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	if err := os.MkdirAll(filepath.Join(agentDir, "agents"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(agentDir, "agents", "reviewer.md"), []byte("review stuff"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	configContent := `{"harness":{"logFiles":{"toolUse":"logs/tool-use.jsonl","compact":"logs/compact.jsonl","subagent":"logs/subagent.jsonl"}}}`
-	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(configContent), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd:         dir,
-		AgentDir:    agentDir,
-		Model:       newTestModel(),
-		CustomTools: []agent.Tool{&testEchoTool{}},
-		GetAPIKey:   func(provider string) (string, error) { return "", nil },
-		Extensions: []extension.Extension{
-			subagentext.New(),
-		},
-		StreamFn: func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
-			stream := types.NewEventStream()
-			go func() {
-				msg := &types.AssistantMessage{
-					Role:       "assistant",
-					ProviderID: "mock",
-					Model:      "mock",
-					StopReason: "stop",
-					Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "subagent ok"}},
-					Timestamp:  time.Now().UnixMilli(),
-				}
-				stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
-				stream.Resolve(msg, nil)
-				stream.Close()
-			}()
-			return stream, nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var echoTool, spawnTool agent.Tool
-	for _, tool := range session.GetAgent().GetState().Tools {
-		switch tool.Name() {
-		case "echo":
-			echoTool = tool
-		case "spawn_subagent":
-			spawnTool = tool
-		}
-	}
-	if echoTool == nil || spawnTool == nil {
-		t.Fatalf("expected echo and spawn_subagent from extension, got %v", session.GetActiveToolNames())
-	}
-
-	if _, err := echoTool.Execute(context.Background(), "echo-log-1", map[string]any{"value": "ok"}, nil); err != nil {
-		t.Fatal(err)
-	}
-	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "one"})
-	session.GetAgent().AppendMessage(types.AssistantMessage{Role: "assistant", Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "two"}}})
-	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "three"})
-	session.GetAgent().AppendMessage(types.AssistantMessage{Role: "assistant", Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "four"}}})
-	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "five"})
-	if err := session.Compact(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := spawnTool.Execute(context.Background(), "spawn-log-1", map[string]any{"name": "reviewer", "task": "check code"}, nil); err != nil {
-		t.Fatal(err)
-	}
-
-	checkLog := func(rel string, want string) {
-		data, err := os.ReadFile(filepath.Join(agentDir, rel))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(string(data), want) {
-			t.Fatalf("expected %s log to contain %q, got %q", rel, want, string(data))
-		}
-	}
-	checkLog("logs/tool-use.jsonl", `"tool":"echo"`)
-	checkLog("logs/compact.jsonl", `"event":"post_compact"`)
-	checkLog("logs/subagent.jsonl", `"name":"reviewer"`)
-}
-
-func TestHarnessConfigWritesLatestArtifacts(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	if err := os.MkdirAll(filepath.Join(agentDir, "agents"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(agentDir, "agents", "reviewer.md"), []byte("review stuff"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	configContent := `{"harness":{"artifactFiles":{"toolUse":"artifacts/tool-use-latest.json","compact":"artifacts/compact-latest.json","subagent":"artifacts/subagent-latest.json"}}}`
-	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(configContent), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd:         dir,
-		AgentDir:    agentDir,
-		Model:       newTestModel(),
-		CustomTools: []agent.Tool{&testEchoTool{}},
-		GetAPIKey:   func(provider string) (string, error) { return "", nil },
-		Extensions: []extension.Extension{
-			subagentext.New(),
-		},
-		StreamFn: func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
-			stream := types.NewEventStream()
-			go func() {
-				msg := &types.AssistantMessage{
-					Role:       "assistant",
-					ProviderID: "mock",
-					Model:      "mock",
-					StopReason: "stop",
-					Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "subagent ok"}},
-					Timestamp:  time.Now().UnixMilli(),
-				}
-				stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
-				stream.Resolve(msg, nil)
-				stream.Close()
-			}()
-			return stream, nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var echoTool, spawnTool agent.Tool
-	for _, tool := range session.GetAgent().GetState().Tools {
-		switch tool.Name() {
-		case "echo":
-			echoTool = tool
-		case "spawn_subagent":
-			spawnTool = tool
-		}
-	}
-	if echoTool == nil || spawnTool == nil {
-		t.Fatalf("expected echo and spawn_subagent from extension, got %v", session.GetActiveToolNames())
-	}
-
-	if _, err := echoTool.Execute(context.Background(), "echo-artifact-1", map[string]any{"value": "ok"}, nil); err != nil {
-		t.Fatal(err)
-	}
-	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "one"})
-	session.GetAgent().AppendMessage(types.AssistantMessage{Role: "assistant", Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "two"}}})
-	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "three"})
-	session.GetAgent().AppendMessage(types.AssistantMessage{Role: "assistant", Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "four"}}})
-	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "five"})
-	if err := session.Compact(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := spawnTool.Execute(context.Background(), "spawn-artifact-1", map[string]any{"name": "reviewer", "task": "check code"}, nil); err != nil {
-		t.Fatal(err)
-	}
-
-	checkArtifact := func(rel string, want string) {
-		data, err := os.ReadFile(filepath.Join(agentDir, rel))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(string(data), want) {
-			t.Fatalf("expected %s artifact to contain %q, got %q", rel, want, string(data))
-		}
-	}
-	checkArtifact("artifacts/tool-use-latest.json", `"tool": "spawn_subagent"`)
-	checkArtifact("artifacts/compact-latest.json", `"event": "post_compact"`)
-	checkArtifact("artifacts/subagent-latest.json", `"event": "subagent_stop"`)
-}
-
-func TestHarnessConfigWritesEventBridgeFiles(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	if err := os.MkdirAll(filepath.Join(agentDir, "agents"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(agentDir, "agents", "reviewer.md"), []byte("review stuff"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	configContent := `{"harness":{"bridgeDirs":{"toolUse":"bridge/tool-use","compact":"bridge/compact","subagent":"bridge/subagent"}}}`
-	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(configContent), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd:         dir,
-		AgentDir:    agentDir,
-		Model:       newTestModel(),
-		CustomTools: []agent.Tool{&testEchoTool{}},
-		GetAPIKey:   func(provider string) (string, error) { return "", nil },
-		Extensions: []extension.Extension{
-			subagentext.New(),
-		},
-		StreamFn: func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
-			stream := types.NewEventStream()
-			go func() {
-				msg := &types.AssistantMessage{
-					Role:       "assistant",
-					ProviderID: "mock",
-					Model:      "mock",
-					StopReason: "stop",
-					Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "subagent ok"}},
-					Timestamp:  time.Now().UnixMilli(),
-				}
-				stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
-				stream.Resolve(msg, nil)
-				stream.Close()
-			}()
-			return stream, nil
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var echoTool, spawnTool agent.Tool
-	for _, tool := range session.GetAgent().GetState().Tools {
-		switch tool.Name() {
-		case "echo":
-			echoTool = tool
-		case "spawn_subagent":
-			spawnTool = tool
-		}
-	}
-	if echoTool == nil || spawnTool == nil {
-		t.Fatalf("expected echo and spawn_subagent from extension, got %v", session.GetActiveToolNames())
-	}
-
-	if _, err := echoTool.Execute(context.Background(), "echo-bridge-1", map[string]any{"value": "ok"}, nil); err != nil {
-		t.Fatal(err)
-	}
-	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "one"})
-	session.GetAgent().AppendMessage(types.AssistantMessage{Role: "assistant", Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "two"}}})
-	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "three"})
-	session.GetAgent().AppendMessage(types.AssistantMessage{Role: "assistant", Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "four"}}})
-	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "five"})
-	if err := session.Compact(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := spawnTool.Execute(context.Background(), "spawn-bridge-1", map[string]any{"name": "reviewer", "task": "check code"}, nil); err != nil {
-		t.Fatal(err)
-	}
-
-	checkBridge := func(rel string, want string) {
-		entries, err := os.ReadDir(filepath.Join(agentDir, rel))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(entries) == 0 {
-			t.Fatalf("expected bridge events in %s", rel)
-		}
-		for _, entry := range entries {
-			data, err := os.ReadFile(filepath.Join(agentDir, rel, entry.Name()))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if strings.Contains(string(data), want) {
-				return
-			}
-		}
-		t.Fatalf("expected %s bridge events to contain %q", rel, want)
-	}
-	checkBridge("bridge/tool-use", `"tool":"spawn_subagent"`)
-	checkBridge("bridge/compact", `"event":"post_compact"`)
-	checkBridge("bridge/subagent", `"event":"subagent_stop"`)
-}
-
-func TestHarnessConfigDispatchesHostActions(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	marker := filepath.Join(agentDir, "action-marker.txt")
-	if err := os.MkdirAll(agentDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	configContent := `{"harness":{"enableActions":true,"actions":{"toolUse":[{"type":"exec","command":"/bin/sh","args":["-c","printf '%s:%s:%s' \"$HARNESS_EVENT_TYPE\" \"$HARNESS_TOOL\" \"$HARNESS_AGENT_DIR\" > action-marker.txt"],"dir":"{{agent_dir}}"}]}}}`
-	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(configContent), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd:         dir,
-		AgentDir:    agentDir,
-		Model:       newTestModel(),
-		CustomTools: []agent.Tool{&testEchoTool{}},
-		GetAPIKey:   func(provider string) (string, error) { return "", nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var echoTool agent.Tool
-	for _, tool := range session.GetAgent().GetState().Tools {
-		if tool.Name() == "echo" {
-			echoTool = tool
-			break
-		}
-	}
-	if echoTool == nil {
-		t.Fatal("expected echo tool")
-	}
-	if _, err := echoTool.Execute(context.Background(), "echo-action-1", map[string]any{"value": "ok"}, nil); err != nil {
-		t.Fatal(err)
-	}
-
-	data, err := os.ReadFile(marker)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.TrimSpace(string(data)) != "post_tool_use:echo:"+agentDir {
-		t.Fatalf("expected host action marker, got %q", string(data))
-	}
-
-	statusPath := filepath.Join(session.RuntimePaths().RuntimeDir, "actions", "tool_use", "latest.json")
-	statusData, err := os.ReadFile(statusPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(statusData), `"status": "ok"`) {
-		t.Fatalf("expected successful action status, got %q", string(statusData))
-	}
-}
-
-func TestHarnessConfigDoesNotDispatchActionsWhenExplicitlyDisabled(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	marker := filepath.Join(agentDir, "action-disabled.txt")
-	if err := os.MkdirAll(agentDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	configContent := `{"harness":{"enableActions":false,"actions":{"toolUse":[{"type":"exec","command":"/bin/sh","args":["-c","printf 'ran' > action-disabled.txt"],"dir":"{{agent_dir}}"}]}}}`
-	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(configContent), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd:         dir,
-		AgentDir:    agentDir,
-		Model:       newTestModel(),
-		CustomTools: []agent.Tool{&testEchoTool{}},
-		GetAPIKey:   func(provider string) (string, error) { return "", nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var echoTool agent.Tool
-	for _, tool := range session.GetAgent().GetState().Tools {
-		if tool.Name() == "echo" {
-			echoTool = tool
-			break
-		}
-	}
-	if echoTool == nil {
-		t.Fatal("expected echo tool")
-	}
-	if _, err := echoTool.Execute(context.Background(), "echo-action-disabled-1", map[string]any{"value": "ok"}, nil); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(marker); !os.IsNotExist(err) {
-		t.Fatalf("expected disabled actions not to run, stat err=%v", err)
-	}
-}
-
-func TestHarnessConfigActionFailureIsRecorded(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	if err := os.MkdirAll(agentDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	configContent := `{"harness":{"enableActions":true,"actions":{"toolUse":[{"type":"exec","command":"/bin/sh","args":["-c","exit 7"]}]}}}`
-	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(configContent), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd:         dir,
-		AgentDir:    agentDir,
-		Model:       newTestModel(),
-		CustomTools: []agent.Tool{&testEchoTool{}},
-		GetAPIKey:   func(provider string) (string, error) { return "", nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var echoTool agent.Tool
-	for _, tool := range session.GetAgent().GetState().Tools {
-		if tool.Name() == "echo" {
-			echoTool = tool
-			break
-		}
-	}
-	if echoTool == nil {
-		t.Fatal("expected echo tool")
-	}
-	if _, err := echoTool.Execute(context.Background(), "echo-action-fail-1", map[string]any{"value": "ok"}, nil); err != nil {
-		t.Fatal(err)
-	}
-
-	statusPath := filepath.Join(session.RuntimePaths().RuntimeDir, "actions", "tool_use", "latest.json")
-	statusData, err := os.ReadFile(statusPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(statusData), `"status": "error"`) || !strings.Contains(string(statusData), `"exit status 7"`) {
-		t.Fatalf("expected failing action status, got %q", string(statusData))
-	}
-}
-
-func TestHarnessConfigActionOutputIsCaptured(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	if err := os.MkdirAll(agentDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	configContent := `{"harness":{"enableActions":true,"actions":{"toolUse":[{"type":"exec","command":"/bin/sh","args":["-c","printf 'out'; printf 'err' >&2"]}]}}}`
-	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(configContent), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd:         dir,
-		AgentDir:    agentDir,
-		Model:       newTestModel(),
-		CustomTools: []agent.Tool{&testEchoTool{}},
-		GetAPIKey:   func(provider string) (string, error) { return "", nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var echoTool agent.Tool
-	for _, tool := range session.GetAgent().GetState().Tools {
-		if tool.Name() == "echo" {
-			echoTool = tool
-			break
-		}
-	}
-	if echoTool == nil {
-		t.Fatal("expected echo tool")
-	}
-	if _, err := echoTool.Execute(context.Background(), "echo-action-output-1", map[string]any{"value": "ok"}, nil); err != nil {
-		t.Fatal(err)
-	}
-
-	statusPath := filepath.Join(session.RuntimePaths().RuntimeDir, "actions", "tool_use", "latest.json")
-	statusData, err := os.ReadFile(statusPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(statusData), `"stdout": "out"`) || !strings.Contains(string(statusData), `"stderr": "err"`) || !strings.Contains(string(statusData), `"output": "outerr"`) {
-		t.Fatalf("expected split captured output in action status, got %q", string(statusData))
-	}
-}
-
-func TestHarnessConfigActionTimeoutIsRecorded(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	if err := os.MkdirAll(agentDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	configContent := `{"harness":{"enableActions":true,"actions":{"toolUse":[{"type":"exec","command":"/bin/sh","args":["-c","sleep 1"],"timeoutMs":10}]}}}`
-	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(configContent), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd:         dir,
-		AgentDir:    agentDir,
-		Model:       newTestModel(),
-		CustomTools: []agent.Tool{&testEchoTool{}},
-		GetAPIKey:   func(provider string) (string, error) { return "", nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var echoTool agent.Tool
-	for _, tool := range session.GetAgent().GetState().Tools {
-		if tool.Name() == "echo" {
-			echoTool = tool
-			break
-		}
-	}
-	if echoTool == nil {
-		t.Fatal("expected echo tool")
-	}
-	if _, err := echoTool.Execute(context.Background(), "echo-action-timeout-1", map[string]any{"value": "ok"}, nil); err != nil {
-		t.Fatal(err)
-	}
-
-	statusPath := filepath.Join(session.RuntimePaths().RuntimeDir, "actions", "tool_use", "latest.json")
-	statusData, err := os.ReadFile(statusPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(statusData), `"timed_out": true`) {
-		t.Fatalf("expected timeout marker in action status, got %q", string(statusData))
-	}
-}
-
-func TestHarnessConfigActionRetriesUntilSuccess(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	marker := filepath.Join(agentDir, "retry-marker.txt")
-	if err := os.MkdirAll(agentDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	configContent := `{"harness":{"enableActions":true,"actions":{"toolUse":[{"type":"exec","command":"/bin/sh","args":["-c","if [ ! -f retry-marker.txt ]; then printf 'first' > retry-marker.txt; exit 9; fi; printf 'second'"],"dir":"{{agent_dir}}","retry":{"maxAttempts":2,"delayMs":1}}]}}}`
-	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(configContent), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd:         dir,
-		AgentDir:    agentDir,
-		Model:       newTestModel(),
-		CustomTools: []agent.Tool{&testEchoTool{}},
-		GetAPIKey:   func(provider string) (string, error) { return "", nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var echoTool agent.Tool
-	for _, tool := range session.GetAgent().GetState().Tools {
-		if tool.Name() == "echo" {
-			echoTool = tool
-			break
-		}
-	}
-	if echoTool == nil {
-		t.Fatal("expected echo tool")
-	}
-	if _, err := echoTool.Execute(context.Background(), "echo-action-retry-1", map[string]any{"value": "ok"}, nil); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(marker); err != nil {
-		t.Fatalf("expected retry marker, got %v", err)
-	}
-
-	statusPath := filepath.Join(session.RuntimePaths().RuntimeDir, "actions", "tool_use", "latest.json")
-	statusData, err := os.ReadFile(statusPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	status := string(statusData)
-	if !strings.Contains(status, `"status": "ok"`) || !strings.Contains(status, `"attempts": 2`) || !strings.Contains(status, `"stdout": "second"`) {
-		t.Fatalf("expected retry success status, got %q", status)
-	}
-}
-
-func TestHarnessConfigActionStopOnFailureSkipsRemainingActions(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	skippedMarker := filepath.Join(agentDir, "should-not-exist.txt")
-	if err := os.MkdirAll(agentDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	configContent := `{"harness":{"enableActions":true,"actions":{"toolUse":[{"type":"exec","command":"/bin/sh","args":["-c","exit 6"],"onFailure":"stop"},{"type":"exec","command":"/bin/sh","args":["-c","printf 'ran' > should-not-exist.txt"],"dir":"{{agent_dir}}"}]}}}`
-	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(configContent), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd:         dir,
-		AgentDir:    agentDir,
-		Model:       newTestModel(),
-		CustomTools: []agent.Tool{&testEchoTool{}},
-		GetAPIKey:   func(provider string) (string, error) { return "", nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var echoTool agent.Tool
-	for _, tool := range session.GetAgent().GetState().Tools {
-		if tool.Name() == "echo" {
-			echoTool = tool
-			break
-		}
-	}
-	if echoTool == nil {
-		t.Fatal("expected echo tool")
-	}
-	if _, err := echoTool.Execute(context.Background(), "echo-action-stop-1", map[string]any{"value": "ok"}, nil); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(skippedMarker); !os.IsNotExist(err) {
-		t.Fatalf("expected second action to be skipped, stat err=%v", err)
-	}
-
-	statusPath := filepath.Join(session.RuntimePaths().RuntimeDir, "actions", "tool_use", "latest.json")
-	statusData, err := os.ReadFile(statusPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(statusData), `"on_failure": "stop"`) || !strings.Contains(string(statusData), `"status": "error"`) {
-		t.Fatalf("expected stop-on-failure status, got %q", string(statusData))
-	}
-}
-
-func TestHarnessRuntimeIndexUpdates(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	if err := os.MkdirAll(agentDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	configContent := `{"harness":{"artifactFiles":{"toolUse":"artifacts/tool-use-latest.json"}}}`
-	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(configContent), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd:         dir,
-		AgentDir:    agentDir,
-		Model:       newTestModel(),
-		CustomTools: []agent.Tool{&testEchoTool{}},
-		GetAPIKey:   func(provider string) (string, error) { return "", nil },
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var echoTool agent.Tool
-	for _, tool := range session.GetAgent().GetState().Tools {
-		if tool.Name() == "echo" {
-			echoTool = tool
-			break
-		}
-	}
-	if echoTool == nil {
-		t.Fatal("expected echo tool")
-	}
-	if _, err := echoTool.Execute(context.Background(), "echo-index-1", map[string]any{"value": "ok"}, nil); err != nil {
-		t.Fatal(err)
-	}
-
-	indexPath := session.RuntimePaths().RuntimeIndexFile
-	data, err := os.ReadFile(indexPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(data), `"tool_use"`) || !strings.Contains(string(data), `"post_tool_use"`) {
-		t.Fatalf("expected runtime index to contain tool_use last event, got %q", string(data))
-	}
-	if !strings.Contains(string(data), `"runtime_index_file"`) {
-		t.Fatalf("expected runtime paths in index, got %q", string(data))
-	}
-}
-
-func TestPromptToolHarnessArtifactIntegration(t *testing.T) {
-	dir := t.TempDir()
-	agentDir := filepath.Join(dir, ".coding_agent")
-	if err := os.MkdirAll(agentDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	configContent := `{"harness":{"artifactFiles":{"toolUse":"artifacts/tool-use-latest.json"}}}`
-	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(configContent), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	model := newTestModel()
-	tool := &testEchoTool{}
-	callIndex := 0
-	streamFn := func(ctx context.Context, _ *types.Model, _ *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
-		stream := types.NewEventStream()
-		go func() {
-			if callIndex == 0 {
-				msg := &types.AssistantMessage{
-					Role:       "assistant",
-					ProviderID: model.ProviderID,
-					Model:      model.ID,
-					StopReason: "toolUse",
-					Content: []types.ContentBlock{
-						&types.ToolCallContent{Type: "toolCall", ID: "tool-1", Name: "echo", Arguments: map[string]any{"value": "hello"}},
-					},
-					Timestamp: time.Now().UnixMilli(),
-				}
-				stream.Push(types.StreamEvent{Type: "done", Reason: "toolUse", Message: msg})
-				stream.Resolve(msg, nil)
-			} else {
-				msg := &types.AssistantMessage{
-					Role:       "assistant",
-					ProviderID: model.ProviderID,
-					Model:      model.ID,
-					StopReason: "stop",
-					Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "done"}},
-					Timestamp:  time.Now().UnixMilli(),
-				}
-				stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
-				stream.Resolve(msg, nil)
-			}
-			callIndex++
-			stream.Close()
-		}()
-		return stream, nil
-	}
-
-	session, err := NewCodingSession(CodingSessionOptions{
-		Cwd:       dir,
-		AgentDir:  agentDir,
-		Model:     model,
-		Tools:     []agent.Tool{tool},
-		GetAPIKey: func(p string) (string, error) { return "", nil },
-		StreamFn:  streamFn,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := session.Prompt(context.Background(), "run echo"); err != nil {
-		t.Fatal(err)
-	}
-
-	artifactPath := filepath.Join(agentDir, "artifacts", "tool-use-latest.json")
-	data, err := os.ReadFile(artifactPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(data), `"tool": "echo"`) {
-		t.Fatalf("expected harness artifact from prompt-driven tool execution, got %q", string(data))
-	}
-	if text := session.GetLastAssistantText(); text != "done" {
-		t.Fatalf("expected final assistant text to remain intact, got %q", text)
-	}
-}
-
 func TestHandleToolExecutionEndQueuesNestedContextForDeeperPath(t *testing.T) {
 	root := t.TempDir()
 	cwd := filepath.Join(root, "repo")
@@ -4157,7 +2600,7 @@ func TestHandleToolExecutionEndQueuesNestedContextForDeeperPath(t *testing.T) {
 		t.Fatalf("expected no queued steering messages initially, got %d", session.agent.QueuedMessageCount())
 	}
 
-	session.handleToolExecutionEnd(agent.Event{
+	session.ctxMgr.OnToolExecutionEnd(agent.Event{
 		Type:     agent.EventTypeToolExecutionEnd,
 		ToolName: "read",
 		Args:     map[string]any{"path": targetFile},
@@ -4170,7 +2613,7 @@ func TestHandleToolExecutionEndQueuesNestedContextForDeeperPath(t *testing.T) {
 		t.Fatalf("expected one queued steering message, got %d", session.agent.QueuedMessageCount())
 	}
 
-	session.handleToolExecutionEnd(agent.Event{
+	session.ctxMgr.OnToolExecutionEnd(agent.Event{
 		Type:     agent.EventTypeToolExecutionEnd,
 		ToolName: "read",
 		Args:     map[string]any{"path": targetFile},
@@ -4214,7 +2657,7 @@ func TestTransientNestedContextMessagesArePrunedAndNotPersisted(t *testing.T) {
 	session.handleMessageEnd(hiddenFollowUp)
 	session.agent.AppendMessage(normal)
 	session.handleMessageEnd(normal)
-	session.pruneTransientContextMessages()
+	session.ctxMgr.PruneTransient()
 
 	msgs := session.agent.GetState().Messages
 	if len(msgs) != 1 {

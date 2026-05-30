@@ -1,0 +1,302 @@
+package coding_agent
+
+import (
+	"context"
+	"fmt"
+	"path/filepath"
+	"time"
+
+	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/coding_agent/services/compaction"
+	"github.com/openmodu/modu/pkg/coding_agent/services/session"
+	"github.com/openmodu/modu/pkg/types"
+)
+
+// Fork creates a new branch from the given entry ID.
+func (s *CodingSession) Fork(entryID string) error {
+	return s.sessionManager.Fork(entryID)
+}
+
+// GetSessionLeafID returns the current persisted session leaf entry ID.
+func (s *CodingSession) GetSessionLeafID() string {
+	if s.sessionManager == nil {
+		return ""
+	}
+	return s.sessionManager.LastID()
+}
+
+// GetSessionBranches returns branch points in the current session tree.
+func (s *CodingSession) GetSessionBranches() []SessionBranchInfo {
+	if s.sessionTree == nil {
+		return nil
+	}
+	branches := s.sessionTree.GetBranches()
+	out := make([]SessionBranchInfo, 0, len(branches))
+	for _, branch := range branches {
+		out = append(out, SessionBranchInfo{
+			ID:         branch.ID,
+			ParentID:   branch.ParentID,
+			Label:      branch.Label,
+			EntryCount: len(branch.Entries),
+		})
+	}
+	return out
+}
+
+// GetSessionTreeNodes returns a depth-first view of the current session tree.
+func (s *CodingSession) GetSessionTreeNodes() []SessionTreeNode {
+	if s.sessionManager == nil || s.sessionTree == nil {
+		return nil
+	}
+	entries := s.sessionManager.Load()
+	lookup := make(map[string]session.SessionEntry, len(entries))
+	visible := make(map[string]struct{})
+	for _, entry := range entries {
+		lookup[entry.ID] = entry
+		if session.IsVisibleEntry(entry) {
+			visible[entry.ID] = struct{}{}
+		}
+	}
+	children := make(map[string][]session.SessionEntry)
+	for _, entry := range entries {
+		if !session.IsVisibleEntry(entry) {
+			continue
+		}
+		parentID := session.NearestVisibleParent(entry.ParentID, lookup, visible)
+		children[parentID] = append(children[parentID], entry)
+	}
+	currentPath := make(map[string]struct{})
+	for _, entry := range s.sessionTree.GetCurrentPath() {
+		currentPath[entry.ID] = struct{}{}
+	}
+	currentID := s.sessionManager.LastID()
+	var out []SessionTreeNode
+	var walk func(parentID string, depth int)
+	walk = func(parentID string, depth int) {
+		for _, entry := range children[parentID] {
+			_, inPath := currentPath[entry.ID]
+			node := SessionTreeNode{
+				ID:            entry.ID,
+				ParentID:      session.NearestVisibleParent(entry.ParentID, lookup, visible),
+				Type:          string(entry.Type),
+				Role:          session.EntryRole(entry),
+				Label:         session.TreeNodeLabel(entry, s.sessionManager.GetLabel(entry.ID)),
+				Preview:       session.EntryPreview(entry),
+				Depth:         depth,
+				ChildCount:    len(children[entry.ID]),
+				Current:       entry.ID == currentID,
+				InCurrentPath: inPath,
+				Timestamp:     entry.Timestamp,
+			}
+			out = append(out, node)
+			walk(entry.ID, depth+1)
+		}
+	}
+	walk("", 0)
+	return out
+}
+
+// CreateBranchedSession creates a new session file from the path to entryID.
+func (s *CodingSession) CreateBranchedSession(entryID string) (string, error) {
+	if s.sessionManager == nil {
+		return "", fmt.Errorf("session manager not available")
+	}
+	path, err := s.sessionManager.CreateBranchedSession(entryID)
+	if err != nil {
+		return "", err
+	}
+	s.sessionTree = session.NewTree(s.sessionManager)
+	_, _ = s.RestoreMessages()
+	s.writeRuntimeState()
+	return path, nil
+}
+
+// NavigateTree navigates to a specific point in the session tree.
+func (s *CodingSession) NavigateTree(entryID string) error {
+	if s.sessionManager == nil || s.sessionTree == nil {
+		return fmt.Errorf("session tree not available")
+	}
+	path := s.sessionTree.GetPath(entryID)
+	if len(path) == 0 {
+		return fmt.Errorf("entry %s not found", entryID)
+	}
+	if entryID == s.sessionManager.LastID() {
+		_, err := s.RestoreMessages()
+		return err
+	}
+	var msgs []types.AgentMessage
+	for _, entry := range path {
+		if entry.Type != session.EntryTypeMessage {
+			continue
+		}
+		if msg, ok := agentMessageFromSessionData(entry.Data); ok && msg != nil {
+			msgs = append(msgs, msg)
+		}
+	}
+	summary, err := compaction.GenerateBranchSummary(context.Background(), msgs, compaction.BranchSummaryOptions{})
+	if err != nil {
+		return err
+	}
+	if _, err := s.sessionManager.BranchWithSummary(entryID, summary); err != nil {
+		return err
+	}
+	s.sessionTree = session.NewTree(s.sessionManager)
+	_, err = s.RestoreMessages()
+	s.writeRuntimeState()
+	return err
+}
+
+// GetSessionID returns the current session ID.
+func (s *engine) GetSessionID() string {
+	if s.sessionManager != nil {
+		return s.sessionManager.SessionID()
+	}
+	return s.agent.GetSessionID()
+}
+
+// GetSessionFile returns the session file path.
+func (s *CodingSession) GetSessionFile() string {
+	return s.sessionManager.FilePath()
+}
+
+// ListSessions returns persisted sessions for the current working directory.
+func (s *CodingSession) ListSessions() ([]session.SessionInfo, error) {
+	return session.List(s.agentDir, s.cwd)
+}
+
+func (s *CodingSession) ListSessionInfos() ([]SessionInfo, error) {
+	return s.ListSessions()
+}
+
+// ListAllSessions returns persisted sessions across all working directories.
+func (s *CodingSession) ListAllSessions() ([]session.SessionInfo, error) {
+	return session.ListAll(s.agentDir)
+}
+
+func (s *CodingSession) ListAllSessionInfos() ([]SessionInfo, error) {
+	return s.ListAllSessions()
+}
+
+// ForkFromSession creates and switches to a new session copied from sessionFile.
+func (s *CodingSession) ForkFromSession(sessionFile string) error {
+	mgr, err := session.ForkFrom(s.agentDir, sessionFile, s.cwd)
+	if err != nil {
+		return err
+	}
+	return s.switchSessionManager(mgr)
+}
+
+// DeleteSession removes a saved session file, except the active session.
+func (s *CodingSession) DeleteSession(sessionFile string) error {
+	current, err := filepath.Abs(s.GetSessionFile())
+	if err != nil {
+		return err
+	}
+	target, err := filepath.Abs(sessionFile)
+	if err != nil {
+		return err
+	}
+	if current == target {
+		return fmt.Errorf("refusing to delete the active session")
+	}
+	return session.Delete(s.agentDir, sessionFile)
+}
+
+// SetSessionName sets the display name for this session.
+func (s *CodingSession) SetSessionName(name string) {
+	s.sessionName = name
+	if s.sessionManager != nil {
+		_ = s.sessionManager.AppendSessionInfo(name)
+	}
+}
+
+// GetSessionName returns the display name for this session.
+func (s *CodingSession) GetSessionName() string {
+	if s.sessionManager != nil {
+		return s.sessionManager.SessionName()
+	}
+	return s.sessionName
+}
+
+// GetForkMessages returns user messages from the session history, suitable for forking.
+func (s *CodingSession) GetForkMessages() []ForkMessage {
+	entries := s.sessionTree.GetCurrentPath()
+	var result []ForkMessage
+	for _, entry := range entries {
+		if entry.Type != session.EntryTypeMessage {
+			continue
+		}
+		data, ok := entry.Data.(session.MessageData)
+		if !ok {
+			// Try map-based extraction (from JSON deserialization)
+			if m, ok := entry.Data.(map[string]any); ok {
+				role, _ := m["role"].(string)
+				if role != string(agent.RoleUser) {
+					continue
+				}
+				content, _ := m["content"].(string)
+				result = append(result, ForkMessage{
+					EntryID: entry.ID,
+					Role:    role,
+					Content: content,
+				})
+			}
+			continue
+		}
+		if data.Role != agent.RoleUser {
+			continue
+		}
+		content, _ := data.Content.(string)
+		result = append(result, ForkMessage{
+			EntryID: entry.ID,
+			Role:    string(data.Role),
+			Content: content,
+		})
+	}
+	return result
+}
+
+// GetSessionStats returns aggregate statistics for the current session.
+func (s *CodingSession) GetSessionStats() SessionStats {
+	msgs := s.agent.GetState().Messages
+	now := time.Now().UnixMilli()
+	return SessionStats{
+		TotalTokens:    s.ctxMgr.Tokens(),
+		MessageCount:   len(msgs),
+		SessionStarted: s.sessionStarted,
+		DurationMs:     now - s.sessionStarted,
+	}
+}
+
+// SwitchSession loads messages from a different session file and replaces the current agent messages.
+func (s *CodingSession) SwitchSession(sessionFile string) error {
+	newMgr, err := session.NewManagerFromFile(sessionFile)
+	if err != nil {
+		return fmt.Errorf("failed to load session: %w", err)
+	}
+	return s.switchSessionManager(newMgr)
+}
+
+func (s *CodingSession) switchSessionManager(newMgr *session.Manager) error {
+	var messages []agent.AgentMessage
+	newTree := session.NewTree(newMgr)
+	for _, entry := range newTree.GetCurrentPath() {
+		if entry.Type != session.EntryTypeMessage {
+			continue
+		}
+		if msg, ok := agentMessageFromSessionData(entry.Data); ok && msg != nil {
+			messages = append(messages, msg)
+		}
+	}
+
+	s.sessionManager = newMgr
+	s.sessionTree = newTree
+	s.sessionName = newMgr.SessionName()
+	s.agent.ReplaceMessages(messages)
+	s.lastSavedIndex = len(messages)
+	if s.extensions != nil {
+		s.extensions.EmitEvent(agent.Event{Type: agent.EventType("session_start"), Reason: "resume"})
+	}
+	s.writeRuntimeState()
+	return nil
+}

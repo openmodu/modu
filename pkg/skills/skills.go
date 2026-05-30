@@ -13,8 +13,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 
+	"github.com/openmodu/modu/pkg/mdloader"
 	"github.com/openmodu/modu/pkg/utils"
 )
 
@@ -56,96 +56,68 @@ type Skill struct {
 
 // Manager handles skill discovery and loading. All public accessors rediscover
 // from disk before reading the skill map, so changes to skill files are picked
-// up without restarting the session.
+// up without restarting the session. The discovery skeleton (roots, extra
+// paths, locking, re-scan) is provided by the embedded mdloader.Manager; this
+// type adds skill-specific lazy content loading and prompt formatting.
 type Manager struct {
-	agentDir string
-	cwd      string
-
-	mu         sync.RWMutex
-	skills     map[string]*Skill
-	extraPaths []PathRef
+	*mdloader.Manager[Skill]
 }
 
 // NewManager creates a new skill manager. Global skills live under
 // {agentDir}/skills and project skills under {cwd}/.coding_agent/skills.
+// Project skills are scanned first so they win over global ones of the same
+// name (the parser keeps the first registration).
 func NewManager(agentDir, cwd string) *Manager {
-	return &Manager{
-		agentDir: agentDir,
-		cwd:      cwd,
-		skills:   make(map[string]*Skill),
+	roots := []mdloader.Ref{
+		{Path: filepath.Join(cwd, ".coding_agent", "skills"), Source: "project"},
+		{Path: filepath.Join(agentDir, "skills"), Source: "user"},
 	}
+	return &Manager{mdloader.New(roots, skillParser{})}
 }
 
 // SetExtraPaths registers additional skill files or directories (e.g. from
 // resource packages) to include in discovery.
 func (m *Manager) SetExtraPaths(paths []PathRef) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.extraPaths = append([]PathRef(nil), paths...)
+	refs := make([]mdloader.Ref, len(paths))
+	for i, p := range paths {
+		refs[i] = mdloader.Ref{Path: p.Path, Source: p.Source}
+	}
+	m.SetExtraRefs(refs)
 }
 
-// Discover scans the global and project skill directories and atomically
-// replaces the in-memory map with the result. Safe to call repeatedly — each
-// call reflects the current filesystem state, so removed/edited/added skills
-// are picked up.
-//
-// Discovery rules:
-//   - Direct .md files at the skills directory root
-//   - Recursive SKILL.md files under subdirectories
-//   - Project skills override global skills with the same name (first wins)
-func (m *Manager) Discover() error {
-	fresh := make(map[string]*Skill)
+// skillParser plugs skill-specific scanning into the mdloader skeleton.
+// Both methods keep the first registration of a name, so earlier roots
+// (project) win over later ones (global).
+type skillParser struct{}
 
-	projectDir := filepath.Join(m.cwd, ".coding_agent", "skills")
-	if err := loadIntoMap(fresh, projectDir, "project"); err != nil && !os.IsNotExist(err) {
-		return err
-	}
+func (skillParser) ParseDir(dst map[string]*Skill, dir, source string) error {
+	return loadIntoMap(dst, dir, source)
+}
 
-	globalDir := filepath.Join(m.agentDir, "skills")
-	if err := loadIntoMap(fresh, globalDir, "user"); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-
-	m.mu.RLock()
-	extraPaths := append([]PathRef(nil), m.extraPaths...)
-	m.mu.RUnlock()
-	for _, ref := range extraPaths {
-		_ = loadPathIntoMap(fresh, ref.Path, ref.Source)
-	}
-
-	m.mu.Lock()
-	m.skills = fresh
-	m.mu.Unlock()
-	return nil
+func (skillParser) ParsePath(dst map[string]*Skill, path, source string) error {
+	return loadPathIntoMap(dst, path, source)
 }
 
 // Get returns a skill by name. Triggers a Discover() on each call so renamed
 // or newly added skills resolve without a session restart.
 func (m *Manager) Get(name string) (*Skill, bool) {
-	_ = m.Discover()
-	m.mu.RLock()
-	s, ok := m.skills[name]
-	if ok {
-		s = cloneSkill(s)
-	}
-	m.mu.RUnlock()
+	stored, ok := m.Lookup(name)
 	if !ok {
 		return nil, false
 	}
+	s := cloneSkill(stored)
 	if err := loadSkillContent(s); err != nil {
 		slog.Warn("failed to load skill content", "source", s.Source, "path", s.FilePath, "name", s.Name, "error", err)
 		return nil, false
 	}
-	return s, ok
+	return s, true
 }
 
 // List returns all discovered skills (re-scanning disk first).
 func (m *Manager) List() []*Skill {
-	_ = m.Discover()
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	result := make([]*Skill, 0, len(m.skills))
-	for _, s := range m.skills {
+	stored := m.Snapshot()
+	result := make([]*Skill, 0, len(stored))
+	for _, s := range stored {
 		result = append(result, cloneSkill(s))
 	}
 	return result
@@ -153,11 +125,8 @@ func (m *Manager) List() []*Skill {
 
 // GetDescriptions returns formatted descriptions for system prompt inclusion.
 func (m *Manager) GetDescriptions() []string {
-	_ = m.Discover()
-	m.mu.RLock()
-	defer m.mu.RUnlock()
 	var descs []string
-	for _, s := range m.skills {
+	for _, s := range m.Snapshot() {
 		desc := "- /" + s.Name
 		if s.Description != "" {
 			desc += ": " + s.Description
@@ -172,11 +141,8 @@ func (m *Manager) GetDescriptions() []string {
 // Skills with DisableModelInvocation=true are excluded (they can only be
 // invoked explicitly via /skill:name commands).
 func (m *Manager) FormatForPrompt() string {
-	_ = m.Discover()
-	m.mu.RLock()
-	defer m.mu.RUnlock()
 	var visible []*Skill
-	for _, s := range m.skills {
+	for _, s := range m.Snapshot() {
 		if !s.DisableModelInvocation {
 			visible = append(visible, s)
 		}

@@ -10,21 +10,20 @@ import (
 )
 
 type RuntimeStateSnapshot struct {
-	UpdatedAt    int64             `json:"updatedAt"`
-	SessionID    string            `json:"sessionId"`
-	Cwd          string            `json:"cwd"`
-	Model        map[string]string `json:"model"`
-	Thinking     string            `json:"thinking"`
-	Modes        map[string]any    `json:"modes"`
-	Extensions   map[string]any    `json:"extensions"`
-	Features     map[string]bool   `json:"features"`
-	Permissions  map[string]any    `json:"permissions"`
-	Git          map[string]any    `json:"git"`
-	Counts       map[string]int    `json:"counts"`
-	Paths        map[string]any    `json:"paths"`
-	Todos        []TodoItem        `json:"todos"`
-	Tasks        []BackgroundTask  `json:"tasks"`
-	HarnessHints int               `json:"harnessHints"`
+	UpdatedAt   int64             `json:"updatedAt"`
+	SessionID   string            `json:"sessionId"`
+	Cwd         string            `json:"cwd"`
+	Model       map[string]string `json:"model"`
+	Thinking    string            `json:"thinking"`
+	Modes       map[string]any    `json:"modes"`
+	Extensions  map[string]any    `json:"extensions"`
+	Features    map[string]bool   `json:"features"`
+	Permissions map[string]any    `json:"permissions"`
+	Git         map[string]any    `json:"git"`
+	Counts      map[string]int    `json:"counts"`
+	Paths       map[string]any    `json:"paths"`
+	Todos       []TodoItem        `json:"todos"`
+	Tasks       []BackgroundTask  `json:"tasks"`
 }
 
 // cachedGitState holds the last-known git state so that writeRuntimeState
@@ -37,7 +36,7 @@ type cachedGitState struct {
 	refreshingCwd string
 }
 
-func (s *CodingSession) refreshGitRuntimeState() {
+func (s *engine) refreshGitRuntimeState() {
 	cwd := s.cwd
 	state := s.gitRuntimeStateForCwd(cwd)
 	s.gitCache.mu.Lock()
@@ -48,7 +47,7 @@ func (s *CodingSession) refreshGitRuntimeState() {
 	s.gitCache.mu.Unlock()
 }
 
-func (s *CodingSession) cachedGitState() map[string]any {
+func (s *engine) cachedGitState() map[string]any {
 	cwd := s.cwd
 	s.gitCache.mu.RLock()
 	st := s.gitCache.state
@@ -66,14 +65,14 @@ func (s *CodingSession) cachedGitState() map[string]any {
 // RefreshRuntimeStateAsync refreshes expensive runtime state in the background.
 // Callers use this after the UI is visible so startup is not blocked by git
 // subprocesses on large repositories.
-func (s *CodingSession) RefreshRuntimeStateAsync() {
+func (s *engine) RefreshRuntimeStateAsync() {
 	if s == nil {
 		return
 	}
 	s.scheduleGitRuntimeStateRefresh(s.cwd)
 }
 
-func (s *CodingSession) scheduleGitRuntimeStateRefresh(cwd string) {
+func (s *engine) scheduleGitRuntimeStateRefresh(cwd string) {
 	s.gitCache.mu.Lock()
 	if s.gitCache.refreshing && s.gitCache.refreshingCwd == cwd {
 		s.gitCache.mu.Unlock()
@@ -95,17 +94,11 @@ func (s *CodingSession) scheduleGitRuntimeStateRefresh(cwd string) {
 	}()
 }
 
-func (s *CodingSession) RuntimeState() RuntimeStateSnapshot {
+func (s *engine) RuntimeState() RuntimeStateSnapshot {
 	model := map[string]string{}
 	if s.model != nil {
 		model["id"] = s.model.ID
 		model["provider"] = s.model.ProviderID
-	}
-	hintCount := 0
-	if s.harness != nil {
-		s.harness.mu.RLock()
-		hintCount = len(s.harness.pendingHints)
-		s.harness.mu.RUnlock()
 	}
 	todos := s.GetTodos()
 	tasks := s.GetBackgroundTasks()
@@ -127,7 +120,6 @@ func (s *CodingSession) RuntimeState() RuntimeStateSnapshot {
 			"task_output_tool": s.config.FeatureTaskOutputTool(),
 			"plan_mode":        s.config.FeaturePlanMode(),
 			"worktree_mode":    s.config.FeatureWorktreeMode(),
-			"harness_actions":  s.config.FeatureHarnessActions() && s.config.HarnessEnableActions(),
 		},
 		Counts: map[string]int{
 			"messages": len(s.GetMessages()),
@@ -141,16 +133,15 @@ func (s *CodingSession) RuntimeState() RuntimeStateSnapshot {
 			"allow_bash_prefixes": append([]string(nil), s.config.Permissions.AllowBashPrefixes...),
 			"deny_bash_prefixes":  append([]string(nil), s.config.Permissions.DenyBashPrefixes...),
 		},
-		Git:          s.cachedGitState(),
-		Paths:        s.RuntimePaths().ToMap(),
-		Todos:        todos,
-		Tasks:        tasks,
-		HarnessHints: hintCount,
+		Git:   s.cachedGitState(),
+		Paths: s.RuntimePaths().ToMap(),
+		Todos: todos,
+		Tasks: tasks,
 	}
 }
 
 // ExtensionRuntimeStates returns lightweight state exposed by loaded extensions.
-func (s *CodingSession) ExtensionRuntimeStates() map[string]any {
+func (s *engine) ExtensionRuntimeStates() map[string]any {
 	if s == nil || s.extensions == nil {
 		return map[string]any{}
 	}
@@ -161,7 +152,7 @@ func (s *CodingSession) ExtensionRuntimeStates() map[string]any {
 	return states
 }
 
-func (s *CodingSession) RuntimeStateJSON() string {
+func (s *engine) RuntimeStateJSON() string {
 	data, err := json.MarshalIndent(s.RuntimeState(), "", "  ")
 	if err != nil {
 		return "{}\n"
@@ -169,7 +160,7 @@ func (s *CodingSession) RuntimeStateJSON() string {
 	return string(data) + "\n"
 }
 
-func (s *CodingSession) writeRuntimeState() {
+func (s *engine) writeRuntimeState() {
 	paths := s.RuntimePaths()
 	if err := os.MkdirAll(paths.RuntimeDir, 0o755); err != nil {
 		return

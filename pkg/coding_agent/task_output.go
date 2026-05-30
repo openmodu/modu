@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/openmodu/modu/pkg/coding_agent/taskoutput"
+	"github.com/openmodu/modu/pkg/coding_agent/foundation/taskoutput"
 )
 
 type BackgroundTask = taskoutput.Task
@@ -355,7 +355,7 @@ func numericTaskID(id string) int64 {
 }
 
 // GetBackgroundTasks returns a snapshot of session background tasks.
-func (s *CodingSession) GetBackgroundTasks() []BackgroundTask {
+func (s *engine) GetBackgroundTasks() []BackgroundTask {
 	if s.taskManager == nil {
 		return nil
 	}

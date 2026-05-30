@@ -2,17 +2,18 @@ package coding_agent
 
 import (
 	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/coding_agent/services/todo"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/planning"
 )
 
-// TodoItem represents one task tracked during a coding session.
-type TodoItem struct {
-	Content string `json:"content"`
-	Status  string `json:"status"`
-}
+// TodoItem aliases the todo service's item type so existing callers (and the
+// runtime-state snapshot) keep working unchanged.
+type TodoItem = todo.Item
 
+// todoStoreAdapter bridges the session todo store to the planning todo tool,
+// converting between the two TodoItem shapes.
 type todoStoreAdapter struct {
-	session *CodingSession
+	session *engine
 }
 
 func (a todoStoreAdapter) GetTodos() []planning.TodoItem {
@@ -38,7 +39,7 @@ func (a todoStoreAdapter) SetTodos(items []planning.TodoItem) {
 	a.session.SetTodos(out)
 }
 
-func (s *CodingSession) replaceTodoTool() {
+func (s *engine) replaceTodoTool() {
 	if !s.config.FeatureTodoTool() {
 		s.activeTools = removeToolByName(s.activeTools, "todo_write")
 		s.agent.SetTools(removeToolByName(s.agent.GetState().Tools, "todo_write"))
@@ -69,19 +70,7 @@ func replaceTool(list []agent.Tool, replacement agent.Tool) []agent.Tool {
 }
 
 // GetTodos returns the current session todo list.
-func (s *CodingSession) GetTodos() []TodoItem {
-	s.todoMu.RLock()
-	defer s.todoMu.RUnlock()
-	out := make([]TodoItem, len(s.todos))
-	copy(out, s.todos)
-	return out
-}
+func (s *engine) GetTodos() []TodoItem { return s.todos.Get() }
 
 // SetTodos replaces the current session todo list.
-func (s *CodingSession) SetTodos(items []TodoItem) {
-	s.todoMu.Lock()
-	s.todos = make([]TodoItem, len(items))
-	copy(s.todos, items)
-	s.todoMu.Unlock()
-	s.writeRuntimeState()
-}
+func (s *engine) SetTodos(items []TodoItem) { s.todos.Set(items) }

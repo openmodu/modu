@@ -1,6 +1,6 @@
 # modu_code
 
-一个基于 `coding_agent` 的终端 AI 编程助手，采用 `github.com/grindlemire/go-tui` 构建的 TUI 界面。
+一个基于 `coding_agent` 的终端 AI 编程助手，默认采用 Bubble Tea inline TUI：完成的对话会进入终端 scrollback，便于像 Claude Code / Codex 一样选择和复制，底部输入和选择器由 Bubble Tea 渲染。
 
 ---
 
@@ -38,7 +38,7 @@ go run ./cmd/modu_code
 }
 ```
 
-运行中输入 `/model` 会打开模型选择器，可用方向键选择、`Enter` 确认、`Esc` 取消。也可以用 `/model list` 查看模型，用 `/model <name>` 或 `/model <provider> <modelId>` 快速切换。切换后会写回 `active`，下次启动继续使用该模型；如果实际切换到了另一个模型，会清空旧对话上下文并在状态里明确提示。
+运行中输入 `/model` 会打开模型选择器，可用方向键选择、`Enter` 确认、`Esc` 取消。也可以用 `/model <query>` 带初始搜索打开选择器。切换后会写回 `active`，下次启动继续使用该模型；如果实际切换到了另一个模型，会清空旧对话上下文并在状态里明确提示。
 
 配置辅助命令：
 
@@ -69,13 +69,11 @@ go run ./cmd/modu_code config validate
 | `ctrl+d` | 退出（输入框为空时） |
 | `ctrl+l` | 清屏 |
 | `ctrl+o` | 切换工具调用展开模式 |
-| `ctrl+p` / `ctrl+n` | 向前 / 向后切换可用模型 |
 | `esc` | 中断当前请求 / 返回输入 |
-| `PageUp` / `PageDown` | 滚动对话 |
-| `Home` / `End` | 跳到顶部 / 底部 |
+| `Home` / `End` | 输入行首 / 行尾 |
 | `ctrl+j` | 在输入框插入换行 |
 
-输入 `@` 后继续键入文件名或路径片段可以模糊搜索当前工作目录下的文件，Tab 或 Enter 会补全选中的 `@path`。提交普通 prompt 时，合法的 `@path` 文件引用会把文件内容附加到发给模型的消息中。Tab 也支持补全 `./`、`../`、`~/` 或包含 `/` 的路径 token。
+输入 `/` 会打开轻量命令选择器，可用方向键选择，`Tab` 补全，`Enter` 执行选中命令。
 
 输入 `!cmd` 会在当前工作目录执行 shell 命令，把输出显示在 TUI 中，并作为下一条用户消息发送给模型。输入 `!!cmd` 只执行并显示输出，不发送给模型。
 
@@ -83,7 +81,7 @@ go run ./cmd/modu_code config validate
 
 输入 `/queue` 可以查看当前等待执行的 steer / follow-up 队列；`/queue clear` 清空全部队列，`/queue clear steer` 或 `/queue clear followup` 按类型清空，`/queue drop` 删除最后一条等待消息。
 
-`/settings` 中的 tool output 展开模式会持久化到 `~/.coding_agent/tui_settings.json`，下次启动自动恢复。
+Bubble Tea 的全屏 TUI 保留为实验路径；默认交互路径使用 Bubble Tea inline runtime，优先保证 scrollback 和终端文本选择体验。
 
 ---
 
@@ -103,7 +101,7 @@ go run ./cmd/modu_code config validate
 
 | 命令 | 说明 |
 |------|------|
-| `/settings` | 打开 TUI 设置面板 |
+| `/settings` | 显示 Bubble Tea 迁移状态 |
 | `/model [query]` | 打开带搜索的模型选择器 |
 | `/scoped-models` | 打开模型范围选择器，用于控制模型循环范围 |
 | `/config example\|init\|validate` | 在 TUI 内查看、初始化或校验模型配置 |
@@ -123,17 +121,17 @@ go run ./cmd/modu_code config validate
 | `/session` | 查看当前会话 id、名称、文件、cwd、模型、消息数、tokens、plan/worktree 和资源摘要 |
 | `/name <name>` | 设置当前会话名称 |
 | `/session delete <file>` | 删除非当前会话文件 |
-| `/sessions [all]` | 在 TUI 中打开当前项目或全部项目的会话选择器；非 TUI 模式列出会话 |
-| `/resume [all]` | 在 TUI 中打开会话选择器；非 TUI 模式需要传入 `<file>` |
+| `/sessions [all]` | 列出当前项目或全部项目的会话 |
+| `/resume <file>` | 切换到指定会话文件 |
 | `/fork-session <file>` | 从已有会话复制一份到当前项目 |
-| `/fork [entry-id]` | TUI 中无参数打开 session tree；带 entry id 时从历史位置 fork |
+| `/fork <entry-id>` | 从历史位置 fork |
 | `/clone` | 从当前 session leaf 克隆一份会话 |
-| `/tree` | 在 TUI 中打开 session tree，Enter 跳转并注入 branch summary，Ctrl+F 从选中节点创建 branched session |
+| `/tree` | 显示 session tree 摘要 |
 | `/export [file]` | 导出当前 session 为 HTML；相对路径按当前工作目录解析 |
 | `/copy` | 复制最后一条 assistant 回复到系统剪贴板 |
 | `/changelog` | 显示当前 git 仓库最近提交 |
-| `/skills` | 在 TUI 中打开可搜索 skills 选择器；非 TUI 模式列出已发现 skills |
-| `/prompts` | 在 TUI 中打开可搜索 prompt templates 选择器；非 TUI 模式列出已发现 templates |
+| `/skills` | 列出已发现 skills |
+| `/prompts` | 列出已发现 prompt templates |
 
 ---
 

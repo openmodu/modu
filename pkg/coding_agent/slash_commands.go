@@ -16,7 +16,7 @@ type SlashCommand struct {
 }
 
 // HasSlashCommand reports whether the session has a registered slash command.
-func (s *CodingSession) HasSlashCommand(name string) bool {
+func (s *engine) HasSlashCommand(name string) bool {
 	if s == nil {
 		return false
 	}
@@ -33,7 +33,7 @@ func (s *CodingSession) HasSlashCommand(name string) bool {
 
 // RegisteredSlashCommands returns all session-level slash commands, including
 // commands contributed by extensions.
-func (s *CodingSession) RegisteredSlashCommands() []SlashCommand {
+func (s *engine) RegisteredSlashCommands() []SlashCommand {
 	if s == nil || len(s.slashCommands) == 0 {
 		return nil
 	}

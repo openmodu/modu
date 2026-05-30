@@ -8,13 +8,13 @@ import (
 	"strings"
 
 	"github.com/openmodu/modu/pkg/agent"
-	"github.com/openmodu/modu/pkg/coding_agent/session"
+	"github.com/openmodu/modu/pkg/coding_agent/services/session"
 	"github.com/openmodu/modu/pkg/types"
 )
 
 // messagesFilePath returns the path of the per-project messages snapshot.
 // We use JSONL format to align with pi-mono.
-func (s *CodingSession) messagesFilePath() string {
+func (s *engine) messagesFilePath() string {
 	if s != nil && s.sessionManager != nil {
 		return s.sessionManager.FilePath()
 	}
@@ -29,13 +29,13 @@ func (s *CodingSession) messagesFilePath() string {
 
 // SaveMessages writes the current conversation messages to a JSONL file.
 // It appends only new messages since the last save.
-func (s *CodingSession) SaveMessages() error {
+func (s *engine) SaveMessages() error {
 	return nil
 }
 
 // RestoreMessages loads a previously saved message snapshot from JSONL.
 // Returns (number_of_messages, error).
-func (s *CodingSession) RestoreMessages() (int, error) {
+func (s *engine) RestoreMessages() (int, error) {
 	var msgs []agent.AgentMessage
 	for _, entry := range s.sessionTree.GetCurrentPath() {
 		if entry.Type == session.EntryTypeBranchSummary {
@@ -79,7 +79,7 @@ func branchSummaryMessageFromSessionData(data any) (types.UserMessage, bool) {
 }
 
 // migrateOldMessagesJSON handles migration from older single JSON array to new JSONL.
-func (s *CodingSession) migrateOldMessagesJSON() (int, error) {
+func (s *engine) migrateOldMessagesJSON() (int, error) {
 	oldPath := filepath.Join(filepath.Dir(s.messagesFilePath()), "messages.json")
 	data, err := os.ReadFile(oldPath)
 	if err != nil {
@@ -113,12 +113,12 @@ func (s *CodingSession) migrateOldMessagesJSON() (int, error) {
 }
 
 // InputHistoryFile returns the path of the per-project input history file.
-func (s *CodingSession) InputHistoryFile() string {
+func (s *engine) InputHistoryFile() string {
 	return filepath.Join(filepath.Dir(s.messagesFilePath()), "input_history")
 }
 
 // ClearSavedMessages deletes the messages snapshot for this project.
-func (s *CodingSession) ClearSavedMessages() error {
+func (s *engine) ClearSavedMessages() error {
 	s.lastSavedIndex = 0
 	if s.sessionManager != nil {
 		return s.sessionManager.Clear()
@@ -127,7 +127,7 @@ func (s *CodingSession) ClearSavedMessages() error {
 }
 
 // ClearConversation clears both in-memory and persisted conversation context.
-func (s *CodingSession) ClearConversation() error {
+func (s *engine) ClearConversation() error {
 	s.agent.Reset()
 	return s.ClearSavedMessages()
 }

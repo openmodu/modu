@@ -2,7 +2,7 @@ package coding_agent
 
 import backendtask "github.com/openmodu/modu/pkg/coding_agent/tools/backend_task"
 
-func (s *CodingSession) replaceTaskOutputTool() {
+func (s *engine) replaceTaskOutputTool() {
 	if !s.config.FeatureTaskOutputTool() {
 		s.activeTools = removeToolByName(s.activeTools, "task_output")
 		s.agent.SetTools(removeToolByName(s.agent.GetState().Tools, "task_output"))
