@@ -87,6 +87,8 @@ enough to implement, verify, and commit independently.
   information into scrollback on startup and after model switches, with Telegram
   shown as `channel` instead of `mode`, without keeping a persistent header row
   in the live renderer.
+- Bubble Tea tool and plan approval prompts now use the Agenvoy-style prompt
+  card: `⏺` title, compact tool/input detail, and colored `actions:` choices.
 
 ## Next
 
@@ -150,3 +152,5 @@ enough to implement, verify, and commit independently.
 - 2026-05-30: `go test ./cmd/modu_code ./cmd/modu_code/internal/provider ./pkg/tui ./pkg/slash ./pkg/coding_agent`
   passed for the non-persistent multi-line inline header, channel labeling, and
   input prompt marker update.
+- 2026-05-30: `go test ./cmd/modu_code ./cmd/modu_code/internal/provider ./pkg/tui ./pkg/slash ./pkg/coding_agent`
+  passed for the Agenvoy-style Bubble Tea approval prompt cards.

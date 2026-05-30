@@ -52,6 +52,61 @@ func TestBubbleTUIApprovalAllowsWithY(t *testing.T) {
 	}
 }
 
+func TestBubbleTUIApprovalUsesAgenvoyStyleToolCard(t *testing.T) {
+	root := newBubbleTUI(context.Background(), nil, nil, "", nil, CommandHooks{})
+	root.model.pendingPerm = &approval.Request{
+		ToolName:   "bash",
+		ToolCallID: "call-1",
+		Args:       map[string]any{"command": "go test ./pkg/tui"},
+	}
+
+	rendered := stripANSIForGoTUI(root.renderApproval())
+	for _, want := range []string{
+		"⏺ Permission required",
+		"  tool: bash",
+		"  args: go test ./pkg/tui",
+		"  actions: [Y]es  [N]o  [A]llow this command  [D]eny this command",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected Agenvoy-style approval card to contain %q, got %q", want, rendered)
+		}
+	}
+}
+
+func TestBubbleTUIApprovalUsesAlwaysLabelsForNonBashTools(t *testing.T) {
+	root := newBubbleTUI(context.Background(), nil, nil, "", nil, CommandHooks{})
+	root.model.pendingPerm = &approval.Request{
+		ToolName:   "edit",
+		ToolCallID: "call-1",
+		Args:       map[string]any{"path": "/tmp/example.go"},
+	}
+
+	rendered := stripANSIForGoTUI(root.renderApproval())
+	if !strings.Contains(rendered, "[A]lways allow") || !strings.Contains(rendered, "[D]eny always") {
+		t.Fatalf("expected non-bash approval card to keep always labels, got %q", rendered)
+	}
+}
+
+func TestBubbleTUIPlanApprovalUsesAgenvoyStyleActions(t *testing.T) {
+	root := newBubbleTUI(context.Background(), nil, nil, "", nil, CommandHooks{})
+	root.model.pendingPerm = &approval.Request{
+		ToolName:   "exit_plan_mode",
+		ToolCallID: "plan",
+		Args:       map[string]any{"steps": []any{"one", "two"}},
+	}
+
+	rendered := stripANSIForGoTUI(root.renderApproval())
+	for _, want := range []string{
+		"⏺ Plan approval",
+		"  plan shown above  steps=2",
+		"  actions: [Y]es, start coding  [A] auto-accept edits  [N]o, keep planning",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected Agenvoy-style plan approval to contain %q, got %q", want, rendered)
+		}
+	}
+}
+
 func TestBubbleTUIConfigHookRendersSection(t *testing.T) {
 	root := newBubbleTUI(context.Background(), nil, nil, "", nil, CommandHooks{
 		Config: func(args string) (string, error) {

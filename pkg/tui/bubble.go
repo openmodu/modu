@@ -2142,29 +2142,81 @@ func (b *bubbleTUI) renderApproval() string {
 	}
 	if perm.ToolName == "exit_plan_mode" {
 		return strings.Join([]string{
-			uiSecondaryText.Render("Plan approval"),
-			uiDimText.Render("enter/y approve  a approve+auto  n/esc reject"),
+			uiSecondaryText.Bold(true).Render("⏺ Plan approval"),
+			uiDimText.Render(fmt.Sprintf("  plan shown above  steps=%d", planApprovalStepCount(perm.Args))),
+			uiSecondaryText.Render("  auto-accept allows write/edit/bash for this session"),
+			b.renderApprovalActions([]approvalActionLabel{
+				{Text: "[Y]es, start coding", Style: uiSuccessText.Bold(true)},
+				{Text: "[A] auto-accept edits", Style: uiSecondaryText.Bold(true)},
+				{Text: "[N]o, keep planning", Style: uiErrorText},
+			}),
 		}, "\n")
 	}
 	if perm.ToolName == "extension_confirm" {
 		title, _ := perm.Args["title"].(string)
 		body, _ := perm.Args["body"].(string)
-		return strings.Join([]string{
-			uiSecondaryText.Render(strings.TrimSpace(title)),
-			strings.TrimSpace(body),
-			uiDimText.Render("enter/y yes  n/esc no"),
-		}, "\n")
+		if strings.TrimSpace(title) == "" {
+			title = "Confirm action"
+		}
+		var lines []string
+		lines = append(lines, uiSecondaryText.Bold(true).Render("⏺ "+strings.TrimSpace(title)))
+		for _, line := range strings.Split(strings.TrimSpace(body), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			lines = append(lines, uiDimText.Render("  "+truncateRunes(line, 100)))
+		}
+		lines = append(lines, b.renderApprovalActions([]approvalActionLabel{
+			{Text: "[Y]es", Style: uiSuccessText.Bold(true)},
+			{Text: "[N]o", Style: uiErrorText},
+		}))
+		return strings.Join(lines, "\n")
 	}
-	var detail string
-	if len(perm.Args) > 0 {
-		detail = fmt.Sprintf("args: %v", perm.Args)
+	lines := []string{
+		uiSecondaryText.Bold(true).Render("⏺ Permission required"),
+		uiWhiteText.Bold(true).Render("  tool: " + perm.ToolName),
 	}
-	return strings.TrimSpace(strings.Join([]string{
-		uiSecondaryText.Render("Permission required"),
-		"tool: " + perm.ToolName,
-		detail,
-		uiDimText.Render("enter/y allow  a always  n/esc deny  d deny always"),
-	}, "\n"))
+	if args := formatToolInput(perm.ToolName, perm.Args); args != "" {
+		lines = append(lines, uiDimText.Render("  args: "+truncateRunes(args, 80)))
+	}
+	allowLabel := "[A]lways allow"
+	denyLabel := "[D]eny always"
+	if perm.ToolName == "bash" {
+		allowLabel = "[A]llow this command"
+		denyLabel = "[D]eny this command"
+	}
+	lines = append(lines, b.renderApprovalActions([]approvalActionLabel{
+		{Text: "[Y]es", Style: uiSuccessText.Bold(true)},
+		{Text: "[N]o", Style: uiErrorText},
+		{Text: allowLabel, Style: uiSecondaryText.Bold(true)},
+		{Text: denyLabel, Style: uiDimText},
+	}))
+	return strings.Join(lines, "\n")
+}
+
+type approvalActionLabel struct {
+	Text  string
+	Style lipgloss.Style
+}
+
+func (b *bubbleTUI) renderApprovalActions(actions []approvalActionLabel) string {
+	parts := make([]string, 0, len(actions))
+	for _, action := range actions {
+		parts = append(parts, action.Style.Render(action.Text))
+	}
+	return uiDimText.Render("  actions: ") + strings.Join(parts, "  ")
+}
+
+func truncateRunes(s string, maxRunes int) string {
+	rs := []rune(s)
+	if len(rs) <= maxRunes {
+		return s
+	}
+	if maxRunes < 1 {
+		return ""
+	}
+	return string(rs[:maxRunes-1]) + "…"
 }
 
 func (b *bubbleTUI) renderPlanReject() string {
