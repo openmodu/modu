@@ -1,18 +1,17 @@
 package coding_agent
 
 import (
-	"sync"
-
 	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/coding_agent/services/todo"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/planning"
 )
 
-// TodoItem represents one task tracked during a coding session.
-type TodoItem struct {
-	Content string `json:"content"`
-	Status  string `json:"status"`
-}
+// TodoItem aliases the todo service's item type so existing callers (and the
+// runtime-state snapshot) keep working unchanged.
+type TodoItem = todo.Item
 
+// todoStoreAdapter bridges the session todo store to the planning todo tool,
+// converting between the two TodoItem shapes.
 type todoStoreAdapter struct {
 	session *CodingSession
 }
@@ -68,34 +67,6 @@ func replaceTool(list []agent.Tool, replacement agent.Tool) []agent.Tool {
 		out = append(out, replacement)
 	}
 	return out
-}
-
-// todoStore owns the session todo list. It is self-contained: state changes
-// notify the host through onChange rather than reaching back into the session.
-type todoStore struct {
-	mu       sync.RWMutex
-	items    []TodoItem
-	onChange func()
-}
-
-func newTodoStore() *todoStore { return &todoStore{} }
-
-func (t *todoStore) Get() []TodoItem {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	out := make([]TodoItem, len(t.items))
-	copy(out, t.items)
-	return out
-}
-
-func (t *todoStore) Set(items []TodoItem) {
-	t.mu.Lock()
-	t.items = make([]TodoItem, len(items))
-	copy(t.items, items)
-	t.mu.Unlock()
-	if t.onChange != nil {
-		t.onChange()
-	}
 }
 
 // GetTodos returns the current session todo list.

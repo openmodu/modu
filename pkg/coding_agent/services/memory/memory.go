@@ -1,4 +1,4 @@
-package coding_agent
+package memory
 
 import (
 	"fmt"
@@ -8,27 +8,27 @@ import (
 	"time"
 )
 
-// MemoryStore manages persistent memory for the coding agent at two scopes:
+// Store manages persistent memory for the coding agent at two scopes:
 //
 //   - Global (~/.coding_agent/memory/): shared across all projects.
 //   - Project (<cwd>/memory/):          specific to the current project.
 //
 // Both scopes store a MEMORY.md for long-term facts and
 // daily notes under YYYYMM/YYYYMMDD.md.
-type MemoryStore struct {
+type Store struct {
 	globalDir  string // e.g. ~/.coding_agent/memory
 	projectDir string // e.g. <cwd>/memory
 }
 
-// NewMemoryStore creates a MemoryStore backed by two directories.
+// New creates a Store backed by two directories.
 // agentDir is the global config dir (e.g. ~/.coding_agent/);
 // cwd is the current project directory.
-func NewMemoryStore(agentDir, cwd string) *MemoryStore {
+func New(agentDir, cwd string) *Store {
 	globalDir := filepath.Join(agentDir, "memory")
 	projectDir := filepath.Join(cwd, ".modu_code", "memory")
 	os.MkdirAll(globalDir, 0o755)
 	os.MkdirAll(projectDir, 0o755)
-	return &MemoryStore{
+	return &Store{
 		globalDir:  globalDir,
 		projectDir: projectDir,
 	}
@@ -37,12 +37,12 @@ func NewMemoryStore(agentDir, cwd string) *MemoryStore {
 // ── read ──────────────────────────────────────────────────────────────────────
 
 // ReadLongTerm reads the project-scoped MEMORY.md (default scope for tools).
-func (ms *MemoryStore) ReadLongTerm() string {
+func (ms *Store) ReadLongTerm() string {
 	return ms.ReadProjectLongTerm()
 }
 
 // ReadProjectLongTerm reads <cwd>/memory/MEMORY.md.
-func (ms *MemoryStore) ReadProjectLongTerm() string {
+func (ms *Store) ReadProjectLongTerm() string {
 	data, err := os.ReadFile(filepath.Join(ms.projectDir, "MEMORY.md"))
 	if err != nil {
 		return ""
@@ -51,7 +51,7 @@ func (ms *MemoryStore) ReadProjectLongTerm() string {
 }
 
 // ReadGlobalLongTerm reads ~/.coding_agent/memory/MEMORY.md.
-func (ms *MemoryStore) ReadGlobalLongTerm() string {
+func (ms *Store) ReadGlobalLongTerm() string {
 	data, err := os.ReadFile(filepath.Join(ms.globalDir, "MEMORY.md"))
 	if err != nil {
 		return ""
@@ -62,28 +62,28 @@ func (ms *MemoryStore) ReadGlobalLongTerm() string {
 // ── write ─────────────────────────────────────────────────────────────────────
 
 // WriteLongTerm writes to the project-scoped MEMORY.md (default scope for tools).
-func (ms *MemoryStore) WriteLongTerm(content string) error {
+func (ms *Store) WriteLongTerm(content string) error {
 	return ms.WriteProjectLongTerm(content)
 }
 
 // WriteProjectLongTerm overwrites <cwd>/memory/MEMORY.md.
-func (ms *MemoryStore) WriteProjectLongTerm(content string) error {
+func (ms *Store) WriteProjectLongTerm(content string) error {
 	return os.WriteFile(filepath.Join(ms.projectDir, "MEMORY.md"), []byte(content), 0o600)
 }
 
 // WriteGlobalLongTerm overwrites ~/.coding_agent/memory/MEMORY.md.
-func (ms *MemoryStore) WriteGlobalLongTerm(content string) error {
+func (ms *Store) WriteGlobalLongTerm(content string) error {
 	return os.WriteFile(filepath.Join(ms.globalDir, "MEMORY.md"), []byte(content), 0o600)
 }
 
 // ── daily notes ───────────────────────────────────────────────────────────────
 
 // AppendToday appends content to today's project-scoped daily note.
-func (ms *MemoryStore) AppendToday(content string) error {
+func (ms *Store) AppendToday(content string) error {
 	return ms.appendTodayToDir(ms.projectDir, content)
 }
 
-func (ms *MemoryStore) appendTodayToDir(dir, content string) error {
+func (ms *Store) appendTodayToDir(dir, content string) error {
 	today := time.Now().Format("20060102")
 	monthDir := today[:6]
 	filePath := filepath.Join(dir, monthDir, today+".md")
@@ -107,11 +107,11 @@ func (ms *MemoryStore) appendTodayToDir(dir, content string) error {
 }
 
 // GetRecentDailyNotes returns daily notes from the last N days (project scope).
-func (ms *MemoryStore) GetRecentDailyNotes(days int) string {
+func (ms *Store) GetRecentDailyNotes(days int) string {
 	return ms.recentDailyNotesFromDir(ms.projectDir, days)
 }
 
-func (ms *MemoryStore) recentDailyNotesFromDir(dir string, days int) string {
+func (ms *Store) recentDailyNotesFromDir(dir string, days int) string {
 	var sb strings.Builder
 	first := true
 	for i := 0; i < days; i++ {
@@ -135,7 +135,7 @@ func (ms *MemoryStore) recentDailyNotesFromDir(dir string, days int) string {
 
 // GetMemoryContext returns merged memory from both scopes for the system prompt.
 // Global memory appears first; project memory is labelled separately.
-func (ms *MemoryStore) GetMemoryContext() string {
+func (ms *Store) GetMemoryContext() string {
 	global := ms.ReadGlobalLongTerm()
 	project := ms.ReadProjectLongTerm()
 	recent := ms.GetRecentDailyNotes(3)

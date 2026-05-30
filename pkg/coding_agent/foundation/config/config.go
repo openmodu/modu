@@ -1,4 +1,7 @@
-package coding_agent
+// Package config is the foundation layer holding coding-agent session
+// configuration loaded from global and project settings.json files. It has no
+// dependency on the session or any higher layer.
+package config
 
 import (
 	"encoding/json"
@@ -100,8 +103,8 @@ type RetryConfig struct {
 	MaxDelayMs int `json:"maxDelayMs,omitempty"`
 }
 
-// DefaultConfig returns a config with sensible defaults.
-func DefaultConfig() *Config {
+// Default returns a config with sensible defaults.
+func Default() *Config {
 	return &Config{
 		ThinkingLevel:  agent.ThinkingLevelMedium,
 		AutoCompaction: true,
@@ -119,6 +122,9 @@ func DefaultConfig() *Config {
 		Permissions: PermissionConfig{},
 	}
 }
+
+// Ptr returns a pointer to v. Handy for setting the *bool feature flags.
+func Ptr[T any](v T) *T { return &v }
 
 func boolPtr(v bool) *bool { return &v }
 
@@ -139,44 +145,29 @@ func (c *Config) FeatureWorktreeMode() bool {
 	return c == nil || featureEnabled(c.Features.WorktreeMode)
 }
 
-// LoadConfig loads configuration from global and project-level settings files.
+// Load reads configuration from global and project-level settings files.
 // Project settings override global settings.
-func LoadConfig(agentDir, cwd string) (*Config, error) {
-	cfg := DefaultConfig()
+func Load(agentDir, cwd string) (*Config, error) {
+	cfg := Default()
 
 	// Load global config
 	globalPath := filepath.Join(agentDir, "settings.json")
-	if err := loadConfigFile(globalPath, cfg); err != nil && !os.IsNotExist(err) {
+	if err := loadFile(globalPath, cfg); err != nil && !os.IsNotExist(err) {
 		return nil, err
 	} else if os.IsNotExist(err) {
-		_ = SaveConfig(cfg, globalPath)
+		_ = Save(cfg, globalPath)
 	}
 
 	// Load project config (overrides global)
 	projectPath := filepath.Join(cwd, ".coding_agent", "settings.json")
-	if err := loadConfigFile(projectPath, cfg); err != nil && !os.IsNotExist(err) {
-		return nil, err
-	}
-	if err := ValidateConfig(cfg); err != nil {
+	if err := loadFile(projectPath, cfg); err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
 
 	return cfg, nil
 }
 
-func ValidateConfig(cfg *Config) error {
-	return nil
-}
-
-func DefaultConfigTemplate() string {
-	data, err := json.MarshalIndent(DefaultConfig(), "", "  ")
-	if err != nil {
-		return ""
-	}
-	return string(data) + "\n"
-}
-
-func loadConfigFile(path string, cfg *Config) error {
+func loadFile(path string, cfg *Config) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -184,69 +175,14 @@ func loadConfigFile(path string, cfg *Config) error {
 	return json.Unmarshal(data, cfg)
 }
 
-// SaveConfig saves the configuration to the given path.
-func SaveConfig(cfg *Config, path string) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+// Save writes the configuration to path as indented JSON.
+func Save(cfg *Config, path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
-
 	return os.WriteFile(path, data, 0o644)
-}
-
-// APIKeyStore manages API key storage.
-type APIKeyStore struct {
-	path string
-	keys map[string]string
-}
-
-// NewAPIKeyStore creates a new API key store.
-func NewAPIKeyStore(agentDir string) *APIKeyStore {
-	return &APIKeyStore{
-		path: filepath.Join(agentDir, "auth.json"),
-		keys: make(map[string]string),
-	}
-}
-
-// Load reads API keys from disk.
-func (s *APIKeyStore) Load() error {
-	data, err := os.ReadFile(s.path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	return json.Unmarshal(data, &s.keys)
-}
-
-// Get returns an API key for the given provider.
-func (s *APIKeyStore) Get(provider string) (string, bool) {
-	key, ok := s.keys[provider]
-	return key, ok
-}
-
-// Set stores an API key for the given provider.
-func (s *APIKeyStore) Set(provider, key string) error {
-	s.keys[provider] = key
-	return s.save()
-}
-
-func (s *APIKeyStore) save() error {
-	dir := filepath.Dir(s.path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-
-	data, err := json.MarshalIndent(s.keys, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	return os.WriteFile(s.path, data, 0o600) // Restrictive permissions for secrets
 }

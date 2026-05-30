@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/openmodu/modu/pkg/agent"
-	"github.com/openmodu/modu/pkg/coding_agent/taskoutput"
+	"github.com/openmodu/modu/pkg/coding_agent/foundation/taskoutput"
 	"github.com/openmodu/modu/pkg/types"
 )
 

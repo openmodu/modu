@@ -8,14 +8,22 @@ import (
 	"time"
 
 	"github.com/openmodu/modu/pkg/agent"
-	"github.com/openmodu/modu/pkg/coding_agent/contextmgr"
-	"github.com/openmodu/modu/pkg/coding_agent/eventbus"
-	"github.com/openmodu/modu/pkg/coding_agent/extension"
-	"github.com/openmodu/modu/pkg/coding_agent/prompts"
-	"github.com/openmodu/modu/pkg/coding_agent/resource"
-	"github.com/openmodu/modu/pkg/coding_agent/session"
-	"github.com/openmodu/modu/pkg/coding_agent/subagent"
-	"github.com/openmodu/modu/pkg/coding_agent/systemprompt"
+	"github.com/openmodu/modu/pkg/coding_agent/foundation/config"
+	"github.com/openmodu/modu/pkg/coding_agent/foundation/eventbus"
+	"github.com/openmodu/modu/pkg/coding_agent/foundation/resource"
+	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
+	"github.com/openmodu/modu/pkg/coding_agent/plugins/prompts"
+	"github.com/openmodu/modu/pkg/coding_agent/plugins/subagent"
+	"github.com/openmodu/modu/pkg/coding_agent/services/approval"
+	"github.com/openmodu/modu/pkg/coding_agent/services/bash"
+	"github.com/openmodu/modu/pkg/coding_agent/services/contextmgr"
+	"github.com/openmodu/modu/pkg/coding_agent/services/memory"
+	"github.com/openmodu/modu/pkg/coding_agent/services/plan"
+	"github.com/openmodu/modu/pkg/coding_agent/services/retry"
+	"github.com/openmodu/modu/pkg/coding_agent/services/session"
+	"github.com/openmodu/modu/pkg/coding_agent/services/systemprompt"
+	"github.com/openmodu/modu/pkg/coding_agent/services/todo"
+	"github.com/openmodu/modu/pkg/coding_agent/services/worktree"
 	"github.com/openmodu/modu/pkg/coding_agent/tools"
 	"github.com/openmodu/modu/pkg/skills"
 	"github.com/openmodu/modu/pkg/types"
@@ -59,12 +67,12 @@ type CodingSession struct {
 	agent           *agent.Agent
 	sessionManager  *session.Manager
 	sessionTree     *session.Tree
-	config          *Config
+	config          *config.Config
 	extensions      *extension.Runner
 	skillManager    *skills.Manager
 	promptManager   *prompts.Manager
 	resources       *resource.Loader
-	memoryStore     *MemoryStore
+	memoryStore     *memory.Store
 	subagentLoader  *subagent.Loader
 	cwd             string
 	agentDir        string
@@ -76,7 +84,7 @@ type CodingSession struct {
 	getAPIKey       func(provider string) (string, error)
 	streamFn        agent.StreamFn
 	lastSavedIndex  int
-	retryManager    *RetryManager
+	retryManager    *retry.Manager
 	eventBus        eventbus.EventBusController
 	scopedModels    []string
 	modelConfigPath string
@@ -86,15 +94,15 @@ type CodingSession struct {
 
 	// Session components — each owns its own state behind a narrow API.
 	ctxMgr      *contextmgr.Manager    // conversation window: tokens, compaction, nested context
-	bash        *bashRunner            // inline !command execution + cancellation
-	todos       *todoStore             // session todo list
+	bash        *bash.Runner           // inline !command execution + cancellation
+	todos       *todo.Store            // session todo list
 	taskManager *backgroundTaskManager // background async tasks
-	plan        *planController        // plan mode
-	worktree    *worktreeController    // isolated git worktree
+	plan        *plan.Controller       // plan mode
+	worktree    *worktree.Controller   // isolated git worktree
 	extPrompts  extensionPrompts       // host confirm/select callbacks
 
 	// approvalManager handles tool execution approval.
-	approvalManager *ApprovalManager
+	approvalManager *approval.Manager
 
 	// gitCache holds the last-known git state to avoid spawning git subprocesses
 	// on every writeRuntimeState call.
@@ -123,9 +131,9 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	}
 
 	// Load config
-	cfg, err := LoadConfig(agentDir, opts.Cwd)
+	cfg, err := config.Load(agentDir, opts.Cwd)
 	if err != nil {
-		cfg = DefaultConfig()
+		cfg = config.Default()
 	}
 
 	// Override config with options
@@ -134,7 +142,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	}
 
 	// Initialize memory store (global ~/.coding_agent/memory + project <cwd>/memory)
-	memoryStore := NewMemoryStore(agentDir, opts.Cwd)
+	memoryStore := memory.New(agentDir, opts.Cwd)
 
 	// Set up tools
 	toolProvider := opts.ToolProvider
@@ -155,8 +163,8 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		Values: map[string]any{
 			tools.ValueMemoryStore: memoryStore,
 			tools.ValueTodoStore:   todoStoreAdapter{session: nil},
-			tools.ValuePlanMode:    newPlanController(nil),
-			tools.ValueWorktree:    newWorktreeController(nil),
+			tools.ValuePlanMode:    plan.New(nil),
+			tools.ValueWorktree:    worktree.New(nil),
 		},
 	})
 
@@ -234,7 +242,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	systemPrompt := promptBuilder.Build()
 
 	// Create approval manager
-	approvalMgr := NewApprovalManager()
+	approvalMgr := approval.New()
 	approvalMgr.SetRules(cfg.Permissions)
 
 	// Create the underlying agent
@@ -270,7 +278,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		slashCommands:   make(map[string]SlashCommand),
 		getAPIKey:       getAPIKey,
 		streamFn:        streamFn,
-		retryManager:    NewRetryManager(cfg.RetrySettings, cfg.AutoRetry),
+		retryManager:    retry.New(cfg.RetrySettings, cfg.AutoRetry),
 		eventBus:        eventbus.NewEventBus(),
 		scopedModels:    resolveScopedModels(cfg.ScopedModels, opts.ScopedModels),
 		modelConfigPath: opts.ModelConfigPath,
@@ -294,8 +302,8 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	cs.refreshToolsForCwd(cs.cwd)
 	cs.replaceTodoTool()
 	cs.replaceTaskOutputTool()
-	cs.plan.replaceTools()
-	cs.worktree.replaceTools()
+	cs.replacePlanTools()
+	cs.replaceWorktreeTools()
 	initialContexts := make([]string, 0, len(resourceSnapshot.ContextFiles))
 	for _, ctxFile := range resourceSnapshot.ContextFiles {
 		initialContexts = append(initialContexts, ctxFile.Path)
@@ -517,11 +525,11 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 // their dependencies. It runs once, after the session struct is populated, so
 // every component can read what it needs from s.
 func (s *CodingSession) wireComponents() {
-	s.todos = newTodoStore()
-	s.todos.onChange = func() { s.writeRuntimeState() }
-	s.plan = newPlanController(s)
-	s.worktree = newWorktreeController(s)
-	s.bash = newBashRunner(s)
+	s.todos = todo.NewStore()
+	s.todos.OnChange = func() { s.writeRuntimeState() }
+	s.plan = plan.New(s)
+	s.worktree = worktree.New(s)
+	s.bash = bash.New(s)
 	s.ctxMgr = contextmgr.New(contextmgr.Deps{
 		Agent:          s.agent,
 		Resources:      s.resources,
@@ -693,7 +701,7 @@ func (s *CodingSession) GetLastAssistantText() string {
 	return ""
 }
 
-func prepareSubagentDefinition(def *subagent.SubagentDefinition, skillMgr *skills.Manager, memoryStore *MemoryStore) *subagent.SubagentDefinition {
+func prepareSubagentDefinition(def *subagent.SubagentDefinition, skillMgr *skills.Manager, memoryStore *memory.Store) *subagent.SubagentDefinition {
 	if def == nil {
 		return nil
 	}
@@ -730,7 +738,7 @@ func prepareSubagentDefinition(def *subagent.SubagentDefinition, skillMgr *skill
 	return &clone
 }
 
-func memoryContextForScope(store *MemoryStore, scope string) string {
+func memoryContextForScope(store *memory.Store, scope string) string {
 	switch strings.ToLower(strings.TrimSpace(scope)) {
 	case "", "none":
 		return ""

@@ -1,10 +1,10 @@
-package coding_agent
+package todo
 
 import "testing"
 
 func TestTodoStoreGetSetCopies(t *testing.T) {
-	ts := newTodoStore()
-	in := []TodoItem{{Content: "a", Status: "pending"}}
+	ts := NewStore()
+	in := []Item{{Content: "a", Status: "pending"}}
 	ts.Set(in)
 
 	// Mutating the input slice must not affect stored state.
@@ -22,18 +22,18 @@ func TestTodoStoreGetSetCopies(t *testing.T) {
 }
 
 func TestTodoStoreOnChangeFires(t *testing.T) {
-	ts := newTodoStore()
+	ts := NewStore()
 	calls := 0
-	ts.onChange = func() { calls++ }
-	ts.Set([]TodoItem{{Content: "x"}})
+	ts.OnChange = func() { calls++ }
+	ts.Set([]Item{{Content: "x"}})
 	if calls != 1 {
 		t.Fatalf("expected onChange to fire once, got %d", calls)
 	}
 }
 
 func TestTodoStoreNilOnChangeSafe(t *testing.T) {
-	ts := newTodoStore() // no onChange wired
-	ts.Set([]TodoItem{{Content: "x"}})
+	ts := NewStore() // no onChange wired
+	ts.Set([]Item{{Content: "x"}})
 	if len(ts.Get()) != 1 {
 		t.Fatal("Set should work without an onChange callback")
 	}

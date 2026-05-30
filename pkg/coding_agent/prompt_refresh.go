@@ -1,6 +1,6 @@
 package coding_agent
 
-import "github.com/openmodu/modu/pkg/coding_agent/systemprompt"
+import "github.com/openmodu/modu/pkg/coding_agent/services/systemprompt"
 
 // refreshDynamicSystemPrompt rebuilds the system prompt from scratch every
 // turn. The skills XML block, context files, and memory are all regenerated

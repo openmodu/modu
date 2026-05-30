@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/openmodu/modu/pkg/agent"
-	"github.com/openmodu/modu/pkg/coding_agent/contextmgr"
+	"github.com/openmodu/modu/pkg/coding_agent/services/contextmgr"
 )
 
 // Compact triggers context compaction for the session.

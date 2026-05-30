@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/openmodu/modu/pkg/coding_agent/taskoutput"
+	"github.com/openmodu/modu/pkg/coding_agent/foundation/taskoutput"
 )
 
 type BackgroundTask = taskoutput.Task

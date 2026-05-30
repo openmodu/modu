@@ -1,4 +1,4 @@
-package coding_agent
+package retry
 
 import (
 	"context"
@@ -6,12 +6,14 @@ import (
 	"regexp"
 	"sync"
 	"time"
+
+	"github.com/openmodu/modu/pkg/coding_agent/foundation/config"
 )
 
 var retryablePattern = regexp.MustCompile(`(?i)(overloaded|rate.?limit|429|500|502|503|504|too many requests|capacity|temporarily unavailable|server error|internal error)`)
 
-// RetryManager manages auto-retry logic with exponential backoff.
-type RetryManager struct {
+// Manager manages auto-retry logic with exponential backoff.
+type Manager struct {
 	mu          sync.Mutex
 	attempt     int
 	maxAttempts int
@@ -21,8 +23,8 @@ type RetryManager struct {
 	enabled     bool
 }
 
-// NewRetryManager creates a RetryManager with the given configuration.
-func NewRetryManager(cfg RetryConfig, enabled bool) *RetryManager {
+// NewRetryManager creates a Manager with the given configuration.
+func New(cfg config.RetryConfig, enabled bool) *Manager {
 	maxAttempts := cfg.MaxRetries
 	if maxAttempts <= 0 {
 		maxAttempts = 3
@@ -35,7 +37,7 @@ func NewRetryManager(cfg RetryConfig, enabled bool) *RetryManager {
 	if maxDelay <= 0 {
 		maxDelay = 30000
 	}
-	return &RetryManager{
+	return &Manager{
 		maxAttempts: maxAttempts,
 		baseDelayMs: baseDelay,
 		maxDelayMs:  maxDelay,
@@ -51,7 +53,7 @@ func IsRetryableError(errMsg string) bool {
 // HandleRetryableError performs exponential backoff retry.
 // It calls onRetryStart before waiting and retryFn to perform the retry.
 // Returns nil if retry was initiated, or an error if retries are exhausted or aborted.
-func (rm *RetryManager) HandleRetryableError(ctx context.Context, errMsg string, onRetryStart func(attempt, maxAttempts, delayMs int), retryFn func() error) error {
+func (rm *Manager) HandleRetryableError(ctx context.Context, errMsg string, onRetryStart func(attempt, maxAttempts, delayMs int), retryFn func() error) error {
 	rm.mu.Lock()
 	if !rm.enabled {
 		rm.mu.Unlock()
@@ -97,7 +99,7 @@ func (rm *RetryManager) HandleRetryableError(ctx context.Context, errMsg string,
 }
 
 // AbortRetry cancels any pending retry wait.
-func (rm *RetryManager) AbortRetry() {
+func (rm *Manager) AbortRetry() {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	if rm.cancelFn != nil {
@@ -107,21 +109,21 @@ func (rm *RetryManager) AbortRetry() {
 }
 
 // Reset resets the retry counter.
-func (rm *RetryManager) Reset() {
+func (rm *Manager) Reset() {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	rm.attempt = 0
 }
 
 // IsEnabled returns whether auto-retry is enabled.
-func (rm *RetryManager) IsEnabled() bool {
+func (rm *Manager) IsEnabled() bool {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	return rm.enabled
 }
 
 // SetEnabled enables or disables auto-retry.
-func (rm *RetryManager) SetEnabled(enabled bool) {
+func (rm *Manager) SetEnabled(enabled bool) {
 	rm.mu.Lock()
 	defer rm.mu.Unlock()
 	rm.enabled = enabled

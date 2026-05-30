@@ -1,7 +1,9 @@
-package coding_agent
+package approval
 
 import "strings"
 
+// isDangerousBashCommand reports whether a bash command line performs a
+// filesystem-mutating or otherwise side-effecting action that warrants approval.
 func isDangerousBashCommand(command string) bool {
 	command = strings.TrimSpace(command)
 	if command == "" {
@@ -151,19 +153,6 @@ func hasShortFlag(words []string, flag string) bool {
 			return false
 		}
 		if word == "-"+flag || strings.HasPrefix(word, "-"+flag) {
-			return true
-		}
-	}
-	return false
-}
-
-func hasLongFlag(words []string, flag string) bool {
-	for _, word := range words {
-		word = strings.Trim(word, `"'`)
-		if word == "--" {
-			return false
-		}
-		if word == "--"+flag || strings.HasPrefix(word, "--"+flag+"=") {
 			return true
 		}
 	}

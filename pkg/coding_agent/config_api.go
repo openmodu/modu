@@ -5,11 +5,12 @@ import (
 	"path/filepath"
 
 	"github.com/openmodu/modu/pkg/agent"
-	"github.com/openmodu/modu/pkg/coding_agent/session"
+	"github.com/openmodu/modu/pkg/coding_agent/foundation/config"
+	"github.com/openmodu/modu/pkg/coding_agent/services/session"
 )
 
 // GetConfig returns the current configuration.
-func (s *CodingSession) GetConfig() *Config {
+func (s *CodingSession) GetConfig() *config.Config {
 	return s.config
 }
 

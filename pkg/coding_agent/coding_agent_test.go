@@ -11,10 +11,12 @@ import (
 	"time"
 
 	"github.com/openmodu/modu/pkg/agent"
-	"github.com/openmodu/modu/pkg/coding_agent/extension"
-	subagentext "github.com/openmodu/modu/pkg/coding_agent/extension/subagent"
-	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/session"
-	"github.com/openmodu/modu/pkg/coding_agent/subagent"
+	"github.com/openmodu/modu/pkg/coding_agent/foundation/config"
+	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
+	subagentext "github.com/openmodu/modu/pkg/coding_agent/plugins/extension/subagent"
+	"github.com/openmodu/modu/pkg/coding_agent/plugins/subagent"
+	"github.com/openmodu/modu/pkg/coding_agent/services/memory"
+	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/services/session"
 	"github.com/openmodu/modu/pkg/coding_agent/tools"
 	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/skills"
@@ -295,10 +297,10 @@ Return a short completion message.`
 	}
 
 	// Enable task_output explicitly for this test (it's off by default).
-	cfg := DefaultConfig()
-	cfg.Features.TaskOutputTool = boolPtr(true)
+	cfg := config.Default()
+	cfg.Features.TaskOutputTool = config.Ptr(true)
 	settingsPath := filepath.Join(agentDir, "settings.json")
-	if err := SaveConfig(cfg, settingsPath); err != nil {
+	if err := config.Save(cfg, settingsPath); err != nil {
 		t.Fatal(err)
 	}
 
@@ -744,287 +746,6 @@ func TestPlanModeTools(t *testing.T) {
 }
 
 // TestPlanGateAutoAllowed verifies the agent-level approval gate lets
-// exit_plan_mode through unconditionally — the real interactive approval is
-// driven inside the tool (so rejection feedback can reach the model).
-func TestPlanGateAutoAllowed(t *testing.T) {
-	m := NewApprovalManager()
-	m.DenyAlways("exit_plan_mode")
-	m.SetRules(PermissionConfig{DenyTools: []string{"exit_plan_mode"}})
-	called := false
-	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
-		called = true
-		return agent.ToolApprovalDeny, nil
-	})
-	if d, _ := m.Approve("exit_plan_mode", "c0", nil); d != agent.ToolApprovalAllow {
-		t.Fatalf("agent gate must auto-allow exit_plan_mode, got %v", d)
-	}
-	if called {
-		t.Fatal("exit_plan_mode must not hit the generic approval callback")
-	}
-}
-
-func TestApprovalManagerAutoAllowsReadOnlyTools(t *testing.T) {
-	m := NewApprovalManager()
-	called := false
-	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
-		called = true
-		return agent.ToolApprovalDeny, nil
-	})
-	for _, toolName := range []string{"read", "grep", "find", "ls"} {
-		if d, _ := m.Approve(toolName, "call-"+toolName, nil); d != agent.ToolApprovalAllow {
-			t.Fatalf("expected %s to auto-allow, got %v", toolName, d)
-		}
-	}
-	if called {
-		t.Fatal("read-only tools should not hit the interactive approval callback")
-	}
-}
-
-func TestApprovalManagerAutoAllowsGoalStateTools(t *testing.T) {
-	m := NewApprovalManager()
-	m.SetRules(PermissionConfig{DenyTools: []string{"update_goal"}})
-	called := false
-	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
-		called = true
-		return agent.ToolApprovalDeny, nil
-	})
-	for _, toolName := range []string{"create_goal", "get_goal", "update_goal"} {
-		if d, _ := m.Approve(toolName, "call-"+toolName, nil); d != agent.ToolApprovalAllow {
-			t.Fatalf("expected %s to auto-allow, got %v", toolName, d)
-		}
-	}
-	if called {
-		t.Fatal("goal state tools should not hit the interactive approval callback")
-	}
-}
-
-func TestApprovalManagerDenyRulesOverrideReadOnlyAutoAllow(t *testing.T) {
-	m := NewApprovalManager()
-	m.SetRules(PermissionConfig{DenyTools: []string{"read"}})
-	if d, _ := m.Approve("read", "call-read", nil); d != agent.ToolApprovalDeny {
-		t.Fatalf("expected denyTools to override read auto-allow, got %v", d)
-	}
-}
-
-func TestApprovalManagerDenyRulesOverrideCachedBashAllow(t *testing.T) {
-	m := NewApprovalManager()
-	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
-		return agent.ToolApprovalAllowAlways, nil
-	})
-	args := map[string]any{"command": "rm -rf /tmp/nope"}
-	if d, _ := m.Approve("bash", "call-allow", args); d != agent.ToolApprovalAllowAlways {
-		t.Fatalf("expected initial bash approval to cache, got %v", d)
-	}
-
-	m.SetRules(PermissionConfig{DenyTools: []string{"bash"}})
-	if d, _ := m.Approve("bash", "call-deny", args); d != agent.ToolApprovalDeny {
-		t.Fatalf("expected denyTools to override cached bash allow, got %v", d)
-	}
-}
-
-func TestApprovalManagerAutoAllowsSafeBashCommands(t *testing.T) {
-	m := NewApprovalManager()
-	called := false
-	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
-		called = true
-		return agent.ToolApprovalDeny, nil
-	})
-	for _, command := range []string{
-		"pwd",
-		"git status --short",
-		"go test ./pkg/tui",
-		"curl -sS http://127.0.0.1:7081/",
-		"rg -n ApprovalManager pkg/coding_agent 2>/dev/null",
-		"bash -lc 'git status --short'",
-		"curl -sS -o /dev/null http://127.0.0.1:7081/",
-		"python <<'PY'\nprint('inspect')\nPY",
-	} {
-		if d, _ := m.Approve("bash", "call-safe", map[string]any{"command": command}); d != agent.ToolApprovalAllow {
-			t.Fatalf("expected safe bash command %q to auto-allow, got %v", command, d)
-		}
-	}
-	if called {
-		t.Fatal("safe bash commands should not hit the interactive approval callback")
-	}
-}
-
-func TestApprovalManagerAllowBashPrefixesRestrictsSafeBashAutoAllow(t *testing.T) {
-	m := NewApprovalManager()
-	m.SetRules(PermissionConfig{AllowBashPrefixes: []string{"git status"}})
-	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
-		t.Fatalf("allowBashPrefixes should decide safe bash command before callback for %s %#v", name, args)
-		return agent.ToolApprovalDeny, nil
-	})
-	if d, _ := m.Approve("bash", "call-allowed", map[string]any{"command": "git status --short"}); d != agent.ToolApprovalAllow {
-		t.Fatalf("expected matching safe bash command to be allowed, got %v", d)
-	}
-	if d, _ := m.Approve("bash", "call-denied", map[string]any{"command": "pwd"}); d != agent.ToolApprovalDeny {
-		t.Fatalf("expected non-matching safe bash command to be denied by allowBashPrefixes, got %v", d)
-	}
-}
-
-func TestApprovalManagerScopesInteractiveBashAllowAlwaysToCommand(t *testing.T) {
-	m := NewApprovalManager()
-	calls := 0
-	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
-		calls++
-		switch calls {
-		case 1:
-			return agent.ToolApprovalAllowAlways, nil
-		case 2:
-			return agent.ToolApprovalDeny, nil
-		default:
-			t.Fatalf("unexpected approval callback call %d for %s %#v", calls, name, args)
-			return agent.ToolApprovalDeny, nil
-		}
-	})
-
-	dangerArgs := map[string]any{"command": "rm -rf /tmp/nope"}
-	if d, _ := m.Approve("bash", "call-danger-1", dangerArgs); d != agent.ToolApprovalAllowAlways {
-		t.Fatalf("expected first bash command to return allow_always, got %v", d)
-	}
-	if d, _ := m.Approve("bash", "call-danger-2", dangerArgs); d != agent.ToolApprovalAllow {
-		t.Fatalf("expected identical bash command to be cached as allow, got %v", d)
-	}
-	if calls != 1 {
-		t.Fatalf("expected identical bash command not to prompt again, got %d callbacks", calls)
-	}
-	if d, _ := m.Approve("bash", "call-danger-other", map[string]any{"command": "rm -rf /tmp/other"}); d != agent.ToolApprovalDeny {
-		t.Fatalf("expected different bash command to ask callback and deny, got %v", d)
-	}
-	if calls != 2 {
-		t.Fatalf("expected different bash command to prompt, got %d callbacks", calls)
-	}
-}
-
-func TestApprovalManagerScopesInteractiveBashDenyAlwaysToCommand(t *testing.T) {
-	m := NewApprovalManager()
-	calls := 0
-	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
-		calls++
-		switch calls {
-		case 1:
-			return agent.ToolApprovalDenyAlways, nil
-		case 2:
-			return agent.ToolApprovalAllow, nil
-		default:
-			t.Fatalf("unexpected approval callback call %d for %s %#v", calls, name, args)
-			return agent.ToolApprovalDeny, nil
-		}
-	})
-
-	dangerArgs := map[string]any{"command": "rm -rf /tmp/nope"}
-	if d, _ := m.Approve("bash", "call-danger-1", dangerArgs); d != agent.ToolApprovalDenyAlways {
-		t.Fatalf("expected first bash command to return deny_always, got %v", d)
-	}
-	if d, _ := m.Approve("bash", "call-danger-2", dangerArgs); d != agent.ToolApprovalDeny {
-		t.Fatalf("expected identical bash command to be cached as deny, got %v", d)
-	}
-	if calls != 1 {
-		t.Fatalf("expected identical denied bash command not to prompt again, got %d callbacks", calls)
-	}
-	if d, _ := m.Approve("bash", "call-other-danger", map[string]any{"command": "rm -rf /tmp/other"}); d != agent.ToolApprovalAllow {
-		t.Fatalf("expected different bash command to ask callback and allow, got %v", d)
-	}
-	if calls != 2 {
-		t.Fatalf("expected different bash command to prompt, got %d callbacks", calls)
-	}
-}
-
-func TestApprovalManagerProgrammaticBashAllowAlwaysRemainsToolWideForNonDangerousCommands(t *testing.T) {
-	m := NewApprovalManager()
-	m.AllowAlways("bash")
-	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
-		t.Fatalf("programmatic bash allow should not prompt for %s %#v", name, args)
-		return agent.ToolApprovalDeny, nil
-	})
-	if d, _ := m.Approve("bash", "call-1", map[string]any{"command": "go test ./pkg/tui"}); d != agent.ToolApprovalAllow {
-		t.Fatalf("expected first bash command to be allowed, got %v", d)
-	}
-	if d, _ := m.Approve("bash", "call-2", map[string]any{"command": "git status --short"}); d != agent.ToolApprovalAllow {
-		t.Fatalf("expected second bash command to be allowed by tool-wide rule, got %v", d)
-	}
-}
-
-func TestApprovalManagerDangerousBashBypassesToolWideAllow(t *testing.T) {
-	m := NewApprovalManager()
-	m.AllowAlways("bash")
-	calls := 0
-	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
-		calls++
-		return agent.ToolApprovalDeny, nil
-	})
-	if d, _ := m.Approve("bash", "call-danger", map[string]any{"command": "rm -rf /tmp/nope"}); d != agent.ToolApprovalDeny {
-		t.Fatalf("expected dangerous bash command to require approval and deny, got %v", d)
-	}
-	if calls != 1 {
-		t.Fatalf("expected dangerous bash command to prompt despite tool-wide allow, got %d callbacks", calls)
-	}
-}
-
-func TestApprovalManagerDangerousBashWrapperBypassesToolWideAllow(t *testing.T) {
-	m := NewApprovalManager()
-	m.AllowAlways("bash")
-	calls := 0
-	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
-		calls++
-		return agent.ToolApprovalDeny, nil
-	})
-	if d, _ := m.Approve("bash", "call-danger", map[string]any{"command": "bash -lc 'rm -rf /tmp/nope'"}); d != agent.ToolApprovalDeny {
-		t.Fatalf("expected dangerous wrapped bash command to require approval and deny, got %v", d)
-	}
-	if calls != 1 {
-		t.Fatalf("expected dangerous wrapped bash command to prompt despite tool-wide allow, got %d callbacks", calls)
-	}
-}
-
-func TestApprovalManagerDangerousBashBypassesAllowPrefix(t *testing.T) {
-	m := NewApprovalManager()
-	m.SetRules(PermissionConfig{AllowBashPrefixes: []string{"rm "}})
-	calls := 0
-	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
-		calls++
-		return agent.ToolApprovalDeny, nil
-	})
-	if d, _ := m.Approve("bash", "call-danger", map[string]any{"command": "rm -rf /tmp/nope"}); d != agent.ToolApprovalDeny {
-		t.Fatalf("expected dangerous bash command to bypass allow prefix and deny, got %v", d)
-	}
-	if calls != 1 {
-		t.Fatalf("expected dangerous bash command to prompt despite allow prefix, got %d callbacks", calls)
-	}
-}
-
-func TestApprovalManagerDangerousBashStillCachesExactCommand(t *testing.T) {
-	m := NewApprovalManager()
-	calls := 0
-	m.SetCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
-		calls++
-		switch calls {
-		case 1:
-			return agent.ToolApprovalAllowAlways, nil
-		case 2:
-			return agent.ToolApprovalDeny, nil
-		default:
-			t.Fatalf("unexpected approval callback call %d for %s %#v", calls, name, args)
-			return agent.ToolApprovalDeny, nil
-		}
-	})
-
-	dangerArgs := map[string]any{"command": "rm -rf /tmp/nope"}
-	if d, _ := m.Approve("bash", "call-danger-1", dangerArgs); d != agent.ToolApprovalAllowAlways {
-		t.Fatalf("expected first dangerous bash command to return allow_always, got %v", d)
-	}
-	if d, _ := m.Approve("bash", "call-danger-2", dangerArgs); d != agent.ToolApprovalAllow {
-		t.Fatalf("expected identical dangerous bash command to be cached as allow, got %v", d)
-	}
-	if d, _ := m.Approve("bash", "call-danger-3", map[string]any{"command": "rm -rf /tmp/other"}); d != agent.ToolApprovalDeny {
-		t.Fatalf("expected different dangerous bash command to ask callback and deny, got %v", d)
-	}
-	if calls != 2 {
-		t.Fatalf("expected only exact dangerous command to be cached, got %d callbacks", calls)
-	}
-}
-
 func TestPlanModeApprovalBlocksMutatingToolsBeforeCallback(t *testing.T) {
 	session := newTestSession(t, newTestModel())
 	session.EnterPlanMode()
@@ -1465,7 +1186,7 @@ func TestCodingSessionRequiresModel(t *testing.T) {
 }
 
 func TestDefaultConfig(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := config.Default()
 	if cfg.ThinkingLevel == "" {
 		t.Fatal("thinking level should have default")
 	}
@@ -1484,7 +1205,7 @@ func TestLoadConfigMissing(t *testing.T) {
 	if err := os.MkdirAll(cwd, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := LoadConfig(agentDir, cwd)
+	cfg, err := config.Load(agentDir, cwd)
 	if err != nil {
 		t.Fatalf("loading missing config should not error: %v", err)
 	}
@@ -1508,7 +1229,7 @@ func TestLoadConfigFromFile(t *testing.T) {
 	configContent := `{"thinkingLevel":"high","autoCompaction":false}`
 	os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(configContent), 0o644)
 
-	cfg, err := LoadConfig(agentDir, dir)
+	cfg, err := config.Load(agentDir, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1914,55 +1635,6 @@ func TestMaybeAutoCompact_AboveThreshold(t *testing.T) {
 		t.Fatalf("expected totalTokens reset to 0, got %d", session.ctxMgr.Tokens())
 	}
 }
-
-// --- Retry Manager Tests ---
-
-func TestIsRetryableError(t *testing.T) {
-	tests := []struct {
-		msg      string
-		expected bool
-	}{
-		{"server overloaded", true},
-		{"rate limit exceeded", true},
-		{"429 too many requests", true},
-		{"HTTP 502 bad gateway", true},
-		{"HTTP 503 service unavailable", true},
-		{"normal error", false},
-		{"invalid input", false},
-		{"temporarily unavailable", true},
-	}
-	for _, tt := range tests {
-		if got := IsRetryableError(tt.msg); got != tt.expected {
-			t.Errorf("IsRetryableError(%q) = %v, want %v", tt.msg, got, tt.expected)
-		}
-	}
-}
-
-func TestRetryManagerReset(t *testing.T) {
-	rm := NewRetryManager(RetryConfig{MaxRetries: 2, BaseDelayMs: 10, MaxDelayMs: 100}, true)
-	rm.Reset()
-	if !rm.IsEnabled() {
-		t.Fatal("should be enabled")
-	}
-}
-
-func TestRetryManagerDisabled(t *testing.T) {
-	rm := NewRetryManager(RetryConfig{}, false)
-	if rm.IsEnabled() {
-		t.Fatal("should be disabled")
-	}
-	rm.SetEnabled(true)
-	if !rm.IsEnabled() {
-		t.Fatal("should be enabled after SetEnabled(true)")
-	}
-}
-
-func TestRetryManagerAbort(t *testing.T) {
-	rm := NewRetryManager(RetryConfig{MaxRetries: 3, BaseDelayMs: 10, MaxDelayMs: 100}, true)
-	rm.AbortRetry()
-}
-
-// --- CycleModel Tests ---
 
 func TestCycleModelNoScoped(t *testing.T) {
 	session := newTestSession(t, newTestModel())
@@ -2550,7 +2222,7 @@ func TestPrepareSubagentDefinitionInjectsSkillsAndMemory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mem := NewMemoryStore(agentDir, dir)
+	mem := memory.New(agentDir, dir)
 	if err := mem.WriteGlobalLongTerm("global note"); err != nil {
 		t.Fatal(err)
 	}
