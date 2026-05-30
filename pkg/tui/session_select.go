@@ -12,7 +12,7 @@ import (
 	gotui "github.com/grindlemire/go-tui"
 
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
-	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/session"
+	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/services/session"
 )
 
 const sessionSelectVisibleRows = 10

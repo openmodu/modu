@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/openmodu/modu/pkg/coding_agent/extension"
+	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
 )
 
 // batchTask is a top-level parallel/chain/tasks call that the extension is
@@ -198,4 +198,3 @@ func mergeBatchTasks(host []extension.TaskSnapshot, batch []extension.TaskSnapsh
 	}
 	return out
 }
-

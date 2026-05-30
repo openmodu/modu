@@ -7,8 +7,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/openmodu/modu/pkg/coding_agent/extension"
-	csubagent "github.com/openmodu/modu/pkg/coding_agent/subagent"
+	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
+	csubagent "github.com/openmodu/modu/pkg/coding_agent/plugins/subagent"
 )
 
 // runSingle delegates one (agent, task) pair via ForkSession and returns
@@ -694,6 +694,7 @@ func forkOptionsFor(def *csubagent.SubagentDefinition, cfg Config, task string, 
 // child's system prompt when:
 //   - the call carries a batch task id (only batch async paths set this);
 //   - the extension's IntercomMode allows it (off / fork-only / always).
+//
 // Returns the new prompt and true when augmented; otherwise (sysPrompt, false).
 func augmentSystemPromptWithIntercom(sysPrompt string, cfg Config, opts callOptions) (string, bool) {
 	id := strings.TrimSpace(opts.batchTaskID)

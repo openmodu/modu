@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/openmodu/modu/pkg/coding_agent/resource"
+	"github.com/openmodu/modu/pkg/coding_agent/foundation/resource"
 )
 
 // Config holds Telegram bot settings stored at

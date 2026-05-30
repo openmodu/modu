@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/openmodu/modu/pkg/agent"
-	"github.com/openmodu/modu/pkg/coding_agent/resource"
+	"github.com/openmodu/modu/pkg/coding_agent/foundation/resource"
 )
 
 // Byte budgets for dynamically injected path-specific context.

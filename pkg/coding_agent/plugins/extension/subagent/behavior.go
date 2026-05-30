@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	csubagent "github.com/openmodu/modu/pkg/coding_agent/subagent"
+	csubagent "github.com/openmodu/modu/pkg/coding_agent/plugins/subagent"
 )
 
 const initialProgressContent = "# Progress\n\n## Status\nIn Progress\n\n## Tasks\n\n## Files Changed\n\n## Notes\n"

@@ -18,8 +18,8 @@ import (
 	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/approval"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
-	"github.com/openmodu/modu/pkg/coding_agent/extension"
-	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/session"
+	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
+	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/services/session"
 	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/types"
 )

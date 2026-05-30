@@ -18,8 +18,8 @@
 package subagent
 
 import (
-	"github.com/openmodu/modu/pkg/coding_agent/extension"
-	csubagent "github.com/openmodu/modu/pkg/coding_agent/subagent"
+	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
+	csubagent "github.com/openmodu/modu/pkg/coding_agent/plugins/subagent"
 )
 
 // Extension implements extension.Extension and extension.ConfigurableExtension.

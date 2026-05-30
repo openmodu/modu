@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	csubagent "github.com/openmodu/modu/pkg/coding_agent/subagent"
+	csubagent "github.com/openmodu/modu/pkg/coding_agent/plugins/subagent"
 )
 
 type skillOverride struct {

@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/openmodu/modu/pkg/coding_agent/resource"
+	"github.com/openmodu/modu/pkg/coding_agent/foundation/resource"
 )
 
 func writeFile(t *testing.T, path, content string) {

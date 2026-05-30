@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/openmodu/modu/pkg/coding_agent/extension"
-	csubagent "github.com/openmodu/modu/pkg/coding_agent/subagent"
+	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
+	csubagent "github.com/openmodu/modu/pkg/coding_agent/plugins/subagent"
 )
 
 func runAction(ctx context.Context, ext *Extension, action string, args map[string]any) (string, error) {

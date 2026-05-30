@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/openmodu/modu/pkg/coding_agent/resource"
+	"github.com/openmodu/modu/pkg/coding_agent/foundation/resource"
 	"github.com/openmodu/modu/pkg/mdloader"
 	"github.com/openmodu/modu/pkg/utils"
 )

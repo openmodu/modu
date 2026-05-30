@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
-	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/session"
+	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/services/session"
 	"github.com/openmodu/modu/pkg/slash"
 	"github.com/openmodu/modu/pkg/tui"
 	"github.com/openmodu/modu/pkg/types"

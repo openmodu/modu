@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openmodu/modu/pkg/coding_agent/extension"
+	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
 )
 
 // staleStatus is the status string we write to a reconciled status.json. It

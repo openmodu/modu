@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/openmodu/modu/pkg/agent"
-	"github.com/openmodu/modu/pkg/coding_agent/resource"
-	"github.com/openmodu/modu/pkg/coding_agent/session"
+	"github.com/openmodu/modu/pkg/coding_agent/foundation/resource"
+	"github.com/openmodu/modu/pkg/coding_agent/services/session"
 	"github.com/openmodu/modu/pkg/types"
 )
 
