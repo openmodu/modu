@@ -25,12 +25,8 @@ func (s *CodingSession) refreshDynamicSystemPrompt() {
 // currentModeBlocks returns the active-mode prompt blocks for the current
 // session state, in the order they should appear.
 func (s *CodingSession) currentModeBlocks() []string {
-	s.planMu.RLock()
-	planMode := s.planMode
-	s.planMu.RUnlock()
-	s.worktreeMu.Lock()
-	worktreePath := s.worktreePath
-	s.worktreeMu.Unlock()
+	planMode := s.plan.IsPlanMode()
+	worktreePath := s.worktree.ActiveWorktree()
 
 	var blocks []string
 	if planMode {

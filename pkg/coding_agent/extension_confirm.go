@@ -2,35 +2,42 @@ package coding_agent
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/openmodu/modu/pkg/agent"
 )
 
-// requestExtensionConfirm asks the interactive host UI for a yes/no decision.
-// With no callback (headless / --no-approve), the caller-provided default is
-// returned so extensions can choose safe behaviour per prompt.
-func (s *CodingSession) requestExtensionConfirm(title, body string, defaultYes bool) bool {
-	s.extensionMu.RLock()
-	cb := s.extensionConfirmCb
-	s.extensionMu.RUnlock()
+// extensionPrompts is a self-contained registry of the host's interactive
+// confirm/select callbacks. It has no dependency on the session — the host
+// wires callbacks in, extensions ask through it.
+type extensionPrompts struct {
+	mu        sync.RWMutex
+	confirmCb func(title, body string, defaultYes bool) bool
+	selectCb  func(title string, options []string) string
+}
+
+// confirm asks the host UI for a yes/no decision. With no callback (headless /
+// --no-approve) the caller-provided default is returned.
+func (e *extensionPrompts) confirm(title, body string, defaultYes bool) bool {
+	e.mu.RLock()
+	cb := e.confirmCb
+	e.mu.RUnlock()
 	if cb == nil {
 		return defaultYes
 	}
 	return cb(title, body, defaultYes)
 }
 
-// SetExtensionConfirmCallback wires interactive extension confirmation
-// prompts. The callback returns true for yes/allow and false for no/deny.
-func (s *CodingSession) SetExtensionConfirmCallback(fn func(title, body string, defaultYes bool) bool) {
-	s.extensionMu.Lock()
-	s.extensionConfirmCb = fn
-	s.extensionMu.Unlock()
+func (e *extensionPrompts) setConfirm(fn func(title, body string, defaultYes bool) bool) {
+	e.mu.Lock()
+	e.confirmCb = fn
+	e.mu.Unlock()
 }
 
-func (s *CodingSession) requestExtensionSelect(title string, options []string) string {
-	s.extensionMu.RLock()
-	cb := s.extensionSelectCb
-	s.extensionMu.RUnlock()
+func (e *extensionPrompts) selectOption(title string, options []string) string {
+	e.mu.RLock()
+	cb := e.selectCb
+	e.mu.RUnlock()
 	if len(options) == 0 {
 		return ""
 	}
@@ -46,11 +53,31 @@ func (s *CodingSession) requestExtensionSelect(title string, options []string) s
 	return options[0]
 }
 
+func (e *extensionPrompts) setSelect(fn func(title string, options []string) string) {
+	e.mu.Lock()
+	e.selectCb = fn
+	e.mu.Unlock()
+}
+
+// --- CodingSession delegates (preserve the public API surface) ---
+
+func (s *CodingSession) requestExtensionConfirm(title, body string, defaultYes bool) bool {
+	return s.extPrompts.confirm(title, body, defaultYes)
+}
+
+// SetExtensionConfirmCallback wires interactive extension confirmation prompts.
+// The callback returns true for yes/allow and false for no/deny.
+func (s *CodingSession) SetExtensionConfirmCallback(fn func(title, body string, defaultYes bool) bool) {
+	s.extPrompts.setConfirm(fn)
+}
+
+func (s *CodingSession) requestExtensionSelect(title string, options []string) string {
+	return s.extPrompts.selectOption(title, options)
+}
+
 // SetExtensionSelectCallback wires interactive extension choice prompts.
 func (s *CodingSession) SetExtensionSelectCallback(fn func(title string, options []string) string) {
-	s.extensionMu.Lock()
-	s.extensionSelectCb = fn
-	s.extensionMu.Unlock()
+	s.extPrompts.setSelect(fn)
 }
 
 // EmitExtensionEvent dispatches a host lifecycle event to registered

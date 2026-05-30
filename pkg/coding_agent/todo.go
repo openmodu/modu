@@ -1,6 +1,8 @@
 package coding_agent
 
 import (
+	"sync"
+
 	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/planning"
 )
@@ -68,20 +70,36 @@ func replaceTool(list []agent.Tool, replacement agent.Tool) []agent.Tool {
 	return out
 }
 
-// GetTodos returns the current session todo list.
-func (s *CodingSession) GetTodos() []TodoItem {
-	s.todoMu.RLock()
-	defer s.todoMu.RUnlock()
-	out := make([]TodoItem, len(s.todos))
-	copy(out, s.todos)
+// todoStore owns the session todo list. It is self-contained: state changes
+// notify the host through onChange rather than reaching back into the session.
+type todoStore struct {
+	mu       sync.RWMutex
+	items    []TodoItem
+	onChange func()
+}
+
+func newTodoStore() *todoStore { return &todoStore{} }
+
+func (t *todoStore) Get() []TodoItem {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	out := make([]TodoItem, len(t.items))
+	copy(out, t.items)
 	return out
 }
 
-// SetTodos replaces the current session todo list.
-func (s *CodingSession) SetTodos(items []TodoItem) {
-	s.todoMu.Lock()
-	s.todos = make([]TodoItem, len(items))
-	copy(s.todos, items)
-	s.todoMu.Unlock()
-	s.writeRuntimeState()
+func (t *todoStore) Set(items []TodoItem) {
+	t.mu.Lock()
+	t.items = make([]TodoItem, len(items))
+	copy(t.items, items)
+	t.mu.Unlock()
+	if t.onChange != nil {
+		t.onChange()
+	}
 }
+
+// GetTodos returns the current session todo list.
+func (s *CodingSession) GetTodos() []TodoItem { return s.todos.Get() }
+
+// SetTodos replaces the current session todo list.
+func (s *CodingSession) SetTodos(items []TodoItem) { s.todos.Set(items) }

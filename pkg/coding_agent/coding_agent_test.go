@@ -720,7 +720,7 @@ func TestPlanModeTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !session.planMode {
+	if !session.IsPlanMode() {
 		t.Fatal("expected plan mode enabled")
 	}
 
@@ -731,7 +731,7 @@ func TestPlanModeTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if session.planMode {
+	if session.IsPlanMode() {
 		t.Fatal("expected plan mode disabled")
 	}
 	todos := session.GetTodos()
@@ -1058,7 +1058,7 @@ func TestSubmitPlanApprove(t *testing.T) {
 	session.EnterPlanMode()
 	session.SetPlanDecisionCallback(func(plan string, steps []string) string { return "approve" })
 
-	adapter := planModeAdapter{session: session}
+	adapter := session.plan
 	msg := adapter.SubmitPlan(context.Background(), "do work", []string{"a", "b"})
 
 	if session.IsPlanMode() {
@@ -1097,19 +1097,6 @@ func TestClearPlanRemovesPlanArtifactAndTodos(t *testing.T) {
 	}
 }
 
-func TestSessionTreeBranchSummaryFallbackLabel(t *testing.T) {
-	entry := sessionpkg.SessionEntry{
-		Type: sessionpkg.EntryTypeBranchSummary,
-		Data: sessionpkg.BranchSummaryData{FromID: "1234567890abcdef"},
-	}
-	if got := sessionTreeNodeLabel(entry, ""); got != "from #12345678" {
-		t.Fatalf("expected branch summary fallback label, got %q", got)
-	}
-	if got := sessionTreeNodeLabel(entry, "manual label"); got != "manual label" {
-		t.Fatalf("expected explicit label to win, got %q", got)
-	}
-}
-
 // TestSubmitPlanAutoAccept covers approve_auto: edits are auto-allowed for the
 // rest of the session.
 func TestSubmitPlanAutoAccept(t *testing.T) {
@@ -1117,7 +1104,7 @@ func TestSubmitPlanAutoAccept(t *testing.T) {
 	session.EnterPlanMode()
 	session.SetPlanDecisionCallback(func(plan string, steps []string) string { return "approve_auto" })
 
-	planModeAdapter{session: session}.SubmitPlan(context.Background(), "p", []string{"x"})
+	session.plan.SubmitPlan(context.Background(), "p", []string{"x"})
 
 	for _, tool := range []string{"write", "edit", "bash"} {
 		if d, _ := session.approvalManager.Approve(tool, "t", nil); d != agent.ToolApprovalAllow {
@@ -1135,7 +1122,7 @@ func TestSubmitPlanReject(t *testing.T) {
 		return "reject:use the existing helper instead"
 	})
 
-	msg := planModeAdapter{session: session}.SubmitPlan(context.Background(), "p", []string{"x"})
+	msg := session.plan.SubmitPlan(context.Background(), "p", []string{"x"})
 
 	if !session.IsPlanMode() {
 		t.Fatal("expected to remain in plan mode after rejection")

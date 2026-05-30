@@ -10,20 +10,20 @@ import (
 )
 
 type RuntimeStateSnapshot struct {
-	UpdatedAt    int64             `json:"updatedAt"`
-	SessionID    string            `json:"sessionId"`
-	Cwd          string            `json:"cwd"`
-	Model        map[string]string `json:"model"`
-	Thinking     string            `json:"thinking"`
-	Modes        map[string]any    `json:"modes"`
-	Extensions   map[string]any    `json:"extensions"`
-	Features     map[string]bool   `json:"features"`
-	Permissions  map[string]any    `json:"permissions"`
-	Git          map[string]any    `json:"git"`
-	Counts       map[string]int    `json:"counts"`
-	Paths        map[string]any    `json:"paths"`
-	Todos        []TodoItem        `json:"todos"`
-	Tasks        []BackgroundTask  `json:"tasks"`
+	UpdatedAt   int64             `json:"updatedAt"`
+	SessionID   string            `json:"sessionId"`
+	Cwd         string            `json:"cwd"`
+	Model       map[string]string `json:"model"`
+	Thinking    string            `json:"thinking"`
+	Modes       map[string]any    `json:"modes"`
+	Extensions  map[string]any    `json:"extensions"`
+	Features    map[string]bool   `json:"features"`
+	Permissions map[string]any    `json:"permissions"`
+	Git         map[string]any    `json:"git"`
+	Counts      map[string]int    `json:"counts"`
+	Paths       map[string]any    `json:"paths"`
+	Todos       []TodoItem        `json:"todos"`
+	Tasks       []BackgroundTask  `json:"tasks"`
 }
 
 // cachedGitState holds the last-known git state so that writeRuntimeState
@@ -133,10 +133,10 @@ func (s *CodingSession) RuntimeState() RuntimeStateSnapshot {
 			"allow_bash_prefixes": append([]string(nil), s.config.Permissions.AllowBashPrefixes...),
 			"deny_bash_prefixes":  append([]string(nil), s.config.Permissions.DenyBashPrefixes...),
 		},
-		Git:          s.cachedGitState(),
-		Paths:        s.RuntimePaths().ToMap(),
-		Todos:        todos,
-		Tasks:        tasks,
+		Git:   s.cachedGitState(),
+		Paths: s.RuntimePaths().ToMap(),
+		Todos: todos,
+		Tasks: tasks,
 	}
 }
 
