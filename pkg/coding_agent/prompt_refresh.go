@@ -8,7 +8,7 @@ import "github.com/openmodu/modu/pkg/coding_agent/services/systemprompt"
 // dropped into the skills dir) are reflected without restarting the session.
 // Active-mode blocks (plan mode, worktree) are routed through the builder so
 // the whole prompt is produced by a single Build path.
-func (s *CodingSession) refreshDynamicSystemPrompt() {
+func (s *engine) refreshDynamicSystemPrompt() {
 	s.refreshResourcePaths()
 	if s.promptBuilder == nil {
 		return
@@ -24,7 +24,7 @@ func (s *CodingSession) refreshDynamicSystemPrompt() {
 
 // currentModeBlocks returns the active-mode prompt blocks for the current
 // session state, in the order they should appear.
-func (s *CodingSession) currentModeBlocks() []string {
+func (s *engine) currentModeBlocks() []string {
 	planMode := s.plan.IsPlanMode()
 	worktreePath := s.worktree.ActiveWorktree()
 

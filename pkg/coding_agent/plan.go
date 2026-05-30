@@ -12,11 +12,11 @@ type (
 )
 
 // CodingSession implements plan.Host.
-var _ plan.Host = (*CodingSession)(nil)
+var _ plan.Host = (*engine)(nil)
 
 // replacePlanTools registers (or removes) the plan tools. Tool registration is
 // a kernel concern; the plan controller is supplied as the tools' manager.
-func (s *CodingSession) replacePlanTools() {
+func (s *engine) replacePlanTools() {
 	if !s.config.FeaturePlanMode() {
 		s.activeTools = removeToolByName(s.activeTools, "enter_plan_mode")
 		s.activeTools = removeToolByName(s.activeTools, "exit_plan_mode")
@@ -37,24 +37,24 @@ func (s *CodingSession) replacePlanTools() {
 // --- delegates (preserve the public API surface) ---
 
 // IsPlanMode reports whether the session is currently in plan mode.
-func (s *CodingSession) IsPlanMode() bool { return s.plan.IsPlanMode() }
+func (s *engine) IsPlanMode() bool { return s.plan.IsPlanMode() }
 
 // EnterPlanMode enables plan mode for the current session.
-func (s *CodingSession) EnterPlanMode() { s.plan.EnterPlanMode() }
+func (s *engine) EnterPlanMode() { s.plan.EnterPlanMode() }
 
 // ExitPlanMode disables plan mode for the current session.
-func (s *CodingSession) ExitPlanMode(p string, steps []string) { s.plan.ExitPlanMode(p, steps) }
+func (s *engine) ExitPlanMode(p string, steps []string) { s.plan.ExitPlanMode(p, steps) }
 
 // SetPlanDecisionCallback wires the interactive plan-approval prompt.
-func (s *CodingSession) SetPlanDecisionCallback(fn func(plan string, steps []string) string) {
+func (s *engine) SetPlanDecisionCallback(fn func(plan string, steps []string) string) {
 	s.plan.SetDecisionCallback(fn)
 }
 
 // PlanStatus returns plan-mode state, latest plan path, and todo counters.
-func (s *CodingSession) PlanStatus() PlanStatus { return s.plan.Status() }
+func (s *engine) PlanStatus() PlanStatus { return s.plan.Status() }
 
 // ClearPlan removes the latest persisted plan artifact and clears the seeded todos.
-func (s *CodingSession) ClearPlan() error { return s.plan.Clear() }
+func (s *engine) ClearPlan() error { return s.plan.Clear() }
 
 // ListPlanRevisions returns approved-plan snapshots, newest first.
-func (s *CodingSession) ListPlanRevisions() []PlanRevision { return s.plan.ListRevisions() }
+func (s *engine) ListPlanRevisions() []PlanRevision { return s.plan.ListRevisions() }

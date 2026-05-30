@@ -56,7 +56,7 @@ func (p HarnessRuntimePaths) ToMap() map[string]any {
 	}
 }
 
-func (s *CodingSession) RuntimePaths() HarnessRuntimePaths {
+func (s *engine) RuntimePaths() HarnessRuntimePaths {
 	projectKey := strings.ReplaceAll(strings.TrimPrefix(s.cwd, "/"), "/", "_")
 	if projectKey == "" {
 		projectKey = "root"
@@ -91,12 +91,12 @@ func (s *CodingSession) RuntimePaths() HarnessRuntimePaths {
 	}
 }
 
-func (s *CodingSession) installHarnessLayer() {
+func (s *engine) installHarnessLayer() {
 	s.activeTools = wrapHarnessTools(s.activeTools, s)
 	s.agent.SetTools(s.activeTools)
 }
 
-func wrapHarnessTools(list []agent.Tool, session *CodingSession) []agent.Tool {
+func wrapHarnessTools(list []agent.Tool, session *engine) []agent.Tool {
 	out := make([]agent.Tool, len(list))
 	for i, tool := range list {
 		if _, ok := tool.(*HarnessWrappedTool); ok {
@@ -113,7 +113,7 @@ func wrapHarnessTools(list []agent.Tool, session *CodingSession) []agent.Tool {
 // settings-driven blockTools deny list.
 type HarnessWrappedTool struct {
 	inner   agent.Tool
-	session *CodingSession
+	session *engine
 }
 
 func (w *HarnessWrappedTool) Name() string        { return w.inner.Name() }
@@ -157,7 +157,7 @@ func (w *HarnessWrappedTool) Parallel() bool {
 	return false
 }
 
-func (s *CodingSession) harnessToolBlocked(name string) bool {
+func (s *engine) harnessToolBlocked(name string) bool {
 	if s == nil || s.config == nil {
 		return false
 	}
@@ -169,7 +169,7 @@ func (s *CodingSession) harnessToolBlocked(name string) bool {
 	return false
 }
 
-func (s *CodingSession) planModeBlocksTool(toolName string) bool {
+func (s *engine) planModeBlocksTool(toolName string) bool {
 	if s == nil || !s.IsPlanMode() {
 		return false
 	}
@@ -185,14 +185,14 @@ func planModeBlockMessage(toolName string) string {
 	return fmt.Sprintf("%s is blocked while plan mode is active; exit plan mode before making changes", toolName)
 }
 
-func (s *CodingSession) runHarnessPermissionRequest(call HarnessToolCall) {
+func (s *engine) runHarnessPermissionRequest(call HarnessToolCall) {
 	s.emitSessionEvent(SessionEvent{
 		Type:     SessionEventPermissionReq,
 		ToolName: call.ToolName,
 	})
 }
 
-func (s *CodingSession) runHarnessPermissionDenied(call HarnessToolCall, reason string) {
+func (s *engine) runHarnessPermissionDenied(call HarnessToolCall, reason string) {
 	s.emitSessionEvent(SessionEvent{
 		Type:     SessionEventPermissionDeny,
 		ToolName: call.ToolName,
@@ -200,7 +200,7 @@ func (s *CodingSession) runHarnessPermissionDenied(call HarnessToolCall, reason 
 	})
 }
 
-func (s *CodingSession) runHarnessCwdChanged(oldCwd, newCwd string) {
+func (s *engine) runHarnessCwdChanged(oldCwd, newCwd string) {
 	s.emitSessionEvent(SessionEvent{
 		Type:   SessionEventCwdChanged,
 		OldCwd: oldCwd,
@@ -208,29 +208,29 @@ func (s *CodingSession) runHarnessCwdChanged(oldCwd, newCwd string) {
 	})
 }
 
-func (s *CodingSession) runHarnessWorktreeCreate(path string) {
+func (s *engine) runHarnessWorktreeCreate(path string) {
 	s.emitSessionEvent(SessionEvent{
 		Type: SessionEventWorktreeCreate,
 		Path: path,
 	})
 }
 
-func (s *CodingSession) runHarnessWorktreeRemove(path string) {
+func (s *engine) runHarnessWorktreeRemove(path string) {
 	s.emitSessionEvent(SessionEvent{
 		Type: SessionEventWorktreeRemove,
 		Path: path,
 	})
 }
 
-func (s *CodingSession) OnSubagentStart(name, task string, background bool) {
+func (s *engine) OnSubagentStart(name, task string, background bool) {
 	s.onSubagentStart(HarnessSubagentRun{Name: name, Task: task, Background: background})
 }
 
-func (s *CodingSession) OnSubagentStop(name, task string, background bool, result string, err error) {
+func (s *engine) OnSubagentStop(name, task string, background bool, result string, err error) {
 	s.onSubagentStop(HarnessSubagentRun{Name: name, Task: task, Background: background}, result, err)
 }
 
-func (s *CodingSession) onSubagentStart(run HarnessSubagentRun) {
+func (s *engine) onSubagentStart(run HarnessSubagentRun) {
 	s.emitSessionEvent(SessionEvent{
 		Type:               SessionEventSubagentStart,
 		SubagentName:       run.Name,
@@ -239,7 +239,7 @@ func (s *CodingSession) onSubagentStart(run HarnessSubagentRun) {
 	})
 }
 
-func (s *CodingSession) onSubagentStop(run HarnessSubagentRun, result string, err error) {
+func (s *engine) onSubagentStop(run HarnessSubagentRun, result string, err error) {
 	evt := SessionEvent{
 		Type:               SessionEventSubagentStop,
 		SubagentName:       run.Name,

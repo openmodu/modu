@@ -62,8 +62,14 @@ type CodingSessionOptions struct {
 	ModelConfigPath string
 }
 
-// CodingSession is the main entry point for the coding agent system.
-type CodingSession struct {
+// engine is the L1 kernel: it owns all session state, runs agent turns, wires
+// the L2 services, and exposes the kernel capability surface they depend on.
+// The host-facing API (L5) lives on CodingSession, which embeds *engine.
+type engine struct {
+	// self points back to the host façade, for the few callbacks whose
+	// signature requires a *CodingSession (e.g. slash-command handlers).
+	self *CodingSession
+
 	agent           *agent.Agent
 	sessionManager  *session.Manager
 	sessionTree     *session.Tree
@@ -107,6 +113,13 @@ type CodingSession struct {
 	// gitCache holds the last-known git state to avoid spawning git subprocesses
 	// on every writeRuntimeState call.
 	gitCache cachedGitState
+}
+
+// CodingSession is the L5 host façade: it embeds the kernel engine (promoting
+// all kernel methods) and adds the host-facing API (model/session/config
+// management, introspection, export). External drivers (rpc, sdk, tui) use it.
+type CodingSession struct {
+	*engine
 }
 
 // NewCodingSession creates and initializes a new coding session.
@@ -258,7 +271,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		StreamFn: streamFn,
 	})
 
-	cs := &CodingSession{
+	cs := &engine{
 		agent:           ag,
 		sessionManager:  sessionMgr,
 		sessionTree:     session.NewTree(sessionMgr),
@@ -518,13 +531,15 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	cs.installHarnessLayer()
 	cs.writeRuntimeState()
 
-	return cs, nil
+	sess := &CodingSession{engine: cs}
+	cs.self = sess
+	return sess, nil
 }
 
 // wireComponents constructs the session's stateful sub-components and wires
 // their dependencies. It runs once, after the session struct is populated, so
 // every component can read what it needs from s.
-func (s *CodingSession) wireComponents() {
+func (s *engine) wireComponents() {
 	s.todos = todo.NewStore()
 	s.todos.OnChange = func() { s.writeRuntimeState() }
 	s.plan = plan.New(s)
@@ -543,7 +558,7 @@ func (s *CodingSession) wireComponents() {
 }
 
 // Prompt sends a user message and starts processing.
-func (s *CodingSession) Prompt(ctx context.Context, text string) error {
+func (s *engine) Prompt(ctx context.Context, text string) error {
 	input := strings.TrimSpace(text)
 
 	// Check for slash commands
@@ -556,7 +571,7 @@ func (s *CodingSession) Prompt(ctx context.Context, text string) error {
 		}
 
 		if cmd, ok := s.slashCommands[cmdName]; ok {
-			err := cmd.Handler(s, cmdArgs)
+			err := cmd.Handler(s.self, cmdArgs)
 			s.writeRuntimeState()
 			return err
 		}
@@ -601,7 +616,7 @@ func (s *CodingSession) Prompt(ctx context.Context, text string) error {
 	return nil
 }
 
-func (s *CodingSession) Close(reason string) {
+func (s *engine) Close(reason string) {
 	if s.extensions != nil {
 		s.extensions.EmitEvent(agent.Event{Type: agent.EventType("session_shutdown")})
 	}
@@ -609,7 +624,7 @@ func (s *CodingSession) Close(reason string) {
 }
 
 // Steer injects a high-priority message during processing.
-func (s *CodingSession) Steer(text string) {
+func (s *engine) Steer(text string) {
 	msg := types.UserMessage{
 		Role:    "user",
 		Content: text,
@@ -618,7 +633,7 @@ func (s *CodingSession) Steer(text string) {
 }
 
 // FollowUp queues a message for processing after the current task.
-func (s *CodingSession) FollowUp(text string) {
+func (s *engine) FollowUp(text string) {
 	msg := types.UserMessage{
 		Role:    "user",
 		Content: text,
@@ -627,43 +642,43 @@ func (s *CodingSession) FollowUp(text string) {
 }
 
 // Subscribe registers an event listener. Returns an unsubscribe function.
-func (s *CodingSession) Subscribe(fn func(agent.Event)) func() {
+func (s *engine) Subscribe(fn func(agent.Event)) func() {
 	return s.agent.Subscribe(fn)
 }
 
 // GetAgent returns the underlying agent.
-func (s *CodingSession) GetAgent() *agent.Agent {
+func (s *engine) GetAgent() *agent.Agent {
 	return s.agent
 }
 
 // WaitForIdle blocks until the agent is idle.
-func (s *CodingSession) WaitForIdle() {
+func (s *engine) WaitForIdle() {
 	s.agent.WaitForIdle()
 }
 
 // Abort cancels the current operation.
-func (s *CodingSession) Abort() {
+func (s *engine) Abort() {
 	s.agent.Abort()
 }
 
 // IsStreaming returns whether the agent is currently streaming.
-func (s *CodingSession) IsStreaming() bool {
+func (s *engine) IsStreaming() bool {
 	return s.agent.GetState().IsStreaming
 }
 
 // GetMessages returns the current message history.
-func (s *CodingSession) GetMessages() []agent.AgentMessage {
+func (s *engine) GetMessages() []agent.AgentMessage {
 	return s.agent.GetState().Messages
 }
 
 // GetEventBus returns the session's event bus.
-func (s *CodingSession) GetEventBus() eventbus.EventBusController {
+func (s *engine) GetEventBus() eventbus.EventBusController {
 	return s.eventBus
 }
 
 // SubscribeSession registers a handler for session-level events.
 // Returns an unsubscribe function.
-func (s *CodingSession) SubscribeSession(fn func(SessionEvent)) func() {
+func (s *engine) SubscribeSession(fn func(SessionEvent)) func() {
 	return s.eventBus.On(sessionEventChannel, func(data any) {
 		if event, ok := data.(SessionEvent); ok {
 			fn(event)
@@ -671,17 +686,17 @@ func (s *CodingSession) SubscribeSession(fn func(SessionEvent)) func() {
 	})
 }
 
-func (s *CodingSession) emitSessionEvent(event SessionEvent) {
+func (s *engine) emitSessionEvent(event SessionEvent) {
 	s.eventBus.Emit(sessionEventChannel, event)
 }
 
 // IsCompacting returns whether compaction is currently in progress.
-func (s *CodingSession) IsCompacting() bool {
+func (s *engine) IsCompacting() bool {
 	return s.ctxMgr.IsCompacting()
 }
 
 // GetLastAssistantText returns the text content of the last assistant message.
-func (s *CodingSession) GetLastAssistantText() string {
+func (s *engine) GetLastAssistantText() string {
 	msgs := s.agent.GetState().Messages
 	for i := len(msgs) - 1; i >= 0; i-- {
 		msg, ok := msgs[i].(types.AssistantMessage)
@@ -756,7 +771,7 @@ func memoryContextForScope(store *memory.Store, scope string) string {
 	return ""
 }
 
-func (s *CodingSession) executeSkill(ctx context.Context, skill *skills.Skill, args string) error {
+func (s *engine) executeSkill(ctx context.Context, skill *skills.Skill, args string) error {
 	task := strings.TrimSpace(args)
 	if task == "" {
 		task = "Use this skill for the user's request."
@@ -784,7 +799,7 @@ func (s *CodingSession) executeSkill(ctx context.Context, skill *skills.Skill, a
 	return nil
 }
 
-func (s *CodingSession) skillPrompt(skill *skills.Skill) string {
+func (s *engine) skillPrompt(skill *skills.Skill) string {
 	var parts []string
 	parts = append(parts, fmt.Sprintf("The user explicitly invoked the %q skill. Use the instructions below for this turn.", skill.Name))
 	parts = append(parts, skill.Content)
@@ -792,7 +807,7 @@ func (s *CodingSession) skillPrompt(skill *skills.Skill) string {
 	return strings.Join(parts, "\n\n---\n\n")
 }
 
-func (s *CodingSession) handleMessageEnd(msg agent.AgentMessage) {
+func (s *engine) handleMessageEnd(msg agent.AgentMessage) {
 	if msg == nil {
 		return
 	}
@@ -822,7 +837,7 @@ func (s *CodingSession) handleMessageEnd(msg agent.AgentMessage) {
 	_ = s.SaveMessages()
 }
 
-func (s *CodingSession) currentLeafMessageMatches(role string, content any) bool {
+func (s *engine) currentLeafMessageMatches(role string, content any) bool {
 	if s.sessionManager == nil {
 		return false
 	}

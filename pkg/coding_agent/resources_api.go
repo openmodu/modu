@@ -7,7 +7,7 @@ import (
 )
 
 // SetActiveTools sets which tools are active by name.
-func (s *CodingSession) SetActiveTools(names []string) {
+func (s *engine) SetActiveTools(names []string) {
 	nameSet := make(map[string]bool)
 	for _, n := range names {
 		nameSet[n] = true
@@ -24,7 +24,7 @@ func (s *CodingSession) SetActiveTools(names []string) {
 	s.writeRuntimeState()
 }
 
-func (s *CodingSession) refreshResourcePaths() resource.ResourceSnapshot {
+func (s *engine) refreshResourcePaths() resource.ResourceSnapshot {
 	if s.resources == nil {
 		return resource.ResourceSnapshot{}
 	}
@@ -63,7 +63,7 @@ type SubagentInfo struct {
 }
 
 // GetSkills returns all discovered skills.
-func (s *CodingSession) GetSkills() []SkillInfo {
+func (s *engine) GetSkills() []SkillInfo {
 	if s.skillManager == nil {
 		return nil
 	}
@@ -77,7 +77,7 @@ func (s *CodingSession) GetSkills() []SkillInfo {
 }
 
 // GetSubagents returns all discovered subagent definitions.
-func (s *CodingSession) GetSubagents() []SubagentInfo {
+func (s *engine) GetSubagents() []SubagentInfo {
 	if s.subagentLoader == nil {
 		return nil
 	}
@@ -95,7 +95,7 @@ func (s *CodingSession) GetSubagents() []SubagentInfo {
 }
 
 // GetActiveToolNames returns the names of currently active tools.
-func (s *CodingSession) GetActiveToolNames() []string {
+func (s *engine) GetActiveToolNames() []string {
 	state := s.agent.GetState()
 	names := make([]string, len(state.Tools))
 	for i, t := range state.Tools {
@@ -105,7 +105,7 @@ func (s *CodingSession) GetActiveToolNames() []string {
 }
 
 // ReloadResources reloads dynamic resources and refreshes the prompt.
-func (s *CodingSession) ReloadResources() {
+func (s *engine) ReloadResources() {
 	s.refreshResourcePaths()
 	s.refreshDynamicSystemPrompt()
 	s.writeRuntimeState()

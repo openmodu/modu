@@ -17,7 +17,7 @@ func resolveScopedModels(configured, explicit []string) []string {
 }
 
 // SetModel changes the active model.
-func (s *CodingSession) SetModel(model *types.Model) {
+func (s *engine) SetModel(model *types.Model) {
 	changed := s.model == nil || s.model.ProviderID != model.ProviderID || s.model.ID != model.ID
 	s.model = model
 	s.agent.SetModel(model)
@@ -43,7 +43,7 @@ func (s *CodingSession) SetModel(model *types.Model) {
 }
 
 // SetModelByID changes the active model by provider and model ID.
-func (s *CodingSession) SetModelByID(provider, modelID string) error {
+func (s *engine) SetModelByID(provider, modelID string) error {
 	llmModel := providers.GetModel(provider, modelID)
 	if llmModel == nil {
 		return fmt.Errorf("model not found: %s/%s", provider, modelID)

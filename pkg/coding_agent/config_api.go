@@ -67,7 +67,7 @@ func (s *CodingSession) SetThinkingLevel(level agent.ThinkingLevel) {
 }
 
 // GetThinkingLevel returns the current thinking level.
-func (s *CodingSession) GetThinkingLevel() agent.ThinkingLevel {
+func (s *engine) GetThinkingLevel() agent.ThinkingLevel {
 	return s.thinkingLevel
 }
 

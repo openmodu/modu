@@ -147,7 +147,7 @@ func (s *CodingSession) NavigateTree(entryID string) error {
 }
 
 // GetSessionID returns the current session ID.
-func (s *CodingSession) GetSessionID() string {
+func (s *engine) GetSessionID() string {
 	if s.sessionManager != nil {
 		return s.sessionManager.SessionID()
 	}

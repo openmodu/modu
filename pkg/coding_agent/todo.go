@@ -13,7 +13,7 @@ type TodoItem = todo.Item
 // todoStoreAdapter bridges the session todo store to the planning todo tool,
 // converting between the two TodoItem shapes.
 type todoStoreAdapter struct {
-	session *CodingSession
+	session *engine
 }
 
 func (a todoStoreAdapter) GetTodos() []planning.TodoItem {
@@ -39,7 +39,7 @@ func (a todoStoreAdapter) SetTodos(items []planning.TodoItem) {
 	a.session.SetTodos(out)
 }
 
-func (s *CodingSession) replaceTodoTool() {
+func (s *engine) replaceTodoTool() {
 	if !s.config.FeatureTodoTool() {
 		s.activeTools = removeToolByName(s.activeTools, "todo_write")
 		s.agent.SetTools(removeToolByName(s.agent.GetState().Tools, "todo_write"))
@@ -70,7 +70,7 @@ func replaceTool(list []agent.Tool, replacement agent.Tool) []agent.Tool {
 }
 
 // GetTodos returns the current session todo list.
-func (s *CodingSession) GetTodos() []TodoItem { return s.todos.Get() }
+func (s *engine) GetTodos() []TodoItem { return s.todos.Get() }
 
 // SetTodos replaces the current session todo list.
-func (s *CodingSession) SetTodos(items []TodoItem) { s.todos.Set(items) }
+func (s *engine) SetTodos(items []TodoItem) { s.todos.Set(items) }

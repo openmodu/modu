@@ -10,38 +10,38 @@ import "github.com/openmodu/modu/pkg/agent"
 // When set, the callback is called before each tool execution that is not
 // already covered by an always-allow or always-deny rule.
 // Passing nil disables interactive approval (all tools auto-approved).
-func (cs *CodingSession) SetToolApprovalCallback(fn func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error)) {
+func (cs *engine) SetToolApprovalCallback(fn func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error)) {
 	cs.approvalManager.SetCallback(fn)
 }
 
 // AllowToolAlways marks a tool as always allowed for this session.
-func (cs *CodingSession) AllowToolAlways(toolName string) {
+func (cs *engine) AllowToolAlways(toolName string) {
 	cs.approvalManager.AllowAlways(toolName)
 }
 
 // DenyToolAlways marks a tool as always denied for this session.
-func (cs *CodingSession) DenyToolAlways(toolName string) {
+func (cs *engine) DenyToolAlways(toolName string) {
 	cs.approvalManager.DenyAlways(toolName)
 }
 
 // ClearToolDecision removes any cached always-allow or always-deny decision for a tool.
-func (cs *CodingSession) ClearToolDecision(toolName string) {
+func (cs *engine) ClearToolDecision(toolName string) {
 	cs.approvalManager.ClearDecision(toolName)
 }
 
 // ResetToolApprovals clears all cached tool approval rules and the callback.
-func (cs *CodingSession) ResetToolApprovals() {
+func (cs *engine) ResetToolApprovals() {
 	cs.approvalManager.Reset()
 }
 
 // OnPermissionRequest / OnPermissionDenied implement approval.Observer.
 
-func (cs *CodingSession) OnPermissionRequest(toolName, toolCallID string, args map[string]any) {
+func (cs *engine) OnPermissionRequest(toolName, toolCallID string, args map[string]any) {
 	cs.runHarnessPermissionRequest(HarnessToolCall{ToolName: toolName, Args: args})
 	cs.writeRuntimeState()
 }
 
-func (cs *CodingSession) OnPermissionDenied(toolName, toolCallID string, args map[string]any, reason string) {
+func (cs *engine) OnPermissionDenied(toolName, toolCallID string, args map[string]any, reason string) {
 	cs.runHarnessPermissionDenied(HarnessToolCall{ToolName: toolName, Args: args}, reason)
 	cs.writeRuntimeState()
 }

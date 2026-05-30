@@ -152,10 +152,16 @@ intent is honest, not aspirational.
    What remains in the root `package coding_agent` is the kernel itself plus the
    host-API methods that hang off `CodingSession` — that is violation #2 (the
    L1/L5 split), which directory moves cannot fix.
-2. **`CodingSession` spans L1 + L5.** It is simultaneously the kernel (state +
-   turn loop) and the host API (the `*_api.go` methods hang off the same struct).
-   A reader can't tell engine from façade. Target: a small kernel `Engine` + a
-   thin host façade composed over it.
+2. ~~**`CodingSession` spans L1 + L5.**~~ **Resolved.** The kernel is now an
+   internal `engine` struct (state + turn loop + service wiring + the capability
+   surface the services depend on; ~126 methods). `CodingSession` is a thin host
+   façade — `struct { *engine }` — carrying only the ~37 host-facing API methods
+   (model/session/config management, introspection, export). Same package, so
+   the façade reaches engine internals directly (no accessors). A reader can now
+   tell engine from façade by the receiver: `func (s *engine)` is L1, `func (s
+   *CodingSession)` is L5. The engine keeps a `self *CodingSession` back-pointer
+   for the few callbacks (slash-command handlers) whose signature needs the
+   façade.
 3. **`harness.go` has split personality.** It mixes `RuntimePaths` (foundation),
    the tool wrapper (kernel↔tools glue), and session-event emitters (kernel).
    Three layers in one file.

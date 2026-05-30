@@ -61,29 +61,29 @@ func (e *extensionPrompts) setSelect(fn func(title string, options []string) str
 
 // --- CodingSession delegates (preserve the public API surface) ---
 
-func (s *CodingSession) requestExtensionConfirm(title, body string, defaultYes bool) bool {
+func (s *engine) requestExtensionConfirm(title, body string, defaultYes bool) bool {
 	return s.extPrompts.confirm(title, body, defaultYes)
 }
 
 // SetExtensionConfirmCallback wires interactive extension confirmation prompts.
 // The callback returns true for yes/allow and false for no/deny.
-func (s *CodingSession) SetExtensionConfirmCallback(fn func(title, body string, defaultYes bool) bool) {
+func (s *engine) SetExtensionConfirmCallback(fn func(title, body string, defaultYes bool) bool) {
 	s.extPrompts.setConfirm(fn)
 }
 
-func (s *CodingSession) requestExtensionSelect(title string, options []string) string {
+func (s *engine) requestExtensionSelect(title string, options []string) string {
 	return s.extPrompts.selectOption(title, options)
 }
 
 // SetExtensionSelectCallback wires interactive extension choice prompts.
-func (s *CodingSession) SetExtensionSelectCallback(fn func(title string, options []string) string) {
+func (s *engine) SetExtensionSelectCallback(fn func(title string, options []string) string) {
 	s.extPrompts.setSelect(fn)
 }
 
 // EmitExtensionEvent dispatches a host lifecycle event to registered
 // extensions. It is intentionally narrow: callers should use it for host/UI
 // readiness boundaries, not for synthetic agent transcript events.
-func (s *CodingSession) EmitExtensionEvent(eventType string) {
+func (s *engine) EmitExtensionEvent(eventType string) {
 	if s == nil || s.extensions == nil || strings.TrimSpace(eventType) == "" {
 		return
 	}

@@ -355,7 +355,7 @@ func numericTaskID(id string) int64 {
 }
 
 // GetBackgroundTasks returns a snapshot of session background tasks.
-func (s *CodingSession) GetBackgroundTasks() []BackgroundTask {
+func (s *engine) GetBackgroundTasks() []BackgroundTask {
 	if s.taskManager == nil {
 		return nil
 	}

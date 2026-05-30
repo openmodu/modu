@@ -13,12 +13,12 @@ type (
 )
 
 // CodingSession implements worktree.Host.
-var _ worktree.Host = (*CodingSession)(nil)
+var _ worktree.Host = (*engine)(nil)
 
 // replaceWorktreeTools registers (or removes) the worktree tools. Tool
 // registration is a kernel concern; the worktree controller is supplied as the
 // tools' manager.
-func (s *CodingSession) replaceWorktreeTools() {
+func (s *engine) replaceWorktreeTools() {
 	if !s.config.FeatureWorktreeMode() {
 		s.activeTools = removeToolByName(s.activeTools, "enter_worktree")
 		s.activeTools = removeToolByName(s.activeTools, "exit_worktree")
@@ -39,24 +39,24 @@ func (s *CodingSession) replaceWorktreeTools() {
 // --- delegates (preserve the public API surface) ---
 
 // ActiveWorktree returns the currently active isolated worktree path, if any.
-func (s *CodingSession) ActiveWorktree() string { return s.worktree.ActiveWorktree() }
+func (s *engine) ActiveWorktree() string { return s.worktree.ActiveWorktree() }
 
 // WorktreeStatus returns the current isolated worktree state.
-func (s *CodingSession) WorktreeStatus() WorktreeStatus { return s.worktree.Status() }
+func (s *engine) WorktreeStatus() WorktreeStatus { return s.worktree.Status() }
 
 // ListManagedWorktrees returns managed worktree directories, active one marked.
-func (s *CodingSession) ListManagedWorktrees() []WorktreeInfo { return s.worktree.ListManaged() }
+func (s *engine) ListManagedWorktrees() []WorktreeInfo { return s.worktree.ListManaged() }
 
 // CleanupManagedWorktrees removes inactive managed worktree directories.
-func (s *CodingSession) CleanupManagedWorktrees() ([]WorktreeInfo, error) {
+func (s *engine) CleanupManagedWorktrees() ([]WorktreeInfo, error) {
 	return s.worktree.Cleanup()
 }
 
 // ActiveWorktreeDiff returns a read-only diff for the active isolated worktree.
-func (s *CodingSession) ActiveWorktreeDiff() (WorktreeDiff, error) { return s.worktree.ActiveDiff() }
+func (s *engine) ActiveWorktreeDiff() (WorktreeDiff, error) { return s.worktree.ActiveDiff() }
 
 // EnterWorktree moves the session into a fresh isolated git worktree.
-func (s *CodingSession) EnterWorktree() (string, error) { return s.worktree.EnterWorktree() }
+func (s *engine) EnterWorktree() (string, error) { return s.worktree.EnterWorktree() }
 
 // ExitWorktree leaves the active worktree and restores the original cwd.
-func (s *CodingSession) ExitWorktree() error { return s.worktree.ExitWorktree() }
+func (s *engine) ExitWorktree() error { return s.worktree.ExitWorktree() }
