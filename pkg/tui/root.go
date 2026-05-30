@@ -2,6 +2,7 @@
 //
 // Files in this package are organised by component / concern:
 //
+//	bubble.go        — Bubble Tea runtime used by the default modu_code TUI
 //	root.go          — goTUIRoot struct, lifecycle, top-level KeyMap, Render compose
 //	input.go         — input box rendering + key dispatch + cursor + history
 //	approval.go      — tool-approval dialog (state, key map, rendering)

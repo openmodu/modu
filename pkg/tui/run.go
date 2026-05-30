@@ -31,6 +31,10 @@ func Run(ctx context.Context, session *coding_agent.CodingSession, model *types.
 }
 
 func RunWithOptions(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool, opts RunOptions) error {
+	return RunBubbleInlineWithOptions(ctx, session, model, noApprove, opts)
+}
+
+func RunLegacyWithOptions(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool, opts RunOptions) error {
 	if n, err := session.RestoreMessages(); err == nil && n > 0 {
 		_ = n
 	}

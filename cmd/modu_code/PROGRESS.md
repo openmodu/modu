@@ -71,10 +71,24 @@ enough to implement, verify, and commit independently.
 - Telegram input now mirrors the TUI queue semantics: plain messages become
   follow-ups while a task is active, `/f` queues explicitly, and `/s` steers and
   cancels the current Telegram-driven turn so queued work can continue.
+- Default interactive TUI entry migrated to Bubble Tea while keeping the
+  previous go-tui implementation as `RunLegacyWithOptions` for comparison.
+  The first Bubble Tea slice covers full-screen rendering, prompt submission,
+  slash-command selection, approval prompts, shell shortcuts, queue handling,
+  Telegram bridge output, and agent/session event streaming.
+- Bubble Tea TUI now includes the interactive `/model` selector,
+  `/scoped-models` scope editor, and `Ctrl+P` / `Ctrl+N` model cycling.
+- Bubble Tea view chrome now follows the Agenvoy-style visual structure:
+  top header, bounded transcript, bordered input, and popup-styled selectors.
+- Default TUI path moved to Bubble Tea inline runtime: Bubble Tea renders the
+  bottom input/selector/approval widget, while completed transcript blocks are
+  printed above the program into terminal scrollback for selection/copy.
 
 ## Next
 
-1. Add real keybindings.json remapping if custom keyboard shortcuts become a priority.
+1. Migrate the remaining rich selectors to Bubble Tea: sessions/tree,
+   settings, skills/prompts, and file-reference completion.
+2. Add real keybindings.json remapping if custom keyboard shortcuts become a priority.
 
 ## Validation Log
 
@@ -119,3 +133,13 @@ enough to implement, verify, and commit independently.
   passed for searchable skill/prompt resource picker behavior.
 - 2026-05-20: `go test ./pkg/tui`
   passed for persisted TUI settings round-trip behavior.
+- 2026-05-30: `go test ./cmd/modu_code ./cmd/modu_code/internal/provider ./pkg/tui ./pkg/slash ./pkg/coding_agent`
+  passed for the first Bubble Tea migration slice.
+- 2026-05-30: `go test ./cmd/modu_code ./cmd/modu_code/internal/provider ./pkg/tui ./pkg/slash ./pkg/coding_agent`
+  passed for the Bubble Tea `/model`, `/scoped-models`, and model cycling migration.
+- 2026-05-30: `go test ./cmd/modu_code ./cmd/modu_code/internal/provider ./pkg/tui ./pkg/slash ./pkg/coding_agent`
+  passed for the Agenvoy-style Bubble Tea chrome pass.
+- 2026-05-30: `go test ./cmd/modu_code ./cmd/modu_code/internal/provider ./pkg/tui ./pkg/slash ./pkg/coding_agent`
+  passed after restoring the default inline selectable TUI path.
+- 2026-05-30: `go test ./cmd/modu_code ./cmd/modu_code/internal/provider ./pkg/tui ./pkg/slash ./pkg/coding_agent`
+  passed for the Bubble Tea inline selectable-scrollback runtime.
