@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 
 	"github.com/openmodu/modu/pkg/coding_agent/resource"
+	"github.com/openmodu/modu/pkg/mdloader"
 	"github.com/openmodu/modu/pkg/utils"
 )
 
@@ -35,74 +35,54 @@ func (t *Template) Expand(input string) string {
 }
 
 // Manager discovers prompt templates from global, project, and package paths.
+// The discovery skeleton (roots, extra paths, locking, re-scan) is provided by
+// the embedded mdloader.Manager; this type adds the prompt-specific accessors.
 type Manager struct {
-	agentDir string
-	cwd      string
-
-	mu         sync.RWMutex
-	extraPaths []resource.ResourceRef
-	templates  map[string]*Template
+	*mdloader.Manager[Template]
 }
 
+// NewManager creates a prompt-template manager. User templates live under
+// {agentDir}/prompts and project templates under {cwd}/.coding_agent/prompts.
+// Project templates are scanned after user ones so they win on name conflicts
+// (the parser overwrites).
 func NewManager(agentDir, cwd string) *Manager {
-	return &Manager{
-		agentDir:  agentDir,
-		cwd:       cwd,
-		templates: make(map[string]*Template),
+	roots := []mdloader.Ref{
+		{Path: filepath.Join(agentDir, "prompts"), Source: "user"},
+		{Path: filepath.Join(cwd, ".coding_agent", "prompts"), Source: "project"},
 	}
+	return &Manager{mdloader.New(roots, promptParser{})}
 }
 
+// SetExtraPaths registers additional template files or directories (e.g. from
+// resource packages) to include in discovery.
 func (m *Manager) SetExtraPaths(paths []resource.ResourceRef) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.extraPaths = append([]resource.ResourceRef(nil), paths...)
-}
-
-func (m *Manager) Discover() error {
-	fresh := make(map[string]*Template)
-
-	if err := loadIntoMap(fresh, filepath.Join(m.agentDir, "prompts"), "user"); err != nil && !os.IsNotExist(err) {
-		return err
+	refs := make([]mdloader.Ref, len(paths))
+	for i, p := range paths {
+		refs[i] = mdloader.Ref{Path: p.Path, Source: p.Source}
 	}
-	if err := loadIntoMap(fresh, filepath.Join(m.cwd, ".coding_agent", "prompts"), "project"); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-
-	m.mu.RLock()
-	extraPaths := append([]resource.ResourceRef(nil), m.extraPaths...)
-	m.mu.RUnlock()
-	for _, ref := range extraPaths {
-		_ = loadPathIntoMap(fresh, ref.Path, ref.Source)
-	}
-
-	m.mu.Lock()
-	m.templates = fresh
-	m.mu.Unlock()
-	return nil
+	m.SetExtraRefs(refs)
 }
 
 func (m *Manager) Get(name string) (*Template, bool) {
-	_ = m.Discover()
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	t, ok := m.templates[name]
-	return t, ok
+	return m.Lookup(name)
 }
 
 func (m *Manager) List() []*Template {
-	_ = m.Discover()
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	result := make([]*Template, 0, len(m.templates))
-	for _, t := range m.templates {
-		result = append(result, t)
-	}
+	result := m.Snapshot()
 	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
 	return result
 }
 
-func loadIntoMap(dst map[string]*Template, dir, source string) error {
+// promptParser plugs template scanning into the mdloader skeleton. Both methods
+// overwrite on name conflict, so later roots (project) and extra paths win.
+type promptParser struct{}
+
+func (promptParser) ParseDir(dst map[string]*Template, dir, source string) error {
 	return loadPathIntoMap(dst, dir, source)
+}
+
+func (promptParser) ParsePath(dst map[string]*Template, path, source string) error {
+	return loadPathIntoMap(dst, path, source)
 }
 
 func loadPathIntoMap(dst map[string]*Template, path, source string) error {
