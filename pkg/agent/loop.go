@@ -12,6 +12,10 @@ type Loop struct {
 	Tools types.Tools
 }
 
+type discardEvents struct{}
+
+func (discardEvents) Emit(types.Event) {}
+
 func NewLoop(llm types.LLM, tools types.Tools) *Loop {
 	if llm == nil {
 		llm = DefaultLLM{}
@@ -38,9 +42,10 @@ func (l *Loop) Run(ctx context.Context, input types.LoopInput) (types.LoopResult
 		Tools:        input.Context.Tools,
 	}
 
-	emitEvent(events, types.Event{Type: types.EventTypeAgentStart})
+	events.Emit(types.Event{Type: types.EventTypeAgentStart})
 	for _, prompt := range input.Prompts {
-		emitMessageTo(events, prompt)
+		events.Emit(types.Event{Type: types.EventTypeMessageStart, Message: prompt})
+		events.Emit(types.Event{Type: types.EventTypeMessageEnd, Message: prompt})
 	}
 
 	stepCount := 0
@@ -55,7 +60,7 @@ func (l *Loop) Run(ctx context.Context, input types.LoopInput) (types.LoopResult
 		}
 		if input.Config.MaxSteps > 0 && stepCount >= input.Config.MaxSteps {
 			interrupt := &types.InterruptEvent{Reason: types.InterruptReasonMaxSteps, StepCount: stepCount}
-			emitEvent(events, types.Event{Type: types.EventTypeInterrupt, Interrupt: interrupt})
+			events.Emit(types.Event{Type: types.EventTypeInterrupt, Interrupt: interrupt})
 			if input.Runtime.OnMaxStepsReached == nil {
 				return finish(events, newMessages, nil)
 			}
@@ -70,7 +75,7 @@ func (l *Loop) Run(ctx context.Context, input types.LoopInput) (types.LoopResult
 			continue
 		}
 
-		emitEvent(events, types.Event{Type: types.EventTypeTurnStart})
+		events.Emit(types.Event{Type: types.EventTypeTurnStart})
 		assistantMessage, err := l.LLM.Complete(ctx, types.LLMInput{
 			Context: current,
 			Options: llmOptions(input.Config),
@@ -84,13 +89,13 @@ func (l *Loop) Run(ctx context.Context, input types.LoopInput) (types.LoopResult
 		current.Messages = append(current.Messages, assistantMessage)
 
 		if assistantMessage.StopReason == "error" || assistantMessage.StopReason == "aborted" {
-			emitEvent(events, types.Event{Type: types.EventTypeTurnEnd, Message: assistantMessage})
+			events.Emit(types.Event{Type: types.EventTypeTurnEnd, Message: assistantMessage})
 			return finish(events, newMessages, nil)
 		}
 
 		toolCalls := extractToolCalls(assistantMessage)
 		if len(toolCalls) == 0 {
-			emitEvent(events, types.Event{Type: types.EventTypeTurnEnd, Message: assistantMessage})
+			events.Emit(types.Event{Type: types.EventTypeTurnEnd, Message: assistantMessage})
 			followUps := getMessages(input.Runtime.GetFollowUpMessages)
 			if len(followUps) == 0 {
 				return finish(events, newMessages, nil)
@@ -114,7 +119,7 @@ func (l *Loop) Run(ctx context.Context, input types.LoopInput) (types.LoopResult
 			current.Messages = append(current.Messages, message)
 			newMessages = append(newMessages, message)
 		}
-		emitEvent(events, types.Event{Type: types.EventTypeTurnEnd, Message: assistantMessage, ToolResults: toolOutput.Results})
+		events.Emit(types.Event{Type: types.EventTypeTurnEnd, Message: assistantMessage, ToolResults: toolOutput.Results})
 
 		if len(toolOutput.Steering) > 0 {
 			pending = toolOutput.Steering
@@ -126,15 +131,18 @@ func (l *Loop) Run(ctx context.Context, input types.LoopInput) (types.LoopResult
 
 func appendMessages(events types.EventSink, current *types.AgentContext, newMessages *[]types.AgentMessage, messages []types.AgentMessage) {
 	for _, message := range messages {
-		emitMessageTo(events, message)
+		events.Emit(types.Event{Type: types.EventTypeMessageStart, Message: message})
+		events.Emit(types.Event{Type: types.EventTypeMessageEnd, Message: message})
 		current.Messages = append(current.Messages, message)
 		*newMessages = append(*newMessages, message)
 	}
 }
 
 func finish(events types.EventSink, messages []types.AgentMessage, err error) (types.LoopResult, error) {
-	emitEvent(events, types.Event{Type: types.EventTypeAgentEnd, Messages: messages})
-	resolveEvents(events, messages, err)
+	events.Emit(types.Event{Type: types.EventTypeAgentEnd, Messages: messages})
+	if stream, ok := events.(*types.AgentEventStream); ok {
+		stream.Resolve(messages, err)
+	}
 	return types.LoopResult{Messages: messages}, err
 }
 

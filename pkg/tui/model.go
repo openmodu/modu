@@ -28,6 +28,9 @@ const (
 	uiStateSettingsSelect
 	uiStateTreeSelect
 	uiStateResourceSelect
+	uiStateConfigMenu
+	uiStateConfigInput
+	uiStateConfigSelect
 	uiStatePlanReject // capturing free-form rejection feedback for a plan
 )
 
@@ -70,7 +73,7 @@ var uiSlashCommands = []slashCommandDef{
 	{"/clear", "clear screen and session"},
 	{"/new", "start a new session"},
 	{"/model", "show or switch model"},
-	{"/scoped-models", "enable models for cycling"},
+	{"/scoped-models", "configure model cycling scope"},
 	{"/settings", "open settings"},
 	{"/compact", "compact context"},
 	{"/tokens", "show token usage"},
@@ -81,7 +84,7 @@ var uiSlashCommands = []slashCommandDef{
 	{"/s", "short alias for /steer"},
 	{"/followup", "queue message after current task"},
 	{"/f", "short alias for /followup"},
-	{"/config", "show/init/validate model config"},
+	{"/config", "manage model config"},
 	{"/tools", "list active tools"},
 	{"/allow", "clear deny decision for a tool"},
 	{"/agents", "list subagents"},

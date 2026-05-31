@@ -21,8 +21,24 @@ func TestRunConfigCommandExample(t *testing.T) {
 	if err := runConfigCommand([]string{"example"}, &out, nil); err != nil {
 		t.Fatalf("runConfigCommand example: %v", err)
 	}
-	if !strings.Contains(out.String(), `"models"`) || !strings.Contains(out.String(), `"active": "local-qwen"`) {
+	if !strings.Contains(out.String(), `"models"`) || !strings.Contains(out.String(), `"description": "local coding model"`) {
 		t.Fatalf("unexpected example output:\n%s", out.String())
+	}
+}
+
+func TestRunConfigCommandShowWhenMissing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	var out bytes.Buffer
+	if err := runConfigCommand(nil, &out, nil); err != nil {
+		t.Fatalf("runConfigCommand show: %v", err)
+	}
+	got := out.String()
+	for _, want := range []string{"status: missing", "TUI:", "/config"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected %q in output:\n%s", want, got)
+		}
 	}
 }
 
@@ -48,6 +64,107 @@ func TestRunConfigCommandInitAndValidate(t *testing.T) {
 	}
 	if !strings.Contains(validateOut.String(), "status: ok") {
 		t.Fatalf("expected validate ok, got:\n%s", validateOut.String())
+	}
+}
+
+func TestRunConfigCommandAddListUseAndRemove(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	var addOut bytes.Buffer
+	err := runConfigCommand([]string{
+		"add", "local-qwen", "lmstudio", "qwen", "127.0.0.1:1234/v1", "local-key",
+		"--description", "local", "coding", "model",
+	}, &addOut, nil)
+	if err != nil {
+		t.Fatalf("runConfigCommand add: %v\n%s", err, addOut.String())
+	}
+	if !strings.Contains(addOut.String(), "added model: local-qwen") {
+		t.Fatalf("unexpected add output:\n%s", addOut.String())
+	}
+
+	var listOut bytes.Buffer
+	if err := runConfigCommand([]string{"list"}, &listOut, nil); err != nil {
+		t.Fatalf("runConfigCommand list: %v", err)
+	}
+	if got := listOut.String(); !strings.Contains(got, "* local-qwen") || !strings.Contains(got, "local coding model") {
+		t.Fatalf("unexpected list output:\n%s", got)
+	}
+
+	var useOut bytes.Buffer
+	if err := runConfigCommand([]string{"use", "lmstudio/qwen"}, &useOut, nil); err != nil {
+		t.Fatalf("runConfigCommand use: %v", err)
+	}
+	if !strings.Contains(useOut.String(), "active: local-qwen") {
+		t.Fatalf("unexpected use output:\n%s", useOut.String())
+	}
+
+	var removeOut bytes.Buffer
+	if err := runConfigCommand([]string{"remove", "local-qwen"}, &removeOut, nil); err != nil {
+		t.Fatalf("runConfigCommand remove: %v", err)
+	}
+	if !strings.Contains(removeOut.String(), "removed model: local-qwen") {
+		t.Fatalf("unexpected remove output:\n%s", removeOut.String())
+	}
+}
+
+func TestRunConfigCommandAddWritesV2ProviderSchema(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	var out bytes.Buffer
+	if err := runConfigCommand([]string{
+		"add", "local-qwen", "lmstudio", "qwen", "127.0.0.1:1234/v1", "local-key",
+	}, &out, nil); err != nil {
+		t.Fatalf("runConfigCommand add: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".coding_agent", "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	for _, want := range []string{`"version": 2`, `"providers"`, `"baseUrl": "127.0.0.1:1234/v1"`, `"apiKey": "local-key"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected %q in config:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, `"models": [
+    {
+      "name": "local-qwen",
+      "provider": "lmstudio",
+      "model": "qwen",
+      "baseUrl"`) {
+		t.Fatalf("expected model entry not to own baseUrl:\n%s", got)
+	}
+}
+
+func TestConfigProviderEntriesIncludePresets(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	entries, err := configProviderEntries()
+	if err != nil {
+		t.Fatalf("configProviderEntries: %v", err)
+	}
+	names := map[string]bool{}
+	for _, entry := range entries {
+		names[entry.Name] = true
+	}
+	for _, want := range []string{"openai", "deepseek", "lmstudio", "ollama"} {
+		if !names[want] {
+			t.Fatalf("expected provider preset %q in %#v", want, entries)
+		}
+	}
+}
+
+func TestSplitConfigArgsSupportsQuotedDescription(t *testing.T) {
+	got, err := splitConfigArgs(`add local lmstudio qwen http://127.0.0.1:1234/v1 --description "local coding model"`)
+	if err != nil {
+		t.Fatalf("splitConfigArgs: %v", err)
+	}
+	want := []string{"add", "local", "lmstudio", "qwen", "http://127.0.0.1:1234/v1", "--description", "local coding model"}
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("split args = %#v, want %#v", got, want)
 	}
 }
 

@@ -18,8 +18,8 @@ type fakeLLM struct {
 func (f *fakeLLM) Complete(ctx context.Context, input types.LLMInput) (*types.AssistantMessage, error) {
 	msg := f.messages[f.calls]
 	f.calls++
-	emitEvent(input.Events, types.Event{Type: types.EventTypeMessageStart, Message: *msg})
-	emitEvent(input.Events, types.Event{Type: types.EventTypeMessageEnd, Message: *msg})
+	input.Events.Emit(types.Event{Type: types.EventTypeMessageStart, Message: *msg})
+	input.Events.Emit(types.Event{Type: types.EventTypeMessageEnd, Message: *msg})
 	return msg, nil
 }
 
@@ -39,7 +39,7 @@ func (t *fakeTool) Execute(ctx context.Context, toolCallID string, args map[stri
 }
 
 func TestLoopReturnsAssistantMessageWithoutTools(t *testing.T) {
-	events := NewEventStream()
+	events := types.NewAgentEventStream()
 	drain(events)
 
 	llm := &fakeLLM{messages: []*types.AssistantMessage{
@@ -64,7 +64,7 @@ func TestLoopReturnsAssistantMessageWithoutTools(t *testing.T) {
 }
 
 func TestLoopExecutesToolAndContinues(t *testing.T) {
-	events := NewEventStream()
+	events := types.NewAgentEventStream()
 	drain(events)
 
 	tool := &fakeTool{}
@@ -105,7 +105,7 @@ func TestAgentLoopBasic(t *testing.T) {
 	model := &types.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
 	user := types.UserMessage{Role: types.RoleUser, Content: "Hello", Timestamp: time.Now().UnixMilli()}
 
-	events := NewEventStream()
+	events := types.NewAgentEventStream()
 	drain(events)
 	defer events.Close()
 
@@ -148,7 +148,7 @@ func TestAgentLoopToolCalls(t *testing.T) {
 	tool := &fakeTool{}
 	callIndex := 0
 
-	events := NewEventStream()
+	events := types.NewAgentEventStream()
 	drain(events)
 	defer events.Close()
 
@@ -235,7 +235,7 @@ func TestAgentIsRetryableError(t *testing.T) {
 
 func TestAgentCompleteWithRetrySuccess(t *testing.T) {
 	model := &types.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
-	events := NewEventStream()
+	events := types.NewAgentEventStream()
 	drain(events)
 	defer events.Close()
 
@@ -261,7 +261,7 @@ func TestAgentCompleteWithRetrySuccess(t *testing.T) {
 
 func TestAgentCompleteWithRetryRetriesTransient(t *testing.T) {
 	model := &types.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
-	events := NewEventStream()
+	events := types.NewAgentEventStream()
 	drain(events)
 	defer events.Close()
 
@@ -296,7 +296,7 @@ func TestAgentCompleteWithRetryRetriesTransient(t *testing.T) {
 
 func TestAgentCompleteWithRetryNoPermanentRetry(t *testing.T) {
 	model := &types.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
-	events := NewEventStream()
+	events := types.NewAgentEventStream()
 	drain(events)
 	defer events.Close()
 
@@ -323,7 +323,7 @@ func TestAgentCompleteWithRetryNoPermanentRetry(t *testing.T) {
 }
 
 func TestV2DefaultLLMUsesStreamDefaultWhenStreamFnMissing(t *testing.T) {
-	events := NewEventStream()
+	events := types.NewAgentEventStream()
 	drain(events)
 	defer events.Close()
 
@@ -344,7 +344,7 @@ func TestV2DefaultLLMUsesStreamDefaultWhenStreamFnMissing(t *testing.T) {
 
 func TestAgentPromptWithImagesPassesMessageToLLM(t *testing.T) {
 	model := &types.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
-	events := NewEventStream()
+	events := types.NewAgentEventStream()
 	drain(events)
 	defer events.Close()
 
@@ -383,7 +383,7 @@ func TestAgentPromptWithImagesPassesMessageToLLM(t *testing.T) {
 
 func TestAgentDefaultConvertToLLMFiltersProviderMessages(t *testing.T) {
 	model := &types.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
-	events := NewEventStream()
+	events := types.NewAgentEventStream()
 	drain(events)
 	defer events.Close()
 
@@ -413,7 +413,7 @@ func TestAgentDefaultConvertToLLMFiltersProviderMessages(t *testing.T) {
 
 func TestAgentToolArgumentsValidateAgainstSchema(t *testing.T) {
 	tool := &schemaTool{}
-	events := NewEventStream()
+	events := types.NewAgentEventStream()
 	drain(events)
 	defer events.Close()
 

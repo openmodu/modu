@@ -1,11 +1,15 @@
 package provider
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/providers"
@@ -14,8 +18,13 @@ import (
 )
 
 type Config struct {
-	Active string        `json:"active,omitempty"`
-	Models []ModelConfig `json:"models,omitempty"`
+	Version      int                       `json:"version,omitempty"`
+	Active       string                    `json:"active,omitempty"`
+	Roles        map[string]string         `json:"roles,omitempty"`
+	ScopedModels []string                  `json:"scopedModels,omitempty"`
+	Reasoning    ReasoningConfig           `json:"reasoning,omitempty"`
+	Providers    map[string]ProviderConfig `json:"providers,omitempty"`
+	Models       []ModelConfig             `json:"models,omitempty"`
 
 	// Legacy single-model fields. Kept so existing ~/.coding_agent/config.json
 	// files continue to work.
@@ -26,13 +35,29 @@ type Config struct {
 	Headers  map[string]string `json:"headers,omitempty"`
 }
 
+type ProviderConfig struct {
+	Type      string            `json:"type,omitempty"`
+	BaseURL   string            `json:"baseUrl,omitempty"`
+	APIKey    string            `json:"apiKey,omitempty"`
+	APIKeyEnv string            `json:"apiKeyEnv,omitempty"`
+	Headers   map[string]string `json:"headers,omitempty"`
+}
+
 type ModelConfig struct {
-	Name     string            `json:"name,omitempty"`
-	Provider string            `json:"provider"`
-	Model    string            `json:"model"`
-	BaseURL  string            `json:"baseUrl"`
-	APIKey   string            `json:"apiKey,omitempty"`
-	Headers  map[string]string `json:"headers,omitempty"`
+	Name         string   `json:"name,omitempty"`
+	Description  string   `json:"description,omitempty"`
+	Provider     string   `json:"provider"`
+	Model        string   `json:"model"`
+	Capabilities []string `json:"capabilities,omitempty"`
+	// Legacy per-model connection fields. New config files keep these values in
+	// Config.Providers, but these remain readable for existing files.
+	BaseURL string            `json:"baseUrl,omitempty"`
+	APIKey  string            `json:"apiKey,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+}
+
+type ReasoningConfig struct {
+	Level string `json:"level,omitempty"`
 }
 
 type ConfigValidation struct {
@@ -42,22 +67,56 @@ type ConfigValidation struct {
 	Problems   []string
 }
 
+type ModelDiscovery struct {
+	Provider string
+	Found    int
+	Added    int
+	Updated  int
+	Models   []string
+}
+
+var modelDiscoveryHTTPClient = &http.Client{Timeout: 15 * time.Second}
+
 const exampleConfigJSON = `{
+  "version": 2,
   "active": "local-qwen",
-  "models": [
-    {
-      "name": "local-qwen",
-      "provider": "lmstudio",
-      "model": "qwen/qwen3.6-35b-a3b",
+  "roles": {
+    "summary": "local-qwen",
+    "dispatcher": "deepseek"
+  },
+  "scopedModels": [
+    "local-qwen",
+    "deepseek"
+  ],
+  "reasoning": {
+    "level": "off"
+  },
+  "providers": {
+    "lmstudio": {
+      "type": "openai-compatible",
       "baseUrl": "http://127.0.0.1:1234/v1",
       "apiKey": "lm-studio"
     },
+    "deepseek": {
+      "type": "openai-compatible",
+      "baseUrl": "https://api.deepseek.com/v1",
+      "apiKeyEnv": "DEEPSEEK_API_KEY"
+    }
+  },
+  "models": [
+    {
+      "name": "local-qwen",
+      "description": "local coding model",
+      "provider": "lmstudio",
+      "model": "qwen/qwen3.6-35b-a3b",
+      "capabilities": ["tools"]
+    },
     {
       "name": "deepseek",
+      "description": "remote fallback model",
       "provider": "deepseek",
       "model": "deepseek-chat",
-      "baseUrl": "https://api.deepseek.com/v1",
-      "apiKey": "..."
+      "capabilities": ["tools"]
     }
   ]
 }`
@@ -157,6 +216,18 @@ func Resolve() (*types.Model, func(string) (string, error)) {
 
 // ResolveThinkingLevel maps the THINKING_LEVEL env var to an types.ThinkingLevel.
 func ResolveThinkingLevel() types.ThinkingLevel {
+	if cfg, ok := LoadConfig(); ok {
+		switch strings.ToLower(cfg.Reasoning.Level) {
+		case "low":
+			return types.ThinkingLevelLow
+		case "medium":
+			return types.ThinkingLevelMedium
+		case "high":
+			return types.ThinkingLevelHigh
+		case "off":
+			return types.ThinkingLevelOff
+		}
+	}
 	switch strings.ToLower(os.Getenv("THINKING_LEVEL")) {
 	case "low":
 		return types.ThinkingLevelLow
@@ -190,20 +261,64 @@ func InitConfig(force bool) (string, error) {
 	return path, os.WriteFile(path, []byte(ExampleConfigJSON()), 0o600)
 }
 
-func ValidateConfig() ConfigValidation {
+func LoadConfigFile() (Config, bool, error) {
 	path := ConfigPath()
-	result := ConfigValidation{Path: path}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		result.Problems = append(result.Problems, err.Error())
-		return result
+		if os.IsNotExist(err) {
+			return Config{}, false, nil
+		}
+		return Config{}, false, err
 	}
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
+		return Config{}, true, err
+	}
+	normalizeConfig(&cfg)
+	migrateLegacyConfig(&cfg)
+	return cfg, true, nil
+}
+
+func SaveConfig(cfg Config) error {
+	normalizeConfig(&cfg)
+	migrateLegacyConfig(&cfg)
+	stripLegacyFields(&cfg)
+	cfg.Version = 2
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(ConfigPath()), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(ConfigPath(), append(data, '\n'), 0o600)
+}
+
+func stripLegacyFields(cfg *Config) {
+	cfg.Provider = ""
+	cfg.Model = ""
+	cfg.BaseURL = ""
+	cfg.APIKey = ""
+	cfg.Headers = nil
+	for i := range cfg.Models {
+		cfg.Models[i].BaseURL = ""
+		cfg.Models[i].APIKey = ""
+		cfg.Models[i].Headers = nil
+	}
+}
+
+func ValidateConfig() ConfigValidation {
+	path := ConfigPath()
+	result := ConfigValidation{Path: path}
+	cfg, exists, err := LoadConfigFile()
+	if err != nil {
 		result.Problems = append(result.Problems, "invalid JSON: "+err.Error())
 		return result
 	}
-	normalizeConfig(&cfg)
+	if !exists {
+		result.Problems = append(result.Problems, "config not found: "+path)
+		return result
+	}
 	result.Active = cfg.Active
 	result.ModelCount = len(cfg.modelConfigs())
 	if result.ModelCount == 0 {
@@ -213,6 +328,9 @@ func ValidateConfig() ConfigValidation {
 		seenNames := make(map[string]struct{}, len(cfg.Models))
 		for i, model := range cfg.Models {
 			validateModelConfig(i, model, &result)
+			if model.Provider != "" && modelProviderConfig(cfg, model).BaseURL == "" {
+				result.Problems = append(result.Problems, fmt.Sprintf("models[%d].provider %q has no baseUrl", i, model.Provider))
+			}
 			if model.Name == "" {
 				continue
 			}
@@ -222,23 +340,27 @@ func ValidateConfig() ConfigValidation {
 			seenNames[model.Name] = struct{}{}
 		}
 	}
+	for providerID, pc := range cfg.Providers {
+		if strings.TrimSpace(pc.BaseURL) == "" {
+			result.Problems = append(result.Problems, fmt.Sprintf("providers.%s.baseUrl is required", providerID))
+		}
+	}
 	if cfg.Active != "" && !activeMatchesAny(cfg) {
 		result.Problems = append(result.Problems, "active model does not match any configured model")
+	}
+	for _, id := range cfg.ScopedModels {
+		if !configModelTargetExists(cfg, id) {
+			result.Problems = append(result.Problems, "scoped model does not match any configured model: "+id)
+		}
 	}
 	return result
 }
 
 func LoadConfig() (Config, bool) {
-	path := ConfigPath()
-	data, err := os.ReadFile(path)
-	if err != nil {
+	cfg, exists, err := LoadConfigFile()
+	if err != nil || !exists {
 		return Config{}, false
 	}
-	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return Config{}, false
-	}
-	normalizeConfig(&cfg)
 	if len(cfg.modelConfigs()) == 0 {
 		return Config{}, false
 	}
@@ -255,20 +377,204 @@ func SaveActiveModel(provider, modelID string) error {
 		active = entry.Name
 	}
 	cfg.Active = active
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	return SaveConfig(cfg)
+}
+
+func UpsertModelConfig(entry ModelConfig) (bool, error) {
+	normalizeModelConfig(&entry)
+	if entry.Name == "" {
+		return false, fmt.Errorf("model name is required")
+	}
+	var validation ConfigValidation
+	validateModelConfig(0, entry, &validation)
+	if len(validation.Problems) > 0 {
+		return false, fmt.Errorf("%s", strings.Join(validation.Problems, "; "))
+	}
+
+	cfg, exists, err := LoadConfigFile()
+	if err != nil {
+		return false, err
+	}
+	if !exists {
+		cfg = Config{}
+	}
+	if entry.BaseURL == "" && cfg.Providers[entry.Provider].BaseURL == "" {
+		return false, fmt.Errorf("provider baseUrl is required")
+	}
+	upsertProviderForModel(&cfg, entry)
+	entry.BaseURL = ""
+	entry.APIKey = ""
+	entry.Headers = nil
+
+	for i, model := range cfg.Models {
+		if model.Name == entry.Name {
+			cfg.Models[i] = entry
+			if cfg.Active == "" {
+				cfg.Active = entry.Name
+			}
+			if err := SaveConfig(cfg); err != nil {
+				return false, err
+			}
+			registerConfig(cfg)
+			return false, nil
+		}
+	}
+
+	cfg.Models = append(cfg.Models, entry)
+	if cfg.Active == "" {
+		cfg.Active = entry.Name
+	}
+	if err := SaveConfig(cfg); err != nil {
+		return false, err
+	}
+	registerConfig(cfg)
+	return true, nil
+}
+
+func UpsertProviderConfig(providerID string, config ProviderConfig) error {
+	providerID = strings.TrimSpace(providerID)
+	if providerID == "" {
+		return fmt.Errorf("provider is required")
+	}
+	config.Type = strings.TrimSpace(config.Type)
+	if config.Type == "" {
+		config.Type = "openai-compatible"
+	}
+	config.BaseURL = strings.TrimSpace(config.BaseURL)
+	config.APIKey = strings.TrimSpace(config.APIKey)
+	config.APIKeyEnv = strings.TrimSpace(config.APIKeyEnv)
+	if config.BaseURL == "" {
+		return fmt.Errorf("provider baseUrl is required")
+	}
+	cfg, exists, err := LoadConfigFile()
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(ConfigPath()), 0o755); err != nil {
-		return err
+	if !exists {
+		cfg = Config{}
 	}
-	return os.WriteFile(ConfigPath(), append(data, '\n'), 0o600)
+	if cfg.Providers == nil {
+		cfg.Providers = map[string]ProviderConfig{}
+	}
+	existing := cfg.Providers[providerID]
+	if config.APIKey == "" {
+		config.APIKey = existing.APIKey
+	}
+	if config.APIKeyEnv == "" {
+		config.APIKeyEnv = existing.APIKeyEnv
+	}
+	if len(config.Headers) == 0 {
+		config.Headers = existing.Headers
+	}
+	cfg.Providers[providerID] = config
+	return SaveConfig(cfg)
+}
+
+func DiscoverProviderModels(ctx context.Context, providerID string) (ModelDiscovery, error) {
+	providerID = strings.TrimSpace(providerID)
+	if providerID == "" {
+		return ModelDiscovery{}, fmt.Errorf("provider is required")
+	}
+	cfg, exists, err := LoadConfigFile()
+	if err != nil {
+		return ModelDiscovery{}, err
+	}
+	if !exists {
+		return ModelDiscovery{}, fmt.Errorf("config not found: %s", ConfigPath())
+	}
+	pc, ok := cfg.Providers[providerID]
+	if !ok {
+		return ModelDiscovery{}, fmt.Errorf("provider not found: %s", providerID)
+	}
+	modelIDs, err := fetchOpenAICompatibleModelIDs(ctx, pc)
+	if err != nil {
+		return ModelDiscovery{}, err
+	}
+	discovery := upsertDiscoveredModels(&cfg, providerID, modelIDs)
+	if err := SaveConfig(cfg); err != nil {
+		return ModelDiscovery{}, err
+	}
+	registerConfig(cfg)
+	return discovery, nil
+}
+
+func SetActiveModel(target string) (ModelConfig, error) {
+	cfg, ok := LoadConfig()
+	if !ok {
+		return ModelConfig{}, fmt.Errorf("no valid config found: %s", ConfigPath())
+	}
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return ModelConfig{}, fmt.Errorf("model target is required")
+	}
+	for _, model := range cfg.modelConfigs() {
+		if modelMatchesActive(model, target) {
+			if model.Name != "" {
+				cfg.Active = model.Name
+			} else {
+				cfg.Active = model.Provider + "/" + model.Model
+			}
+			if err := SaveConfig(cfg); err != nil {
+				return ModelConfig{}, err
+			}
+			return model, nil
+		}
+	}
+	return ModelConfig{}, fmt.Errorf("model not found: %s", target)
+}
+
+func RemoveModelConfig(target string) (ModelConfig, error) {
+	cfg, exists, err := LoadConfigFile()
+	if err != nil {
+		return ModelConfig{}, err
+	}
+	if !exists {
+		return ModelConfig{}, fmt.Errorf("config not found: %s", ConfigPath())
+	}
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return ModelConfig{}, fmt.Errorf("model target is required")
+	}
+
+	idx := -1
+	var removed ModelConfig
+	for i, model := range cfg.Models {
+		if modelMatchesActive(model, target) {
+			idx = i
+			removed = model
+			break
+		}
+	}
+	if idx < 0 {
+		return ModelConfig{}, fmt.Errorf("model not found: %s", target)
+	}
+
+	cfg.Models = append(cfg.Models[:idx], cfg.Models[idx+1:]...)
+	if cfg.Active != "" && modelMatchesActive(removed, cfg.Active) {
+		cfg.Active = ""
+		if len(cfg.modelConfigs()) > 0 {
+			next := cfg.modelConfigs()[0]
+			if next.Name != "" {
+				cfg.Active = next.Name
+			} else {
+				cfg.Active = next.Provider + "/" + next.Model
+			}
+		}
+	}
+	if err := SaveConfig(cfg); err != nil {
+		return ModelConfig{}, err
+	}
+	unregisterModel(removed)
+	return removed, nil
 }
 
 func ConfiguredModelIDs() []string {
 	cfg, ok := LoadConfig()
 	if !ok {
 		return nil
+	}
+	if len(cfg.ScopedModels) > 0 {
+		return configTargetsToModelIDs(cfg, cfg.ScopedModels)
 	}
 	models := cfg.modelConfigs()
 	out := make([]string, 0, len(models))
@@ -278,18 +584,108 @@ func ConfiguredModelIDs() []string {
 	return out
 }
 
+func SetScopedModelIDs(ids []string) error {
+	cfg, exists, err := LoadConfigFile()
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("config not found: %s", ConfigPath())
+	}
+	if len(ids) == 0 {
+		cfg.ScopedModels = nil
+		return SaveConfig(cfg)
+	}
+	for _, id := range ids {
+		if !configModelTargetExists(cfg, id) {
+			return fmt.Errorf("scoped model not found: %s", id)
+		}
+	}
+	cfg.ScopedModels = configTargetsToScopeIDs(cfg, ids)
+	return SaveConfig(cfg)
+}
+
 func normalizeConfig(cfg *Config) {
+	if cfg.Version == 0 {
+		cfg.Version = 2
+	}
 	cfg.Active = strings.TrimSpace(cfg.Active)
 	cfg.Provider = strings.TrimSpace(cfg.Provider)
 	cfg.Model = strings.TrimSpace(cfg.Model)
 	cfg.BaseURL = strings.TrimSpace(cfg.BaseURL)
 	cfg.APIKey = strings.TrimSpace(cfg.APIKey)
+	cfg.Reasoning.Level = strings.TrimSpace(strings.ToLower(cfg.Reasoning.Level))
+	for k, v := range cfg.Providers {
+		id := strings.TrimSpace(k)
+		v.Type = strings.TrimSpace(v.Type)
+		v.BaseURL = strings.TrimSpace(v.BaseURL)
+		v.APIKey = strings.TrimSpace(v.APIKey)
+		v.APIKeyEnv = strings.TrimSpace(v.APIKeyEnv)
+		if id != k {
+			if cfg.Providers == nil {
+				cfg.Providers = map[string]ProviderConfig{}
+			}
+			delete(cfg.Providers, k)
+			cfg.Providers[id] = v
+		} else {
+			cfg.Providers[k] = v
+		}
+	}
+	for i := range cfg.ScopedModels {
+		cfg.ScopedModels[i] = strings.TrimSpace(cfg.ScopedModels[i])
+	}
 	for i := range cfg.Models {
-		cfg.Models[i].Name = strings.TrimSpace(cfg.Models[i].Name)
-		cfg.Models[i].Provider = strings.TrimSpace(cfg.Models[i].Provider)
-		cfg.Models[i].Model = strings.TrimSpace(cfg.Models[i].Model)
-		cfg.Models[i].BaseURL = strings.TrimSpace(cfg.Models[i].BaseURL)
-		cfg.Models[i].APIKey = strings.TrimSpace(cfg.Models[i].APIKey)
+		normalizeModelConfig(&cfg.Models[i])
+	}
+}
+
+func normalizeModelConfig(model *ModelConfig) {
+	model.Name = strings.TrimSpace(model.Name)
+	model.Description = strings.TrimSpace(model.Description)
+	model.Provider = strings.TrimSpace(model.Provider)
+	model.Model = strings.TrimSpace(model.Model)
+	model.BaseURL = strings.TrimSpace(model.BaseURL)
+	model.APIKey = strings.TrimSpace(model.APIKey)
+	for i := range model.Capabilities {
+		model.Capabilities[i] = strings.TrimSpace(model.Capabilities[i])
+	}
+}
+
+func migrateLegacyConfig(cfg *Config) {
+	if cfg.Providers == nil {
+		cfg.Providers = map[string]ProviderConfig{}
+	}
+	for i := range cfg.Models {
+		model := &cfg.Models[i]
+		if model.Provider == "" {
+			continue
+		}
+		pc := cfg.Providers[model.Provider]
+		if pc.Type == "" {
+			pc.Type = "openai-compatible"
+		}
+		if pc.BaseURL == "" {
+			pc.BaseURL = model.BaseURL
+		}
+		if pc.APIKey == "" {
+			pc.APIKey = model.APIKey
+		}
+		if len(pc.Headers) == 0 && len(model.Headers) > 0 {
+			pc.Headers = model.Headers
+		}
+		cfg.Providers[model.Provider] = pc
+	}
+	if cfg.Provider != "" && cfg.Model != "" && cfg.BaseURL != "" && len(cfg.Models) == 0 {
+		cfg.Providers[cfg.Provider] = ProviderConfig{
+			Type:    "openai-compatible",
+			BaseURL: cfg.BaseURL,
+			APIKey:  cfg.APIKey,
+			Headers: cfg.Headers,
+		}
+		cfg.Models = []ModelConfig{{
+			Provider: cfg.Provider,
+			Model:    cfg.Model,
+		}}
 	}
 }
 
@@ -297,7 +693,7 @@ func (cfg Config) modelConfigs() []ModelConfig {
 	if len(cfg.Models) > 0 {
 		out := make([]ModelConfig, 0, len(cfg.Models))
 		for _, m := range cfg.Models {
-			if m.Provider != "" && m.Model != "" && m.BaseURL != "" {
+			if m.Provider != "" && m.Model != "" && modelProviderConfig(cfg, m).BaseURL != "" {
 				out = append(out, m)
 			}
 		}
@@ -322,9 +718,6 @@ func validateModelConfig(i int, model ModelConfig, result *ConfigValidation) {
 	}
 	if model.Model == "" {
 		result.Problems = append(result.Problems, prefix+".model is required")
-	}
-	if model.BaseURL == "" {
-		result.Problems = append(result.Problems, prefix+".baseUrl is required")
 	}
 }
 
@@ -375,21 +768,22 @@ func registerConfig(cfg Config) (*types.Model, func(string) (string, error)) {
 	keys := make(map[string]string, len(models))
 	registeredProviders := make(map[string]bool, len(models))
 	for _, entry := range models {
-		baseURL := normalizedBaseURL(entry.BaseURL)
-		apiKey := entry.APIKey
+		pc := modelProviderConfig(cfg, entry)
+		baseURL := normalizedBaseURL(pc.BaseURL)
+		apiKey := resolveProviderAPIKey(pc)
 		if apiKey == "" {
 			apiKey = "lm-studio"
 		}
 		keys[entry.Provider] = apiKey
 		if !registeredProviders[entry.Provider] {
 			opts := []openai.Option{openai.WithBaseURL(baseURL), openai.WithAPIKey(apiKey)}
-			if len(entry.Headers) > 0 {
-				opts = append(opts, openai.WithHeaders(entry.Headers))
+			if len(pc.Headers) > 0 {
+				opts = append(opts, openai.WithHeaders(pc.Headers))
 			}
 			providers.Register(openai.New(entry.Provider, opts...))
 			registeredProviders[entry.Provider] = true
 		}
-		registerModel(entry, baseURL)
+		registerModel(entry, baseURL, pc.Headers)
 	}
 
 	active, ok := cfg.activeModel()
@@ -398,8 +792,9 @@ func registerConfig(cfg Config) (*types.Model, func(string) (string, error)) {
 	}
 	model := providers.GetModel(active.Provider, active.Model)
 	if model == nil {
-		baseURL := normalizedBaseURL(active.BaseURL)
-		registerModel(active, baseURL)
+		pc := modelProviderConfig(cfg, active)
+		baseURL := normalizedBaseURL(pc.BaseURL)
+		registerModel(active, baseURL, pc.Headers)
 		model = providers.GetModel(active.Provider, active.Model)
 	}
 	return model, func(p string) (string, error) {
@@ -417,7 +812,214 @@ func normalizedBaseURL(baseURL string) string {
 	return strings.TrimRight(baseURL, "/")
 }
 
-func registerModel(cfg ModelConfig, baseURL string) {
+func modelProviderConfig(cfg Config, model ModelConfig) ProviderConfig {
+	pc := cfg.Providers[model.Provider]
+	if pc.BaseURL == "" {
+		pc.BaseURL = model.BaseURL
+	}
+	if pc.APIKey == "" {
+		pc.APIKey = model.APIKey
+	}
+	if len(pc.Headers) == 0 && len(model.Headers) > 0 {
+		pc.Headers = model.Headers
+	}
+	if pc.Type == "" {
+		pc.Type = "openai-compatible"
+	}
+	return pc
+}
+
+func resolveProviderAPIKey(pc ProviderConfig) string {
+	if pc.APIKey != "" {
+		return pc.APIKey
+	}
+	if pc.APIKeyEnv != "" {
+		return os.Getenv(pc.APIKeyEnv)
+	}
+	return ""
+}
+
+func fetchOpenAICompatibleModelIDs(ctx context.Context, pc ProviderConfig) ([]string, error) {
+	if pc.Type != "" && pc.Type != "openai-compatible" {
+		return nil, fmt.Errorf("provider type %q does not support model discovery", pc.Type)
+	}
+	if strings.TrimSpace(pc.BaseURL) == "" {
+		return nil, fmt.Errorf("provider baseUrl is required")
+	}
+	baseURL := normalizedBaseURL(pc.BaseURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	if key := resolveProviderAPIKey(pc); key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	for k, v := range pc.Headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := modelDiscoveryHTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("GET /models returned %s", resp.Status)
+	}
+	var payload struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var ids []string
+	for _, item := range payload.Data {
+		id := strings.TrimSpace(item.ID)
+		if id == "" || seen[id] {
+			continue
+		}
+		ids = append(ids, id)
+		seen[id] = true
+	}
+	sort.Strings(ids)
+	return ids, nil
+}
+
+func upsertDiscoveredModels(cfg *Config, providerID string, modelIDs []string) ModelDiscovery {
+	discovery := ModelDiscovery{
+		Provider: providerID,
+		Found:    len(modelIDs),
+		Models:   append([]string(nil), modelIDs...),
+	}
+	if len(modelIDs) == 0 {
+		return discovery
+	}
+	usedNames := map[string]bool{}
+	for _, model := range cfg.Models {
+		if model.Name != "" {
+			usedNames[model.Name] = true
+		}
+	}
+	for _, modelID := range modelIDs {
+		if idx := findRawModelIndex(cfg.Models, providerID, modelID); idx >= 0 {
+			if cfg.Models[idx].Name == "" {
+				name := uniqueDiscoveredModelName(usedNames, providerID, modelID)
+				cfg.Models[idx].Name = name
+				usedNames[name] = true
+				discovery.Updated++
+			}
+			continue
+		}
+		name := uniqueDiscoveredModelName(usedNames, providerID, modelID)
+		usedNames[name] = true
+		cfg.Models = append(cfg.Models, ModelConfig{
+			Name:        name,
+			Description: "discovered from " + providerID,
+			Provider:    providerID,
+			Model:       modelID,
+		})
+		discovery.Added++
+		if cfg.Active == "" {
+			cfg.Active = name
+		}
+	}
+	return discovery
+}
+
+func findRawModelIndex(models []ModelConfig, providerID, modelID string) int {
+	for i, model := range models {
+		if model.Provider == providerID && model.Model == modelID {
+			return i
+		}
+	}
+	return -1
+}
+
+func uniqueDiscoveredModelName(used map[string]bool, providerID, modelID string) string {
+	for _, name := range []string{modelID, providerID + "/" + modelID} {
+		if !used[name] {
+			return name
+		}
+	}
+	base := providerID + "/" + modelID
+	for i := 2; ; i++ {
+		name := fmt.Sprintf("%s-%d", base, i)
+		if !used[name] {
+			return name
+		}
+	}
+}
+
+func upsertProviderForModel(cfg *Config, model ModelConfig) {
+	if cfg.Providers == nil {
+		cfg.Providers = map[string]ProviderConfig{}
+	}
+	pc := cfg.Providers[model.Provider]
+	if pc.Type == "" {
+		pc.Type = "openai-compatible"
+	}
+	if model.BaseURL != "" {
+		pc.BaseURL = model.BaseURL
+	}
+	if model.APIKey != "" {
+		pc.APIKey = model.APIKey
+	}
+	if len(model.Headers) > 0 {
+		pc.Headers = model.Headers
+	}
+	cfg.Providers[model.Provider] = pc
+}
+
+func configModelTargetExists(cfg Config, target string) bool {
+	for _, model := range cfg.Models {
+		if modelMatchesActive(model, target) || modelScopeID(model) == target {
+			return true
+		}
+	}
+	return false
+}
+
+func modelScopeID(model ModelConfig) string {
+	if model.Name != "" {
+		return model.Name
+	}
+	return model.Model
+}
+
+func configTargetsToModelIDs(cfg Config, targets []string) []string {
+	out := make([]string, 0, len(targets))
+	for _, target := range targets {
+		for _, model := range cfg.Models {
+			if modelMatchesActive(model, target) || modelScopeID(model) == target {
+				out = append(out, model.Model)
+				break
+			}
+		}
+	}
+	return out
+}
+
+func configTargetsToScopeIDs(cfg Config, targets []string) []string {
+	out := make([]string, 0, len(targets))
+	seen := map[string]bool{}
+	for _, target := range targets {
+		for _, model := range cfg.Models {
+			if modelMatchesActive(model, target) || modelScopeID(model) == target {
+				scopeID := modelScopeID(model)
+				if !seen[scopeID] {
+					out = append(out, scopeID)
+					seen[scopeID] = true
+				}
+				break
+			}
+		}
+	}
+	return out
+}
+
+func registerModel(cfg ModelConfig, baseURL string, headers map[string]string) {
 	if providers.Models[cfg.Provider] == nil {
 		providers.Models[cfg.Provider] = make(map[string]*types.Model)
 	}
@@ -430,6 +1032,16 @@ func registerModel(cfg ModelConfig, baseURL string) {
 		Name:       name,
 		ProviderID: cfg.Provider,
 		BaseURL:    baseURL,
-		Headers:    cfg.Headers,
+		Headers:    headers,
+	}
+}
+
+func unregisterModel(cfg ModelConfig) {
+	if providers.Models[cfg.Provider] == nil {
+		return
+	}
+	delete(providers.Models[cfg.Provider], cfg.Model)
+	if len(providers.Models[cfg.Provider]) == 0 {
+		delete(providers.Models, cfg.Provider)
 	}
 }

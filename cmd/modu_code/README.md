@@ -18,36 +18,60 @@ go run ./cmd/modu_code
 
 ```json
 {
+  "version": 2,
   "active": "local-qwen",
-  "models": [
-    {
-      "name": "local-qwen",
-      "provider": "lmstudio",
-      "model": "qwen/qwen3.6-35b-a3b",
+  "roles": {
+    "summary": "local-qwen",
+    "dispatcher": "deepseek"
+  },
+  "scopedModels": ["local-qwen", "deepseek"],
+  "reasoning": {
+    "level": "off"
+  },
+  "providers": {
+    "lmstudio": {
+      "type": "openai-compatible",
       "baseUrl": "http://127.0.0.1:1234/v1",
       "apiKey": "lm-studio"
     },
+    "deepseek": {
+      "type": "openai-compatible",
+      "baseUrl": "https://api.deepseek.com/v1",
+      "apiKeyEnv": "DEEPSEEK_API_KEY"
+    }
+  },
+  "models": [
+    {
+      "name": "local-qwen",
+      "description": "local coding model",
+      "provider": "lmstudio",
+      "model": "qwen/qwen3.6-35b-a3b",
+      "capabilities": ["tools"]
+    },
     {
       "name": "deepseek",
+      "description": "remote fallback model",
       "provider": "deepseek",
       "model": "deepseek-chat",
-      "baseUrl": "https://api.deepseek.com/v1",
-      "apiKey": "..."
+      "capabilities": ["tools"]
     }
   ]
 }
 ```
+
+`providers` 只描述连接方式，`models` 只描述可选模型；`active` 是默认模型，`scopedModels` 是模型循环范围，`roles` 预留给 summary/dispatcher 等专用模型。
 
 运行中输入 `/model` 会打开模型选择器，可用方向键选择、`Enter` 确认、`Esc` 取消。也可以用 `/model <query>` 带初始搜索打开选择器。切换后会写回 `active`，下次启动继续使用该模型；如果实际切换到了另一个模型，会清空旧对话上下文并在状态里明确提示。
 
 配置辅助命令：
 
 ```bash
-go run ./cmd/modu_code config example
+go run ./cmd/modu_code config
 go run ./cmd/modu_code config init
 go run ./cmd/modu_code config init --force
-go run ./cmd/modu_code config validate
 ```
+
+TUI 中输入 `/config` 会打开配置页面，当前只提供 `Active Model` 和 `Provider` 两个入口。进入二级页面后可用 `Esc` 返回上一层。`Provider` 会先打开和模型选择器一致的可搜索列表，可选择已有或预设 provider 进入设置，也可选择 `Custom OpenAI-compatible` 配置自定义 OpenAI 风格源；保存 provider 后会自动请求 `<baseUrl>/models`，把返回的模型写入 `models` 配置。
 
 ---
 
@@ -73,7 +97,7 @@ go run ./cmd/modu_code config validate
 | `Home` / `End` | 输入行首 / 行尾 |
 | `ctrl+j` | 在输入框插入换行 |
 
-输入 `/` 会打开轻量命令选择器，可用方向键选择，`Tab` 补全，`Enter` 执行选中命令。
+输入 `/` 会打开轻量命令选择器，可用方向键选择，`Tab` 补全，`Enter` 执行选中命令。`/scoped-models` 可直接用 slash 参数配置模型循环范围：`list` 查看，`set <model...>` 设置，`add <model...>` 添加，`remove <model...>` 移除，`clear` 恢复全部模型，`edit` 打开选择器。
 
 输入 `!cmd` 会在当前工作目录执行 shell 命令，把输出显示在 TUI 中，并作为下一条用户消息发送给模型。输入 `!!cmd` 只执行并显示输出，不发送给模型。
 
@@ -103,8 +127,8 @@ Bubble Tea 的全屏 TUI 保留为实验路径；默认交互路径使用 Bubble
 |------|------|
 | `/settings` | 显示 Bubble Tea 迁移状态 |
 | `/model [query]` | 打开带搜索的模型选择器 |
-| `/scoped-models` | 打开模型范围选择器，用于控制模型循环范围 |
-| `/config example\|init\|validate` | 在 TUI 内查看、初始化或校验模型配置 |
+| `/scoped-models [list\|set\|add\|remove\|clear\|edit]` | 配置模型循环范围 |
+| `/config` | 打开模型配置页面 |
 | `/context` | 查看当前 prompt/context 来源 |
 | `/doctor` | 查看基础运行诊断 |
 | `/retry` | 重试上一条失败的 prompt |

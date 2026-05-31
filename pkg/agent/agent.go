@@ -130,7 +130,7 @@ func (a *Agent) run(ctx context.Context, messages []types.AgentMessage) error {
 	}
 	a.mu.Unlock()
 
-	stream := NewEventStream()
+	stream := types.NewAgentEventStream()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
