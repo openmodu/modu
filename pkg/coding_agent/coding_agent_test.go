@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1812,12 +1813,12 @@ func TestPromptPersistsAssistantAndToolMessages(t *testing.T) {
 	agentDir := filepath.Join(dir, ".coding_agent")
 	model := newTestModel()
 	tool := &testEchoTool{}
-	callIndex := 0
+	var callIndex atomic.Int64
 
 	streamFn := func(ctx context.Context, _ *types.Model, _ *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
 		stream := types.NewEventStream()
 		go func() {
-			if callIndex == 0 {
+			if callIndex.Load() == 0 {
 				msg := &types.AssistantMessage{
 					Role:       "assistant",
 					ProviderID: model.ProviderID,
@@ -1844,7 +1845,7 @@ func TestPromptPersistsAssistantAndToolMessages(t *testing.T) {
 				stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
 				stream.Resolve(msg, nil)
 			}
-			callIndex++
+			callIndex.Add(1)
 			stream.Close()
 		}()
 		return stream, nil
