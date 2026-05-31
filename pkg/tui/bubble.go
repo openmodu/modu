@@ -63,7 +63,7 @@ type bubbleTUI struct {
 type bubbleTickMsg time.Time
 
 type bubbleAgentMsg struct {
-	event agent.Event
+	event types.Event
 }
 
 type bubbleSessionMsg struct {
@@ -152,7 +152,7 @@ func runBubbleWithOptions(ctx context.Context, session *coding_agent.CodingSessi
 		go session.EmitExtensionEvent("ui_ready")
 	}
 
-	unsub := session.Subscribe(func(ev agent.Event) {
+	unsub := session.Subscribe(func(ev types.Event) {
 		prog.Send(bubbleAgentMsg{event: ev})
 	})
 	defer unsub()
@@ -213,127 +213,15 @@ func watchBubbleApprovals(ctx context.Context, prog *tea.Program, approvalCh <-c
 }
 
 func installBubbleApprovalCallbacks(ctx context.Context, session *coding_agent.CodingSession, approvalCh chan<- approval.Request) {
-	session.SetToolApprovalCallback(func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
-		respCh := make(chan string, 1)
-		req := approval.Request{
-			ToolName:   toolName,
-			ToolCallID: toolCallID,
-			Args:       args,
-			Response:   respCh,
-		}
-		select {
-		case approvalCh <- req:
-		case <-ctx.Done():
-			return agent.ToolApprovalDeny, ctx.Err()
-		}
-		select {
-		case decision := <-respCh:
-			return agent.ToolApprovalDecision(decision), nil
-		case <-ctx.Done():
-			return agent.ToolApprovalDeny, ctx.Err()
-		}
-	})
-
-	session.SetPlanDecisionCallback(func(plan string, steps []string) string {
-		respCh := make(chan string, 1)
-		anySteps := make([]any, len(steps))
-		for i, step := range steps {
-			anySteps[i] = step
-		}
-		req := approval.Request{
-			ToolName:   "exit_plan_mode",
-			ToolCallID: "plan",
-			Args:       map[string]any{"plan": plan, "steps": anySteps},
-			Response:   respCh,
-		}
-		select {
-		case approvalCh <- req:
-		case <-ctx.Done():
-			return "reject"
-		}
-		select {
-		case decision := <-respCh:
-			return decision
-		case <-ctx.Done():
-			return "reject"
-		}
-	})
-
-	session.SetExtensionConfirmCallback(func(title, body string, defaultYes bool) bool {
-		respCh := make(chan string, 1)
-		req := approval.Request{
-			ToolName:   "extension_confirm",
-			ToolCallID: "extension_confirm",
-			Args: map[string]any{
-				"title":      title,
-				"body":       body,
-				"defaultYes": defaultYes,
-			},
-			Response: respCh,
-		}
-		select {
-		case approvalCh <- req:
-		case <-ctx.Done():
-			return defaultYes
-		}
-		select {
-		case decision := <-respCh:
-			switch strings.TrimSpace(strings.ToLower(decision)) {
-			case "allow", "allow_always", "approve", "yes", "y":
-				return true
-			case "deny", "deny_always", "reject", "no", "n":
-				return false
-			default:
-				return defaultYes
-			}
-		case <-ctx.Done():
-			return defaultYes
-		}
-	})
-
-	session.SetExtensionSelectCallback(func(title string, options []string) string {
-		respCh := make(chan string, 1)
-		req := approval.Request{
-			ToolName:   "extension_select",
-			ToolCallID: "extension_select",
-			Args: map[string]any{
-				"title":   title,
-				"options": options,
-			},
-			Response: respCh,
-		}
-		select {
-		case approvalCh <- req:
-		case <-ctx.Done():
-			if len(options) > 0 {
-				return options[0]
-			}
-			return ""
-		}
-		select {
-		case decision := <-respCh:
-			decision = strings.TrimSpace(decision)
-			for _, option := range options {
-				if decision == option {
-					return option
-				}
-			}
-			if len(options) > 0 {
-				return options[0]
-			}
-			return ""
-		case <-ctx.Done():
-			if len(options) > 0 {
-				return options[0]
-			}
-			return ""
-		}
-	})
+	session.SetPrompter(newChannelPrompter(ctx, approvalCh, nil))
 }
 
 func (b *bubbleTUI) Init() tea.Cmd {
 	if b.session != nil {
 		b.session.RefreshRuntimeStateAsync()
+	}
+	if b.inline {
+		return tea.Sequence(b.printInlineHeaderCmd(), bubbleTick())
 	}
 	return bubbleTick()
 }
@@ -378,8 +266,7 @@ func (b *bubbleTUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case bubbleShellDoneMsg:
 		return b.handleShellDone(msg)
 	case bubbleModelSwitchDoneMsg:
-		b.handleModelSwitchDone(msg)
-		return b, nil
+		return b, b.handleModelSwitchDone(msg)
 	case bubbleExternalInfoMsg:
 		block := uiBlock{Kind: "section", Title: "modu_code", Content: msg.text, Timestamp: time.Now()}
 		b.appendBlock(block)
@@ -1191,11 +1078,11 @@ func (b *bubbleTUI) confirmModelSelect() tea.Cmd {
 	}
 }
 
-func (b *bubbleTUI) handleModelSwitchDone(msg bubbleModelSwitchDoneMsg) {
+func (b *bubbleTUI) handleModelSwitchDone(msg bubbleModelSwitchDoneMsg) tea.Cmd {
 	if msg.err != nil {
 		b.model.errMsg = msg.err.Error()
 		b.model.statusMsg = "model unchanged"
-		return
+		return nil
 	}
 	if b.session != nil {
 		b.model.model = b.session.GetModel()
@@ -1206,6 +1093,7 @@ func (b *bubbleTUI) handleModelSwitchDone(msg bubbleModelSwitchDoneMsg) {
 	} else {
 		b.model.statusMsg = "model unchanged"
 	}
+	return b.printInlineHeaderCmd()
 }
 
 func (b *bubbleTUI) toggleScopedModelSelection() {
@@ -1354,12 +1242,12 @@ func (b *bubbleTUI) abortQuery() {
 	b.model.statusMsg = "interrupted"
 }
 
-func (b *bubbleTUI) handleAgentEvent(ev agent.Event) tea.Cmd {
+func (b *bubbleTUI) handleAgentEvent(ev types.Event) tea.Cmd {
 	b.model.handleAgentEvent(ev)
 	switch ev.Type {
-	case agent.EventTypeAgentEnd:
+	case types.EventTypeAgentEnd:
 		b.model.state = uiStateInput
-	case agent.EventTypeMessageEnd:
+	case types.EventTypeMessageEnd:
 		for i := len(b.model.blocks) - 1; i >= 0; i-- {
 			if b.model.blocks[i].Kind == "assistant" {
 				if !b.model.blocks[i].pushed {
@@ -1369,7 +1257,7 @@ func (b *bubbleTUI) handleAgentEvent(ev agent.Event) tea.Cmd {
 				break
 			}
 		}
-	case agent.EventTypeToolExecutionEnd:
+	case types.EventTypeToolExecutionEnd:
 		for i := len(b.model.blocks) - 1; i >= 0; i-- {
 			if b.model.blocks[i].Kind != "tool" {
 				continue
@@ -1487,6 +1375,13 @@ func (b *bubbleTUI) printBlockCmd(block uiBlock) tea.Cmd {
 		return nil
 	}
 	return b.printStringCmd(b.model.renderSingleBlock(block))
+}
+
+func (b *bubbleTUI) printInlineHeaderCmd() tea.Cmd {
+	if !b.inline {
+		return nil
+	}
+	return b.printStringCmd(b.renderInlineHeader())
 }
 
 func (b *bubbleTUI) printStringCmd(s string) tea.Cmd {
@@ -1744,6 +1639,63 @@ func (b *bubbleTUI) renderInlineLive() string {
 
 func (b *bubbleTUI) renderHeader() string {
 	width := max(24, b.width)
+	return lipgloss.NewStyle().Width(width).Render(b.renderHeaderLine(width))
+}
+
+func (b *bubbleTUI) renderInlineHeader() string {
+	width := max(24, b.width-2)
+	contentWidth := max(12, width-6)
+	info := b.headerInfo()
+	lines := []string{uiWhiteText.Bold(true).Render("modu_code")}
+	lines = append(lines, uiDimText.Render("model  ")+uiWhiteText.Render(info.model))
+	if info.cwd != "" {
+		lines = append(lines, uiDimText.Render("cwd    ")+uiWhiteText.Render(info.cwd))
+	}
+	mode := "default"
+	if len(info.modes) > 0 {
+		mode = strings.Join(info.modes, " · ")
+	}
+	lines = append(lines, uiDimText.Render("mode   ")+uiWhiteText.Render(mode))
+	if info.channel != "" {
+		lines = append(lines, uiDimText.Render("channel ")+uiWhiteText.Render(info.channel))
+	}
+	return uiBubbleHeader.Width(contentWidth).Render(strings.Join(lines, "\n"))
+}
+
+func (b *bubbleTUI) renderHeaderLine(width int) string {
+	info := b.headerInfo()
+	var leftParts []string
+	leftParts = append(leftParts, uiWhiteText.Bold(true).Render("* modu_code"))
+	if info.cwd != "" {
+		leftParts = append(leftParts, uiDimText.Render(info.cwd))
+	}
+
+	rightParts := []string{uiDimText.Render(info.model)}
+	for _, mode := range info.modes {
+		rightParts = append(rightParts, uiSecondaryText.Render(mode))
+	}
+	if info.channel != "" {
+		rightParts = append(rightParts, uiSecondaryText.Render(info.channel))
+	}
+
+	left := strings.Join(leftParts, uiDimText.Render(" · "))
+	right := strings.Join(rightParts, uiDimText.Render(" · "))
+	pad := width - lipgloss.Width(left) - lipgloss.Width(right)
+	if pad < 1 {
+		pad = 1
+	}
+	return left + strings.Repeat(" ", pad) + right
+}
+
+type bubbleHeaderInfo struct {
+	model   string
+	cwd     string
+	modes   []string
+	channel string
+}
+
+func (b *bubbleTUI) headerInfo() bubbleHeaderInfo {
+	info := bubbleHeaderInfo{model: "none"}
 	model := "none"
 	if b.session != nil && b.session.GetModel() != nil {
 		m := b.session.GetModel()
@@ -1759,7 +1711,11 @@ func (b *bubbleTUI) renderHeader() string {
 		if strings.TrimSpace(model) == "" {
 			model = b.modelInfo.ID
 		}
+		if b.modelInfo.ProviderID != "" {
+			model += " (" + b.modelInfo.ProviderID + "/" + b.modelInfo.ID + ")"
+		}
 	}
+	info.model = model
 
 	cwd := ""
 	if b.session != nil {
@@ -1771,35 +1727,19 @@ func (b *bubbleTUI) renderHeader() string {
 	if cwd != "" {
 		cwd = shortenUIPath(cwd)
 	}
-
-	var leftParts []string
-	leftParts = append(leftParts, uiWhiteText.Bold(true).Render("* modu_code"))
-	if cwd != "" {
-		leftParts = append(leftParts, uiDimText.Render(cwd))
-	}
-
-	var rightParts []string
-	rightParts = append(rightParts, uiDimText.Render(model))
+	info.cwd = cwd
 	if b.session != nil {
 		if b.session.IsPlanMode() {
-			rightParts = append(rightParts, uiSecondaryText.Render("plan"))
+			info.modes = append(info.modes, "plan")
 		}
 		if b.session.ActiveWorktree() != "" {
-			rightParts = append(rightParts, uiSecondaryText.Render("worktree"))
+			info.modes = append(info.modes, "worktree")
 		}
 	}
 	if b.model.tgUsername != "" {
-		rightParts = append(rightParts, uiSecondaryText.Render("@"+b.model.tgUsername))
+		info.channel = "@" + strings.TrimPrefix(b.model.tgUsername, "@")
 	}
-
-	left := strings.Join(leftParts, uiDimText.Render(" · "))
-	right := strings.Join(rightParts, uiDimText.Render(" · "))
-	pad := width - lipgloss.Width(left) - lipgloss.Width(right)
-	if pad < 1 {
-		pad = 1
-	}
-	line := left + strings.Repeat(" ", pad) + right
-	return lipgloss.NewStyle().Width(width).Render(line)
+	return info
 }
 
 func (b *bubbleTUI) renderInputControl() string {
@@ -2054,7 +1994,7 @@ func (b *bubbleTUI) renderInput() string {
 		rng := ranges[idx]
 		prefix := "  "
 		if idx == 0 {
-			prefix = uiPrimaryText.Render("> ")
+			prefix = uiPrimaryText.Render("❯ ")
 		}
 		var row strings.Builder
 		row.WriteString(prefix)
@@ -2087,29 +2027,81 @@ func (b *bubbleTUI) renderApproval() string {
 	}
 	if perm.ToolName == "exit_plan_mode" {
 		return strings.Join([]string{
-			uiSecondaryText.Render("Plan approval"),
-			uiDimText.Render("enter/y approve  a approve+auto  n/esc reject"),
+			uiSecondaryText.Bold(true).Render("⏺ Plan approval"),
+			uiDimText.Render(fmt.Sprintf("  plan shown above  steps=%d", planApprovalStepCount(perm.Args))),
+			uiSecondaryText.Render("  auto-accept allows write/edit/bash for this session"),
+			b.renderApprovalActions([]approvalActionLabel{
+				{Text: "[Y]es, start coding", Style: uiSuccessText.Bold(true)},
+				{Text: "[A] auto-accept edits", Style: uiSecondaryText.Bold(true)},
+				{Text: "[N]o, keep planning", Style: uiErrorText},
+			}),
 		}, "\n")
 	}
 	if perm.ToolName == "extension_confirm" {
 		title, _ := perm.Args["title"].(string)
 		body, _ := perm.Args["body"].(string)
-		return strings.Join([]string{
-			uiSecondaryText.Render(strings.TrimSpace(title)),
-			strings.TrimSpace(body),
-			uiDimText.Render("enter/y yes  n/esc no"),
-		}, "\n")
+		if strings.TrimSpace(title) == "" {
+			title = "Confirm action"
+		}
+		var lines []string
+		lines = append(lines, uiSecondaryText.Bold(true).Render("⏺ "+strings.TrimSpace(title)))
+		for _, line := range strings.Split(strings.TrimSpace(body), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			lines = append(lines, uiDimText.Render("  "+truncateRunes(line, 100)))
+		}
+		lines = append(lines, b.renderApprovalActions([]approvalActionLabel{
+			{Text: "[Y]es", Style: uiSuccessText.Bold(true)},
+			{Text: "[N]o", Style: uiErrorText},
+		}))
+		return strings.Join(lines, "\n")
 	}
-	var detail string
-	if len(perm.Args) > 0 {
-		detail = fmt.Sprintf("args: %v", perm.Args)
+	lines := []string{
+		uiSecondaryText.Bold(true).Render("⏺ Permission required"),
+		uiWhiteText.Bold(true).Render("  tool: " + perm.ToolName),
 	}
-	return strings.TrimSpace(strings.Join([]string{
-		uiSecondaryText.Render("Permission required"),
-		"tool: " + perm.ToolName,
-		detail,
-		uiDimText.Render("enter/y allow  a always  n/esc deny  d deny always"),
-	}, "\n"))
+	if args := formatToolInput(perm.ToolName, perm.Args); args != "" {
+		lines = append(lines, uiDimText.Render("  args: "+truncateRunes(args, 80)))
+	}
+	allowLabel := "[A]lways allow"
+	denyLabel := "[D]eny always"
+	if perm.ToolName == "bash" {
+		allowLabel = "[A]llow this command"
+		denyLabel = "[D]eny this command"
+	}
+	lines = append(lines, b.renderApprovalActions([]approvalActionLabel{
+		{Text: "[Y]es", Style: uiSuccessText.Bold(true)},
+		{Text: "[N]o", Style: uiErrorText},
+		{Text: allowLabel, Style: uiSecondaryText.Bold(true)},
+		{Text: denyLabel, Style: uiDimText},
+	}))
+	return strings.Join(lines, "\n")
+}
+
+type approvalActionLabel struct {
+	Text  string
+	Style lipgloss.Style
+}
+
+func (b *bubbleTUI) renderApprovalActions(actions []approvalActionLabel) string {
+	parts := make([]string, 0, len(actions))
+	for _, action := range actions {
+		parts = append(parts, action.Style.Render(action.Text))
+	}
+	return uiDimText.Render("  actions: ") + strings.Join(parts, "  ")
+}
+
+func truncateRunes(s string, maxRunes int) string {
+	rs := []rune(s)
+	if len(rs) <= maxRunes {
+		return s
+	}
+	if maxRunes < 1 {
+		return ""
+	}
+	return string(rs[:maxRunes-1]) + "…"
 }
 
 func (b *bubbleTUI) renderPlanReject() string {

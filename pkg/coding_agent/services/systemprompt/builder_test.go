@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -20,8 +19,8 @@ func (t stubTool) Name() string        { return t.name }
 func (t stubTool) Label() string       { return t.name }
 func (t stubTool) Description() string { return t.desc }
 func (t stubTool) Parameters() any     { return map[string]any{"type": "object"} }
-func (t stubTool) Execute(context.Context, string, map[string]any, agent.ToolUpdateCallback) (agent.ToolResult, error) {
-	return agent.ToolResult{}, nil
+func (t stubTool) Execute(context.Context, string, map[string]any, types.ToolUpdateCallback) (types.ToolResult, error) {
+	return types.ToolResult{}, nil
 }
 
 type stubMemory string
@@ -97,7 +96,7 @@ func TestBuilderCustomPromptReplacesDefault(t *testing.T) {
 
 func TestBuilderIncludesToolDescriptions(t *testing.T) {
 	prompt := NewBuilder(t.TempDir()).
-		SetTools([]agent.Tool{stubTool{name: "read", desc: "reads a file"}}).
+		SetTools([]types.Tool{stubTool{name: "read", desc: "reads a file"}}).
 		Build()
 
 	if !strings.Contains(prompt, "# Available Tools") {

@@ -7,15 +7,6 @@ import (
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 )
 
-func (r *goTUIRoot) showPlanPanel() {
-	if r.session == nil {
-		r.model.statusMsg = "no session"
-		r.bump()
-		return
-	}
-	r.appendSystemSection("Plan", planPanelContent(r.session))
-}
-
 func planPanelContent(session *coding_agent.CodingSession) string {
 	status := session.PlanStatus()
 	lines := []string{
@@ -51,16 +42,6 @@ func planPanelContent(session *coding_agent.CodingSession) string {
 	}
 	return strings.Join(lines, "\n")
 }
-
-func (r *goTUIRoot) showWorktreePanel() {
-	if r.session == nil {
-		r.model.statusMsg = "no session"
-		r.bump()
-		return
-	}
-	r.appendSystemSection("Worktree", worktreePanelContent(r.session))
-}
-
 func worktreePanelContent(session *coding_agent.CodingSession) string {
 	status := session.WorktreeStatus()
 	lines := []string{

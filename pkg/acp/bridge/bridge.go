@@ -15,7 +15,6 @@ import (
 	"fmt"
 
 	"github.com/openmodu/modu/pkg/acp/jsonrpc"
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -59,7 +58,7 @@ type SlashCommand struct {
 //   - nil msg, non-session/update, or unknown sessionUpdate → (nil, nil).
 //   - available_commands_update → empty non-nil slice (known-but-ignored).
 //   - malformed params → error.
-func Translate(msg *jsonrpc.Message) ([]agent.Event, error) {
+func Translate(msg *jsonrpc.Message) ([]types.Event, error) {
 	if msg == nil || msg.Method != "session/update" {
 		return nil, nil
 	}
@@ -80,8 +79,8 @@ func Translate(msg *jsonrpc.Message) ([]agent.Event, error) {
 		if u.ToolCallID == "" {
 			return nil, nil
 		}
-		return []agent.Event{{
-			Type:       agent.EventTypeToolExecutionStart,
+		return []types.Event{{
+			Type:       types.EventTypeToolExecutionStart,
 			ToolCallID: u.ToolCallID,
 			ToolName:   toolNameOf(u),
 			Args:       u.RawInput,
@@ -97,20 +96,20 @@ func Translate(msg *jsonrpc.Message) ([]agent.Event, error) {
 		// Known but produces no AgentEvent — callers who need the command
 		// list should read it from a higher layer. Return an empty (non-nil)
 		// slice so tests can distinguish this from the unknown case.
-		return []agent.Event{}, nil
+		return []types.Event{}, nil
 
 	default:
 		return nil, nil
 	}
 }
 
-func translateToolUpdate(u sessionUpdate) []agent.Event {
+func translateToolUpdate(u sessionUpdate) []types.Event {
 	hasError := u.Error != "" ||
 		(u.Meta != nil && u.Meta.ClaudeCode != nil && u.Meta.ClaudeCode.Error != "")
 
 	if u.Status == "completed" || hasError {
-		ev := agent.Event{
-			Type:       agent.EventTypeToolExecutionEnd,
+		ev := types.Event{
+			Type:       types.EventTypeToolExecutionEnd,
 			ToolCallID: u.ToolCallID,
 			ToolName:   toolNameOf(u),
 			IsError:    hasError,
@@ -123,24 +122,24 @@ func translateToolUpdate(u sessionUpdate) []agent.Event {
 		default:
 			ev.Result = u.Content
 		}
-		return []agent.Event{ev}
+		return []types.Event{ev}
 	}
 
-	return []agent.Event{{
-		Type:       agent.EventTypeToolExecutionUpdate,
+	return []types.Event{{
+		Type:       types.EventTypeToolExecutionUpdate,
 		ToolCallID: u.ToolCallID,
 		ToolName:   toolNameOf(u),
 		Partial:    u.Content,
 	}}
 }
 
-func textDelta(content json.RawMessage, evType types.StreamEventType) []agent.Event {
+func textDelta(content json.RawMessage, evType types.StreamEventType) []types.Event {
 	text := extractText(content)
 	if text == "" {
 		return nil
 	}
-	return []agent.Event{{
-		Type: agent.EventTypeMessageUpdate,
+	return []types.Event{{
+		Type: types.EventTypeMessageUpdate,
 		StreamEvent: &types.StreamEvent{
 			Type:  evType,
 			Delta: text,

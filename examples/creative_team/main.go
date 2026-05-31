@@ -29,7 +29,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/openmodu/modu/pkg/agent"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/mailbox"
 	"github.com/openmodu/modu/pkg/mailbox/client"
@@ -74,7 +73,7 @@ func setupModel() *types.Model {
 
 // ── LLM 工具函数 ──────────────────────────────────────────────────────────────
 
-func newCodingSession(model *types.Model, systemPrompt, agentDir string, tools []agent.Tool) *coding_agent.CodingSession {
+func newCodingSession(model *types.Model, systemPrompt, agentDir string, tools []types.Tool) *coding_agent.CodingSession {
 	// Use agentDir as Cwd too so that CodingSession doesn't pick up CLAUDE.md
 	// or other context files from the repo root and pollute the system prompt.
 	cs, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{

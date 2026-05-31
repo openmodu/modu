@@ -7,15 +7,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/mailbox"
 	"github.com/openmodu/modu/pkg/mailbox/client"
 	"github.com/openmodu/modu/pkg/types"
 )
 
 // NewMailboxTools returns the mailbox tools for a given client.
-func NewMailboxTools(c *client.MailboxClient) []agent.Tool {
-	return []agent.Tool{
+func NewMailboxTools(c *client.MailboxClient) []types.Tool {
+	return []types.Tool{
 		&getDiscussionTool{c: c},
 		&postMessageTool{c: c},
 		&getTaskTool{c: c},
@@ -47,7 +46,7 @@ func (t *getDiscussionTool) Parameters() any {
 		"required": []string{"task_id"},
 	}
 }
-func (t *getDiscussionTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *getDiscussionTool) Execute(ctx context.Context, _ string, args map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	taskID, _ := args["task_id"].(string)
 	if taskID == "" {
 		return toolText("task_id is required"), nil
@@ -96,7 +95,7 @@ func (t *postMessageTool) Parameters() any {
 		"required": []string{"to", "task_id", "text"},
 	}
 }
-func (t *postMessageTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *postMessageTool) Execute(ctx context.Context, _ string, args map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	to, _ := args["to"].(string)
 	taskID, _ := args["task_id"].(string)
 	text, _ := args["text"].(string)
@@ -129,7 +128,7 @@ func (t *listProjectsTool) Description() string {
 func (t *listProjectsTool) Parameters() any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
-func (t *listProjectsTool) Execute(ctx context.Context, _ string, _ map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *listProjectsTool) Execute(ctx context.Context, _ string, _ map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	projects, err := t.c.ListProjects(ctx)
 	if err != nil {
 		return toolText(fmt.Sprintf("error: %v", err)), nil
@@ -166,7 +165,7 @@ func (t *getProjectTool) Parameters() any {
 		"required": []string{"project_id"},
 	}
 }
-func (t *getProjectTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *getProjectTool) Execute(ctx context.Context, _ string, args map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	projectID, _ := args["project_id"].(string)
 	if projectID == "" {
 		return toolText("project_id is required"), nil
@@ -205,7 +204,7 @@ func (t *getTaskTool) Parameters() any {
 		"required": []string{"task_id"},
 	}
 }
-func (t *getTaskTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *getTaskTool) Execute(ctx context.Context, _ string, args map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	taskID, _ := args["task_id"].(string)
 	if taskID == "" {
 		return toolText("task_id is required"), nil
@@ -257,7 +256,7 @@ func (t *completeTaskTool) Parameters() any {
 		"required": []string{"task_id", "result"},
 	}
 }
-func (t *completeTaskTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *completeTaskTool) Execute(ctx context.Context, _ string, args map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	taskID, _ := args["task_id"].(string)
 	result, _ := args["result"].(string)
 	if taskID == "" || result == "" {
@@ -282,7 +281,7 @@ func (t *listAgentsTool) Description() string {
 func (t *listAgentsTool) Parameters() any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
-func (t *listAgentsTool) Execute(ctx context.Context, _ string, _ map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *listAgentsTool) Execute(ctx context.Context, _ string, _ map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	ids, err := t.c.ListAgents(ctx)
 	if err != nil {
 		return toolText(fmt.Sprintf("error: %v", err)), nil
@@ -301,8 +300,8 @@ func (t *listAgentsTool) Execute(ctx context.Context, _ string, _ map[string]any
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-func toolText(s string) agent.ToolResult {
-	return agent.ToolResult{
+func toolText(s string) types.ToolResult {
+	return types.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: s}},
 	}
 }

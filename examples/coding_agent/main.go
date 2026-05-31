@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/openmodu/modu/pkg/agent"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
 	"github.com/openmodu/modu/pkg/coding_agent/tools"
@@ -53,7 +52,7 @@ func (e *auditHookExtension) Init(api extension.ExtensionAPI) error {
 		},
 
 		// After: audit log for every completed tool call
-		After: func(toolName string, args map[string]any, result agent.ToolResult) {
+		After: func(toolName string, args map[string]any, result types.ToolResult) {
 			e.mu.Lock()
 			defer e.mu.Unlock()
 			e.afterCalls = append(e.afterCalls, toolName)
@@ -61,7 +60,7 @@ func (e *auditHookExtension) Init(api extension.ExtensionAPI) error {
 		},
 
 		// Transform: append a watermark to text results
-		Transform: func(toolName string, result agent.ToolResult) agent.ToolResult {
+		Transform: func(toolName string, result types.ToolResult) types.ToolResult {
 			e.mu.Lock()
 			defer e.mu.Unlock()
 			e.transforms++
@@ -131,11 +130,11 @@ func main() {
 	}
 
 	// Subscribe to events
-	unsubscribe := session.Subscribe(func(event agent.Event) {
+	unsubscribe := session.Subscribe(func(event types.Event) {
 		switch event.Type {
-		case agent.EventTypeAgentStart:
+		case types.EventTypeAgentStart:
 			fmt.Println("\n=== Agent Started ===")
-		case agent.EventTypeMessageUpdate:
+		case types.EventTypeMessageUpdate:
 			if event.StreamEvent != nil {
 				evt := event.StreamEvent
 				switch evt.Type {
@@ -149,7 +148,7 @@ func main() {
 					fmt.Print(evt.Delta)
 				}
 			}
-		case agent.EventTypeToolExecutionStart:
+		case types.EventTypeToolExecutionStart:
 			fmt.Printf("\n\n>> Tool: %s\n", event.ToolName)
 			if args, ok := event.Args.(map[string]any); ok {
 				for k, v := range args {
@@ -160,9 +159,9 @@ func main() {
 					fmt.Printf("   %s: %s\n", k, val)
 				}
 			}
-		case agent.EventTypeToolExecutionEnd:
+		case types.EventTypeToolExecutionEnd:
 			fmt.Printf("<< Result:\n")
-			if result, ok := event.Result.(agent.ToolResult); ok {
+			if result, ok := event.Result.(types.ToolResult); ok {
 				for _, block := range result.Content {
 					var text string
 					switch tc := block.(type) {
@@ -180,7 +179,7 @@ func main() {
 			if event.IsError {
 				fmt.Println("   [ERROR]")
 			}
-		case agent.EventTypeAgentEnd:
+		case types.EventTypeAgentEnd:
 			fmt.Println("\n\n=== Agent Finished ===")
 		}
 	})

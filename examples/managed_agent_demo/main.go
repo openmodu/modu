@@ -44,12 +44,12 @@ func (t *SafeSearchTool) Parameters() any {
 		"required": []string{"query"},
 	}
 }
-func (t *SafeSearchTool) Execute(_ context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *SafeSearchTool) Execute(_ context.Context, _ string, args map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	query, _ := args["query"].(string)
 	// Simulated result
 	result := fmt.Sprintf("[search result for '%s']: Found 3 relevant articles. Top result: "+
 		"'A comprehensive overview of %s — published 2025.'", query, query)
-	return agent.ToolResult{
+	return types.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: result}},
 	}, nil
 }
@@ -73,11 +73,11 @@ func (t *DangerousActionTool) Parameters() any {
 		"required": []string{"action"},
 	}
 }
-func (t *DangerousActionTool) Execute(_ context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *DangerousActionTool) Execute(_ context.Context, _ string, args map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	action, _ := args["action"].(string)
 	payload, _ := args["payload"].(string)
 	result := fmt.Sprintf("[dangerous_action executed] action=%q payload=%q — done.", action, payload)
-	return agent.ToolResult{
+	return types.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: result}},
 	}, nil
 }
@@ -110,32 +110,32 @@ func (t *SubTool) Parameters() any {
 		"required": []string{"task"},
 	}
 }
-func (t *SubTool) Execute(ctx context.Context, _ string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *SubTool) Execute(ctx context.Context, _ string, args map[string]any, onUpdate types.ToolUpdateCallback) (types.ToolResult, error) {
 	task, _ := args["task"].(string)
 
-	onUpdate(agent.ToolResult{
+	onUpdate(types.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "Sub-agent starting…"}},
 	})
 
 	// Spin up an independent sub-agent. It has its own tools (only SafeSearch),
 	// its own conversation, and no interrupt/resume overhead.
-	sub := agent.NewAgent(agent.Config{
-		InitialState: &agent.State{
+	sub := agent.NewAgent(types.Config{
+		InitialState: &types.State{
 			SystemPrompt: "You are a research specialist. Answer the given task concisely using the safe_search tool.",
 			Model:        t.model,
-			Tools:        []agent.Tool{&SafeSearchTool{}},
+			Tools:        []types.Tool{&SafeSearchTool{}},
 		},
 	})
 
 	var answer strings.Builder
-	sub.Subscribe(func(ev agent.Event) {
-		if ev.Type == agent.EventTypeMessageUpdate && ev.StreamEvent != nil && ev.StreamEvent.Type == "text_delta" {
+	sub.Subscribe(func(ev types.Event) {
+		if ev.Type == types.EventTypeMessageUpdate && ev.StreamEvent != nil && ev.StreamEvent.Type == "text_delta" {
 			answer.WriteString(ev.StreamEvent.Delta)
 		}
 	})
 
 	if err := sub.Prompt(ctx, task); err != nil {
-		return agent.ToolResult{
+		return types.ToolResult{
 			Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "sub-agent error: " + err.Error()}},
 		}, nil
 	}
@@ -145,11 +145,11 @@ func (t *SubTool) Execute(ctx context.Context, _ string, args map[string]any, on
 		result = "(sub-agent returned no text)"
 	}
 
-	onUpdate(agent.ToolResult{
+	onUpdate(types.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "Sub-agent completed."}},
 	})
 
-	return agent.ToolResult{
+	return types.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: result}},
 		Details: map[string]any{"delegated_task": task},
 	}, nil
@@ -159,10 +159,10 @@ func (t *SubTool) Execute(ctx context.Context, _ string, args map[string]any, on
 
 // handleInterrupt prints the interrupt event and prompts the user to approve/deny.
 // Returns the ResumeDecision to pass to Agent.Resume().
-func handleInterrupt(ev *agent.InterruptEvent) agent.ResumeDecision {
+func handleInterrupt(ev *types.InterruptEvent) types.ResumeDecision {
 	fmt.Println()
 	switch ev.Reason {
-	case agent.InterruptReasonToolApproval:
+	case types.InterruptReasonToolApproval:
 		fmt.Printf("╔══ INTERRUPT: tool_use_approval ═══════════════╗\n")
 		fmt.Printf("║  Tool     : %s\n", ev.ToolName)
 		fmt.Printf("║  CallID   : %s\n", ev.ToolCallID)
@@ -171,7 +171,7 @@ func handleInterrupt(ev *agent.InterruptEvent) agent.ResumeDecision {
 		}
 		fmt.Printf("╚═══════════════════════════════════════════════╝\n")
 		fmt.Print("Allow this tool call? [y/n]: ")
-	case agent.InterruptReasonMaxSteps:
+	case types.InterruptReasonMaxSteps:
 		fmt.Printf("╔══ INTERRUPT: max_steps_reached ════════════════╗\n")
 		fmt.Printf("║  Steps completed: %d\n", ev.StepCount)
 		fmt.Printf("╚════════════════════════════════════════════════╝\n")
@@ -184,28 +184,28 @@ func handleInterrupt(ev *agent.InterruptEvent) agent.ResumeDecision {
 	reader := bufio.NewReader(os.Stdin)
 	line, _ := reader.ReadString('\n')
 	allow := strings.TrimSpace(strings.ToLower(line)) == "y"
-	return agent.ResumeDecision{Allow: allow}
+	return types.ResumeDecision{Allow: allow}
 }
 
 // ─── Event printer ───────────────────────────────────────────────────────────
 
-func printEvent(ev agent.Event) {
+func printEvent(ev types.Event) {
 	switch ev.Type {
-	case agent.EventTypeAgentStart:
+	case types.EventTypeAgentStart:
 		fmt.Printf("\n┌── agent_start\n")
-	case agent.EventTypeAgentEnd:
+	case types.EventTypeAgentEnd:
 		fmt.Printf("\n└── agent_end\n")
-	case agent.EventTypeTurnStart:
+	case types.EventTypeTurnStart:
 		fmt.Printf("│  ┌─ turn_start\n")
-	case agent.EventTypeTurnEnd:
+	case types.EventTypeTurnEnd:
 		fmt.Printf("│  └─ turn_end\n")
-	case agent.EventTypeMessageUpdate:
+	case types.EventTypeMessageUpdate:
 		if ev.StreamEvent != nil && ev.StreamEvent.Type == "text_delta" {
 			fmt.Print(ev.StreamEvent.Delta)
 		}
-	case agent.EventTypeToolExecutionStart:
+	case types.EventTypeToolExecutionStart:
 		fmt.Printf("\n│  ⚙  %s(…)\n", ev.ToolName)
-	case agent.EventTypeToolExecutionEnd:
+	case types.EventTypeToolExecutionEnd:
 		if ev.IsError {
 			fmt.Printf("│  ✗  %s denied/error\n", ev.ToolName)
 		} else {
@@ -235,19 +235,19 @@ func main() {
 	fmt.Println("Demo 1: Session lifecycle + Interrupt/Resume")
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
-	a := agent.NewAgent(agent.Config{
+	a := agent.NewAgent(types.Config{
 		// EnableInterrupts wires the interrupt/resume pattern:
 		//   - tool calls emit EventTypeInterrupt (tool_use_approval) + pause
 		//   - MaxSteps exceeded emits EventTypeInterrupt (max_steps_reached) + pause
 		//   - State.Status tracks: idle→running→paused→running→completed
 		EnableInterrupts: true,
 		MaxSteps:         3,
-		InitialState: &agent.State{
+		InitialState: &types.State{
 			SystemPrompt: "You are a helpful assistant. " +
 				"First use safe_search to look up the topic, " +
 				"then call dangerous_action to send a summary email to the user.",
 			Model: model,
-			Tools: []agent.Tool{
+			Tools: []types.Tool{
 				&SafeSearchTool{},
 				&DangerousActionTool{},
 			},
@@ -256,10 +256,10 @@ func main() {
 
 	// Subscribe for UI + interrupt handling.
 	// When we get EventTypeInterrupt, we ask the user and call Resume().
-	a.Subscribe(func(ev agent.Event) {
+	a.Subscribe(func(ev types.Event) {
 		printEvent(ev)
 
-		if ev.Type == agent.EventTypeInterrupt && ev.Interrupt != nil {
+		if ev.Type == types.EventTypeInterrupt && ev.Interrupt != nil {
 			decision := handleInterrupt(ev.Interrupt)
 			// Resume() is safe to call from any goroutine; the buffered channel
 			// ensures it never blocks even if called before interruptBlock() reads it.
@@ -295,17 +295,17 @@ func main() {
 	fmt.Println("Sub-agents are just Tool implementations — no mailbox, no polling.")
 	fmt.Println()
 
-	orchestrator := agent.NewAgent(agent.Config{
-		InitialState: &agent.State{
+	orchestrator := agent.NewAgent(types.Config{
+		InitialState: &types.State{
 			SystemPrompt: "You are an orchestrator. Use delegate_to_subagent to hand off research tasks.",
 			Model:        model,
-			Tools: []agent.Tool{
+			Tools: []types.Tool{
 				&SubTool{model: model},
 			},
 		},
 	})
 
-	orchestrator.Subscribe(func(ev agent.Event) {
+	orchestrator.Subscribe(func(ev types.Event) {
 		printEvent(ev)
 	})
 

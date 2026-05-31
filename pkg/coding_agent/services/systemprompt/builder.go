@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -97,7 +96,7 @@ type MemoryProvider interface {
 // Builder constructs the system prompt from multiple sources.
 type Builder struct {
 	customPrompt  string
-	tools         []agent.Tool
+	tools         []types.Tool
 	contextFiles  []string
 	skillsPrompt  string
 	appendPrompts []string
@@ -119,7 +118,7 @@ func (b *Builder) SetCustomPrompt(prompt string) *Builder {
 }
 
 // SetTools sets the active tools whose descriptions will be included.
-func (b *Builder) SetTools(tools []agent.Tool) *Builder {
+func (b *Builder) SetTools(tools []types.Tool) *Builder {
 	b.tools = tools
 	return b
 }

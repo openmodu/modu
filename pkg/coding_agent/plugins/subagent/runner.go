@@ -21,10 +21,10 @@ func Run(
 	ctx context.Context,
 	def *SubagentDefinition,
 	task string,
-	allTools []agent.Tool,
+	allTools []types.Tool,
 	model *types.Model,
 	getAPIKey func(string) (string, error),
-	streamFn agent.StreamFn,
+	streamFn types.StreamFn,
 ) (string, error) {
 	result, err := RunWithMessages(ctx, def, nil, task, allTools, model, getAPIKey, streamFn)
 	if err != nil {
@@ -36,7 +36,7 @@ func Run(
 // RunResult contains a subagent's final text and full message transcript.
 type RunResult struct {
 	Text     string
-	Messages []agent.AgentMessage
+	Messages []types.AgentMessage
 }
 
 // RunWithMessages executes a subagent using initialMessages as prior
@@ -44,12 +44,12 @@ type RunResult struct {
 func RunWithMessages(
 	ctx context.Context,
 	def *SubagentDefinition,
-	initialMessages []agent.AgentMessage,
+	initialMessages []types.AgentMessage,
 	task string,
-	allTools []agent.Tool,
+	allTools []types.Tool,
 	model *types.Model,
 	getAPIKey func(string) (string, error),
-	streamFn agent.StreamFn,
+	streamFn types.StreamFn,
 ) (RunResult, error) {
 	activeTools := filterTools(def.Tools, def.DisallowedTools, allTools)
 	activeTools = applyPermissionMode(activeTools, def.PermissionMode)
@@ -74,27 +74,27 @@ func RunWithMessages(
 		wrappedStreamFn = limitTurns(streamFn, def.MaxTurns)
 	}
 
-	ag := agent.NewAgent(agent.Config{
+	ag := agent.NewAgent(types.Config{
 		GetAPIKey: getAPIKey,
 		StreamFn:  wrappedStreamFn,
-		InitialState: &agent.State{
+		InitialState: &types.State{
 			SystemPrompt:  systemPrompt,
 			Model:         activeModel,
 			ThinkingLevel: resolveThinkingLevel(def),
 			Tools:         activeTools,
-			Messages:      append([]agent.AgentMessage(nil), initialMessages...),
+			Messages:      append([]types.AgentMessage(nil), initialMessages...),
 		},
 	})
 
 	if err := ag.Prompt(ctx, task); err != nil {
 		messages := ag.GetState().Messages
-		return RunResult{Messages: append([]agent.AgentMessage(nil), messages...)}, fmt.Errorf("subagent %q: %w", def.Name, err)
+		return RunResult{Messages: append([]types.AgentMessage(nil), messages...)}, fmt.Errorf("subagent %q: %w", def.Name, err)
 	}
 
 	messages := ag.GetState().Messages
 	return RunResult{
 		Text:     extractLastAssistantText(messages),
-		Messages: append([]agent.AgentMessage(nil), messages...),
+		Messages: append([]types.AgentMessage(nil), messages...),
 	}, nil
 }
 
@@ -122,8 +122,8 @@ func WithWorkingDirectory(def *SubagentDefinition, cwd string) *SubagentDefiniti
 
 // filterTools returns the subset of allTools whose Name() matches wantNames.
 // Unrecognised names are logged and skipped.
-func filterTools(wantNames, disallowedNames []string, allTools []agent.Tool) []agent.Tool {
-	toolMap := make(map[string]agent.Tool, len(allTools))
+func filterTools(wantNames, disallowedNames []string, allTools []types.Tool) []types.Tool {
+	toolMap := make(map[string]types.Tool, len(allTools))
 	for _, t := range allTools {
 		toolMap[t.Name()] = t
 	}
@@ -137,7 +137,7 @@ func filterTools(wantNames, disallowedNames []string, allTools []agent.Tool) []a
 	}
 
 	if len(wantNames) == 0 {
-		var result []agent.Tool
+		var result []types.Tool
 		for _, t := range allTools {
 			if _, blocked := disallowed[t.Name()]; blocked {
 				continue
@@ -147,7 +147,7 @@ func filterTools(wantNames, disallowedNames []string, allTools []agent.Tool) []a
 		return result
 	}
 
-	var result []agent.Tool
+	var result []types.Tool
 	for _, name := range wantNames {
 		name = strings.TrimSpace(name)
 		if t, ok := toolMap[name]; ok {
@@ -162,12 +162,12 @@ func filterTools(wantNames, disallowedNames []string, allTools []agent.Tool) []a
 	return result
 }
 
-func applyPermissionMode(tools []agent.Tool, mode string) []agent.Tool {
+func applyPermissionMode(tools []types.Tool, mode string) []types.Tool {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "", "default", "normal":
 		return tools
 	case "read-only", "readonly", "read_only":
-		var result []agent.Tool
+		var result []types.Tool
 		for _, t := range tools {
 			if isReadOnlyToolName(t.Name()) {
 				result = append(result, t)
@@ -188,7 +188,7 @@ func isReadOnlyToolName(name string) bool {
 	}
 }
 
-func limitTurns(next agent.StreamFn, maxTurns int) agent.StreamFn {
+func limitTurns(next types.StreamFn, maxTurns int) types.StreamFn {
 	var mu sync.Mutex
 	turns := 0
 	return func(ctx context.Context, model *types.Model, llmCtx *types.LLMContext, opts *types.SimpleStreamOptions) (types.EventStream, error) {
@@ -202,32 +202,32 @@ func limitTurns(next agent.StreamFn, maxTurns int) agent.StreamFn {
 	}
 }
 
-func resolveThinkingLevel(def *SubagentDefinition) agent.ThinkingLevel {
+func resolveThinkingLevel(def *SubagentDefinition) types.ThinkingLevel {
 	if def == nil {
-		return agent.ThinkingLevelOff
+		return types.ThinkingLevelOff
 	}
 	if def.ThinkingLevel != "" {
 		return def.ThinkingLevel
 	}
 	switch strings.ToLower(strings.TrimSpace(def.Effort)) {
 	case "minimal":
-		return agent.ThinkingLevelMinimal
+		return types.ThinkingLevelMinimal
 	case "low":
-		return agent.ThinkingLevelLow
+		return types.ThinkingLevelLow
 	case "medium":
-		return agent.ThinkingLevelMedium
+		return types.ThinkingLevelMedium
 	case "high":
-		return agent.ThinkingLevelHigh
+		return types.ThinkingLevelHigh
 	case "xhigh":
-		return agent.ThinkingLevelXHigh
+		return types.ThinkingLevelXHigh
 	default:
-		return agent.ThinkingLevelOff
+		return types.ThinkingLevelOff
 	}
 }
 
 // extractLastAssistantText returns the concatenated text blocks of the last
 // AssistantMessage in the message list.
-func extractLastAssistantText(messages []agent.AgentMessage) string {
+func extractLastAssistantText(messages []types.AgentMessage) string {
 	for i := len(messages) - 1; i >= 0; i-- {
 		var msg types.AssistantMessage
 		switch m := messages[i].(type) {

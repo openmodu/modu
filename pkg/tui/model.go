@@ -213,6 +213,20 @@ func (m *uiModel) currentAssistantBlock() *uiBlock {
 	return &m.blocks[len(m.blocks)-1]
 }
 
+// lastAssistantBlock returns the most recent assistant block, searching past any
+// trailing tool blocks. A single message may emit text and then a tool call, so
+// at MessageEnd the last block is the tool block — finalizing the message must
+// update that message's assistant block, not append a duplicate after the tool.
+// Falls back to currentAssistantBlock when no assistant block exists yet.
+func (m *uiModel) lastAssistantBlock() *uiBlock {
+	for i := len(m.blocks) - 1; i >= 0; i-- {
+		if m.blocks[i].Kind == "assistant" {
+			return &m.blocks[i]
+		}
+	}
+	return m.currentAssistantBlock()
+}
+
 func (m *uiModel) beginAssistantBlock() *uiBlock {
 	if len(m.blocks) > 0 {
 		last := &m.blocks[len(m.blocks)-1]

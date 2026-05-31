@@ -4,13 +4,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/foundation/resource"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 func TestExtractToolPathsDedupesAcrossArgsAndResult(t *testing.T) {
-	event := agent.Event{
-		Result: agent.ToolResult{Details: map[string]any{
+	event := types.Event{
+		Result: types.ToolResult{Details: map[string]any{
 			"matched_paths": []string{"a.go", "b.go"},
 		}},
 		Args: map[string]any{"path": "a.go"},
@@ -26,8 +26,8 @@ func TestExtractToolPathsDedupesAcrossArgsAndResult(t *testing.T) {
 }
 
 func TestExtractToolPathsHandlesAnySliceAndBlanks(t *testing.T) {
-	event := agent.Event{
-		Result: agent.ToolResult{Details: map[string]any{
+	event := types.Event{
+		Result: types.ToolResult{Details: map[string]any{
 			"matched_paths": []any{"x.go", "", 42},
 			"path":          "  ",
 		}},

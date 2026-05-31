@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -39,7 +38,7 @@ func (t *createGoalTool) Parameters() any {
 	}
 }
 
-func (t *createGoalTool) Execute(_ context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *createGoalTool) Execute(_ context.Context, _ string, args map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	objective, _ := args["objective"].(string)
 	budget, err := optionalPositiveInt(args["token_budget"])
 	if err != nil {
@@ -88,7 +87,7 @@ func (t *updateGoalTool) Parameters() any {
 	}
 }
 
-func (t *updateGoalTool) Execute(_ context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *updateGoalTool) Execute(_ context.Context, _ string, args map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	status, _ := args["status"].(string)
 	if status != "complete" {
 		return textResult("update_goal can only mark the existing goal complete; pause, resume, and budget-limited status changes are controlled by the user or system", true), nil
@@ -122,7 +121,7 @@ func (t *getGoalTool) Parameters() any {
 	}
 }
 
-func (t *getGoalTool) Execute(_ context.Context, _ string, _ map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *getGoalTool) Execute(_ context.Context, _ string, _ map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	g, ok, err := t.store.CurrentErr()
 	if err != nil {
 		return textResult(fmt.Sprintf("get_goal failed: %v", err), true), nil
@@ -233,8 +232,8 @@ func optionalPositiveInt(v any) (*int, error) {
 	return &out, nil
 }
 
-func textResult(s string, isError bool) agent.ToolResult {
-	return agent.ToolResult{
+func textResult(s string, isError bool) types.ToolResult {
+	return types.ToolResult{
 		Content: []types.ContentBlock{
 			&types.TextContent{Type: "text", Text: s},
 		},

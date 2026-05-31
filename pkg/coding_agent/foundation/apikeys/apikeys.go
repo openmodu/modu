@@ -1,4 +1,4 @@
-package coding_agent
+package apikeys
 
 import (
 	"encoding/json"
@@ -6,22 +6,22 @@ import (
 	"path/filepath"
 )
 
-// APIKeyStore manages per-provider API key storage under the agent dir.
-type APIKeyStore struct {
+// Store manages per-provider API key storage under the agent dir.
+type Store struct {
 	path string
 	keys map[string]string
 }
 
-// NewAPIKeyStore creates a new API key store.
-func NewAPIKeyStore(agentDir string) *APIKeyStore {
-	return &APIKeyStore{
+// New creates a new API key store.
+func New(agentDir string) *Store {
+	return &Store{
 		path: filepath.Join(agentDir, "auth.json"),
 		keys: make(map[string]string),
 	}
 }
 
 // Load reads API keys from disk.
-func (s *APIKeyStore) Load() error {
+func (s *Store) Load() error {
 	data, err := os.ReadFile(s.path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -33,18 +33,18 @@ func (s *APIKeyStore) Load() error {
 }
 
 // Get returns an API key for the given provider.
-func (s *APIKeyStore) Get(provider string) (string, bool) {
+func (s *Store) Get(provider string) (string, bool) {
 	key, ok := s.keys[provider]
 	return key, ok
 }
 
 // Set stores an API key for the given provider.
-func (s *APIKeyStore) Set(provider, key string) error {
+func (s *Store) Set(provider, key string) error {
 	s.keys[provider] = key
 	return s.save()
 }
 
-func (s *APIKeyStore) save() error {
+func (s *Store) save() error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
 		return err
 	}

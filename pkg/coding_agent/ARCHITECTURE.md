@@ -50,8 +50,10 @@ Pure, widely depended upon, depends on nothing in this package.
 - `coding_agent/eventbus` — pub/sub
 - `coding_agent/resource` — agent-dir layout, path resolution, context-file & package discovery
 - `coding_agent/taskoutput` — the background-task contract (breaks an import cycle)
-- `coding_agent/config` — session settings (`config.Config`, `config.Load`, `config.Default`)
-- `coding_agent/paths.go` — default agent dir (root file; candidate to fold into a foundation pkg)
+- `foundation/config` — session settings (`config.Config`, `config.Load`, `config.Default`)
+- `foundation/apikeys` — per-provider API key storage under the agent dir
+- `coding_agent/paths.go` — a one-line `DefaultAgentDir` re-export of
+  `foundation/resource` (kept as a public convenience for cmd callers)
 
 ### L1 — kernel
 Single responsibility: hold the session and run turns. The smallest thing that
@@ -78,7 +80,7 @@ through a narrow API. Each should be replaceable/testable in isolation.
 | session persistence + tree/branching | `session/` |
 | tool approval policy | `approval/` (session keeps only the `approval.go` wiring + Observer impl) |
 | persistent memory | `memory/` |
-| background async tasks | `task_output.go`, `task_output_adapter.go` |
+| background async tasks | `services/bgtask` (kernel keeps `task_output.go` aliases + accessor, and `task_output_adapter.go`) |
 | plan mode | `plan/` (kernel keeps `plan.go` wiring + tool registration) |
 | isolated git worktree | `worktree/` (kernel keeps `worktree.go` wiring + tool registration) |
 | todo list | `todo/` (kernel keeps `todo.go` alias + tool adapter) |
@@ -89,7 +91,7 @@ through a narrow API. Each should be replaceable/testable in isolation.
 
 ### L3 — tools
 Single responsibility: the agent's action surface. Each tool is a self-contained
-capability with a uniform `agent.Tool` contract. This layer is already the
+capability with a uniform `types.Tool` contract. This layer is already the
 cleanest (`tools/` subtree).
 
 - `tools/{read,write,edit,grep,find,ls,bash,memory,planning,worktree,backend_task,common}`
@@ -162,9 +164,9 @@ intent is honest, not aspirational.
    *CodingSession)` is L5. The engine keeps a `self *CodingSession` back-pointer
    for the few callbacks (slash-command handlers) whose signature needs the
    façade.
-3. **`harness.go` has split personality.** It mixes `RuntimePaths` (foundation),
-   the tool wrapper (kernel↔tools glue), and session-event emitters (kernel).
-   Three layers in one file.
+3. ~~**`harness.go` has split personality.**~~ **Resolved.** Split by concern
+   into `runtime_paths.go` (the on-disk layout), `tool_gate.go` (the kernel↔tools
+   pre-execution gate), and the session-event emitters folded into `events.go`.
 4. ~~**Services reach the kernel by back-reference.**~~ **Resolved.** Every L2
    service is now a package reaching the kernel through a narrow Host interface
    (`bash.Host`, `plan.Host`, `worktree.Host`, `contextmgr.Host`); `todo` needs
@@ -173,9 +175,13 @@ intent is honest, not aspirational.
    `PlanFile`/`PlansDir`, `*ModeEnabled`, `EmitWorktree*`). Tool registration
    (`replace*Tools`) stays kernel-side, with the service controller supplied as
    the tool's manager.
-5. **No service registry.** The kernel holds ~7 concrete component fields plus
-   ~25 other fields. A registry keyed by contract would make the kernel agnostic
-   to which services are present (and make features truly optional).
+5. **No service registry — and that is the right call (not a violation).** The
+   kernel holds ~7 concrete, typed component fields (`ctxMgr`, `bash`, `todos`,
+   `taskManager`, `plan`, `worktree`, `extPrompts`). A registry keyed by contract
+   was considered and rejected: the services are *always* present (only their
+   *tools* are feature-gated, via `replace*Tools`), so a registry would trade
+   type-safe direct access (`s.plan.X`) for untyped map lookups plus nil checks —
+   more ceremony for optionality the code does not need. Direct fields stay.
 
 ## 5. What is already aligned
 

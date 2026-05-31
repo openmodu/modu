@@ -54,12 +54,12 @@ func main() {
 		ProviderID: providerID,
 	}
 
-	a := agent.NewAgent(agent.Config{
-		InitialState: &agent.State{
+	a := agent.NewAgent(types.Config{
+		InitialState: &types.State{
 			SystemPrompt:  systemPrompt,
 			Model:         model,
-			ThinkingLevel: agent.ThinkingLevelLow,
-			Tools: []agent.Tool{
+			ThinkingLevel: types.ThinkingLevelLow,
+			Tools: []types.Tool{
 				&TTSTool{},
 				&SayTool{},
 				&ASRTool{},
@@ -72,13 +72,13 @@ func main() {
 	})
 
 	// Event stream rendering
-	a.Subscribe(func(event agent.Event) {
+	a.Subscribe(func(event types.Event) {
 		switch event.Type {
-		case agent.EventTypeMessageUpdate:
+		case types.EventTypeMessageUpdate:
 			if event.StreamEvent != nil && event.StreamEvent.Type == "text_delta" {
 				fmt.Print(event.StreamEvent.Delta)
 			}
-		case agent.EventTypeToolExecutionStart:
+		case types.EventTypeToolExecutionStart:
 			fmt.Printf("\n\033[2m>> %s\033[0m", event.ToolName)
 			if args, ok := event.Args.(map[string]any); ok {
 				if text, _ := args["text"].(string); text != "" {
@@ -93,11 +93,11 @@ func main() {
 				}
 			}
 			fmt.Println()
-		case agent.EventTypeToolExecutionEnd:
+		case types.EventTypeToolExecutionEnd:
 			if event.IsError {
 				fmt.Println("\033[31m   [ERROR]\033[0m")
 			}
-		case agent.EventTypeMessageEnd:
+		case types.EventTypeMessageEnd:
 			if _, ok := event.Message.(types.AssistantMessage); ok {
 				fmt.Println()
 			} else if _, ok := event.Message.(*types.AssistantMessage); ok {

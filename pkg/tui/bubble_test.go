@@ -52,6 +52,61 @@ func TestBubbleTUIApprovalAllowsWithY(t *testing.T) {
 	}
 }
 
+func TestBubbleTUIApprovalUsesAgenvoyStyleToolCard(t *testing.T) {
+	root := newBubbleTUI(context.Background(), nil, nil, "", nil, CommandHooks{})
+	root.model.pendingPerm = &approval.Request{
+		ToolName:   "bash",
+		ToolCallID: "call-1",
+		Args:       map[string]any{"command": "go test ./pkg/tui"},
+	}
+
+	rendered := stripANSIForGoTUI(root.renderApproval())
+	for _, want := range []string{
+		"⏺ Permission required",
+		"  tool: bash",
+		"  args: go test ./pkg/tui",
+		"  actions: [Y]es  [N]o  [A]llow this command  [D]eny this command",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected Agenvoy-style approval card to contain %q, got %q", want, rendered)
+		}
+	}
+}
+
+func TestBubbleTUIApprovalUsesAlwaysLabelsForNonBashTools(t *testing.T) {
+	root := newBubbleTUI(context.Background(), nil, nil, "", nil, CommandHooks{})
+	root.model.pendingPerm = &approval.Request{
+		ToolName:   "edit",
+		ToolCallID: "call-1",
+		Args:       map[string]any{"path": "/tmp/example.go"},
+	}
+
+	rendered := stripANSIForGoTUI(root.renderApproval())
+	if !strings.Contains(rendered, "[A]lways allow") || !strings.Contains(rendered, "[D]eny always") {
+		t.Fatalf("expected non-bash approval card to keep always labels, got %q", rendered)
+	}
+}
+
+func TestBubbleTUIPlanApprovalUsesAgenvoyStyleActions(t *testing.T) {
+	root := newBubbleTUI(context.Background(), nil, nil, "", nil, CommandHooks{})
+	root.model.pendingPerm = &approval.Request{
+		ToolName:   "exit_plan_mode",
+		ToolCallID: "plan",
+		Args:       map[string]any{"steps": []any{"one", "two"}},
+	}
+
+	rendered := stripANSIForGoTUI(root.renderApproval())
+	for _, want := range []string{
+		"⏺ Plan approval",
+		"  plan shown above  steps=2",
+		"  actions: [Y]es, start coding  [A] auto-accept edits  [N]o, keep planning",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected Agenvoy-style plan approval to contain %q, got %q", want, rendered)
+		}
+	}
+}
+
 func TestBubbleTUIConfigHookRendersSection(t *testing.T) {
 	root := newBubbleTUI(context.Background(), nil, nil, "", nil, CommandHooks{
 		Config: func(args string) (string, error) {
@@ -103,7 +158,7 @@ func TestBubbleTUIViewUsesAgenvoyStyleChrome(t *testing.T) {
 	root.height = 24
 
 	view := root.View()
-	for _, want := range []string{"modu_code", "Bubble Tea", "/model", "Test", "> █"} {
+	for _, want := range []string{"modu_code", "Bubble Tea", "/model", "Test", "❯ █"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected Bubble view chrome to contain %q, got %q", want, view)
 		}
@@ -127,8 +182,47 @@ func TestBubbleInlineViewKeepsTranscriptOutOfRenderer(t *testing.T) {
 	if strings.Contains(view, "modu_code ·") {
 		t.Fatalf("inline Bubble view should not keep a persistent full header, got %q", view)
 	}
-	if !strings.Contains(view, "> █") {
+	if !strings.Contains(view, "❯ █") {
 		t.Fatalf("expected inline Bubble view to keep the input widget, got %q", view)
+	}
+}
+
+func TestBubbleInlineHeaderIsPrintableButNotPersistent(t *testing.T) {
+	root := newBubbleTUI(context.Background(), nil, &types.Model{ID: "test", Name: "Test", ProviderID: "test"}, "", nil, CommandHooks{})
+	root.inline = true
+	root.width = 80
+	root.model.tgUsername = "ityike_quick_snap_bot"
+
+	header := stripANSIForGoTUI(root.renderInlineHeader())
+	for _, want := range []string{"modu_code", "Test", "test/test"} {
+		if !strings.Contains(header, want) {
+			t.Fatalf("expected printable inline header to contain %q, got %q", want, header)
+		}
+	}
+	for _, want := range []string{"model", "mode"} {
+		if !strings.Contains(header, want) {
+			t.Fatalf("expected printable inline header to expose %q as a separate row, got %q", want, header)
+		}
+	}
+	if !strings.Contains(header, "channel @ityike_quick_snap_bot") {
+		t.Fatalf("expected Telegram username to be rendered as channel, got %q", header)
+	}
+	if strings.Contains(header, "mode   @ityike_quick_snap_bot") {
+		t.Fatalf("expected Telegram username not to be rendered as mode, got %q", header)
+	}
+	if got := strings.Count(header, "\n"); got < 4 {
+		t.Fatalf("expected printable inline header to be multi-line, got %d newlines in %q", got, header)
+	}
+	for _, want := range []string{"╭", "╰"} {
+		if !strings.Contains(header, want) {
+			t.Fatalf("expected printable inline header to use a bordered box containing %q, got %q", want, header)
+		}
+	}
+	view := stripANSIForGoTUI(root.View())
+	for _, unwanted := range []string{"modu_code", "test/test"} {
+		if strings.Contains(view, unwanted) {
+			t.Fatalf("inline header should not be persistent in view; found %q in %q", unwanted, view)
+		}
 	}
 }
 

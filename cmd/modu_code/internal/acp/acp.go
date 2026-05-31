@@ -15,7 +15,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/openmodu/modu/pkg/agent"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/types"
 )
@@ -60,7 +59,7 @@ func New(session *coding_agent.CodingSession) *Server {
 // Run starts the ACP dispatch loop. Blocks until stdin closes or ctx is cancelled.
 func (s *Server) Run(ctx context.Context) error {
 	// Wire tool approval → session/request_permission reverse RPC.
-	s.session.SetToolApprovalCallback(func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
+	s.session.SetToolApprovalCallback(func(toolName, toolCallID string, args map[string]any) (types.ToolApprovalDecision, error) {
 		return s.requestPermission(ctx, toolName, toolCallID, args)
 	})
 
@@ -148,8 +147,8 @@ func (s *Server) handlePrompt(ctx context.Context, id int64, msg *rpcMsg) {
 	}
 
 	// Subscribe to agent events and forward text deltas as session/update.
-	unsub := s.session.Subscribe(func(ev agent.Event) {
-		if ev.Type != agent.EventTypeMessageUpdate || ev.StreamEvent == nil {
+	unsub := s.session.Subscribe(func(ev types.Event) {
+		if ev.Type != types.EventTypeMessageUpdate || ev.StreamEvent == nil {
 			return
 		}
 		se := ev.StreamEvent
@@ -174,7 +173,7 @@ func (s *Server) handlePrompt(ctx context.Context, id int64, msg *rpcMsg) {
 
 // requestPermission sends a session/request_permission reverse RPC and blocks
 // until the client replies. Returns the chosen approval decision.
-func (s *Server) requestPermission(ctx context.Context, toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
+func (s *Server) requestPermission(ctx context.Context, toolName, toolCallID string, args map[string]any) (types.ToolApprovalDecision, error) {
 	reqID := s.msgID.Add(1)
 	ch := make(chan *rpcMsg, 1)
 
@@ -211,10 +210,10 @@ func (s *Server) requestPermission(ctx context.Context, toolName, toolCallID str
 		s.revMu.Lock()
 		delete(s.reverse, reqID)
 		s.revMu.Unlock()
-		return agent.ToolApprovalDeny, ctx.Err()
+		return types.ToolApprovalDeny, ctx.Err()
 	case resp := <-ch:
 		if resp.Error != nil {
-			return agent.ToolApprovalDeny, nil
+			return types.ToolApprovalDeny, nil
 		}
 		var result struct {
 			Outcome struct {
@@ -222,19 +221,19 @@ func (s *Server) requestPermission(ctx context.Context, toolName, toolCallID str
 			} `json:"outcome"`
 		}
 		if err := json.Unmarshal(resp.Result, &result); err != nil {
-			return agent.ToolApprovalDeny, nil
+			return types.ToolApprovalDeny, nil
 		}
 		switch result.Outcome.OptionID {
 		case "allow_once", "allow":
-			return agent.ToolApprovalAllow, nil
+			return types.ToolApprovalAllow, nil
 		case "allow_always":
-			return agent.ToolApprovalAllowAlways, nil
+			return types.ToolApprovalAllowAlways, nil
 		case "reject_once", "deny", "deny_once":
-			return agent.ToolApprovalDeny, nil
+			return types.ToolApprovalDeny, nil
 		case "reject_always", "deny_always":
-			return agent.ToolApprovalDenyAlways, nil
+			return types.ToolApprovalDenyAlways, nil
 		default:
-			return agent.ToolApprovalDeny, nil
+			return types.ToolApprovalDeny, nil
 		}
 	}
 }

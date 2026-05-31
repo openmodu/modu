@@ -3,7 +3,6 @@ package planning
 import (
 	"context"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -21,7 +20,7 @@ type EnterPlanModeTool struct {
 	manager PlanModeManager
 }
 
-func NewEnterPlanModeTool(manager PlanModeManager) agent.Tool {
+func NewEnterPlanModeTool(manager PlanModeManager) types.Tool {
 	return &EnterPlanModeTool{manager: manager}
 }
 
@@ -33,7 +32,7 @@ func (t *EnterPlanModeTool) Description() string {
 func (t *EnterPlanModeTool) Parameters() any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
-func (t *EnterPlanModeTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *EnterPlanModeTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate types.ToolUpdateCallback) (types.ToolResult, error) {
 	if t.manager != nil {
 		t.manager.EnterPlanMode()
 	}
@@ -44,7 +43,7 @@ type ExitPlanModeTool struct {
 	manager PlanModeManager
 }
 
-func NewExitPlanModeTool(manager PlanModeManager) agent.Tool {
+func NewExitPlanModeTool(manager PlanModeManager) types.Tool {
 	return &ExitPlanModeTool{manager: manager}
 }
 
@@ -74,7 +73,7 @@ func (t *ExitPlanModeTool) Parameters() any {
 		"required": []string{"plan"},
 	}
 }
-func (t *ExitPlanModeTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *ExitPlanModeTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate types.ToolUpdateCallback) (types.ToolResult, error) {
 	plan, _ := args["plan"].(string)
 	var steps []string
 	if raw, ok := args["steps"].([]any); ok {
@@ -90,8 +89,8 @@ func (t *ExitPlanModeTool) Execute(ctx context.Context, toolCallID string, args 
 	return planToolResult(t.manager.SubmitPlan(ctx, plan, steps)), nil
 }
 
-func planToolResult(text string) agent.ToolResult {
-	return agent.ToolResult{
+func planToolResult(text string) types.ToolResult {
+	return types.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: text}},
 	}
 }

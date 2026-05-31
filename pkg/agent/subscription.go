@@ -1,6 +1,8 @@
 package agent
 
-func (a *Agent) Subscribe(fn func(Event)) func() {
+import "github.com/openmodu/modu/pkg/types"
+
+func (a *Agent) Subscribe(fn func(types.Event)) func() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	id := a.listenerID
@@ -13,9 +15,9 @@ func (a *Agent) Subscribe(fn func(Event)) func() {
 	}
 }
 
-func (a *Agent) emit(event Event) {
+func (a *Agent) emit(event types.Event) {
 	a.mu.RLock()
-	listeners := make([]func(Event), 0, len(a.listeners))
+	listeners := make([]func(types.Event), 0, len(a.listeners))
 	for _, listener := range a.listeners {
 		listeners = append(listeners, listener)
 	}

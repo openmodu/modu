@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -19,8 +18,8 @@ func (t *testTool) Name() string        { return t.name }
 func (t *testTool) Label() string       { return t.name }
 func (t *testTool) Description() string { return t.name }
 func (t *testTool) Parameters() any     { return nil }
-func (t *testTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
-	return agent.ToolResult{}, nil
+func (t *testTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate types.ToolUpdateCallback) (types.ToolResult, error) {
+	return types.ToolResult{}, nil
 }
 
 func TestRunRespectsToolFilteringAndThinkingLevel(t *testing.T) {
@@ -30,7 +29,7 @@ func TestRunRespectsToolFilteringAndThinkingLevel(t *testing.T) {
 		SystemPrompt:    "test prompt",
 		Tools:           []string{"read", "bash"},
 		DisallowedTools: []string{"bash"},
-		ThinkingLevel:   agent.ThinkingLevelHigh,
+		ThinkingLevel:   types.ThinkingLevelHigh,
 	}
 
 	streamFn := func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, opts *types.SimpleStreamOptions) (types.EventStream, error) {
@@ -63,7 +62,7 @@ func TestRunRespectsToolFilteringAndThinkingLevel(t *testing.T) {
 		context.Background(),
 		def,
 		"do it",
-		[]agent.Tool{&testTool{name: "read"}, &testTool{name: "bash"}},
+		[]types.Tool{&testTool{name: "read"}, &testTool{name: "bash"}},
 		model,
 		func(string) (string, error) { return "", nil },
 		streamFn,
@@ -158,7 +157,7 @@ You are a test agent.`
 	if def.Effort != "high" {
 		t.Fatalf("unexpected effort: %q", def.Effort)
 	}
-	if def.ThinkingLevel != agent.ThinkingLevelHigh {
+	if def.ThinkingLevel != types.ThinkingLevelHigh {
 		t.Fatalf("unexpected thinking level: %q", def.ThinkingLevel)
 	}
 	if def.MaxTurns != 3 {
@@ -200,7 +199,7 @@ func TestRunUsesEffortWhenThinkingLevelNotExplicit(t *testing.T) {
 		context.Background(),
 		def,
 		"do work",
-		[]agent.Tool{},
+		[]types.Tool{},
 		model,
 		func(string) (string, error) { return "", nil },
 		streamFn,
@@ -256,7 +255,7 @@ func TestRunReadOnlyPermissionModeFiltersMutatingTools(t *testing.T) {
 		context.Background(),
 		def,
 		"inspect",
-		[]agent.Tool{
+		[]types.Tool{
 			&testTool{name: "read"},
 			&testTool{name: "find"},
 			&testTool{name: "bash"},
@@ -323,7 +322,7 @@ func TestRunRespectsMaxTurns(t *testing.T) {
 		context.Background(),
 		def,
 		"loop",
-		[]agent.Tool{&testTool{name: "read"}},
+		[]types.Tool{&testTool{name: "read"}},
 		model,
 		func(string) (string, error) { return "", nil },
 		streamFn,

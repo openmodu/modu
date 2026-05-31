@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/mailbox"
 	"github.com/openmodu/modu/pkg/providers"
@@ -188,13 +187,13 @@ func runCodingSession(
 	log.Printf("[%s] CodingSession ready, sending prompt to LLM", agentID)
 
 	// Subscribe to agent events for live logging
-	cs.Subscribe(func(e agent.Event) {
+	cs.Subscribe(func(e types.Event) {
 		switch e.Type {
-		case agent.EventTypeTurnStart:
+		case types.EventTypeTurnStart:
 			log.Printf("[%s] ▶ LLM turn start", agentID)
-		case agent.EventTypeToolExecutionStart:
+		case types.EventTypeToolExecutionStart:
 			log.Printf("[%s] 🔧 tool call: %s", agentID, e.ToolName)
-		case agent.EventTypeAgentEnd:
+		case types.EventTypeAgentEnd:
 			log.Printf("[%s] ✓ agent done", agentID)
 		}
 	})

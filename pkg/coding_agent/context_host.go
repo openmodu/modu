@@ -3,8 +3,8 @@ package coding_agent
 import (
 	"context"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/services/contextmgr"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // Compact triggers context compaction for the session.
@@ -25,14 +25,14 @@ func (s *engine) EmitCompactionDone() {
 	s.emitSessionEvent(SessionEvent{Type: SessionEventCompactionDone})
 }
 
-func (s *engine) NestedContextMessage(text string) agent.AgentMessage {
+func (s *engine) NestedContextMessage(text string) types.AgentMessage {
 	return (&CustomMessage{
 		Source: nestedContextSource,
 		Text:   text,
 	}).ToLlmMessage()
 }
 
-func (s *engine) IsTransient(msg agent.AgentMessage) bool {
+func (s *engine) IsTransient(msg types.AgentMessage) bool {
 	return isTransientContextMessage(msg)
 }
 

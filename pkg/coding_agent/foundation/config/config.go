@@ -8,13 +8,13 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // Config holds coding agent configuration from global and project-level settings.
 type Config struct {
 	// ThinkingLevel controls LLM reasoning depth.
-	ThinkingLevel agent.ThinkingLevel `json:"thinkingLevel,omitempty"`
+	ThinkingLevel types.ThinkingLevel `json:"thinkingLevel,omitempty"`
 
 	// AutoCompaction enables automatic context compaction.
 	AutoCompaction bool `json:"autoCompaction,omitempty"`
@@ -47,10 +47,10 @@ type Config struct {
 	ScopedModels []string `json:"scopedModels,omitempty"`
 
 	// SteeringMode controls how steering messages are consumed.
-	SteeringMode agent.ExecutionMode `json:"steeringMode,omitempty"`
+	SteeringMode types.ExecutionMode `json:"steeringMode,omitempty"`
 
 	// FollowUpMode controls how follow-up messages are consumed.
-	FollowUpMode agent.ExecutionMode `json:"followUpMode,omitempty"`
+	FollowUpMode types.ExecutionMode `json:"followUpMode,omitempty"`
 
 	// BlockImages prevents image content from being sent to the model.
 	BlockImages bool `json:"blockImages,omitempty"`
@@ -106,7 +106,7 @@ type RetryConfig struct {
 // Default returns a config with sensible defaults.
 func Default() *Config {
 	return &Config{
-		ThinkingLevel:  agent.ThinkingLevelMedium,
+		ThinkingLevel:  types.ThinkingLevelMedium,
 		AutoCompaction: true,
 		CompactionSettings: CompactionConfig{
 			MaxContextPercentage:   80.0,

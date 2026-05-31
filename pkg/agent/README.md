@@ -11,6 +11,11 @@ The split is intentionally small:
 - `Tools`: executes tool calls and returns tool-result messages.
 - `ToolManager`: supplies and rebinds tool sets for host runtimes.
 
+Shared public contracts such as `Config`, `AgentContext`, `State`, `Event`,
+`Tool`, and `ToolResult` are defined in `pkg/types`. `pkg/agent` owns runtime
+behaviour such as `Agent`, `Loop`, `DefaultLLM`, and `DefaultTools`; callers use
+`types.*` directly for shared contracts.
+
 `Loop` depends only on the `LLM` and `Tools` interfaces. Provider streaming,
 retry, tool approval, tool execution, and parallel tool batches live behind
 those interfaces instead of inside the loop.
@@ -36,11 +41,11 @@ dependencies.
 loop := agent.NewLoop(agent.DefaultLLM{}, agent.DefaultTools{})
 events := agent.NewEventStream()
 
-result, err := loop.Run(ctx, agent.LoopInput{
-    Prompts: []agent.AgentMessage{userMessage},
-    Context: agent.AgentContext{Tools: []agent.Tool{tool}},
-    Config:  agent.Config{Model: model, StreamFn: streamFn},
-    Runtime: agent.RuntimeHooks{},
+result, err := loop.Run(ctx, types.LoopInput{
+    Prompts: []types.AgentMessage{userMessage},
+    Context: types.AgentContext{Tools: []types.Tool{tool}},
+    Config:  types.Config{Model: model, StreamFn: streamFn},
+    Runtime: types.RuntimeHooks{},
     Events:  events,
 })
 ```

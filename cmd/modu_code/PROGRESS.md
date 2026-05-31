@@ -71,11 +71,11 @@ enough to implement, verify, and commit independently.
 - Telegram input now mirrors the TUI queue semantics: plain messages become
   follow-ups while a task is active, `/f` queues explicitly, and `/s` steers and
   cancels the current Telegram-driven turn so queued work can continue.
-- Default interactive TUI entry migrated to Bubble Tea while keeping the
-  previous go-tui implementation as `RunLegacyWithOptions` for comparison.
-  The first Bubble Tea slice covers full-screen rendering, prompt submission,
-  slash-command selection, approval prompts, shell shortcuts, queue handling,
-  Telegram bridge output, and agent/session event streaming.
+- Default interactive TUI entry migrated to Bubble Tea. The old legacy runtime
+  and comparison path have been removed; the Bubble Tea path covers full-screen
+  rendering, prompt submission, slash-command selection, approval prompts, shell
+  shortcuts, queue handling, Telegram bridge output, and agent/session event
+  streaming.
 - Bubble Tea TUI now includes the interactive `/model` selector,
   `/scoped-models` scope editor, and `Ctrl+P` / `Ctrl+N` model cycling.
 - Bubble Tea view chrome now follows the Agenvoy-style visual structure:
@@ -83,6 +83,12 @@ enough to implement, verify, and commit independently.
 - Default TUI path moved to Bubble Tea inline runtime: Bubble Tea renders the
   bottom input/selector/approval widget, while completed transcript blocks are
   printed above the program into terminal scrollback for selection/copy.
+- Bubble Tea inline runtime now prints the Agenvoy-style bordered multi-line header
+  information into scrollback on startup and after model switches, with Telegram
+  shown as `channel` instead of `mode`, without keeping a persistent header row
+  in the live renderer.
+- Bubble Tea tool and plan approval prompts now use the Agenvoy-style prompt
+  card: `⏺` title, compact tool/input detail, and colored `actions:` choices.
 
 ## Next
 
@@ -143,3 +149,12 @@ enough to implement, verify, and commit independently.
   passed after restoring the default inline selectable TUI path.
 - 2026-05-30: `go test ./cmd/modu_code ./cmd/modu_code/internal/provider ./pkg/tui ./pkg/slash ./pkg/coding_agent`
   passed for the Bubble Tea inline selectable-scrollback runtime.
+- 2026-05-30: `go test ./cmd/modu_code ./cmd/modu_code/internal/provider ./pkg/tui ./pkg/slash ./pkg/coding_agent`
+  passed for the non-persistent multi-line inline header, channel labeling, and
+  input prompt marker update.
+- 2026-05-30: `go test ./cmd/modu_code ./cmd/modu_code/internal/provider ./pkg/tui ./pkg/slash ./pkg/coding_agent`
+  passed for the Agenvoy-style Bubble Tea approval prompt cards.
+- 2026-05-31: `GOCACHE=/private/tmp/modu-go-build go test ./cmd/modu_code ./cmd/modu_code/internal/provider ./pkg/tui ./pkg/slash ./pkg/coding_agent`
+  passed for removing the legacy go-tui runtime and dependency.
+- 2026-05-31: `GOCACHE=/private/tmp/modu-go-build go test ./...`
+  passed after removing the legacy go-tui runtime and dependency.

@@ -1,6 +1,6 @@
 package coding_agent
 
-import "github.com/openmodu/modu/pkg/agent"
+import "github.com/openmodu/modu/pkg/types"
 
 // This file is the kernel capability surface: small exported methods that let
 // L2 service packages (plan, worktree, …) reach the kernel through their narrow
@@ -47,9 +47,9 @@ func (s *engine) SwitchCwd(newCwd string) {
 // refreshToolsForCwd rebinds every active tool to a new working directory and
 // re-wraps them in the harness layer.
 func (s *engine) refreshToolsForCwd(cwd string) {
-	var updated []agent.Tool
+	var updated []types.Tool
 	for _, tool := range s.activeTools {
-		if rebound, ok := s.toolProvider.Rebind(tool, agent.ToolContext{Cwd: cwd}); ok {
+		if rebound, ok := s.toolProvider.Rebind(tool, types.ToolContext{Cwd: cwd}); ok {
 			updated = append(updated, rebound)
 			continue
 		}

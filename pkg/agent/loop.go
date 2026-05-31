@@ -7,7 +7,12 @@ import (
 	"github.com/openmodu/modu/pkg/types"
 )
 
-func NewLoop(llm LLM, tools Tools) *Loop {
+type Loop struct {
+	LLM   types.LLM
+	Tools types.Tools
+}
+
+func NewLoop(llm types.LLM, tools types.Tools) *Loop {
 	if llm == nil {
 		llm = DefaultLLM{}
 	}
@@ -17,7 +22,7 @@ func NewLoop(llm LLM, tools Tools) *Loop {
 	return &Loop{LLM: llm, Tools: tools}
 }
 
-func (l *Loop) Run(ctx context.Context, input LoopInput) (LoopResult, error) {
+func (l *Loop) Run(ctx context.Context, input types.LoopInput) (types.LoopResult, error) {
 	if l == nil {
 		l = NewLoop(nil, nil)
 	}
@@ -26,14 +31,14 @@ func (l *Loop) Run(ctx context.Context, input LoopInput) (LoopResult, error) {
 		events = discardEvents{}
 	}
 
-	newMessages := append([]AgentMessage{}, input.Prompts...)
-	current := AgentContext{
+	newMessages := append([]types.AgentMessage{}, input.Prompts...)
+	current := types.AgentContext{
 		SystemPrompt: input.Context.SystemPrompt,
-		Messages:     append(append([]AgentMessage{}, input.Context.Messages...), input.Prompts...),
+		Messages:     append(append([]types.AgentMessage{}, input.Context.Messages...), input.Prompts...),
 		Tools:        input.Context.Tools,
 	}
 
-	emitEvent(events, Event{Type: EventTypeAgentStart})
+	emitEvent(events, types.Event{Type: types.EventTypeAgentStart})
 	for _, prompt := range input.Prompts {
 		emitMessageTo(events, prompt)
 	}
@@ -49,8 +54,8 @@ func (l *Loop) Run(ctx context.Context, input LoopInput) (LoopResult, error) {
 			pending = nil
 		}
 		if input.Config.MaxSteps > 0 && stepCount >= input.Config.MaxSteps {
-			interrupt := &InterruptEvent{Reason: InterruptReasonMaxSteps, StepCount: stepCount}
-			emitEvent(events, Event{Type: EventTypeInterrupt, Interrupt: interrupt})
+			interrupt := &types.InterruptEvent{Reason: types.InterruptReasonMaxSteps, StepCount: stepCount}
+			emitEvent(events, types.Event{Type: types.EventTypeInterrupt, Interrupt: interrupt})
 			if input.Runtime.OnMaxStepsReached == nil {
 				return finish(events, newMessages, nil)
 			}
@@ -59,14 +64,14 @@ func (l *Loop) Run(ctx context.Context, input LoopInput) (LoopResult, error) {
 				return finish(events, newMessages, nil)
 			}
 			if decision.Message != "" {
-				pending = []AgentMessage{types.UserMessage{Role: RoleUser, Content: decision.Message}}
+				pending = []types.AgentMessage{types.UserMessage{Role: types.RoleUser, Content: decision.Message}}
 			}
 			stepCount = 0
 			continue
 		}
 
-		emitEvent(events, Event{Type: EventTypeTurnStart})
-		assistantMessage, err := l.LLM.Complete(ctx, LLMInput{
+		emitEvent(events, types.Event{Type: types.EventTypeTurnStart})
+		assistantMessage, err := l.LLM.Complete(ctx, types.LLMInput{
 			Context: current,
 			Options: llmOptions(input.Config),
 			Events:  events,
@@ -79,13 +84,13 @@ func (l *Loop) Run(ctx context.Context, input LoopInput) (LoopResult, error) {
 		current.Messages = append(current.Messages, assistantMessage)
 
 		if assistantMessage.StopReason == "error" || assistantMessage.StopReason == "aborted" {
-			emitEvent(events, Event{Type: EventTypeTurnEnd, Message: assistantMessage})
+			emitEvent(events, types.Event{Type: types.EventTypeTurnEnd, Message: assistantMessage})
 			return finish(events, newMessages, nil)
 		}
 
 		toolCalls := extractToolCalls(assistantMessage)
 		if len(toolCalls) == 0 {
-			emitEvent(events, Event{Type: EventTypeTurnEnd, Message: assistantMessage})
+			emitEvent(events, types.Event{Type: types.EventTypeTurnEnd, Message: assistantMessage})
 			followUps := getMessages(input.Runtime.GetFollowUpMessages)
 			if len(followUps) == 0 {
 				return finish(events, newMessages, nil)
@@ -94,7 +99,7 @@ func (l *Loop) Run(ctx context.Context, input LoopInput) (LoopResult, error) {
 			continue
 		}
 
-		toolOutput, err := l.Tools.Execute(ctx, ToolInput{
+		toolOutput, err := l.Tools.Execute(ctx, types.ToolInput{
 			Tools:               current.Tools,
 			Calls:               toolCalls,
 			Events:              events,
@@ -109,7 +114,7 @@ func (l *Loop) Run(ctx context.Context, input LoopInput) (LoopResult, error) {
 			current.Messages = append(current.Messages, message)
 			newMessages = append(newMessages, message)
 		}
-		emitEvent(events, Event{Type: EventTypeTurnEnd, Message: assistantMessage, ToolResults: toolOutput.Results})
+		emitEvent(events, types.Event{Type: types.EventTypeTurnEnd, Message: assistantMessage, ToolResults: toolOutput.Results})
 
 		if len(toolOutput.Steering) > 0 {
 			pending = toolOutput.Steering
@@ -119,7 +124,7 @@ func (l *Loop) Run(ctx context.Context, input LoopInput) (LoopResult, error) {
 	}
 }
 
-func appendMessages(events EventSink, current *AgentContext, newMessages *[]AgentMessage, messages []AgentMessage) {
+func appendMessages(events types.EventSink, current *types.AgentContext, newMessages *[]types.AgentMessage, messages []types.AgentMessage) {
 	for _, message := range messages {
 		emitMessageTo(events, message)
 		current.Messages = append(current.Messages, message)
@@ -127,14 +132,14 @@ func appendMessages(events EventSink, current *AgentContext, newMessages *[]Agen
 	}
 }
 
-func finish(events EventSink, messages []AgentMessage, err error) (LoopResult, error) {
-	emitEvent(events, Event{Type: EventTypeAgentEnd, Messages: messages})
+func finish(events types.EventSink, messages []types.AgentMessage, err error) (types.LoopResult, error) {
+	emitEvent(events, types.Event{Type: types.EventTypeAgentEnd, Messages: messages})
 	resolveEvents(events, messages, err)
-	return LoopResult{Messages: messages}, err
+	return types.LoopResult{Messages: messages}, err
 }
 
-func llmOptions(config Config) LLMOptions {
-	return LLMOptions{
+func llmOptions(config types.Config) types.LLMOptions {
+	return types.LLMOptions{
 		Model:            config.Model,
 		StreamFn:         config.StreamFn,
 		ConvertToLLM:     config.ConvertToLLM,
@@ -152,7 +157,7 @@ func llmOptions(config Config) LLMOptions {
 	}
 }
 
-func getMessages(fn func() ([]AgentMessage, error)) []AgentMessage {
+func getMessages(fn func() ([]types.AgentMessage, error)) []types.AgentMessage {
 	if fn == nil {
 		return nil
 	}
@@ -176,7 +181,7 @@ func extractToolCalls(message *types.AssistantMessage) []types.ToolCallContent {
 	return out
 }
 
-func roleOf(message AgentMessage) string {
+func roleOf(message types.AgentMessage) string {
 	switch m := message.(type) {
 	case types.UserMessage:
 		return m.Role

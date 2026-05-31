@@ -16,7 +16,6 @@ import (
 	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/muesli/reflow/wrap"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -588,7 +587,7 @@ func (m *uiModel) renderExitSessionMeta() string {
 
 // ─── Block helpers ───────────────────────────────
 
-func assistantMessageFromEvent(msg agent.AgentMessage) (types.AssistantMessage, bool) {
+func assistantMessageFromEvent(msg types.AgentMessage) (types.AssistantMessage, bool) {
 	switch v := msg.(type) {
 	case types.AssistantMessage:
 		return v, true
@@ -698,12 +697,12 @@ func shortenUIPath(path string) string {
 
 // ─── Result text extraction ──────────────────────
 
-func fullResultText(ev agent.Event) string {
+func fullResultText(ev types.Event) string {
 	if ev.Result == nil {
 		return ""
 	}
 	// Primary path: AgentToolResult carries a typed content slice.
-	if r, ok := ev.Result.(agent.ToolResult); ok {
+	if r, ok := ev.Result.(types.ToolResult); ok {
 		return contentBlocksText(r.Content)
 	}
 	// Fallback paths for legacy or third-party tool implementations.

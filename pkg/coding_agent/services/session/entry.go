@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 const CurrentSessionVersion = 3
@@ -168,7 +168,7 @@ func (e *SessionEntry) UnmarshalJSON(data []byte) error {
 	case EntryTypeThinkingChange:
 		var level string
 		_ = json.Unmarshal(raw["thinkingLevel"], &level)
-		e.Data = ThinkingChangeData{Level: agent.ThinkingLevel(level)}
+		e.Data = ThinkingChangeData{Level: types.ThinkingLevel(level)}
 	case EntryTypeModelChange:
 		var provider, modelID string
 		_ = json.Unmarshal(raw["provider"], &provider)
@@ -208,11 +208,11 @@ func (e *SessionEntry) UnmarshalJSON(data []byte) error {
 }
 
 func messagePayload(data any) any {
-	if msg, ok := data.(agent.AgentMessage); ok {
+	if msg, ok := data.(types.AgentMessage); ok {
 		return msg
 	}
 	if data, ok := data.(MessageData); ok {
-		if msg, ok := data.Content.(agent.AgentMessage); ok {
+		if msg, ok := data.Content.(types.AgentMessage); ok {
 			return msg
 		}
 		return map[string]any{
@@ -249,7 +249,7 @@ type ModelChangeData struct {
 
 // ThinkingChangeData holds thinking level change entry data.
 type ThinkingChangeData struct {
-	Level agent.ThinkingLevel `json:"level"`
+	Level types.ThinkingLevel `json:"level"`
 }
 
 // CompactionData holds compaction entry data.

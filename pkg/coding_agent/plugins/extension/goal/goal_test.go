@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
 	"github.com/openmodu/modu/pkg/types"
 )
@@ -17,7 +16,7 @@ import (
 // SendMessage call so tests can assert on the loop's behaviour.
 type fakeAPI struct {
 	mu       sync.Mutex
-	tools    []agent.Tool
+	tools    []types.Tool
 	commands map[string]extension.CommandHandler
 	handlers map[string][]extension.EventHandler
 	sent     []string
@@ -37,7 +36,7 @@ func newFakeAPI() *fakeAPI {
 	}
 }
 
-func (f *fakeAPI) RegisterTool(t agent.Tool) {
+func (f *fakeAPI) RegisterTool(t types.Tool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.tools = append(f.tools, t)
@@ -144,14 +143,14 @@ func (f *fakeAPI) lastSentOptions() extension.MessageOptions {
 }
 
 func (f *fakeAPI) fireAgentEnd() {
-	f.fire(string(agent.EventTypeAgentEnd))
+	f.fire(string(types.EventTypeAgentEnd))
 }
 
 func (f *fakeAPI) fire(event string) {
-	f.fireEvent(agent.Event{Type: agent.EventType(event)})
+	f.fireEvent(types.Event{Type: types.EventType(event)})
 }
 
-func (f *fakeAPI) fireEvent(event agent.Event) {
+func (f *fakeAPI) fireEvent(event types.Event) {
 	f.mu.Lock()
 	hs := append([]extension.EventHandler(nil), f.handlers[string(event.Type)]...)
 	f.mu.Unlock()
@@ -206,8 +205,8 @@ func TestInitRegistersTheExpectedSurface(t *testing.T) {
 		}
 	}
 	// agent_end handler.
-	if len(api.handlers[string(agent.EventTypeAgentEnd)]) != 1 {
-		t.Errorf("expected 1 agent_end handler, got %d", len(api.handlers[string(agent.EventTypeAgentEnd)]))
+	if len(api.handlers[string(types.EventTypeAgentEnd)]) != 1 {
+		t.Errorf("expected 1 agent_end handler, got %d", len(api.handlers[string(types.EventTypeAgentEnd)]))
 	}
 }
 
@@ -485,7 +484,7 @@ func TestUIReadyCanResumePausedGoal(t *testing.T) {
 	}
 	api.selectQ = []string{resumeGoalChoice}
 	before := api.sentCount()
-	api.fireEvent(agent.Event{Type: agent.EventType(extensionSessionStart), Reason: "resume"})
+	api.fireEvent(types.Event{Type: types.EventType(extensionSessionStart), Reason: "resume"})
 	api.fire(extensionUIReady)
 	if api.sentCount() != before+1 {
 		t.Fatalf("ui_ready resume should queue one continuation: got %d want %d", api.sentCount(), before+1)
@@ -503,7 +502,7 @@ func TestUIReadyDoesNotPromptPausedGoalOnStartup(t *testing.T) {
 	if _, err := ext.store.Pause(); err != nil {
 		t.Fatalf("Pause: %v", err)
 	}
-	api.fireEvent(agent.Event{Type: agent.EventType(extensionSessionStart), Reason: "startup"})
+	api.fireEvent(types.Event{Type: types.EventType(extensionSessionStart), Reason: "startup"})
 	api.fire(extensionUIReady)
 	if len(api.selects) != 0 {
 		t.Fatalf("startup should not prompt to resume paused goal, got %#v", api.selects)

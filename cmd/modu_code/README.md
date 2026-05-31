@@ -1,6 +1,6 @@
 # modu_code
 
-一个基于 `coding_agent` 的终端 AI 编程助手，默认采用 Bubble Tea inline TUI：完成的对话会进入终端 scrollback，便于像 Claude Code / Codex 一样选择和复制，底部输入和选择器由 Bubble Tea 渲染。
+一个基于 `coding_agent` 的终端 AI 编程助手，默认采用 Bubble Tea inline TUI：完成的对话会进入终端 scrollback，便于像 Claude Code / Codex 一样选择和复制；启动和模型切换时会把当前模型、目录、模式和 channel 信息打印为非常驻多行 header，底部输入和选择器由 Bubble Tea 渲染。
 
 ---
 

@@ -15,11 +15,11 @@ type fakeLLM struct {
 	calls    int
 }
 
-func (f *fakeLLM) Complete(ctx context.Context, input LLMInput) (*types.AssistantMessage, error) {
+func (f *fakeLLM) Complete(ctx context.Context, input types.LLMInput) (*types.AssistantMessage, error) {
 	msg := f.messages[f.calls]
 	f.calls++
-	emitEvent(input.Events, Event{Type: EventTypeMessageStart, Message: *msg})
-	emitEvent(input.Events, Event{Type: EventTypeMessageEnd, Message: *msg})
+	emitEvent(input.Events, types.Event{Type: types.EventTypeMessageStart, Message: *msg})
+	emitEvent(input.Events, types.Event{Type: types.EventTypeMessageEnd, Message: *msg})
 	return msg, nil
 }
 
@@ -31,11 +31,11 @@ func (t *fakeTool) Name() string        { return "echo" }
 func (t *fakeTool) Label() string       { return "Echo" }
 func (t *fakeTool) Description() string { return "Echo tool" }
 func (t *fakeTool) Parameters() any     { return nil }
-func (t *fakeTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate ToolUpdateCallback) (ToolResult, error) {
+func (t *fakeTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate types.ToolUpdateCallback) (types.ToolResult, error) {
 	value, _ := args["value"].(string)
 	t.executed = append(t.executed, value)
-	onUpdate(ToolResult{Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "partial"}}})
-	return ToolResult{Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "echoed: " + value}}}, nil
+	onUpdate(types.ToolResult{Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "partial"}}})
+	return types.ToolResult{Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "echoed: " + value}}}, nil
 }
 
 func TestLoopReturnsAssistantMessageWithoutTools(t *testing.T) {
@@ -46,10 +46,10 @@ func TestLoopReturnsAssistantMessageWithoutTools(t *testing.T) {
 		assistantText("done"),
 	}}
 	loop := NewLoop(llm, DefaultTools{})
-	result, err := loop.Run(context.Background(), LoopInput{
-		Prompts: []AgentMessage{types.UserMessage{Role: RoleUser, Content: "hello", Timestamp: time.Now().UnixMilli()}},
-		Context: AgentContext{},
-		Config:  Config{},
+	result, err := loop.Run(context.Background(), types.LoopInput{
+		Prompts: []types.AgentMessage{types.UserMessage{Role: types.RoleUser, Content: "hello", Timestamp: time.Now().UnixMilli()}},
+		Context: types.AgentContext{},
+		Config:  types.Config{},
 		Events:  events,
 	})
 	if err != nil {
@@ -59,7 +59,7 @@ func TestLoopReturnsAssistantMessageWithoutTools(t *testing.T) {
 		t.Fatalf("expected user + assistant messages, got %d", len(result.Messages))
 	}
 	if llm.calls != 1 {
-		t.Fatalf("expected one LLM call, got %d", llm.calls)
+		t.Fatalf("expected one types.LLM call, got %d", llm.calls)
 	}
 }
 
@@ -70,7 +70,7 @@ func TestLoopExecutesToolAndContinues(t *testing.T) {
 	tool := &fakeTool{}
 	llm := &fakeLLM{messages: []*types.AssistantMessage{
 		{
-			Role:       RoleAssistant,
+			Role:       types.RoleAssistant,
 			StopReason: "toolUse",
 			Content: []types.ContentBlock{
 				&types.ToolCallContent{Type: "toolCall", ID: "tool-1", Name: "echo", Arguments: map[string]any{"value": "hello"}},
@@ -81,10 +81,10 @@ func TestLoopExecutesToolAndContinues(t *testing.T) {
 	}}
 
 	loop := NewLoop(llm, DefaultTools{})
-	result, err := loop.Run(context.Background(), LoopInput{
-		Prompts: []AgentMessage{types.UserMessage{Role: RoleUser, Content: "go", Timestamp: time.Now().UnixMilli()}},
-		Context: AgentContext{Tools: []Tool{tool}},
-		Config:  Config{},
+	result, err := loop.Run(context.Background(), types.LoopInput{
+		Prompts: []types.AgentMessage{types.UserMessage{Role: types.RoleUser, Content: "go", Timestamp: time.Now().UnixMilli()}},
+		Context: types.AgentContext{Tools: []types.Tool{tool}},
+		Config:  types.Config{},
 		Events:  events,
 	})
 	if err != nil {
@@ -97,13 +97,13 @@ func TestLoopExecutesToolAndContinues(t *testing.T) {
 		t.Fatalf("expected user, assistant tool call, tool result, final assistant; got %d", len(result.Messages))
 	}
 	if llm.calls != 2 {
-		t.Fatalf("expected two LLM calls, got %d", llm.calls)
+		t.Fatalf("expected two types.LLM calls, got %d", llm.calls)
 	}
 }
 
 func TestAgentLoopBasic(t *testing.T) {
 	model := &types.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
-	user := types.UserMessage{Role: RoleUser, Content: "Hello", Timestamp: time.Now().UnixMilli()}
+	user := types.UserMessage{Role: types.RoleUser, Content: "Hello", Timestamp: time.Now().UnixMilli()}
 
 	events := NewEventStream()
 	drain(events)
@@ -113,7 +113,7 @@ func TestAgentLoopBasic(t *testing.T) {
 		stream := types.NewEventStream()
 		go func() {
 			msg := &types.AssistantMessage{
-				Role:       RoleAssistant,
+				Role:       types.RoleAssistant,
 				ProviderID: model.ProviderID,
 				Model:      model.ID,
 				Usage:      types.AgentUsage{},
@@ -129,10 +129,10 @@ func TestAgentLoopBasic(t *testing.T) {
 	}
 
 	loop := NewLoop(DefaultLLM{}, DefaultTools{})
-	result, err := loop.Run(context.Background(), LoopInput{
-		Prompts: []AgentMessage{user},
-		Context: AgentContext{SystemPrompt: "", Messages: []AgentMessage{}},
-		Config:  Config{Model: model, StreamFn: streamFn},
+	result, err := loop.Run(context.Background(), types.LoopInput{
+		Prompts: []types.AgentMessage{user},
+		Context: types.AgentContext{SystemPrompt: "", Messages: []types.AgentMessage{}},
+		Config:  types.Config{Model: model, StreamFn: streamFn},
 		Events:  events,
 	})
 	if err != nil {
@@ -157,7 +157,7 @@ func TestAgentLoopToolCalls(t *testing.T) {
 		go func() {
 			if callIndex == 0 {
 				msg := &types.AssistantMessage{
-					Role:       RoleAssistant,
+					Role:       types.RoleAssistant,
 					ProviderID: model.ProviderID,
 					Model:      model.ID,
 					Usage:      types.AgentUsage{},
@@ -171,7 +171,7 @@ func TestAgentLoopToolCalls(t *testing.T) {
 				stream.Resolve(msg, nil)
 			} else {
 				msg := &types.AssistantMessage{
-					Role:       RoleAssistant,
+					Role:       types.RoleAssistant,
 					ProviderID: model.ProviderID,
 					Model:      model.ID,
 					Usage:      types.AgentUsage{},
@@ -189,10 +189,10 @@ func TestAgentLoopToolCalls(t *testing.T) {
 	}
 
 	loop := NewLoop(DefaultLLM{}, DefaultTools{})
-	result, err := loop.Run(context.Background(), LoopInput{
-		Prompts: []AgentMessage{types.UserMessage{Role: RoleUser, Content: "go", Timestamp: time.Now().UnixMilli()}},
-		Context: AgentContext{SystemPrompt: "", Messages: []AgentMessage{}, Tools: []Tool{tool}},
-		Config:  Config{Model: model, StreamFn: streamFn},
+	result, err := loop.Run(context.Background(), types.LoopInput{
+		Prompts: []types.AgentMessage{types.UserMessage{Role: types.RoleUser, Content: "go", Timestamp: time.Now().UnixMilli()}},
+		Context: types.AgentContext{SystemPrompt: "", Messages: []types.AgentMessage{}, Tools: []types.Tool{tool}},
+		Config:  types.Config{Model: model, StreamFn: streamFn},
 		Events:  events,
 	})
 	if err != nil {
@@ -243,9 +243,9 @@ func TestAgentCompleteWithRetrySuccess(t *testing.T) {
 		return assistantStream(model, "ok"), nil
 	}
 
-	msg, err := (DefaultLLM{}).Complete(context.Background(), LLMInput{
-		Context: AgentContext{},
-		Options: LLMOptions{
+	msg, err := (DefaultLLM{}).Complete(context.Background(), types.LLMInput{
+		Context: types.AgentContext{},
+		Options: types.LLMOptions{
 			Model:    model,
 			StreamFn: streamFn,
 		},
@@ -274,9 +274,9 @@ func TestAgentCompleteWithRetryRetriesTransient(t *testing.T) {
 		return assistantStream(model, "recovered"), nil
 	}
 
-	msg, err := (DefaultLLM{}).Complete(context.Background(), LLMInput{
-		Context: AgentContext{},
-		Options: LLMOptions{
+	msg, err := (DefaultLLM{}).Complete(context.Background(), types.LLMInput{
+		Context: types.AgentContext{},
+		Options: types.LLMOptions{
 			Model:           model,
 			StreamFn:        streamFn,
 			MaxRetryDelayMs: 10,
@@ -306,9 +306,9 @@ func TestAgentCompleteWithRetryNoPermanentRetry(t *testing.T) {
 		return nil, fmt.Errorf("HTTP 401 Unauthorized")
 	}
 
-	_, err := (DefaultLLM{}).Complete(context.Background(), LLMInput{
-		Context: AgentContext{},
-		Options: LLMOptions{
+	_, err := (DefaultLLM{}).Complete(context.Background(), types.LLMInput{
+		Context: types.AgentContext{},
+		Options: types.LLMOptions{
 			Model:    model,
 			StreamFn: streamFn,
 		},
@@ -327,9 +327,9 @@ func TestV2DefaultLLMUsesStreamDefaultWhenStreamFnMissing(t *testing.T) {
 	drain(events)
 	defer events.Close()
 
-	_, err := (DefaultLLM{}).Complete(context.Background(), LLMInput{
-		Context: AgentContext{},
-		Options: LLMOptions{
+	_, err := (DefaultLLM{}).Complete(context.Background(), types.LLMInput{
+		Context: types.AgentContext{},
+		Options: types.LLMOptions{
 			Model: &types.Model{ID: "mock", ProviderID: "missing-provider"},
 		},
 		Events: events,
@@ -359,10 +359,10 @@ func TestAgentPromptWithImagesPassesMessageToLLM(t *testing.T) {
 		&types.ImageContent{Type: "image", Data: "base64data", MimeType: "image/png"},
 	}
 	loop := NewLoop(DefaultLLM{}, DefaultTools{})
-	_, err := loop.Run(context.Background(), LoopInput{
-		Prompts: []AgentMessage{types.UserMessage{Role: RoleUser, Content: content, Timestamp: time.Now().UnixMilli()}},
-		Context: AgentContext{},
-		Config:  Config{Model: model, StreamFn: streamFn},
+	_, err := loop.Run(context.Background(), types.LoopInput{
+		Prompts: []types.AgentMessage{types.UserMessage{Role: types.RoleUser, Content: content, Timestamp: time.Now().UnixMilli()}},
+		Context: types.AgentContext{},
+		Config:  types.Config{Model: model, StreamFn: streamFn},
 		Events:  events,
 	})
 	if err != nil {
@@ -394,10 +394,10 @@ func TestAgentDefaultConvertToLLMFiltersProviderMessages(t *testing.T) {
 	}
 
 	loop := NewLoop(DefaultLLM{}, DefaultTools{})
-	_, err := loop.Run(context.Background(), LoopInput{
-		Prompts: []AgentMessage{types.UserMessage{Role: RoleUser, Content: "hello", Timestamp: time.Now().UnixMilli()}},
-		Context: AgentContext{Messages: []AgentMessage{struct{ Note string }{Note: "internal"}}},
-		Config:  Config{Model: model, StreamFn: streamFn},
+	_, err := loop.Run(context.Background(), types.LoopInput{
+		Prompts: []types.AgentMessage{types.UserMessage{Role: types.RoleUser, Content: "hello", Timestamp: time.Now().UnixMilli()}},
+		Context: types.AgentContext{Messages: []types.AgentMessage{struct{ Note string }{Note: "internal"}}},
+		Config:  types.Config{Model: model, StreamFn: streamFn},
 		Events:  events,
 	})
 	if err != nil {
@@ -406,7 +406,7 @@ func TestAgentDefaultConvertToLLMFiltersProviderMessages(t *testing.T) {
 	if len(received) != 1 {
 		t.Fatalf("expected only provider-compatible message, got %d", len(received))
 	}
-	if roleOf(received[0]) != RoleUser {
+	if roleOf(received[0]) != types.RoleUser {
 		t.Fatalf("expected user message, got role %q", roleOf(received[0]))
 	}
 }
@@ -417,8 +417,8 @@ func TestAgentToolArgumentsValidateAgainstSchema(t *testing.T) {
 	drain(events)
 	defer events.Close()
 
-	output, err := (DefaultTools{}).Execute(context.Background(), ToolInput{
-		Tools: []Tool{tool},
+	output, err := (DefaultTools{}).Execute(context.Background(), types.ToolInput{
+		Tools: []types.Tool{tool},
 		Calls: []types.ToolCallContent{
 			{Type: "toolCall", ID: "tool-1", Name: "schema_echo", Arguments: map[string]any{}},
 		},
@@ -439,8 +439,8 @@ func TestAgentToolArgumentsValidateAgainstSchema(t *testing.T) {
 }
 
 func TestAgentAgentClearMessages(t *testing.T) {
-	agent := NewAgent(Config{})
-	agent.AppendMessage(types.UserMessage{Role: RoleUser, Content: "hello", Timestamp: time.Now().UnixMilli()})
+	agent := NewAgent(types.Config{})
+	agent.AppendMessage(types.UserMessage{Role: types.RoleUser, Content: "hello", Timestamp: time.Now().UnixMilli()})
 	if len(agent.GetState().Messages) != 1 {
 		t.Fatal("expected 1 message")
 	}
@@ -451,23 +451,23 @@ func TestAgentAgentClearMessages(t *testing.T) {
 }
 
 func TestAgentAgentModeGetters(t *testing.T) {
-	agent := NewAgent(Config{
-		SteeringMode: ExecutionModeAll,
-		FollowUpMode: ExecutionModeOneAtATime,
+	agent := NewAgent(types.Config{
+		SteeringMode: types.ExecutionModeAll,
+		FollowUpMode: types.ExecutionModeOneAtATime,
 	})
-	if agent.GetSteeringMode() != ExecutionModeAll {
+	if agent.GetSteeringMode() != types.ExecutionModeAll {
 		t.Fatalf("expected steering mode 'all', got %s", agent.GetSteeringMode())
 	}
-	if agent.GetFollowUpMode() != ExecutionModeOneAtATime {
+	if agent.GetFollowUpMode() != types.ExecutionModeOneAtATime {
 		t.Fatalf("expected follow-up mode 'one-at-a-time', got %s", agent.GetFollowUpMode())
 	}
 }
 
 func TestAgentAgentQueuedMessageCounts(t *testing.T) {
-	agent := NewAgent(Config{})
-	agent.Steer(types.UserMessage{Role: RoleUser, Content: "change direction"})
-	agent.FollowUp(types.UserMessage{Role: RoleUser, Content: "after this"})
-	agent.FollowUp(types.UserMessage{Role: RoleUser, Content: "then this"})
+	agent := NewAgent(types.Config{})
+	agent.Steer(types.UserMessage{Role: types.RoleUser, Content: "change direction"})
+	agent.FollowUp(types.UserMessage{Role: types.RoleUser, Content: "after this"})
+	agent.FollowUp(types.UserMessage{Role: types.RoleUser, Content: "then this"})
 
 	steering, followUp := agent.QueuedMessageCounts()
 	if steering != 1 || followUp != 2 {
@@ -479,15 +479,15 @@ func TestAgentAgentQueuedMessageCounts(t *testing.T) {
 }
 
 func TestAgentAgentQueuedMessagesAndDropLast(t *testing.T) {
-	agent := NewAgent(Config{})
-	agent.Steer(types.UserMessage{Role: RoleUser, Content: "change direction"})
-	agent.FollowUp(types.UserMessage{Role: RoleUser, Content: "after this"})
+	agent := NewAgent(types.Config{})
+	agent.Steer(types.UserMessage{Role: types.RoleUser, Content: "change direction"})
+	agent.FollowUp(types.UserMessage{Role: types.RoleUser, Content: "after this"})
 
 	steering, followUp := agent.QueuedMessages()
 	if len(steering) != 1 || len(followUp) != 1 {
 		t.Fatalf("expected one steering and one follow-up, got %d and %d", len(steering), len(followUp))
 	}
-	steering[0] = types.UserMessage{Role: RoleUser, Content: "mutated"}
+	steering[0] = types.UserMessage{Role: types.RoleUser, Content: "mutated"}
 	steering, _ = agent.QueuedMessages()
 	if got := steering[0].(types.UserMessage).Content; got != "change direction" {
 		t.Fatalf("expected queued message copy, got %q", got)
@@ -511,7 +511,7 @@ func TestAgentAgentQueuedMessagesAndDropLast(t *testing.T) {
 }
 
 func TestAgentAgentSessionIDGetterSetter(t *testing.T) {
-	agent := NewAgent(Config{SessionID: "initial"})
+	agent := NewAgent(types.Config{SessionID: "initial"})
 	if agent.GetSessionID() != "initial" {
 		t.Fatal("expected session ID 'initial'")
 	}
@@ -522,7 +522,7 @@ func TestAgentAgentSessionIDGetterSetter(t *testing.T) {
 }
 
 func TestAgentAgentThinkingBudgetsGetterSetter(t *testing.T) {
-	agent := NewAgent(Config{})
+	agent := NewAgent(types.Config{})
 	if agent.GetThinkingBudgets() != nil {
 		t.Fatal("expected nil thinking budgets by default")
 	}
@@ -534,7 +534,7 @@ func TestAgentAgentThinkingBudgetsGetterSetter(t *testing.T) {
 }
 
 func TestAgentAgentMaxRetryDelayMsGetterSetter(t *testing.T) {
-	agent := NewAgent(Config{MaxRetryDelayMs: 5000})
+	agent := NewAgent(types.Config{MaxRetryDelayMs: 5000})
 	if agent.GetMaxRetryDelayMs() != 5000 {
 		t.Fatalf("expected 5000, got %d", agent.GetMaxRetryDelayMs())
 	}
@@ -547,17 +547,17 @@ func TestAgentAgentMaxRetryDelayMsGetterSetter(t *testing.T) {
 func TestAgentAgentStateSettersAndReset(t *testing.T) {
 	model := &types.Model{ID: "mock", ProviderID: "openai"}
 	tool := &fakeTool{}
-	agent := NewAgent(Config{})
+	agent := NewAgent(types.Config{})
 	agent.SetSystemPrompt("system")
 	agent.SetModel(model)
-	agent.SetThinkingLevel(ThinkingLevelHigh)
-	agent.SetTools([]Tool{tool})
-	agent.ReplaceMessages([]AgentMessage{types.UserMessage{Role: RoleUser, Content: "hello"}})
-	agent.Steer(types.UserMessage{Role: RoleUser, Content: "steer"})
-	agent.FollowUp(types.UserMessage{Role: RoleUser, Content: "follow"})
+	agent.SetThinkingLevel(types.ThinkingLevelHigh)
+	agent.SetTools([]types.Tool{tool})
+	agent.ReplaceMessages([]types.AgentMessage{types.UserMessage{Role: types.RoleUser, Content: "hello"}})
+	agent.Steer(types.UserMessage{Role: types.RoleUser, Content: "steer"})
+	agent.FollowUp(types.UserMessage{Role: types.RoleUser, Content: "follow"})
 
 	state := agent.GetState()
-	if state.SystemPrompt != "system" || state.Model != model || state.ThinkingLevel != ThinkingLevelHigh {
+	if state.SystemPrompt != "system" || state.Model != model || state.ThinkingLevel != types.ThinkingLevelHigh {
 		t.Fatalf("state setters did not apply: %#v", state)
 	}
 	if len(state.Tools) != 1 || len(state.Messages) != 1 {
@@ -581,15 +581,15 @@ func TestAgentAgentContinueConsumesQueuedSteering(t *testing.T) {
 		return assistantStream(model, "ok"), nil
 	}
 
-	agent := NewAgent(Config{
-		InitialState: &State{
+	agent := NewAgent(types.Config{
+		InitialState: &types.State{
 			Model:            model,
-			Messages:         []AgentMessage{assistantText("previous")},
+			Messages:         []types.AgentMessage{assistantText("previous")},
 			PendingToolCalls: map[string]struct{}{},
 		},
 		StreamFn: streamFn,
 	})
-	agent.Steer(types.UserMessage{Role: RoleUser, Content: "new direction"})
+	agent.Steer(types.UserMessage{Role: types.RoleUser, Content: "new direction"})
 
 	err := agent.Continue(context.Background())
 	if err != nil {
@@ -599,11 +599,11 @@ func TestAgentAgentContinueConsumesQueuedSteering(t *testing.T) {
 		t.Fatal("expected queued steering message to be consumed")
 	}
 	if len(received) != 1 {
-		t.Fatalf("expected one LLM call, got %d", len(received))
+		t.Fatalf("expected one types.LLM call, got %d", len(received))
 	}
 	last := received[0][len(received[0])-1]
-	if roleOf(last) != RoleUser {
-		t.Fatalf("expected queued steering user message to reach LLM, got role %q", roleOf(last))
+	if roleOf(last) != types.RoleUser {
+		t.Fatalf("expected queued steering user message to reach types.LLM, got role %q", roleOf(last))
 	}
 }
 
@@ -615,12 +615,12 @@ func TestAgentAgentPromptWithImages(t *testing.T) {
 		return assistantStream(model, "I see the image"), nil
 	}
 
-	agent := NewAgent(Config{
-		InitialState: &State{
+	agent := NewAgent(types.Config{
+		InitialState: &types.State{
 			Model:            model,
-			ThinkingLevel:    ThinkingLevelOff,
-			Tools:            []Tool{},
-			Messages:         []AgentMessage{},
+			ThinkingLevel:    types.ThinkingLevelOff,
+			Tools:            []types.Tool{},
+			Messages:         []types.AgentMessage{},
 			PendingToolCalls: map[string]struct{}{},
 		},
 		StreamFn: streamFn,
@@ -647,12 +647,12 @@ func TestAgentAgentErrorMessageAppendedOnFailure(t *testing.T) {
 		return nil, fmt.Errorf("HTTP 401 Unauthorized")
 	}
 
-	agent := NewAgent(Config{
-		InitialState: &State{
+	agent := NewAgent(types.Config{
+		InitialState: &types.State{
 			Model:            model,
-			ThinkingLevel:    ThinkingLevelOff,
-			Tools:            []Tool{},
-			Messages:         []AgentMessage{},
+			ThinkingLevel:    types.ThinkingLevelOff,
+			Tools:            []types.Tool{},
+			Messages:         []types.AgentMessage{},
 			PendingToolCalls: map[string]struct{}{},
 		},
 		StreamFn: streamFn,
@@ -688,7 +688,7 @@ func TestAgentAgentInterruptsForToolApprovalAndResumes(t *testing.T) {
 			var msg *types.AssistantMessage
 			if callIndex == 0 {
 				msg = &types.AssistantMessage{
-					Role:       RoleAssistant,
+					Role:       types.RoleAssistant,
 					StopReason: "toolUse",
 					Content: []types.ContentBlock{
 						&types.ToolCallContent{Type: "toolCall", ID: "tool-1", Name: "echo", Arguments: map[string]any{"value": "hello"}},
@@ -705,20 +705,20 @@ func TestAgentAgentInterruptsForToolApprovalAndResumes(t *testing.T) {
 		}()
 		return stream, nil
 	}
-	agent := NewAgent(Config{
-		InitialState: &State{
+	agent := NewAgent(types.Config{
+		InitialState: &types.State{
 			Model:            model,
-			Tools:            []Tool{tool},
-			Messages:         []AgentMessage{},
+			Tools:            []types.Tool{tool},
+			Messages:         []types.AgentMessage{},
 			PendingToolCalls: map[string]struct{}{},
 		},
 		StreamFn:         streamFn,
 		EnableInterrupts: true,
 	})
 
-	interrupted := make(chan *InterruptEvent, 1)
-	agent.Subscribe(func(event Event) {
-		if event.Type == EventTypeInterrupt {
+	interrupted := make(chan *types.InterruptEvent, 1)
+	agent.Subscribe(func(event types.Event) {
+		if event.Type == types.EventTypeInterrupt {
 			interrupted <- event.Interrupt
 		}
 	})
@@ -728,13 +728,13 @@ func TestAgentAgentInterruptsForToolApprovalAndResumes(t *testing.T) {
 	}()
 
 	interrupt := <-interrupted
-	if interrupt == nil || interrupt.Reason != InterruptReasonToolApproval {
+	if interrupt == nil || interrupt.Reason != types.InterruptReasonToolApproval {
 		t.Fatalf("expected tool approval interrupt, got %#v", interrupt)
 	}
-	if agent.GetStatus() != SessionStatusPaused {
+	if agent.GetStatus() != types.SessionStatusPaused {
 		t.Fatalf("expected paused status, got %s", agent.GetStatus())
 	}
-	if !agent.Resume(ResumeDecision{Allow: true}) {
+	if !agent.Resume(types.ResumeDecision{Allow: true}) {
 		t.Fatal("expected resume to succeed")
 	}
 	if err := <-done; err != nil {
@@ -743,7 +743,7 @@ func TestAgentAgentInterruptsForToolApprovalAndResumes(t *testing.T) {
 	if len(tool.executed) != 1 || tool.executed[0] != "hello" {
 		t.Fatalf("expected approved tool to execute, got %#v", tool.executed)
 	}
-	if agent.GetStatus() != SessionStatusCompleted {
+	if agent.GetStatus() != types.SessionStatusCompleted {
 		t.Fatalf("expected completed status, got %s", agent.GetStatus())
 	}
 }
@@ -762,21 +762,21 @@ func TestAgentAgentInterruptsAtMaxStepsAndResumes(t *testing.T) {
 		}()
 		return stream, nil
 	}
-	agent := NewAgent(Config{
-		InitialState: &State{
+	agent := NewAgent(types.Config{
+		InitialState: &types.State{
 			Model:            model,
-			Messages:         []AgentMessage{},
+			Messages:         []types.AgentMessage{},
 			PendingToolCalls: map[string]struct{}{},
 		},
 		StreamFn:         streamFn,
 		EnableInterrupts: true,
 		MaxSteps:         1,
 	})
-	agent.FollowUp(types.UserMessage{Role: RoleUser, Content: "next"})
+	agent.FollowUp(types.UserMessage{Role: types.RoleUser, Content: "next"})
 
-	interrupted := make(chan *InterruptEvent, 1)
-	agent.Subscribe(func(event Event) {
-		if event.Type == EventTypeInterrupt {
+	interrupted := make(chan *types.InterruptEvent, 1)
+	agent.Subscribe(func(event types.Event) {
+		if event.Type == types.EventTypeInterrupt {
 			interrupted <- event.Interrupt
 		}
 	})
@@ -786,17 +786,17 @@ func TestAgentAgentInterruptsAtMaxStepsAndResumes(t *testing.T) {
 	}()
 
 	interrupt := <-interrupted
-	if interrupt == nil || interrupt.Reason != InterruptReasonMaxSteps {
+	if interrupt == nil || interrupt.Reason != types.InterruptReasonMaxSteps {
 		t.Fatalf("expected max steps interrupt, got %#v", interrupt)
 	}
-	if !agent.Resume(ResumeDecision{Allow: true}) {
+	if !agent.Resume(types.ResumeDecision{Allow: true}) {
 		t.Fatal("expected resume to succeed")
 	}
 	if err := <-done; err != nil {
 		t.Fatalf("unexpected prompt error: %v", err)
 	}
 	if callIndex != 2 {
-		t.Fatalf("expected two LLM calls after max-step resume, got %d", callIndex)
+		t.Fatalf("expected two types.LLM calls after max-step resume, got %d", callIndex)
 	}
 }
 
@@ -808,10 +808,10 @@ func TestAgentAgentAbortCancelsPrompt(t *testing.T) {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
-	agent := NewAgent(Config{
-		InitialState: &State{
+	agent := NewAgent(types.Config{
+		InitialState: &types.State{
 			Model:            model,
-			Messages:         []AgentMessage{},
+			Messages:         []types.AgentMessage{},
 			PendingToolCalls: map[string]struct{}{},
 		},
 		StreamFn: streamFn,
@@ -841,7 +841,7 @@ func TestAgentAgentAbortCancelsPrompt(t *testing.T) {
 	}
 }
 
-func drain(events *EventStream) {
+func drain(events *types.AgentEventStream) {
 	go func() {
 		for range events.Events() {
 		}
@@ -850,7 +850,7 @@ func drain(events *EventStream) {
 
 func assistantText(text string) *types.AssistantMessage {
 	return &types.AssistantMessage{
-		Role:       RoleAssistant,
+		Role:       types.RoleAssistant,
 		StopReason: "stop",
 		Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: text}},
 		Timestamp:  time.Now().UnixMilli(),
@@ -861,7 +861,7 @@ func assistantStream(model *types.Model, text string) types.EventStream {
 	stream := types.NewEventStream()
 	go func() {
 		msg := &types.AssistantMessage{
-			Role:       RoleAssistant,
+			Role:       types.RoleAssistant,
 			ProviderID: model.ProviderID,
 			Model:      model.ID,
 			StopReason: "stop",
@@ -891,7 +891,7 @@ func (t *schemaTool) Parameters() any {
 		},
 	}
 }
-func (t *schemaTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate ToolUpdateCallback) (ToolResult, error) {
+func (t *schemaTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate types.ToolUpdateCallback) (types.ToolResult, error) {
 	t.executed = true
-	return ToolResult{Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "ok"}}}, nil
+	return types.ToolResult{Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "ok"}}}, nil
 }

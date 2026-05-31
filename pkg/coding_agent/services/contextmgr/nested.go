@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/foundation/resource"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // Byte budgets for dynamically injected path-specific context.
@@ -17,7 +17,7 @@ const (
 // OnToolExecutionEnd injects path-specific context that became relevant after a
 // file-touching tool ran. The injected message is transient and is removed by
 // PruneTransient when the agent turn ends.
-func (m *Manager) OnToolExecutionEnd(event agent.Event) {
+func (m *Manager) OnToolExecutionEnd(event types.Event) {
 	if m.deps.Resources == nil {
 		return
 	}
@@ -65,7 +65,7 @@ func (m *Manager) PruneTransient() {
 		return
 	}
 
-	filtered := make([]agent.AgentMessage, 0, len(state.Messages))
+	filtered := make([]types.AgentMessage, 0, len(state.Messages))
 	for _, msg := range state.Messages {
 		if !m.deps.Host.IsTransient(msg) {
 			filtered = append(filtered, msg)
@@ -100,7 +100,7 @@ func (m *Manager) collectNewContextFiles(paths []string) []resource.ContextFile 
 	return out
 }
 
-func extractToolPaths(event agent.Event) []string {
+func extractToolPaths(event types.Event) []string {
 	var paths []string
 	seen := make(map[string]struct{})
 	add := func(path string) {
@@ -115,7 +115,7 @@ func extractToolPaths(event agent.Event) []string {
 		paths = append(paths, path)
 	}
 
-	if result, ok := event.Result.(agent.ToolResult); ok {
+	if result, ok := event.Result.(types.ToolResult); ok {
 		if details, ok := result.Details.(map[string]any); ok {
 			collectToolPathsFromDetails(details, add)
 		}

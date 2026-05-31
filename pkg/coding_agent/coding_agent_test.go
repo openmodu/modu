@@ -7,14 +7,15 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/foundation/config"
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
 	subagentext "github.com/openmodu/modu/pkg/coding_agent/plugins/extension/subagent"
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/subagent"
+	"github.com/openmodu/modu/pkg/coding_agent/services/bgtask"
 	"github.com/openmodu/modu/pkg/coding_agent/services/memory"
 	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/services/session"
 	"github.com/openmodu/modu/pkg/coding_agent/tools"
@@ -46,32 +47,32 @@ func (t namedTestTool) Description() string { return string(t) }
 func (t namedTestTool) Parameters() any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
-func (t namedTestTool) Execute(context.Context, string, map[string]any, agent.ToolUpdateCallback) (agent.ToolResult, error) {
-	return agent.ToolResult{}, nil
+func (t namedTestTool) Execute(context.Context, string, map[string]any, types.ToolUpdateCallback) (types.ToolResult, error) {
+	return types.ToolResult{}, nil
 }
 
 type testToolProvider struct {
-	ctx       agent.ToolContext
+	ctx       types.ToolContext
 	rebindCwd string
 }
 
-func (p *testToolProvider) Tools(ctx agent.ToolContext) []agent.Tool {
+func (p *testToolProvider) Tools(ctx types.ToolContext) []types.Tool {
 	p.ctx = ctx
-	out := []agent.Tool{namedTestTool("provider_tool")}
+	out := []types.Tool{namedTestTool("provider_tool")}
 	out = append(out, ctx.ExtraTools...)
 	return out
 }
 
-func (p *testToolProvider) Rebind(tool agent.Tool, ctx agent.ToolContext) (agent.Tool, bool) {
+func (p *testToolProvider) Rebind(tool types.Tool, ctx types.ToolContext) (types.Tool, bool) {
 	p.rebindCwd = ctx.Cwd
 	if tool.Name() == "provider_tool" {
 		return namedTestTool("provider_tool_rebound"), true
 	}
 	return nil, false
 }
-func (t *testEchoTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *testEchoTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate types.ToolUpdateCallback) (types.ToolResult, error) {
 	value, _ := args["value"].(string)
-	return agent.ToolResult{
+	return types.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "echoed: " + value}},
 	}, nil
 }
@@ -85,12 +86,12 @@ func (t *testCwdTool) Label() string       { return "Cwd" }
 func (t *testCwdTool) Description() string { return "Report cwd " + t.cwd }
 func (t *testCwdTool) Parameters() any     { return map[string]any{"type": "object"} }
 func (t *testCwdTool) Parallel() bool      { return true }
-func (t *testCwdTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
-	return agent.ToolResult{
+func (t *testCwdTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate types.ToolUpdateCallback) (types.ToolResult, error) {
+	return types.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "tool-cwd:" + t.cwd}},
 	}, nil
 }
-func (t *testCwdTool) WithCwd(cwd string) agent.Tool {
+func (t *testCwdTool) WithCwd(cwd string) types.Tool {
 	return &testCwdTool{cwd: cwd}
 }
 
@@ -145,7 +146,7 @@ func TestNewCodingSessionUsesToolProvider(t *testing.T) {
 		Cwd:          dir,
 		AgentDir:     agentDir,
 		Model:        newTestModel(),
-		CustomTools:  []agent.Tool{namedTestTool("custom_tool")},
+		CustomTools:  []types.Tool{namedTestTool("custom_tool")},
 		ToolProvider: provider,
 		GetAPIKey:    func(provider string) (string, error) { return "", nil },
 	})
@@ -193,7 +194,7 @@ func TestNewCodingSessionRegistersTodoWriteTool(t *testing.T) {
 		t.Fatalf("expected todo_write in active tools, got %v", session.GetActiveToolNames())
 	}
 
-	var todoTool agent.Tool
+	var todoTool types.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		if tool.Name() == "todo_write" {
 			todoTool = tool
@@ -318,7 +319,7 @@ Return a short completion message.`
 		t.Fatal(err)
 	}
 
-	var spawnTool, outputTool, subagentTool agent.Tool
+	var spawnTool, outputTool, subagentTool types.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		switch tool.Name() {
 		case "spawn_subagent":
@@ -436,7 +437,7 @@ Return a short completion message.`
 	if err != nil {
 		t.Fatal(err)
 	}
-	var outputTool2, subagentTool2 agent.Tool
+	var outputTool2, subagentTool2 types.Tool
 	for _, tool := range session2.GetAgent().GetState().Tools {
 		switch tool.Name() {
 		case "task_output":
@@ -535,7 +536,7 @@ Return the child message count.
 	if err != nil {
 		t.Fatal(err)
 	}
-	session.agent.ReplaceMessages([]agent.AgentMessage{
+	session.agent.ReplaceMessages([]types.AgentMessage{
 		types.UserMessage{Role: "user", Content: "parent question", Timestamp: time.Now().UnixMilli()},
 		&types.AssistantMessage{
 			Role:       "assistant",
@@ -547,7 +548,7 @@ Return the child message count.
 		},
 	})
 
-	var subagentTool agent.Tool
+	var subagentTool types.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		if tool.Name() == "subagent" {
 			subagentTool = tool
@@ -607,7 +608,7 @@ System prompt for helper.
 		Cwd:         root,
 		AgentDir:    agentDir,
 		Model:       model,
-		CustomTools: []agent.Tool{&testCwdTool{}},
+		CustomTools: []types.Tool{&testCwdTool{}},
 		GetAPIKey:   func(provider string) (string, error) { return "", nil },
 		Extensions: []extension.Extension{
 			subagentext.New(),
@@ -637,7 +638,7 @@ System prompt for helper.
 	if err != nil {
 		t.Fatal(err)
 	}
-	var subagentTool agent.Tool
+	var subagentTool types.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		if tool.Name() == "subagent" {
 			subagentTool = tool
@@ -672,7 +673,7 @@ System prompt for helper.
 func TestBackgroundTaskManagerCreateWithMetadataInDirRedirects(t *testing.T) {
 	defaultRoot := t.TempDir()
 	overrideRoot := t.TempDir()
-	mgr := newBackgroundTaskManager()
+	mgr := bgtask.New()
 	if err := mgr.SetStorePath(filepath.Join(defaultRoot, "background_tasks.json")); err != nil {
 		t.Fatal(err)
 	}
@@ -705,7 +706,7 @@ func TestBackgroundTaskManagerCreateWithMetadataInDirRedirects(t *testing.T) {
 
 func TestPlanModeTools(t *testing.T) {
 	session := newTestSession(t, newTestModel())
-	var enterTool, exitTool agent.Tool
+	var enterTool, exitTool types.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		switch tool.Name() {
 		case "enter_plan_mode":
@@ -750,14 +751,14 @@ func TestPlanModeApprovalBlocksMutatingToolsBeforeCallback(t *testing.T) {
 	session := newTestSession(t, newTestModel())
 	session.EnterPlanMode()
 	called := false
-	session.SetToolApprovalCallback(func(name, id string, args map[string]any) (agent.ToolApprovalDecision, error) {
+	session.SetToolApprovalCallback(func(name, id string, args map[string]any) (types.ToolApprovalDecision, error) {
 		called = true
-		return agent.ToolApprovalAllow, nil
+		return types.ToolApprovalAllow, nil
 	})
 
 	for _, tool := range []string{"write", "edit", "bash"} {
 		decision, err := session.approvalManager.Approve(tool, "call-"+tool, nil)
-		if decision != agent.ToolApprovalDeny {
+		if decision != types.ToolApprovalDeny {
 			t.Fatalf("%s should be denied in plan mode, got %v", tool, decision)
 		}
 		if err == nil || !strings.Contains(err.Error(), "plan mode is active") {
@@ -767,7 +768,7 @@ func TestPlanModeApprovalBlocksMutatingToolsBeforeCallback(t *testing.T) {
 	if called {
 		t.Fatal("plan mode block should happen before interactive approval callback")
 	}
-	if decision, err := session.approvalManager.Approve("exit_plan_mode", "plan", nil); decision != agent.ToolApprovalAllow || err != nil {
+	if decision, err := session.approvalManager.Approve("exit_plan_mode", "plan", nil); decision != types.ToolApprovalAllow || err != nil {
 		t.Fatalf("exit_plan_mode should still be auto-allowed, got decision=%v err=%v", decision, err)
 	}
 }
@@ -828,7 +829,7 @@ func TestSubmitPlanAutoAccept(t *testing.T) {
 	session.plan.SubmitPlan(context.Background(), "p", []string{"x"})
 
 	for _, tool := range []string{"write", "edit", "bash"} {
-		if d, _ := session.approvalManager.Approve(tool, "t", nil); d != agent.ToolApprovalAllow {
+		if d, _ := session.approvalManager.Approve(tool, "t", nil); d != types.ToolApprovalAllow {
 			t.Fatalf("%s should be auto-allowed after approve_auto, got %v", tool, d)
 		}
 	}
@@ -860,7 +861,7 @@ func TestPlanModeBlocksMutatingTools(t *testing.T) {
 	session := newTestSession(t, newTestModel())
 	session.EnterPlanMode()
 
-	var writeTool, editTool, bashTool agent.Tool
+	var writeTool, editTool, bashTool types.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		switch tool.Name() {
 		case "write":
@@ -949,7 +950,7 @@ func TestPlanModeBlocksWriteAfterEnterWorktree(t *testing.T) {
 	}
 	defer session.ExitWorktree()
 
-	var writeTool agent.Tool
+	var writeTool types.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		if tool.Name() == "write" {
 			writeTool = tool
@@ -1137,7 +1138,7 @@ Run pwd in bash and return the tool output.`
 		t.Fatal(err)
 	}
 
-	var spawnTool agent.Tool
+	var spawnTool types.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		if tool.Name() == "spawn_subagent" {
 			spawnTool = tool
@@ -1357,25 +1358,6 @@ func TestRuntimeStateGitRefreshCanRunAsync(t *testing.T) {
 	}
 }
 
-func TestAPIKeyStore(t *testing.T) {
-	dir := t.TempDir()
-	store := NewAPIKeyStore(dir)
-
-	// Set and get
-	store.Set("test-provider", "test-key-123")
-
-	key, ok := store.Get("test-provider")
-	if !ok || key != "test-key-123" {
-		t.Fatal("failed to get stored key")
-	}
-
-	// Missing key
-	_, ok = store.Get("nonexistent")
-	if ok {
-		t.Fatal("should not find nonexistent key")
-	}
-}
-
 // --- Fix 1: Hook Integration Tests ---
 
 // testHookExtension is a test extension that registers a before-hook.
@@ -1394,7 +1376,7 @@ func (e *testHookExtension) Init(api extension.ExtensionAPI) error {
 			}
 			return true
 		},
-		After: func(toolName string, args map[string]any, result agent.ToolResult) {
+		After: func(toolName string, args map[string]any, result types.ToolResult) {
 			e.afterCalls = append(e.afterCalls, toolName)
 		},
 	})
@@ -1497,7 +1479,7 @@ type testEventExtension struct {
 
 func (e *testEventExtension) Name() string { return "test-events" }
 func (e *testEventExtension) Init(api extension.ExtensionAPI) error {
-	api.On(string(agent.EventTypeAgentStart), func(event agent.Event) {
+	api.On(string(types.EventTypeAgentStart), func(event types.Event) {
 		e.agentStartCount++
 	})
 	return nil
@@ -1675,7 +1657,7 @@ func TestCycleThinkingLevel(t *testing.T) {
 	agentDir := filepath.Join(dir, ".coding_agent")
 	session, err := NewCodingSession(CodingSessionOptions{
 		Cwd: dir, AgentDir: agentDir, Model: newTestModel(),
-		ThinkingLevel: agent.ThinkingLevelOff,
+		ThinkingLevel: types.ThinkingLevelOff,
 		GetAPIKey:     func(p string) (string, error) { return "", nil },
 	})
 	if err != nil {
@@ -1683,19 +1665,19 @@ func TestCycleThinkingLevel(t *testing.T) {
 	}
 
 	level := session.CycleThinkingLevel()
-	if level != agent.ThinkingLevelLow {
+	if level != types.ThinkingLevelLow {
 		t.Fatalf("expected low, got %s", level)
 	}
 	level = session.CycleThinkingLevel()
-	if level != agent.ThinkingLevelMedium {
+	if level != types.ThinkingLevelMedium {
 		t.Fatalf("expected medium, got %s", level)
 	}
 	level = session.CycleThinkingLevel()
-	if level != agent.ThinkingLevelHigh {
+	if level != types.ThinkingLevelHigh {
 		t.Fatalf("expected high, got %s", level)
 	}
 	level = session.CycleThinkingLevel()
-	if level != agent.ThinkingLevelOff {
+	if level != types.ThinkingLevelOff {
 		t.Fatalf("expected off, got %s", level)
 	}
 }
@@ -1812,12 +1794,12 @@ func TestPromptPersistsAssistantAndToolMessages(t *testing.T) {
 	agentDir := filepath.Join(dir, ".coding_agent")
 	model := newTestModel()
 	tool := &testEchoTool{}
-	callIndex := 0
+	var callIndex atomic.Int64
 
 	streamFn := func(ctx context.Context, _ *types.Model, _ *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
 		stream := types.NewEventStream()
 		go func() {
-			if callIndex == 0 {
+			if callIndex.Load() == 0 {
 				msg := &types.AssistantMessage{
 					Role:       "assistant",
 					ProviderID: model.ProviderID,
@@ -1844,7 +1826,7 @@ func TestPromptPersistsAssistantAndToolMessages(t *testing.T) {
 				stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
 				stream.Resolve(msg, nil)
 			}
-			callIndex++
+			callIndex.Add(1)
 			stream.Close()
 		}()
 		return stream, nil
@@ -1854,7 +1836,7 @@ func TestPromptPersistsAssistantAndToolMessages(t *testing.T) {
 		Cwd:       dir,
 		AgentDir:  agentDir,
 		Model:     model,
-		Tools:     []agent.Tool{tool},
+		Tools:     []types.Tool{tool},
 		GetAPIKey: func(p string) (string, error) { return "", nil },
 		StreamFn:  streamFn,
 	})
@@ -1882,13 +1864,13 @@ func TestPromptPersistsAssistantAndToolMessages(t *testing.T) {
 		}
 	}
 
-	if !containsRole(roles, agent.RoleUser) {
+	if !containsRole(roles, types.RoleUser) {
 		t.Fatalf("expected user message to be persisted, got roles=%v", roles)
 	}
-	if !containsRole(roles, agent.RoleAssistant) {
+	if !containsRole(roles, types.RoleAssistant) {
 		t.Fatalf("expected assistant message to be persisted, got roles=%v", roles)
 	}
-	if !containsRole(roles, agent.RoleToolResult) {
+	if !containsRole(roles, types.RoleToolResult) {
 		t.Fatalf("expected tool result message to be persisted, got roles=%v", roles)
 	}
 
@@ -1914,9 +1896,9 @@ You are a summarizer. Reply with a concise summary of the user's request.`
 	}
 
 	model := newTestModel()
-	var capturedMessages []agent.AgentMessage
+	var capturedMessages []types.AgentMessage
 	streamFn := func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
-		capturedMessages = append([]agent.AgentMessage{}, llmCtx.Messages...)
+		capturedMessages = append([]types.AgentMessage{}, llmCtx.Messages...)
 		stream := types.NewEventStream()
 		go func() {
 			last := llmCtx.Messages[len(llmCtx.Messages)-1]
@@ -1952,8 +1934,8 @@ You are a summarizer. Reply with a concise summary of the user's request.`
 		t.Fatal(err)
 	}
 
-	var events []agent.Event
-	unsub := session.Subscribe(func(event agent.Event) {
+	var events []types.Event
+	unsub := session.Subscribe(func(event types.Event) {
 		events = append(events, event)
 	})
 	defer unsub()
@@ -2005,9 +1987,9 @@ Review this target:
 	}
 
 	model := newTestModel()
-	var capturedMessages []agent.AgentMessage
+	var capturedMessages []types.AgentMessage
 	streamFn := func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
-		capturedMessages = append([]agent.AgentMessage{}, llmCtx.Messages...)
+		capturedMessages = append([]types.AgentMessage{}, llmCtx.Messages...)
 		stream := types.NewEventStream()
 		go func() {
 			defer stream.Close()
@@ -2141,7 +2123,7 @@ func containsPromptName(prompts []PromptTemplateInfo, name string) bool {
 	return false
 }
 
-func messagesContainText(messages []agent.AgentMessage, text string) bool {
+func messagesContainText(messages []types.AgentMessage, text string) bool {
 	for _, msg := range messages {
 		if strings.Contains(agentMessageText(msg), text) {
 			return true
@@ -2150,7 +2132,7 @@ func messagesContainText(messages []agent.AgentMessage, text string) bool {
 	return false
 }
 
-func agentMessageText(msg agent.AgentMessage) string {
+func agentMessageText(msg types.AgentMessage) string {
 	switch m := msg.(type) {
 	case types.UserMessage:
 		return contentText(m.Content)
@@ -2178,9 +2160,9 @@ func contentText(content any) string {
 	}
 }
 
-func hasAssistantMessageEnd(events []agent.Event, text string) bool {
+func hasAssistantMessageEnd(events []types.Event, text string) bool {
 	for _, event := range events {
-		if event.Type != agent.EventTypeMessageEnd {
+		if event.Type != types.EventTypeMessageEnd {
 			continue
 		}
 		msg, ok := event.Message.(types.AssistantMessage)
@@ -2196,9 +2178,9 @@ func hasAssistantMessageEnd(events []agent.Event, text string) bool {
 	return false
 }
 
-func hasAgentEnd(events []agent.Event) bool {
+func hasAgentEnd(events []types.Event) bool {
 	for _, event := range events {
-		if event.Type == agent.EventTypeAgentEnd {
+		if event.Type == types.EventTypeAgentEnd {
 			return true
 		}
 	}
@@ -2453,12 +2435,12 @@ func TestSubscribeSession(t *testing.T) {
 	})
 	defer unsub()
 
-	session.SetThinkingLevel(agent.ThinkingLevelHigh)
+	session.SetThinkingLevel(types.ThinkingLevelHigh)
 
 	if received.Type != SessionEventThinkingChange {
 		t.Fatalf("expected thinking_change event, got %s", received.Type)
 	}
-	if received.Level != string(agent.ThinkingLevelHigh) {
+	if received.Level != string(types.ThinkingLevelHigh) {
 		t.Fatalf("expected level 'high', got %s", received.Level)
 	}
 }
@@ -2495,7 +2477,7 @@ func TestHarnessPlanFileReadable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var readTool agent.Tool
+	var readTool types.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		switch tool.Name() {
 		case "read":
@@ -2536,14 +2518,14 @@ func TestHarnessConfigBlocksTools(t *testing.T) {
 		Cwd:         dir,
 		AgentDir:    agentDir,
 		Model:       newTestModel(),
-		CustomTools: []agent.Tool{&testEchoTool{}},
+		CustomTools: []types.Tool{&testEchoTool{}},
 		GetAPIKey:   func(provider string) (string, error) { return "", nil },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var echo agent.Tool
+	var echo types.Tool
 	for _, tool := range session.GetAgent().GetState().Tools {
 		if tool.Name() == "echo" {
 			echo = tool
@@ -2600,11 +2582,11 @@ func TestHandleToolExecutionEndQueuesNestedContextForDeeperPath(t *testing.T) {
 		t.Fatalf("expected no queued steering messages initially, got %d", session.agent.QueuedMessageCount())
 	}
 
-	session.ctxMgr.OnToolExecutionEnd(agent.Event{
-		Type:     agent.EventTypeToolExecutionEnd,
+	session.ctxMgr.OnToolExecutionEnd(types.Event{
+		Type:     types.EventTypeToolExecutionEnd,
 		ToolName: "read",
 		Args:     map[string]any{"path": targetFile},
-		Result: agent.ToolResult{
+		Result: types.ToolResult{
 			Details: map[string]any{"path": targetFile},
 		},
 	})
@@ -2613,11 +2595,11 @@ func TestHandleToolExecutionEndQueuesNestedContextForDeeperPath(t *testing.T) {
 		t.Fatalf("expected one queued steering message, got %d", session.agent.QueuedMessageCount())
 	}
 
-	session.ctxMgr.OnToolExecutionEnd(agent.Event{
-		Type:     agent.EventTypeToolExecutionEnd,
+	session.ctxMgr.OnToolExecutionEnd(types.Event{
+		Type:     types.EventTypeToolExecutionEnd,
 		ToolName: "read",
 		Args:     map[string]any{"path": targetFile},
-		Result: agent.ToolResult{
+		Result: types.ToolResult{
 			Details: map[string]any{"path": targetFile},
 		},
 	})
@@ -2680,5 +2662,44 @@ func TestTransientNestedContextMessagesArePrunedAndNotPersisted(t *testing.T) {
 	}
 	if !strings.Contains(text, "regular user message") {
 		t.Fatalf("expected regular message to be persisted, got:\n%s", text)
+	}
+}
+
+func TestExplicitSkillMessageResidentButNotPersisted(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  agentDir,
+		Model:     newTestModel(),
+		GetAPIKey: func(provider string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	skillMsg := (&CustomMessage{
+		Source: explicitSkillSource,
+		Text:   "The user explicitly invoked the \"git-commit\" skill.\n\n<skill body>",
+	}).ToLlmMessage()
+
+	session.agent.AppendMessage(skillMsg)
+	session.handleMessageEnd(skillMsg)
+	session.ctxMgr.PruneTransient()
+
+	// Resident: an explicitly invoked skill survives the end-of-turn prune so a
+	// multi-turn skill is not re-read every turn.
+	if msgs := session.agent.GetState().Messages; len(msgs) != 1 {
+		t.Fatalf("expected explicit_skill message to stay resident after prune, got %d", len(msgs))
+	}
+
+	// Not persisted: the skill body must not pollute the saved session.
+	data, err := os.ReadFile(session.messagesFilePath())
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), explicitSkillSource) {
+		t.Fatalf("expected explicit_skill not to be persisted, got:\n%s", string(data))
 	}
 }

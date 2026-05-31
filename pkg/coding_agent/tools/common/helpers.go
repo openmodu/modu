@@ -1,13 +1,12 @@
 package common
 
 import (
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/types"
 )
 
 // ErrorResult creates an error ToolResult with the given message.
-func ErrorResult(msg string) agent.ToolResult {
-	return agent.ToolResult{
+func ErrorResult(msg string) types.ToolResult {
+	return types.ToolResult{
 		Content: []types.ContentBlock{
 			&types.TextContent{
 				Type: "text",

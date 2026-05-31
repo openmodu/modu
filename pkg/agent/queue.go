@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"fmt"
+
+	"github.com/openmodu/modu/pkg/types"
 )
 
 func (a *Agent) Continue(ctx context.Context) error {
@@ -11,12 +13,12 @@ func (a *Agent) Continue(ctx context.Context) error {
 		a.mu.Unlock()
 		return fmt.Errorf("agent is already processing")
 	}
-	messages := append([]AgentMessage{}, a.state.Messages...)
+	messages := append([]types.AgentMessage{}, a.state.Messages...)
 	if len(messages) == 0 {
 		a.mu.Unlock()
 		return fmt.Errorf("no messages to continue from")
 	}
-	if roleOf(messages[len(messages)-1]) == RoleAssistant {
+	if roleOf(messages[len(messages)-1]) == types.RoleAssistant {
 		steering := a.dequeueSteeringLocked()
 		if len(steering) > 0 {
 			a.mu.Unlock()
@@ -34,13 +36,13 @@ func (a *Agent) Continue(ctx context.Context) error {
 	return a.run(ctx, nil)
 }
 
-func (a *Agent) Steer(message AgentMessage) {
+func (a *Agent) Steer(message types.AgentMessage) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.steering = append(a.steering, message)
 }
 
-func (a *Agent) FollowUp(message AgentMessage) {
+func (a *Agent) FollowUp(message types.AgentMessage) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.followUp = append(a.followUp, message)
@@ -49,20 +51,20 @@ func (a *Agent) FollowUp(message AgentMessage) {
 func (a *Agent) ClearSteeringQueue() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.steering = []AgentMessage{}
+	a.steering = []types.AgentMessage{}
 }
 
 func (a *Agent) ClearFollowUpQueue() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.followUp = []AgentMessage{}
+	a.followUp = []types.AgentMessage{}
 }
 
 func (a *Agent) ClearAllQueues() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.steering = []AgentMessage{}
-	a.followUp = []AgentMessage{}
+	a.steering = []types.AgentMessage{}
+	a.followUp = []types.AgentMessage{}
 }
 
 func (a *Agent) HasQueuedMessages() bool {
@@ -83,10 +85,10 @@ func (a *Agent) QueuedMessageCounts() (steering, followUp int) {
 	return len(a.steering), len(a.followUp)
 }
 
-func (a *Agent) QueuedMessages() (steering, followUp []AgentMessage) {
+func (a *Agent) QueuedMessages() (steering, followUp []types.AgentMessage) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return append([]AgentMessage{}, a.steering...), append([]AgentMessage{}, a.followUp...)
+	return append([]types.AgentMessage{}, a.steering...), append([]types.AgentMessage{}, a.followUp...)
 }
 
 func (a *Agent) DropLastQueuedMessage() (kind string, ok bool) {
@@ -103,54 +105,54 @@ func (a *Agent) DropLastQueuedMessage() (kind string, ok bool) {
 	return "", false
 }
 
-func (a *Agent) GetSteeringMode() ExecutionMode {
+func (a *Agent) GetSteeringMode() types.ExecutionMode {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.config.SteeringMode
 }
 
-func (a *Agent) SetSteeringMode(mode ExecutionMode) {
+func (a *Agent) SetSteeringMode(mode types.ExecutionMode) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.config.SteeringMode = mode
 }
 
-func (a *Agent) GetFollowUpMode() ExecutionMode {
+func (a *Agent) GetFollowUpMode() types.ExecutionMode {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.config.FollowUpMode
 }
 
-func (a *Agent) SetFollowUpMode(mode ExecutionMode) {
+func (a *Agent) SetFollowUpMode(mode types.ExecutionMode) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.config.FollowUpMode = mode
 }
 
-func (a *Agent) dequeueSteeringLocked() []AgentMessage {
-	if a.config.SteeringMode == ExecutionModeOneAtATime {
+func (a *Agent) dequeueSteeringLocked() []types.AgentMessage {
+	if a.config.SteeringMode == types.ExecutionModeOneAtATime {
 		if len(a.steering) == 0 {
-			return []AgentMessage{}
+			return []types.AgentMessage{}
 		}
 		first := a.steering[0]
 		a.steering = a.steering[1:]
-		return []AgentMessage{first}
+		return []types.AgentMessage{first}
 	}
-	messages := append([]AgentMessage{}, a.steering...)
-	a.steering = []AgentMessage{}
+	messages := append([]types.AgentMessage{}, a.steering...)
+	a.steering = []types.AgentMessage{}
 	return messages
 }
 
-func (a *Agent) dequeueFollowUpLocked() []AgentMessage {
-	if a.config.FollowUpMode == ExecutionModeOneAtATime {
+func (a *Agent) dequeueFollowUpLocked() []types.AgentMessage {
+	if a.config.FollowUpMode == types.ExecutionModeOneAtATime {
 		if len(a.followUp) == 0 {
-			return []AgentMessage{}
+			return []types.AgentMessage{}
 		}
 		first := a.followUp[0]
 		a.followUp = a.followUp[1:]
-		return []AgentMessage{first}
+		return []types.AgentMessage{first}
 	}
-	messages := append([]AgentMessage{}, a.followUp...)
-	a.followUp = []AgentMessage{}
+	messages := append([]types.AgentMessage{}, a.followUp...)
+	a.followUp = []types.AgentMessage{}
 	return messages
 }

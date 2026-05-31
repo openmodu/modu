@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
 	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/types"
@@ -15,15 +14,15 @@ type CreateSessionOptions struct {
 	Cwd            string
 	AgentDir       string
 	Model          *types.Model
-	ThinkingLevel  agent.ThinkingLevel
+	ThinkingLevel  types.ThinkingLevel
 	ScopedModels   []string
-	Tools          []agent.Tool
-	CustomTools    []agent.Tool
-	ToolProvider   agent.ToolManager
+	Tools          []types.Tool
+	CustomTools    []types.Tool
+	ToolProvider   types.ToolManager
 	Extensions     []extension.Extension
 	SystemPrompt   string
 	GetAPIKey      func(provider string) (string, error)
-	StreamFn       agent.StreamFn
+	StreamFn       types.StreamFn
 	SessionFile    string // path to restore an existing session
 	AutoCompaction *bool
 	AutoRetry      *bool

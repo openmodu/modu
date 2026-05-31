@@ -10,14 +10,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/common"
 	"github.com/openmodu/modu/pkg/types"
 )
 
 // backgroundResult returns a success result for a background process.
-func backgroundResult(pid int) agent.ToolResult {
-	return agent.ToolResult{
+func backgroundResult(pid int) types.ToolResult {
+	return types.ToolResult{
 		Content: []types.ContentBlock{
 			&types.TextContent{
 				Type: "text",
@@ -38,7 +37,7 @@ type BashTool struct {
 	cwd string
 }
 
-func NewTool(cwd string) agent.Tool {
+func NewTool(cwd string) types.Tool {
 	return &BashTool{cwd: cwd}
 }
 
@@ -71,7 +70,7 @@ func (t *BashTool) Parameters() any {
 	}
 }
 
-func (t *BashTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *BashTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate types.ToolUpdateCallback) (types.ToolResult, error) {
 	command, _ := args["command"].(string)
 	if command == "" {
 		return common.ErrorResult("command is required"), nil
@@ -184,7 +183,7 @@ func (t *BashTool) Execute(ctx context.Context, toolCallID string, args map[stri
 		text = "(no output)"
 	}
 
-	return agent.ToolResult{
+	return types.ToolResult{
 		Content: []types.ContentBlock{
 			&types.TextContent{
 				Type: "text",

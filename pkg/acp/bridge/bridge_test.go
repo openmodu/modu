@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/openmodu/modu/pkg/acp/jsonrpc"
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -34,7 +33,7 @@ func TestTranslate_AgentMessageChunk(t *testing.T) {
 		t.Fatalf("got %d events, want 1", len(events))
 	}
 	ev := events[0]
-	if ev.Type != agent.EventTypeMessageUpdate {
+	if ev.Type != types.EventTypeMessageUpdate {
 		t.Errorf("type = %s, want message_update", ev.Type)
 	}
 	if ev.StreamEvent == nil {
@@ -76,7 +75,7 @@ func TestTranslate_ToolCall(t *testing.T) {
 		t.Fatalf("got %d events", len(events))
 	}
 	ev := events[0]
-	if ev.Type != agent.EventTypeToolExecutionStart {
+	if ev.Type != types.EventTypeToolExecutionStart {
 		t.Errorf("type = %s", ev.Type)
 	}
 	if ev.ToolCallID != "tc-bash-42" {
@@ -104,7 +103,7 @@ func TestTranslate_ToolCallUpdateCompleted(t *testing.T) {
 		t.Fatalf("got %d events", len(events))
 	}
 	ev := events[0]
-	if ev.Type != agent.EventTypeToolExecutionEnd {
+	if ev.Type != types.EventTypeToolExecutionEnd {
 		t.Errorf("type = %s", ev.Type)
 	}
 	if ev.IsError {
@@ -128,7 +127,7 @@ func TestTranslate_ToolCallUpdateError(t *testing.T) {
 		t.Fatalf("got %d events", len(events))
 	}
 	ev := events[0]
-	if ev.Type != agent.EventTypeToolExecutionEnd {
+	if ev.Type != types.EventTypeToolExecutionEnd {
 		t.Errorf("type = %s", ev.Type)
 	}
 	if !ev.IsError {
@@ -149,7 +148,7 @@ func TestTranslate_ToolCallUpdateRunning(t *testing.T) {
 		t.Fatalf("got %d events", len(events))
 	}
 	ev := events[0]
-	if ev.Type != agent.EventTypeToolExecutionUpdate {
+	if ev.Type != types.EventTypeToolExecutionUpdate {
 		t.Errorf("type = %s (want tool_execution_update)", ev.Type)
 	}
 	if ev.Partial == nil {

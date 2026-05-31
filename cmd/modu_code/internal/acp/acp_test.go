@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 func TestRequestPermissionSendsSingleReverseRPCWithRejectAlways(t *testing.T) {
 	var out bytes.Buffer
 	s := testACPServer(&out)
-	resultCh := make(chan agent.ToolApprovalDecision, 1)
+	resultCh := make(chan types.ToolApprovalDecision, 1)
 
 	go func() {
 		decision, _ := s.requestPermission(context.Background(), "bash", "call-1", map[string]any{"cmd": "pwd"})
@@ -61,7 +61,7 @@ func TestRequestPermissionSendsSingleReverseRPCWithRejectAlways(t *testing.T) {
 
 	select {
 	case got := <-resultCh:
-		if got != agent.ToolApprovalDenyAlways {
+		if got != types.ToolApprovalDenyAlways {
 			t.Fatalf("expected deny always, got %q", got)
 		}
 	case <-time.After(time.Second):
@@ -72,7 +72,7 @@ func TestRequestPermissionSendsSingleReverseRPCWithRejectAlways(t *testing.T) {
 func TestRequestPermissionDeniesMalformedResult(t *testing.T) {
 	var out bytes.Buffer
 	s := testACPServer(&out)
-	resultCh := make(chan agent.ToolApprovalDecision, 1)
+	resultCh := make(chan types.ToolApprovalDecision, 1)
 
 	go func() {
 		decision, _ := s.requestPermission(context.Background(), "bash", "call-1", nil)
@@ -88,7 +88,7 @@ func TestRequestPermissionDeniesMalformedResult(t *testing.T) {
 
 	select {
 	case got := <-resultCh:
-		if got != agent.ToolApprovalDeny {
+		if got != types.ToolApprovalDeny {
 			t.Fatalf("expected malformed response to deny, got %q", got)
 		}
 	case <-time.After(time.Second):
@@ -99,7 +99,7 @@ func TestRequestPermissionDeniesMalformedResult(t *testing.T) {
 func TestRequestPermissionDeniesUnknownOption(t *testing.T) {
 	var out bytes.Buffer
 	s := testACPServer(&out)
-	resultCh := make(chan agent.ToolApprovalDecision, 1)
+	resultCh := make(chan types.ToolApprovalDecision, 1)
 
 	go func() {
 		decision, _ := s.requestPermission(context.Background(), "bash", "call-1", nil)
@@ -115,7 +115,7 @@ func TestRequestPermissionDeniesUnknownOption(t *testing.T) {
 
 	select {
 	case got := <-resultCh:
-		if got != agent.ToolApprovalDeny {
+		if got != types.ToolApprovalDeny {
 			t.Fatalf("expected unknown option to deny, got %q", got)
 		}
 	case <-time.After(time.Second):

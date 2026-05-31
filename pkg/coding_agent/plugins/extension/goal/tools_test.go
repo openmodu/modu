@@ -5,19 +5,18 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/types"
 )
 
 // callTool runs a tool's Execute and returns the flat text of the first
 // TextContent block.
-func callTool(t *testing.T, tool agent.Tool, args map[string]any) string {
+func callTool(t *testing.T, tool types.Tool, args map[string]any) string {
 	t.Helper()
 	text, _ := callToolResult(t, tool, args)
 	return text
 }
 
-func callToolResult(t *testing.T, tool agent.Tool, args map[string]any) (string, agent.ToolResult) {
+func callToolResult(t *testing.T, tool types.Tool, args map[string]any) (string, types.ToolResult) {
 	t.Helper()
 	res, err := tool.Execute(context.Background(), "test-call", args, nil)
 	if err != nil {
@@ -154,7 +153,7 @@ func TestGetGoalEmptyAndPopulated(t *testing.T) {
 
 func TestToolMetadata(t *testing.T) {
 	store := NewStore()
-	for _, tool := range []agent.Tool{
+	for _, tool := range []types.Tool{
 		&createGoalTool{store: store},
 		&updateGoalTool{store: store},
 		&getGoalTool{store: store},

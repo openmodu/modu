@@ -1,6 +1,6 @@
 package coding_agent
 
-import "github.com/openmodu/modu/pkg/agent"
+import "github.com/openmodu/modu/pkg/types"
 
 // This file is the session-side wiring for the approval service
 // (pkg/coding_agent/approval). The session owns an *approval.Manager, exposes a
@@ -10,7 +10,7 @@ import "github.com/openmodu/modu/pkg/agent"
 // When set, the callback is called before each tool execution that is not
 // already covered by an always-allow or always-deny rule.
 // Passing nil disables interactive approval (all tools auto-approved).
-func (cs *engine) SetToolApprovalCallback(fn func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error)) {
+func (cs *engine) SetToolApprovalCallback(fn func(toolName, toolCallID string, args map[string]any) (types.ToolApprovalDecision, error)) {
 	cs.approvalManager.SetCallback(fn)
 }
 

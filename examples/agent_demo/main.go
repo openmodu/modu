@@ -45,7 +45,7 @@ func (t *CalculatorTool) Parameters() any {
 	}
 }
 
-func (t *CalculatorTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *CalculatorTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate types.ToolUpdateCallback) (types.ToolResult, error) {
 	op, _ := args["operation"].(string)
 	a := toFloat(args["a"])
 	b := toFloat(args["b"])
@@ -65,7 +65,7 @@ func (t *CalculatorTool) Execute(ctx context.Context, toolCallID string, args ma
 		desc = fmt.Sprintf("%.2f * %.2f = %.2f", a, b, result)
 	case "divide":
 		if b == 0 {
-			return agent.ToolResult{
+			return types.ToolResult{
 				Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "Error: division by zero"}},
 				Details: map[string]any{},
 			}, nil
@@ -79,13 +79,13 @@ func (t *CalculatorTool) Execute(ctx context.Context, toolCallID string, args ma
 		result = math.Pow(a, b)
 		desc = fmt.Sprintf("%.2f ^ %.2f = %.2f", a, b, result)
 	default:
-		return agent.ToolResult{
+		return types.ToolResult{
 			Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "Unknown operation: " + op}},
 			Details: map[string]any{},
 		}, nil
 	}
 
-	return agent.ToolResult{
+	return types.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: desc}},
 		Details: map[string]any{"result": result},
 	}, nil
@@ -105,9 +105,9 @@ func (t *GetTimeTool) Parameters() any {
 	}
 }
 
-func (t *GetTimeTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *GetTimeTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate types.ToolUpdateCallback) (types.ToolResult, error) {
 	now := time.Now().Format("2006-01-02 15:04:05 MST")
-	return agent.ToolResult{
+	return types.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: now}},
 		Details: map[string]any{"time": now},
 	}, nil
@@ -146,11 +146,11 @@ func main() {
 		ProviderID: providerID,
 	}
 
-	a := agent.NewAgent(agent.Config{
-		InitialState: &agent.State{
+	a := agent.NewAgent(types.Config{
+		InitialState: &types.State{
 			SystemPrompt: "You are a helpful assistant. When asked math questions, use the calculator tool. When asked about the time, use the get_current_time tool. Always respond in the same language as the user.",
 			Model:        model,
-			Tools: []agent.Tool{
+			Tools: []types.Tool{
 				&CalculatorTool{},
 				&GetTimeTool{},
 			},
@@ -158,35 +158,35 @@ func main() {
 	})
 
 	// Subscribe to events for observability
-	a.Subscribe(func(event agent.Event) {
+	a.Subscribe(func(event types.Event) {
 		switch event.Type {
-		case agent.EventTypeAgentStart:
+		case types.EventTypeAgentStart:
 			fmt.Println("\n=== Agent Start ===")
-		case agent.EventTypeAgentEnd:
+		case types.EventTypeAgentEnd:
 			fmt.Println("\n=== Agent End ===")
-		case agent.EventTypeTurnStart:
+		case types.EventTypeTurnStart:
 			fmt.Println("--- Turn Start ---")
-		case agent.EventTypeTurnEnd:
+		case types.EventTypeTurnEnd:
 			fmt.Println("\n--- Turn End ---")
-		case agent.EventTypeMessageStart:
+		case types.EventTypeMessageStart:
 			if _, ok := event.Message.(types.AssistantMessage); ok {
 				fmt.Printf("[Assistant] ")
 			} else if _, ok := event.Message.(*types.AssistantMessage); ok {
 				fmt.Printf("[Assistant] ")
 			}
-		case agent.EventTypeMessageUpdate:
+		case types.EventTypeMessageUpdate:
 			if event.StreamEvent != nil {
 				if event.StreamEvent.Type == "text_delta" {
 					fmt.Print(event.StreamEvent.Delta)
 				}
 			}
-		case agent.EventTypeToolExecutionStart:
+		case types.EventTypeToolExecutionStart:
 			fmt.Printf("\n>> Tool Call: %s (id=%s)\n", event.ToolName, event.ToolCallID)
 			if args, ok := event.Args.(map[string]any); ok {
 				fmt.Printf("   Args: %v\n", args)
 			}
-		case agent.EventTypeToolExecutionEnd:
-			if result, ok := event.Result.(agent.ToolResult); ok {
+		case types.EventTypeToolExecutionEnd:
+			if result, ok := event.Result.(types.ToolResult); ok {
 				for _, c := range result.Content {
 					if tc, ok := c.(*types.TextContent); ok {
 						fmt.Printf("   Result: %s\n", tc.Text)
@@ -230,7 +230,7 @@ func main() {
 
 			// 3. Set Mode and Continue
 			fmt.Println("\n>>> 3. Setting FollowUpMode to ExecutionModeOneAtATime and triggering process...")
-			a.SetFollowUpMode(agent.ExecutionModeOneAtATime)
+			a.SetFollowUpMode(types.ExecutionModeOneAtATime)
 
 			err = a.Prompt(context.Background(), "Please process the queued follow-ups.")
 			if err != nil {
@@ -261,7 +261,7 @@ func main() {
 
 			// 3. Set Mode and Continue
 			fmt.Println("\n>>> 3. Setting FollowUpMode to ExecutionModeAll and triggering process...")
-			a.SetFollowUpMode(agent.ExecutionModeAll)
+			a.SetFollowUpMode(types.ExecutionModeAll)
 
 			// This single prompt will pull BOTH queued follow-up messages into the same context block
 			err = a.Prompt(context.Background(), "Please process the queued follow-ups.")
@@ -274,8 +274,8 @@ func main() {
 			a.ClearMessages()
 
 			// 1. Set modes to OneAtATime to clearly see what goes first
-			a.SetFollowUpMode(agent.ExecutionModeOneAtATime)
-			a.SetSteeringMode(agent.ExecutionModeOneAtATime)
+			a.SetFollowUpMode(types.ExecutionModeOneAtATime)
+			a.SetSteeringMode(types.ExecutionModeOneAtATime)
 
 			// 2. Queue a FollowUp AND a Steering message *before* prompting
 			fmt.Println("\n>>> 1. Injecting one FollowUp message and one Steering message...")

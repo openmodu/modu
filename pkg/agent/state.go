@@ -2,28 +2,14 @@ package agent
 
 import "github.com/openmodu/modu/pkg/types"
 
-type State struct {
-	SystemPrompt     string
-	Model            *types.Model
-	ThinkingLevel    ThinkingLevel
-	Tools            []Tool
-	Messages         []AgentMessage
-	IsStreaming      bool
-	StreamMessage    AgentMessage
-	PendingToolCalls map[string]struct{}
-	Error            string
-	Status           SessionStatus
-	Interrupt        *InterruptEvent
-}
-
-func initialState(cfg Config) State {
-	state := State{
+func initialState(cfg types.Config) types.State {
+	state := types.State{
 		Model:            cfg.Model,
-		ThinkingLevel:    ThinkingLevelOff,
-		Tools:            []Tool{},
-		Messages:         []AgentMessage{},
+		ThinkingLevel:    types.ThinkingLevelOff,
+		Tools:            []types.Tool{},
+		Messages:         []types.AgentMessage{},
 		PendingToolCalls: map[string]struct{}{},
-		Status:           SessionStatusIdle,
+		Status:           types.SessionStatusIdle,
 	}
 	if cfg.InitialState != nil {
 		state = *cfg.InitialState
@@ -32,10 +18,10 @@ func initialState(cfg Config) State {
 		state.Model = cfg.Model
 	}
 	if state.Messages == nil {
-		state.Messages = []AgentMessage{}
+		state.Messages = []types.AgentMessage{}
 	}
 	if state.Tools == nil {
-		state.Tools = []Tool{}
+		state.Tools = []types.Tool{}
 	}
 	if state.PendingToolCalls == nil {
 		state.PendingToolCalls = map[string]struct{}{}

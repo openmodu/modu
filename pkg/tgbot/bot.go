@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/approval"
 	"github.com/openmodu/modu/pkg/channels"
 	"github.com/openmodu/modu/pkg/channels/telegram"
@@ -55,8 +54,8 @@ func Start(
 
 		thinkCh := make(chan string, 4)
 
-		unsub := session.Subscribe(func(ev agent.Event) {
-			if ev.Type != agent.EventTypeMessageEnd {
+		unsub := session.Subscribe(func(ev types.Event) {
+			if ev.Type != types.EventTypeMessageEnd {
 				return
 			}
 			var msg types.AssistantMessage
@@ -104,7 +103,7 @@ func Start(
 		if approvalCh != nil && bot != nil {
 			chatID := chCtx.ChatID()
 
-			tuiApprovalFn := func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
+			tuiApprovalFn := func(toolName, toolCallID string, args map[string]any) (types.ToolApprovalDecision, error) {
 				respCh := make(chan string, 1)
 				req := approval.Request{
 					ToolName:   toolName,
@@ -115,17 +114,17 @@ func Start(
 				select {
 				case approvalCh <- req:
 				case <-hCtx.Done():
-					return agent.ToolApprovalDeny, hCtx.Err()
+					return types.ToolApprovalDeny, hCtx.Err()
 				}
 				select {
 				case decision := <-respCh:
-					return agent.ToolApprovalDecision(decision), nil
+					return types.ToolApprovalDecision(decision), nil
 				case <-hCtx.Done():
-					return agent.ToolApprovalDeny, hCtx.Err()
+					return types.ToolApprovalDeny, hCtx.Err()
 				}
 			}
 
-			session.SetToolApprovalCallback(func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
+			session.SetToolApprovalCallback(func(toolName, toolCallID string, args map[string]any) (types.ToolApprovalDecision, error) {
 				var think string
 				select {
 				case think = <-thinkCh:
@@ -148,7 +147,7 @@ func Start(
 				select {
 				case approvalCh <- req:
 				case <-hCtx.Done():
-					return agent.ToolApprovalDeny, hCtx.Err()
+					return types.ToolApprovalDeny, hCtx.Err()
 				}
 
 				kbd, kbdErr := bot.SendApprovalKeyboard(chatID, toolName)
@@ -182,20 +181,20 @@ func Start(
 					if kbdErr == nil {
 						bot.RemoveKeyboard(chatID, kbd.MessageID)
 					}
-					return agent.ToolApprovalDeny, hCtx.Err()
+					return types.ToolApprovalDeny, hCtx.Err()
 				}
 
-				d := agent.ToolApprovalDecision(decision)
+				d := types.ToolApprovalDecision(decision)
 
 				var result string
 				switch d {
-				case agent.ToolApprovalAllow:
+				case types.ToolApprovalAllow:
 					result = fmt.Sprintf("✅ `%s` allowed", toolName)
-				case agent.ToolApprovalAllowAlways:
+				case types.ToolApprovalAllowAlways:
 					result = fmt.Sprintf("✅ `%s` always allowed", toolName)
-				case agent.ToolApprovalDeny:
+				case types.ToolApprovalDeny:
 					result = fmt.Sprintf("❌ `%s` denied", toolName)
-				case agent.ToolApprovalDenyAlways:
+				case types.ToolApprovalDenyAlways:
 					result = fmt.Sprintf("❌ `%s` always denied", toolName)
 				}
 				if result != "" {

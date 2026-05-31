@@ -11,31 +11,31 @@ import (
 
 type Agent struct {
 	mu          sync.RWMutex
-	state       State
-	config      Config
+	state       types.State
+	config      types.Config
 	loop        *Loop
-	steering    []AgentMessage
-	followUp    []AgentMessage
-	listeners   map[int]func(Event)
+	steering    []types.AgentMessage
+	followUp    []types.AgentMessage
+	listeners   map[int]func(types.Event)
 	listenerID  int
 	running     chan struct{}
-	resume      chan ResumeDecision
+	resume      chan types.ResumeDecision
 	resumeReady chan struct{}
 	cancel      context.CancelFunc
 }
 
-func NewAgent(cfg Config) *Agent {
+func NewAgent(cfg types.Config) *Agent {
 	if cfg.SteeringMode == "" {
-		cfg.SteeringMode = ExecutionModeOneAtATime
+		cfg.SteeringMode = types.ExecutionModeOneAtATime
 	}
 	if cfg.FollowUpMode == "" {
-		cfg.FollowUpMode = ExecutionModeOneAtATime
+		cfg.FollowUpMode = types.ExecutionModeOneAtATime
 	}
 	return &Agent{
 		state:     initialState(cfg),
 		config:    cfg,
 		loop:      NewLoop(DefaultLLM{}, DefaultTools{}),
-		listeners: map[int]func(Event){},
+		listeners: map[int]func(types.Event){},
 	}
 }
 
@@ -52,7 +52,7 @@ func (a *Agent) PromptWithImages(ctx context.Context, text string, images []type
 	for i := range images {
 		content = append(content, &images[i])
 	}
-	return a.run(ctx, []AgentMessage{types.UserMessage{Role: RoleUser, Content: content, Timestamp: time.Now().UnixMilli()}})
+	return a.run(ctx, []types.AgentMessage{types.UserMessage{Role: types.RoleUser, Content: content, Timestamp: time.Now().UnixMilli()}})
 }
 
 func (a *Agent) WaitForIdle() {
@@ -72,7 +72,7 @@ func (a *Agent) Abort() {
 	}
 }
 
-func (a *Agent) run(ctx context.Context, messages []AgentMessage) error {
+func (a *Agent) run(ctx context.Context, messages []types.AgentMessage) error {
 	a.mu.Lock()
 	if a.running != nil {
 		a.mu.Unlock()
@@ -90,41 +90,41 @@ func (a *Agent) run(ctx context.Context, messages []AgentMessage) error {
 	a.state.PendingToolCalls = map[string]struct{}{}
 	a.state.Error = ""
 	if a.config.EnableInterrupts {
-		a.state.Status = SessionStatusRunning
+		a.state.Status = types.SessionStatusRunning
 		a.resumeReady = make(chan struct{})
 	}
-	agentCtx := AgentContext{
+	agentCtx := types.AgentContext{
 		SystemPrompt: a.state.SystemPrompt,
-		Messages:     append([]AgentMessage{}, a.state.Messages...),
+		Messages:     append([]types.AgentMessage{}, a.state.Messages...),
 		Tools:        a.state.Tools,
 	}
 	config := a.config
 	config.Model = a.state.Model
 	config.Reasoning = a.state.ThinkingLevel
-	runtime := RuntimeHooks{
+	runtime := types.RuntimeHooks{
 		ApproveTool: config.ApproveTool,
-		GetSteeringMessages: func() ([]AgentMessage, error) {
+		GetSteeringMessages: func() ([]types.AgentMessage, error) {
 			a.mu.Lock()
 			defer a.mu.Unlock()
 			return a.dequeueSteeringLocked(), nil
 		},
-		GetFollowUpMessages: func() ([]AgentMessage, error) {
+		GetFollowUpMessages: func() ([]types.AgentMessage, error) {
 			a.mu.Lock()
 			defer a.mu.Unlock()
 			return a.dequeueFollowUpLocked(), nil
 		},
 	}
 	if config.EnableInterrupts && runtime.ApproveTool == nil {
-		runtime.ApproveTool = func(toolName, toolCallID string, args map[string]any) (ToolApprovalDecision, error) {
+		runtime.ApproveTool = func(toolName, toolCallID string, args map[string]any) (types.ToolApprovalDecision, error) {
 			decision := a.waitForResume(runCtx)
 			if decision.Allow {
-				return ToolApprovalAllow, nil
+				return types.ToolApprovalAllow, nil
 			}
-			return ToolApprovalDeny, nil
+			return types.ToolApprovalDeny, nil
 		}
 	}
 	if config.EnableInterrupts {
-		runtime.OnMaxStepsReached = func(stepCount int) ResumeDecision {
+		runtime.OnMaxStepsReached = func(stepCount int) types.ResumeDecision {
 			return a.waitForResume(runCtx)
 		}
 	}
@@ -140,7 +140,7 @@ func (a *Agent) run(ctx context.Context, messages []AgentMessage) error {
 		}
 	}()
 
-	_, err := a.loop.Run(runCtx, LoopInput{
+	_, err := a.loop.Run(runCtx, types.LoopInput{
 		Prompts: messages,
 		Context: agentCtx,
 		Config:  config,
@@ -166,9 +166,9 @@ func (a *Agent) run(ctx context.Context, messages []AgentMessage) error {
 	}
 	if a.config.EnableInterrupts {
 		if a.state.Error != "" {
-			a.state.Status = SessionStatusFailed
+			a.state.Status = types.SessionStatusFailed
 		} else {
-			a.state.Status = SessionStatusCompleted
+			a.state.Status = types.SessionStatusCompleted
 		}
 	}
 	if a.running != nil {
@@ -180,16 +180,16 @@ func (a *Agent) run(ctx context.Context, messages []AgentMessage) error {
 	return err
 }
 
-func promptMessages(input any) ([]AgentMessage, error) {
+func promptMessages(input any) ([]types.AgentMessage, error) {
 	switch v := input.(type) {
 	case string:
-		return []AgentMessage{types.UserMessage{Role: RoleUser, Content: v, Timestamp: time.Now().UnixMilli()}}, nil
-	case []AgentMessage:
+		return []types.AgentMessage{types.UserMessage{Role: types.RoleUser, Content: v, Timestamp: time.Now().UnixMilli()}}, nil
+	case []types.AgentMessage:
 		return v, nil
 	default:
 		if input == nil {
 			return nil, fmt.Errorf("invalid input type")
 		}
-		return []AgentMessage{input}, nil
+		return []types.AgentMessage{input}, nil
 	}
 }

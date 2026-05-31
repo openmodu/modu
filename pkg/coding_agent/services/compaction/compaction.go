@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -25,7 +24,7 @@ type Options struct {
 	// GetAPIKey retrieves an API key for the given provider.
 	GetAPIKey func(provider string) (string, error)
 	// StreamFn creates an LLM stream for summary generation.
-	StreamFn agent.StreamFn
+	StreamFn types.StreamFn
 }
 
 // Result holds the outcome of a compaction operation.

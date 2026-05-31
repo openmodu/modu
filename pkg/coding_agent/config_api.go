@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"path/filepath"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/foundation/config"
 	"github.com/openmodu/modu/pkg/coding_agent/services/session"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // GetConfig returns the current configuration.
@@ -33,19 +33,19 @@ func (s *CodingSession) EffectiveConfigJSON() string {
 }
 
 // CycleThinkingLevel cycles through: off -> low -> medium -> high -> off.
-func (s *CodingSession) CycleThinkingLevel() agent.ThinkingLevel {
-	var next agent.ThinkingLevel
+func (s *CodingSession) CycleThinkingLevel() types.ThinkingLevel {
+	var next types.ThinkingLevel
 	switch s.thinkingLevel {
-	case agent.ThinkingLevelOff:
-		next = agent.ThinkingLevelLow
-	case agent.ThinkingLevelLow:
-		next = agent.ThinkingLevelMedium
-	case agent.ThinkingLevelMedium:
-		next = agent.ThinkingLevelHigh
-	case agent.ThinkingLevelHigh:
-		next = agent.ThinkingLevelOff
+	case types.ThinkingLevelOff:
+		next = types.ThinkingLevelLow
+	case types.ThinkingLevelLow:
+		next = types.ThinkingLevelMedium
+	case types.ThinkingLevelMedium:
+		next = types.ThinkingLevelHigh
+	case types.ThinkingLevelHigh:
+		next = types.ThinkingLevelOff
 	default:
-		next = agent.ThinkingLevelLow
+		next = types.ThinkingLevelLow
 	}
 
 	s.SetThinkingLevel(next)
@@ -53,7 +53,7 @@ func (s *CodingSession) CycleThinkingLevel() agent.ThinkingLevel {
 }
 
 // SetThinkingLevel sets the thinking level.
-func (s *CodingSession) SetThinkingLevel(level agent.ThinkingLevel) {
+func (s *CodingSession) SetThinkingLevel(level types.ThinkingLevel) {
 	s.thinkingLevel = level
 	s.agent.SetThinkingLevel(level)
 	_ = s.sessionManager.Append(session.NewEntry(session.EntryTypeThinkingChange, "", session.ThinkingChangeData{
@@ -67,7 +67,7 @@ func (s *CodingSession) SetThinkingLevel(level agent.ThinkingLevel) {
 }
 
 // GetThinkingLevel returns the current thinking level.
-func (s *engine) GetThinkingLevel() agent.ThinkingLevel {
+func (s *engine) GetThinkingLevel() types.ThinkingLevel {
 	return s.thinkingLevel
 }
 

@@ -2,28 +2,28 @@ package agent
 
 import "github.com/openmodu/modu/pkg/types"
 
-func (a *Agent) GetState() State {
+func (a *Agent) GetState() types.State {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.state
 }
 
-func (a *Agent) AppendMessage(message AgentMessage) {
+func (a *Agent) AppendMessage(message types.AgentMessage) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.state.Messages = append(a.state.Messages, message)
 }
 
-func (a *Agent) ReplaceMessages(messages []AgentMessage) {
+func (a *Agent) ReplaceMessages(messages []types.AgentMessage) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.state.Messages = append([]AgentMessage{}, messages...)
+	a.state.Messages = append([]types.AgentMessage{}, messages...)
 }
 
 func (a *Agent) ClearMessages() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.state.Messages = []AgentMessage{}
+	a.state.Messages = []types.AgentMessage{}
 }
 
 func (a *Agent) Reset() {
@@ -33,15 +33,15 @@ func (a *Agent) Reset() {
 		a.cancel()
 		a.cancel = nil
 	}
-	a.state.Messages = []AgentMessage{}
+	a.state.Messages = []types.AgentMessage{}
 	a.state.IsStreaming = false
 	a.state.StreamMessage = nil
 	a.state.PendingToolCalls = map[string]struct{}{}
 	a.state.Error = ""
 	a.state.Interrupt = nil
-	a.state.Status = SessionStatusIdle
-	a.steering = []AgentMessage{}
-	a.followUp = []AgentMessage{}
+	a.state.Status = types.SessionStatusIdle
+	a.steering = []types.AgentMessage{}
+	a.followUp = []types.AgentMessage{}
 }
 
 func (a *Agent) SetSystemPrompt(value string) {
@@ -56,13 +56,13 @@ func (a *Agent) SetModel(model *types.Model) {
 	a.state.Model = model
 }
 
-func (a *Agent) SetThinkingLevel(level ThinkingLevel) {
+func (a *Agent) SetThinkingLevel(level types.ThinkingLevel) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.state.ThinkingLevel = level
 }
 
-func (a *Agent) SetTools(tools []Tool) {
+func (a *Agent) SetTools(tools []types.Tool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.state.Tools = tools

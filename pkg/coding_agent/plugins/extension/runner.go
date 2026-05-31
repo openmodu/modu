@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // Runner manages the lifecycle of extensions and provides the ExtensionAPI.
 type Runner struct {
 	extensions    []Extension
-	tools         []agent.Tool
+	tools         []types.Tool
 	commands      []Command
 	hooks         []ToolHook
 	handlers      map[string][]EventHandler
@@ -96,7 +96,7 @@ func (r *Runner) Init(extensions []Extension) error {
 }
 
 // RegisterTool implements ExtensionAPI.
-func (r *Runner) RegisterTool(tool agent.Tool) {
+func (r *Runner) RegisterTool(tool types.Tool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.tools = append(r.tools, tool)
@@ -323,16 +323,16 @@ func (r *Runner) InterruptBackgroundTask(id, reason string) (TaskSnapshot, bool)
 }
 
 // GetTools returns all tools registered by extensions.
-func (r *Runner) GetTools() []agent.Tool {
+func (r *Runner) GetTools() []types.Tool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	result := make([]agent.Tool, len(r.tools))
+	result := make([]types.Tool, len(r.tools))
 	copy(result, r.tools)
 	return result
 }
 
 // EmitEvent dispatches an event to all registered handlers.
-func (r *Runner) EmitEvent(event agent.Event) {
+func (r *Runner) EmitEvent(event types.Event) {
 	r.mu.RLock()
 	handlers := r.handlers[string(event.Type)]
 	r.mu.RUnlock()

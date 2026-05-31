@@ -7,12 +7,11 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/services/session"
 	"github.com/openmodu/modu/pkg/types"
 )
 
-func writeSubagentSessionFile(path, cwd, parentSession, id string, messages []agent.AgentMessage) error {
+func writeSubagentSessionFile(path, cwd, parentSession, id string, messages []types.AgentMessage) error {
 	if path == "" {
 		return nil
 	}
@@ -52,7 +51,7 @@ func writeSubagentSessionFile(path, cwd, parentSession, id string, messages []ag
 	return os.Rename(tmp, path)
 }
 
-func loadSubagentSessionMessages(path string) ([]agent.AgentMessage, error) {
+func loadSubagentSessionMessages(path string) ([]types.AgentMessage, error) {
 	if path == "" {
 		return nil, nil
 	}
@@ -62,7 +61,7 @@ func loadSubagentSessionMessages(path string) ([]agent.AgentMessage, error) {
 	}
 	defer f.Close()
 
-	var messages []agent.AgentMessage
+	var messages []types.AgentMessage
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		msg, ok := parseSubagentSessionLine(scanner.Bytes())
@@ -76,7 +75,7 @@ func loadSubagentSessionMessages(path string) ([]agent.AgentMessage, error) {
 	return messages, nil
 }
 
-func parseSubagentSessionLine(data []byte) (agent.AgentMessage, bool) {
+func parseSubagentSessionLine(data []byte) (types.AgentMessage, bool) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, false

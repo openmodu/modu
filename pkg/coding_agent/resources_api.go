@@ -1,9 +1,9 @@
 package coding_agent
 
 import (
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/foundation/resource"
 	"github.com/openmodu/modu/pkg/skills"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // SetActiveTools sets which tools are active by name.
@@ -13,7 +13,7 @@ func (s *engine) SetActiveTools(names []string) {
 		nameSet[n] = true
 	}
 
-	var active []agent.Tool
+	var active []types.Tool
 	for _, tool := range s.activeTools {
 		if nameSet[tool.Name()] {
 			active = append(active, tool)

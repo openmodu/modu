@@ -7,30 +7,30 @@ import (
 	"github.com/openmodu/modu/pkg/types"
 )
 
-func (a *Agent) applyEvent(event Event) {
+func (a *Agent) applyEvent(event types.Event) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	switch event.Type {
-	case EventTypeMessageStart, EventTypeMessageUpdate:
+	case types.EventTypeMessageStart, types.EventTypeMessageUpdate:
 		a.state.StreamMessage = event.Message
-	case EventTypeMessageEnd:
+	case types.EventTypeMessageEnd:
 		a.state.StreamMessage = nil
 		a.state.Messages = append(a.state.Messages, event.Message)
-	case EventTypeToolExecutionStart:
+	case types.EventTypeToolExecutionStart:
 		a.state.PendingToolCalls[event.ToolCallID] = struct{}{}
-	case EventTypeToolExecutionEnd:
+	case types.EventTypeToolExecutionEnd:
 		delete(a.state.PendingToolCalls, event.ToolCallID)
-	case EventTypeInterrupt:
+	case types.EventTypeInterrupt:
 		if event.Interrupt != nil && a.config.EnableInterrupts {
-			a.state.Status = SessionStatusPaused
+			a.state.Status = types.SessionStatusPaused
 			a.state.Interrupt = event.Interrupt
-			a.resume = make(chan ResumeDecision, 1)
+			a.resume = make(chan types.ResumeDecision, 1)
 			if a.resumeReady != nil {
 				close(a.resumeReady)
 				a.resumeReady = nil
 			}
 		}
-	case EventTypeAgentEnd:
+	case types.EventTypeAgentEnd:
 		a.state.IsStreaming = false
 		a.state.StreamMessage = nil
 	}
@@ -48,7 +48,7 @@ func (a *Agent) appendErrorMessageLocked(ctx context.Context, err error) {
 		modelID = a.state.Model.ID
 	}
 	message := types.AssistantMessage{
-		Role:         RoleAssistant,
+		Role:         types.RoleAssistant,
 		Content:      []types.ContentBlock{&types.TextContent{Type: "text", Text: ""}},
 		ProviderID:   providerID,
 		Model:        modelID,

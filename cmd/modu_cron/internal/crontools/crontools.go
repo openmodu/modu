@@ -1,5 +1,5 @@
 // Package crontools exposes cron_add / cron_list / cron_remove as
-// agent.Tool implementations, so the CodingSession driving each task
+// types.Tool implementations, so the CodingSession driving each task
 // can manage the modu_cron task file via natural language.
 //
 // All three tools serialize on the same package-level mutex so concurrent
@@ -18,7 +18,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/types"
 
 	"github.com/openmodu/modu/cmd/modu_cron/internal/config"
@@ -30,8 +29,8 @@ import (
 var fileMu sync.Mutex
 
 // New returns the three cron-management tools bound to cfgPath.
-func New(cfgPath string) []agent.Tool {
-	return []agent.Tool{
+func New(cfgPath string) []types.Tool {
+	return []types.Tool{
 		&addTool{cfgPath: cfgPath},
 		&listTool{cfgPath: cfgPath},
 		&removeTool{cfgPath: cfgPath},
@@ -83,7 +82,7 @@ func (t *addTool) Parameters() any {
 	}
 }
 
-func (t *addTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *addTool) Execute(ctx context.Context, _ string, args map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	id, _ := args["id"].(string)
 	cronExpr, _ := args["cron"].(string)
 	prompt, _ := args["prompt"].(string)
@@ -158,7 +157,7 @@ func (t *listTool) Parameters() any {
 	}
 }
 
-func (t *listTool) Execute(ctx context.Context, _ string, _ map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *listTool) Execute(ctx context.Context, _ string, _ map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	fileMu.Lock()
 	defer fileMu.Unlock()
 	cfg, err := config.Load(t.cfgPath)
@@ -236,7 +235,7 @@ func (t *removeTool) Parameters() any {
 	}
 }
 
-func (t *removeTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *removeTool) Execute(ctx context.Context, _ string, args map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	id, _ := args["id"].(string)
 	if id == "" {
 		return errorResult("id is required"), nil
@@ -267,8 +266,8 @@ func (t *removeTool) Execute(ctx context.Context, _ string, args map[string]any,
 
 // ─── helpers ───────────────────────────────────────────────────────────────
 
-func okResult(text string, details map[string]any) agent.ToolResult {
-	return agent.ToolResult{
+func okResult(text string, details map[string]any) types.ToolResult {
+	return types.ToolResult{
 		Content: []types.ContentBlock{
 			&types.TextContent{Type: "text", Text: text},
 		},
@@ -276,8 +275,8 @@ func okResult(text string, details map[string]any) agent.ToolResult {
 	}
 }
 
-func errorResult(text string) agent.ToolResult {
-	return agent.ToolResult{
+func errorResult(text string) types.ToolResult {
+	return types.ToolResult{
 		Content: []types.ContentBlock{
 			&types.TextContent{Type: "text", Text: text},
 		},

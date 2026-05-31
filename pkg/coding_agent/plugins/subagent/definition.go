@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/types"
 	"github.com/openmodu/modu/pkg/utils"
 )
 
@@ -25,7 +25,7 @@ type SubagentDefinition struct {
 	Isolation         string
 	Model             string // optional model ID override
 	DefaultContext    string
-	ThinkingLevel     agent.ThinkingLevel
+	ThinkingLevel     types.ThinkingLevel
 	MaxTurns          int
 	DefaultReads      []string
 	DefaultProgress   bool
@@ -90,7 +90,7 @@ func applyFrontmatter(fields map[string]string, def *SubagentDefinition) {
 		case "default_context", "default-context":
 			def.DefaultContext = value
 		case "thinking", "thinking_level", "thinking-level":
-			def.ThinkingLevel = agent.ThinkingLevel(value)
+			def.ThinkingLevel = types.ThinkingLevel(value)
 		case "max_turns", "max-turns":
 			if n, err := strconv.Atoi(value); err == nil && n > 0 {
 				def.MaxTurns = n

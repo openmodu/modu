@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -23,7 +22,7 @@ Be concise but specific.`
 type BranchSummaryOptions struct {
 	Model     *types.Model
 	GetAPIKey func(provider string) (string, error)
-	StreamFn  agent.StreamFn
+	StreamFn  types.StreamFn
 }
 
 // GenerateBranchSummary creates a summary of the conversation context

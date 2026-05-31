@@ -5,11 +5,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/types"
 )
 
-// subagentTool is the agent.Tool the extension exposes to the LLM.
+// subagentTool is the types.Tool the extension exposes to the LLM.
 //
 // The tool name is "subagent". The extension also exposes "spawn_subagent" as
 // a compatibility alias for callers that still use the old tool surface.
@@ -295,7 +294,7 @@ func (t *subagentTool) Parameters() any {
 	}
 }
 
-func (t *subagentTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *subagentTool) Execute(ctx context.Context, _ string, args map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	if action, _ := args["action"].(string); action != "" {
 		text, err := runAction(ctx, t.ext, action, args)
 		if err != nil {
@@ -398,8 +397,8 @@ func detailsFromText(text string) map[string]string {
 	return map[string]string{"task_id": taskID, "status": "running"}
 }
 
-func okResult(text string, details map[string]string) agent.ToolResult {
-	result := agent.ToolResult{
+func okResult(text string, details map[string]string) types.ToolResult {
+	result := types.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: text}},
 	}
 	if len(details) > 0 {
@@ -408,8 +407,8 @@ func okResult(text string, details map[string]string) agent.ToolResult {
 	return result
 }
 
-func errResult(text string) agent.ToolResult {
-	return agent.ToolResult{
+func errResult(text string) types.ToolResult {
+	return types.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: text}},
 		IsError: true,
 	}

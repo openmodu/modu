@@ -1,8 +1,12 @@
 package agent
 
-import "context"
+import (
+	"context"
 
-func (a *Agent) Resume(decision ResumeDecision) bool {
+	"github.com/openmodu/modu/pkg/types"
+)
+
+func (a *Agent) Resume(decision types.ResumeDecision) bool {
 	a.mu.RLock()
 	ch := a.resume
 	a.mu.RUnlock()
@@ -17,19 +21,19 @@ func (a *Agent) Resume(decision ResumeDecision) bool {
 	}
 }
 
-func (a *Agent) GetStatus() SessionStatus {
+func (a *Agent) GetStatus() types.SessionStatus {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.state.Status
 }
 
-func (a *Agent) GetInterrupt() *InterruptEvent {
+func (a *Agent) GetInterrupt() *types.InterruptEvent {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.state.Interrupt
 }
 
-func (a *Agent) waitForResume(ctx context.Context) ResumeDecision {
+func (a *Agent) waitForResume(ctx context.Context) types.ResumeDecision {
 	a.mu.RLock()
 	ch := a.resume
 	ready := a.resumeReady
@@ -38,23 +42,23 @@ func (a *Agent) waitForResume(ctx context.Context) ResumeDecision {
 		select {
 		case <-ready:
 		case <-ctx.Done():
-			return ResumeDecision{Allow: false}
+			return types.ResumeDecision{Allow: false}
 		}
 		a.mu.RLock()
 		ch = a.resume
 		a.mu.RUnlock()
 	}
 	if ch == nil {
-		return ResumeDecision{Allow: false}
+		return types.ResumeDecision{Allow: false}
 	}
-	var decision ResumeDecision
+	var decision types.ResumeDecision
 	select {
 	case decision = <-ch:
 	case <-ctx.Done():
-		return ResumeDecision{Allow: false}
+		return types.ResumeDecision{Allow: false}
 	}
 	a.mu.Lock()
-	a.state.Status = SessionStatusRunning
+	a.state.Status = types.SessionStatusRunning
 	a.state.Interrupt = nil
 	a.resume = nil
 	a.resumeReady = make(chan struct{})
