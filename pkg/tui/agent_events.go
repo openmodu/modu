@@ -93,7 +93,7 @@ func (m *uiModel) handleAgentEvent(ev agent.Event) {
 		if !ok {
 			break
 		}
-		block := m.currentAssistantBlock()
+		block := m.lastAssistantBlock()
 		for _, content := range msg.Content {
 			switch c := content.(type) {
 			case *types.ThinkingContent:

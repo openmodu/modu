@@ -639,6 +639,35 @@ func TestHandleToolExecutionEndUpdatesByToolCallID(t *testing.T) {
 	}
 }
 
+func TestMessageEndDoesNotDuplicateAssistantBlockAfterTool(t *testing.T) {
+	// A single assistant message that emits text and then a tool call produces
+	// the event order: MessageStart, text delta, ToolExecutionStart, MessageEnd.
+	// At MessageEnd the last block is the tool block, so finalizing the message
+	// must update the existing assistant block — not append a second one.
+	m := newUIModel(context.Background(), nil, nil, "", nil, nil, "")
+
+	m.handleAgentEvent(agent.Event{Type: agent.EventTypeMessageStart, Message: types.AssistantMessage{Role: "assistant"}})
+	m.handleAgentEvent(agent.Event{
+		Type:        agent.EventTypeMessageUpdate,
+		StreamEvent: &types.StreamEvent{Type: types.EventTextDelta, Delta: "Hello there"},
+	})
+	m.handleAgentEvent(agent.Event{Type: agent.EventTypeToolExecutionStart, ToolCallID: "call-1", ToolName: "bash"})
+	m.handleAgentEvent(agent.Event{
+		Type:    agent.EventTypeMessageEnd,
+		Message: types.AssistantMessage{Role: "assistant", Content: []types.ContentBlock{&types.TextContent{Text: "Hello there"}}},
+	})
+
+	var assistantBlocks int
+	for _, blk := range m.blocks {
+		if blk.Kind == "assistant" {
+			assistantBlocks++
+		}
+	}
+	if assistantBlocks != 1 {
+		t.Fatalf("expected exactly 1 assistant block, got %d (duplicate render after tool)", assistantBlocks)
+	}
+}
+
 func TestRenderInputMetaUsesShortenedCwd(t *testing.T) {
 	session := newUITestSession(t)
 	model := testUIModel()
