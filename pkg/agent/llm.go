@@ -121,19 +121,22 @@ func defaultConvertToLLM(messages []types.AgentMessage) []types.AgentMessage {
 }
 
 func collectAssistantMessage(response types.EventStream, events types.EventSink) (*types.AssistantMessage, error) {
+	if events == nil {
+		events = discardEvents{}
+	}
 	addedStart := false
 	for event := range response.Events() {
 		switch event.Type {
 		case types.EventStart:
 			if event.Partial != nil {
 				addedStart = true
-				emitEvent(events, types.Event{Type: types.EventTypeMessageStart, Message: *event.Partial})
+				events.Emit(types.Event{Type: types.EventTypeMessageStart, Message: *event.Partial})
 			}
 		case types.EventTextStart, types.EventTextDelta, types.EventTextEnd,
 			types.EventThinkingStart, types.EventThinkingDelta, types.EventThinkingEnd,
 			types.EventToolCallStart, types.EventToolCallDelta, types.EventToolCallEnd:
 			if event.Partial != nil {
-				emitEvent(events, types.Event{Type: types.EventTypeMessageUpdate, Message: *event.Partial, StreamEvent: &event})
+				events.Emit(types.Event{Type: types.EventTypeMessageUpdate, Message: *event.Partial, StreamEvent: &event})
 			}
 		case types.EventDone, types.EventError:
 			finalMessage, err := response.Result()
@@ -144,9 +147,9 @@ func collectAssistantMessage(response types.EventStream, events types.EventSink)
 				return nil, fmt.Errorf("missing final message")
 			}
 			if !addedStart {
-				emitEvent(events, types.Event{Type: types.EventTypeMessageStart, Message: *finalMessage})
+				events.Emit(types.Event{Type: types.EventTypeMessageStart, Message: *finalMessage})
 			}
-			emitEvent(events, types.Event{Type: types.EventTypeMessageEnd, Message: *finalMessage})
+			events.Emit(types.Event{Type: types.EventTypeMessageEnd, Message: *finalMessage})
 			return finalMessage, nil
 		}
 	}
