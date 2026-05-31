@@ -16,6 +16,7 @@ import (
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
 	subagentext "github.com/openmodu/modu/pkg/coding_agent/plugins/extension/subagent"
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/subagent"
+	"github.com/openmodu/modu/pkg/coding_agent/services/bgtask"
 	"github.com/openmodu/modu/pkg/coding_agent/services/memory"
 	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/services/session"
 	"github.com/openmodu/modu/pkg/coding_agent/tools"
@@ -673,7 +674,7 @@ System prompt for helper.
 func TestBackgroundTaskManagerCreateWithMetadataInDirRedirects(t *testing.T) {
 	defaultRoot := t.TempDir()
 	overrideRoot := t.TempDir()
-	mgr := newBackgroundTaskManager()
+	mgr := bgtask.New()
 	if err := mgr.SetStorePath(filepath.Join(defaultRoot, "background_tasks.json")); err != nil {
 		t.Fatal(err)
 	}
@@ -1355,25 +1356,6 @@ func TestRuntimeStateGitRefreshCanRunAsync(t *testing.T) {
 		default:
 			time.Sleep(10 * time.Millisecond)
 		}
-	}
-}
-
-func TestAPIKeyStore(t *testing.T) {
-	dir := t.TempDir()
-	store := NewAPIKeyStore(dir)
-
-	// Set and get
-	store.Set("test-provider", "test-key-123")
-
-	key, ok := store.Get("test-provider")
-	if !ok || key != "test-key-123" {
-		t.Fatal("failed to get stored key")
-	}
-
-	// Missing key
-	_, ok = store.Get("nonexistent")
-	if ok {
-		t.Fatal("should not find nonexistent key")
 	}
 }
 

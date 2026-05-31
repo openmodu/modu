@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/coding_agent/foundation/apikeys"
 	"github.com/openmodu/modu/pkg/coding_agent/foundation/config"
 	"github.com/openmodu/modu/pkg/coding_agent/foundation/eventbus"
 	"github.com/openmodu/modu/pkg/coding_agent/foundation/resource"
@@ -16,6 +17,7 @@ import (
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/subagent"
 	"github.com/openmodu/modu/pkg/coding_agent/services/approval"
 	"github.com/openmodu/modu/pkg/coding_agent/services/bash"
+	"github.com/openmodu/modu/pkg/coding_agent/services/bgtask"
 	"github.com/openmodu/modu/pkg/coding_agent/services/contextmgr"
 	"github.com/openmodu/modu/pkg/coding_agent/services/memory"
 	"github.com/openmodu/modu/pkg/coding_agent/services/plan"
@@ -99,13 +101,13 @@ type engine struct {
 	sessionStarted  int64
 
 	// Session components — each owns its own state behind a narrow API.
-	ctxMgr      *contextmgr.Manager    // conversation window: tokens, compaction, nested context
-	bash        *bash.Runner           // inline !command execution + cancellation
-	todos       *todo.Store            // session todo list
-	taskManager *backgroundTaskManager // background async tasks
-	plan        *plan.Controller       // plan mode
-	worktree    *worktree.Controller   // isolated git worktree
-	extPrompts  extensionPrompts       // host confirm/select callbacks
+	ctxMgr      *contextmgr.Manager  // conversation window: tokens, compaction, nested context
+	bash        *bash.Runner         // inline !command execution + cancellation
+	todos       *todo.Store          // session todo list
+	taskManager *bgtask.Manager      // background async tasks
+	plan        *plan.Controller     // plan mode
+	worktree    *worktree.Controller // isolated git worktree
+	extPrompts  extensionPrompts     // host confirm/select callbacks
 
 	// approvalManager handles tool execution approval.
 	approvalManager *approval.Manager
@@ -233,7 +235,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	// Determine API key function
 	getAPIKey := opts.GetAPIKey
 	if getAPIKey == nil {
-		keyStore := NewAPIKeyStore(agentDir)
+		keyStore := apikeys.New(agentDir)
 		_ = keyStore.Load()
 		getAPIKey = func(provider string) (string, error) {
 			key, ok := keyStore.Get(provider)
@@ -251,7 +253,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	subagentLoader := subagent.NewLoader()
 	subagentLoader.Discover(agentDir, opts.Cwd)
 	subagentLoader.DiscoverExtra(opts.ExtraSubagentDirs...)
-	taskMgr := newBackgroundTaskManager()
+	taskMgr := bgtask.New()
 	systemPrompt := promptBuilder.Build()
 
 	// Create approval manager

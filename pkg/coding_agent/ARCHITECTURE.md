@@ -50,8 +50,10 @@ Pure, widely depended upon, depends on nothing in this package.
 - `coding_agent/eventbus` — pub/sub
 - `coding_agent/resource` — agent-dir layout, path resolution, context-file & package discovery
 - `coding_agent/taskoutput` — the background-task contract (breaks an import cycle)
-- `coding_agent/config` — session settings (`config.Config`, `config.Load`, `config.Default`)
-- `coding_agent/paths.go` — default agent dir (root file; candidate to fold into a foundation pkg)
+- `foundation/config` — session settings (`config.Config`, `config.Load`, `config.Default`)
+- `foundation/apikeys` — per-provider API key storage under the agent dir
+- `coding_agent/paths.go` — a one-line `DefaultAgentDir` re-export of
+  `foundation/resource` (kept as a public convenience for cmd callers)
 
 ### L1 — kernel
 Single responsibility: hold the session and run turns. The smallest thing that
@@ -78,7 +80,7 @@ through a narrow API. Each should be replaceable/testable in isolation.
 | session persistence + tree/branching | `session/` |
 | tool approval policy | `approval/` (session keeps only the `approval.go` wiring + Observer impl) |
 | persistent memory | `memory/` |
-| background async tasks | `task_output.go`, `task_output_adapter.go` |
+| background async tasks | `services/bgtask` (kernel keeps `task_output.go` aliases + accessor, and `task_output_adapter.go`) |
 | plan mode | `plan/` (kernel keeps `plan.go` wiring + tool registration) |
 | isolated git worktree | `worktree/` (kernel keeps `worktree.go` wiring + tool registration) |
 | todo list | `todo/` (kernel keeps `todo.go` alias + tool adapter) |
