@@ -10,8 +10,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/foundation/config"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // Manager manages tool execution permissions.
@@ -29,7 +29,7 @@ type Manager struct {
 	blocker         func(toolName string, args map[string]any) (bool, string)
 	// callback is called when no cached decision exists.
 	// If nil, all tools are auto-approved.
-	callback func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error)
+	callback func(toolName, toolCallID string, args map[string]any) (types.ToolApprovalDecision, error)
 }
 
 // Observer is notified when a permission is requested or denied.
@@ -49,7 +49,7 @@ func New() *Manager {
 }
 
 // SetCallback sets the interactive approval callback.
-func (m *Manager) SetCallback(fn func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error)) {
+func (m *Manager) SetCallback(fn func(toolName, toolCallID string, args map[string]any) (types.ToolApprovalDecision, error)) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.callback = fn
@@ -73,13 +73,13 @@ func (m *Manager) SetBlocker(fn func(toolName string, args map[string]any) (bool
 	m.blocker = fn
 }
 
-// Approve is the agent.Config.ApproveTool implementation.
-func (m *Manager) Approve(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
+// Approve is the types.Config.ApproveTool implementation.
+func (m *Manager) Approve(toolName, toolCallID string, args map[string]any) (types.ToolApprovalDecision, error) {
 	// exit_plan_mode runs its own interactive plan-approval gate inside the
 	// tool (so the user's rejection feedback can flow back to the model), so
 	// the agent-level gate must let it through without prompting.
 	if toolName == "exit_plan_mode" || isGoalStateTool(toolName) {
-		return agent.ToolApprovalAllow, nil
+		return types.ToolApprovalAllow, nil
 	}
 
 	m.mu.RLock()
@@ -94,7 +94,7 @@ func (m *Manager) Approve(toolName, toolCallID string, args map[string]any) (age
 			if observer != nil {
 				observer.OnPermissionDenied(toolName, toolCallID, args, reason)
 			}
-			return agent.ToolApprovalDeny, errors.New(reason)
+			return types.ToolApprovalDeny, errors.New(reason)
 		}
 	}
 
@@ -104,11 +104,11 @@ func (m *Manager) Approve(toolName, toolCallID string, args map[string]any) (age
 	m.mu.RLock()
 	if bashCommand != "" && m.alwaysDenyBash[bashCommand] {
 		m.mu.RUnlock()
-		return agent.ToolApprovalDeny, nil
+		return types.ToolApprovalDeny, nil
 	}
 	if m.alwaysDeny[toolName] {
 		m.mu.RUnlock()
-		return agent.ToolApprovalDeny, nil
+		return types.ToolApprovalDeny, nil
 	}
 	bashAllowed := bashCommand != "" && m.alwaysAllowBash[bashCommand]
 	toolAllowed := !bashNeedsApproval && m.alwaysAllow[toolName]
@@ -125,7 +125,7 @@ func (m *Manager) Approve(toolName, toolCallID string, args map[string]any) (age
 	}
 
 	if bashAllowed || toolAllowed {
-		return agent.ToolApprovalAllow, nil
+		return types.ToolApprovalAllow, nil
 	}
 
 	if !bashNeedsApproval {
@@ -138,7 +138,7 @@ func (m *Manager) Approve(toolName, toolCallID string, args map[string]any) (age
 	}
 
 	if cb == nil {
-		return agent.ToolApprovalAllow, nil
+		return types.ToolApprovalAllow, nil
 	}
 	if observer != nil {
 		observer.OnPermissionRequest(toolName, toolCallID, args)
@@ -149,7 +149,7 @@ func (m *Manager) Approve(toolName, toolCallID string, args map[string]any) (age
 		if observer != nil {
 			observer.OnPermissionDenied(toolName, toolCallID, args, err.Error())
 		}
-		return agent.ToolApprovalDeny, err
+		return types.ToolApprovalDeny, err
 	}
 	if !decision.IsAllow() && observer != nil {
 		observer.OnPermissionDenied(toolName, toolCallID, args, string(decision))
@@ -157,21 +157,21 @@ func (m *Manager) Approve(toolName, toolCallID string, args map[string]any) (age
 
 	// Persist always decisions. Interactive bash decisions are intentionally
 	// command-scoped; programmatic AllowAlways("bash") remains tool-wide.
-	if bashCommand != "" && decision == agent.ToolApprovalAllowAlways {
+	if bashCommand != "" && decision == types.ToolApprovalAllowAlways {
 		m.mu.Lock()
 		m.alwaysAllowBash[bashCommand] = true
 		delete(m.alwaysDenyBash, bashCommand)
 		m.mu.Unlock()
-	} else if bashCommand != "" && decision == agent.ToolApprovalDenyAlways {
+	} else if bashCommand != "" && decision == types.ToolApprovalDenyAlways {
 		m.mu.Lock()
 		m.alwaysDenyBash[bashCommand] = true
 		delete(m.alwaysAllowBash, bashCommand)
 		m.mu.Unlock()
-	} else if decision == agent.ToolApprovalAllowAlways {
+	} else if decision == types.ToolApprovalAllowAlways {
 		m.mu.Lock()
 		m.alwaysAllow[toolName] = true
 		m.mu.Unlock()
-	} else if decision == agent.ToolApprovalDenyAlways {
+	} else if decision == types.ToolApprovalDenyAlways {
 		m.mu.Lock()
 		m.alwaysDeny[toolName] = true
 		m.mu.Unlock()
@@ -180,10 +180,10 @@ func (m *Manager) Approve(toolName, toolCallID string, args map[string]any) (age
 	return decision, nil
 }
 
-func evaluateDenyPermissionRules(rules config.PermissionConfig, toolName string, args map[string]any) (agent.ToolApprovalDecision, string, bool) {
+func evaluateDenyPermissionRules(rules config.PermissionConfig, toolName string, args map[string]any) (types.ToolApprovalDecision, string, bool) {
 	for _, denied := range rules.DenyTools {
 		if strings.TrimSpace(denied) == toolName {
-			return agent.ToolApprovalDeny, "denied by permission rules", true
+			return types.ToolApprovalDeny, "denied by permission rules", true
 		}
 	}
 	if toolName != "bash" {
@@ -195,20 +195,20 @@ func evaluateDenyPermissionRules(rules config.PermissionConfig, toolName string,
 	}
 	for _, denied := range rules.DenyBashPrefixes {
 		if denied = strings.TrimSpace(denied); denied != "" && strings.HasPrefix(command, denied) {
-			return agent.ToolApprovalDeny, "bash command denied by permission rules", true
+			return types.ToolApprovalDeny, "bash command denied by permission rules", true
 		}
 	}
 	return "", "", false
 }
 
-func evaluateAllowPermissionRules(rules config.PermissionConfig, toolName string, args map[string]any) (agent.ToolApprovalDecision, string, bool) {
+func evaluateAllowPermissionRules(rules config.PermissionConfig, toolName string, args map[string]any) (types.ToolApprovalDecision, string, bool) {
 	for _, allowed := range rules.AllowTools {
 		if strings.TrimSpace(allowed) == toolName {
-			return agent.ToolApprovalAllow, "", true
+			return types.ToolApprovalAllow, "", true
 		}
 	}
 	if isAutoAllowedReadOnlyTool(toolName) {
-		return agent.ToolApprovalAllow, "", true
+		return types.ToolApprovalAllow, "", true
 	}
 	if toolName != "bash" {
 		return "", "", false
@@ -220,12 +220,12 @@ func evaluateAllowPermissionRules(rules config.PermissionConfig, toolName string
 	if len(rules.AllowBashPrefixes) > 0 {
 		for _, allowed := range rules.AllowBashPrefixes {
 			if allowed = strings.TrimSpace(allowed); allowed != "" && strings.HasPrefix(command, allowed) {
-				return agent.ToolApprovalAllow, "", true
+				return types.ToolApprovalAllow, "", true
 			}
 		}
-		return agent.ToolApprovalDeny, "bash command not allowed by permission rules", true
+		return types.ToolApprovalDeny, "bash command not allowed by permission rules", true
 	}
-	return agent.ToolApprovalAllow, "", true
+	return types.ToolApprovalAllow, "", true
 }
 
 func isAutoAllowedReadOnlyTool(toolName string) bool {

@@ -485,7 +485,7 @@ func TestReadOnlyTools(t *testing.T) {
 
 func TestDefaultProviderBuildsAndRebindsTools(t *testing.T) {
 	provider := NewProvider(ToolSetReadOnly)
-	tools := provider.Tools(agent.ToolContext{
+	tools := provider.Tools(types.ToolContext{
 		Cwd: "/tmp/a",
 		Features: map[string]bool{
 			FeatureMemory: true,
@@ -504,11 +504,11 @@ func TestDefaultProviderBuildsAndRebindsTools(t *testing.T) {
 		t.Fatalf("read-only provider should not include write/bash, got %v", names)
 	}
 
-	rebound, ok := provider.Rebind(read.NewTool("/tmp/a"), agent.ToolContext{Cwd: "/tmp/b"})
+	rebound, ok := provider.Rebind(read.NewTool("/tmp/a"), types.ToolContext{Cwd: "/tmp/b"})
 	if !ok || rebound.Name() != "read" {
 		t.Fatalf("expected read tool to rebind, got %T %v", rebound, ok)
 	}
-	_, ok = provider.Rebind(testUnknownTool{}, agent.ToolContext{Cwd: "/tmp/b"})
+	_, ok = provider.Rebind(testUnknownTool{}, types.ToolContext{Cwd: "/tmp/b"})
 	if ok {
 		t.Fatal("expected unknown tool not to rebind")
 	}
@@ -530,11 +530,11 @@ func (testUnknownTool) Name() string        { return "unknown" }
 func (testUnknownTool) Label() string       { return "Unknown" }
 func (testUnknownTool) Description() string { return "Unknown" }
 func (testUnknownTool) Parameters() any     { return nil }
-func (testUnknownTool) Execute(context.Context, string, map[string]any, agent.ToolUpdateCallback) (agent.ToolResult, error) {
-	return agent.ToolResult{}, nil
+func (testUnknownTool) Execute(context.Context, string, map[string]any, types.ToolUpdateCallback) (types.ToolResult, error) {
+	return types.ToolResult{}, nil
 }
 
-func toolNames(tools []agent.Tool) []string {
+func toolNames(tools []types.Tool) []string {
 	names := make([]string, 0, len(tools))
 	for _, tool := range tools {
 		names = append(names, tool.Name())

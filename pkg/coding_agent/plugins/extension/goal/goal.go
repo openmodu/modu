@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
 	"github.com/openmodu/modu/pkg/types"
 )
@@ -161,8 +160,8 @@ func (e *Extension) Init(api extension.ExtensionAPI) error {
 	})
 	api.RegisterTool(&getGoalTool{store: e.store})
 
-	api.On(string(agent.EventTypeAgentStart), e.onAgentStart)
-	api.On(string(agent.EventTypeAgentEnd), e.onAgentEnd)
+	api.On(string(types.EventTypeAgentStart), e.onAgentStart)
+	api.On(string(types.EventTypeAgentEnd), e.onAgentEnd)
 	api.On(extensionSessionStart, e.onSessionStart)
 	api.On(extensionUIReady, e.onUIReady)
 	api.On(extensionShutdown, e.onSessionShutdown)
@@ -308,7 +307,7 @@ func (e *Extension) setWatching(v bool) {
 	e.watching = v
 }
 
-func (e *Extension) onAgentStart(_ agent.Event) {
+func (e *Extension) onAgentStart(_ types.Event) {
 	e.mu.Lock()
 	e.agentTurnInProgress = true
 	e.completedThisTurnGoalID = ""
@@ -327,7 +326,7 @@ func (e *Extension) onAgentStart(_ agent.Event) {
 	e.clearAgentGoalAccounting()
 }
 
-func (e *Extension) onSessionStart(event agent.Event) {
+func (e *Extension) onSessionStart(event types.Event) {
 	e.mu.Lock()
 	e.lastSessionStartReason = event.Reason
 	e.mu.Unlock()
@@ -350,7 +349,7 @@ func (e *Extension) onSessionStart(event agent.Event) {
 	e.clearAgentGoalAccounting()
 }
 
-func (e *Extension) onUIReady(_ agent.Event) {
+func (e *Extension) onUIReady(_ types.Event) {
 	g, ok, err := e.store.CurrentErr()
 	if err != nil {
 		e.tell(fmt.Sprintf("goal: read failed: %v", err))
@@ -370,14 +369,14 @@ func (e *Extension) onUIReady(_ agent.Event) {
 	}
 }
 
-func (e *Extension) onSessionShutdown(_ agent.Event) {
+func (e *Extension) onSessionShutdown(_ types.Event) {
 	if e.hasAgentGoalAccounting() {
 		e.accountCurrentAgentTurn(types.AgentUsage{}, false)
 	}
 	e.clearAgentGoalAccounting()
 }
 
-func (e *Extension) onAgentEnd(event agent.Event) {
+func (e *Extension) onAgentEnd(event types.Event) {
 	includeComplete := e.completedGoalThisTurn() != ""
 	g, ok := e.accountCurrentAgentTurn(collectUsage(event.Messages), includeComplete)
 
@@ -549,7 +548,7 @@ func (e *Extension) accountCurrentAgentTurn(usage types.AgentUsage, includeCompl
 	return g, ok
 }
 
-func collectUsage(messages []agent.AgentMessage) types.AgentUsage {
+func collectUsage(messages []types.AgentMessage) types.AgentUsage {
 	var out types.AgentUsage
 	for _, msg := range messages {
 		switch m := msg.(type) {

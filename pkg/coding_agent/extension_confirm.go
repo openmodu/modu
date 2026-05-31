@@ -4,7 +4,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // extensionPrompts is a self-contained registry of the host's interactive
@@ -87,5 +87,5 @@ func (s *engine) EmitExtensionEvent(eventType string) {
 	if s == nil || s.extensions == nil || strings.TrimSpace(eventType) == "" {
 		return
 	}
-	s.extensions.EmitEvent(agent.Event{Type: agent.EventType(eventType)})
+	s.extensions.EmitEvent(types.Event{Type: types.EventType(eventType)})
 }

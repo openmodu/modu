@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/mailbox"
 	"github.com/openmodu/modu/pkg/types"
 )
@@ -19,8 +18,8 @@ import (
 //   - mailbox_post       — any agent: post a free-form message to the task's forum thread
 //   - mailbox_pin        — owner/coordinator: update the pinned summary for the task
 //   - mailbox_complete   — coordinator only: mark the whole task as done with the final deliverable
-func hubMailboxTools(hub *mailbox.Hub, agentID string) []agent.Tool {
-	return []agent.Tool{
+func hubMailboxTools(hub *mailbox.Hub, agentID string) []types.Tool {
+	return []types.Tool{
 		&hubDelegateTool{hub: hub, agentID: agentID},
 		&hubReplyTool{hub: hub, agentID: agentID},
 		&hubPostTool{hub: hub, agentID: agentID},
@@ -52,7 +51,7 @@ func (t *hubDelegateTool) Parameters() any {
 		"required": []string{"to", "task_id", "request"},
 	}
 }
-func (t *hubDelegateTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *hubDelegateTool) Execute(ctx context.Context, _ string, args map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	to, _ := args["to"].(string)
 	taskID, _ := args["task_id"].(string)
 	request, _ := args["request"].(string)
@@ -121,7 +120,7 @@ func (t *hubReplyTool) Parameters() any {
 		"required": []string{"to", "task_id"},
 	}
 }
-func (t *hubReplyTool) Execute(_ context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *hubReplyTool) Execute(_ context.Context, _ string, args map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	to, _ := args["to"].(string)
 	taskID, _ := args["task_id"].(string)
 	filePath, _ := args["file_path"].(string)
@@ -191,7 +190,7 @@ func (t *hubPostTool) Parameters() any {
 		"required": []string{"task_id", "text"},
 	}
 }
-func (t *hubPostTool) Execute(_ context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *hubPostTool) Execute(_ context.Context, _ string, args map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	taskID, _ := args["task_id"].(string)
 	text, _ := args["text"].(string)
 	kindStr, _ := args["kind"].(string)
@@ -227,7 +226,7 @@ func (t *hubPinTool) Parameters() any {
 		"required": []string{"task_id", "summary"},
 	}
 }
-func (t *hubPinTool) Execute(_ context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *hubPinTool) Execute(_ context.Context, _ string, args map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	taskID, _ := args["task_id"].(string)
 	summary, _ := args["summary"].(string)
 	if taskID == "" || summary == "" {
@@ -273,7 +272,7 @@ func (t *hubCompleteTool) Parameters() any {
 		"required": []string{"task_id"},
 	}
 }
-func (t *hubCompleteTool) Execute(_ context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *hubCompleteTool) Execute(_ context.Context, _ string, args map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	taskID, _ := args["task_id"].(string)
 	filePath, _ := args["file_path"].(string)
 	result, _ := args["result"].(string)
@@ -316,8 +315,8 @@ func (t *hubCompleteTool) Execute(_ context.Context, _ string, args map[string]a
 
 // ── helper ────────────────────────────────────────────────────────────────────
 
-func hubText(s string) agent.ToolResult {
-	return agent.ToolResult{
+func hubText(s string) types.ToolResult {
+	return types.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: s}},
 	}
 }

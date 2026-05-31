@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/subagent"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // forkSession is the host-side implementation of ExtensionAPI.ForkSession.
@@ -40,7 +40,7 @@ func (cs *engine) forkSession(ctx context.Context, opts extension.ForkOptions) (
 		Skills:          append([]string(nil), opts.Skills...),
 		MemoryScope:     opts.MemoryScope,
 		Model:           opts.Model,
-		ThinkingLevel:   agent.ThinkingLevel(opts.ThinkingLevel),
+		ThinkingLevel:   types.ThinkingLevel(opts.ThinkingLevel),
 		PermissionMode:  opts.PermissionMode,
 		MaxTurns:        opts.MaxTurns,
 		Background:      opts.Background,
@@ -89,7 +89,7 @@ func (cs *engine) forkSession(ctx context.Context, opts extension.ForkOptions) (
 // dropping the request. When sessionDirOverride is non-empty the task's
 // session.jsonl/status.json land under that parent dir; otherwise the
 // task manager picks its default run root.
-func (cs *engine) forkInBackground(ctx context.Context, def *subagent.SubagentDefinition, childCwd string, initialMessages []agent.AgentMessage, task, parentID, outputPath, outputMode, sessionDirOverride string) (string, error) {
+func (cs *engine) forkInBackground(ctx context.Context, def *subagent.SubagentDefinition, childCwd string, initialMessages []types.AgentMessage, task, parentID, outputPath, outputMode, sessionDirOverride string) (string, error) {
 	if cs.taskManager == nil {
 		return "", fmt.Errorf("background fork requested but task manager is not configured")
 	}
@@ -198,7 +198,7 @@ func countLines(text string) int {
 	return strings.Count(text, "\n") + 1
 }
 
-func (cs *engine) loadSubagentParentMessages(parentID string) ([]agent.AgentMessage, error) {
+func (cs *engine) loadSubagentParentMessages(parentID string) ([]types.AgentMessage, error) {
 	if strings.TrimSpace(parentID) == "" || cs.taskManager == nil {
 		return nil, nil
 	}
@@ -209,7 +209,7 @@ func (cs *engine) loadSubagentParentMessages(parentID string) ([]agent.AgentMess
 	return loadSubagentSessionMessages(parent.SessionFile)
 }
 
-func (cs *engine) initialMessagesForFork(mode, parentID string) ([]agent.AgentMessage, error) {
+func (cs *engine) initialMessagesForFork(mode, parentID string) ([]types.AgentMessage, error) {
 	if strings.TrimSpace(parentID) != "" {
 		return cs.loadSubagentParentMessages(parentID)
 	}
@@ -220,7 +220,7 @@ func (cs *engine) initialMessagesForFork(mode, parentID string) ([]agent.AgentMe
 		if cs == nil || cs.agent == nil {
 			return nil, nil
 		}
-		return append([]agent.AgentMessage(nil), cs.agent.GetState().Messages...), nil
+		return append([]types.AgentMessage(nil), cs.agent.GetState().Messages...), nil
 	default:
 		return nil, fmt.Errorf("unknown fork context %q (expected fresh|fork)", mode)
 	}
@@ -229,7 +229,7 @@ func (cs *engine) initialMessagesForFork(mode, parentID string) ([]agent.AgentMe
 // forkInWorktree creates a detached git worktree, rebinds file/shell
 // tools to that path, runs the child, and removes the worktree on exit.
 // Mirrors the legacy spawn_subagent worktree behavior closely.
-func (cs *engine) forkInWorktree(ctx context.Context, def *subagent.SubagentDefinition, initialMessages []agent.AgentMessage, task string) (string, error) {
+func (cs *engine) forkInWorktree(ctx context.Context, def *subagent.SubagentDefinition, initialMessages []types.AgentMessage, task string) (string, error) {
 	root, err := gitTopLevelDir(cs.cwd)
 	if err != nil {
 		return "", fmt.Errorf("worktree isolation requires a git repository: %w", err)
@@ -274,14 +274,14 @@ func forkName(opts extension.ForkOptions) string {
 
 // rebindToolsToCwd returns a copy of tools where cwd-bound tools point at the
 // given path. Unknown tools pass through unchanged.
-func (cs *engine) rebindToolsToCwd(cwd string) []agent.Tool {
-	out := make([]agent.Tool, 0, len(cs.activeTools))
+func (cs *engine) rebindToolsToCwd(cwd string) []types.Tool {
+	out := make([]types.Tool, 0, len(cs.activeTools))
 	for _, tool := range cs.activeTools {
-		if rebound, ok := cs.toolProvider.Rebind(tool, agent.ToolContext{Cwd: cwd}); ok {
+		if rebound, ok := cs.toolProvider.Rebind(tool, types.ToolContext{Cwd: cwd}); ok {
 			out = append(out, rebound)
 			continue
 		}
-		if rebindable, ok := tool.(interface{ WithCwd(string) agent.Tool }); ok {
+		if rebindable, ok := tool.(interface{ WithCwd(string) types.Tool }); ok {
 			out = append(out, rebindable.WithCwd(cwd))
 		} else {
 			out = append(out, tool)

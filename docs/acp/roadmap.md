@@ -237,7 +237,7 @@ pkg/acp/bridge/
 **对外 API**
 ```go
 // Translate 把一个 ACP session/update notification 转成 0..N 个 modu Event
-func Translate(msg *jsonrpc.Message) ([]agent.Event, error)
+func Translate(msg *jsonrpc.Message) ([]types.Event, error)
 ```
 
 **设计要点**

@@ -4,8 +4,8 @@ import (
 	"context"
 	"strings"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/approval"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // channelPrompter implements coding_agent.Prompter by funnelling every kind of
@@ -44,12 +44,12 @@ func (p *channelPrompter) ask(req approval.Request) (string, error) {
 	}
 }
 
-func (p *channelPrompter) ApproveTool(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
+func (p *channelPrompter) ApproveTool(toolName, toolCallID string, args map[string]any) (types.ToolApprovalDecision, error) {
 	d, err := p.ask(approval.Request{ToolName: toolName, ToolCallID: toolCallID, Args: args})
 	if err != nil {
-		return agent.ToolApprovalDeny, err
+		return types.ToolApprovalDeny, err
 	}
-	return agent.ToolApprovalDecision(d), nil
+	return types.ToolApprovalDecision(d), nil
 }
 
 func (p *channelPrompter) ApprovePlan(plan string, steps []string) string {

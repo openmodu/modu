@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/openmodu/modu/pkg/agent"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/providers/openai"
@@ -156,17 +155,17 @@ func Resolve() (*types.Model, func(string) (string, error)) {
 	return nil, nil
 }
 
-// ResolveThinkingLevel maps the THINKING_LEVEL env var to an agent.ThinkingLevel.
-func ResolveThinkingLevel() agent.ThinkingLevel {
+// ResolveThinkingLevel maps the THINKING_LEVEL env var to an types.ThinkingLevel.
+func ResolveThinkingLevel() types.ThinkingLevel {
 	switch strings.ToLower(os.Getenv("THINKING_LEVEL")) {
 	case "low":
-		return agent.ThinkingLevelLow
+		return types.ThinkingLevelLow
 	case "medium":
-		return agent.ThinkingLevelMedium
+		return types.ThinkingLevelMedium
 	case "high":
-		return agent.ThinkingLevelHigh
+		return types.ThinkingLevelHigh
 	default:
-		return agent.ThinkingLevelOff
+		return types.ThinkingLevelOff
 	}
 }
 

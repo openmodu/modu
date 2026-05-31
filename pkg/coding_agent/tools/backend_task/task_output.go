@@ -6,7 +6,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/foundation/taskoutput"
 	"github.com/openmodu/modu/pkg/types"
 )
@@ -18,7 +17,7 @@ type TaskOutputTool struct {
 	store BackgroundTaskStore
 }
 
-func NewTaskOutputTool(store BackgroundTaskStore) agent.Tool {
+func NewTaskOutputTool(store BackgroundTaskStore) types.Tool {
 	return &TaskOutputTool{store: store}
 }
 
@@ -41,7 +40,7 @@ func (t *TaskOutputTool) Parameters() any {
 	}
 }
 
-func (t *TaskOutputTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *TaskOutputTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate types.ToolUpdateCallback) (types.ToolResult, error) {
 	if t.store == nil {
 		return taskOutputResult("background task store is not configured"), nil
 	}
@@ -92,8 +91,8 @@ func (t *TaskOutputTool) Execute(ctx context.Context, toolCallID string, args ma
 	return taskOutputResult(strings.Join(lines, "\n")), nil
 }
 
-func taskOutputResult(text string) agent.ToolResult {
-	return agent.ToolResult{
+func taskOutputResult(text string) types.ToolResult {
+	return types.ToolResult{
 		Content: []types.ContentBlock{
 			&types.TextContent{Type: "text", Text: text},
 		},

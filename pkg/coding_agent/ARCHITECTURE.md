@@ -91,7 +91,7 @@ through a narrow API. Each should be replaceable/testable in isolation.
 
 ### L3 — tools
 Single responsibility: the agent's action surface. Each tool is a self-contained
-capability with a uniform `agent.Tool` contract. This layer is already the
+capability with a uniform `types.Tool` contract. This layer is already the
 cleanest (`tools/` subtree).
 
 - `tools/{read,write,edit,grep,find,ls,bash,memory,planning,worktree,backend_task,common}`

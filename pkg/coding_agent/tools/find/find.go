@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/common"
 	"github.com/openmodu/modu/pkg/types"
 )
@@ -21,7 +20,7 @@ type FindTool struct {
 	cwd string
 }
 
-func NewTool(cwd string) agent.Tool {
+func NewTool(cwd string) types.Tool {
 	return &FindTool{cwd: cwd}
 }
 
@@ -52,7 +51,7 @@ func (t *FindTool) Parameters() any {
 	}
 }
 
-func (t *FindTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *FindTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate types.ToolUpdateCallback) (types.ToolResult, error) {
 	pattern, _ := args["pattern"].(string)
 	if pattern == "" {
 		return common.ErrorResult("pattern is required"), nil
@@ -80,7 +79,7 @@ func (t *FindTool) Execute(ctx context.Context, toolCallID string, args map[stri
 	return t.executeBuiltin(ctx, pattern, searchPath, limit)
 }
 
-func (t *FindTool) executeFd(ctx context.Context, fdPath, pattern, searchPath string, limit int) (agent.ToolResult, error) {
+func (t *FindTool) executeFd(ctx context.Context, fdPath, pattern, searchPath string, limit int) (types.ToolResult, error) {
 	args := []string{
 		"--type", "f",
 		"--color", "never",
@@ -94,7 +93,7 @@ func (t *FindTool) executeFd(ctx context.Context, fdPath, pattern, searchPath st
 	output, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-			return agent.ToolResult{
+			return types.ToolResult{
 				Content: []types.ContentBlock{
 					&types.TextContent{Type: "text", Text: "No files found."},
 				},
@@ -106,7 +105,7 @@ func (t *FindTool) executeFd(ctx context.Context, fdPath, pattern, searchPath st
 
 	result := strings.TrimSpace(string(output))
 	if result == "" {
-		return agent.ToolResult{
+		return types.ToolResult{
 			Content: []types.ContentBlock{
 				&types.TextContent{Type: "text", Text: "No files found."},
 			},
@@ -132,7 +131,7 @@ func (t *FindTool) executeFd(ctx context.Context, fdPath, pattern, searchPath st
 		}
 	}
 
-	return agent.ToolResult{
+	return types.ToolResult{
 		Content: []types.ContentBlock{
 			&types.TextContent{Type: "text", Text: result},
 		},
@@ -143,7 +142,7 @@ func (t *FindTool) executeFd(ctx context.Context, fdPath, pattern, searchPath st
 	}, nil
 }
 
-func (t *FindTool) executeBuiltin(ctx context.Context, pattern, searchPath string, limit int) (agent.ToolResult, error) {
+func (t *FindTool) executeBuiltin(ctx context.Context, pattern, searchPath string, limit int) (types.ToolResult, error) {
 	var results []string
 	skipDirs := map[string]bool{
 		".git":         true,
@@ -199,7 +198,7 @@ func (t *FindTool) executeBuiltin(ctx context.Context, pattern, searchPath strin
 	}
 
 	if len(results) == 0 {
-		return agent.ToolResult{
+		return types.ToolResult{
 			Content: []types.ContentBlock{
 				&types.TextContent{Type: "text", Text: "No files found."},
 			},
@@ -212,7 +211,7 @@ func (t *FindTool) executeBuiltin(ctx context.Context, pattern, searchPath strin
 		text += fmt.Sprintf("\n\n... (limited to %d results)", limit)
 	}
 
-	return agent.ToolResult{
+	return types.ToolResult{
 		Content: []types.ContentBlock{
 			&types.TextContent{Type: "text", Text: text},
 		},

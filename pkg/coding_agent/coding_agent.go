@@ -40,14 +40,14 @@ type CodingSessionOptions struct {
 	// Model is the LLM model to use.
 	Model *types.Model
 	// ThinkingLevel controls reasoning depth.
-	ThinkingLevel agent.ThinkingLevel
+	ThinkingLevel types.ThinkingLevel
 	// Tools are the tools to make available. If nil, defaults to CodingTools.
-	Tools []agent.Tool
+	Tools []types.Tool
 	// CustomTools are additional tools provided by the caller.
-	CustomTools []agent.Tool
+	CustomTools []types.Tool
 	// ToolProvider constructs and rebinds session tools. If nil, the default
 	// coding tool provider is used.
-	ToolProvider agent.ToolManager
+	ToolProvider types.ToolManager
 	// Extensions are extensions to initialize.
 	Extensions []extension.Extension
 	// CustomSystemPrompt overrides the default system prompt.
@@ -55,7 +55,7 @@ type CodingSessionOptions struct {
 	// GetAPIKey retrieves an API key for a provider.
 	GetAPIKey func(provider string) (string, error)
 	// StreamFn overrides the default stream function.
-	StreamFn agent.StreamFn
+	StreamFn types.StreamFn
 	// ExtraSubagentDirs adds extra directories to scan for subagent definitions.
 	ExtraSubagentDirs []string
 	// ScopedModels limits model listing/cycling to these model IDs.
@@ -86,17 +86,17 @@ type engine struct {
 	agentDir        string
 	promptBuilder   *systemprompt.Builder
 	model           *types.Model
-	activeTools     []agent.Tool
-	toolProvider    agent.ToolManager
+	activeTools     []types.Tool
+	toolProvider    types.ToolManager
 	slashCommands   map[string]SlashCommand
 	getAPIKey       func(provider string) (string, error)
-	streamFn        agent.StreamFn
+	streamFn        types.StreamFn
 	lastSavedIndex  int
 	retryManager    *retry.Manager
 	eventBus        eventbus.EventBusController
 	scopedModels    []string
 	modelConfigPath string
-	thinkingLevel   agent.ThinkingLevel
+	thinkingLevel   types.ThinkingLevel
 	sessionName     string
 	sessionStarted  int64
 
@@ -164,7 +164,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	if toolProvider == nil {
 		toolProvider = tools.NewProvider(tools.ToolSetCoding)
 	}
-	activeTools := toolProvider.Tools(agent.ToolContext{
+	activeTools := toolProvider.Tools(types.ToolContext{
 		Cwd:        opts.Cwd,
 		BaseTools:  opts.Tools,
 		ExtraTools: opts.CustomTools,
@@ -261,10 +261,10 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	approvalMgr.SetRules(cfg.Permissions)
 
 	// Create the underlying agent
-	ag := agent.NewAgent(agent.Config{
+	ag := agent.NewAgent(types.Config{
 		GetAPIKey:   getAPIKey,
 		ApproveTool: approvalMgr.Approve,
-		InitialState: &agent.State{
+		InitialState: &types.State{
 			SystemPrompt:  systemPrompt,
 			Model:         opts.Model,
 			ThinkingLevel: cfg.ThinkingLevel,
@@ -326,11 +326,11 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	cs.ctxMgr.MarkInitialContext(initialContexts)
 
 	// Subscribe to events for token usage tracking (auto-compaction)
-	ag.Subscribe(func(event agent.Event) {
+	ag.Subscribe(func(event types.Event) {
 		if cs.extensions != nil {
 			cs.extensions.EmitEvent(event)
 		}
-		if event.Type == agent.EventTypeMessageEnd {
+		if event.Type == types.EventTypeMessageEnd {
 			addUsage := func(u types.AgentUsage) {
 				t := u.TotalTokens
 				if t == 0 {
@@ -346,11 +346,11 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 			cs.handleMessageEnd(event.Message)
 			return
 		}
-		if event.Type == agent.EventTypeToolExecutionEnd && !event.IsError {
+		if event.Type == types.EventTypeToolExecutionEnd && !event.IsError {
 			cs.ctxMgr.OnToolExecutionEnd(event)
 			return
 		}
-		if event.Type == agent.EventTypeAgentEnd {
+		if event.Type == types.EventTypeAgentEnd {
 			cs.ctxMgr.PruneTransient()
 			go cs.refreshGitRuntimeState()
 			cs.writeRuntimeState()
@@ -527,7 +527,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 				},
 			}
 		}
-		extRunner.EmitEvent(agent.Event{Type: agent.EventType("session_start"), Reason: "startup"})
+		extRunner.EmitEvent(types.Event{Type: types.EventType("session_start"), Reason: "startup"})
 	}
 
 	cs.installHarnessLayer()
@@ -551,7 +551,7 @@ func (s *engine) wireComponents() {
 		Agent:          s.agent,
 		Resources:      s.resources,
 		SessionManager: s.sessionManager,
-		StreamFn:       func() agent.StreamFn { return s.streamFn },
+		StreamFn:       func() types.StreamFn { return s.streamFn },
 		APIKey:         s.getAPIKey,
 		Host:           s,
 	})
@@ -599,7 +599,7 @@ func (s *engine) Prompt(ctx context.Context, text string) error {
 
 	// Record to session
 	_ = s.sessionManager.Append(session.NewEntry(session.EntryTypeMessage, "", session.MessageData{
-		Role:    agent.RoleUser,
+		Role:    types.RoleUser,
 		Content: text,
 	}))
 
@@ -620,7 +620,7 @@ func (s *engine) Prompt(ctx context.Context, text string) error {
 
 func (s *engine) Close(reason string) {
 	if s.extensions != nil {
-		s.extensions.EmitEvent(agent.Event{Type: agent.EventType("session_shutdown")})
+		s.extensions.EmitEvent(types.Event{Type: types.EventType("session_shutdown")})
 	}
 	s.writeRuntimeState()
 }
@@ -644,7 +644,7 @@ func (s *engine) FollowUp(text string) {
 }
 
 // Subscribe registers an event listener. Returns an unsubscribe function.
-func (s *engine) Subscribe(fn func(agent.Event)) func() {
+func (s *engine) Subscribe(fn func(types.Event)) func() {
 	return s.agent.Subscribe(fn)
 }
 
@@ -669,7 +669,7 @@ func (s *engine) IsStreaming() bool {
 }
 
 // GetMessages returns the current message history.
-func (s *engine) GetMessages() []agent.AgentMessage {
+func (s *engine) GetMessages() []types.AgentMessage {
 	return s.agent.GetState().Messages
 }
 
@@ -781,7 +781,7 @@ func (s *engine) executeSkill(ctx context.Context, skill *skills.Skill, args str
 
 	s.refreshDynamicSystemPrompt()
 
-	messages := []agent.AgentMessage{
+	messages := []types.AgentMessage{
 		(&CustomMessage{
 			Source: explicitSkillSource,
 			Text:   s.skillPrompt(skill),
@@ -809,7 +809,7 @@ func (s *engine) skillPrompt(skill *skills.Skill) string {
 	return strings.Join(parts, "\n\n---\n\n")
 }
 
-func (s *engine) handleMessageEnd(msg agent.AgentMessage) {
+func (s *engine) handleMessageEnd(msg types.AgentMessage) {
 	if msg == nil {
 		return
 	}
@@ -821,7 +821,7 @@ func (s *engine) handleMessageEnd(msg agent.AgentMessage) {
 	if !ok {
 		return
 	}
-	if role == agent.RoleUser {
+	if role == types.RoleUser {
 		if !s.currentLeafMessageMatches(role, content) {
 			_ = s.sessionManager.Append(session.NewEntry(session.EntryTypeMessage, "", session.MessageData{
 				Role:    role,
@@ -858,20 +858,20 @@ func (s *engine) currentLeafMessageMatches(role string, content any) bool {
 	return data.Role == role && reflect.DeepEqual(data.Content, content)
 }
 
-func sessionMessageData(msg agent.AgentMessage) (string, any, bool) {
+func sessionMessageData(msg types.AgentMessage) (string, any, bool) {
 	switch m := msg.(type) {
 	case types.UserMessage:
-		return agent.RoleUser, m.Content, true
+		return types.RoleUser, m.Content, true
 	case *types.UserMessage:
-		return agent.RoleUser, m.Content, true
+		return types.RoleUser, m.Content, true
 	case types.AssistantMessage:
-		return agent.RoleAssistant, m, true
+		return types.RoleAssistant, m, true
 	case *types.AssistantMessage:
-		return agent.RoleAssistant, *m, true
+		return types.RoleAssistant, *m, true
 	case types.ToolResultMessage:
-		return agent.RoleToolResult, m, true
+		return types.RoleToolResult, m, true
 	case *types.ToolResultMessage:
-		return agent.RoleToolResult, *m, true
+		return types.RoleToolResult, *m, true
 	default:
 		return "", nil, false
 	}

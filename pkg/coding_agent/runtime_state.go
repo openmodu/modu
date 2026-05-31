@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 type RuntimeStateSnapshot struct {
@@ -172,8 +172,8 @@ func (s *engine) writeRuntimeState() {
 	_ = os.WriteFile(paths.RuntimeStateFile, append(data, '\n'), 0o600)
 }
 
-func removeToolByName(list []agent.Tool, name string) []agent.Tool {
-	out := make([]agent.Tool, 0, len(list))
+func removeToolByName(list []types.Tool, name string) []types.Tool {
+	out := make([]types.Tool, 0, len(list))
 	for _, tool := range list {
 		if tool.Name() == name {
 			continue

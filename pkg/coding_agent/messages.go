@@ -4,7 +4,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -104,7 +103,7 @@ func (m *CustomMessage) ToLlmMessage() types.UserMessage {
 // body stays resident across turns so a multi-turn skill is not re-read every
 // turn, and context pressure is reclaimed by compaction instead. The broader
 // "never persist" set is isNonPersistentMessage.
-func isTransientContextMessage(msg agent.AgentMessage) bool {
+func isTransientContextMessage(msg types.AgentMessage) bool {
 	switch m := msg.(type) {
 	case types.UserMessage:
 		return customMessageHasSource(m.Content, nestedContextSource) ||
@@ -122,7 +121,7 @@ func isTransientContextMessage(msg agent.AgentMessage) bool {
 // explicit_skill. A skill body lives in-context for the task but should not
 // pollute persisted history (it would replay as a bogus user message on resume)
 // and is cheaply re-injected when the skill is invoked again.
-func isNonPersistentMessage(msg agent.AgentMessage) bool {
+func isNonPersistentMessage(msg types.AgentMessage) bool {
 	if isTransientContextMessage(msg) {
 		return true
 	}

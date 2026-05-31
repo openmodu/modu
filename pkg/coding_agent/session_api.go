@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/services/compaction"
 	"github.com/openmodu/modu/pkg/coding_agent/services/session"
 	"github.com/openmodu/modu/pkg/types"
@@ -231,7 +230,7 @@ func (s *CodingSession) GetForkMessages() []ForkMessage {
 			// Try map-based extraction (from JSON deserialization)
 			if m, ok := entry.Data.(map[string]any); ok {
 				role, _ := m["role"].(string)
-				if role != string(agent.RoleUser) {
+				if role != string(types.RoleUser) {
 					continue
 				}
 				content, _ := m["content"].(string)
@@ -243,7 +242,7 @@ func (s *CodingSession) GetForkMessages() []ForkMessage {
 			}
 			continue
 		}
-		if data.Role != agent.RoleUser {
+		if data.Role != types.RoleUser {
 			continue
 		}
 		content, _ := data.Content.(string)
@@ -278,7 +277,7 @@ func (s *CodingSession) SwitchSession(sessionFile string) error {
 }
 
 func (s *CodingSession) switchSessionManager(newMgr *session.Manager) error {
-	var messages []agent.AgentMessage
+	var messages []types.AgentMessage
 	newTree := session.NewTree(newMgr)
 	for _, entry := range newTree.GetCurrentPath() {
 		if entry.Type != session.EntryTypeMessage {
@@ -295,7 +294,7 @@ func (s *CodingSession) switchSessionManager(newMgr *session.Manager) error {
 	s.agent.ReplaceMessages(messages)
 	s.lastSavedIndex = len(messages)
 	if s.extensions != nil {
-		s.extensions.EmitEvent(agent.Event{Type: agent.EventType("session_start"), Reason: "resume"})
+		s.extensions.EmitEvent(types.Event{Type: types.EventType("session_start"), Reason: "resume"})
 	}
 	s.writeRuntimeState()
 	return nil

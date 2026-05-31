@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/common"
 	"github.com/openmodu/modu/pkg/types"
 )
@@ -23,7 +22,7 @@ type GrepTool struct {
 	cwd string
 }
 
-func NewTool(cwd string) agent.Tool {
+func NewTool(cwd string) types.Tool {
 	return &GrepTool{cwd: cwd}
 }
 
@@ -70,7 +69,7 @@ func (t *GrepTool) Parameters() any {
 	}
 }
 
-func (t *GrepTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *GrepTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate types.ToolUpdateCallback) (types.ToolResult, error) {
 	pattern, _ := args["pattern"].(string)
 	if pattern == "" {
 		return common.ErrorResult("pattern is required"), nil
@@ -105,7 +104,7 @@ func (t *GrepTool) Execute(ctx context.Context, toolCallID string, args map[stri
 	return t.executeBuiltin(ctx, pattern, searchPath, glob, ignoreCase, literal, contextLines, limit)
 }
 
-func (t *GrepTool) executeRipgrep(ctx context.Context, rgPath, pattern, searchPath, glob string, ignoreCase, literal bool, contextLines, limit int) (agent.ToolResult, error) {
+func (t *GrepTool) executeRipgrep(ctx context.Context, rgPath, pattern, searchPath, glob string, ignoreCase, literal bool, contextLines, limit int) (types.ToolResult, error) {
 	args := []string{
 		"--line-number",
 		"--no-heading",
@@ -136,7 +135,7 @@ func (t *GrepTool) executeRipgrep(ctx context.Context, rgPath, pattern, searchPa
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			if exitErr.ExitCode() == 1 {
 				// No matches
-				return agent.ToolResult{
+				return types.ToolResult{
 					Content: []types.ContentBlock{
 						&types.TextContent{Type: "text", Text: "No matches found."},
 					},
@@ -162,7 +161,7 @@ func (t *GrepTool) executeRipgrep(ctx context.Context, rgPath, pattern, searchPa
 		result = "No matches found."
 	}
 
-	return agent.ToolResult{
+	return types.ToolResult{
 		Content: []types.ContentBlock{
 			&types.TextContent{Type: "text", Text: result},
 		},
@@ -173,7 +172,7 @@ func (t *GrepTool) executeRipgrep(ctx context.Context, rgPath, pattern, searchPa
 	}, nil
 }
 
-func (t *GrepTool) executeBuiltin(ctx context.Context, pattern, searchPath, glob string, ignoreCase, literal bool, contextLines, limit int) (agent.ToolResult, error) {
+func (t *GrepTool) executeBuiltin(ctx context.Context, pattern, searchPath, glob string, ignoreCase, literal bool, contextLines, limit int) (types.ToolResult, error) {
 	if literal {
 		pattern = regexp.QuoteMeta(pattern)
 	}
@@ -257,7 +256,7 @@ func (t *GrepTool) executeBuiltin(ctx context.Context, pattern, searchPath, glob
 	}
 
 	if len(results) == 0 {
-		return agent.ToolResult{
+		return types.ToolResult{
 			Content: []types.ContentBlock{
 				&types.TextContent{Type: "text", Text: "No matches found."},
 			},
@@ -269,7 +268,7 @@ func (t *GrepTool) executeBuiltin(ctx context.Context, pattern, searchPath, glob
 		text += fmt.Sprintf("\n\n... (results limited to %d matches)", limit)
 	}
 
-	return agent.ToolResult{
+	return types.ToolResult{
 		Content: []types.ContentBlock{
 			&types.TextContent{Type: "text", Text: text},
 		},

@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"github.com/openmodu/modu/pkg/agent"
 	backendtask "github.com/openmodu/modu/pkg/coding_agent/tools/backend_task"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/bash"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/edit"
@@ -13,6 +12,7 @@ import (
 	"github.com/openmodu/modu/pkg/coding_agent/tools/read"
 	worktreetool "github.com/openmodu/modu/pkg/coding_agent/tools/worktree"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/write"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 type ToolSet string
@@ -46,8 +46,8 @@ func NewProvider(set ToolSet) DefaultProvider {
 	return DefaultProvider{Set: set}
 }
 
-func (p DefaultProvider) Tools(ctx agent.ToolContext) []agent.Tool {
-	out := append([]agent.Tool{}, ctx.BaseTools...)
+func (p DefaultProvider) Tools(ctx types.ToolContext) []types.Tool {
+	out := append([]types.Tool{}, ctx.BaseTools...)
 	if ctx.BaseTools == nil {
 		out = p.baseTools(ctx.Cwd)
 	}
@@ -72,7 +72,7 @@ func (p DefaultProvider) Tools(ctx agent.ToolContext) []agent.Tool {
 	return out
 }
 
-func (p DefaultProvider) Rebind(tool agent.Tool, ctx agent.ToolContext) (agent.Tool, bool) {
+func (p DefaultProvider) Rebind(tool types.Tool, ctx types.ToolContext) (types.Tool, bool) {
 	switch tool.Name() {
 	case "read":
 		return read.NewTool(ctx.Cwd), true
@@ -93,22 +93,22 @@ func (p DefaultProvider) Rebind(tool agent.Tool, ctx agent.ToolContext) (agent.T
 	}
 }
 
-func valueAs[T any](ctx agent.ToolContext, name string) T {
+func valueAs[T any](ctx types.ToolContext, name string) T {
 	v, _ := ctx.Value(name).(T)
 	return v
 }
 
-func (p DefaultProvider) baseTools(cwd string) []agent.Tool {
+func (p DefaultProvider) baseTools(cwd string) []types.Tool {
 	switch p.Set {
 	case ToolSetReadOnly:
-		return []agent.Tool{
+		return []types.Tool{
 			read.NewTool(cwd),
 			grep.NewTool(cwd),
 			find.NewTool(cwd),
 			ls.NewTool(cwd),
 		}
 	case ToolSetAll:
-		return []agent.Tool{
+		return []types.Tool{
 			read.NewTool(cwd),
 			write.NewTool(cwd),
 			edit.NewTool(cwd),
@@ -118,7 +118,7 @@ func (p DefaultProvider) baseTools(cwd string) []agent.Tool {
 			ls.NewTool(cwd),
 		}
 	default:
-		return []agent.Tool{
+		return []types.Tool{
 			read.NewTool(cwd),
 			bash.NewTool(cwd),
 			edit.NewTool(cwd),
@@ -128,16 +128,16 @@ func (p DefaultProvider) baseTools(cwd string) []agent.Tool {
 }
 
 // CodingTools returns the core coding tools: read, bash, edit, write.
-func CodingTools(cwd string) []agent.Tool {
+func CodingTools(cwd string) []types.Tool {
 	return NewProvider(ToolSetCoding).baseTools(cwd)
 }
 
 // ReadOnlyTools returns read-only tools: read, grep, find, ls.
-func ReadOnlyTools(cwd string) []agent.Tool {
+func ReadOnlyTools(cwd string) []types.Tool {
 	return NewProvider(ToolSetReadOnly).baseTools(cwd)
 }
 
 // AllTools returns all available built-in coding tools.
-func AllTools(cwd string) []agent.Tool {
+func AllTools(cwd string) []types.Tool {
 	return NewProvider(ToolSetAll).baseTools(cwd)
 }

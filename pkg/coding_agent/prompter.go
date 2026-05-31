@@ -1,6 +1,6 @@
 package coding_agent
 
-import "github.com/openmodu/modu/pkg/agent"
+import "github.com/openmodu/modu/pkg/types"
 
 // Prompter is the unified host-interaction contract (L5). A host implements it
 // once and registers it with SetPrompter, instead of wiring the four separate
@@ -20,7 +20,7 @@ type Prompter interface {
 	// "approve_auto", "reject", or "reject:<feedback>".
 	ApprovePlan(plan string, steps []string) string
 	// ApproveTool gates a single tool execution.
-	ApproveTool(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error)
+	ApproveTool(toolName, toolCallID string, args map[string]any) (types.ToolApprovalDecision, error)
 }
 
 // SetPrompter wires every interactive callback from a single Prompter. It is

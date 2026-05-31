@@ -12,6 +12,10 @@
 - `Tools`：执行 tool call，并返回 tool result 消息。
 - `ToolManager`：为 host runtime 提供和重绑定工具集合。
 
+`Config`、`AgentContext`、`State`、`Event`、`Tool`、`ToolResult` 等公共契约
+由 `pkg/types` 统一定义。`pkg/agent` 只负责 `Agent`、`Loop`、`DefaultLLM`、
+`DefaultTools` 这类运行期行为，调用方需要直接使用 `types.*` 公共契约。
+
 `Loop` 只依赖 `LLM` 和 `Tools` 接口。Provider streaming、重试、工具审批、
 工具执行和并行工具批次都放在接口背后，而不是塞进 loop 本身。
 
@@ -30,11 +34,11 @@ interrupt/resume 状态。
 loop := agent.NewLoop(agent.DefaultLLM{}, agent.DefaultTools{})
 events := agent.NewEventStream()
 
-result, err := loop.Run(ctx, agent.LoopInput{
-    Prompts: []agent.AgentMessage{userMessage},
-    Context: agent.AgentContext{Tools: []agent.Tool{tool}},
-    Config:  agent.Config{Model: model, StreamFn: streamFn},
-    Runtime: agent.RuntimeHooks{},
+result, err := loop.Run(ctx, types.LoopInput{
+    Prompts: []types.AgentMessage{userMessage},
+    Context: types.AgentContext{Tools: []types.Tool{tool}},
+    Config:  types.Config{Model: model, StreamFn: streamFn},
+    Runtime: types.RuntimeHooks{},
     Events:  events,
 })
 ```
@@ -42,17 +46,17 @@ result, err := loop.Run(ctx, agent.LoopInput{
 ## Agent 用法
 
 ```go
-a := agent.NewAgent(agent.Config{
-    InitialState: &agent.State{
+a := agent.NewAgent(types.Config{
+    InitialState: &types.State{
         SystemPrompt:  "You are a helpful assistant.",
         Model:         model,
-        ThinkingLevel: agent.ThinkingLevelOff,
-        Tools:         []agent.Tool{weatherTool},
+        ThinkingLevel: types.ThinkingLevelOff,
+        Tools:         []types.Tool{weatherTool},
     },
     StreamFn: streamFn,
 })
 
-unsubscribe := a.Subscribe(func(e agent.Event) {
+unsubscribe := a.Subscribe(func(e types.Event) {
     // handle event
 })
 defer unsubscribe()

@@ -1,4 +1,4 @@
-package agent
+package types
 
 type SessionStatus string
 
@@ -30,4 +30,18 @@ type InterruptEvent struct {
 type ResumeDecision struct {
 	Allow   bool
 	Message string
+}
+
+type State struct {
+	SystemPrompt     string
+	Model            *Model
+	ThinkingLevel    ThinkingLevel
+	Tools            []Tool
+	Messages         []AgentMessage
+	IsStreaming      bool
+	StreamMessage    AgentMessage
+	PendingToolCalls map[string]struct{}
+	Error            string
+	Status           SessionStatus
+	Interrupt        *InterruptEvent
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -23,7 +22,7 @@ type MemoryTool struct {
 }
 
 // NewMemoryTool creates a new memory tool instance.
-func NewMemoryTool(store MemoryStore) agent.Tool {
+func NewMemoryTool(store MemoryStore) types.Tool {
 	return &MemoryTool{store: store}
 }
 
@@ -68,7 +67,7 @@ func (t *MemoryTool) Parameters() any {
 	}
 }
 
-func (t *MemoryTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *MemoryTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate types.ToolUpdateCallback) (types.ToolResult, error) {
 	if t.store == nil {
 		return textResult("Error: memory store is not configured for this session"), nil
 	}
@@ -124,8 +123,8 @@ func (t *MemoryTool) Execute(ctx context.Context, toolCallID string, args map[st
 }
 
 // textResult creates a simple text ToolResult.
-func textResult(text string) agent.ToolResult {
-	return agent.ToolResult{
+func textResult(text string) types.ToolResult {
+	return types.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: text}},
 		Details: map[string]any{"result": text},
 	}

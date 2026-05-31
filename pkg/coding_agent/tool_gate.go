@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -18,8 +17,8 @@ func (s *engine) installHarnessLayer() {
 	s.agent.SetTools(s.activeTools)
 }
 
-func wrapHarnessTools(list []agent.Tool, session *engine) []agent.Tool {
-	out := make([]agent.Tool, len(list))
+func wrapHarnessTools(list []types.Tool, session *engine) []types.Tool {
+	out := make([]types.Tool, len(list))
 	for i, tool := range list {
 		if _, ok := tool.(*HarnessWrappedTool); ok {
 			out[i] = tool
@@ -34,7 +33,7 @@ func wrapHarnessTools(list []agent.Tool, session *engine) []agent.Tool {
 // must run before any tool executes: plan-mode mutation blocking and the
 // settings-driven blockTools deny list.
 type HarnessWrappedTool struct {
-	inner   agent.Tool
+	inner   types.Tool
 	session *engine
 }
 
@@ -42,17 +41,17 @@ func (w *HarnessWrappedTool) Name() string        { return w.inner.Name() }
 func (w *HarnessWrappedTool) Label() string       { return w.inner.Label() }
 func (w *HarnessWrappedTool) Description() string { return w.inner.Description() }
 func (w *HarnessWrappedTool) Parameters() any     { return w.inner.Parameters() }
-func (w *HarnessWrappedTool) WithCwd(cwd string) agent.Tool {
-	if rebindable, ok := w.inner.(interface{ WithCwd(string) agent.Tool }); ok {
+func (w *HarnessWrappedTool) WithCwd(cwd string) types.Tool {
+	if rebindable, ok := w.inner.(interface{ WithCwd(string) types.Tool }); ok {
 		return &HarnessWrappedTool{inner: rebindable.WithCwd(cwd), session: w.session}
 	}
 	return w
 }
 
-func (w *HarnessWrappedTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (w *HarnessWrappedTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate types.ToolUpdateCallback) (types.ToolResult, error) {
 	name := w.inner.Name()
 	if w.session != nil && w.session.planModeBlocksTool(name) {
-		return agent.ToolResult{
+		return types.ToolResult{
 			Content: []types.ContentBlock{&types.TextContent{
 				Type: "text",
 				Text: planModeBlockMessage(name),
@@ -61,7 +60,7 @@ func (w *HarnessWrappedTool) Execute(ctx context.Context, toolCallID string, arg
 		}, nil
 	}
 	if w.session != nil && w.session.harnessToolBlocked(name) {
-		return agent.ToolResult{
+		return types.ToolResult{
 			Content: []types.ContentBlock{&types.TextContent{
 				Type: "text",
 				Text: fmt.Sprintf("harness blocked %s: blocked by settings.json", name),
@@ -73,7 +72,7 @@ func (w *HarnessWrappedTool) Execute(ctx context.Context, toolCallID string, arg
 }
 
 func (w *HarnessWrappedTool) Parallel() bool {
-	if p, ok := w.inner.(agent.ParallelTool); ok {
+	if p, ok := w.inner.(types.ParallelTool); ok {
 		return p.Parallel()
 	}
 	return false

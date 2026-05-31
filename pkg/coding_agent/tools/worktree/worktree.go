@@ -3,7 +3,6 @@ package worktree
 import (
 	"context"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -17,7 +16,7 @@ type EnterWorktreeTool struct {
 	manager WorktreeManager
 }
 
-func NewEnterWorktreeTool(manager WorktreeManager) agent.Tool {
+func NewEnterWorktreeTool(manager WorktreeManager) types.Tool {
 	return &EnterWorktreeTool{manager: manager}
 }
 
@@ -33,7 +32,7 @@ func (t *EnterWorktreeTool) Parameters() any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
 
-func (t *EnterWorktreeTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *EnterWorktreeTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate types.ToolUpdateCallback) (types.ToolResult, error) {
 	if t.manager == nil {
 		return worktreeToolResult("worktree manager is not configured"), nil
 	}
@@ -48,7 +47,7 @@ type ExitWorktreeTool struct {
 	manager WorktreeManager
 }
 
-func NewExitWorktreeTool(manager WorktreeManager) agent.Tool {
+func NewExitWorktreeTool(manager WorktreeManager) types.Tool {
 	return &ExitWorktreeTool{manager: manager}
 }
 
@@ -64,7 +63,7 @@ func (t *ExitWorktreeTool) Parameters() any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
 
-func (t *ExitWorktreeTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *ExitWorktreeTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate types.ToolUpdateCallback) (types.ToolResult, error) {
 	if t.manager == nil {
 		return worktreeToolResult("worktree manager is not configured"), nil
 	}
@@ -74,8 +73,8 @@ func (t *ExitWorktreeTool) Execute(ctx context.Context, toolCallID string, args 
 	return worktreeToolResult("exited worktree"), nil
 }
 
-func worktreeToolResult(text string) agent.ToolResult {
-	return agent.ToolResult{
+func worktreeToolResult(text string) types.ToolResult {
+	return types.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: text}},
 	}
 }

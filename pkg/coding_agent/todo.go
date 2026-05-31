@@ -1,9 +1,9 @@
 package coding_agent
 
 import (
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/services/todo"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/planning"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // TodoItem aliases the todo service's item type so existing callers (and the
@@ -50,8 +50,8 @@ func (s *engine) replaceTodoTool() {
 	s.agent.SetTools(replaceTool(s.agent.GetState().Tools, todoTool))
 }
 
-func replaceTool(list []agent.Tool, replacement agent.Tool) []agent.Tool {
-	out := make([]agent.Tool, 0, len(list))
+func replaceTool(list []types.Tool, replacement types.Tool) []types.Tool {
+	out := make([]types.Tool, 0, len(list))
 	replaced := false
 	for _, tool := range list {
 		if tool.Name() == replacement.Name() {

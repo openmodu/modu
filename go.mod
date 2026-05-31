@@ -11,7 +11,6 @@ require (
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-telegram-bot-api/telegram-bot-api/v5 v5.5.1
 	github.com/google/uuid v1.6.0
-	github.com/grindlemire/go-tui v0.13.1
 	github.com/larksuite/oapi-sdk-go/v3 v3.5.3
 	github.com/mattn/go-runewidth v0.0.16
 	github.com/muesli/reflow v0.3.0

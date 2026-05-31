@@ -9,80 +9,12 @@ import (
 	"github.com/openmodu/modu/pkg/types"
 )
 
-type ToolResult struct {
-	Content []types.ContentBlock `json:"content"`
-	Details any                  `json:"details"`
-	IsError bool                 `json:"isError,omitempty"`
-}
-
-type ToolUpdateCallback func(partial ToolResult)
-
-type Tool interface {
-	Name() string
-	Label() string
-	Description() string
-	Parameters() any
-	Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate ToolUpdateCallback) (ToolResult, error)
-}
-
-type ToolContext struct {
-	Cwd        string
-	BaseTools  []Tool
-	ExtraTools []Tool
-	Features   map[string]bool
-	Values     map[string]any
-}
-
-func (c ToolContext) FeatureEnabled(name string) bool {
-	if c.Features == nil {
-		return false
-	}
-	return c.Features[name]
-}
-
-func (c ToolContext) Value(name string) any {
-	if c.Values == nil {
-		return nil
-	}
-	return c.Values[name]
-}
-
-type ToolProvider interface {
-	Tools(ctx ToolContext) []Tool
-}
-
-type ToolRebinder interface {
-	Rebind(tool Tool, ctx ToolContext) (Tool, bool)
-}
-
-type ToolManager interface {
-	ToolProvider
-	ToolRebinder
-}
-
-type ParallelTool interface {
-	Parallel() bool
-}
-
-type ToolApprovalDecision string
-
-const (
-	ToolApprovalAllow       ToolApprovalDecision = "allow"
-	ToolApprovalAllowAlways ToolApprovalDecision = "allow_always"
-	ToolApprovalDeny        ToolApprovalDecision = "deny"
-	ToolApprovalDenyAlways  ToolApprovalDecision = "deny_always"
-)
-
-func (d ToolApprovalDecision) IsAllow() bool {
-	return d == ToolApprovalAllow || d == ToolApprovalAllowAlways
-}
-
 type DefaultTools struct{}
 
-func (DefaultTools) Execute(ctx context.Context, input ToolInput) (ToolOutput, error) {
+func (DefaultTools) Execute(ctx context.Context, input types.ToolInput) (types.ToolOutput, error) {
 	results := make([]types.ToolResultMessage, len(input.Calls))
-	messages := make([]AgentMessage, 0, len(input.Calls))
-	var steering []AgentMessage
+	messages := make([]types.AgentMessage, 0, len(input.Calls))
+	var steering []types.AgentMessage
 
 	for i := 0; i < len(input.Calls); {
 		batchEnd := i + 1
@@ -110,16 +42,16 @@ func (DefaultTools) Execute(ctx context.Context, input ToolInput) (ToolOutput, e
 		i = batchEnd
 	}
 
-	return ToolOutput{Messages: messages, Results: results, Steering: steering}, nil
+	return types.ToolOutput{Messages: messages, Results: results, Steering: steering}, nil
 }
 
-func runToolBatch(ctx context.Context, input ToolInput, calls []types.ToolCallContent) []types.ToolResultMessage {
+func runToolBatch(ctx context.Context, input types.ToolInput, calls []types.ToolCallContent) []types.ToolResultMessage {
 	parallel := len(calls) > 1
 	out := make([]types.ToolResultMessage, len(calls))
 	prepared := make([]preparedCall, len(calls))
 	for i, call := range calls {
 		prepared[i] = prepareToolCall(input, call)
-		emitEvent(input.Events, Event{Type: EventTypeToolExecutionStart, ToolCallID: call.ID, ToolName: call.Name, Args: call.Arguments, Parallel: parallel})
+		emitEvent(input.Events, types.Event{Type: types.EventTypeToolExecutionStart, ToolCallID: call.ID, ToolName: call.Name, Args: call.Arguments, Parallel: parallel})
 	}
 
 	runOne := func(i int) {
@@ -146,12 +78,12 @@ func runToolBatch(ctx context.Context, input ToolInput, calls []types.ToolCallCo
 }
 
 type preparedCall struct {
-	tool    Tool
+	tool    types.Tool
 	args    map[string]any
 	denyMsg string
 }
 
-func prepareToolCall(input ToolInput, call types.ToolCallContent) preparedCall {
+func prepareToolCall(input types.ToolInput, call types.ToolCallContent) preparedCall {
 	tool := findTool(input.Tools, call.Name)
 	if tool == nil {
 		return preparedCall{denyMsg: "Tool not found"}
@@ -163,10 +95,10 @@ func prepareToolCall(input ToolInput, call types.ToolCallContent) preparedCall {
 	}
 	if input.ApproveTool != nil {
 		if input.EnableInterrupts {
-			emitEvent(input.Events, Event{
-				Type: EventTypeInterrupt,
-				Interrupt: &InterruptEvent{
-					Reason:     InterruptReasonToolApproval,
+			emitEvent(input.Events, types.Event{
+				Type: types.EventTypeInterrupt,
+				Interrupt: &types.InterruptEvent{
+					Reason:     types.InterruptReasonToolApproval,
 					ToolCallID: call.ID,
 					ToolName:   call.Name,
 					ToolArgs:   args,
@@ -184,15 +116,15 @@ func prepareToolCall(input ToolInput, call types.ToolCallContent) preparedCall {
 	return preparedCall{tool: tool, args: args}
 }
 
-func executePreparedCall(ctx context.Context, input ToolInput, call types.ToolCallContent, prepared preparedCall, parallel bool) types.ToolResultMessage {
-	result := ToolResult{}
+func executePreparedCall(ctx context.Context, input types.ToolInput, call types.ToolCallContent, prepared preparedCall, parallel bool) types.ToolResultMessage {
+	result := types.ToolResult{}
 	isError := false
 	if prepared.denyMsg != "" {
 		result = errorToolResult(prepared.denyMsg)
 		isError = true
 	} else {
-		r, err := prepared.tool.Execute(ctx, call.ID, prepared.args, func(partial ToolResult) {
-			emitEvent(input.Events, Event{Type: EventTypeToolExecutionUpdate, ToolCallID: call.ID, ToolName: call.Name, Args: call.Arguments, Partial: partial, Parallel: parallel})
+		r, err := prepared.tool.Execute(ctx, call.ID, prepared.args, func(partial types.ToolResult) {
+			emitEvent(input.Events, types.Event{Type: types.EventTypeToolExecutionUpdate, ToolCallID: call.ID, ToolName: call.Name, Args: call.Arguments, Partial: partial, Parallel: parallel})
 		})
 		if err != nil {
 			r = errorToolResult(err.Error())
@@ -203,8 +135,8 @@ func executePreparedCall(ctx context.Context, input ToolInput, call types.ToolCa
 		result = r
 	}
 
-	emitEvent(input.Events, Event{
-		Type:       EventTypeToolExecutionEnd,
+	emitEvent(input.Events, types.Event{
+		Type:       types.EventTypeToolExecutionEnd,
 		ToolCallID: call.ID,
 		ToolName:   call.Name,
 		Args:       call.Arguments,
@@ -213,7 +145,7 @@ func executePreparedCall(ctx context.Context, input ToolInput, call types.ToolCa
 		Parallel:   parallel,
 	})
 	return types.ToolResultMessage{
-		Role:       RoleToolResult,
+		Role:       types.RoleToolResult,
 		ToolCallID: call.ID,
 		ToolName:   call.Name,
 		Content:    result.Content,
@@ -223,20 +155,20 @@ func executePreparedCall(ctx context.Context, input ToolInput, call types.ToolCa
 	}
 }
 
-func errorToolResult(message string) ToolResult {
-	return ToolResult{
+func errorToolResult(message string) types.ToolResult {
+	return types.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: message}},
 		Details: map[string]any{},
 		IsError: true,
 	}
 }
 
-func skipToolCall(call types.ToolCallContent, events EventSink) types.ToolResultMessage {
+func skipToolCall(call types.ToolCallContent, events types.EventSink) types.ToolResultMessage {
 	result := errorToolResult("Skipped due to queued user message.")
-	emitEvent(events, Event{Type: EventTypeToolExecutionStart, ToolCallID: call.ID, ToolName: call.Name, Args: call.Arguments})
-	emitEvent(events, Event{Type: EventTypeToolExecutionEnd, ToolCallID: call.ID, ToolName: call.Name, Args: call.Arguments, Result: result, IsError: true})
+	emitEvent(events, types.Event{Type: types.EventTypeToolExecutionStart, ToolCallID: call.ID, ToolName: call.Name, Args: call.Arguments})
+	emitEvent(events, types.Event{Type: types.EventTypeToolExecutionEnd, ToolCallID: call.ID, ToolName: call.Name, Args: call.Arguments, Result: result, IsError: true})
 	message := types.ToolResultMessage{
-		Role:       RoleToolResult,
+		Role:       types.RoleToolResult,
 		ToolCallID: call.ID,
 		ToolName:   call.Name,
 		Content:    result.Content,
@@ -248,7 +180,7 @@ func skipToolCall(call types.ToolCallContent, events EventSink) types.ToolResult
 	return message
 }
 
-func findTool(tools []Tool, name string) Tool {
+func findTool(tools []types.Tool, name string) types.Tool {
 	for _, tool := range tools {
 		if tool.Name() == name {
 			return tool
@@ -257,16 +189,16 @@ func findTool(tools []Tool, name string) Tool {
 	return nil
 }
 
-func isParallelCapable(tools []Tool, call types.ToolCallContent) bool {
+func isParallelCapable(tools []types.Tool, call types.ToolCallContent) bool {
 	tool := findTool(tools, call.Name)
 	if tool == nil {
 		return false
 	}
-	parallel, ok := tool.(ParallelTool)
+	parallel, ok := tool.(types.ParallelTool)
 	return ok && parallel.Parallel()
 }
 
-func toolDefinitions(tools []Tool) []types.ToolDefinition {
+func toolDefinitions(tools []types.Tool) []types.ToolDefinition {
 	defs := make([]types.ToolDefinition, 0, len(tools))
 	for _, tool := range tools {
 		defs = append(defs, types.ToolDefinition{

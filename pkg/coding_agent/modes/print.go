@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 
-	"github.com/openmodu/modu/pkg/agent"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/types"
 )
@@ -54,8 +53,8 @@ func runPrintText(ctx context.Context, opts PrintOptions) error {
 	var lastAssistantText string
 
 	// Subscribe to capture assistant messages
-	unsub := opts.Session.Subscribe(func(event agent.Event) {
-		if event.Type == agent.EventTypeMessageEnd {
+	unsub := opts.Session.Subscribe(func(event types.Event) {
+		if event.Type == types.EventTypeMessageEnd {
 			if msg, ok := event.Message.(types.AssistantMessage); ok {
 				for _, block := range msg.Content {
 					if tc, ok := block.(*types.TextContent); ok {
@@ -99,7 +98,7 @@ func runPrintJSON(ctx context.Context, opts PrintOptions) error {
 	// Subscribe to stream all events as JSON lines.
 	// For message_update events the Partial field (cumulative text) is stripped
 	// so each line is truly incremental — only the delta is included.
-	unsub := opts.Session.Subscribe(func(event agent.Event) {
+	unsub := opts.Session.Subscribe(func(event types.Event) {
 		line := map[string]any{"type": string(event.Type)}
 
 		if event.ToolName != "" {
@@ -130,7 +129,7 @@ func runPrintJSON(ctx context.Context, opts PrintOptions) error {
 				Delta:        se.Delta,
 			}
 			// message: only the delta text, not the cumulative partial.
-			if event.Type == agent.EventTypeMessageUpdate && se.Delta != "" {
+			if event.Type == types.EventTypeMessageUpdate && se.Delta != "" {
 				line["message"] = se.Delta
 			}
 		} else if event.Message != nil {

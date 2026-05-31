@@ -63,7 +63,7 @@ type bubbleTUI struct {
 type bubbleTickMsg time.Time
 
 type bubbleAgentMsg struct {
-	event agent.Event
+	event types.Event
 }
 
 type bubbleSessionMsg struct {
@@ -152,7 +152,7 @@ func runBubbleWithOptions(ctx context.Context, session *coding_agent.CodingSessi
 		go session.EmitExtensionEvent("ui_ready")
 	}
 
-	unsub := session.Subscribe(func(ev agent.Event) {
+	unsub := session.Subscribe(func(ev types.Event) {
 		prog.Send(bubbleAgentMsg{event: ev})
 	})
 	defer unsub()
@@ -1242,12 +1242,12 @@ func (b *bubbleTUI) abortQuery() {
 	b.model.statusMsg = "interrupted"
 }
 
-func (b *bubbleTUI) handleAgentEvent(ev agent.Event) tea.Cmd {
+func (b *bubbleTUI) handleAgentEvent(ev types.Event) tea.Cmd {
 	b.model.handleAgentEvent(ev)
 	switch ev.Type {
-	case agent.EventTypeAgentEnd:
+	case types.EventTypeAgentEnd:
 		b.model.state = uiStateInput
-	case agent.EventTypeMessageEnd:
+	case types.EventTypeMessageEnd:
 		for i := len(b.model.blocks) - 1; i >= 0; i-- {
 			if b.model.blocks[i].Kind == "assistant" {
 				if !b.model.blocks[i].pushed {
@@ -1257,7 +1257,7 @@ func (b *bubbleTUI) handleAgentEvent(ev agent.Event) tea.Cmd {
 				break
 			}
 		}
-	case agent.EventTypeToolExecutionEnd:
+	case types.EventTypeToolExecutionEnd:
 		for i := len(b.model.blocks) - 1; i >= 0; i-- {
 			if b.model.blocks[i].Kind != "tool" {
 				continue

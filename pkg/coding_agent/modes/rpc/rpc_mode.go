@@ -9,13 +9,13 @@ import (
 	"os"
 	"sync"
 
-	"github.com/openmodu/modu/pkg/agent"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // pendingApproval holds a channel waiting for the client's approval decision.
 type pendingApproval struct {
-	ch chan agent.ToolApprovalDecision
+	ch chan types.ToolApprovalDecision
 }
 
 // RpcMode implements a JSON-line based RPC protocol over stdin/stdout.
@@ -49,8 +49,8 @@ func (r *RpcMode) SetIO(input io.Reader, output io.Writer) {
 // Run starts the RPC mode main loop.
 func (r *RpcMode) Run(ctx context.Context) error {
 	// Register interactive approval callback: block until client responds.
-	r.session.SetToolApprovalCallback(func(toolName, toolCallID string, args map[string]any) (agent.ToolApprovalDecision, error) {
-		ch := make(chan agent.ToolApprovalDecision, 1)
+	r.session.SetToolApprovalCallback(func(toolName, toolCallID string, args map[string]any) (types.ToolApprovalDecision, error) {
+		ch := make(chan types.ToolApprovalDecision, 1)
 		r.pendingApprovalsMu.Lock()
 		r.pendingApprovals[toolCallID] = &pendingApproval{ch: ch}
 		r.pendingApprovalsMu.Unlock()
@@ -71,12 +71,12 @@ func (r *RpcMode) Run(ctx context.Context) error {
 		case decision := <-ch:
 			return decision, nil
 		case <-ctx.Done():
-			return agent.ToolApprovalDeny, ctx.Err()
+			return types.ToolApprovalDeny, ctx.Err()
 		}
 	})
 
 	// Subscribe to agent events and forward full event data
-	unsubAgent := r.session.Subscribe(func(event agent.Event) {
+	unsubAgent := r.session.Subscribe(func(event types.Event) {
 		data := map[string]any{"eventType": string(event.Type)}
 		if event.ToolName != "" {
 			data["toolName"] = event.ToolName
@@ -258,7 +258,7 @@ func (r *RpcMode) handleCommand(ctx context.Context, cmd RpcCommand) RpcResponse
 			resp.Error = fmt.Sprintf("invalid thinking level data: %v", err)
 			return resp
 		}
-		r.session.SetThinkingLevel(agent.ThinkingLevel(data.Level))
+		r.session.SetThinkingLevel(types.ThinkingLevel(data.Level))
 		resp.Success = true
 
 	case RpcCmdCycleThinking:
@@ -329,7 +329,7 @@ func (r *RpcMode) handleCommand(ctx context.Context, cmd RpcCommand) RpcResponse
 			resp.Error = fmt.Sprintf("invalid set_steering_mode data: %v", err)
 			return resp
 		}
-		r.session.GetAgent().SetSteeringMode(agent.ExecutionMode(data.Mode))
+		r.session.GetAgent().SetSteeringMode(types.ExecutionMode(data.Mode))
 		resp.Success = true
 
 	case RpcCmdSetFollowUpMode:
@@ -338,7 +338,7 @@ func (r *RpcMode) handleCommand(ctx context.Context, cmd RpcCommand) RpcResponse
 			resp.Error = fmt.Sprintf("invalid set_follow_up_mode data: %v", err)
 			return resp
 		}
-		r.session.GetAgent().SetFollowUpMode(agent.ExecutionMode(data.Mode))
+		r.session.GetAgent().SetFollowUpMode(types.ExecutionMode(data.Mode))
 		resp.Success = true
 
 	case RpcCmdBash:
@@ -494,7 +494,7 @@ func (r *RpcMode) handleCommand(ctx context.Context, cmd RpcCommand) RpcResponse
 			resp.Error = fmt.Sprintf("no pending approval for toolCallId: %s", data.ToolCallID)
 			return resp
 		}
-		pending.ch <- agent.ToolApprovalDecision(data.Decision)
+		pending.ch <- types.ToolApprovalDecision(data.Decision)
 		resp.Success = true
 
 	default:

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // legacySpawnSubagentTool preserves the old spawn_subagent tool surface while
@@ -58,7 +58,7 @@ func (t *legacySpawnSubagentTool) Parameters() any {
 	}
 }
 
-func (t *legacySpawnSubagentTool) Execute(ctx context.Context, _ string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *legacySpawnSubagentTool) Execute(ctx context.Context, _ string, args map[string]any, onUpdate types.ToolUpdateCallback) (types.ToolResult, error) {
 	name, _ := args["name"].(string)
 	task, _ := args["task"].(string)
 	if name == "" {

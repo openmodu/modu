@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -26,7 +25,7 @@ type TodoWriteTool struct {
 	store TodoStore
 }
 
-func NewTodoWriteTool(store TodoStore) agent.Tool {
+func NewTodoWriteTool(store TodoStore) types.Tool {
 	return &TodoWriteTool{store: store}
 }
 
@@ -63,7 +62,7 @@ func (t *TodoWriteTool) Parameters() any {
 	}
 }
 
-func (t *TodoWriteTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *TodoWriteTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate types.ToolUpdateCallback) (types.ToolResult, error) {
 	if t.store == nil {
 		return todoResult("todo store is not configured", true), nil
 	}
@@ -112,8 +111,8 @@ func (t *TodoWriteTool) Execute(ctx context.Context, toolCallID string, args map
 	return todoResult(fmt.Sprintf("updated todo list with %d item(s)", len(todos)), false), nil
 }
 
-func todoResult(text string, isError bool) agent.ToolResult {
-	return agent.ToolResult{
+func todoResult(text string, isError bool) types.ToolResult {
+	return types.ToolResult{
 		Content: []types.ContentBlock{
 			&types.TextContent{Type: "text", Text: text},
 		},

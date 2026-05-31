@@ -21,11 +21,11 @@ const (
 
 type DefaultLLM struct{}
 
-func (DefaultLLM) Complete(ctx context.Context, input LLMInput) (*types.AssistantMessage, error) {
+func (DefaultLLM) Complete(ctx context.Context, input types.LLMInput) (*types.AssistantMessage, error) {
 	return completeWithRetry(ctx, input)
 }
 
-func completeWithRetry(ctx context.Context, input LLMInput) (*types.AssistantMessage, error) {
+func completeWithRetry(ctx context.Context, input types.LLMInput) (*types.AssistantMessage, error) {
 	maxDelayMs := defaultMaxDelayMs
 	if input.Options.MaxRetryDelayMs > 0 {
 		maxDelayMs = input.Options.MaxRetryDelayMs
@@ -50,7 +50,7 @@ func completeWithRetry(ctx context.Context, input LLMInput) (*types.AssistantMes
 	return nil, fmt.Errorf("max retries (%d) exceeded: %w", defaultMaxRetries, lastErr)
 }
 
-func completeOnce(ctx context.Context, input LLMInput) (*types.AssistantMessage, error) {
+func completeOnce(ctx context.Context, input types.LLMInput) (*types.AssistantMessage, error) {
 	if err := requireModel(input.Options.Model); err != nil {
 		return nil, err
 	}
@@ -109,31 +109,31 @@ func completeOnce(ctx context.Context, input LLMInput) (*types.AssistantMessage,
 	return collectAssistantMessage(response, input.Events)
 }
 
-func defaultConvertToLLM(messages []AgentMessage) []AgentMessage {
-	out := make([]AgentMessage, 0, len(messages))
+func defaultConvertToLLM(messages []types.AgentMessage) []types.AgentMessage {
+	out := make([]types.AgentMessage, 0, len(messages))
 	for _, message := range messages {
 		switch roleOf(message) {
-		case RoleUser, RoleAssistant, RoleToolResult:
+		case types.RoleUser, types.RoleAssistant, types.RoleToolResult:
 			out = append(out, message)
 		}
 	}
 	return out
 }
 
-func collectAssistantMessage(response types.EventStream, events EventSink) (*types.AssistantMessage, error) {
+func collectAssistantMessage(response types.EventStream, events types.EventSink) (*types.AssistantMessage, error) {
 	addedStart := false
 	for event := range response.Events() {
 		switch event.Type {
 		case types.EventStart:
 			if event.Partial != nil {
 				addedStart = true
-				emitEvent(events, Event{Type: EventTypeMessageStart, Message: *event.Partial})
+				emitEvent(events, types.Event{Type: types.EventTypeMessageStart, Message: *event.Partial})
 			}
 		case types.EventTextStart, types.EventTextDelta, types.EventTextEnd,
 			types.EventThinkingStart, types.EventThinkingDelta, types.EventThinkingEnd,
 			types.EventToolCallStart, types.EventToolCallDelta, types.EventToolCallEnd:
 			if event.Partial != nil {
-				emitEvent(events, Event{Type: EventTypeMessageUpdate, Message: *event.Partial, StreamEvent: &event})
+				emitEvent(events, types.Event{Type: types.EventTypeMessageUpdate, Message: *event.Partial, StreamEvent: &event})
 			}
 		case types.EventDone, types.EventError:
 			finalMessage, err := response.Result()
@@ -144,9 +144,9 @@ func collectAssistantMessage(response types.EventStream, events EventSink) (*typ
 				return nil, fmt.Errorf("missing final message")
 			}
 			if !addedStart {
-				emitEvent(events, Event{Type: EventTypeMessageStart, Message: *finalMessage})
+				emitEvent(events, types.Event{Type: types.EventTypeMessageStart, Message: *finalMessage})
 			}
-			emitEvent(events, Event{Type: EventTypeMessageEnd, Message: *finalMessage})
+			emitEvent(events, types.Event{Type: types.EventTypeMessageEnd, Message: *finalMessage})
 			return finalMessage, nil
 		}
 	}

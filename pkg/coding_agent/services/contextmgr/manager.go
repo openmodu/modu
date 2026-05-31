@@ -27,10 +27,10 @@ type Host interface {
 	EmitCompactionDone()
 	// NestedContextMessage wraps injected path-context text in the host's
 	// transient message envelope.
-	NestedContextMessage(text string) agent.AgentMessage
+	NestedContextMessage(text string) types.AgentMessage
 	// IsTransient reports whether a conversation message is host-injected
 	// transient context that should be pruned at the end of a turn.
-	IsTransient(msg agent.AgentMessage) bool
+	IsTransient(msg types.AgentMessage) bool
 }
 
 // Deps are the stable collaborators handed to the manager at construction.
@@ -40,7 +40,7 @@ type Deps struct {
 	Agent          *agent.Agent
 	Resources      *resource.Loader
 	SessionManager *session.Manager
-	StreamFn       func() agent.StreamFn
+	StreamFn       func() types.StreamFn
 	APIKey         func(provider string) (string, error)
 	Host           Host
 }

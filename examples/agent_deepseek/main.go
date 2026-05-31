@@ -43,7 +43,7 @@ func (t *CalculatorTool) Parameters() any {
 	}
 }
 
-func (t *CalculatorTool) Execute(_ context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *CalculatorTool) Execute(_ context.Context, _ string, args map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	op, _ := args["operation"].(string)
 	a := toFloat(args["a"])
 	b := toFloat(args["b"])
@@ -75,7 +75,7 @@ func (t *CalculatorTool) Execute(_ context.Context, _ string, args map[string]an
 	default:
 		return textResult("Unknown operation: " + op), nil
 	}
-	return agent.ToolResult{
+	return types.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: desc}},
 		Details: map[string]any{"result": result},
 	}, nil
@@ -91,16 +91,16 @@ func (t *GetTimeTool) Description() string { return "Get the current date and ti
 func (t *GetTimeTool) Parameters() any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
-func (t *GetTimeTool) Execute(_ context.Context, _ string, _ map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *GetTimeTool) Execute(_ context.Context, _ string, _ map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	now := time.Now().Format("2006-01-02 15:04:05 MST")
-	return agent.ToolResult{
+	return types.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: now}},
 		Details: map[string]any{"time": now},
 	}, nil
 }
 
-func textResult(text string) agent.ToolResult {
-	return agent.ToolResult{
+func textResult(text string) types.ToolResult {
+	return types.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: text}},
 	}
 }
@@ -140,31 +140,31 @@ func main() {
 		ProviderID: "deepseek",
 	}
 
-	a := agent.NewAgent(agent.Config{
-		InitialState: &agent.State{
+	a := agent.NewAgent(types.Config{
+		InitialState: &types.State{
 			SystemPrompt: "You are a helpful assistant. Use tools when appropriate. Respond concisely.",
 			Model:        model,
-			Tools: []agent.Tool{
+			Tools: []types.Tool{
 				&CalculatorTool{},
 				&GetTimeTool{},
 			},
 		},
 	})
 
-	a.Subscribe(func(event agent.Event) {
+	a.Subscribe(func(event types.Event) {
 		switch event.Type {
-		case agent.EventTypeAgentStart:
+		case types.EventTypeAgentStart:
 			fmt.Println("\n=== Agent Start ===")
-		case agent.EventTypeAgentEnd:
+		case types.EventTypeAgentEnd:
 			fmt.Println("\n=== Agent End ===")
-		case agent.EventTypeMessageUpdate:
+		case types.EventTypeMessageUpdate:
 			if event.StreamEvent != nil && event.StreamEvent.Type == "text_delta" {
 				fmt.Print(event.StreamEvent.Delta)
 			}
-		case agent.EventTypeToolExecutionStart:
+		case types.EventTypeToolExecutionStart:
 			fmt.Printf("\n>> Tool: %s %v\n", event.ToolName, event.Args)
-		case agent.EventTypeToolExecutionEnd:
-			if result, ok := event.Result.(agent.ToolResult); ok {
+		case types.EventTypeToolExecutionEnd:
+			if result, ok := event.Result.(types.ToolResult); ok {
 				for _, c := range result.Content {
 					if tc, ok := c.(*types.TextContent); ok {
 						fmt.Printf("<< %s\n", tc.Text)

@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // SlashCommand represents a built-in slash command.
@@ -149,9 +149,9 @@ func cmdThinking(session *CodingSession, args string) error {
 		return nil
 	}
 
-	tl := agent.ThinkingLevel(level)
+	tl := types.ThinkingLevel(level)
 	switch tl {
-	case agent.ThinkingLevelOff, agent.ThinkingLevelLow, agent.ThinkingLevelMedium, agent.ThinkingLevelHigh:
+	case types.ThinkingLevelOff, types.ThinkingLevelLow, types.ThinkingLevelMedium, types.ThinkingLevelHigh:
 		session.SetThinkingLevel(tl)
 		fmt.Printf("Thinking level set to: %s\n", tl)
 		return nil

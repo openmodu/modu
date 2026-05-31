@@ -24,12 +24,12 @@ type mockHost struct {
 func (h *mockHost) EmitCompactionStart() { h.startCalls++ }
 func (h *mockHost) EmitCompactionDone()  { h.doneCalls++ }
 
-func (h *mockHost) NestedContextMessage(text string) agent.AgentMessage {
+func (h *mockHost) NestedContextMessage(text string) types.AgentMessage {
 	h.nested = append(h.nested, text)
 	return userMsg(text)
 }
 
-func (h *mockHost) IsTransient(msg agent.AgentMessage) bool {
+func (h *mockHost) IsTransient(msg types.AgentMessage) bool {
 	return strings.HasPrefix(messageText(msg), "[transient] ")
 }
 
@@ -40,7 +40,7 @@ func userMsg(text string) types.UserMessage {
 	}
 }
 
-func messageText(msg agent.AgentMessage) string {
+func messageText(msg types.AgentMessage) string {
 	um, ok := msg.(types.UserMessage)
 	if !ok {
 		return ""
@@ -57,7 +57,7 @@ func messageText(msg agent.AgentMessage) string {
 	return ""
 }
 
-func summaryStreamFn() agent.StreamFn {
+func summaryStreamFn() types.StreamFn {
 	return func(ctx context.Context, model *types.Model, _ *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
 		stream := types.NewEventStream()
 		go func() {
@@ -81,19 +81,19 @@ func testModel(window int) *types.Model {
 
 // newManager builds a Manager backed by a real agent and session manager in a
 // temp dir, plus the supplied mock host.
-func newManager(t *testing.T, host *mockHost, stream agent.StreamFn) (*Manager, *agent.Agent) {
+func newManager(t *testing.T, host *mockHost, stream types.StreamFn) (*Manager, *agent.Agent) {
 	t.Helper()
 	dir := t.TempDir()
 	sm, err := session.NewManager(filepath.Join(dir, ".agent"), dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ag := agent.NewAgent(agent.Config{})
+	ag := agent.NewAgent(types.Config{})
 	m := New(Deps{
 		Agent:          ag,
 		Resources:      resource.NewLoader(filepath.Join(dir, ".agent"), dir),
 		SessionManager: sm,
-		StreamFn:       func() agent.StreamFn { return stream },
+		StreamFn:       func() types.StreamFn { return stream },
 		APIKey:         func(string) (string, error) { return "", nil },
 		Host:           host,
 	})
@@ -264,15 +264,15 @@ func TestOnToolExecutionEndInjectsAndDedupes(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := New(Deps{
-		Agent:          agent.NewAgent(agent.Config{}),
+		Agent:          agent.NewAgent(types.Config{}),
 		Resources:      resource.NewLoader(filepath.Join(dir, ".agent"), dir),
 		SessionManager: sm,
-		StreamFn:       func() agent.StreamFn { return nil },
+		StreamFn:       func() types.StreamFn { return nil },
 		APIKey:         func(string) (string, error) { return "", nil },
 		Host:           host,
 	})
 
-	event := agent.Event{
+	event := types.Event{
 		ToolName: "read",
 		Args:     map[string]any{"path": filepath.Join(dir, "main.go")},
 	}
@@ -295,7 +295,7 @@ func TestOnToolExecutionEndInjectsAndDedupes(t *testing.T) {
 func TestOnToolExecutionEndIgnoresNonFileTools(t *testing.T) {
 	host := &mockHost{}
 	m, _ := newManager(t, host, nil)
-	m.OnToolExecutionEnd(agent.Event{ToolName: "todo_write", Args: map[string]any{"path": "x"}})
+	m.OnToolExecutionEnd(types.Event{ToolName: "todo_write", Args: map[string]any{"path": "x"}})
 	if len(host.nested) != 0 {
 		t.Fatalf("non-file tool should not inject context, got %d", len(host.nested))
 	}
@@ -313,17 +313,17 @@ func TestMarkInitialContextSuppressesInjection(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := New(Deps{
-		Agent:          agent.NewAgent(agent.Config{}),
+		Agent:          agent.NewAgent(types.Config{}),
 		Resources:      resource.NewLoader(filepath.Join(dir, ".agent"), dir),
 		SessionManager: sm,
-		StreamFn:       func() agent.StreamFn { return nil },
+		StreamFn:       func() types.StreamFn { return nil },
 		APIKey:         func(string) (string, error) { return "", nil },
 		Host:           host,
 	})
 	// Already folded into the system prompt — should not be re-injected.
 	m.MarkInitialContext([]string{agentsPath})
 
-	m.OnToolExecutionEnd(agent.Event{ToolName: "read", Args: map[string]any{"path": filepath.Join(dir, "main.go")}})
+	m.OnToolExecutionEnd(types.Event{ToolName: "read", Args: map[string]any{"path": filepath.Join(dir, "main.go")}})
 	if len(host.nested) != 0 {
 		t.Fatalf("initial context should be suppressed, got %d injections", len(host.nested))
 	}

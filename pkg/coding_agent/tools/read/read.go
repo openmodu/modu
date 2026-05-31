@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/common"
 	"github.com/openmodu/modu/pkg/types"
 )
@@ -29,7 +28,7 @@ type ReadTool struct {
 	cwd string
 }
 
-func NewTool(cwd string) agent.Tool {
+func NewTool(cwd string) types.Tool {
 	return &ReadTool{cwd: cwd}
 }
 
@@ -67,7 +66,7 @@ func (t *ReadTool) Parameters() any {
 	}
 }
 
-func (t *ReadTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *ReadTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate types.ToolUpdateCallback) (types.ToolResult, error) {
 	pathArg, _ := args["path"].(string)
 	if pathArg == "" {
 		pathArg, _ = args["file_path"].(string)
@@ -101,7 +100,7 @@ func (t *ReadTool) Execute(ctx context.Context, toolCallID string, args map[stri
 	return t.readText(resolved, info, args)
 }
 
-func (t *ReadTool) readImage(path, mimeType string) (agent.ToolResult, error) {
+func (t *ReadTool) readImage(path, mimeType string) (types.ToolResult, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return common.ErrorResult(fmt.Sprintf("failed to read image: %v", err)), nil
@@ -117,7 +116,7 @@ func (t *ReadTool) readImage(path, mimeType string) (agent.ToolResult, error) {
 
 	encoded := base64.StdEncoding.EncodeToString(data)
 
-	return agent.ToolResult{
+	return types.ToolResult{
 		Content: []types.ContentBlock{
 			&types.ImageContent{
 				Type:     "image",
@@ -128,7 +127,7 @@ func (t *ReadTool) readImage(path, mimeType string) (agent.ToolResult, error) {
 	}, nil
 }
 
-func (t *ReadTool) readText(path string, info os.FileInfo, args map[string]any) (agent.ToolResult, error) {
+func (t *ReadTool) readText(path string, info os.FileInfo, args map[string]any) (types.ToolResult, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return common.ErrorResult(fmt.Sprintf("failed to read file: %v", err)), nil
@@ -161,7 +160,7 @@ func (t *ReadTool) readText(path string, info os.FileInfo, args map[string]any) 
 	if offset > 0 && offset < len(lines) {
 		lines = lines[offset:]
 	} else if offset >= len(lines) {
-		return agent.ToolResult{
+		return types.ToolResult{
 			Content: []types.ContentBlock{
 				&types.TextContent{
 					Type: "text",
@@ -194,7 +193,7 @@ func (t *ReadTool) readText(path string, info os.FileInfo, args map[string]any) 
 			totalLines-len(lines), startLine, startLine+len(lines)-1, totalLines+offset)
 	}
 
-	return agent.ToolResult{
+	return types.ToolResult{
 		Content: []types.ContentBlock{
 			&types.TextContent{
 				Type: "text",

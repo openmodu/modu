@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -33,8 +32,8 @@ func runOPC(ctx context.Context, args ...string) (string, error) {
 	return output, err
 }
 
-func textResult(text string) agent.ToolResult {
-	return agent.ToolResult{
+func textResult(text string) types.ToolResult {
+	return types.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: text}},
 	}
 }
@@ -68,7 +67,7 @@ func (t *TTSTool) Parameters() any {
 	}
 }
 
-func (t *TTSTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *TTSTool) Execute(ctx context.Context, _ string, args map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	text, _ := args["text"].(string)
 	if text == "" {
 		return textResult("Error: text is required"), nil
@@ -116,7 +115,7 @@ func (t *SayTool) Parameters() any {
 	}
 }
 
-func (t *SayTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *SayTool) Execute(ctx context.Context, _ string, args map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	text, _ := args["text"].(string)
 	if text == "" {
 		return textResult("Error: text is required"), nil
@@ -160,7 +159,7 @@ func (t *ASRTool) Parameters() any {
 	}
 }
 
-func (t *ASRTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *ASRTool) Execute(ctx context.Context, _ string, args map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	audio, _ := args["audio"].(string)
 	if audio == "" {
 		return textResult("Error: audio file path is required"), nil
@@ -196,7 +195,7 @@ func (t *VoicesTool) Parameters() any {
 	}
 }
 
-func (t *VoicesTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *VoicesTool) Execute(ctx context.Context, _ string, args map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	cmdArgs := []string{"voices"}
 	cmdArgs = appendStringArg(cmdArgs, args, "engine", "-e")
 	output, err := runOPC(ctx, cmdArgs...)
@@ -224,7 +223,7 @@ func (t *DiscoverTool) Parameters() any {
 	}
 }
 
-func (t *DiscoverTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *DiscoverTool) Execute(ctx context.Context, _ string, args map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	cmdArgs := []string{"discover"}
 	if setDefault, _ := args["set_default"].(bool); setDefault {
 		cmdArgs = append(cmdArgs, "--set-default")
@@ -258,7 +257,7 @@ func (t *ConfigTool) Parameters() any {
 	}
 }
 
-func (t *ConfigTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *ConfigTool) Execute(ctx context.Context, _ string, args map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	cmdArgs := []string{"config"}
 	if show, _ := args["show"].(bool); show {
 		cmdArgs = append(cmdArgs, "--show")
@@ -309,7 +308,7 @@ func (t *ASRSplitTool) Parameters() any {
 	}
 }
 
-func (t *ASRSplitTool) Execute(ctx context.Context, _ string, args map[string]any, _ agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *ASRSplitTool) Execute(ctx context.Context, _ string, args map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	linesJSON, _ := args["lines_json"].(string)
 	line := int(toFloat(args["line"]))
 	after, _ := args["after"].(string)

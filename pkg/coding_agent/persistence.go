@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/services/session"
 	"github.com/openmodu/modu/pkg/types"
 )
@@ -36,7 +35,7 @@ func (s *engine) SaveMessages() error {
 // RestoreMessages loads a previously saved message snapshot from JSONL.
 // Returns (number_of_messages, error).
 func (s *engine) RestoreMessages() (int, error) {
-	var msgs []agent.AgentMessage
+	var msgs []types.AgentMessage
 	for _, entry := range s.sessionTree.GetCurrentPath() {
 		if entry.Type == session.EntryTypeBranchSummary {
 			if msg, ok := branchSummaryMessageFromSessionData(entry.Data); ok {
@@ -134,7 +133,7 @@ func (s *engine) ClearConversation() error {
 
 // ── JSON marshaling ──────────────────────────────────────────────────────────
 
-func unmarshalSingleAgentMessage(raw json.RawMessage) (agent.AgentMessage, error) {
+func unmarshalSingleAgentMessage(raw json.RawMessage) (types.AgentMessage, error) {
 	var peek struct {
 		Role string `json:"role"`
 	}
@@ -155,16 +154,16 @@ func unmarshalSingleAgentMessage(raw json.RawMessage) (agent.AgentMessage, error
 	return nil, fmt.Errorf("unknown role: %s", peek.Role)
 }
 
-func agentMessageFromSessionData(data any) (agent.AgentMessage, bool) {
+func agentMessageFromSessionData(data any) (types.AgentMessage, bool) {
 	switch v := data.(type) {
 	case session.MessageData:
-		if msg, ok := v.Content.(agent.AgentMessage); ok {
+		if msg, ok := v.Content.(types.AgentMessage); ok {
 			return msg, true
 		}
 		switch v.Role {
-		case agent.RoleUser:
+		case types.RoleUser:
 			return types.UserMessage{Role: "user", Content: v.Content}, true
-		case agent.RoleAssistant:
+		case types.RoleAssistant:
 			if msg, ok := v.Content.(types.AssistantMessage); ok {
 				return msg, true
 			}
@@ -173,7 +172,7 @@ func agentMessageFromSessionData(data any) (agent.AgentMessage, bool) {
 			}
 			text, _ := v.Content.(string)
 			return types.AssistantMessage{Role: "assistant", Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: text}}}, true
-		case agent.RoleToolResult:
+		case types.RoleToolResult:
 			if msg, ok := v.Content.(types.ToolResultMessage); ok {
 				return msg, true
 			}
@@ -193,13 +192,13 @@ func agentMessageFromSessionData(data any) (agent.AgentMessage, bool) {
 }
 
 // unmarshalAgentMessages deserializes messages previously produced by old json array format.
-func unmarshalAgentMessages(data []byte) ([]agent.AgentMessage, error) {
+func unmarshalAgentMessages(data []byte) ([]types.AgentMessage, error) {
 	var raws []json.RawMessage
 	if err := json.Unmarshal(data, &raws); err != nil {
 		return nil, err
 	}
 
-	msgs := make([]agent.AgentMessage, 0, len(raws))
+	msgs := make([]types.AgentMessage, 0, len(raws))
 	for _, raw := range raws {
 		msg, err := unmarshalSingleAgentMessage(raw)
 		if err == nil && msg != nil {

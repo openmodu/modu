@@ -6,7 +6,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/common"
 	"github.com/openmodu/modu/pkg/types"
 	"golang.org/x/text/unicode/norm"
@@ -17,7 +16,7 @@ type EditTool struct {
 	cwd string
 }
 
-func NewTool(cwd string) agent.Tool {
+func NewTool(cwd string) types.Tool {
 	return &EditTool{cwd: cwd}
 }
 
@@ -52,7 +51,7 @@ func (t *EditTool) Parameters() any {
 	}
 }
 
-func (t *EditTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate agent.ToolUpdateCallback) (agent.ToolResult, error) {
+func (t *EditTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate types.ToolUpdateCallback) (types.ToolResult, error) {
 	pathArg, _ := args["path"].(string)
 	oldText, _ := args["old_text"].(string)
 	newText, _ := args["new_text"].(string)
@@ -154,7 +153,7 @@ func (t *EditTool) Execute(ctx context.Context, toolCallID string, args map[stri
 		msgText = fmt.Sprintf("Successfully edited %s (%d replacement(s) using fuzzy match)\n\n%s", pathArg, replacements, diff)
 	}
 
-	return agent.ToolResult{
+	return types.ToolResult{
 		Content: []types.ContentBlock{
 			&types.TextContent{
 				Type: "text",

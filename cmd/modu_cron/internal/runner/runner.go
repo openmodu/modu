@@ -25,7 +25,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openmodu/modu/pkg/agent"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/coding_agent/modes"
 	"github.com/openmodu/modu/pkg/types"
@@ -47,7 +46,7 @@ type Deps struct {
 	Model       *types.Model
 	GetAPIKey   func(provider string) (string, error)
 	Logs        *runlog.Store
-	CustomTools []agent.Tool
+	CustomTools []types.Tool
 }
 
 // Result describes one completed execution. LogPath is populated even if the

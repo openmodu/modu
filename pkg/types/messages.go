@@ -3,6 +3,12 @@ package types
 // StopReason is the reason the model stopped generating.
 type StopReason = string
 
+const (
+	RoleUser       = "user"
+	RoleAssistant  = "assistant"
+	RoleToolResult = "toolResult"
+)
+
 // AgentMessage is the interface for all message types in the conversation history.
 type AgentMessage interface{}
 

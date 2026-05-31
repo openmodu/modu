@@ -3,7 +3,7 @@ package extension
 import (
 	"context"
 
-	"github.com/openmodu/modu/pkg/agent"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // ForkOptions configures a one-shot child agent spawned by ExtensionAPI.ForkSession.
@@ -133,7 +133,7 @@ type TaskSnapshot struct {
 // ExtensionAPI provides the API available to extensions.
 type ExtensionAPI interface {
 	// RegisterTool registers a new tool provided by the extension.
-	RegisterTool(tool agent.Tool)
+	RegisterTool(tool types.Tool)
 	// RegisterCommand registers a slash command handler.
 	RegisterCommand(name, description string, handler CommandHandler)
 	// AddHook registers a hook that wraps tool execution.
@@ -189,7 +189,7 @@ type ExtensionAPI interface {
 type CommandHandler func(args string) error
 
 // EventHandler handles an agent event.
-type EventHandler func(event agent.Event)
+type EventHandler func(event types.Event)
 
 // Command represents a registered slash command.
 type Command struct {
@@ -203,7 +203,7 @@ type ToolHook struct {
 	// Before is called before tool execution. Return false to cancel.
 	Before func(toolName string, args map[string]any) bool
 	// After is called after tool execution with the result.
-	After func(toolName string, args map[string]any, result agent.ToolResult)
+	After func(toolName string, args map[string]any, result types.ToolResult)
 	// Transform allows modifying the tool result before returning it.
-	Transform func(toolName string, result agent.ToolResult) agent.ToolResult
+	Transform func(toolName string, result types.ToolResult) types.ToolResult
 }

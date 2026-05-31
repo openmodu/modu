@@ -7,9 +7,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/openmodu/modu/pkg/agent"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/coding_agent/modes"
+	"github.com/openmodu/modu/pkg/types"
 
 	"github.com/openmodu/modu/cmd/modu_cron/internal/config"
 	"github.com/openmodu/modu/cmd/modu_cron/internal/crontools"
@@ -68,12 +68,12 @@ func Add(ctx context.Context, cfgPath, description string, out io.Writer) error 
 	})
 }
 
-func filterCronTools(all []agent.Tool, names ...string) []agent.Tool {
+func filterCronTools(all []types.Tool, names ...string) []types.Tool {
 	keep := map[string]bool{}
 	for _, n := range names {
 		keep[n] = true
 	}
-	out := make([]agent.Tool, 0, len(names))
+	out := make([]types.Tool, 0, len(names))
 	for _, t := range all {
 		if keep[t.Name()] {
 			out = append(out, t)

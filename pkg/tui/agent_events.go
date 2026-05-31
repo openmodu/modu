@@ -4,23 +4,22 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/types"
 )
 
-func (m *uiModel) handleAgentEvent(ev agent.Event) {
+func (m *uiModel) handleAgentEvent(ev types.Event) {
 	switch ev.Type {
-	case agent.EventTypeAgentStart:
+	case types.EventTypeAgentStart:
 		m.queryActive = true
 		m.setStatus("thinking")
 		m.clearActivity()
 
-	case agent.EventTypeMessageStart:
+	case types.EventTypeMessageStart:
 		if _, ok := assistantMessageFromEvent(ev.Message); ok {
 			m.beginAssistantBlock()
 		}
 
-	case agent.EventTypeMessageUpdate:
+	case types.EventTypeMessageUpdate:
 		if ev.StreamEvent == nil {
 			break
 		}
@@ -44,7 +43,7 @@ func (m *uiModel) handleAgentEvent(ev agent.Event) {
 		}
 		return
 
-	case agent.EventTypeToolExecutionStart:
+	case types.EventTypeToolExecutionStart:
 		var args map[string]any
 		if margs, ok := ev.Args.(map[string]any); ok {
 			args = margs
@@ -71,7 +70,7 @@ func (m *uiModel) handleAgentEvent(ev agent.Event) {
 			Status:   "running",
 		})
 
-	case agent.EventTypeToolExecutionEnd:
+	case types.EventTypeToolExecutionEnd:
 		if ev.ToolCallID == "" {
 			break
 		}
@@ -88,7 +87,7 @@ func (m *uiModel) handleAgentEvent(ev agent.Event) {
 			}
 		}
 
-	case agent.EventTypeMessageEnd:
+	case types.EventTypeMessageEnd:
 		msg, ok := assistantMessageFromEvent(ev.Message)
 		if !ok {
 			break
@@ -113,7 +112,7 @@ func (m *uiModel) handleAgentEvent(ev agent.Event) {
 		}
 		block.Streaming = false
 
-	case agent.EventTypeAgentEnd:
+	case types.EventTypeAgentEnd:
 		m.queryActive = false
 		if m.statusMsg != "interrupted" {
 			m.setStatus("")

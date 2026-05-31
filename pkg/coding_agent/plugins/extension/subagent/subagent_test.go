@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
 	"github.com/openmodu/modu/pkg/types"
 )
@@ -24,7 +23,7 @@ import (
 // Most ExtensionAPI methods return zero values — the subagent extension
 // only touches RegisterTool and ForkSession in normal flow.
 type fakeAPI struct {
-	registered []agent.Tool
+	registered []types.Tool
 	commands   map[string]extension.CommandHandler
 	notices    []string
 
@@ -38,7 +37,7 @@ type fakeAPI struct {
 	cwd         string
 }
 
-func (f *fakeAPI) RegisterTool(t agent.Tool) { f.registered = append(f.registered, t) }
+func (f *fakeAPI) RegisterTool(t types.Tool) { f.registered = append(f.registered, t) }
 func (f *fakeAPI) RegisterCommand(name string, _ string, h extension.CommandHandler) {
 	if f.commands == nil {
 		f.commands = map[string]extension.CommandHandler{}
@@ -163,12 +162,12 @@ func newExtensionWithProfiles(t *testing.T, profiles map[string]string) (*Extens
 	return ext, api
 }
 
-func toolOf(t *testing.T, api *fakeAPI) agent.Tool {
+func toolOf(t *testing.T, api *fakeAPI) types.Tool {
 	t.Helper()
 	return registeredTool(t, api, "subagent")
 }
 
-func registeredTool(t *testing.T, api *fakeAPI, name string) agent.Tool {
+func registeredTool(t *testing.T, api *fakeAPI, name string) types.Tool {
 	t.Helper()
 	for _, tool := range api.registered {
 		if tool.Name() == name {
@@ -3886,7 +3885,7 @@ func TestDefaultModelAppliedWhenProfileLeavesItEmpty(t *testing.T) {
 
 // textOf concatenates every TextContent block in a tool result. Used to
 // keep assertions concise.
-func textOf(res agent.ToolResult) string {
+func textOf(res types.ToolResult) string {
 	var b strings.Builder
 	for _, block := range res.Content {
 		if tc, ok := block.(*types.TextContent); ok {
