@@ -813,7 +813,7 @@ func (s *engine) handleMessageEnd(msg agent.AgentMessage) {
 	if msg == nil {
 		return
 	}
-	if isTransientContextMessage(msg) {
+	if isNonPersistentMessage(msg) {
 		return
 	}
 

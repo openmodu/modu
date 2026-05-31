@@ -98,16 +98,39 @@ func (m *CustomMessage) ToLlmMessage() types.UserMessage {
 	}
 }
 
+// isTransientContextMessage reports whether a message is host-injected context
+// that PruneTransient drops from the live context at the end of each turn.
+// Explicitly invoked skills (explicit_skill) are deliberately excluded: their
+// body stays resident across turns so a multi-turn skill is not re-read every
+// turn, and context pressure is reclaimed by compaction instead. The broader
+// "never persist" set is isNonPersistentMessage.
 func isTransientContextMessage(msg agent.AgentMessage) bool {
 	switch m := msg.(type) {
 	case types.UserMessage:
 		return customMessageHasSource(m.Content, nestedContextSource) ||
-			customMessageHasSource(m.Content, explicitSkillSource) ||
 			customMessageHasSource(m.Content, hiddenExtensionSource)
 	case *types.UserMessage:
 		return customMessageHasSource(m.Content, nestedContextSource) ||
-			customMessageHasSource(m.Content, explicitSkillSource) ||
 			customMessageHasSource(m.Content, hiddenExtensionSource)
+	default:
+		return false
+	}
+}
+
+// isNonPersistentMessage reports whether a message is host-injected context that
+// must never be written to the saved session: everything transient, plus
+// explicit_skill. A skill body lives in-context for the task but should not
+// pollute persisted history (it would replay as a bogus user message on resume)
+// and is cheaply re-injected when the skill is invoked again.
+func isNonPersistentMessage(msg agent.AgentMessage) bool {
+	if isTransientContextMessage(msg) {
+		return true
+	}
+	switch m := msg.(type) {
+	case types.UserMessage:
+		return customMessageHasSource(m.Content, explicitSkillSource)
+	case *types.UserMessage:
+		return customMessageHasSource(m.Content, explicitSkillSource)
 	default:
 		return false
 	}

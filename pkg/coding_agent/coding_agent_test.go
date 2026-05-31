@@ -2665,3 +2665,42 @@ func TestTransientNestedContextMessagesArePrunedAndNotPersisted(t *testing.T) {
 		t.Fatalf("expected regular message to be persisted, got:\n%s", text)
 	}
 }
+
+func TestExplicitSkillMessageResidentButNotPersisted(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  agentDir,
+		Model:     newTestModel(),
+		GetAPIKey: func(provider string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	skillMsg := (&CustomMessage{
+		Source: explicitSkillSource,
+		Text:   "The user explicitly invoked the \"git-commit\" skill.\n\n<skill body>",
+	}).ToLlmMessage()
+
+	session.agent.AppendMessage(skillMsg)
+	session.handleMessageEnd(skillMsg)
+	session.ctxMgr.PruneTransient()
+
+	// Resident: an explicitly invoked skill survives the end-of-turn prune so a
+	// multi-turn skill is not re-read every turn.
+	if msgs := session.agent.GetState().Messages; len(msgs) != 1 {
+		t.Fatalf("expected explicit_skill message to stay resident after prune, got %d", len(msgs))
+	}
+
+	// Not persisted: the skill body must not pollute the saved session.
+	data, err := os.ReadFile(session.messagesFilePath())
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), explicitSkillSource) {
+		t.Fatalf("expected explicit_skill not to be persisted, got:\n%s", string(data))
+	}
+}
