@@ -52,6 +52,21 @@ type bubbleTUI struct {
 	modelScopeEdit    bool
 	modelScopedIDs    map[string]bool
 
+	configAction          string
+	configFields          []configInputField
+	configFieldIdx        int
+	configInput           ConfigModelInput
+	configChoices         []ConfigModelEntry
+	configAllChoices      []ConfigModelEntry
+	configSelectIdx       int
+	configSelectScroll    int
+	configSearch          string
+	configMenuChoices     []configMenuChoice
+	configMenuIdx         int
+	configProviderInput   ConfigProviderInput
+	configProviderChoices []ConfigProviderEntry
+	configProviderAll     []ConfigProviderEntry
+
 	width  int
 	height int
 
@@ -263,6 +278,12 @@ func (b *bubbleTUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return b.handleSlashDone(msg)
 	case bubbleConfigDoneMsg:
 		return b, b.handleConfigDone(msg)
+	case bubbleConfigModelsMsg:
+		b.handleConfigModels(msg)
+		return b, nil
+	case bubbleConfigProvidersMsg:
+		b.handleConfigProviders(msg)
+		return b, nil
 	case bubbleShellDoneMsg:
 		return b.handleShellDone(msg)
 	case bubbleModelSwitchDoneMsg:
@@ -293,6 +314,15 @@ func (b *bubbleTUI) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if b.model.state == uiStateModelSelect {
 		return b.updateModelSelectKey(msg)
+	}
+	if b.model.state == uiStateConfigMenu {
+		return b.updateConfigMenuKey(msg)
+	}
+	if b.model.state == uiStateConfigInput {
+		return b, b.updateConfigInputKey(msg)
+	}
+	if b.model.state == uiStateConfigSelect {
+		return b.updateConfigSelectKey(msg)
 	}
 
 	switch msg.String() {
@@ -571,15 +601,14 @@ func (b *bubbleTUI) runLocalOrSlash(line string) tea.Cmd {
 	case line == "/retry":
 		return b.retryLastFailedPrompt()
 	case line == "/config" || strings.HasPrefix(line, "/config "):
-		return b.runConfigHook(strings.TrimSpace(strings.TrimPrefix(line, "/config")))
+		return b.runConfigCommand(strings.TrimSpace(strings.TrimPrefix(line, "/config")))
 	case line == "/settings":
 		return b.appendSystemSection("Settings", "Bubble Tea settings selector is not migrated yet.\nUse /model list, /plan, /worktree, /sessions, /skills, or /prompts for command output.")
 	case line == "/model" || strings.HasPrefix(line, "/model "):
 		b.openModelSelect(strings.TrimSpace(strings.TrimPrefix(line, "/model")))
 		return nil
-	case line == "/scoped-models":
-		b.openScopedModelsSelect()
-		return nil
+	case line == "/scoped-models" || strings.HasPrefix(line, "/scoped-models "):
+		return b.runScopedModelsCommand(strings.TrimSpace(strings.TrimPrefix(line, "/scoped-models")))
 	case line == "/hotkeys":
 		return b.appendSystemSection("Hotkeys", hotkeyHelpText())
 	case line == "/plan":
@@ -1111,7 +1140,11 @@ func (b *bubbleTUI) toggleScopedModelSelection() {
 	if len(ids) == len(b.modelAllChoices) {
 		ids = nil
 	}
-	b.session.SetScopedModelIDs(ids)
+	if err := b.saveScopedModelIDs(ids); err != nil {
+		b.model.statusMsg = "model scope not saved"
+		b.model.errMsg = err.Error()
+		return
+	}
 	b.model.statusMsg = "model scope updated"
 }
 
@@ -1751,8 +1784,19 @@ func (b *bubbleTUI) renderInputControl() string {
 		input = b.renderPlanReject()
 	} else if b.model.state == uiStateModelSelect {
 		input = b.renderModelSelect()
+	} else if b.model.state == uiStateConfigMenu {
+		input = b.renderConfigMenu()
+	} else if b.model.state == uiStateConfigInput {
+		input = b.renderConfigInput()
+	} else if b.model.state == uiStateConfigSelect {
+		input = b.renderConfigSelect()
 	}
-	if b.model.state == uiStatePermission || b.model.state == uiStatePlanReject || b.model.state == uiStateModelSelect {
+	if b.model.state == uiStatePermission ||
+		b.model.state == uiStatePlanReject ||
+		b.model.state == uiStateModelSelect ||
+		b.model.state == uiStateConfigMenu ||
+		b.model.state == uiStateConfigInput ||
+		b.model.state == uiStateConfigSelect {
 		return uiBubblePopup.Width(width).Render(input)
 	}
 	return uiBubbleInput.Width(width).Render(input)
@@ -1842,6 +1886,18 @@ func bubbleWindowRange(cursor, total, size int) (start, end int) {
 func (b *bubbleTUI) inputHeight() int {
 	if b.model.state == uiStateModelSelect {
 		return min(len(b.modelChoices), modelSelectVisibleRows) + 4
+	}
+	if b.model.state == uiStateConfigSelect {
+		return min(b.configSelectLen(), modelSelectVisibleRows) + 4
+	}
+	if b.model.state == uiStateConfigMenu {
+		return min(len(b.configMenuChoices), modelSelectVisibleRows) + 4
+	}
+	if b.model.state == uiStateConfigInput {
+		if b.configAction == "provider" {
+			return len(configProviderFields) + 4
+		}
+		return 6
 	}
 	if b.model.state == uiStatePermission {
 		return 5
@@ -1934,6 +1990,9 @@ func (b *bubbleTUI) renderStatusLine() string {
 	}
 	if b.model.state == uiStateModelSelect {
 		return uiDimText.Render(strings.TrimSpace(b.modelSelectHint()))
+	}
+	if b.model.state == uiStateConfigMenu || b.model.state == uiStateConfigInput || b.model.state == uiStateConfigSelect {
+		return uiDimText.Render(strings.TrimSpace(b.configHint()))
 	}
 	if status := b.model.effectiveStatusMsg(time.Now()); status != "" && status != "thinking" {
 		if queue := b.queueStatusLine(); queue != "" {

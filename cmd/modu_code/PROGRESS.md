@@ -89,6 +89,17 @@ enough to implement, verify, and commit independently.
   in the live renderer.
 - Bubble Tea tool and plan approval prompts now use the Agenvoy-style prompt
   card: `⏺` title, compact tool/input detail, and colored `actions:` choices.
+- `/config` now opens a configuration page instead of exposing list/validate/example
+  slash subcommands. The page is intentionally limited to Active Model and
+  Provider setup, with Esc returning from a second-level page.
+- `/scoped-models` now supports simple slash arguments: list, set, add, remove,
+  clear, and edit.
+- Model config now writes a v2 schema with separate provider connection config,
+  model metadata, active model, roles, reasoning, and persistent scopedModels;
+  legacy per-model baseUrl/apiKey files still load and migrate on save.
+- `/config` Provider now uses the same searchable selector pattern as model
+  selection, opens an existing, preset, or custom OpenAI-compatible provider
+  settings form, and discovers model entries from `<baseUrl>/models` after save.
 
 ## Next
 
@@ -158,3 +169,15 @@ enough to implement, verify, and commit independently.
   passed for removing the legacy go-tui runtime and dependency.
 - 2026-05-31: `GOCACHE=/private/tmp/modu-go-build go test ./...`
   passed after removing the legacy go-tui runtime and dependency.
+- 2026-05-31: `go test ./cmd/modu_code ./cmd/modu_code/internal/provider ./pkg/tui ./pkg/slash ./pkg/coding_agent`
+  passed for the expanded `/config` management commands.
+- 2026-05-31: `env GOCACHE=/private/tmp/modu-go-build go test ./cmd/modu_code ./cmd/modu_code/internal/provider ./pkg/tui ./pkg/slash ./pkg/coding_agent`
+  passed for the `/config` configuration page and provider/model/scoped-model flows.
+- 2026-05-31: `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/tui ./cmd/modu_code`
+  passed for `/scoped-models` slash-argument configuration.
+- 2026-05-31: `env GOCACHE=/private/tmp/modu-go-build go test ./cmd/modu_code/internal/provider ./cmd/modu_code ./pkg/tui`
+  passed for v2 config schema loading, migration, scopedModels persistence, and
+  config command coverage.
+- 2026-05-31: `env GOCACHE=/private/tmp/modu-go-build go test ./cmd/modu_code/internal/provider ./cmd/modu_code ./pkg/tui`
+  passed for the searchable `/config` provider selector and OpenAI-compatible
+  model discovery.

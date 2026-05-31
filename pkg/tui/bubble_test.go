@@ -117,7 +117,7 @@ func TestBubbleTUIConfigHookRendersSection(t *testing.T) {
 		},
 	})
 
-	cmd := root.submit("/config validate", submitModeNormal)
+	cmd := root.runConfigHook("validate")
 	if cmd == nil {
 		t.Fatal("expected config command")
 	}
@@ -133,6 +133,237 @@ func TestBubbleTUIConfigHookRendersSection(t *testing.T) {
 	}
 	if got := root.model.blocks[0].Content; !strings.Contains(got, "status: ok") {
 		t.Fatalf("expected config output in block, got %q", got)
+	}
+}
+
+func TestBubbleTUIConfigOpensMenu(t *testing.T) {
+	root := newBubbleTUI(context.Background(), nil, nil, "", nil, CommandHooks{})
+
+	cmd := root.submit("/config", submitModeNormal)
+	if cmd != nil {
+		t.Fatal("expected /config to open menu without command")
+	}
+	if root.model.state != uiStateConfigMenu {
+		t.Fatalf("expected config menu state, got %v", root.model.state)
+	}
+	rendered := root.renderConfigMenu()
+	for _, want := range []string{"Config", "Active Model", "Provider"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected menu to contain %q, got %q", want, rendered)
+		}
+	}
+	for _, notWant := range []string{"Custom model", "Scoped models", "Remove model"} {
+		if strings.Contains(rendered, notWant) {
+			t.Fatalf("expected menu not to contain %q, got %q", notWant, rendered)
+		}
+	}
+}
+
+func TestBubbleTUIConfigProviderInteractive(t *testing.T) {
+	var got ConfigProviderInput
+	root := newBubbleTUI(context.Background(), nil, nil, "", nil, CommandHooks{
+		ConfigSetProvider: func(input ConfigProviderInput) (string, error) {
+			got = input
+			return "saved provider: " + input.Provider, nil
+		},
+	})
+
+	root.openConfigProvider()
+	if root.model.state != uiStateConfigInput {
+		t.Fatalf("expected config input state, got %v", root.model.state)
+	}
+	rendered := root.renderConfigInput()
+	for _, want := range []string{"ProviderName", "API Key", "BaseURL (optional)"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected provider form to show %q, got %q", want, rendered)
+		}
+	}
+	for _, value := range []string{"openai", "sk-test", "https://api.openai.com/v1"} {
+		for _, r := range value {
+			root.updateConfigInputKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		}
+		cmd := root.updateConfigInputKey(tea.KeyMsg{Type: tea.KeyEnter})
+		if cmd != nil {
+			msg, ok := cmd().(bubbleConfigDoneMsg)
+			if !ok {
+				t.Fatalf("expected bubbleConfigDoneMsg, got %T", msg)
+			}
+			if msg.err != nil || !strings.Contains(msg.out, "saved provider: openai") {
+				t.Fatalf("unexpected provider result: out=%q err=%v", msg.out, msg.err)
+			}
+		}
+	}
+	if got.Provider != "openai" || got.Type != "openai-compatible" || got.BaseURL != "https://api.openai.com/v1" || got.APIKey != "sk-test" {
+		t.Fatalf("unexpected provider input: %#v", got)
+	}
+}
+
+func TestBubbleTUIConfigProviderMenuCanReturn(t *testing.T) {
+	root := newBubbleTUI(context.Background(), nil, nil, "", nil, CommandHooks{
+		ConfigProviders: func() ([]ConfigProviderEntry, error) {
+			return []ConfigProviderEntry{{Name: "openai", Type: "openai-compatible", BaseURL: "https://api.openai.com/v1", APIKeyEnv: "OPENAI_API_KEY"}}, nil
+		},
+	})
+
+	cmd := root.openConfigProviderMenu()
+	if cmd == nil {
+		t.Fatal("expected provider list command")
+	}
+	msg, ok := cmd().(bubbleConfigProvidersMsg)
+	if !ok {
+		t.Fatalf("expected bubbleConfigProvidersMsg, got %T", msg)
+	}
+	next, _ := root.Update(msg)
+	root = next.(*bubbleTUI)
+	if root.model.state != uiStateConfigSelect || root.configAction != "provider-select" {
+		t.Fatalf("expected provider selector, state=%v action=%q", root.model.state, root.configAction)
+	}
+	if rendered := root.renderConfigSelect(); !strings.Contains(rendered, "Custom OpenAI-compatible") || !strings.Contains(rendered, "openai") {
+		t.Fatalf("unexpected provider selector: %q", rendered)
+	}
+
+	root.updateConfigSelectKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if root.model.state != uiStateConfigMenu {
+		t.Fatalf("expected esc to return to config menu, got %v", root.model.state)
+	}
+}
+
+func TestBubbleTUIConfigProviderSelectorOpensExistingProvider(t *testing.T) {
+	root := newBubbleTUI(context.Background(), nil, nil, "", nil, CommandHooks{
+		ConfigProviders: func() ([]ConfigProviderEntry, error) {
+			return []ConfigProviderEntry{{Name: "openai", Type: "openai-compatible", BaseURL: "https://api.openai.com/v1", APIKeyEnv: "OPENAI_API_KEY"}}, nil
+		},
+		ConfigSetProvider: func(input ConfigProviderInput) (string, error) {
+			return "saved provider: " + input.Provider, nil
+		},
+	})
+
+	cmd := root.openConfigProviderMenu()
+	next, _ := root.Update(cmd())
+	root = next.(*bubbleTUI)
+	root.configSearch = "openai"
+	root.filterConfigChoices()
+	if len(root.configProviderChoices) != 2 {
+		t.Fatalf("expected custom plus openai choices, got %#v", root.configProviderChoices)
+	}
+	root.configSelectIdx = 1
+	cmd = root.confirmConfigSelect()
+	if cmd != nil {
+		t.Fatal("expected existing provider select to open input synchronously")
+	}
+	if root.model.state != uiStateConfigInput {
+		t.Fatalf("expected provider input state, got %v", root.model.state)
+	}
+	if root.configFields[root.configFieldIdx].key != "provider" || root.draft != "openai" {
+		t.Fatalf("expected provider field prefilled, field=%#v draft=%q", root.configFields[root.configFieldIdx], root.draft)
+	}
+	if len(root.configFields) != 3 || root.configFields[0].label != "ProviderName" || root.configFields[1].label != "API Key" || root.configFields[2].label != "BaseURL (optional)" {
+		t.Fatalf("unexpected provider fields: %#v", root.configFields)
+	}
+}
+
+func TestBubbleTUIConfigAddInteractive(t *testing.T) {
+	var got ConfigModelInput
+	root := newBubbleTUI(context.Background(), nil, nil, "", nil, CommandHooks{
+		ConfigAdd: func(input ConfigModelInput) (string, error) {
+			got = input
+			return "added model: " + input.Name, nil
+		},
+	})
+
+	cmd := root.submit("/config add", submitModeNormal)
+	if cmd != nil {
+		t.Fatal("expected interactive config add to stay in TUI")
+	}
+	if root.model.state != uiStateConfigInput {
+		t.Fatalf("expected config input state, got %v", root.model.state)
+	}
+
+	type fieldInput struct {
+		value string
+		want  string
+	}
+	fields := []fieldInput{
+		{"local-qwen", "provider"},
+		{"lmstudio", "model"},
+		{"qwen", "baseUrl"},
+		{"http://127.0.0.1:1234/v1", "apiKey"},
+		{"local-key", "description"},
+		{"local coding model", ""},
+	}
+	var last tea.Cmd
+	for _, field := range fields {
+		for _, r := range field.value {
+			root.updateConfigInputKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		}
+		last = root.updateConfigInputKey(tea.KeyMsg{Type: tea.KeyEnter})
+		if field.want != "" {
+			if root.configFields[root.configFieldIdx].key != field.want {
+				t.Fatalf("expected next field %q, got %q", field.want, root.configFields[root.configFieldIdx].key)
+			}
+		}
+	}
+	if last == nil {
+		t.Fatal("expected final config add command")
+	}
+	msg, ok := last().(bubbleConfigDoneMsg)
+	if !ok {
+		t.Fatalf("expected bubbleConfigDoneMsg, got %T", msg)
+	}
+	if msg.err != nil || !strings.Contains(msg.out, "added model: local-qwen") {
+		t.Fatalf("unexpected config add result: out=%q err=%v", msg.out, msg.err)
+	}
+	if got.Name != "local-qwen" || got.Provider != "lmstudio" || got.Model != "qwen" || got.APIKey != "local-key" || got.Description != "local coding model" {
+		t.Fatalf("unexpected config input: %#v", got)
+	}
+	if root.model.state != uiStateConfigMenu {
+		t.Fatalf("expected config menu after add, got %v", root.model.state)
+	}
+}
+
+func TestBubbleTUIConfigUseInteractive(t *testing.T) {
+	used := ""
+	root := newBubbleTUI(context.Background(), nil, nil, "", nil, CommandHooks{
+		ConfigModels: func() ([]ConfigModelEntry, error) {
+			return []ConfigModelEntry{
+				{Name: "alpha", Provider: "openai", Model: "gpt-4o", Active: true},
+				{Name: "beta", Provider: "deepseek", Model: "deepseek-chat", Description: "fallback"},
+			}, nil
+		},
+		ConfigUse: func(target string) (string, error) {
+			used = target
+			return "active: " + target, nil
+		},
+	})
+
+	cmd := root.submit("/config use", submitModeNormal)
+	if cmd == nil {
+		t.Fatal("expected config model list command")
+	}
+	msg, ok := cmd().(bubbleConfigModelsMsg)
+	if !ok {
+		t.Fatalf("expected bubbleConfigModelsMsg, got %T", msg)
+	}
+	next, _ := root.Update(msg)
+	root = next.(*bubbleTUI)
+	if root.model.state != uiStateConfigSelect {
+		t.Fatalf("expected config select state, got %v", root.model.state)
+	}
+	if rendered := root.renderConfigSelect(); !strings.Contains(rendered, "Config use") || !strings.Contains(rendered, "alpha") {
+		t.Fatalf("unexpected rendered selector: %q", rendered)
+	}
+
+	root.moveConfigSelect(1)
+	cmd = root.confirmConfigSelect()
+	if cmd == nil {
+		t.Fatal("expected config use command")
+	}
+	done, ok := cmd().(bubbleConfigDoneMsg)
+	if !ok {
+		t.Fatalf("expected bubbleConfigDoneMsg, got %T", done)
+	}
+	if done.err != nil || used != "beta" {
+		t.Fatalf("unexpected config use result: used=%q out=%q err=%v", used, done.out, done.err)
 	}
 }
 
@@ -369,6 +600,44 @@ func TestBubbleTUIScopedModelsSelectorTogglesScope(t *testing.T) {
 	}
 	if len(session.GetScopedModelIDs()) == 0 {
 		t.Fatal("expected remaining scoped model ids")
+	}
+}
+
+func TestBubbleTUIScopedModelsSlashCommands(t *testing.T) {
+	providers.Models["bubble-scoped-slash"] = map[string]*types.Model{
+		"scope-alpha": {ID: "scope-alpha", Name: "Scope Alpha", ProviderID: "bubble-scoped-slash"},
+		"scope-beta":  {ID: "scope-beta", Name: "Scope Beta", ProviderID: "bubble-scoped-slash"},
+	}
+	session := newUITestSession(t)
+	session.SetModel(providers.Models["bubble-scoped-slash"]["scope-alpha"])
+	var saved []string
+	root := newBubbleTUI(context.Background(), session, session.GetModel(), "", nil, CommandHooks{
+		SaveScopedModels: func(ids []string) error {
+			saved = append([]string(nil), ids...)
+			return nil
+		},
+	})
+
+	cmd := root.submit("/scoped-models set scope-beta", submitModeNormal)
+	if cmd != nil {
+		runBubbleTestCmd(t, root, cmd)
+	}
+	if got := session.GetScopedModelIDs(); len(got) != 1 || got[0] != "scope-beta" {
+		t.Fatalf("expected scope-beta scope, got %v", got)
+	}
+	if len(saved) != 1 || saved[0] != "scope-beta" {
+		t.Fatalf("expected saved scope-beta, got %v", saved)
+	}
+	if got := root.model.blocks[len(root.model.blocks)-1].Content; !strings.Contains(got, "scope: 1 model") || !strings.Contains(got, "Scope Beta") {
+		t.Fatalf("unexpected scoped-models output:\n%s", got)
+	}
+
+	cmd = root.submit("/scoped-models clear", submitModeNormal)
+	if cmd != nil {
+		runBubbleTestCmd(t, root, cmd)
+	}
+	if got := session.GetScopedModelIDs(); len(got) != 0 {
+		t.Fatalf("expected cleared scope, got %v", got)
 	}
 }
 
