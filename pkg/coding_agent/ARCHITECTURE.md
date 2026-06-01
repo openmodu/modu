@@ -172,7 +172,7 @@ intent is honest, not aspirational.
    (`bash.Host`, `plan.Host`, `worktree.Host`, `contextmgr.Host`); `todo` needs
    none. The kernel exposes a small capability surface (`kernel.go`:
    `WriteRuntimeState`, `RefreshSystemPrompt`, `SwitchCwd`, `Cwd`, `AgentDir`,
-   `PlanFile`/`PlansDir`, `*ModeEnabled`, `EmitWorktree*`). Tool registration
+   plan snapshot append/list, `*ModeEnabled`, `EmitWorktree*`). Tool registration
    (`replace*Tools`) stays kernel-side, with the service controller supplied as
    the tool's manager.
 5. **No service registry — and that is the right call (not a violation).** The
@@ -225,9 +225,9 @@ type Host interface{ Cwd() string }
 
 // package plan
 type Host interface {
-    PlanFile() string
-    PlansDir() string
-    Todos() []TodoItem
+    AppendPlanSnapshot(Snapshot) error
+    PlanSnapshots() []Snapshot
+    GetTodos() []TodoItem
     SetTodos([]TodoItem)
     AllowToolAlways(tool string)
     RefreshSystemPrompt()

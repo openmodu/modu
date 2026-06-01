@@ -2,10 +2,10 @@ package coding_agent
 
 import (
 	"encoding/json"
-	"os"
 	"sync"
 	"time"
 
+	"github.com/openmodu/modu/pkg/coding_agent/services/session"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -161,15 +161,22 @@ func (s *engine) RuntimeStateJSON() string {
 }
 
 func (s *engine) writeRuntimeState() {
-	paths := s.RuntimePaths()
-	if err := os.MkdirAll(paths.RuntimeDir, 0o755); err != nil {
+	if s == nil || s.sessionManager == nil {
 		return
 	}
-	data, err := json.MarshalIndent(s.RuntimeState(), "", "  ")
-	if err != nil {
+	if !s.hasSessionContent() {
 		return
 	}
-	_ = os.WriteFile(paths.RuntimeStateFile, append(data, '\n'), 0o600)
+	_ = s.sessionManager.AppendSidecar(session.NewEntry(session.EntryTypeRuntimeState, "", s.RuntimeState()))
+}
+
+func (s *engine) hasSessionContent() bool {
+	for _, entry := range s.sessionManager.Load() {
+		if entry.Type != session.EntryTypeRuntimeState {
+			return true
+		}
+	}
+	return false
 }
 
 func removeToolByName(list []types.Tool, name string) []types.Tool {

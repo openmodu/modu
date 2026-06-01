@@ -14,12 +14,6 @@ func (s *engine) WriteRuntimeState() { s.writeRuntimeState() }
 // RefreshSystemPrompt rebuilds the system prompt for the current state.
 func (s *engine) RefreshSystemPrompt() { s.refreshDynamicSystemPrompt() }
 
-// PlanFile returns the path of the latest persisted plan.
-func (s *engine) PlanFile() string { return s.RuntimePaths().PlanFile }
-
-// PlansDir returns the directory holding plan revisions.
-func (s *engine) PlansDir() string { return s.RuntimePaths().PlansDir }
-
 // PlanModeEnabled reports whether plan mode is enabled by config.
 func (s *engine) PlanModeEnabled() bool { return s.config.FeaturePlanMode() }
 

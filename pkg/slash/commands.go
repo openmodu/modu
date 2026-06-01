@@ -3,7 +3,6 @@ package slash
 import (
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -293,8 +292,7 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 			status := session.PlanStatus()
 			lines := []string{
 				"active: " + yesNo(status.Active),
-				"latest plan: " + status.PlanFile,
-				"latest plan exists: " + yesNo(status.PlanExists),
+				"latest plan: " + yesNo(status.PlanExists),
 				fmt.Sprintf("revisions: %d", status.RevisionCount),
 				fmt.Sprintf("todos: total=%d pending=%d in_progress=%d completed=%d", status.TodoTotal, status.TodoPending, status.TodoInProgress, status.TodoCompleted),
 			}
@@ -311,12 +309,7 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 				r.PrintInfo("no latest plan")
 				return true, false
 			}
-			data, err := os.ReadFile(status.PlanFile)
-			if err != nil {
-				r.PrintError(err)
-				return true, false
-			}
-			content := strings.TrimSpace(string(data))
+			content := strings.TrimSpace(status.LatestPlan)
 			if content == "" {
 				content = "(empty plan)"
 			}
@@ -338,7 +331,7 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 				if i >= 10 {
 					break
 				}
-				lines = append(lines, fmt.Sprintf("%s  %s", revision.ModTime.Format(time.RFC3339), revision.Path))
+				lines = append(lines, fmt.Sprintf("%s  %s", revision.ModTime.Format(time.RFC3339), revision.Name))
 			}
 			r.PrintSection("Plan history", lines)
 		default:

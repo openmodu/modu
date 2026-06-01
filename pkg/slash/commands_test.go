@@ -373,7 +373,6 @@ func TestHandlePlanStatusShowsArtifactAndTodos(t *testing.T) {
 	}
 	session.EnterPlanMode()
 	session.ExitPlanMode("approved slash plan", []string{"first", "second"})
-	status := session.PlanStatus()
 
 	printer := &capturePrinter{}
 	handled, exit := Handle(context.Background(), "/plan status", session, printer, model)
@@ -384,8 +383,7 @@ func TestHandlePlanStatusShowsArtifactAndTodos(t *testing.T) {
 	for _, want := range []string{
 		"Plan",
 		"active: no",
-		"latest plan: " + status.PlanFile,
-		"latest plan exists: yes",
+		"latest plan: yes",
 		"revisions: 1",
 		"todos: total=2 pending=2 in_progress=0 completed=0",
 	} {
@@ -410,7 +408,7 @@ func TestHandlePlanStatusShowsArtifactAndTodos(t *testing.T) {
 		t.Fatalf("expected /plan history handled without exit, handled=%v exit=%v", handled, exit)
 	}
 	output = printer.String()
-	if !strings.Contains(output, "Plan history") || !strings.Contains(output, "revision-") {
+	if !strings.Contains(output, "Plan history") || !strings.Contains(output, "plan-") {
 		t.Fatalf("expected plan history output with revision, got:\n%s", output)
 	}
 

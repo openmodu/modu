@@ -131,6 +131,32 @@ func (m *Manager) Append(entry SessionEntry) error {
 	return m.appendToFileLocked(entry)
 }
 
+// AppendSidecar adds an entry to the session file without moving the
+// conversational leaf. Runtime snapshots use this so operational state lives
+// with the session without becoming part of the branch path.
+func (m *Manager) AppendSidecar(entry SessionEntry) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if entry.ID == "" {
+		entry.ID = generateID(func(id string) bool {
+			_, ok := m.byID[id]
+			return ok
+		})
+	}
+	if entry.Timestamp == 0 {
+		entry.Timestamp = time.Now().UnixMilli()
+	}
+	if entry.ParentID == "" {
+		entry.ParentID = m.leafID
+	}
+
+	m.entries = append(m.entries, entry)
+	m.byID[entry.ID] = entry
+	m.applyDerivedState(entry)
+	return m.appendToFileLocked(entry)
+}
+
 // Load returns all non-header session entries.
 func (m *Manager) Load() []SessionEntry {
 	m.mu.RLock()
@@ -409,9 +435,15 @@ func (m *Manager) rebuildIndexLocked() {
 	m.leafID = ""
 	for _, entry := range m.entries {
 		m.byID[entry.ID] = entry
-		m.leafID = entry.ID
+		if entryAffectsLeaf(entry) {
+			m.leafID = entry.ID
+		}
 		m.applyDerivedState(entry)
 	}
+}
+
+func entryAffectsLeaf(entry SessionEntry) bool {
+	return entry.Type != EntryTypeRuntimeState && entry.Type != EntryTypePlanSnapshot
 }
 
 func (m *Manager) applyDerivedState(entry SessionEntry) {

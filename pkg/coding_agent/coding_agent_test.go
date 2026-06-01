@@ -2,6 +2,7 @@ package coding_agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -802,12 +803,12 @@ func TestSubmitPlanApprove(t *testing.T) {
 	}
 }
 
-func TestClearPlanRemovesPlanArtifactAndTodos(t *testing.T) {
+func TestClearPlanClearsPlanSnapshotAndTodos(t *testing.T) {
 	session := newTestSession(t, newTestModel())
 	session.EnterPlanMode()
 	session.ExitPlanMode("clear me", []string{"a"})
 	if status := session.PlanStatus(); !status.PlanExists || status.TodoTotal != 1 {
-		t.Fatalf("expected plan artifact and todo before clear, got %#v", status)
+		t.Fatalf("expected plan snapshot and todo before clear, got %#v", status)
 	}
 
 	if err := session.ClearPlan(); err != nil {
@@ -1242,19 +1243,39 @@ func TestLoadConfigFromFile(t *testing.T) {
 	}
 }
 
-func TestRuntimeStateFileAndJSON(t *testing.T) {
+func TestRuntimeStateStoredInSessionAndJSON(t *testing.T) {
 	session := newTestSession(t, newTestModel())
+	if err := session.sessionManager.Append(sessionpkg.NewEntry(sessionpkg.EntryTypeMessage, "", sessionpkg.MessageData{
+		Role:    types.RoleUser,
+		Content: "start",
+	})); err != nil {
+		t.Fatal(err)
+	}
 	session.SetTodos([]TodoItem{{Content: "plan work", Status: "in_progress"}})
 	stateJSON := session.RuntimeStateJSON()
 	if !strings.Contains(stateJSON, `"todos"`) || !strings.Contains(stateJSON, `"features"`) {
 		t.Fatalf("expected runtime state json, got %q", stateJSON)
 	}
-	data, err := os.ReadFile(session.RuntimePaths().RuntimeStateFile)
-	if err != nil {
-		t.Fatal(err)
+	entries := session.sessionManager.Load()
+	if len(entries) == 0 {
+		t.Fatal("expected runtime state session entries")
 	}
-	if !strings.Contains(string(data), `"todo_tool": true`) || !strings.Contains(string(data), `"content": "plan work"`) {
-		t.Fatalf("unexpected runtime state file: %q", string(data))
+	var found bool
+	for _, entry := range entries {
+		if entry.Type != sessionpkg.EntryTypeRuntimeState {
+			continue
+		}
+		data, err := json.Marshal(entry.Data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), `"todo_tool":true`) && strings.Contains(string(data), `"content":"plan work"`) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("runtime state session entry missing todo/features: %#v", entries)
 	}
 }
 
@@ -2464,7 +2485,7 @@ func TestMaybeAutoCompact_DisabledByConfig(t *testing.T) {
 	}
 }
 
-func TestHarnessPlanFileReadable(t *testing.T) {
+func TestPlanSnapshotStoredInSession(t *testing.T) {
 	dir := t.TempDir()
 	agentDir := filepath.Join(t.TempDir(), ".coding_agent")
 	session, err := NewCodingSession(CodingSessionOptions{
@@ -2477,29 +2498,24 @@ func TestHarnessPlanFileReadable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var readTool types.Tool
-	for _, tool := range session.GetAgent().GetState().Tools {
-		switch tool.Name() {
-		case "read":
-			readTool = tool
+	session.ExitPlanMode("ship feature safely", nil)
+	status := session.PlanStatus()
+	if !status.PlanExists || status.LatestPlan != "ship feature safely" || status.RevisionCount != 1 {
+		t.Fatalf("unexpected plan status: %#v", status)
+	}
+	entries := session.sessionManager.Load()
+	var found bool
+	for _, entry := range entries {
+		if entry.Type == sessionpkg.EntryTypePlanSnapshot {
+			found = true
+			break
 		}
 	}
-	if readTool == nil {
-		t.Fatalf("expected read tool, got %v", session.GetActiveToolNames())
+	if !found {
+		t.Fatalf("expected session to contain plan snapshot, got %#v", entries)
 	}
-
-	session.ExitPlanMode("ship feature safely", nil)
-	paths := session.RuntimePaths()
-	if _, err := os.Stat(paths.PlanFile); err != nil {
-		t.Fatalf("expected plan file to exist: %v", err)
-	}
-
-	readResult, err := readTool.Execute(context.Background(), "read-plan", map[string]any{"path": paths.PlanFile}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(readResult.Content[0].(*types.TextContent).Text, "ship feature safely") {
-		t.Fatalf("expected read tool to access harness plan file, got %#v", readResult.Content)
+	if _, err := os.Stat(filepath.Join(agentDir, "plans")); !os.IsNotExist(err) {
+		t.Fatalf("plans dir should not be created, stat err=%v", err)
 	}
 }
 

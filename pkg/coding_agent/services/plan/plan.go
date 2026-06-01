@@ -7,9 +7,6 @@ package plan
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -20,8 +17,8 @@ import (
 
 // Host is the set of kernel capabilities the plan service needs.
 type Host interface {
-	PlanFile() string
-	PlansDir() string
+	AppendPlanSnapshot(Snapshot) error
+	PlanSnapshots() []Snapshot
 	GetTodos() []todo.Item
 	SetTodos([]todo.Item)
 	AllowToolAlways(tool string)
@@ -34,8 +31,8 @@ type Host interface {
 // artifacts.
 type Status struct {
 	Active         bool
-	PlanFile       string
 	PlanExists     bool
+	LatestPlan     string
 	RevisionCount  int
 	TodoTotal      int
 	TodoPending    int
@@ -47,7 +44,16 @@ type Status struct {
 type Revision struct {
 	Path    string
 	Name    string
+	Content string
 	ModTime time.Time
+}
+
+// Snapshot is the persisted session entry for approved or cleared plans.
+type Snapshot struct {
+	ID        string `json:"id,omitempty"`
+	Content   string `json:"content,omitempty"`
+	Cleared   bool   `json:"cleared,omitempty"`
+	CreatedAt int64  `json:"createdAt,omitempty"`
 }
 
 // Controller owns plan-mode state and drives the session through host.
@@ -185,16 +191,13 @@ func (c *Controller) SetDecisionCallback(fn func(plan string, steps []string) st
 	c.mu.Unlock()
 }
 
-// Status returns plan-mode state, latest plan path, and todo counters.
+// Status returns plan-mode state, latest plan content, and todo counters.
 func (c *Controller) Status() Status {
+	latest, exists := c.latestPlan()
 	status := Status{
-		Active:   c.IsPlanMode(),
-		PlanFile: c.host.PlanFile(),
-	}
-	if status.PlanFile != "" {
-		if _, err := os.Stat(status.PlanFile); err == nil {
-			status.PlanExists = true
-		}
+		Active:     c.IsPlanMode(),
+		PlanExists: exists,
+		LatestPlan: latest.Content,
 	}
 	status.RevisionCount = len(c.ListRevisions())
 	for _, item := range c.host.GetTodos() {
@@ -213,11 +216,8 @@ func (c *Controller) Status() Status {
 
 // Clear removes the latest persisted plan and clears the seeded todo list.
 func (c *Controller) Clear() error {
-	status := c.Status()
-	if status.PlanFile != "" {
-		if err := os.Remove(status.PlanFile); err != nil && !os.IsNotExist(err) {
-			return err
-		}
+	if err := c.host.AppendPlanSnapshot(Snapshot{Cleared: true, CreatedAt: time.Now().UnixMilli()}); err != nil {
+		return err
 	}
 	c.host.SetTodos(nil)
 	c.host.WriteRuntimeState()
@@ -226,24 +226,18 @@ func (c *Controller) Clear() error {
 
 // ListRevisions returns approved-plan snapshots, newest first.
 func (c *Controller) ListRevisions() []Revision {
-	dir := c.host.PlansDir()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
-	revisions := make([]Revision, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "revision-") || !strings.HasSuffix(entry.Name(), ".md") {
+	snapshots := c.host.PlanSnapshots()
+	revisions := make([]Revision, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		if snapshot.Cleared || strings.TrimSpace(snapshot.Content) == "" {
 			continue
 		}
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
+		name := "plan-" + time.UnixMilli(snapshot.CreatedAt).UTC().Format("20060102T150405.000Z")
 		revisions = append(revisions, Revision{
-			Path:    filepath.Join(dir, entry.Name()),
-			Name:    entry.Name(),
-			ModTime: info.ModTime(),
+			Path:    "session:" + snapshot.ID,
+			Name:    name,
+			Content: strings.TrimSpace(snapshot.Content),
+			ModTime: time.UnixMilli(snapshot.CreatedAt),
 		})
 	}
 	sort.Slice(revisions, func(i, j int) bool {
@@ -256,17 +250,24 @@ func (c *Controller) ListRevisions() []Revision {
 }
 
 func (c *Controller) writeLatestPlan(plan string) error {
-	if err := os.MkdirAll(c.host.PlansDir(), 0o755); err != nil {
-		return err
-	}
-	content := []byte(strings.TrimSpace(plan) + "\n")
-	if err := os.WriteFile(c.host.PlanFile(), content, 0o600); err != nil {
-		return err
-	}
-	revisionPath := filepath.Join(c.host.PlansDir(), fmt.Sprintf("revision-%d.md", time.Now().UnixNano()))
-	if err := os.WriteFile(revisionPath, content, 0o600); err != nil {
+	if err := c.host.AppendPlanSnapshot(Snapshot{Content: strings.TrimSpace(plan), CreatedAt: time.Now().UnixMilli()}); err != nil {
 		return err
 	}
 	c.host.WriteRuntimeState()
 	return nil
+}
+
+func (c *Controller) latestPlan() (Snapshot, bool) {
+	snapshots := c.host.PlanSnapshots()
+	for i := len(snapshots) - 1; i >= 0; i-- {
+		snapshot := snapshots[i]
+		if snapshot.Cleared {
+			return Snapshot{}, false
+		}
+		if strings.TrimSpace(snapshot.Content) != "" {
+			snapshot.Content = strings.TrimSpace(snapshot.Content)
+			return snapshot, true
+		}
+	}
+	return Snapshot{}, false
 }

@@ -46,6 +46,47 @@ func TestSessionManager(t *testing.T) {
 	}
 }
 
+func TestAppendSidecarDoesNotMoveLeaf(t *testing.T) {
+	dir := t.TempDir()
+
+	mgr, err := NewManager(dir, "/test/project")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	entry1 := NewEntry(EntryTypeMessage, "", MessageData{Role: "user", Content: "hello"})
+	if err := mgr.Append(entry1); err != nil {
+		t.Fatal(err)
+	}
+	sidecar := NewEntry(EntryTypeRuntimeState, "", map[string]any{"mode": "test"})
+	if err := mgr.AppendSidecar(sidecar); err != nil {
+		t.Fatal(err)
+	}
+	planSnapshot := NewEntry(EntryTypePlanSnapshot, "", map[string]any{"content": "plan"})
+	if err := mgr.AppendSidecar(planSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	if got := mgr.LastID(); got != entry1.ID {
+		t.Fatalf("sidecar moved leaf to %s, want %s", got, entry1.ID)
+	}
+
+	reloaded, err := NewManagerFromFile(mgr.FilePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.LastID(); got != entry1.ID {
+		t.Fatalf("reloaded sidecar moved leaf to %s, want %s", got, entry1.ID)
+	}
+	entry2 := NewEntry(EntryTypeMessage, "", MessageData{Role: "assistant", Content: "world"})
+	if err := reloaded.Append(entry2); err != nil {
+		t.Fatal(err)
+	}
+	entries := reloaded.Load()
+	if got := entries[len(entries)-1].ParentID; got != entry1.ID {
+		t.Fatalf("message parent = %s, want previous conversational leaf %s", got, entry1.ID)
+	}
+}
+
 func TestSessionManagerPersistence(t *testing.T) {
 	dir := t.TempDir()
 
