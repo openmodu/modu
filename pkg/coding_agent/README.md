@@ -62,7 +62,7 @@ pkg/coding_agent/
 │   ├── common/               #   路径解析和输出截断等共享工具逻辑
 │   └── tools.go              #   工具集合工厂（AllTools/CodingTools/ReadOnlyTools）
 ├── session/                  # 会话持久化
-│   ├── entry.go              #   会话条目定义（9 种 EntryType）
+│   ├── entry.go              #   会话条目定义（11 种 EntryType）
 │   ├── manager.go            #   JSONL 文件存储 + Fork
 │   └── tree.go               #   树形分支导航
 ├── compaction/               # 上下文压缩
@@ -560,18 +560,20 @@ session, _ := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
 运行时路径由 harness 统一管理，主要包括：
 
 - `sessions/`
-- `plans/`
 - `tool-results/`
 - `runtime/<project>/index.json`
-- `runtime/<project>/state.json`
 - `runtime/<project>/actions/<category>/latest.json`
+
+除 agent root、配置文件和 session 目录外，运行时目录按需创建：查询 `RuntimePaths()` 只返回路径，不会预创建空的 `tool-results/` 或 `runtime/` 树。
 
 其中：
 
 - `runtime index`
   - 记录 resolved 输出目标和每个 category 的最新事件
 - `runtime state`
-  - 记录统一 session 状态快照，包括 mode、feature gate、permission rules、todo、background task、tool count 和 runtime paths
+  - 以 `runtime_state` sidecar entry 写入当前 session JSONL，包括 mode、feature gate、permission rules、todo、background task、tool count 和 runtime paths；它不参与会话分支 leaf
+- `plan snapshot`
+  - 以 `plan_snapshot` sidecar entry 写入当前 session JSONL，保存最新计划和历史计划；它不参与会话分支 leaf
 - `pkg/coding_agent/taskoutput`
   - 复用 background task 的公开类型和 store 接口，供 session runtime 与 task_output tool 共用
 - `action status artifact`

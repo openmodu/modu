@@ -192,27 +192,11 @@ func (l *Loader) Cwd() string {
 	return l.cwd
 }
 
-// EnsureAgentDir creates the agent directory structure if it doesn't exist.
+// EnsureAgentDir creates the agent root if it doesn't exist.
+// Feature-specific directories are created lazily by the component that writes
+// to them, keeping a fresh agent dir small and easy to inspect.
 func (l *Loader) EnsureAgentDir() error {
-	dirs := []string{
-		l.agentDir,
-		filepath.Join(l.agentDir, "sessions"),
-		filepath.Join(l.agentDir, "plans"),
-		filepath.Join(l.agentDir, "skills"),
-		filepath.Join(l.agentDir, "prompts"),
-		filepath.Join(l.agentDir, "packages"),
-		filepath.Join(l.agentDir, "agents"),
-		filepath.Join(l.agentDir, "tool-results"),
-		filepath.Join(l.agentDir, "worktrees"),
-	}
-
-	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return os.MkdirAll(l.agentDir, 0o755)
 }
 
 // DefaultAgentDir returns the default agent directory path (~/.coding_agent/).

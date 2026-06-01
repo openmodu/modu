@@ -33,6 +33,8 @@ const (
 	EntryTypeCustomMessage  EntryType = "custom_message"
 	EntryTypeLabel          EntryType = "label"
 	EntryTypeSessionInfo    EntryType = "session_info"
+	EntryTypeRuntimeState   EntryType = "runtime_state"
+	EntryTypePlanSnapshot   EntryType = "plan_snapshot"
 )
 
 // SessionEntry represents a single entry in the session history.
@@ -139,6 +141,10 @@ func (e SessionEntry) MarshalJSON() ([]byte, error) {
 		} else {
 			base["data"] = e.Data
 		}
+	case EntryTypeRuntimeState:
+		base["state"] = e.Data
+	case EntryTypePlanSnapshot:
+		base["plan"] = e.Data
 	default:
 		base["data"] = e.Data
 	}
@@ -199,6 +205,14 @@ func (e *SessionEntry) UnmarshalJSON(data []byte) error {
 		_ = json.Unmarshal(raw["cwd"], &d.Cwd)
 		_ = json.Unmarshal(raw["startTime"], &d.StartTime)
 		e.Data = d
+	case EntryTypeRuntimeState:
+		var v any
+		_ = json.Unmarshal(raw["state"], &v)
+		e.Data = v
+	case EntryTypePlanSnapshot:
+		var v any
+		_ = json.Unmarshal(raw["plan"], &v)
+		e.Data = v
 	default:
 		var v any
 		_ = json.Unmarshal(raw["data"], &v)

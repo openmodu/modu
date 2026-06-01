@@ -54,3 +54,23 @@ func TestLoadContextFilesIncludesNestedProjectContexts(t *testing.T) {
 		t.Fatalf("missing global context: %#v", got)
 	}
 }
+
+func TestEnsureAgentDirCreatesOnlyRoot(t *testing.T) {
+	root := t.TempDir()
+	agentDir := filepath.Join(root, "agent")
+	loader := NewLoader(agentDir, root)
+
+	if err := loader.EnsureAgentDir(); err != nil {
+		t.Fatal(err)
+	}
+
+	if info, err := os.Stat(agentDir); err != nil || !info.IsDir() {
+		t.Fatalf("expected agent root dir, info=%v err=%v", info, err)
+	}
+	for _, name := range []string{"sessions", "plans", "skills", "prompts", "packages", "agents", "tool-results", "worktrees"} {
+		path := filepath.Join(agentDir, name)
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("expected %s to be created lazily, stat err=%v", path, err)
+		}
+	}
+}

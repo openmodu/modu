@@ -16,9 +16,6 @@ func planPanelContent(session *coding_agent.CodingSession) string {
 		fmt.Sprintf("  revisions: %d", status.RevisionCount),
 		fmt.Sprintf("  todos: total=%d pending=%d in_progress=%d completed=%d", status.TodoTotal, status.TodoPending, status.TodoInProgress, status.TodoCompleted),
 	}
-	if status.PlanFile != "" {
-		lines = append(lines, "  file: "+status.PlanFile)
-	}
 	revisions := session.ListPlanRevisions()
 	if len(revisions) > 0 {
 		lines = append(lines, "", "recent revisions")

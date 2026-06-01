@@ -16,6 +16,11 @@ High-priority gaps identified before this round:
 
 ## Completed In This Round
 
+- Moved runtime state persistence from `runtime/<project>/state.json` into
+  `runtime_state` sidecar entries in the current session JSONL, and made agent
+  runtime directories lazy so startup no longer pre-creates empty feature trees.
+- Moved approved plan persistence from `plans/latest.md` plus revision files into
+  `plan_snapshot` sidecar entries in the current session JSONL.
 - Removed the session-level `/state` and `/settings` built-in slash commands
   that exposed runtime/config snapshots containing harness details. TUI-local
   `/settings` remains owned by the UI layer.
