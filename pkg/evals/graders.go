@@ -18,8 +18,12 @@ const (
 	// graderMaxAttempts retries transient provider/parse failures so one bad
 	// response does not fail an otherwise-passing eval.
 	graderMaxAttempts = 3
-	// graderMaxTokens caps grader output; the rubric verdict is a small JSON object.
-	graderMaxTokens = 512
+	// graderMaxTokens caps grader output. It must be large enough for a reasoning
+	// model to finish its <think>/reasoning_content AND still emit the JSON
+	// verdict: with too small a cap the model is cut off mid-think (finish_reason
+	// "length") and returns empty content. The model stops early once the JSON is
+	// out, so a generous cap costs nothing in the common case.
+	graderMaxTokens = 4096
 	// passScoreThreshold is the single source of truth for the score floor: a
 	// rubric passes only when the grader marks pass=true AND score >= this. It is
 	// injected into both the grader prompt and the verdict so they cannot drift.
