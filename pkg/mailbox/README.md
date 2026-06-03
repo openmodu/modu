@@ -1,6 +1,6 @@
 # Mailbox
 
-A multi-agent coordination hub providing agent registration, point-to-point messaging, task/project lifecycle management, swarm queue execution, adversarial validation, and conversation logging.
+A multi-agent coordination hub providing agent registration, point-to-point messaging, task/project lifecycle management, queue-based task execution, adversarial validation, and conversation logging.
 
 ## Architecture
 
@@ -79,7 +79,7 @@ Mailbox now supports three execution styles:
 | Mode | Primary APIs | Notes |
 |---|---|---|
 | Agent Teams | `CreateTask`, `AssignTask`, `CompleteTask` | Explicit assignment by an orchestrator |
-| Agent Swarm | `SetCapabilities`, `PublishTask`, `ClaimTask` | Shared queue, capability matching, no fixed orchestrator |
+| Queue-based tasks | `SetCapabilities`, `PublishTask`, `ClaimTask` | Shared queue, capability matching, no fixed orchestrator |
 | Adversarial Validation | `PublishValidatedTask`, `SubmitForValidation`, `SubmitValidation` | Separate validator agent reviews and can re-queue failed work |
 
 ## API Reference
@@ -167,7 +167,7 @@ hub.SubmitValidation(validateTaskID, validatorID string, score float64, feedback
 
 Validated tasks follow this flow:
 
-1. A publisher creates a swarm task with `PublishValidatedTask`.
+1. A publisher creates a queue task with `PublishValidatedTask`.
 2. A worker claims it and performs the work.
 3. The worker calls `SubmitForValidation`, which stores the result and creates a new `[VALIDATE]` task requiring the `validate` capability.
 4. A different validator agent claims that validation task and calls `SubmitValidation`.

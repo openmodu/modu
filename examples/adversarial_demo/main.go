@@ -1,9 +1,9 @@
-// adversarial_demo demonstrates the Adversarial Validation pattern built on Agent Swarm:
+// adversarial_demo demonstrates the Adversarial Validation pattern built on mailbox tasks:
 //
 //  1. A publisher pushes tasks that require validation (ValidationRequired=true).
 //  2. Worker agents (cap: "text-processing") claim and process tasks.
 //     When done they call SubmitForValidation instead of CompleteTask.
-//  3. A validate task is automatically created and placed in the swarm queue.
+//  3. A validate task is automatically created and placed in the mailbox queue.
 //  4. Validator agents (cap: "validate") claim validate tasks, score the result,
 //     and call SubmitValidation.
 //  5. If the score is below the pass threshold the source task is re-queued with

@@ -1,6 +1,6 @@
 # Mailbox
 
-一个多 Agent 协调中心，提供 Agent 注册、点对点消息传递、任务/项目生命周期管理、swarm 队列执行、对抗式验证以及对话日志功能。
+一个多 Agent 协调中心，提供 Agent 注册、点对点消息传递、任务/项目生命周期管理、队列任务执行、对抗式验证以及对话日志功能。
 
 ## 架构
 
@@ -79,7 +79,7 @@ Mailbox 现在支持三种执行方式：
 | 模式 | 主要 API | 说明 |
 |---|---|---|
 | Agent Teams | `CreateTask`、`AssignTask`、`CompleteTask` | 由 orchestrator 显式分配任务 |
-| Agent Swarm | `SetCapabilities`、`PublishTask`、`ClaimTask` | 共享队列、能力匹配、无固定调度者 |
+| 队列任务 | `SetCapabilities`、`PublishTask`、`ClaimTask` | 共享队列、能力匹配、无固定调度者 |
 | Adversarial Validation | `PublishValidatedTask`、`SubmitForValidation`、`SubmitValidation` | 独立 validator 复核结果，并可触发重试 |
 
 ## API 参考
@@ -167,7 +167,7 @@ hub.SubmitValidation(validateTaskID, validatorID string, score float64, feedback
 
 验证型任务的流程如下：
 
-1. 发布方通过 `PublishValidatedTask` 创建一个需要验证的 swarm 任务。
+1. 发布方通过 `PublishValidatedTask` 创建一个需要验证的队列任务。
 2. worker 认领任务并完成处理。
 3. worker 调用 `SubmitForValidation`，系统会保存结果，并自动生成一个需要 `validate` 能力的 `[VALIDATE]` 任务。
 4. 另一个 validator agent 认领该验证任务并调用 `SubmitValidation`。
