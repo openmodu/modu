@@ -188,6 +188,15 @@ evals.LLMRubricSoft(e, "回答明确指出法国首都是巴黎", output)
 Run with `GOEVALS=N` and gate via `modu_eval check --min-pass-rate`. A rubric
 passes only when the grader returns `pass=true` and `score >= 0.6`.
 
+## Examples
+
+- `pkg/agent/agent_eval_test.go`: a basic factual-answer rubric eval.
+- `pkg/agent/tool_eval_test.go`: tool-calling evals (assert the agent actually
+  invokes a tool with `ToolCalledT` and grounds its answer in the result).
+- `pkg/coding_agent/coding_eval_test.go`: coding evals that drive a real
+  `CodingSession` in a temp dir and assert real side effects (file written/
+  edited, valid Go) plus a rubric on the generated code.
+
 ## Files
 
 - `pkg/evals`: test harness, provider setup, rubric grading, JSONL recording.
