@@ -36,6 +36,15 @@ EVAL_MODEL=qwen/qwen3.6-35b-a3b \
 go run ./cmd/modu_eval check -v ./pkg/agent -run Eval
 ```
 
+`check` exits non-zero if `go test` failed or any test's pass rate is below the
+threshold. The threshold defaults to `1.0` (every run of every test must pass).
+For probabilistic evals, run each several times (`GOEVALS=5`), write them with
+`LLMRubricSoft` (records but does not fail the test), and tolerate flakiness:
+
+```bash
+GOEVALS=5 ... go run ./cmd/modu_eval check --min-pass-rate 0.8 -run Eval
+```
+
 View an existing result file:
 
 ```bash
@@ -148,6 +157,36 @@ Guidelines:
 - Prefer several narrow rubrics over one broad rubric.
 - Do not rely only on the model saying it used a tool; assert real side effects
   or recorded tool calls when tool usage matters.
+
+### Deterministic assertions
+
+Besides `LLMRubricT`, `pkg/evals` provides deterministic checks that record a
+pass/fail row without spending a grader-LLM call. Prefer them whenever a check
+can be made exactly:
+
+```go
+evals.ContainsT(e, "巴黎", output)          // substring present
+evals.NotContainsT(e, "伦敦", output)        // substring absent
+evals.RegexpT(e, `^\d{4}-\d{2}-\d{2}$`, out) // matches pattern
+evals.ToolCalledT(e, a.GetState().Messages, "read") // agent really called a tool
+```
+
+`ToolCalledT` inspects recorded tool calls (`evals.ToolCalls` /
+`evals.ToolCalled` / `evals.ToolCallNames` are also exported), so it verifies
+real tool usage rather than the model's prose.
+
+### Flaky rubrics
+
+`LLMRubricT` fails the test on a miss. For probabilistic rubrics that you want to
+gate on an aggregate pass rate instead, use `LLMRubricSoft`, which records the
+result and returns the verdict without failing the test:
+
+```go
+evals.LLMRubricSoft(e, "回答明确指出法国首都是巴黎", output)
+```
+
+Run with `GOEVALS=N` and gate via `modu_eval check --min-pass-rate`. A rubric
+passes only when the grader returns `pass=true` and `score >= 0.6`.
 
 ## Files
 

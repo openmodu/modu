@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/mattn/go-runewidth"
@@ -132,7 +133,8 @@ func viewCommand() {
 }
 
 func checkCommand(args []string) {
-	testErr := runEvalTests(args)
+	minPassRate, testArgs := extractMinPassRate(args)
+	testErr := runEvalTests(testArgs)
 	if testErr != nil {
 		fmt.Fprintf(os.Stderr, "\ngo test completed with errors: %v\n", testErr)
 	} else {
@@ -154,9 +156,78 @@ func checkCommand(args []string) {
 		exitErr(err)
 	}
 	printSummary(results)
-	if hasFailures(results) || testErr != nil {
+
+	below := testsBelowPassRate(results, minPassRate)
+	if len(below) > 0 {
+		fmt.Fprintf(os.Stderr, "\nBelow minimum pass rate (%.0f%%):\n", minPassRate*100)
+		for _, line := range below {
+			fmt.Fprintf(os.Stderr, "  %s\n", line)
+		}
+	}
+	if testErr != nil || len(below) > 0 {
 		os.Exit(1)
 	}
+}
+
+// extractMinPassRate pulls the --min-pass-rate flag out of the pass-through args
+// (check uses DisableFlagParsing so cobra does not parse it). The remaining args
+// are forwarded to `go test`. Defaults to 1.0 (every run of every test must
+// pass — the original all-or-nothing behavior).
+func extractMinPassRate(args []string) (float64, []string) {
+	rate := 1.0
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--min-pass-rate" && i+1 < len(args):
+			if v, err := strconv.ParseFloat(args[i+1], 64); err == nil {
+				rate = v
+			}
+			i++
+		case strings.HasPrefix(args[i], "--min-pass-rate="):
+			if v, err := strconv.ParseFloat(strings.TrimPrefix(args[i], "--min-pass-rate="), 64); err == nil {
+				rate = v
+			}
+		default:
+			out = append(out, args[i])
+		}
+	}
+	return rate, out
+}
+
+// testsBelowPassRate returns, for each test whose per-test pass rate is below
+// minRate, a human-readable "name (passed/total = NN%)" line. Pass rate uses the
+// recorded verdict across all GOEVALS=N runs, so flaky probabilistic evals
+// (written with LLMRubricSoft) can be tolerated up to a threshold.
+func testsBelowPassRate(results []evals.EvalLogLine, minRate float64) []string {
+	type agg struct{ passed, total int }
+	byTest := map[string]*agg{}
+	var order []string
+	for _, r := range results {
+		a := byTest[r.Name]
+		if a == nil {
+			a = &agg{}
+			byTest[r.Name] = a
+			order = append(order, r.Name)
+		}
+		a.total++
+		if r.Pass {
+			a.passed++
+		}
+	}
+
+	var below []string
+	for _, name := range order {
+		a := byTest[name]
+		rate := 1.0
+		if a.total > 0 {
+			rate = float64(a.passed) / float64(a.total)
+		}
+		if rate < minRate {
+			below = append(below, fmt.Sprintf("%s (%d/%d = %.0f%%)", name, a.passed, a.total, rate*100))
+		}
+	}
+	sort.Strings(below)
+	return below
 }
 
 func commentCommand(args []string) {
@@ -445,15 +516,6 @@ func generateGitHubComment(results []evals.EvalLogLine) string {
 		b.WriteString("</details>\n")
 	}
 	return b.String()
-}
-
-func hasFailures(results []evals.EvalLogLine) bool {
-	for _, result := range results {
-		if !result.Pass {
-			return true
-		}
-	}
-	return false
 }
 
 // truncate shortens value to at most max terminal cells, cutting on a rune

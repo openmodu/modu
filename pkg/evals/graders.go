@@ -20,6 +20,10 @@ const (
 	graderMaxAttempts = 3
 	// graderMaxTokens caps grader output; the rubric verdict is a small JSON object.
 	graderMaxTokens = 512
+	// passScoreThreshold is the single source of truth for the score floor: a
+	// rubric passes only when the grader marks pass=true AND score >= this. It is
+	// injected into both the grader prompt and the verdict so they cannot drift.
+	passScoreThreshold = 0.6
 )
 
 // thinkBlockRe matches reasoning-model <think>...</think> spans, which some
@@ -33,12 +37,12 @@ type RubricResult struct {
 	Pass      bool    `json:"pass"`
 }
 
-const rubricSystemPrompt = `You are grading model output against one rubric.
+var rubricSystemPrompt = fmt.Sprintf(`You are grading model output against one rubric.
 If the statement in the rubric is true for the output, the output passes.
 Return only a JSON object with this exact shape:
 {"reasoning":"short explanation","score":0.0,"pass":false}
 
-Score must be from 0.0 to 1.0. Passing answers should usually score at least 0.6.`
+Score must be from 0.0 to 1.0. Passing answers should usually score at least %.1f.`, passScoreThreshold)
 
 // LLMRubric grades output with the configured grader LLM. Each attempt is
 // bounded by graderTimeout; transient provider or parse failures are retried up
@@ -95,8 +99,11 @@ func (e *Eval) gradeOnce(ctx context.Context, rubric, output string) (*RubricRes
 	return &result, nil
 }
 
-// LLMRubricT grades output, records the score, and fails the test when it does not pass.
-func LLMRubricT(e *EvalT, rubric, output string) {
+// gradeRubric grades and records one rubric, returning the verdict plus the
+// grader result for messaging. The verdict (the recorded Pass) is the single
+// authority: pass=true AND score >= passScoreThreshold. It Fatals only on a
+// grader/transport error, never on a failing verdict.
+func gradeRubric(e *EvalT, rubric, output string) (bool, *RubricResult) {
 	e.Helper()
 
 	result, err := e.LLMRubric(context.Background(), rubric, output)
@@ -104,20 +111,34 @@ func LLMRubricT(e *EvalT, rubric, output string) {
 		e.Fatalf("rubric grading failed: %v", err)
 	}
 
+	verdict := result.Pass && result.Score >= passScoreThreshold
 	RecordScore(e, &EvalResult{
 		Rubric:    rubric,
 		Output:    output,
 		Reasoning: result.Reasoning,
 		Score:     result.Score,
-		Pass:      result.Pass,
+		Pass:      verdict,
 	})
+	return verdict, result
+}
 
-	if !result.Pass {
-		e.Fatalf("rubric failed: %s", result.Reasoning)
+// LLMRubricT grades output, records the result, and fails the test when the
+// rubric does not pass.
+func LLMRubricT(e *EvalT, rubric, output string) {
+	e.Helper()
+	if pass, result := gradeRubric(e, rubric, output); !pass {
+		e.Fatalf("rubric failed (score %.2f): %s", result.Score, result.Reasoning)
 	}
-	if result.Score < 0.6 {
-		e.Fatalf("rubric score too low: %.2f: %s", result.Score, result.Reasoning)
-	}
+}
+
+// LLMRubricSoft grades output and records the result but does NOT fail the test;
+// it returns whether the rubric passed. Use it with `modu_eval check
+// --min-pass-rate` so a probabilistic rubric gates on an aggregate pass rate
+// across GOEVALS=N runs instead of failing the whole run on a single miss.
+func LLMRubricSoft(e *EvalT, rubric, output string) bool {
+	e.Helper()
+	pass, _ := gradeRubric(e, rubric, output)
+	return pass
 }
 
 func contentString(content any) string {
