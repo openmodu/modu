@@ -8,7 +8,7 @@
 |---|---|
 | G1 — 接入 ACP agent | modu 能起一个 ACP 子进程（Claude Code / Codex / Gemini），跑完一轮 prompt 拿到流式输出 |
 | G2 — 融入 modu 抽象 | ACP agent 被包装成 `providers.Provider`，上层 `pkg/agent` 无感使用 |
-| G3 — 多 agent 并发 | 通过 swarm/mailbox 把多个 ACP agent 并发调度 |
+| G3 — 多 agent 并发 | 通过 mailbox 队列把多个 ACP agent 并发调度 |
 | G4 — 远端触发 | HTTP API 接受外部 `POST /tasks`，任务进 mailbox 队列 |
 | G5 — 基础审计 | gateway 记录关键任务状态，跨 agent 回放后续独立设计 |
 | G6 — iOS 可用（最后做） | 提供稳定的 HTTP + SSE 接口供 iOS 调用 |
@@ -37,7 +37,7 @@
 │          ┌──────────────┼──────────────┐                       │
 │          ▼              ▼              ▼                       │
 │   ┌─────────────┐ ┌─────────────┐ ┌─────────────┐             │
-│   │ ACP Worker  │ │ ACP Worker  │ │ ACP Worker  │ (swarm)     │
+│   │ ACP Worker  │ │ ACP Worker  │ │ ACP Worker  │ (queue)     │
 │   │  (claude)   │ │   (codex)   │ │  (gemini)   │             │
 │   └──────┬──────┘ └──────┬──────┘ └──────┬──────┘             │
 │          │               │               │                     │
@@ -123,7 +123,7 @@ func (p *ACPProvider) Stream(ctx, model, llmCtx, opts) (stream.Stream, error) {
 }
 ```
 
-**好处**：上层 `pkg/agent.Agent` 完全不用改，换 provider 就是换 model.ProviderID；swarm / trace / mailbox 全部免费继承。
+**好处**：上层 `pkg/agent.Agent` 完全不用改，换 provider 就是换 model.ProviderID；trace / mailbox 全部免费继承。
 
 ### `pkg/acp/manager` — 多 agent 池
 
@@ -145,7 +145,7 @@ POST   /api/tasks/:id/approve 审批权限请求 { optionId }
 
 - 鉴权：静态 `Authorization: Bearer <token>`（从 env 或 config 读）
 - 事件存储：复用 `pkg/mailbox` 的 SQLite store
-- 任务调度：任务发到 mailbox swarm queue，ACP worker claim 并执行
+- 任务调度：任务发到 mailbox 队列，ACP worker claim 并执行
 
 ## 4. 关键数据流
 
@@ -211,7 +211,7 @@ claude-code-acp → session/request_permission → ACP client
 
 ### 5.1 为什么包装成 Provider 而不是 Tool？
 - ACP agent 本身是一个有记忆、有工具的完整 agent；当 Tool 用等于"agent 里套 agent"，事件流语义混乱。
-- 当 Provider 用语义就是"换个后端模型"，modu 的 `Agent` / `CodingAgent` / swarm 全部不改。
+- 当 Provider 用语义就是"换个后端模型"，modu 的 `Agent` / `CodingAgent` 全部不改。
 
 ### 5.2 为什么 session 按 cwd 区分而不是全局一个？
 - ACP session 绑定工作目录，切目录需要新 session；
@@ -301,4 +301,4 @@ claude-code-acp → session/request_permission → ACP client
 | iOS 离线 / 断线 | mailbox 持久化 + SSE reconnect + 任务 id 对齐 |
 | agent stdout 超大响应 | Scanner buffer 10 MB（acpone 验证过） |
 | 反向 fs 请求泄漏隐私 | 默认拒绝 + 用户白名单 + 审计日志 |
-| 多 worker 资源爆掉 | swarm 的 MaxAgents 限制 + 任务队列背压 |
+| 多 worker 资源爆掉 | gateway/manager 限制 worker 数量 + 任务队列背压 |
