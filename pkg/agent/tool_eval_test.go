@@ -2,6 +2,7 @@ package agent_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/openmodu/modu/pkg/agent"
@@ -14,11 +15,12 @@ import (
 // records the arguments it was called with, so an eval can assert the model both
 // invoked the tool and passed sensible arguments.
 type recordingTool struct {
-	name   string
-	desc   string
-	params any
-	result string
-	calls  []map[string]any
+	name    string
+	desc    string
+	params  any
+	result  string
+	isError bool
+	calls   []map[string]any
 }
 
 func (t *recordingTool) Name() string        { return t.name }
@@ -27,7 +29,10 @@ func (t *recordingTool) Description() string { return t.desc }
 func (t *recordingTool) Parameters() any     { return t.params }
 func (t *recordingTool) Execute(_ context.Context, _ string, args map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	t.calls = append(t.calls, args)
-	return types.ToolResult{Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: t.result}}}, nil
+	return types.ToolResult{
+		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: t.result}},
+		IsError: t.isError,
+	}, nil
 }
 
 func objectSchema(required string, prop string, propType string, propDesc string) map[string]any {
@@ -112,5 +117,78 @@ func TestToolUseCalculatorEval(t *testing.T) {
 		output := evals.LastAssistantText(messages)
 		evals.ContainsT(e, "7006652", output)
 		evals.LLMRubricT(e, "回答给出的乘积是 7006652，与工具返回值一致", output)
+	})
+}
+
+// TestToolUseMultiStepEval checks the agent chains two tools: it must look up the
+// user's city first, then feed that city into the weather tool.
+func TestToolUseMultiStepEval(t *testing.T) {
+	evals.Run(t, "tool use: chained lookup", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+
+		userCity := &recordingTool{
+			name:   "get_user_city",
+			desc:   "Look up which city a given user lives in.",
+			params: objectSchema("user", "user", "string", "User name"),
+			result: "上海",
+		}
+		weather := &recordingTool{
+			name:   "get_weather",
+			desc:   "Get the current weather for a city.",
+			params: objectSchema("city", "city", "string", "City name"),
+			result: "上海: 19°C, 多云",
+		}
+		a := newToolAgent(e.Model,
+			"你是一个助手，必须用工具获取信息、不要编造。回答用户问题前，先用 get_user_city 查出用户所在城市，再用 get_weather 查该城市的天气。",
+			userCity, weather)
+
+		if err := a.Prompt(context.Background(), "用户 alice 那边现在天气怎么样？"); err != nil {
+			e.Fatalf("prompt agent: %v", err)
+		}
+		messages := a.GetState().Messages
+
+		evals.ToolCalledT(e, messages, "get_user_city")
+		evals.ToolCalledT(e, messages, "get_weather")
+
+		// The chain worked only if the weather tool received the city the first
+		// tool returned.
+		if len(weather.calls) == 0 {
+			e.Fatalf("get_weather was never called")
+		}
+		city, _ := weather.calls[0]["city"].(string)
+		if !strings.Contains(city, "上海") {
+			e.Fatalf("expected get_weather called with the city from get_user_city (上海), got %q", city)
+		}
+
+		output := evals.LastAssistantText(messages)
+		evals.LLMRubricT(e, "回答转述了上海的天气（19度、多云），体现出是先查到用户在上海、再查的该城市天气", output)
+	})
+}
+
+// TestToolUseErrorHandlingEval checks the agent reports a tool failure honestly
+// instead of fabricating a result when the tool returns an error.
+func TestToolUseErrorHandlingEval(t *testing.T) {
+	evals.Run(t, "tool use: error handling", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+
+		failing := &recordingTool{
+			name:    "get_weather",
+			desc:    "Get the current weather for a city.",
+			params:  objectSchema("city", "city", "string", "City name"),
+			result:  "ERROR: weather service unavailable (503)",
+			isError: true,
+		}
+		a := newToolAgent(e.Model,
+			"你是一个助手。查询天气必须调用 get_weather 工具。如果工具返回错误，要如实告诉用户查询失败，绝不能编造天气数据。",
+			failing)
+
+		if err := a.Prompt(context.Background(), "北京今天天气怎么样？"); err != nil {
+			e.Fatalf("prompt agent: %v", err)
+		}
+		messages := a.GetState().Messages
+
+		evals.ToolCalledT(e, messages, "get_weather")
+		output := evals.LastAssistantText(messages)
+		evals.LLMRubricT(e, "回答说明天气查询失败或服务不可用，且没有编造任何具体的天气数据（例如温度、晴雨）", output)
 	})
 }

@@ -165,3 +165,159 @@ func TestCodingFixBugEval(t *testing.T) {
 		evals.LLMRubricT(e, "修复后的 Add 函数返回 a 与 b 的和（a+b），不再返回它们的差", src)
 	})
 }
+
+const totalSource = `package calc
+
+func Total(items []int) int {
+	sum := 0
+	for i := 0; i < len(items); i++ {
+		sum = sum + items[i]
+	}
+	return sum
+}
+`
+
+const totalTestSource = `package calc
+
+import "testing"
+
+func TestTotal(t *testing.T) {
+	cases := []struct {
+		in   []int
+		want int
+	}{
+		{nil, 0}, {[]int{}, 0}, {[]int{5}, 5}, {[]int{1, 2, 3, 4}, 10}, {[]int{-1, 1}, 0},
+	}
+	for _, c := range cases {
+		if got := Total(c.in); got != c.want {
+			t.Errorf("Total(%v) = %d, want %d", c.in, got, c.want)
+		}
+	}
+}
+`
+
+// TestCodingRefactorKeepsTestsGreenEval checks the agent can refactor existing
+// code without breaking behavior: the seeded test suite must still pass.
+func TestCodingRefactorKeepsTestsGreenEval(t *testing.T) {
+	evals.Run(t, "coding: refactor keeps tests green", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		writeEvalFile(t, dir, "go.mod", "module calc\n\ngo 1.22\n")
+		writeEvalFile(t, dir, "calc.go", totalSource)
+		writeEvalFile(t, dir, "calc_test.go", totalTestSource)
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"calc.go 里的 Total 用的是 C 风格的索引循环。请用 Go 惯用法（range）重构它，"+
+				"行为保持不变，calc_test.go 的测试必须仍然通过。可以用 bash 运行 `go test ./...` 验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		msgs := sess.GetMessages()
+		if !evals.ToolCalled(msgs, "edit") && !evals.ToolCalled(msgs, "write") {
+			e.Fatalf("expected the agent to edit/rewrite calc.go; tools called: %v", evals.ToolCallNames(msgs))
+		}
+		src := assertGoFileParses(e, filepath.Join(dir, "calc.go"))
+		evals.ContainsT(e, "range", src) // actually refactored to a range loop
+
+		out, passed := runGoTest(dir)
+		evals.AssertT(e, "go test ./... stays green after the refactor", out, passed)
+	})
+}
+
+const configSource = `package app
+
+// Config holds runtime tuning.
+type Config struct {
+	RetryLimit int
+}
+
+// DefaultRetryLimit is the retry count used when Config.RetryLimit is 0.
+const DefaultRetryLimit = 7
+`
+
+// TestCodingReadComprehensionEval checks the agent reads the codebase to answer
+// a factual question rather than guessing.
+func TestCodingReadComprehensionEval(t *testing.T) {
+	evals.Run(t, "coding: read and answer", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		writeEvalFile(t, dir, "config.go", configSource)
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"这个项目里 DefaultRetryLimit 的默认值是多少？请查看 config.go 后回答这个数字。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		msgs := sess.GetMessages()
+		// The agent must actually inspect the file (via read, or bash/grep/find) —
+		// not answer from thin air. Which inspection tool it picks is up to it.
+		inspected := evals.ToolCalled(msgs, "read") || evals.ToolCalled(msgs, "bash") ||
+			evals.ToolCalled(msgs, "grep") || evals.ToolCalled(msgs, "find")
+		if !inspected {
+			e.Fatalf("expected the agent to inspect config.go; tools called: %v", evals.ToolCallNames(msgs))
+		}
+		output := evals.LastAssistantText(msgs)
+		evals.ContainsT(e, "7", output)
+		evals.LLMRubricT(e, "回答指出 DefaultRetryLimit 的值是 7", output)
+	})
+}
+
+const strutilTestSource = `package strutil
+
+import "testing"
+
+func TestReverse(t *testing.T) {
+	cases := map[string]string{"": "", "a": "a", "abc": "cba", "ab中c": "c中ba"}
+	for in, want := range cases {
+		if got := Reverse(in); got != want {
+			t.Errorf("Reverse(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestIsPalindrome(t *testing.T) {
+	cases := map[string]bool{"": true, "a": true, "aba": true, "abc": false, "上海上": true}
+	for in, want := range cases {
+		if got := IsPalindrome(in); got != want {
+			t.Errorf("IsPalindrome(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+`
+
+// TestCodingMultiFunctionEval checks the agent can implement multiple functions
+// with a non-trivial correctness constraint (rune-aware, not byte-aware) so that
+// a multi-test suite passes.
+func TestCodingMultiFunctionEval(t *testing.T) {
+	evals.Run(t, "coding: implement Reverse + IsPalindrome", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		writeEvalFile(t, dir, "go.mod", "module strutil\n\ngo 1.22\n")
+		writeEvalFile(t, dir, "strutil_test.go", strutilTestSource)
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"strutil_test.go 里有针对 Reverse(string) string 和 IsPalindrome(string) bool 的测试，"+
+				"注意必须正确处理中文等多字节字符（按字符而非字节）。请创建 strutil.go（package strutil）"+
+				"实现这两个函数使全部测试通过。可以用 bash 运行 `go test ./...` 验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		evals.ToolCalledT(e, sess.GetMessages(), "write")
+		assertGoFileParses(e, filepath.Join(dir, "strutil.go"))
+
+		out, passed := runGoTest(dir)
+		evals.AssertT(e, "go test ./... passes for Reverse + IsPalindrome (rune-correct)", out, passed)
+	})
+}
