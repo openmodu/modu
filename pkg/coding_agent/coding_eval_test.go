@@ -321,3 +321,152 @@ func TestCodingMultiFunctionEval(t *testing.T) {
 		evals.AssertT(e, "go test ./... passes for Reverse + IsPalindrome (rune-correct)", out, passed)
 	})
 }
+
+const counterSource = `package store
+
+type Counter struct {
+	n int
+}
+
+func (c *Counter) Inc()       { c.n++ }
+func (c *Counter) Value() int { return c.n }
+`
+
+const reportSource = `package store
+
+import "fmt"
+
+func Report(c *Counter) string {
+	return fmt.Sprintf("count=%d", c.Value())
+}
+`
+
+// The test calls c.IsEven() directly (forces a change in counter.go) AND expects
+// Report to include even-ness (forces a change in report.go), so the task cannot
+// be completed by editing a single file.
+const counterTestSource = `package store
+
+import "testing"
+
+func TestIsEven(t *testing.T) {
+	c := &Counter{}
+	c.Inc()
+	c.Inc()
+	if !c.IsEven() {
+		t.Fatal("Counter at 2 should be even")
+	}
+	c.Inc()
+	if c.IsEven() {
+		t.Fatal("Counter at 3 should be odd")
+	}
+}
+
+func TestReport(t *testing.T) {
+	c := &Counter{}
+	c.Inc()
+	c.Inc()
+	if got := Report(c); got != "count=2 even=true" {
+		t.Fatalf("Report = %q, want %q", got, "count=2 even=true")
+	}
+	c.Inc()
+	if got := Report(c); got != "count=3 even=false" {
+		t.Fatalf("Report = %q, want %q", got, "count=3 even=false")
+	}
+}
+`
+
+// TestCodingCrossFileEval checks the agent can make a coordinated change across
+// two files: add IsEven to Counter (counter.go) and surface it in Report
+// (report.go) so the test suite passes.
+func TestCodingCrossFileEval(t *testing.T) {
+	evals.Run(t, "coding: coordinated cross-file change", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		writeEvalFile(t, dir, "go.mod", "module store\n\ngo 1.22\n")
+		writeEvalFile(t, dir, "counter.go", counterSource)
+		writeEvalFile(t, dir, "report.go", reportSource)
+		writeEvalFile(t, dir, "counter_test.go", counterTestSource)
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"counter_test.go 当前失败。它直接调用了 Counter 的 IsEven() 方法，并要求 Report 输出形如 "+
+				"`count=2 even=true`。请实现：在 counter.go 给 Counter 增加 IsEven() bool 方法，"+
+				"并在 report.go 更新 Report 让它带上 even=true/false。这需要同时改这两个文件。"+
+				"可以用 bash 运行 `go test ./...` 验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		msgs := sess.GetMessages()
+		if !evals.ToolCalled(msgs, "edit") && !evals.ToolCalled(msgs, "write") {
+			e.Fatalf("expected the agent to edit/write files; tools called: %v", evals.ToolCallNames(msgs))
+		}
+		counterSrc := assertGoFileParses(e, filepath.Join(dir, "counter.go"))
+		assertGoFileParses(e, filepath.Join(dir, "report.go"))
+		evals.ContainsT(e, "IsEven", counterSrc) // the new method really landed in counter.go
+
+		out, passed := runGoTest(dir)
+		evals.AssertT(e, "go test ./... passes after the coordinated two-file change", out, passed)
+	})
+}
+
+const romanStubSource = `package roman
+
+// RomanToInt converts a Roman numeral to its integer value.
+// TODO: implement so the tests in roman_test.go pass.
+func RomanToInt(s string) int {
+	return 0
+}
+`
+
+const romanTestSource = `package roman
+
+import "testing"
+
+func TestRomanToInt(t *testing.T) {
+	cases := map[string]int{
+		"I": 1, "III": 3, "IV": 4, "IX": 9, "LVIII": 58,
+		"XL": 40, "XC": 90, "CD": 400, "CM": 900, "MCMXCIV": 1994, "MMXXIV": 2024,
+	}
+	for in, want := range cases {
+		if got := RomanToInt(in); got != want {
+			t.Errorf("RomanToInt(%q) = %d, want %d", in, got, want)
+		}
+	}
+}
+`
+
+// TestCodingTDDEval is a red->green TDD task: a stub implementation makes the
+// test compile but fail; the agent must implement RomanToInt so every case
+// passes. The eval runs the tests itself as the authority.
+func TestCodingTDDEval(t *testing.T) {
+	evals.Run(t, "coding: TDD RomanToInt red to green", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		writeEvalFile(t, dir, "go.mod", "module roman\n\ngo 1.22\n")
+		writeEvalFile(t, dir, "roman.go", romanStubSource)
+		writeEvalFile(t, dir, "roman_test.go", romanTestSource)
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"roman.go 里的 RomanToInt 目前只是返回 0 的桩，roman_test.go 的测试因此全部失败（red）。"+
+				"请用 TDD 的方式实现 RomanToInt，让所有测试通过（green）。"+
+				"可以反复用 bash 运行 `go test ./...` 迭代验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		msgs := sess.GetMessages()
+		if !evals.ToolCalled(msgs, "edit") && !evals.ToolCalled(msgs, "write") {
+			e.Fatalf("expected the agent to edit/write roman.go; tools called: %v", evals.ToolCallNames(msgs))
+		}
+		assertGoFileParses(e, filepath.Join(dir, "roman.go"))
+
+		out, passed := runGoTest(dir)
+		evals.AssertT(e, "go test ./... goes green after implementing RomanToInt", out, passed)
+	})
+}
