@@ -58,6 +58,16 @@ func RecordScore(e *EvalT, result *EvalResult) {
 		Pass:      result.Pass,
 	}
 
+	// Marshal to a single buffer and emit it with one Write. go test runs
+	// packages as separate processes that all append to this file, so the
+	// in-process mutex alone cannot prevent interleaving — a single O_APPEND
+	// write keeps each JSONL row intact (atomic for the common small-row case).
+	data, err := json.Marshal(line)
+	if err != nil {
+		e.Fatalf("marshal eval result: %v", err)
+	}
+	data = append(data, '\n')
+
 	recordMu.Lock()
 	defer recordMu.Unlock()
 
@@ -67,7 +77,7 @@ func RecordScore(e *EvalT, result *EvalResult) {
 	}
 	defer file.Close()
 
-	if err := json.NewEncoder(file).Encode(line); err != nil {
+	if _, err := file.Write(data); err != nil {
 		e.Fatalf("write evals.jsonl: %v", err)
 	}
 }

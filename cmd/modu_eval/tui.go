@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 
 	"github.com/openmodu/modu/pkg/evals"
 )
@@ -150,13 +151,8 @@ func (m tuiModel) renderListView() string {
 		rubricWidth = 20
 	}
 
-	headerLine := fmt.Sprintf(" %-*s %-*s %-*s %-*s %s",
-		providerWidth, "PROVIDER",
-		testWidth, "TEST",
-		rubricWidth, "RUBRIC",
-		scoreWidth, "SCORE",
-		"RESULT",
-	)
+	headerLine := " " + cell("PROVIDER", providerWidth) + " " + cell("TEST", testWidth) +
+		" " + cell("RUBRIC", rubricWidth) + " " + cell("SCORE", scoreWidth) + " RESULT"
 	b.WriteString(tableHeaderStyle().Render(headerLine))
 	b.WriteString("\n")
 	b.WriteString(strings.Repeat("-", width))
@@ -168,14 +164,12 @@ func (m tuiModel) renderListView() string {
 			cursor = ">"
 		}
 		status := passLabel(result.Pass)
-		line := fmt.Sprintf("%s%-*s %-*s %-*s %-*.2f %s",
-			cursor,
-			providerWidth, ellipsis(providerLabel(result), providerWidth),
-			testWidth, ellipsis(result.Name, testWidth),
-			rubricWidth, ellipsis(oneLine(result.Rubric), rubricWidth),
-			scoreWidth, result.Score,
-			status,
-		)
+		line := cursor +
+			cell(providerLabel(result), providerWidth) + " " +
+			cell(result.Name, testWidth) + " " +
+			cell(oneLine(result.Rubric), rubricWidth) + " " +
+			cell(fmt.Sprintf("%.2f", result.Score), scoreWidth) + " " +
+			status
 		style := lipgloss.NewStyle().Width(width)
 		if i == m.cursor {
 			style = style.Background(lipgloss.Color("237"))
@@ -224,7 +218,7 @@ func (m tuiModel) renderDetailView() string {
 	result := m.filtered[m.cursor]
 
 	var b strings.Builder
-	b.WriteString(headerStyle(width).Render("Eval Detail - " + ellipsis(result.Name, width-16)))
+	b.WriteString(headerStyle(width).Render("Eval Detail - " + truncateDisplay(result.Name, width-16)))
 	b.WriteString("\n")
 	if m.ready {
 		b.WriteString(m.viewport.View())
@@ -297,7 +291,7 @@ func wrapTextPreserveNewlines(text string, width int) string {
 		var lines []string
 		line := ""
 		for _, word := range words {
-			if len(line)+len(word)+1 <= width {
+			if runewidth.StringWidth(line)+runewidth.StringWidth(word)+1 <= width {
 				if line == "" {
 					line = word
 				} else {
@@ -318,17 +312,42 @@ func wrapTextPreserveNewlines(text string, width int) string {
 	return strings.Join(wrapped, "\n")
 }
 
-func ellipsis(value string, max int) string {
+// truncateDisplay shortens s to at most max terminal cells, cutting on rune
+// boundaries (never mid-rune) and accounting for wide CJK characters. A trailing
+// "…" marks truncation. Byte slicing here would corrupt multibyte UTF-8.
+func truncateDisplay(s string, max int) string {
 	if max <= 0 {
 		return ""
 	}
-	if len(value) <= max {
-		return value
+	if runewidth.StringWidth(s) <= max {
+		return s
 	}
-	if max <= 3 {
-		return value[:max]
+	if max == 1 {
+		return "…"
 	}
-	return value[:max-3] + "..."
+	var b strings.Builder
+	limit := max - 1 // reserve one cell for the ellipsis
+	width := 0
+	for _, r := range s {
+		rw := runewidth.RuneWidth(r)
+		if width+rw > limit {
+			break
+		}
+		b.WriteRune(r)
+		width += rw
+	}
+	return b.String() + "…"
+}
+
+// cell truncates s to width terminal cells and right-pads it to exactly that
+// width, so columns line up even with wide CJK content (fmt's %-*s pads by rune
+// count, which mismeasures wide runes).
+func cell(s string, width int) string {
+	s = truncateDisplay(s, width)
+	if pad := width - runewidth.StringWidth(s); pad > 0 {
+		return s + strings.Repeat(" ", pad)
+	}
+	return s
 }
 
 func clamp(value, min, max int) int {

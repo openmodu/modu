@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mattn/go-runewidth"
 	"github.com/spf13/cobra"
 
 	"github.com/openmodu/modu/pkg/evals"
@@ -455,11 +456,34 @@ func hasFailures(results []evals.EvalLogLine) bool {
 	return false
 }
 
+// truncate shortens value to at most max terminal cells, cutting on a rune
+// boundary and marking truncation with "...". Width-aware so multibyte CJK is
+// never sliced mid-rune (the old byte slicing produced invalid UTF-8 and
+// panicked when max < 3).
 func truncate(value string, max int) string {
-	if len(value) <= max {
+	if max <= 0 {
+		return ""
+	}
+	if runewidth.StringWidth(value) <= max {
 		return value
 	}
-	return value[:max-3] + "..."
+	ellipsis := "..."
+	limit := max - 3
+	if max <= 3 {
+		ellipsis = ""
+		limit = max
+	}
+	var b strings.Builder
+	width := 0
+	for _, r := range value {
+		rw := runewidth.RuneWidth(r)
+		if width+rw > limit {
+			break
+		}
+		b.WriteRune(r)
+		width += rw
+	}
+	return b.String() + ellipsis
 }
 
 func providerLabel(result evals.EvalLogLine) string {

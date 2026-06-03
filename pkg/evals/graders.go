@@ -4,10 +4,27 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/openmodu/modu/pkg/providers"
 )
+
+const (
+	// graderTimeout bounds a single grader call so a hung provider cannot wedge
+	// the whole eval run.
+	graderTimeout = 60 * time.Second
+	// graderMaxAttempts retries transient provider/parse failures so one bad
+	// response does not fail an otherwise-passing eval.
+	graderMaxAttempts = 3
+	// graderMaxTokens caps grader output; the rubric verdict is a small JSON object.
+	graderMaxTokens = 512
+)
+
+// thinkBlockRe matches reasoning-model <think>...</think> spans, which some
+// providers embed in the message content ahead of the JSON verdict.
+var thinkBlockRe = regexp.MustCompile(`(?is)<think>.*?</think>`)
 
 // RubricResult is the structured result returned by the grader LLM.
 type RubricResult struct {
@@ -23,10 +40,34 @@ Return only a JSON object with this exact shape:
 
 Score must be from 0.0 to 1.0. Passing answers should usually score at least 0.6.`
 
-// LLMRubric grades output with the configured grader LLM.
+// LLMRubric grades output with the configured grader LLM. Each attempt is
+// bounded by graderTimeout; transient provider or parse failures are retried up
+// to graderMaxAttempts so a single flaky response does not fail the eval.
 func (e *Eval) LLMRubric(ctx context.Context, rubric, output string) (*RubricResult, error) {
+	var lastErr error
+	for attempt := 0; attempt < graderMaxAttempts; attempt++ {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		result, err := e.gradeOnce(ctx, rubric, output)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+	}
+	return nil, fmt.Errorf("grade after %d attempts: %w", graderMaxAttempts, lastErr)
+}
+
+func (e *Eval) gradeOnce(ctx context.Context, rubric, output string) (*RubricResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, graderTimeout)
+	defer cancel()
+
+	temperature := 0.0
+	maxTokens := graderMaxTokens
 	resp, err := e.Grader.Chat(ctx, &providers.ChatRequest{
-		Model: e.GraderModel.ID,
+		Model:       e.GraderModel.ID,
+		Temperature: &temperature, // deterministic grading
+		MaxTokens:   &maxTokens,
 		Messages: []providers.Message{
 			{
 				Role:    providers.RoleSystem,
@@ -46,7 +87,7 @@ func (e *Eval) LLMRubric(ctx context.Context, rubric, output string) (*RubricRes
 		return nil, fmt.Errorf("grade with llm: %w", err)
 	}
 
-	text := contentString(resp.Message.Content)
+	text := stripThinkBlocks(contentString(resp.Message.Content))
 	var result RubricResult
 	if err := json.Unmarshal([]byte(extractJSONObject(text)), &result); err != nil {
 		return nil, fmt.Errorf("decode grader result %q: %w", text, err)
@@ -102,4 +143,10 @@ func extractJSONObject(text string) string {
 		return text
 	}
 	return text[start : end+1]
+}
+
+// stripThinkBlocks removes reasoning-model <think>...</think> spans so the JSON
+// verdict that follows them parses cleanly.
+func stripThinkBlocks(text string) string {
+	return strings.TrimSpace(thinkBlockRe.ReplaceAllString(text, ""))
 }
