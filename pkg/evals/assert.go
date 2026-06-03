@@ -30,6 +30,18 @@ func recordDeterministic(e *EvalT, rubric, output string, pass bool) {
 	})
 }
 
+// AssertT records a deterministic pass/fail the eval computed itself (e.g.
+// "go test passed") and fails the test when pass is false. detail is stored as
+// the result Output for debugging. Use it for ground-truth checks that aren't a
+// substring/regex/tool match.
+func AssertT(e *EvalT, description, detail string, pass bool) {
+	e.Helper()
+	recordDeterministic(e, description, detail, pass)
+	if !pass {
+		e.Fatalf("assertion failed: %s\n%s", description, detail)
+	}
+}
+
 // ContainsT asserts output contains substr.
 func ContainsT(e *EvalT, substr, output string) {
 	e.Helper()

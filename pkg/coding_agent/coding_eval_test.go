@@ -5,8 +5,10 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/evals"
@@ -67,6 +69,72 @@ func TestCodingCreateFunctionEval(t *testing.T) {
 		src := assertGoFileParses(e, filepath.Join(dir, "add.go"))
 		evals.ContainsT(e, "func Add", src)
 		evals.LLMRubricT(e, "代码定义了函数 Add，接收两个 int 参数并返回它们的和（a+b）", src)
+	})
+}
+
+func writeEvalFile(t *testing.T, dir, name, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+}
+
+// runGoTest runs `go test ./...` in dir and reports the combined output and
+// whether it passed. This is the eval's own ground-truth check on the agent's
+// implementation — independent of anything the agent claims.
+func runGoTest(dir string) (string, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "test", "./...")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	return string(out), err == nil
+}
+
+const primeTestSource = `package mathutil
+
+import "testing"
+
+func TestIsPrime(t *testing.T) {
+	cases := map[int]bool{
+		-3: false, 0: false, 1: false, 2: true, 3: true, 4: false,
+		17: true, 18: false, 19: true, 20: false, 97: true, 100: false,
+	}
+	for n, want := range cases {
+		if got := IsPrime(n); got != want {
+			t.Errorf("IsPrime(%d) = %v, want %v", n, got, want)
+		}
+	}
+}
+`
+
+// TestCodingImplementToPassTestsEval is the strongest coding signal: the agent
+// implements a function so that a provided test suite passes, may verify itself
+// with bash, and the eval confirms correctness by actually running `go test`.
+func TestCodingImplementToPassTestsEval(t *testing.T) {
+	evals.Run(t, "coding: implement IsPrime to pass tests", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		writeEvalFile(t, dir, "go.mod", "module mathutil\n\ngo 1.22\n")
+		writeEvalFile(t, dir, "prime_test.go", primeTestSource)
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"当前目录是一个 Go 模块，prime_test.go 里有针对 IsPrime(n int) bool 的测试，但实现还不存在。"+
+				"请创建 prime.go（package mathutil）实现 IsPrime，使所有测试通过。"+
+				"你可以用 bash 运行 `go test ./...` 自行验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		evals.ToolCalledT(e, sess.GetMessages(), "write")
+		assertGoFileParses(e, filepath.Join(dir, "prime.go"))
+
+		// Ground truth: the eval runs the tests itself.
+		out, passed := runGoTest(dir)
+		evals.AssertT(e, "go test ./... passes against the agent's implementation", out, passed)
 	})
 }
 
