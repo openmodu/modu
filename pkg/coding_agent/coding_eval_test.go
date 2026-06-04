@@ -470,3 +470,160 @@ func TestCodingTDDEval(t *testing.T) {
 		evals.AssertT(e, "go test ./... goes green after implementing RomanToInt", out, passed)
 	})
 }
+
+// TestCodingPreserveUnrelatedFileEval checks surgical scope: the agent fixes the
+// requested Go bug while leaving an unrelated sentinel file byte-for-byte intact.
+func TestCodingPreserveUnrelatedFileEval(t *testing.T) {
+	evals.Run(t, "coding: preserve unrelated file", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		buggy := "package main\n\n// Add should return the sum of a and b.\nfunc Add(a, b int) int {\n\treturn a - b\n}\n"
+		sentinel := "DO NOT MODIFY\nsentinel=2026-06-04\n"
+		writeEvalFile(t, dir, "add.go", buggy)
+		writeEvalFile(t, dir, "notes.txt", sentinel)
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"只修复 add.go：Add(a, b int) int 应返回 a+b。不要修改 notes.txt，也不要改无关文件。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		msgs := sess.GetMessages()
+		if !evals.ToolCalled(msgs, "edit") && !evals.ToolCalled(msgs, "write") {
+			e.Fatalf("expected the agent to edit/write add.go; tools called: %v", evals.ToolCallNames(msgs))
+		}
+		src := assertGoFileParses(e, filepath.Join(dir, "add.go"))
+		evals.NotContainsT(e, "a - b", src)
+		evals.LLMRubricT(e, "Add 函数返回 a 与 b 的和（a+b），没有引入额外无关逻辑", src)
+
+		data, err := os.ReadFile(filepath.Join(dir, "notes.txt"))
+		if err != nil {
+			e.Fatalf("read notes.txt: %v", err)
+		}
+		evals.AssertT(e, "unrelated notes.txt is unchanged", string(data), string(data) == sentinel)
+	})
+}
+
+const hiddenSlugTestSource = `package slug
+
+import "testing"
+
+func TestSlugifyHiddenCases(t *testing.T) {
+	cases := map[string]string{
+		"": "",
+		"Hello, World!": "hello-world",
+		"Multiple   Spaces": "multiple-spaces",
+		"Already--Slug": "already-slug",
+		"Trim Me ": "trim-me",
+	}
+	for in, want := range cases {
+		if got := Slugify(in); got != want {
+			t.Errorf("Slugify(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+`
+
+// TestCodingAddsImplementationAndTestsEval checks the agent writes both
+// production code and a focused unit test, then the eval adds hidden tests as
+// the ground-truth correctness gate.
+func TestCodingAddsImplementationAndTestsEval(t *testing.T) {
+	evals.Run(t, "coding: add implementation and tests", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		writeEvalFile(t, dir, "go.mod", "module slug\n\ngo 1.22\n")
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"创建一个 Go 包 slug：实现 Slugify(s string) string，并同时新增 slug_test.go。"+
+				"要求：转小写；连续空白或连字符折叠成一个连字符；去掉逗号、感叹号等标点；去掉首尾连字符。"+
+				"请用 go test ./... 验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		evals.ToolCalledT(e, sess.GetMessages(), "write")
+		assertGoFileParses(e, filepath.Join(dir, "slug.go"))
+		testSrc := assertGoFileParses(e, filepath.Join(dir, "slug_test.go"))
+		evals.ContainsT(e, "TestSlugify", testSrc)
+
+		writeEvalFile(t, dir, "slug_hidden_test.go", hiddenSlugTestSource)
+		out, passed := runGoTest(dir)
+		evals.AssertT(e, "go test ./... passes with hidden Slugify cases", out, passed)
+	})
+}
+
+const clampSource = `package mathutil
+
+// Clamp returns n unchanged for now.
+// TODO: clamp n into the inclusive [min, max] range.
+func Clamp(n, min, max int) int {
+	return n
+}
+`
+
+const clampHiddenTestSource = `package mathutil
+
+import "testing"
+
+func TestClampHiddenCases(t *testing.T) {
+	cases := []struct {
+		n, min, max int
+		want        int
+	}{
+		{5, 1, 10, 5},
+		{-2, 0, 10, 0},
+		{12, 0, 10, 10},
+		{7, 7, 7, 7},
+	}
+	for _, c := range cases {
+		if got := Clamp(c.n, c.min, c.max); got != c.want {
+			t.Errorf("Clamp(%d, %d, %d) = %d, want %d", c.n, c.min, c.max, got, c.want)
+		}
+	}
+}
+`
+
+// TestCodingPkgChangeUpdatesReadmeEval encodes the repository rule that changes
+// under pkg should update the relevant README/doc as part of acceptance.
+func TestCodingPkgChangeUpdatesReadmeEval(t *testing.T) {
+	evals.Run(t, "coding: pkg change updates README", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		pkgDir := filepath.Join(dir, "pkg", "mathutil")
+		if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+			t.Fatalf("mkdir pkg/mathutil: %v", err)
+		}
+		writeEvalFile(t, dir, "go.mod", "module example.com/project\n\ngo 1.22\n")
+		writeEvalFile(t, pkgDir, "mathutil.go", clampSource)
+		writeEvalFile(t, pkgDir, "README.md", "# mathutil\n\nSmall integer helpers.\n")
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"这是 pkg/mathutil 公共包。请实现 mathutil.go 里的 Clamp(n, min, max int) int，"+
+				"把 n 限制在闭区间 [min, max] 内；同时更新 pkg/mathutil/README.md 记录 Clamp 的行为。"+
+				"可以用 go test ./... 验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		assertGoFileParses(e, filepath.Join(pkgDir, "mathutil.go"))
+		readme, err := os.ReadFile(filepath.Join(pkgDir, "README.md"))
+		if err != nil {
+			e.Fatalf("read README.md: %v", err)
+		}
+		evals.ContainsT(e, "Clamp", string(readme))
+		evals.LLMRubricT(e, "README 说明了 Clamp 会把输入限制在 min 到 max 的闭区间内", string(readme))
+
+		writeEvalFile(t, pkgDir, "mathutil_hidden_test.go", clampHiddenTestSource)
+		out, passed := runGoTest(dir)
+		evals.AssertT(e, "go test ./... passes with hidden Clamp cases", out, passed)
+	})
+}
