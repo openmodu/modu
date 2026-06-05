@@ -2,11 +2,13 @@ package coding_agent_test
 
 import (
 	"context"
+	"fmt"
 	"go/parser"
 	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -860,6 +862,275 @@ func TestCodingErrorHandlingEval(t *testing.T) {
 
 		out, passed := runGoTest(dir)
 		evals.AssertT(e, "go test ./... passes after adding error handling", out, passed)
+	})
+}
+
+// buildBigSource returns a large Go file: many filler functions surrounding one
+// buggy target (Apply, which should add 10 but adds 1). The size forces a real
+// local edit rather than eyeballing a tiny file.
+func buildBigSource(fillerCount int) string {
+	var b strings.Builder
+	b.WriteString("package bigpkg\n\n")
+	for i := 0; i < fillerCount; i++ {
+		fmt.Fprintf(&b, "// Filler%02d is unrelated padding.\nfunc Filler%02d() int { return %d }\n\n", i, i, i*7)
+	}
+	b.WriteString("// Apply adds 10 to x.\n// BUG: it adds 1 instead of 10.\nfunc Apply(x int) int {\n\treturn x + 1\n}\n")
+	return b.String()
+}
+
+const bigPkgTestSource = `package bigpkg
+
+import "testing"
+
+func TestApply(t *testing.T) {
+	if got := Apply(5); got != 15 {
+		t.Fatalf("Apply(5) = %d, want 15", got)
+	}
+}
+`
+
+// TestCodingLargeFileLocalEditEval checks the agent makes a surgical, local edit
+// to one function buried in a large file — using the edit tool, leaving the
+// dozens of surrounding functions byte-for-byte intact. Correctness is gated by
+// `go test`; the surrounding-code integrity is checked by func count + sentinels.
+func TestCodingLargeFileLocalEditEval(t *testing.T) {
+	evals.Run(t, "coding: surgical edit in a large file", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		const fillerCount = 60
+		writeEvalFile(t, dir, "go.mod", "module bigpkg\n\ngo 1.22\n")
+		writeEvalFile(t, dir, "big.go", buildBigSource(fillerCount))
+		writeEvalFile(t, dir, "big_test.go", bigPkgTestSource)
+
+		// Sanity: the seed bug makes the suite red first.
+		if _, passed := runGoTest(dir); passed {
+			t.Fatal("seed Apply bug should fail before the agent runs")
+		}
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"big.go 是个很大的文件，里面有很多 FillerNN 函数。其中只有 Apply(x int) int 有 bug："+
+				"它应当返回 x+10，现在返回的是 x+1。请只用 edit 工具对 Apply 做局部修改，"+
+				"不要重写整个文件，也不要改动任何 FillerNN 函数。big_test.go 的测试应当通过。"+
+				"可以用 bash 运行 `go test ./...` 验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		msgs := sess.GetMessages()
+		// The capability under test is a *local* edit, not a full-file rewrite.
+		evals.ToolCalledT(e, msgs, "edit")
+		src := assertGoFileParses(e, filepath.Join(dir, "big.go"))
+
+		// All surrounding functions survive: count unchanged + sentinels present.
+		wantFuncs := fillerCount + 1 // fillers + Apply
+		evals.AssertT(e, "no functions added or removed in big.go",
+			fmt.Sprintf("found %d func decls, want %d", strings.Count(src, "func "), wantFuncs),
+			strings.Count(src, "func ") == wantFuncs)
+		evals.ContainsT(e, "func Filler00()", src)
+		evals.ContainsT(e, "func Filler59()", src)
+
+		out, passed := runGoTest(dir)
+		evals.AssertT(e, "go test ./... passes after the local edit", out, passed)
+	})
+}
+
+const depMainSource = `package main
+
+import "fmt"
+
+// Run should greet "world" using the example.com/greetlib module.
+// TODO: depend on example.com/greetlib (source in ./greetlib) and return
+// greetlib.Greet("world").
+func Run() string {
+	return "todo"
+}
+
+func main() { fmt.Println(Run()) }
+`
+
+const depMainTestSource = `package main
+
+import "testing"
+
+func TestRun(t *testing.T) {
+	if got := Run(); got != "Hello, world!" {
+		t.Fatalf("Run() = %q, want %q", got, "Hello, world!")
+	}
+}
+`
+
+const depLibSource = `package greetlib
+
+// Greet returns a greeting for name.
+func Greet(name string) string {
+	return "Hello, " + name + "!"
+}
+`
+
+// TestCodingAddDependencyEval checks the agent wires up a new module dependency:
+// it must add a require + a local replace to go.mod and import the module in
+// code. The dependency is a sibling module reached via a local replace, so the
+// build is fully offline (no proxy/network). Ground truth is `go test`, plus a
+// check that the go.mod directives actually landed.
+func TestCodingAddDependencyEval(t *testing.T) {
+	evals.Run(t, "coding: add a go.mod dependency", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		// The app module that must take on the dependency.
+		writeEvalFile(t, dir, "go.mod", "module app\n\ngo 1.22\n")
+		writeEvalFile(t, dir, "main.go", depMainSource)
+		writeEvalFile(t, dir, "main_test.go", depMainTestSource)
+		// A sibling local module to depend on (its own go.mod => separate module,
+		// excluded from app's ./...).
+		libDir := filepath.Join(dir, "greetlib")
+		if err := os.MkdirAll(libDir, 0o755); err != nil {
+			t.Fatalf("mkdir greetlib: %v", err)
+		}
+		writeEvalFile(t, libDir, "go.mod", "module example.com/greetlib\n\ngo 1.22\n")
+		writeEvalFile(t, libDir, "greet.go", depLibSource)
+
+		// Sanity: Run returns the stub, so the suite is red before the agent runs.
+		if _, passed := runGoTest(dir); passed {
+			t.Fatal("seed stub should fail before the agent runs")
+		}
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"请让 app 模块依赖本地模块 example.com/greetlib（源码在 ./greetlib 目录，不要联网下载）："+
+				"在 go.mod 里加上对 example.com/greetlib 的 require，并用 replace 指向 ./greetlib；"+
+				"然后在 main.go 里 import 它，让 Run() 返回 greetlib.Greet(\"world\")。"+
+				"main_test.go 的测试应当通过。可以用 bash 运行 `go test ./...` 验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		assertGoFileParses(e, filepath.Join(dir, "main.go"))
+		gomod, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+		if err != nil {
+			e.Fatalf("read go.mod: %v", err)
+		}
+		evals.ContainsT(e, "example.com/greetlib", string(gomod))
+		evals.ContainsT(e, "replace", string(gomod))
+
+		out, passed := runGoTest(dir)
+		evals.AssertT(e, "go test ./... passes with the new local dependency", out, passed)
+	})
+}
+
+const geomDupSource = `package geom
+
+// Area clamps both sides to [1,100] then multiplies.
+func Area(w, h int) int {
+	if w < 1 {
+		w = 1
+	}
+	if w > 100 {
+		w = 100
+	}
+	if h < 1 {
+		h = 1
+	}
+	if h > 100 {
+		h = 100
+	}
+	return w * h
+}
+
+// Perimeter clamps both sides to [1,100] then sums.
+func Perimeter(w, h int) int {
+	if w < 1 {
+		w = 1
+	}
+	if w > 100 {
+		w = 100
+	}
+	if h < 1 {
+		h = 1
+	}
+	if h > 100 {
+		h = 100
+	}
+	return 2 * (w + h)
+}
+`
+
+const geomTestSource = `package geom
+
+import "testing"
+
+func TestArea(t *testing.T) {
+	cases := []struct{ w, h, want int }{
+		{5, 4, 20}, {0, 200, 100}, {-5, 50, 50}, {100, 100, 10000},
+	}
+	for _, c := range cases {
+		if got := Area(c.w, c.h); got != c.want {
+			t.Errorf("Area(%d,%d) = %d, want %d", c.w, c.h, got, c.want)
+		}
+	}
+}
+
+func TestPerimeter(t *testing.T) {
+	cases := []struct{ w, h, want int }{
+		{5, 4, 18}, {0, 200, 202}, {-5, 50, 102},
+	}
+	for _, c := range cases {
+		if got := Perimeter(c.w, c.h); got != c.want {
+			t.Errorf("Perimeter(%d,%d) = %d, want %d", c.w, c.h, got, c.want)
+		}
+	}
+}
+`
+
+// TestCodingExtractFunctionEval is a multi-step refactor: identical clamp-to-
+// [1,100] logic is duplicated in Area and Perimeter. The agent must extract it
+// into a shared helper and reuse it in both, with behavior unchanged. `go test`
+// guards behavior; a rise in func-decl count confirms a helper was introduced;
+// a (clear-cut) rubric confirms the duplication was actually DRY'd up.
+func TestCodingExtractFunctionEval(t *testing.T) {
+	evals.Run(t, "coding: extract a shared helper (DRY refactor)", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		writeEvalFile(t, dir, "go.mod", "module geom\n\ngo 1.22\n")
+		writeEvalFile(t, dir, "geom.go", geomDupSource)
+		writeEvalFile(t, dir, "geom_test.go", geomTestSource)
+
+		// Sanity: the suite is green before the refactor (behavior is the invariant).
+		if out, passed := runGoTest(dir); !passed {
+			t.Fatalf("seed should pass before refactor:\n%s", out)
+		}
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"geom.go 里的 Area 和 Perimeter 都重复了同一段「把数值夹在 [1,100] 区间」的逻辑。"+
+				"请把这段重复逻辑提取成一个公共的辅助函数，并在 Area 和 Perimeter 里复用它，"+
+				"对外行为保持不变。geom_test.go 的测试必须仍然全部通过。可以用 bash 运行 `go test ./...` 验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		msgs := sess.GetMessages()
+		if !evals.ToolCalled(msgs, "edit") && !evals.ToolCalled(msgs, "write") {
+			e.Fatalf("expected the agent to edit/write geom.go; tools called: %v", evals.ToolCallNames(msgs))
+		}
+		src := assertGoFileParses(e, filepath.Join(dir, "geom.go"))
+
+		// A helper was introduced: Area + Perimeter + at least one more func.
+		evals.AssertT(e, "a helper function was extracted (>=3 func decls)",
+			fmt.Sprintf("found %d func decls", strings.Count(src, "func ")),
+			strings.Count(src, "func ") >= 3)
+		evals.LLMRubricT(e,
+			"代码把原本在 Area 和 Perimeter 里重复的「夹值到 [1,100]」逻辑提取成了一个公共辅助函数，"+
+				"并在两个函数里都调用了它，消除了重复", src)
+
+		out, passed := runGoTest(dir)
+		evals.AssertT(e, "go test ./... stays green after the extract-function refactor", out, passed)
 	})
 }
 

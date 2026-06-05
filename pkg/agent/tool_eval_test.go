@@ -250,6 +250,109 @@ func TestToolUseParallelEntitiesEval(t *testing.T) {
 	})
 }
 
+// keyedTool is a recordingTool whose Execute returns a per-key result, looked up
+// by a named argument. Used for batch/parallel evals where each call must get a
+// distinct, item-specific answer so the final response can only be right if every
+// item was actually queried.
+type keyedTool struct {
+	recordingTool
+	argKey string
+	byKey  map[string]string
+}
+
+func (t *keyedTool) Execute(_ context.Context, _ string, args map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
+	t.calls = append(t.calls, args)
+	key, _ := args[t.argKey].(string)
+	text := "未知: 无数据"
+	for name, result := range t.byKey {
+		if strings.Contains(key, name) {
+			text = result
+			break
+		}
+	}
+	return types.ToolResult{
+		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: text}},
+	}, nil
+}
+
+// maxToolCallsInOneTurn returns the largest number of tool calls emitted within a
+// single assistant message — i.e. how many were issued in parallel in one turn.
+func maxToolCallsInOneTurn(messages []types.AgentMessage) int {
+	best := 0
+	for _, m := range messages {
+		var content []types.ContentBlock
+		switch msg := m.(type) {
+		case types.AssistantMessage:
+			content = msg.Content
+		case *types.AssistantMessage:
+			if msg != nil {
+				content = msg.Content
+			}
+		}
+		n := 0
+		for _, b := range content {
+			if tc, ok := b.(*types.ToolCallContent); ok && tc != nil {
+				n++
+			}
+		}
+		if n > best {
+			best = n
+		}
+	}
+	return best
+}
+
+// TestToolUseParallelMultiCallEval checks the agent fans a tool out across three
+// independent items and aggregates every result. The tool returns a per-ticker
+// price, so the final answer can only be correct if all three were queried. The
+// deterministic judge is "each ticker queried + each price present"; whether the
+// model issued them in one parallel turn is logged (provider-dependent, not gated).
+func TestToolUseParallelMultiCallEval(t *testing.T) {
+	evals.Run(t, "tool use: parallel multi-call fan-out", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+
+		prices := &keyedTool{
+			recordingTool: recordingTool{
+				name:   "get_stock_price",
+				desc:   "Get the latest price for one stock ticker. Call it once per ticker.",
+				params: objectSchema("ticker", "ticker", "string", "Stock ticker symbol, e.g. AAPL"),
+			},
+			argKey: "ticker",
+			byKey:  map[string]string{"AAPL": "AAPL: 191", "MSFT": "MSFT: 372", "GOOG": "GOOG: 145"},
+		}
+		a := newToolAgent(e.Model,
+			"你是一个助手。查询股价必须调用 get_stock_price，每个代码单独查一次，不要编造价格。",
+			prices)
+
+		if err := a.Prompt(context.Background(),
+			"请分别告诉我 AAPL、MSFT、GOOG 这三只股票现在的价格。"); err != nil {
+			e.Fatalf("prompt agent: %v", err)
+		}
+		messages := a.GetState().Messages
+
+		evals.ToolCalledT(e, messages, "get_stock_price")
+		queried := map[string]bool{}
+		for _, c := range prices.calls {
+			s, _ := c["ticker"].(string)
+			for _, tk := range []string{"AAPL", "MSFT", "GOOG"} {
+				if strings.Contains(strings.ToUpper(s), tk) {
+					queried[tk] = true
+				}
+			}
+		}
+		evals.AssertT(e, "get_stock_price queried for all three tickers",
+			fmt.Sprintf("calls: %v", prices.calls),
+			queried["AAPL"] && queried["MSFT"] && queried["GOOG"])
+
+		output := evals.LastAssistantText(messages)
+		evals.ContainsT(e, "191", output) // AAPL
+		evals.ContainsT(e, "372", output) // MSFT
+		evals.ContainsT(e, "145", output) // GOOG
+
+		e.Logf("max tool calls issued in a single turn: %d", maxToolCallsInOneTurn(messages))
+	})
+}
+
 // cityWeatherTool is a recordingTool whose Execute returns a per-city result.
 type cityWeatherTool struct {
 	recordingTool
@@ -425,6 +528,97 @@ func TestToolUseAskWhenMissingArgsEval(t *testing.T) {
 			toolNamesDetail(messages), !evals.ToolCalled(messages, "book_flight"))
 		output := evals.LastAssistantText(messages)
 		evals.LLMRubricT(e, "回答向用户询问缺少的信息（目的地和/或出发日期），没有擅自下单或编造行程", output)
+	})
+}
+
+// TestToolUseFallbackOnFailureEval checks the agent degrades gracefully: when the
+// preferred tool returns an error, it falls back to the backup tool and grounds
+// its answer in the backup's result. Both tool calls and the backup's value are
+// exact, noise-immune judges.
+func TestToolUseFallbackOnFailureEval(t *testing.T) {
+	evals.Run(t, "tool use: fall back when primary fails", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+
+		primary := &recordingTool{
+			name:    "get_weather_primary",
+			desc:    "Primary weather service. Preferred source for current weather.",
+			params:  objectSchema("city", "city", "string", "City name"),
+			result:  "ERROR: primary weather service down (503)",
+			isError: true,
+		}
+		backup := &recordingTool{
+			name:   "get_weather_backup",
+			desc:   "Backup weather service. Use only if the primary service fails.",
+			params: objectSchema("city", "city", "string", "City name"),
+			result: "成都: 27°C, 多云",
+		}
+		a := newToolAgent(e.Model,
+			"你是一个助手。查天气优先用 get_weather_primary；如果它返回错误或不可用，就改用 get_weather_backup。"+
+				"不要编造天气数据。",
+			primary, backup)
+
+		if err := a.Prompt(context.Background(), "成都现在天气怎么样？"); err != nil {
+			e.Fatalf("prompt agent: %v", err)
+		}
+		messages := a.GetState().Messages
+
+		// It tried the primary, then fell back to the backup.
+		evals.ToolCalledT(e, messages, "get_weather_primary")
+		evals.ToolCalledT(e, messages, "get_weather_backup")
+		output := evals.LastAssistantText(messages)
+		evals.ContainsT(e, "27", output) // the backup's temperature
+		evals.LLMRubricT(e, "回答给出了成都的天气（27度、多云），来自备用数据源，没有编造数据", output)
+	})
+}
+
+// largeProfileJSON is a sizable, nested tool result. The target value (the most
+// recent invoice amount, 4242) is unique; every other number is a distractor, so
+// the agent can only answer correctly by actually parsing the structure.
+const largeProfileJSON = `{
+  "user": {"id": "u_42", "name": "Lin", "age": 29, "since": 2019},
+  "preferences": {"theme": "dark", "lang": "zh", "notifications": 12},
+  "usage": {"storage_gb": 88, "api_calls": 13370, "seats": 5},
+  "billing": {
+    "plan": "pro",
+    "balance": 1500,
+    "invoices": [
+      {"id": "INV-1001", "date": "2025-12-01", "amount": 990},
+      {"id": "INV-1002", "date": "2026-01-01", "amount": 1990},
+      {"id": "INV-1003", "date": "2026-02-01", "amount": 4242}
+    ]
+  },
+  "flags": {"beta": true, "trial_days_left": 0}
+}`
+
+// TestToolUseLargeJSONParsingEval checks the agent parses a large, nested JSON
+// tool result and extracts the right field rather than grabbing a stray number.
+// The target amount is unique, so ContainsT on it is exact and noise-immune.
+func TestToolUseLargeJSONParsingEval(t *testing.T) {
+	evals.Run(t, "tool use: parse large JSON result", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+
+		profile := &recordingTool{
+			name:   "get_user_profile",
+			desc:   "Return the full profile JSON for a user id.",
+			params: objectSchema("user_id", "user_id", "string", "User id, e.g. u_42"),
+			result: largeProfileJSON,
+		}
+		a := newToolAgent(e.Model,
+			"你是一个助手。需要用户资料时调用 get_user_profile，并严格根据返回的 JSON 回答，不要编造或猜数字。",
+			profile)
+
+		if err := a.Prompt(context.Background(),
+			"用户 u_42 最近一张发票（invoices 里日期最新的那张）的金额 amount 是多少？只回答数字。"); err != nil {
+			e.Fatalf("prompt agent: %v", err)
+		}
+		messages := a.GetState().Messages
+
+		evals.ToolCalledT(e, messages, "get_user_profile")
+		// Answering 4242 (the latest invoice) is itself the discriminator: picking
+		// any distractor amount would fail this. No NotContains on the other
+		// amounts — a verbose reply could legitimately mention them.
+		output := evals.LastAssistantText(messages)
+		evals.ContainsT(e, "4242", output)
 	})
 }
 
