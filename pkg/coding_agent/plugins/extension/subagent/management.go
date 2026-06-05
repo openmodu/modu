@@ -135,7 +135,7 @@ func formatStatus(ext *Extension, id string) string {
 		if !ok {
 			return fmt.Sprintf("Background task %q not found.", id)
 		}
-		return formatTask(task, true)
+		return formatTask(task, true) + formatChildActivity(ext, task.ID)
 	}
 	if len(tasks) == 0 {
 		return "No background subagent tasks in the project runtime."
@@ -274,6 +274,21 @@ func formatTask(task extension.TaskSnapshot, includeOutput bool) string {
 		fmt.Fprintf(&b, "\n\noutput:\n%s", task.Output)
 	}
 	return b.String()
+}
+
+// formatChildActivity renders the live turn / failed-tool / token tally for a
+// background child task, fed by the host's re-emitted child events. Returns
+// "" when no activity has been recorded (e.g. a synchronous run, a batch
+// pseudo-task, or a child that has not finished a turn yet).
+func formatChildActivity(ext *Extension, taskID string) string {
+	if ext == nil || ext.childActivity == nil {
+		return ""
+	}
+	a, ok := ext.childActivity.get(taskID)
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("\nactivity: %d turns, %d failed tools, %d tokens", a.Turns, a.FailedTools, a.Tokens)
 }
 
 func resumeTask(ctx context.Context, ext *Extension, args map[string]any) (string, error) {

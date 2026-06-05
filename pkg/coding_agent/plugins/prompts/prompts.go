@@ -4,12 +4,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/openmodu/modu/pkg/coding_agent/foundation/resource"
 	"github.com/openmodu/modu/pkg/mdloader"
 	"github.com/openmodu/modu/pkg/utils"
+)
+
+var (
+	positionalArgRe = regexp.MustCompile(`\$(\d+)`)
+	shellSubRe      = regexp.MustCompile("!`([^`]*)`")
 )
 
 // Template represents a prompt template loaded from disk.
@@ -22,16 +29,92 @@ type Template struct {
 	Metadata    map[string]string `json:"metadata,omitempty"`
 }
 
-// Expand applies the minimal built-in variables supported by prompt templates.
+// Expand substitutes a prompt template's argument placeholders with the user
+// input. It supports both the legacy `{{input}}`/`{{args}}` forms and the
+// Claude Code custom-command forms: `$ARGUMENTS` (all args) and positional
+// `$1`, `$2`, ... (whitespace-split). When the template contains no
+// placeholder at all, non-empty input is appended so bare templates still
+// receive the user's text.
 func (t *Template) Expand(input string) string {
 	input = strings.TrimSpace(input)
 	text := t.Content
-	text = strings.ReplaceAll(text, "{{input}}", input)
-	text = strings.ReplaceAll(text, "{{args}}", input)
-	if !strings.Contains(t.Content, "{{input}}") && !strings.Contains(t.Content, "{{args}}") && input != "" {
+
+	hasPlaceholder := false
+
+	if strings.Contains(text, "$ARGUMENTS") {
+		hasPlaceholder = true
+		text = strings.ReplaceAll(text, "$ARGUMENTS", input)
+	}
+
+	if indices := positionalIndices(text); len(indices) > 0 {
+		hasPlaceholder = true
+		args := strings.Fields(input)
+		// Replace larger indices first so `$1` does not match the prefix of
+		// `$12`.
+		for _, n := range indices {
+			val := ""
+			if n >= 1 && n <= len(args) {
+				val = args[n-1]
+			}
+			text = strings.ReplaceAll(text, "$"+strconv.Itoa(n), val)
+		}
+	}
+
+	if strings.Contains(text, "{{input}}") || strings.Contains(text, "{{args}}") {
+		hasPlaceholder = true
+		text = strings.ReplaceAll(text, "{{input}}", input)
+		text = strings.ReplaceAll(text, "{{args}}", input)
+	}
+
+	if !hasPlaceholder && input != "" {
 		text = strings.TrimSpace(text) + "\n\n" + input
 	}
 	return strings.TrimSpace(text)
+}
+
+// positionalIndices returns the distinct positional argument numbers ($1, $2,
+// ...) referenced in text, sorted descending so callers can substitute longer
+// tokens before their prefixes.
+func positionalIndices(text string) []int {
+	matches := positionalArgRe.FindAllStringSubmatch(text, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	seen := make(map[int]bool, len(matches))
+	for _, m := range matches {
+		n, err := strconv.Atoi(m[1])
+		if err == nil {
+			seen[n] = true
+		}
+	}
+	out := make([]int, 0, len(seen))
+	for n := range seen {
+		out = append(out, n)
+	}
+	sort.Sort(sort.Reverse(sort.IntSlice(out)))
+	return out
+}
+
+// SubstituteShell replaces Claude Code-style inline shell substitutions of the
+// form !`command` with the command's output, using run to execute each
+// command. A nil run leaves the text unchanged; a failing command is replaced
+// with a short inline error marker so the prompt stays readable.
+func SubstituteShell(text string, run func(command string) (string, error)) string {
+	if run == nil {
+		return text
+	}
+	return shellSubRe.ReplaceAllStringFunc(text, func(match string) string {
+		sub := shellSubRe.FindStringSubmatch(match)
+		command := strings.TrimSpace(sub[1])
+		if command == "" {
+			return match
+		}
+		out, err := run(command)
+		if err != nil {
+			return fmt.Sprintf("[command failed: %v]", err)
+		}
+		return strings.TrimRight(out, "\n")
+	})
 }
 
 // Manager discovers prompt templates from global, project, and package paths.

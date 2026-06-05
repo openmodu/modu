@@ -1475,7 +1475,14 @@ func (b *bubbleTUI) sessionSlashCommands() []slashCommandDef {
 		out = append(out, slashCommandDef{Name: "/" + s.Name, Description: s.Description})
 	}
 	for _, p := range prompts {
-		out = append(out, slashCommandDef{Name: "/" + p.Name, Description: p.Description})
+		desc := p.Description
+		if p.ArgumentHint != "" {
+			if desc != "" {
+				desc += " "
+			}
+			desc += "(" + p.ArgumentHint + ")"
+		}
+		out = append(out, slashCommandDef{Name: "/" + p.Name, Description: desc})
 	}
 	return out
 }

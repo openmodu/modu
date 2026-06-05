@@ -293,6 +293,46 @@ func TestSessionShutdownFlushesActiveTurnAccounting(t *testing.T) {
 	}
 }
 
+func TestSubagentChildUsageCountsTowardGoalBudget(t *testing.T) {
+	ext, api := initialized(t)
+	if err := api.runCommand(t, "goal", "build feature"); err != nil {
+		t.Fatalf("/goal: %v", err)
+	}
+	// agent_start begins per-turn accounting against the active goal.
+	api.fire(string(types.EventTypeAgentStart))
+	before, _ := ext.store.Current()
+
+	// Host reports a subagent child's transcript with token usage.
+	api.fireEvent(types.Event{
+		Type: types.EventType(extensionSubagentChildUsage),
+		Messages: []types.AgentMessage{
+			&types.AssistantMessage{Usage: types.AgentUsage{Input: 300, Output: 200, TotalTokens: 500}},
+		},
+	})
+	// The turn ends with no main-agent usage of its own.
+	api.fireAgentEnd()
+
+	after, _ := ext.store.Current()
+	if got := after.TokensUsed - before.TokensUsed; got != 500 {
+		t.Fatalf("expected subagent usage (500 tokens) folded into goal budget, got delta %d", got)
+	}
+}
+
+func TestSubagentChildUsageIgnoredWithoutActiveGoal(t *testing.T) {
+	ext, api := initialized(t)
+	// No goal set: a child-usage event must not panic or fabricate a goal.
+	api.fireEvent(types.Event{
+		Type: types.EventType(extensionSubagentChildUsage),
+		Messages: []types.AgentMessage{
+			&types.AssistantMessage{Usage: types.AgentUsage{Input: 10, Output: 10}},
+		},
+	})
+	api.fireAgentEnd()
+	if _, ok := ext.store.Current(); ok {
+		t.Fatal("no goal should exist after a child-usage event with no active goal")
+	}
+}
+
 func TestCancelStopsLoopPermanently(t *testing.T) {
 	_, api := initialized(t)
 	api.runCommand(t, "goal", "noop")

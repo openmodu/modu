@@ -100,6 +100,36 @@ enough to implement, verify, and commit independently.
 - `/config` Provider now uses the same searchable selector pattern as model
   selection, opens an existing, preset, or custom OpenAI-compatible provider
   settings form, and discovers model entries from `<baseUrl>/models` after save.
+- Prompt-template slash commands now match Claude Code custom-command argument
+  syntax: `$ARGUMENTS` (all args), positional `$1`/`$2`/... (whitespace-split,
+  multi-digit safe), and inline ``!`command` `` shell substitution that runs in
+  the session cwd and injects the output into the prompt; legacy
+  `{{input}}`/`{{args}}` still work. The `/` picker shows a template's
+  `argument-hint` frontmatter next to its description.
+- Subagent token spend now counts toward the active `/goal` budget. When a
+  ForkSession child finishes (single, worktree, or background), the host emits
+  a `subagent_child_usage` event carrying the child transcript; the goal
+  extension folds that token usage into the current turn's accounting so a
+  goal's budget no longer undercounts what its subagents consumed. The same
+  host signal unlocks post-hoc per-child token totals for subagent control
+  (see subagent `PARITY.md` section G).
+- Background subagent children now stream their live activity up to extensions
+  (subagent control parity, G group). The host subscribes to a background
+  child's agent events and re-emits `turn_end`/`tool_execution_end`/`agent_end`
+  as `subagent_child_event` tagged with the child `TaskID`
+  (`types.Event.TaskID`, original type in `Reason`, `IsError` + per-turn usage
+  preserved). The subagent extension tallies per-task turns / failed tools /
+  tokens in a `childActivityRegistry` and shows them as an `activity:` line in
+  `subagent action=status id=<taskID>`.
+- Subagent control activity-counter thresholds are now wired end to end for
+  batch async runs (`activeNoticeAfterTurns`, `activeNoticeAfterTokens`,
+  `failedToolAttemptsBeforeAttention`). `ForkOptions.BubbleTaskID` carries the
+  batch id into every child fork (sync or background), so the host bubbles all
+  of a batch's children under one id; a per-batch `controlCounterRegistry`
+  (registered in `dispatchBatchAsync`) latches each threshold once and
+  delivers an `active_long_running` / `needs_attention` notice through the
+  existing `notifyOn` / `notifyChannels` routing. Single-mode background runs
+  still lack a `control` entry point (see subagent `PARITY.md`).
 
 ## Next
 
@@ -181,3 +211,26 @@ enough to implement, verify, and commit independently.
 - 2026-05-31: `env GOCACHE=/private/tmp/modu-go-build go test ./cmd/modu_code/internal/provider ./cmd/modu_code ./pkg/tui`
   passed for the searchable `/config` provider selector and OpenAI-compatible
   model discovery.
+- 2026-06-05: `env GOCACHE=/private/tmp/modu-go-build go test ./cmd/modu_code ./pkg/coding_agent ./pkg/coding_agent/plugins/prompts ./pkg/tui ./pkg/slash`
+  passed for Claude Code-style prompt-template argument substitution
+  (`$ARGUMENTS`, positional `$N`), inline ``!`command` `` shell substitution, and
+  `argument-hint` surfacing in the slash picker.
+- 2026-06-05: `env GOCACHE=/private/tmp/modu-go-build go test -count=1 ./cmd/modu_code ./pkg/coding_agent ./pkg/coding_agent/plugins/extension/goal ./pkg/coding_agent/plugins/extension/subagent ./pkg/tui`
+  plus `go test -race` on the new tests passed for the `subagent_child_usage`
+  host event and goal-budget folding (`TestSubagentForkEmitsChildUsage`,
+  `TestSubagentChildUsageCountsTowardGoalBudget`,
+  `TestSubagentChildUsageIgnoredWithoutActiveGoal`).
+- 2026-06-05: `env GOCACHE=/private/tmp/modu-go-build go test -count=1 ./pkg/agent ./pkg/coding_agent ./pkg/coding_agent/plugins/subagent ./pkg/coding_agent/plugins/extension/subagent ./pkg/coding_agent/plugins/extension/goal ./cmd/modu_code`
+  plus `go test -race` passed for bubbling background subagent child events
+  (`subagent_child_event` + `types.Event.TaskID` + `RunWithMessagesObserved`)
+  and the child-activity tally (`TestSubagentBackgroundBubblesChildEvents`,
+  `TestChildActivityRegistryTallies`,
+  `TestChildActivityRegistryIsolatesTasksAndIgnoresUntagged`).
+- 2026-06-05: `env GOCACHE=/private/tmp/modu-go-build go test -count=1` (+ `-race`)
+  over the same packages passed for wiring activity-counter control thresholds:
+  `ForkOptions.BubbleTaskID` batch→child id mapping and the per-batch
+  `controlCounterRegistry` (`TestBatchAsyncTagsChildrenWithBatchID`,
+  `TestBatchAsyncBubblesChildEventsUnderBatchID`,
+  `TestControlCounterFailedToolThresholdFiresOnce`,
+  `TestControlCounterTurnsAndTokens`, `TestControlCounterRespectsNotifyOn`,
+  `TestControlCounterUnregisterStopsNotices`).

@@ -160,14 +160,49 @@ func contentString(content any) string {
 	}
 }
 
+// extractJSONObject returns the first complete, brace-balanced JSON object in
+// text. Grader models sometimes wrap the verdict in prose or a ```json fence,
+// and reasoning models occasionally emit the same object twice; a naive
+// first-{-to-last-} span would then include the gap between two objects and fail
+// to parse. Scanning for the first balanced object (while respecting string
+// literals and escapes) returns just the leading verdict. Falls back to the
+// trimmed text when no balanced object is present.
 func extractJSONObject(text string) string {
 	text = strings.TrimSpace(text)
 	start := strings.Index(text, "{")
-	end := strings.LastIndex(text, "}")
-	if start < 0 || end < start {
+	if start < 0 {
 		return text
 	}
-	return text[start : end+1]
+
+	depth := 0
+	inString := false
+	escaped := false
+	for i := start; i < len(text); i++ {
+		c := text[i]
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case c == '\\':
+				escaped = true
+			case c == '"':
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return text[start : i+1]
+			}
+		}
+	}
+	return text
 }
 
 // stripThinkBlocks removes reasoning-model <think>...</think> spans so the JSON

@@ -13,11 +13,12 @@ import (
 )
 
 const (
-	goalUsage             = "Usage: /goal <objective>"
-	extensionSessionStart = "session_start"
-	extensionUIReady      = "ui_ready"
-	extensionShutdown     = "session_shutdown"
-	goalContinuationType  = "pi-goal-continuation"
+	goalUsage                   = "Usage: /goal <objective>"
+	extensionSessionStart       = "session_start"
+	extensionUIReady            = "ui_ready"
+	extensionShutdown           = "session_shutdown"
+	extensionSubagentChildUsage = "subagent_child_usage"
+	goalContinuationType        = "pi-goal-continuation"
 	goalBudgetLimitType   = "pi-goal-budget-limit"
 	replaceGoalChoice     = "Replace current goal"
 	cancelReplaceChoice   = "Cancel"
@@ -38,6 +39,11 @@ type Extension struct {
 	agentTurnInProgress     bool
 	completedThisTurnGoalID string
 	lastSessionStartReason  string
+	// pendingChildUsage accumulates token usage reported by subagent
+	// (ForkSession) children during the current agent turn. It is folded
+	// into the turn's own usage at agent_end so a goal's budget reflects
+	// what its subagents spent, not just the main agent. Reset when taken.
+	pendingChildUsage types.AgentUsage
 	// watching toggles whether the host UI should render the goal
 	// indicator (e.g. statusbar line). Off by default; controlled via
 	// /goal-watch [on|off]. Not persisted — every session starts hidden so
@@ -162,6 +168,7 @@ func (e *Extension) Init(api extension.ExtensionAPI) error {
 
 	api.On(string(types.EventTypeAgentStart), e.onAgentStart)
 	api.On(string(types.EventTypeAgentEnd), e.onAgentEnd)
+	api.On(extensionSubagentChildUsage, e.onSubagentChildUsage)
 	api.On(extensionSessionStart, e.onSessionStart)
 	api.On(extensionUIReady, e.onUIReady)
 	api.On(extensionShutdown, e.onSessionShutdown)
@@ -376,9 +383,33 @@ func (e *Extension) onSessionShutdown(_ types.Event) {
 	e.clearAgentGoalAccounting()
 }
 
+// onSubagentChildUsage folds a subagent child's token usage into the
+// current turn's pending accounting. The host emits this event (carrying
+// the child's transcript) when a ForkSession child finishes; without it the
+// goal budget would ignore everything subagents spent.
+func (e *Extension) onSubagentChildUsage(event types.Event) {
+	usage := collectUsage(event.Messages)
+	if usage == (types.AgentUsage{}) {
+		return
+	}
+	e.mu.Lock()
+	e.pendingChildUsage = addUsage(e.pendingChildUsage, usage)
+	e.mu.Unlock()
+}
+
+// takePendingChildUsage returns and clears the accumulated subagent usage.
+func (e *Extension) takePendingChildUsage() types.AgentUsage {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	u := e.pendingChildUsage
+	e.pendingChildUsage = types.AgentUsage{}
+	return u
+}
+
 func (e *Extension) onAgentEnd(event types.Event) {
 	includeComplete := e.completedGoalThisTurn() != ""
-	g, ok := e.accountCurrentAgentTurn(collectUsage(event.Messages), includeComplete)
+	usage := addUsage(collectUsage(event.Messages), e.takePendingChildUsage())
+	g, ok := e.accountCurrentAgentTurn(usage, includeComplete)
 
 	e.mu.Lock()
 	e.agentTurnInProgress = false
@@ -546,6 +577,22 @@ func (e *Extension) accountCurrentAgentTurn(usage types.AgentUsage, includeCompl
 		e.clearAgentGoalAccounting()
 	}
 	return g, ok
+}
+
+// addUsage returns the field-wise sum of two usage records, including the
+// cost breakdown. Used to merge subagent child usage into a turn's usage.
+func addUsage(a, b types.AgentUsage) types.AgentUsage {
+	a.Input += b.Input
+	a.Output += b.Output
+	a.CacheRead += b.CacheRead
+	a.CacheWrite += b.CacheWrite
+	a.TotalTokens += b.TotalTokens
+	a.Cost.Input += b.Cost.Input
+	a.Cost.Output += b.Cost.Output
+	a.Cost.CacheRead += b.Cost.CacheRead
+	a.Cost.CacheWrite += b.Cost.CacheWrite
+	a.Cost.Total += b.Cost.Total
+	return a
 }
 
 func collectUsage(messages []types.AgentMessage) types.AgentUsage {

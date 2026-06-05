@@ -20,6 +20,7 @@ package subagent
 import (
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
 	csubagent "github.com/openmodu/modu/pkg/coding_agent/plugins/subagent"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // Extension implements extension.Extension and extension.ConfigurableExtension.
@@ -36,6 +37,14 @@ type Extension struct {
 	// driving as a single background batch. The host's task list only sees
 	// per-child ForkSession calls, so the batch layer needs its own pool.
 	batchTasks *batchTaskRegistry
+	// childActivity tallies live per-task progress (turns, failed tools,
+	// tokens) of background subagent children from the host's re-emitted
+	// "subagent_child_event" events.
+	childActivity *childActivityRegistry
+	// controlCounters maps a batch's activity-counter control thresholds to
+	// the live childActivity tally so a batch can be notified mid-run when its
+	// children cross a turn / token / failed-tool threshold.
+	controlCounters *controlCounterRegistry
 }
 
 // New constructs a subagent extension with default configuration.
@@ -66,6 +75,9 @@ func (e *Extension) Init(api extension.ExtensionAPI) error {
 	}
 	e.staleTaskIDs = reconcileStaleTasks(api)
 	e.batchTasks = newBatchTaskRegistry()
+	e.childActivity = newChildActivityRegistry()
+	e.controlCounters = newControlCounterRegistry()
+	api.On("subagent_child_event", e.onChildEvent)
 	api.RegisterCommand("run", "Run one subagent: /run <agent> [task]", e.cmdRun)
 	api.RegisterCommand("parallel", "Run subagents in parallel: /parallel <agent> <task> -> <agent> <task>", e.cmdParallel)
 	api.RegisterCommand("chain", "Run subagents in sequence: /chain <agent> <task> -> <agent> <task>", e.cmdChain)
@@ -121,6 +133,16 @@ func (e *Extension) RuntimeState() any {
 	}
 	state.Count = len(state.Agents)
 	return state
+}
+
+// onChildEvent folds a host-bubbled child event into the per-task activity
+// tally, then checks whether that task crossed any registered control
+// counter threshold (turns / tokens / failed tools).
+func (e *Extension) onChildEvent(ev types.Event) {
+	e.childActivity.handle(ev)
+	if a, ok := e.childActivity.get(ev.TaskID); ok {
+		e.controlCounters.check(e, ev.TaskID, a)
+	}
 }
 
 // init registers the subagent extension as a builtin so anonymous-importing

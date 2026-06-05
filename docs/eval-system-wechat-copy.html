@@ -1,0 +1,529 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>公众号复制版：我是怎么给 Agent 搭建 Eval 评测体系的</title>
+  <style>
+    body {
+      margin: 0;
+      background: #f3f6f8;
+      color: #1f2933;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.8;
+    }
+    .toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      justify-content: center;
+      padding: 14px;
+      border-bottom: 1px solid #d8e0ea;
+      background: rgba(255,255,255,.96);
+    }
+    button {
+      border: 0;
+      border-radius: 6px;
+      background: #0f766e;
+      color: #fff;
+      padding: 10px 16px;
+      font-size: 15px;
+      cursor: pointer;
+    }
+    .status {
+      color: #526173;
+      font-size: 14px;
+    }
+    .wrap {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 28px 18px 56px;
+      background: #fff;
+    }
+    #wechat-article {
+      outline: none;
+    }
+    #wechat-article h1 {
+      margin: 0 0 22px;
+      color: #111827;
+      font-size: 28px;
+      line-height: 1.35;
+      font-weight: 700;
+    }
+    #wechat-article h2 {
+      margin: 36px 0 14px;
+      padding-left: 12px;
+      border-left: 4px solid #0f766e;
+      color: #111827;
+      font-size: 22px;
+      line-height: 1.4;
+      font-weight: 700;
+    }
+    #wechat-article h3 {
+      margin: 26px 0 10px;
+      color: #1f2937;
+      font-size: 18px;
+      line-height: 1.45;
+      font-weight: 700;
+    }
+    #wechat-article p {
+      margin: 14px 0;
+      color: #263445;
+      font-size: 16px;
+      line-height: 1.82;
+    }
+    #wechat-article ul,
+    #wechat-article ol {
+      margin: 14px 0;
+      padding-left: 24px;
+      color: #263445;
+      font-size: 16px;
+      line-height: 1.8;
+    }
+    #wechat-article li {
+      margin: 6px 0;
+    }
+    #wechat-article code {
+      padding: 2px 5px;
+      border-radius: 4px;
+      background: #eef2f7;
+      color: #243244;
+      font-family: Menlo, Consolas, monospace;
+      font-size: 14px;
+    }
+    #wechat-article a {
+      color: #0f766e;
+      text-decoration: underline;
+    }
+    #wechat-article pre {
+      margin: 16px 0;
+      padding: 14px 16px;
+      overflow: auto;
+      border-radius: 6px;
+      background: #f6f8fa;
+      color: #1f2937;
+      font-family: Menlo, Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.65;
+      white-space: pre;
+    }
+    #wechat-article pre code {
+      padding: 0;
+      background: transparent;
+      color: inherit;
+      font-size: inherit;
+    }
+    .lead {
+      margin: 18px 0 24px !important;
+      padding: 14px 16px;
+      border-left: 4px solid #0f766e;
+      background: #e8f5f2;
+      color: #115e59 !important;
+    }
+    .note {
+      margin: 18px 0;
+      padding: 14px 16px;
+      border: 1px solid #d8e0ea;
+      border-radius: 6px;
+      background: #f8fafc;
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <button id="copyBtn">复制公众号富文本正文</button>
+    <button id="selectBtn" style="background:#344054;">选中内联样式正文</button>
+    <span class="status" id="status">复制后到公众号草稿编辑器里粘贴即可</span>
+  </div>
+  <main class="wrap">
+    <article id="wechat-article">
+      <h1>我是怎么给 Agent 搭建 Eval 评测体系的</h1>
+      <p class="lead">Agent 的质量很难靠感觉维护。我的做法是把关键能力拆成可运行的 Eval：能确定的用程序断言，语义质量交给 grader LLM，所有结果落到 JSONL，再由 CLI 做查看、汇总和通过率门禁。项目地址：<a href="https://github.com/openmodu/modu" target="_blank" rel="noreferrer">openmodu/modu</a>。</p>
+
+      <h2>问题不是“模型聪不聪明”，而是“行为能不能回归”</h2>
+      <p>做 Agent 之后，很快会遇到一个工程问题：改了 prompt、工具、上下文压缩、provider 适配之后，怎么判断系统有没有退化？</p>
+      <p>普通单元测试能覆盖确定性代码，但覆盖不了模型行为。人工试几轮又太主观，而且很难留下可比较的记录。我的目标不是做一个排行榜，而是给每次 Agent 迭代建立行为验收边界。</p>
+      <p>所以这套 Eval 体系有三个基本要求：</p>
+      <ul>
+        <li>必须能像普通测试一样被组织、选择和编译。</li>
+        <li>必须能检查真实行为，比如 tool call、文件写入、<code>go test</code> 结果。</li>
+        <li>必须能记录每条 rubric 的输出、理由、分数和 pass/fail，便于追踪。</li>
+      </ul>
+
+      <h2>整体架构：Go test 是执行器，JSONL 是事实表</h2>
+      <p>Eval 用例仍然是 Go 测试，放在被评估包旁边：</p>
+      <pre><code>pkg/evals/                         # 通用评测框架
+pkg/agent/agent_eval_test.go       # Agent 基础行为
+pkg/agent/tool_eval_test.go        # Agent 工具调用行为
+pkg/coding_agent/coding_eval_test.go
+cmd/modu_eval/                     # 运行、查看、CI 汇总</code></pre>
+      <p>运行链路是这样的：</p>
+      <ol>
+        <li>测试调用 <code>evals.Run(t, name, func(e *EvalT){...})</code>，内部拿到模型 provider、model、grader。</li>
+        <li>用例驱动真实 <code>agent.Agent</code> 或 <code>coding_agent.CodingSession</code>，产生消息、工具调用和文件副作用。</li>
+        <li>确定性行为用 Go 断言；语义质量调用 grader LLM，要求返回结构化 JSON。</li>
+        <li>每条判断都通过 <code>RecordScore</code> 追加到模块根目录的 <code>evals.jsonl</code>。</li>
+        <li><code>cmd/modu_eval</code> 负责运行测试、打开 TUI、输出 CI summary、按 pass rate 做门禁。</li>
+      </ol>
+
+      <h2>evals.Run：把 Go test 变成多模型评测器</h2>
+      <p>核心入口在 <code>pkg/evals/evals.go</code>。它没有重新发明测试框架，而是在 Go test 上面加了一层模型注入和运行次数控制。</p>
+      <pre><code>type EvalT struct {
+    *testing.T
+    *Eval
+}
+
+type Eval struct {
+    Provider     providers.Provider
+    Model        *types.Model
+    Grader       providers.Provider
+    GraderModel  *types.Model
+    ProviderSpec ProviderSpec
+    GraderSpec   ProviderSpec
+
+    runNumber int
+}</code></pre>
+      <p><code>EvalT</code> 同时持有 <code>testing.T</code> 和当前评测上下文，所以 Eval 用例里既能 <code>e.Fatalf</code>，也能访问 <code>e.Provider</code>、<code>e.Model</code>、<code>e.Grader</code>。</p>
+      <pre><code>func Run(t *testing.T, name string, f func(e *EvalT)) {
+    numEvals := NumEvalsOrSkip(t)
+    specs := providerSpecsFromEnv()
+
+    for _, spec := range specs {
+        eval, _ := NewEval(spec)
+        testName := fmt.Sprintf("[%s/%s] %s", spec.ProviderID, spec.ModelID, name)
+        t.Run(testName, func(t *testing.T) {
+            e := &EvalT{T: t, Eval: eval}
+            for i := 0; i &lt; numEvals; i++ {
+                e.runNumber = i
+                f(e)
+            }
+        })
+    }
+}</code></pre>
+      <p>这里有几个关键点：<code>GOEVALS</code> 控制是否运行和重复次数；<code>EVAL_PROVIDER</code> 支持逗号分隔；子测试名包含 provider/model；<code>runNumber</code> 会记录到结果里，用来分析稳定性。</p>
+
+      <h2>ProviderSpec：统一走 OpenAI-compatible 接口</h2>
+      <p>Provider 注入在 <code>pkg/evals/provider.go</code>。我没有为每个模型厂商写一套 Eval 逻辑，而是把评测 provider 收敛成一个 <code>ProviderSpec</code>：</p>
+      <pre><code>type ProviderSpec struct {
+    ProviderID string
+    BaseURL    string
+    APIKey     string
+    ModelID    string
+}</code></pre>
+      <p><code>NewProvider</code> 统一创建 OpenAI-compatible provider：</p>
+      <pre><code>return openai.New(
+    spec.ProviderID,
+    openai.WithBaseURL(spec.BaseURL),
+    openai.WithAPIKey(spec.APIKey),
+), nil</code></pre>
+      <p>grader 也独立配置。如果没有设置 <code>GRADER_*</code>，grader 会复用被测模型。这样本地评测可以全用 LM Studio，严肃评测可以用更强模型做 grader。</p>
+
+      <h2>为什么不全靠 LLM 评分</h2>
+      <p>这套体系里有一个很重要的分层：确定性判断和语义判断分开。</p>
+      <pre><code>evals.ContainsT(e, "26", output)
+evals.NotContainsT(e, "a - b", src)
+evals.ToolCalledT(e, messages, "get_weather")
+evals.AssertT(e, "go test ./... passes", out, passed)</code></pre>
+      <p>这些断言不会调用 grader LLM，但仍然会写入 <code>evals.jsonl</code>。真正需要语义理解的部分才走 <code>LLMRubricT</code>：</p>
+      <pre><code>evals.LLMRubricT(e,
+    "回答转述了工具返回的天气（26度、晴），没有编造其他天气数据",
+    output,
+)</code></pre>
+
+      <h2>LLMRubric：让 grader 只返回 JSON</h2>
+      <p><code>pkg/evals/graders.go</code> 里，grader prompt 被限制成只返回一个 JSON 对象：</p>
+      <pre><code>{"reasoning":"short explanation","score":0.0,"pass":false}</code></pre>
+      <p>判分过程有几个工程细节：</p>
+      <ul>
+        <li>每次 grader 调用有 <code>60s</code> timeout，避免卡死整轮测试。</li>
+        <li>provider 或 JSON parse 失败最多重试 <code>3</code> 次。</li>
+        <li>temperature 固定为 <code>0.0</code>，减少评分漂移。</li>
+        <li><code>MaxTokens</code> 给到 <code>4096</code>，避免 reasoning 模型还没吐出 JSON 就被截断。</li>
+        <li>会剥离某些 reasoning 模型输出里的 <code>&lt;think&gt;...&lt;/think&gt;</code>。</li>
+        <li>通过 <code>extractJSONObject</code> 从响应中截取第一个 JSON 对象，降低格式污染带来的失败率。</li>
+      </ul>
+      <p>最终通过条件不是只看 grader 的 <code>pass=true</code>，还要分数达到统一阈值：</p>
+      <pre><code>verdict := result.Pass &amp;&amp; result.Score &gt;= passScoreThreshold</code></pre>
+
+      <h2>RecordScore：JSONL 是评测事实来源</h2>
+      <p>每条断言或 rubric 都会写一行 JSONL。结构在 <code>pkg/evals/record.go</code>：</p>
+      <pre><code>type EvalLogLine struct {
+    Name      string  `json:"name"`
+    Timestamp string  `json:"timestamp"`
+    RunNumber int     `json:"run_number"`
+    Provider  string  `json:"provider"`
+    Model     string  `json:"model"`
+    Grader    string  `json:"grader"`
+    Rubric    string  `json:"rubric"`
+    Output    string  `json:"output"`
+    Reasoning string  `json:"reasoning"`
+    Score     float64 `json:"score"`
+    Pass      bool    `json:"pass"`
+}</code></pre>
+      <p>写文件时先把整行 marshal 成一个 buffer，再用 <code>O_APPEND</code> 打开文件并一次 <code>Write</code>。原因是 <code>go test</code> 跑多个 package 时是多个进程。小 JSONL 行一次 append write，在常见文件系统上可以避免行被交叉写坏。</p>
+
+      <h2>modu_eval：运行、查看和 CI 门禁</h2>
+      <p><code>cmd/modu_eval</code> 是这套 Eval 的外壳。它没有替代 Go test，而是包了一层命令体验。</p>
+      <pre><code>cmdArgs := append([]string{"test"}, args...)
+cmd := exec.Command("go", cmdArgs...)
+cmd.Env = append(os.Environ(), "GOEVALS=1")</code></pre>
+      <p><code>check</code> 支持 <code>--min-pass-rate</code>，实现上是按测试名聚合 JSONL 里的 pass/total。概率性 Eval 可以多跑几次，用通过率做门禁，而不是被单次随机性绑架。</p>
+
+      <h2>Agent Eval：不是看回答，而是看消息和 tool call</h2>
+      <p><code>pkg/agent</code> 的 Eval 直接驱动 <code>agent.NewAgent</code>。工具类 Eval 会注册一个 deterministic tool。这个工具返回固定结果，并记录调用参数：</p>
+      <pre><code>type recordingTool struct {
+    name   string
+    result string
+    calls  []map[string]any
+}
+
+func (t *recordingTool) Execute(..., args map[string]any, ...) (types.ToolResult, error) {
+    t.calls = append(t.calls, args)
+    return types.ToolResult{
+        Content: []types.ContentBlock{&amp;types.TextContent{Text: t.result}},
+    }, nil
+}</code></pre>
+      <p>所以天气 Eval 不只是看回答里有没有天气，还会检查模型是否真的调用了 <code>get_weather</code>、工具参数里是否有 city、最终回答是否包含工具返回值，以及它有没有编造其他天气数据。</p>
+
+      <h2>Coding Agent Eval：在临时项目里检查真实副作用</h2>
+      <p><code>pkg/coding_agent</code> 的 Eval 会创建临时目录，启动真实 <code>CodingSession</code>：</p>
+      <pre><code>sess, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+    Cwd:       dir,
+    AgentDir:  filepath.Join(dir, ".coding_agent"),
+    Model:     e.Model,
+    GetAPIKey: func(string) (string, error) { return "", nil },
+})</code></pre>
+      <p>几个辅助函数构成了 Coding Eval 的基本验收能力：</p>
+      <pre><code>func assertGoFileParses(e *evals.EvalT, path string) string {
+    data, _ := os.ReadFile(path)
+    _, err := parser.ParseFile(token.NewFileSet(), path, data, parser.AllErrors)
+    if err != nil {
+        e.Fatalf("%s is not valid Go", filepath.Base(path))
+    }
+    return string(data)
+}
+
+func runGoTest(dir string) (string, bool) {
+    cmd := exec.CommandContext(ctx, "go", "test", "./...")
+    cmd.Dir = dir
+    out, err := cmd.CombinedOutput()
+    return string(out), err == nil
+}</code></pre>
+      <p>这意味着 Coding Eval 的通过标准不是“模型说它已经完成”，而是文件真的出现在磁盘上、Go 代码真的能 parse、测试真的能通过。</p>
+
+      <h2>隐藏测试：防止模型只满足提示里的样例</h2>
+      <p>Coding Agent 很容易写出“看起来对”的代码。为了避免模型只过拟合显式样例，我在一些 Eval 里采用隐藏测试。</p>
+      <ol>
+        <li>临时项目里只放任务描述或公开测试。</li>
+        <li>让 Agent 实现功能。</li>
+        <li>评测代码在 Agent 完成后写入隐藏测试文件。</li>
+        <li>由评测自己运行 <code>go test ./...</code>。</li>
+      </ol>
+      <pre><code>const hiddenSlugTestSource = `package slug
+
+func TestSlugifyHiddenCases(t *testing.T) {
+    cases := map[string]string{
+        "Hello, World!": "hello-world",
+        "Multiple   Spaces": "multiple-spaces",
+        "Already--Slug": "already-slug",
+        "Trim Me ": "trim-me",
+    }
+    ...
+}`</code></pre>
+
+      <h2>把项目工程约束也变成 Eval</h2>
+      <h3>1. 保护无关文件</h3>
+      <p>我会在临时项目里放一个 <code>notes.txt</code> 哨兵文件，任务只要求修 <code>add.go</code>。完成后 Eval 断言：</p>
+      <pre><code>data, _ := os.ReadFile(filepath.Join(dir, "notes.txt"))
+evals.AssertT(e, "unrelated notes.txt is unchanged", string(data), string(data) == sentinel)</code></pre>
+
+      <h3>2. 新功能必须补测试</h3>
+      <p><code>Slugify</code> Eval 不只要求实现 <code>slug.go</code>，还要求创建 <code>slug_test.go</code>。评测会 parse 测试文件并检查包含 <code>TestSlugify</code>。</p>
+
+      <h3>3. pkg 公共包变更同步 README</h3>
+      <p>另一个 Eval 在临时项目里创建 <code>pkg/mathutil</code>，要求实现 <code>Clamp</code> 并更新 <code>pkg/mathutil/README.md</code>。验收同时检查 README 和隐藏测试。</p>
+
+      <h2>这套体系目前覆盖了什么</h2>
+      <p><code>pkg/agent</code> 侧主要覆盖中文事实回答、多轮上下文记忆、结构化 JSON 输出、按需调用工具、避免无谓工具调用、多步工具链和工具错误处理。</p>
+      <p><code>pkg/coding_agent</code> 侧主要覆盖创建 Go 文件和函数、根据测试实现代码、修复 bug、重构并保持测试通过、读取代码后回答事实问题、跨文件协调修改、TDD red-to-green、保护无关文件、新增实现时同步补测试，以及 <code>pkg</code> 公共包变更同步 README。</p>
+
+      <h2>我的几个实现原则</h2>
+      <div class="note">
+        <ul>
+          <li><strong>Go test 做宿主。</strong> 不另起一套测试协议，直接复用 <code>testing.T</code>、<code>t.Run</code>、临时目录和包选择能力。</li>
+          <li><strong>确定性优先。</strong> substring、regex、tool call、文件存在、<code>go test</code> 结果都由程序判断。</li>
+          <li><strong>Rubric 要窄。</strong> 每条 rubric 只判断一个语义点，失败时才知道具体退化在哪里。</li>
+          <li><strong>记录每个判断。</strong> 无论是确定性断言还是 LLM 判分，都写入统一 JSONL。</li>
+          <li><strong>真实副作用优先。</strong> Coding Agent 的 Eval 看磁盘、看 Go parser、看测试结果，不看模型自述。</li>
+          <li><strong>概率性用 pass rate。</strong> 多跑几次，用 <code>--min-pass-rate</code> 做门禁。</li>
+        </ul>
+      </div>
+
+      <h2>总结</h2>
+      <p>Agent Eval 的价值，不是证明某个模型很强，而是让系统迭代有回归边界。</p>
+      <p>这套实现最重要的地方在于：它没有把评测做成纯 prompt 工程，而是把模型行为接回了工程世界。工具有没有真的调、文件有没有真的改、测试有没有真的过、无关文件有没有被误伤，这些都能被程序检查。</p>
+      <p>当 Eval 能做到这一点，Agent 才不只是一个“看起来能用”的聊天系统，而是一个可以持续改、持续测、持续收敛的工程系统。</p>
+    </article>
+  </main>
+  <script>
+    const statusEl = document.getElementById('status');
+    const article = document.getElementById('wechat-article');
+
+    function plainTextFromArticle() {
+      return article.innerText.replace(/\n{3,}/g, '\n\n');
+    }
+
+    function escapeHTML(value) {
+      return value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function codeToWechatHTML(value) {
+      return escapeHTML(value)
+        .replace(/ /g, '&nbsp;')
+        .replace(/\t/g, '&nbsp;&nbsp;&nbsp;&nbsp;')
+        .replace(/\n/g, '<br>');
+    }
+
+    function inlineWechatStyles(root) {
+      root.querySelectorAll('h1').forEach(el => {
+        el.setAttribute('style', 'margin:0 0 22px;color:#111827;font-size:28px;line-height:1.35;font-weight:700;');
+      });
+      root.querySelectorAll('h2').forEach(el => {
+        el.setAttribute('style', 'margin:36px 0 14px;padding-left:12px;border-left:4px solid #0f766e;color:#111827;font-size:22px;line-height:1.4;font-weight:700;');
+      });
+      root.querySelectorAll('h3').forEach(el => {
+        el.setAttribute('style', 'margin:26px 0 10px;color:#1f2937;font-size:18px;line-height:1.45;font-weight:700;');
+      });
+      root.querySelectorAll('p').forEach(el => {
+        const leadStyle = el.classList.contains('lead')
+          ? 'margin:18px 0 24px;padding:14px 16px;border-left:4px solid #0f766e;background:#e8f5f2;color:#115e59;font-size:16px;line-height:1.82;'
+          : 'margin:14px 0;color:#263445;font-size:16px;line-height:1.82;';
+        el.setAttribute('style', leadStyle);
+      });
+      root.querySelectorAll('ul,ol').forEach(el => {
+        el.setAttribute('style', 'margin:14px 0;padding-left:24px;color:#263445;font-size:16px;line-height:1.8;');
+      });
+      root.querySelectorAll('li').forEach(el => {
+        el.setAttribute('style', 'margin:6px 0;');
+      });
+      root.querySelectorAll('code').forEach(el => {
+        el.setAttribute('style', 'padding:2px 5px;border-radius:4px;background:#eef2f7;color:#243244;font-family:Menlo,Consolas,monospace;font-size:14px;');
+      });
+      root.querySelectorAll('a').forEach(el => {
+        el.setAttribute('style', 'color:#0f766e;text-decoration:underline;');
+      });
+      root.querySelectorAll('.note').forEach(el => {
+        el.setAttribute('style', 'margin:18px 0;padding:14px 16px;border:1px solid #d8e0ea;border-radius:6px;background:#f8fafc;');
+      });
+      root.querySelectorAll('pre').forEach(pre => {
+        const code = pre.textContent.replace(/\n$/, '');
+        const block = document.createElement('section');
+        block.setAttribute('style', 'margin:16px 0;padding:14px 16px;border-radius:6px;background:#f6f8fa;border:1px solid #e5e7eb;overflow-x:auto;');
+
+        const inner = document.createElement('section');
+        inner.setAttribute('style', 'color:#1f2937;font-family:Menlo,Consolas,monospace;font-size:13px;line-height:1.65;letter-spacing:0;white-space:normal;word-break:normal;');
+        inner.innerHTML = codeToWechatHTML(code);
+        block.appendChild(inner);
+        pre.replaceWith(block);
+      });
+    }
+
+    function buildWechatHTML() {
+      const cloned = article.cloneNode(true);
+      inlineWechatStyles(cloned);
+      return '<meta charset="utf-8">' + cloned.innerHTML;
+    }
+
+    async function copyArticle() {
+      const html = buildWechatHTML();
+      const text = plainTextFromArticle();
+      try {
+        if (navigator.clipboard && window.ClipboardItem) {
+          await navigator.clipboard.write([
+            new ClipboardItem({
+              'text/html': new Blob([html], { type: 'text/html' }),
+              'text/plain': new Blob([text], { type: 'text/plain' })
+            })
+          ]);
+        } else {
+          copyViaSelection(html);
+        }
+        statusEl.textContent = '已复制。现在到公众号草稿编辑器粘贴。';
+      } catch (err) {
+        try {
+          copyViaSelection(html);
+          statusEl.textContent = '已复制。现在到公众号草稿编辑器粘贴。';
+        } catch (fallbackErr) {
+          statusEl.textContent = '自动复制失败：请点正文后 Cmd+A / Cmd+C 手动复制。';
+        }
+      }
+    }
+
+    function copyViaSelection(html) {
+      const holder = document.createElement('div');
+      holder.setAttribute('contenteditable', 'true');
+      holder.style.position = 'fixed';
+      holder.style.left = '-9999px';
+      holder.style.top = '0';
+      holder.innerHTML = html;
+      document.body.appendChild(holder);
+
+      try {
+        const range = document.createRange();
+        range.selectNodeContents(holder);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+        const ok = document.execCommand('copy');
+        selection.removeAllRanges();
+        if (!ok) {
+          throw new Error('execCommand copy returned false');
+        }
+      } finally {
+        holder.remove();
+      }
+    }
+
+    function selectInlineArticleForManualCopy() {
+      const html = buildWechatHTML();
+      const holder = document.createElement('div');
+      holder.id = 'manual-copy-holder';
+      holder.setAttribute('contenteditable', 'true');
+      holder.style.margin = '24px 0';
+      holder.style.padding = '18px';
+      holder.style.border = '2px solid #0f766e';
+      holder.style.borderRadius = '8px';
+      holder.style.background = '#fff';
+      holder.innerHTML = html;
+      article.parentNode.insertBefore(holder, article);
+
+      const range = document.createRange();
+      range.selectNodeContents(holder);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      statusEl.textContent = '已选中内联样式正文，请按 Cmd+C 复制，然后到公众号粘贴。';
+    }
+
+    function legacyCopyArticle() {
+          const range = document.createRange();
+          range.selectNodeContents(article);
+          const selection = window.getSelection();
+          selection.removeAllRanges();
+          selection.addRange(range);
+          document.execCommand('copy');
+          selection.removeAllRanges();
+    }
+
+    document.getElementById('copyBtn').addEventListener('click', copyArticle);
+    document.getElementById('selectBtn').addEventListener('click', selectInlineArticleForManualCopy);
+  </script>
+</body>
+</html>

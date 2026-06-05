@@ -37,6 +37,11 @@ type Event struct {
 	Partial    any
 	Parallel   bool
 
+	// TaskID names the background subagent task an event belongs to when the
+	// host re-emits a child agent's events to extensions. Empty for the main
+	// agent's own events.
+	TaskID string
+
 	StreamEvent *StreamEvent
 	Interrupt   *InterruptEvent
 }

@@ -163,19 +163,45 @@ honest stopping point for a pure-extension parity pass.
 `src/runs/shared/completion-guard.ts`, `src/runs/shared/subagent-control.ts`.
 
 Clock-based control fields (`activeNoticeAfterMs`, `needsAttentionAfterMs`)
-and routing fields (`notifyOn`, `notifyChannels`) are wired. What stays
-unimplemented:
+and routing fields (`notifyOn`, `notifyChannels`) are wired.
 
-- `activeNoticeAfterTurns` — needs the host to expose per-child
-  assistant-turn counts during a run.
-- `activeNoticeAfterTokens` — needs per-child token usage from the host.
-- `failedToolAttemptsBeforeAttention` — needs a tool-failure callback
-  from the child agent's runtime.
-- `notifyChannels: "async"` — needs the host's task record to carry a
+Host signals now available:
+
+1. Completion: when a `ForkSession` child finishes, the host emits a
+   `subagent_child_usage` event carrying the child's full transcript (each
+   assistant message keeps its `Usage`). The goal extension folds this into a
+   goal's budget.
+2. In-flight (background children): the host subscribes to a background
+   child's live agent events and re-emits the control-relevant ones
+   (`turn_end`, `tool_execution_end`, `agent_end`) as `subagent_child_event`,
+   tagged with the child's `TaskID` (original type in `Reason`, `IsError` and
+   per-turn `Usage` preserved). The subagent extension's `childActivityRegistry`
+   consumes these and tallies per-task turns, failed tools, and tokens; the
+   tally is surfaced in `subagent action=status id=<taskID>` as an
+   `activity:` line.
+
+Activity-counter thresholds are now wired end to end:
+
+- `activeNoticeAfterTurns` / `activeNoticeAfterTokens` /
+  `failedToolAttemptsBeforeAttention` fire for batch async runs. The id
+  routing is solved via `ForkOptions.BubbleTaskID`: `forkOptionsFor` sets it
+  to the batch id (`_batchTaskID`), so the host bubbles **every** child of a
+  batch — synchronous and background alike — under that single batch id. The
+  `childActivityRegistry` therefore aggregates turns / tokens / failed tools
+  across the batch's children, and `controlCounterRegistry` (registered per
+  batch in `dispatchBatchAsync`, unregistered on completion) latches each
+  threshold and delivers an `active_long_running` (turns/tokens) or
+  `needs_attention` (failed tools) notice once, honoring `notifyOn` /
+  `notifyChannels`.
+
+What stays unimplemented:
+
+- Counter thresholds on the **single-mode background** path (`/run --async`)
+  — there is no `control` entry point there yet; only batch async decodes
+  `control`. Single background children still bubble (under their own host
+  task id) and show an `activity:` line in status, but no threshold fires.
+- `notifyChannels: "async"` — still needs the host's task record to carry a
   notice slot the extension can append into.
-
-Each requires extending `pkg/coding_agent/extension.ExtensionAPI` (or the
-child agent's lifecycle hooks) with new signals.
 
 ### H (partial). Full publisher/subscriber intercom pipeline
 **Pi ref:** `src/intercom/*` (~750 LOC).

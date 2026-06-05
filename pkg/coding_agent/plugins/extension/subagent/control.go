@@ -211,6 +211,102 @@ func runControlTimer(ext *Extension, ctrl *controlOptions, stop <-chan struct{},
 	}
 }
 
+// controlCounterRegistry connects a batch's activity-counter control fields
+// (activeNoticeAfterTurns / activeNoticeAfterTokens /
+// failedToolAttemptsBeforeAttention) to the live per-task tallies fed by the
+// host's re-emitted child events. Each threshold fires its notice at most
+// once (latched). Safe for concurrent use: child events from a batch's
+// parallel children arrive on multiple goroutines.
+type controlCounterRegistry struct {
+	mu     sync.Mutex
+	byTask map[string]*controlCounterEntry
+}
+
+type controlCounterEntry struct {
+	ctrl             *controlOptions
+	mode             string
+	firedTurns       bool
+	firedTokens      bool
+	firedFailedTools bool
+}
+
+func newControlCounterRegistry() *controlCounterRegistry {
+	return &controlCounterRegistry{byTask: map[string]*controlCounterEntry{}}
+}
+
+// register records a batch's counter thresholds under its task id. It is a
+// no-op when no counter threshold is configured, so the common case (clock
+// timers only, or no control) carries no per-event work.
+func (r *controlCounterRegistry) register(taskID, mode string, ctrl *controlOptions) {
+	if r == nil || ctrl == nil || taskID == "" {
+		return
+	}
+	if ctrl.activeNoticeAfterTurns <= 0 && ctrl.activeNoticeAfterTokens <= 0 && ctrl.failedToolAttemptsBeforeAttention <= 0 {
+		return
+	}
+	r.mu.Lock()
+	r.byTask[taskID] = &controlCounterEntry{ctrl: ctrl, mode: mode}
+	r.mu.Unlock()
+}
+
+func (r *controlCounterRegistry) unregister(taskID string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	delete(r.byTask, taskID)
+	r.mu.Unlock()
+}
+
+// counterNotice is one threshold crossing ready to deliver.
+type counterNotice struct {
+	event string
+	text  string
+}
+
+// check evaluates a task's current aggregated activity against its
+// thresholds and delivers any newly-crossed notices. Notices are computed
+// under the lock (to latch atomically) but delivered outside it so api.Notify
+// never runs while the registry mutex is held.
+func (r *controlCounterRegistry) check(ext *Extension, taskID string, a childActivity) {
+	if r == nil || taskID == "" {
+		return
+	}
+	r.mu.Lock()
+	entry := r.byTask[taskID]
+	if entry == nil {
+		r.mu.Unlock()
+		return
+	}
+	ctrl := entry.ctrl
+	var pending []counterNotice
+	if ctrl.activeNoticeAfterTurns > 0 && !entry.firedTurns && a.Turns >= ctrl.activeNoticeAfterTurns {
+		entry.firedTurns = true
+		pending = append(pending, counterNotice{controlEventActiveLongRunning, fmt.Sprintf(
+			"Subagent batch task %s (%s mode) has run %d turns (≥ %d) — consider `subagent action=status id=%s` to check progress.",
+			taskID, entry.mode, a.Turns, ctrl.activeNoticeAfterTurns, taskID)})
+	}
+	if ctrl.activeNoticeAfterTokens > 0 && !entry.firedTokens && a.Tokens >= ctrl.activeNoticeAfterTokens {
+		entry.firedTokens = true
+		pending = append(pending, counterNotice{controlEventActiveLongRunning, fmt.Sprintf(
+			"Subagent batch task %s (%s mode) has used %d tokens (≥ %d) — consider `subagent action=status id=%s` to check progress.",
+			taskID, entry.mode, a.Tokens, ctrl.activeNoticeAfterTokens, taskID)})
+	}
+	if ctrl.failedToolAttemptsBeforeAttention > 0 && !entry.firedFailedTools && a.FailedTools >= ctrl.failedToolAttemptsBeforeAttention {
+		entry.firedFailedTools = true
+		pending = append(pending, counterNotice{controlEventNeedsAttention, fmt.Sprintf(
+			"Subagent batch task %s (%s mode) hit %d failed tool attempts (≥ %d) — inspect with `subagent action=status id=%s` or interrupt via `subagent action=interrupt id=%s`.",
+			taskID, entry.mode, a.FailedTools, ctrl.failedToolAttemptsBeforeAttention, taskID, taskID)})
+	}
+	r.mu.Unlock()
+
+	for _, n := range pending {
+		if ctrl.wantsEvent(n.event) {
+			deliverControlNotice(ext, ctrl, taskID, n.event, n.text)
+		}
+	}
+}
+
 func deliverControlNotice(ext *Extension, ctrl *controlOptions, taskID, eventName, text string) {
 	for _, ch := range ctrl.effectiveChannels() {
 		switch ch {

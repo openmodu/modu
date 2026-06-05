@@ -54,20 +54,25 @@ func (cs *engine) forkSession(ctx context.Context, opts extension.ForkOptions) (
 	}
 
 	if opts.Background {
-		return cs.forkInBackground(ctx, def, childCwd, initialMessages, opts.Task, opts.ParentTaskID, opts.OutputPath, opts.OutputMode, cs.resolveForkSessionDir(opts.SessionDir))
+		return cs.forkInBackground(ctx, def, childCwd, initialMessages, opts.Task, opts.ParentTaskID, opts.OutputPath, opts.OutputMode, cs.resolveForkSessionDir(opts.SessionDir), opts.BubbleTaskID)
 	}
 	cs.OnSubagentStart(def.Name, opts.Task, false)
+	// Synchronous children bubble their live events only when the caller
+	// asked for it via BubbleTaskID (batch dispatch does, so every child of a
+	// batch aggregates under the batch id). Plain sync children stay quiet.
+	observe := cs.childObserver(opts.BubbleTaskID)
 	var (
-		result string
+		result        string
+		childMessages []types.AgentMessage
 	)
 	if strings.EqualFold(opts.Isolation, "worktree") {
-		result, err = cs.forkInWorktree(ctx, def, initialMessages, opts.Task)
+		result, childMessages, err = cs.forkInWorktree(ctx, def, initialMessages, opts.Task, observe)
 	} else {
 		tools := cs.activeTools
 		if childCwd != cs.cwd {
 			tools = cs.rebindToolsToCwd(childCwd)
 		}
-		runResult, runErr := subagent.RunWithMessages(
+		runResult, runErr := subagent.RunWithMessagesObserved(
 			ctx,
 			subagent.WithWorkingDirectory(def, childCwd),
 			initialMessages,
@@ -76,11 +81,63 @@ func (cs *engine) forkSession(ctx context.Context, opts extension.ForkOptions) (
 			cs.model,
 			cs.getAPIKey,
 			cs.streamFn,
+			observe,
 		)
-		result, err = runResult.Text, runErr
+		result, childMessages, err = runResult.Text, runResult.Messages, runErr
 	}
 	cs.OnSubagentStop(def.Name, opts.Task, false, result, err)
+	cs.emitSubagentChildUsage(childMessages)
 	return result, err
+}
+
+// childObserver returns an event observer that re-emits a child's events
+// under bubbleID, or nil when there is nothing to bubble to. Used for both
+// synchronous and background children so the caller can share one code path.
+func (cs *engine) childObserver(bubbleID string) func(types.Event) {
+	if cs.extensions == nil || bubbleID == "" {
+		return nil
+	}
+	return func(ev types.Event) { cs.emitSubagentChildEvent(bubbleID, ev) }
+}
+
+// emitSubagentChildUsage broadcasts a child agent's token usage to
+// extensions via the shared event bus. The child transcript carries
+// per-assistant-message Usage, so consumers (e.g. the goal extension)
+// can fold subagent token spend into their own accounting instead of
+// silently undercounting it. No-op when there is nothing to report.
+func (cs *engine) emitSubagentChildUsage(messages []types.AgentMessage) {
+	if cs.extensions == nil || len(messages) == 0 {
+		return
+	}
+	cs.extensions.EmitEvent(types.Event{
+		Type:     types.EventType("subagent_child_usage"),
+		Messages: messages,
+	})
+}
+
+// emitSubagentChildEvent re-emits a background child agent's lifecycle events
+// to extensions, tagged with the child's task id, so an extension (e.g.
+// subagent control) can track a running child's turn count, failed-tool
+// count, and token usage in flight rather than only at completion. Only the
+// coarse lifecycle events useful for control are forwarded, to keep the bus
+// quiet. The original child event type travels in Reason.
+func (cs *engine) emitSubagentChildEvent(taskID string, ev types.Event) {
+	if cs.extensions == nil || taskID == "" {
+		return
+	}
+	switch ev.Type {
+	case types.EventTypeTurnEnd, types.EventTypeToolExecutionEnd, types.EventTypeAgentEnd:
+	default:
+		return
+	}
+	cs.extensions.EmitEvent(types.Event{
+		Type:     types.EventType("subagent_child_event"),
+		TaskID:   taskID,
+		Reason:   string(ev.Type),
+		ToolName: ev.ToolName,
+		IsError:  ev.IsError,
+		Message:  ev.Message, // carries per-turn Usage on turn_end
+	})
 }
 
 // forkInBackground launches the child on its own goroutine. Returns a
@@ -89,7 +146,7 @@ func (cs *engine) forkSession(ctx context.Context, opts extension.ForkOptions) (
 // dropping the request. When sessionDirOverride is non-empty the task's
 // session.jsonl/status.json land under that parent dir; otherwise the
 // task manager picks its default run root.
-func (cs *engine) forkInBackground(ctx context.Context, def *subagent.SubagentDefinition, childCwd string, initialMessages []types.AgentMessage, task, parentID, outputPath, outputMode, sessionDirOverride string) (string, error) {
+func (cs *engine) forkInBackground(ctx context.Context, def *subagent.SubagentDefinition, childCwd string, initialMessages []types.AgentMessage, task, parentID, outputPath, outputMode, sessionDirOverride, bubbleOverride string) (string, error) {
 	if cs.taskManager == nil {
 		return "", fmt.Errorf("background fork requested but task manager is not configured")
 	}
@@ -99,6 +156,13 @@ func (cs *engine) forkInBackground(ctx context.Context, def *subagent.SubagentDe
 	}
 	outputPath = cs.resolveForkOutputPath(outputPath)
 	taskID := cs.taskManager.CreateWithMetadataInDir("subagent", fmt.Sprintf("%s: %s", name, task), name, task, parentID, outputPath, sessionDirOverride)
+	// Events bubble under the caller-supplied id when set (batch children all
+	// share the batch id) so a batch's control counters aggregate across its
+	// children; otherwise under this background task's own id.
+	bubbleID := taskID
+	if bubbleOverride != "" {
+		bubbleID = bubbleOverride
+	}
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	cs.taskManager.RegisterCancel(taskID, cancel)
 	go func() {
@@ -110,7 +174,7 @@ func (cs *engine) forkInBackground(ctx context.Context, def *subagent.SubagentDe
 		if childCwd != cs.cwd {
 			tools = cs.rebindToolsToCwd(childCwd)
 		}
-		result, err := subagent.RunWithMessages(
+		result, err := subagent.RunWithMessagesObserved(
 			runCtx,
 			subagent.WithWorkingDirectory(def, childCwd),
 			initialMessages,
@@ -119,8 +183,10 @@ func (cs *engine) forkInBackground(ctx context.Context, def *subagent.SubagentDe
 			cs.model,
 			cs.getAPIKey,
 			cs.streamFn,
+			cs.childObserver(bubbleID),
 		)
 		text := result.Text
+		cs.emitSubagentChildUsage(result.Messages)
 		if taskRecord, ok := cs.taskManager.Get(taskID); ok {
 			if writeErr := writeSubagentSessionFile(taskRecord.SessionFile, childCwd, cs.GetSessionID(), taskID, result.Messages); writeErr != nil && err == nil {
 				err = writeErr
@@ -229,18 +295,18 @@ func (cs *engine) initialMessagesForFork(mode, parentID string) ([]types.AgentMe
 // forkInWorktree creates a detached git worktree, rebinds file/shell
 // tools to that path, runs the child, and removes the worktree on exit.
 // Mirrors the legacy spawn_subagent worktree behavior closely.
-func (cs *engine) forkInWorktree(ctx context.Context, def *subagent.SubagentDefinition, initialMessages []types.AgentMessage, task string) (string, error) {
+func (cs *engine) forkInWorktree(ctx context.Context, def *subagent.SubagentDefinition, initialMessages []types.AgentMessage, task string, observe func(types.Event)) (string, []types.AgentMessage, error) {
 	root, err := gitTopLevelDir(cs.cwd)
 	if err != nil {
-		return "", fmt.Errorf("worktree isolation requires a git repository: %w", err)
+		return "", nil, fmt.Errorf("worktree isolation requires a git repository: %w", err)
 	}
 	baseDir := filepath.Join(cs.agentDir, "worktrees")
 	if err := os.MkdirAll(baseDir, 0o755); err != nil {
-		return "", err
+		return "", nil, err
 	}
 	path := filepath.Join(baseDir, fmt.Sprintf("subagent-wt-%d", time.Now().UnixMilli()))
 	if _, err := runGitCommand(root, "worktree", "add", "--detach", path, "HEAD"); err != nil {
-		return "", err
+		return "", nil, err
 	}
 	defer func() {
 		// Best-effort cleanup: if the worktree leaks the user can prune
@@ -248,7 +314,7 @@ func (cs *engine) forkInWorktree(ctx context.Context, def *subagent.SubagentDefi
 		_, _ = runGitCommand(root, "worktree", "remove", "--force", path)
 	}()
 	rebound := cs.rebindToolsToCwd(path)
-	result, err := subagent.RunWithMessages(
+	result, err := subagent.RunWithMessagesObserved(
 		ctx,
 		subagent.WithWorkingDirectory(def, path),
 		initialMessages,
@@ -257,11 +323,12 @@ func (cs *engine) forkInWorktree(ctx context.Context, def *subagent.SubagentDefi
 		cs.model,
 		cs.getAPIKey,
 		cs.streamFn,
+		observe,
 	)
 	if err != nil {
-		return "", err
+		return "", result.Messages, err
 	}
-	return result.Text, nil
+	return result.Text, result.Messages, nil
 }
 
 func forkName(opts extension.ForkOptions) string {

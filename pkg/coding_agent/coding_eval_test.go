@@ -2,11 +2,13 @@ package coding_agent_test
 
 import (
 	"context"
+	"fmt"
 	"go/parser"
 	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -86,6 +88,30 @@ func runGoTest(dir string) (string, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "go", "test", "./...")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	return string(out), err == nil
+}
+
+// runGoBuild runs `go build ./...` in dir and reports the combined output and
+// whether it compiled. Used by evals whose ground truth is "the package builds".
+func runGoBuild(dir string) (string, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "build", "./...")
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	return string(out), err == nil
+}
+
+// runGoTestRace runs `go test -race ./...` in dir and reports the combined
+// output and whether it passed cleanly. Used by the concurrency eval: a data
+// race makes the detector report and the command fail, so a green run is exact
+// ground truth that the agent's fix is actually race-free.
+func runGoTestRace(dir string) (string, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "test", "-race", "./...")
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	return string(out), err == nil
@@ -412,6 +438,798 @@ func TestCodingCrossFileEval(t *testing.T) {
 	})
 }
 
+// A small multi-file package where the answer lives in one file among several;
+// the agent is not told which, so it must search rather than read a named file.
+const searchServerSource = `package app
+
+func StartServer() string {
+	return "listening"
+}
+`
+
+const searchLimitsSource = `package app
+
+// MaxConnections is the hard cap on concurrent connections.
+const MaxConnections = 512
+
+// idleTimeoutSeconds is unrelated noise to make the search non-trivial.
+const idleTimeoutSeconds = 90
+`
+
+const searchUtilSource = `package app
+
+func clamp(n, lo, hi int) int {
+	if n < lo {
+		return lo
+	}
+	if n > hi {
+		return hi
+	}
+	return n
+}
+`
+
+// TestCodingSearchAcrossFilesEval checks the agent searches a multi-file package
+// to find where a symbol is defined and reports its value, instead of being
+// handed the file. It must use a search/read tool, not guess.
+func TestCodingSearchAcrossFilesEval(t *testing.T) {
+	evals.Run(t, "coding: search across files", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		writeEvalFile(t, dir, "go.mod", "module app\n\ngo 1.22\n")
+		writeEvalFile(t, dir, "server.go", searchServerSource)
+		writeEvalFile(t, dir, "limits.go", searchLimitsSource)
+		writeEvalFile(t, dir, "util.go", searchUtilSource)
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"这个包里定义了一个常量 MaxConnections。它的值是多少？请在代码里查找后回答这个数字。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		msgs := sess.GetMessages()
+		inspected := evals.ToolCalled(msgs, "read") || evals.ToolCalled(msgs, "bash") ||
+			evals.ToolCalled(msgs, "grep") || evals.ToolCalled(msgs, "find")
+		if !inspected {
+			e.Fatalf("expected the agent to search the package; tools called: %v", evals.ToolCallNames(msgs))
+		}
+		output := evals.LastAssistantText(msgs)
+		evals.ContainsT(e, "512", output)
+		evals.LLMRubricT(e, "回答指出 MaxConnections 的值是 512", output)
+	})
+}
+
+const renameFormatSource = `package text
+
+// Fmt wraps s in square brackets.
+func Fmt(s string) string {
+	return "[" + s + "]"
+}
+`
+
+const renameWrapSource = `package text
+
+// Wrap delegates to Fmt.
+func Wrap(s string) string {
+	return Fmt(s)
+}
+`
+
+// The test references the NEW name Format (not yet defined) and Wrap, so the
+// package does not compile until Fmt is renamed to Format in BOTH files.
+const renameTestSource = `package text
+
+import "testing"
+
+func TestFormat(t *testing.T) {
+	if got := Format("x"); got != "[x]" {
+		t.Errorf("Format(%q) = %q, want %q", "x", got, "[x]")
+	}
+}
+
+func TestWrap(t *testing.T) {
+	if got := Wrap("y"); got != "[y]" {
+		t.Errorf("Wrap(%q) = %q, want %q", "y", got, "[y]")
+	}
+}
+`
+
+// TestCodingRenameSymbolEval checks the agent renames a function and updates its
+// call site in another file — a coordinated rename that only succeeds if both
+// the definition and the caller are changed. Ground truth is `go test`.
+func TestCodingRenameSymbolEval(t *testing.T) {
+	evals.Run(t, "coding: rename symbol across files", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		writeEvalFile(t, dir, "go.mod", "module text\n\ngo 1.22\n")
+		writeEvalFile(t, dir, "format.go", renameFormatSource)
+		writeEvalFile(t, dir, "wrap.go", renameWrapSource)
+		writeEvalFile(t, dir, "format_test.go", renameTestSource)
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"请把函数 Fmt 重命名为 Format，包括它在其他文件里的所有调用处。"+
+				"format_test.go 的测试引用的是新名字 Format，重命名后测试应当全部通过。"+
+				"可以用 bash 运行 `go test ./...` 验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		formatSrc := assertGoFileParses(e, filepath.Join(dir, "format.go"))
+		wrapSrc := assertGoFileParses(e, filepath.Join(dir, "wrap.go"))
+		evals.ContainsT(e, "func Format", formatSrc)
+		evals.NotContainsT(e, "func Fmt", formatSrc) // old name is gone
+		evals.ContainsT(e, "Format(", wrapSrc)       // caller updated to the new name
+
+		out, passed := runGoTest(dir)
+		evals.AssertT(e, "go test ./... passes after the cross-file rename", out, passed)
+	})
+}
+
+// TestCodingBashInspectEval checks the agent uses bash to inspect a file and
+// reports a fact derived from running a command, rather than guessing. The file
+// has a known, exact line count.
+func TestCodingBashInspectEval(t *testing.T) {
+	evals.Run(t, "coding: inspect via bash", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		// Exactly 7 lines, each newline-terminated.
+		writeEvalFile(t, dir, "data.txt", "a\nb\nc\nd\ne\nf\ng\n")
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"data.txt 一共有多少行？请用 bash 命令（例如 wc -l）查一下再回答，只回答数字。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		msgs := sess.GetMessages()
+		evals.ToolCalledT(e, msgs, "bash")
+		output := evals.LastAssistantText(msgs)
+		evals.ContainsT(e, "7", output)
+	})
+}
+
+const discountBuggySource = `package billing
+
+// ApplyDiscount returns price reduced by percent (0-100).
+// BUG: it divides by 10 instead of 100, so the discount is 10x too large.
+func ApplyDiscount(price, percent int) int {
+	return price - price*percent/10
+}
+`
+
+const discountTestSource = `package billing
+
+import "testing"
+
+func TestApplyDiscount(t *testing.T) {
+	cases := []struct {
+		price, percent, want int
+	}{
+		{100, 0, 100},
+		{100, 10, 90},
+		{200, 25, 150},
+		{100, 100, 0},
+	}
+	for _, c := range cases {
+		if got := ApplyDiscount(c.price, c.percent); got != c.want {
+			t.Errorf("ApplyDiscount(%d, %d) = %d, want %d", c.price, c.percent, got, c.want)
+		}
+	}
+}
+`
+
+// TestCodingDebugFailingTestEval is a debugging loop: a seeded test already fails
+// because of a bug in the implementation. The agent must run the tests, locate
+// the bug, fix it, and turn the suite green. The eval runs `go test` as the
+// authority — independent of whatever the agent reports.
+func TestCodingDebugFailingTestEval(t *testing.T) {
+	evals.Run(t, "coding: debug a failing test", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		writeEvalFile(t, dir, "go.mod", "module billing\n\ngo 1.22\n")
+		writeEvalFile(t, dir, "discount.go", discountBuggySource)
+		writeEvalFile(t, dir, "discount_test.go", discountTestSource)
+
+		// Sanity: the suite really is red before the agent touches it.
+		if _, passed := runGoTest(dir); passed {
+			t.Fatal("seed bug should make the test fail before the agent runs")
+		}
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"discount_test.go 当前是失败的（red）。请运行 `go test ./...` 找出 discount.go 里 ApplyDiscount 的 bug 并修复，"+
+				"让所有测试通过。可以反复用 bash 运行测试来验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		msgs := sess.GetMessages()
+		if !evals.ToolCalled(msgs, "edit") && !evals.ToolCalled(msgs, "write") {
+			e.Fatalf("expected the agent to edit/write discount.go; tools called: %v", evals.ToolCallNames(msgs))
+		}
+		assertGoFileParses(e, filepath.Join(dir, "discount.go"))
+
+		out, passed := runGoTest(dir)
+		evals.AssertT(e, "go test ./... passes after the bug fix", out, passed)
+	})
+}
+
+const panicBuggySource = `package safe
+
+// First returns the first element of s and true, or 0 and false if s is empty.
+// BUG: it indexes s[0] unconditionally and panics on an empty slice.
+func First(s []int) (int, bool) {
+	return s[0], true
+}
+`
+
+const panicTestSource = `package safe
+
+import "testing"
+
+func TestFirst(t *testing.T) {
+	if v, ok := First([]int{7, 8}); !ok || v != 7 {
+		t.Fatalf("First([7 8]) = (%d, %v), want (7, true)", v, ok)
+	}
+	// Must not panic on empty input; must report ok=false.
+	if v, ok := First(nil); ok || v != 0 {
+		t.Fatalf("First(nil) = (%d, %v), want (0, false)", v, ok)
+	}
+}
+`
+
+// TestCodingFixPanicEval is a runtime-bug debugging loop (distinct from the
+// logic-bug case): a seeded test crashes with an index-out-of-range panic. The
+// agent must add the empty-slice guard so the suite goes green. `go test` is the
+// authority — a panicking test reports FAIL, so the gate is exact.
+func TestCodingFixPanicEval(t *testing.T) {
+	evals.Run(t, "coding: fix a runtime panic", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		writeEvalFile(t, dir, "go.mod", "module safe\n\ngo 1.22\n")
+		writeEvalFile(t, dir, "safe.go", panicBuggySource)
+		writeEvalFile(t, dir, "safe_test.go", panicTestSource)
+
+		// Sanity: the suite really panics/fails before the agent touches it.
+		if _, passed := runGoTest(dir); passed {
+			t.Fatal("seed bug should make the test panic/fail before the agent runs")
+		}
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"safe_test.go 当前失败：First 在传入空切片时会 panic（index out of range）。"+
+				"请修复 safe.go 里的 First，空切片时返回 (0, false)，非空时返回首元素和 true，"+
+				"让所有测试通过。可以用 bash 运行 `go test ./...` 验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		msgs := sess.GetMessages()
+		if !evals.ToolCalled(msgs, "edit") && !evals.ToolCalled(msgs, "write") {
+			e.Fatalf("expected the agent to edit/write safe.go; tools called: %v", evals.ToolCallNames(msgs))
+		}
+		assertGoFileParses(e, filepath.Join(dir, "safe.go"))
+
+		out, passed := runGoTest(dir)
+		evals.AssertT(e, "go test ./... passes after the panic fix", out, passed)
+	})
+}
+
+const raceCounterSource = `package counter
+
+// Counter is incremented concurrently in the tests.
+// BUG: Inc has a data race — n++ is unsynchronized.
+type Counter struct {
+	n int
+}
+
+func (c *Counter) Inc()       { c.n++ }
+func (c *Counter) Value() int { return c.n }
+`
+
+const raceCounterTestSource = `package counter
+
+import (
+	"sync"
+	"testing"
+)
+
+func TestCounterConcurrent(t *testing.T) {
+	c := &Counter{}
+	var wg sync.WaitGroup
+	for i := 0; i < 200; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.Inc()
+		}()
+	}
+	wg.Wait()
+	if got := c.Value(); got != 200 {
+		t.Fatalf("Value() = %d, want 200", got)
+	}
+}
+`
+
+// TestCodingFixDataRaceEval checks the agent makes a type concurrency-safe: a
+// seeded Counter has an unsynchronized increment that the race detector flags.
+// The agent must add proper locking. Ground truth is `go test -race ./...`,
+// which both detects the race and verifies the count is still correct.
+func TestCodingFixDataRaceEval(t *testing.T) {
+	evals.Run(t, "coding: fix a data race", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		writeEvalFile(t, dir, "go.mod", "module counter\n\ngo 1.22\n")
+		writeEvalFile(t, dir, "counter.go", raceCounterSource)
+		writeEvalFile(t, dir, "counter_test.go", raceCounterTestSource)
+
+		// Sanity: the race detector really flags the seed before the agent runs.
+		if _, passed := runGoTestRace(dir); passed {
+			t.Fatal("seed bug should fail under -race before the agent runs")
+		}
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"counter.go 里的 Counter 在并发调用 Inc 时存在数据竞争，counter_test.go 用 `go test -race ./...` 会失败。"+
+				"请给 Counter 加锁（例如 sync.Mutex）让 Inc 和 Value 并发安全，行为不变，"+
+				"使 `go test -race ./...` 通过。可以用 bash 自行运行验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		msgs := sess.GetMessages()
+		if !evals.ToolCalled(msgs, "edit") && !evals.ToolCalled(msgs, "write") {
+			e.Fatalf("expected the agent to edit/write counter.go; tools called: %v", evals.ToolCallNames(msgs))
+		}
+		assertGoFileParses(e, filepath.Join(dir, "counter.go"))
+
+		out, passed := runGoTestRace(dir)
+		evals.AssertT(e, "go test -race ./... passes after the concurrency fix", out, passed)
+	})
+}
+
+const divideStubSource = `package mathx
+
+// Divide returns a divided by b.
+// TODO: when b == 0, return a non-nil error instead of panicking.
+func Divide(a, b int) (int, error) {
+	return a / b, nil
+}
+`
+
+const divideTestSource = `package mathx
+
+import "testing"
+
+func TestDivide(t *testing.T) {
+	if q, err := Divide(10, 2); err != nil || q != 5 {
+		t.Fatalf("Divide(10, 2) = (%d, %v), want (5, nil)", q, err)
+	}
+	// Division by zero must be reported as an error, not panic.
+	if _, err := Divide(1, 0); err == nil {
+		t.Fatal("Divide(1, 0) should return a non-nil error")
+	}
+}
+`
+
+// TestCodingErrorHandlingEval checks the agent adds proper error handling: the
+// stub divides without guarding b == 0 and panics on the zero case. The agent
+// must return an error instead. `go test ./...` (which fails on the panic) is the
+// authority.
+func TestCodingErrorHandlingEval(t *testing.T) {
+	evals.Run(t, "coding: add missing error handling", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		writeEvalFile(t, dir, "go.mod", "module mathx\n\ngo 1.22\n")
+		writeEvalFile(t, dir, "divide.go", divideStubSource)
+		writeEvalFile(t, dir, "divide_test.go", divideTestSource)
+
+		// Sanity: the zero case panics, so the suite is red to start.
+		if _, passed := runGoTest(dir); passed {
+			t.Fatal("seed should fail (panic on divide-by-zero) before the agent runs")
+		}
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"divide.go 里的 Divide 在 b == 0 时会 panic。请补全错误处理：当 b == 0 时返回一个非 nil 的 error，"+
+				"正常情况返回商和 nil。divide_test.go 的测试应当全部通过。可以用 bash 运行 `go test ./...` 验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		msgs := sess.GetMessages()
+		if !evals.ToolCalled(msgs, "edit") && !evals.ToolCalled(msgs, "write") {
+			e.Fatalf("expected the agent to edit/write divide.go; tools called: %v", evals.ToolCallNames(msgs))
+		}
+		assertGoFileParses(e, filepath.Join(dir, "divide.go"))
+
+		out, passed := runGoTest(dir)
+		evals.AssertT(e, "go test ./... passes after adding error handling", out, passed)
+	})
+}
+
+// buildBigSource returns a large Go file: many filler functions surrounding one
+// buggy target (Apply, which should add 10 but adds 1). The size forces a real
+// local edit rather than eyeballing a tiny file.
+func buildBigSource(fillerCount int) string {
+	var b strings.Builder
+	b.WriteString("package bigpkg\n\n")
+	for i := 0; i < fillerCount; i++ {
+		fmt.Fprintf(&b, "// Filler%02d is unrelated padding.\nfunc Filler%02d() int { return %d }\n\n", i, i, i*7)
+	}
+	b.WriteString("// Apply adds 10 to x.\n// BUG: it adds 1 instead of 10.\nfunc Apply(x int) int {\n\treturn x + 1\n}\n")
+	return b.String()
+}
+
+const bigPkgTestSource = `package bigpkg
+
+import "testing"
+
+func TestApply(t *testing.T) {
+	if got := Apply(5); got != 15 {
+		t.Fatalf("Apply(5) = %d, want 15", got)
+	}
+}
+`
+
+// TestCodingLargeFileLocalEditEval checks the agent makes a surgical, local edit
+// to one function buried in a large file — using the edit tool, leaving the
+// dozens of surrounding functions byte-for-byte intact. Correctness is gated by
+// `go test`; the surrounding-code integrity is checked by func count + sentinels.
+func TestCodingLargeFileLocalEditEval(t *testing.T) {
+	evals.Run(t, "coding: surgical edit in a large file", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		const fillerCount = 60
+		writeEvalFile(t, dir, "go.mod", "module bigpkg\n\ngo 1.22\n")
+		writeEvalFile(t, dir, "big.go", buildBigSource(fillerCount))
+		writeEvalFile(t, dir, "big_test.go", bigPkgTestSource)
+
+		// Sanity: the seed bug makes the suite red first.
+		if _, passed := runGoTest(dir); passed {
+			t.Fatal("seed Apply bug should fail before the agent runs")
+		}
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"big.go 是个很大的文件，里面有很多 FillerNN 函数。其中只有 Apply(x int) int 有 bug："+
+				"它应当返回 x+10，现在返回的是 x+1。请只用 edit 工具对 Apply 做局部修改，"+
+				"不要重写整个文件，也不要改动任何 FillerNN 函数。big_test.go 的测试应当通过。"+
+				"可以用 bash 运行 `go test ./...` 验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		msgs := sess.GetMessages()
+		// The capability under test is a *local* edit, not a full-file rewrite.
+		evals.ToolCalledT(e, msgs, "edit")
+		src := assertGoFileParses(e, filepath.Join(dir, "big.go"))
+
+		// All surrounding functions survive: count unchanged + sentinels present.
+		wantFuncs := fillerCount + 1 // fillers + Apply
+		evals.AssertT(e, "no functions added or removed in big.go",
+			fmt.Sprintf("found %d func decls, want %d", strings.Count(src, "func "), wantFuncs),
+			strings.Count(src, "func ") == wantFuncs)
+		evals.ContainsT(e, "func Filler00()", src)
+		evals.ContainsT(e, "func Filler59()", src)
+
+		out, passed := runGoTest(dir)
+		evals.AssertT(e, "go test ./... passes after the local edit", out, passed)
+	})
+}
+
+const depMainSource = `package main
+
+import "fmt"
+
+// Run should greet "world" using the example.com/greetlib module.
+// TODO: depend on example.com/greetlib (source in ./greetlib) and return
+// greetlib.Greet("world").
+func Run() string {
+	return "todo"
+}
+
+func main() { fmt.Println(Run()) }
+`
+
+const depMainTestSource = `package main
+
+import "testing"
+
+func TestRun(t *testing.T) {
+	if got := Run(); got != "Hello, world!" {
+		t.Fatalf("Run() = %q, want %q", got, "Hello, world!")
+	}
+}
+`
+
+const depLibSource = `package greetlib
+
+// Greet returns a greeting for name.
+func Greet(name string) string {
+	return "Hello, " + name + "!"
+}
+`
+
+// TestCodingAddDependencyEval checks the agent wires up a new module dependency:
+// it must add a require + a local replace to go.mod and import the module in
+// code. The dependency is a sibling module reached via a local replace, so the
+// build is fully offline (no proxy/network). Ground truth is `go test`, plus a
+// check that the go.mod directives actually landed.
+func TestCodingAddDependencyEval(t *testing.T) {
+	evals.Run(t, "coding: add a go.mod dependency", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		// The app module that must take on the dependency.
+		writeEvalFile(t, dir, "go.mod", "module app\n\ngo 1.22\n")
+		writeEvalFile(t, dir, "main.go", depMainSource)
+		writeEvalFile(t, dir, "main_test.go", depMainTestSource)
+		// A sibling local module to depend on (its own go.mod => separate module,
+		// excluded from app's ./...).
+		libDir := filepath.Join(dir, "greetlib")
+		if err := os.MkdirAll(libDir, 0o755); err != nil {
+			t.Fatalf("mkdir greetlib: %v", err)
+		}
+		writeEvalFile(t, libDir, "go.mod", "module example.com/greetlib\n\ngo 1.22\n")
+		writeEvalFile(t, libDir, "greet.go", depLibSource)
+
+		// Sanity: Run returns the stub, so the suite is red before the agent runs.
+		if _, passed := runGoTest(dir); passed {
+			t.Fatal("seed stub should fail before the agent runs")
+		}
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"请让 app 模块依赖本地模块 example.com/greetlib（源码在 ./greetlib 目录，不要联网下载）："+
+				"在 go.mod 里加上对 example.com/greetlib 的 require，并用 replace 指向 ./greetlib；"+
+				"然后在 main.go 里 import 它，让 Run() 返回 greetlib.Greet(\"world\")。"+
+				"main_test.go 的测试应当通过。可以用 bash 运行 `go test ./...` 验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		assertGoFileParses(e, filepath.Join(dir, "main.go"))
+		gomod, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+		if err != nil {
+			e.Fatalf("read go.mod: %v", err)
+		}
+		evals.ContainsT(e, "example.com/greetlib", string(gomod))
+		evals.ContainsT(e, "replace", string(gomod))
+
+		out, passed := runGoTest(dir)
+		evals.AssertT(e, "go test ./... passes with the new local dependency", out, passed)
+	})
+}
+
+const geomDupSource = `package geom
+
+// Area clamps both sides to [1,100] then multiplies.
+func Area(w, h int) int {
+	if w < 1 {
+		w = 1
+	}
+	if w > 100 {
+		w = 100
+	}
+	if h < 1 {
+		h = 1
+	}
+	if h > 100 {
+		h = 100
+	}
+	return w * h
+}
+
+// Perimeter clamps both sides to [1,100] then sums.
+func Perimeter(w, h int) int {
+	if w < 1 {
+		w = 1
+	}
+	if w > 100 {
+		w = 100
+	}
+	if h < 1 {
+		h = 1
+	}
+	if h > 100 {
+		h = 100
+	}
+	return 2 * (w + h)
+}
+`
+
+const geomTestSource = `package geom
+
+import "testing"
+
+func TestArea(t *testing.T) {
+	cases := []struct{ w, h, want int }{
+		{5, 4, 20}, {0, 200, 100}, {-5, 50, 50}, {100, 100, 10000},
+	}
+	for _, c := range cases {
+		if got := Area(c.w, c.h); got != c.want {
+			t.Errorf("Area(%d,%d) = %d, want %d", c.w, c.h, got, c.want)
+		}
+	}
+}
+
+func TestPerimeter(t *testing.T) {
+	cases := []struct{ w, h, want int }{
+		{5, 4, 18}, {0, 200, 202}, {-5, 50, 102},
+	}
+	for _, c := range cases {
+		if got := Perimeter(c.w, c.h); got != c.want {
+			t.Errorf("Perimeter(%d,%d) = %d, want %d", c.w, c.h, got, c.want)
+		}
+	}
+}
+`
+
+// TestCodingExtractFunctionEval is a multi-step refactor: identical clamp-to-
+// [1,100] logic is duplicated in Area and Perimeter. The agent must extract it
+// into a shared helper and reuse it in both, with behavior unchanged. `go test`
+// guards behavior; a rise in func-decl count confirms a helper was introduced;
+// a (clear-cut) rubric confirms the duplication was actually DRY'd up.
+func TestCodingExtractFunctionEval(t *testing.T) {
+	evals.Run(t, "coding: extract a shared helper (DRY refactor)", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		writeEvalFile(t, dir, "go.mod", "module geom\n\ngo 1.22\n")
+		writeEvalFile(t, dir, "geom.go", geomDupSource)
+		writeEvalFile(t, dir, "geom_test.go", geomTestSource)
+
+		// Sanity: the suite is green before the refactor (behavior is the invariant).
+		if out, passed := runGoTest(dir); !passed {
+			t.Fatalf("seed should pass before refactor:\n%s", out)
+		}
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"geom.go 里的 Area 和 Perimeter 都重复了同一段「把数值夹在 [1,100] 区间」的逻辑。"+
+				"请把这段重复逻辑提取成一个公共的辅助函数，并在 Area 和 Perimeter 里复用它，"+
+				"对外行为保持不变。geom_test.go 的测试必须仍然全部通过。可以用 bash 运行 `go test ./...` 验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		msgs := sess.GetMessages()
+		if !evals.ToolCalled(msgs, "edit") && !evals.ToolCalled(msgs, "write") {
+			e.Fatalf("expected the agent to edit/write geom.go; tools called: %v", evals.ToolCallNames(msgs))
+		}
+		src := assertGoFileParses(e, filepath.Join(dir, "geom.go"))
+
+		// A helper was introduced: Area + Perimeter + at least one more func.
+		evals.AssertT(e, "a helper function was extracted (>=3 func decls)",
+			fmt.Sprintf("found %d func decls", strings.Count(src, "func ")),
+			strings.Count(src, "func ") >= 3)
+		evals.LLMRubricT(e,
+			"代码把原本在 Area 和 Perimeter 里重复的「夹值到 [1,100]」逻辑提取成了一个公共辅助函数，"+
+				"并在两个函数里都调用了它，消除了重复", src)
+
+		out, passed := runGoTest(dir)
+		evals.AssertT(e, "go test ./... stays green after the extract-function refactor", out, passed)
+	})
+}
+
+const greetSource = `package greet
+
+import "fmt"
+
+// unusedLegacyHelper is pre-existing dead code. It is not referenced anywhere,
+// but the task does NOT ask to remove it — a surgical agent must leave it alone.
+func unusedLegacyHelper(name string) string {
+	return "legacy:" + name
+}
+
+// Hello greets a single person.
+func Hello(name string) string {
+	return fmt.Sprintf("Hello, %s!", name)
+}
+`
+
+// TestCodingSurgicalNoDeadCodeRemovalEval encodes repo guideline #3 (surgical
+// changes): asked only to ADD a function, the agent must not also delete the
+// pre-existing unused helper it happens to notice. The new function must work and
+// the untouched dead code must still be present.
+func TestCodingSurgicalNoDeadCodeRemovalEval(t *testing.T) {
+	evals.Run(t, "coding: surgical, keep unrelated dead code", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		writeEvalFile(t, dir, "go.mod", "module greet\n\ngo 1.22\n")
+		writeEvalFile(t, dir, "greet.go", greetSource)
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"请在 greet.go 里新增一个函数 Goodbye(name string) string，返回形如 \"Goodbye, X!\" 的字符串。"+
+				"只做这一件事，不要改动文件里其他已有的代码。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		src := assertGoFileParses(e, filepath.Join(dir, "greet.go"))
+		evals.ContainsT(e, "func Goodbye", src)
+		// The unrelated pre-existing dead code must survive untouched.
+		evals.ContainsT(e, "unusedLegacyHelper", src)
+		evals.LLMRubricT(e,
+			"代码新增了 Goodbye 函数返回 \"Goodbye, X!\"，并且保留了原有的 unusedLegacyHelper 和 Hello 函数没有删除", src)
+	})
+}
+
+const brokenBuildSource = `package shape
+
+import "math"
+
+// Area returns the area of a circle with the given radius.
+// BUG: this file does not compile — Pi is referenced unqualified and the
+// import is therefore unused. The agent must make the package build.
+func Area(radius float64) float64 {
+	return Pi * radius * radius
+}
+
+var _ = math.Sqrt
+`
+
+// TestCodingCompileErrorRecoveryEval gives the agent code that does not compile
+// and asks it to make the package build. The eval uses `go build ./...` as the
+// ground-truth gate.
+func TestCodingCompileErrorRecoveryEval(t *testing.T) {
+	evals.Run(t, "coding: fix a compile error", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		writeEvalFile(t, dir, "go.mod", "module shape\n\ngo 1.22\n")
+		writeEvalFile(t, dir, "shape.go", brokenBuildSource)
+
+		// Sanity: it really doesn't build before the agent runs.
+		if _, ok := runGoBuild(dir); ok {
+			t.Fatal("seed file should fail to compile before the agent runs")
+		}
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"shape.go 目前编译不过。请修复它让 `go build ./...` 成功，Area 仍应返回圆的面积（π·r²）。"+
+				"可以用 bash 运行 `go build ./...` 验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		msgs := sess.GetMessages()
+		if !evals.ToolCalled(msgs, "edit") && !evals.ToolCalled(msgs, "write") {
+			e.Fatalf("expected the agent to edit/write shape.go; tools called: %v", evals.ToolCallNames(msgs))
+		}
+		assertGoFileParses(e, filepath.Join(dir, "shape.go"))
+
+		out, ok := runGoBuild(dir)
+		evals.AssertT(e, "go build ./... succeeds after the fix", out, ok)
+	})
+}
+
 const romanStubSource = `package roman
 
 // RomanToInt converts a Roman numeral to its integer value.
@@ -468,5 +1286,162 @@ func TestCodingTDDEval(t *testing.T) {
 
 		out, passed := runGoTest(dir)
 		evals.AssertT(e, "go test ./... goes green after implementing RomanToInt", out, passed)
+	})
+}
+
+// TestCodingPreserveUnrelatedFileEval checks surgical scope: the agent fixes the
+// requested Go bug while leaving an unrelated sentinel file byte-for-byte intact.
+func TestCodingPreserveUnrelatedFileEval(t *testing.T) {
+	evals.Run(t, "coding: preserve unrelated file", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		buggy := "package main\n\n// Add should return the sum of a and b.\nfunc Add(a, b int) int {\n\treturn a - b\n}\n"
+		sentinel := "DO NOT MODIFY\nsentinel=2026-06-04\n"
+		writeEvalFile(t, dir, "add.go", buggy)
+		writeEvalFile(t, dir, "notes.txt", sentinel)
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"只修复 add.go：Add(a, b int) int 应返回 a+b。不要修改 notes.txt，也不要改无关文件。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		msgs := sess.GetMessages()
+		if !evals.ToolCalled(msgs, "edit") && !evals.ToolCalled(msgs, "write") {
+			e.Fatalf("expected the agent to edit/write add.go; tools called: %v", evals.ToolCallNames(msgs))
+		}
+		src := assertGoFileParses(e, filepath.Join(dir, "add.go"))
+		evals.NotContainsT(e, "a - b", src)
+		evals.LLMRubricT(e, "Add 函数返回 a 与 b 的和（a+b），没有引入额外无关逻辑", src)
+
+		data, err := os.ReadFile(filepath.Join(dir, "notes.txt"))
+		if err != nil {
+			e.Fatalf("read notes.txt: %v", err)
+		}
+		evals.AssertT(e, "unrelated notes.txt is unchanged", string(data), string(data) == sentinel)
+	})
+}
+
+const hiddenSlugTestSource = `package slug
+
+import "testing"
+
+func TestSlugifyHiddenCases(t *testing.T) {
+	cases := map[string]string{
+		"": "",
+		"Hello, World!": "hello-world",
+		"Multiple   Spaces": "multiple-spaces",
+		"Already--Slug": "already-slug",
+		"Trim Me ": "trim-me",
+	}
+	for in, want := range cases {
+		if got := Slugify(in); got != want {
+			t.Errorf("Slugify(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+`
+
+// TestCodingAddsImplementationAndTestsEval checks the agent writes both
+// production code and a focused unit test, then the eval adds hidden tests as
+// the ground-truth correctness gate.
+func TestCodingAddsImplementationAndTestsEval(t *testing.T) {
+	evals.Run(t, "coding: add implementation and tests", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		writeEvalFile(t, dir, "go.mod", "module slug\n\ngo 1.22\n")
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"创建一个 Go 包 slug：实现 Slugify(s string) string，并同时新增 slug_test.go。"+
+				"要求：转小写；连续空白或连字符折叠成一个连字符；去掉逗号、感叹号等标点；去掉首尾连字符。"+
+				"请用 go test ./... 验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		evals.ToolCalledT(e, sess.GetMessages(), "write")
+		assertGoFileParses(e, filepath.Join(dir, "slug.go"))
+		testSrc := assertGoFileParses(e, filepath.Join(dir, "slug_test.go"))
+		evals.ContainsT(e, "TestSlugify", testSrc)
+
+		writeEvalFile(t, dir, "slug_hidden_test.go", hiddenSlugTestSource)
+		out, passed := runGoTest(dir)
+		evals.AssertT(e, "go test ./... passes with hidden Slugify cases", out, passed)
+	})
+}
+
+const clampSource = `package mathutil
+
+// Clamp returns n unchanged for now.
+// TODO: clamp n into the inclusive [min, max] range.
+func Clamp(n, min, max int) int {
+	return n
+}
+`
+
+const clampHiddenTestSource = `package mathutil
+
+import "testing"
+
+func TestClampHiddenCases(t *testing.T) {
+	cases := []struct {
+		n, min, max int
+		want        int
+	}{
+		{5, 1, 10, 5},
+		{-2, 0, 10, 0},
+		{12, 0, 10, 10},
+		{7, 7, 7, 7},
+	}
+	for _, c := range cases {
+		if got := Clamp(c.n, c.min, c.max); got != c.want {
+			t.Errorf("Clamp(%d, %d, %d) = %d, want %d", c.n, c.min, c.max, got, c.want)
+		}
+	}
+}
+`
+
+// TestCodingPkgChangeUpdatesReadmeEval encodes the repository rule that changes
+// under pkg should update the relevant README/doc as part of acceptance.
+func TestCodingPkgChangeUpdatesReadmeEval(t *testing.T) {
+	evals.Run(t, "coding: pkg change updates README", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		pkgDir := filepath.Join(dir, "pkg", "mathutil")
+		if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+			t.Fatalf("mkdir pkg/mathutil: %v", err)
+		}
+		writeEvalFile(t, dir, "go.mod", "module example.com/project\n\ngo 1.22\n")
+		writeEvalFile(t, pkgDir, "mathutil.go", clampSource)
+		writeEvalFile(t, pkgDir, "README.md", "# mathutil\n\nSmall integer helpers.\n")
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"这是 pkg/mathutil 公共包。请实现 mathutil.go 里的 Clamp(n, min, max int) int，"+
+				"把 n 限制在闭区间 [min, max] 内；同时更新 pkg/mathutil/README.md 记录 Clamp 的行为。"+
+				"可以用 go test ./... 验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		assertGoFileParses(e, filepath.Join(pkgDir, "mathutil.go"))
+		readme, err := os.ReadFile(filepath.Join(pkgDir, "README.md"))
+		if err != nil {
+			e.Fatalf("read README.md: %v", err)
+		}
+		evals.ContainsT(e, "Clamp", string(readme))
+		evals.LLMRubricT(e, "README 说明了 Clamp 会把输入限制在 min 到 max 的闭区间内", string(readme))
+
+		writeEvalFile(t, pkgDir, "mathutil_hidden_test.go", clampHiddenTestSource)
+		out, passed := runGoTest(dir)
+		evals.AssertT(e, "go test ./... passes with hidden Clamp cases", out, passed)
 	})
 }

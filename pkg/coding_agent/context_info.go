@@ -9,10 +9,11 @@ type ContextFileInfo struct {
 }
 
 type PromptTemplateInfo struct {
-	Name        string
-	Description string
-	Source      string
-	FilePath    string
+	Name         string
+	Description  string
+	ArgumentHint string
+	Source       string
+	FilePath     string
 }
 
 type PackageResourceInfo struct {
@@ -99,10 +100,11 @@ func (s *CodingSession) GetPromptTemplates() []PromptTemplateInfo {
 	out := make([]PromptTemplateInfo, 0, len(list))
 	for _, t := range list {
 		out = append(out, PromptTemplateInfo{
-			Name:        t.Name,
-			Description: t.Description,
-			Source:      t.Source,
-			FilePath:    t.FilePath,
+			Name:         t.Name,
+			Description:  t.Description,
+			ArgumentHint: t.Metadata["argument-hint"],
+			Source:       t.Source,
+			FilePath:     t.FilePath,
 		})
 	}
 	return out

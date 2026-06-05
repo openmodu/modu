@@ -584,6 +584,16 @@ func (s *engine) Prompt(ctx context.Context, text string) error {
 		if s.promptManager != nil {
 			if template, ok := s.promptManager.Get(cmdName); ok {
 				text = template.Expand(cmdArgs)
+				text = prompts.SubstituteShell(text, func(command string) (string, error) {
+					res, err := s.bash.Execute(ctx, command, 0)
+					if err != nil {
+						return "", err
+					}
+					if res.Stderr != "" {
+						return res.Stdout + res.Stderr, nil
+					}
+					return res.Stdout, nil
+				})
 				input = strings.TrimSpace(text)
 				expandedTemplate = true
 			}

@@ -51,6 +51,25 @@ func RunWithMessages(
 	getAPIKey func(string) (string, error),
 	streamFn types.StreamFn,
 ) (RunResult, error) {
+	return RunWithMessagesObserved(ctx, def, initialMessages, task, allTools, model, getAPIKey, streamFn, nil)
+}
+
+// RunWithMessagesObserved is RunWithMessages plus an optional observe
+// callback that receives the child agent's events live (turn_end,
+// tool_execution_end, agent_end, ...) as they happen. The host uses this to
+// bubble a background child's activity up to extensions. A nil observe makes
+// this identical to RunWithMessages.
+func RunWithMessagesObserved(
+	ctx context.Context,
+	def *SubagentDefinition,
+	initialMessages []types.AgentMessage,
+	task string,
+	allTools []types.Tool,
+	model *types.Model,
+	getAPIKey func(string) (string, error),
+	streamFn types.StreamFn,
+	observe func(types.Event),
+) (RunResult, error) {
 	activeTools := filterTools(def.Tools, def.DisallowedTools, allTools)
 	activeTools = applyPermissionMode(activeTools, def.PermissionMode)
 
@@ -85,6 +104,11 @@ func RunWithMessages(
 			Messages:      append([]types.AgentMessage(nil), initialMessages...),
 		},
 	})
+
+	if observe != nil {
+		unsubscribe := ag.Subscribe(observe)
+		defer unsubscribe()
+	}
 
 	if err := ag.Prompt(ctx, task); err != nil {
 		messages := ag.GetState().Messages
