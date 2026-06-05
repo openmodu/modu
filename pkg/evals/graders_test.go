@@ -100,6 +100,18 @@ func TestExtractJSONObject(t *testing.T) {
 			in:   "not json",
 			want: "not json",
 		},
+		{
+			// Reasoning graders sometimes repeat the verdict; take only the first.
+			name: "duplicated objects",
+			in:   "json\n{\"score\":1.0,\"pass\":true}\n\n{\"score\":1.0,\"pass\":true}",
+			want: `{"score":1.0,"pass":true}`,
+		},
+		{
+			// A brace inside a string value must not close the object early.
+			name: "brace inside string",
+			in:   `{"reasoning":"has a } brace","pass":true}`,
+			want: `{"reasoning":"has a } brace","pass":true}`,
+		},
 	}
 
 	for _, tc := range tests {
