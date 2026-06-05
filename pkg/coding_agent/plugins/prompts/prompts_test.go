@@ -1,6 +1,7 @@
 package prompts
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -30,6 +31,12 @@ func TestExpand(t *testing.T) {
 		{"no placeholder appends input", "Base prompt", "extra", "Base prompt\n\nextra"},
 		{"no placeholder empty input", "Base prompt", "", "Base prompt"},
 		{"trims input", "{{input}}", "  spaced  ", "spaced"},
+		{"arguments placeholder", "Fix $ARGUMENTS please", "the bug", "Fix the bug please"},
+		{"positional args", "From $1 to $2", "a b", "From a to b"},
+		{"positional missing arg empty", "Issue $1 in $2", "42", "Issue 42 in"},
+		{"positional multi-digit no prefix clash", "$10 then $1", "a b c d e f g h i j", "j then a"},
+		{"arguments and positional mix", "$1: $ARGUMENTS", "x y z", "x: x y z"},
+		{"placeholder present empty input not appended", "Run $ARGUMENTS", "", "Run"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -38,6 +45,42 @@ func TestExpand(t *testing.T) {
 				t.Fatalf("Expand(%q) = %q, want %q", tc.input, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestSubstituteShell(t *testing.T) {
+	run := func(command string) (string, error) {
+		switch command {
+		case "git branch --show-current":
+			return "feat/eval\n", nil
+		case "fail":
+			return "", fmt.Errorf("boom")
+		default:
+			return "out:" + command, nil
+		}
+	}
+
+	cases := []struct {
+		name string
+		text string
+		want string
+	}{
+		{"single substitution", "On branch !`git branch --show-current`", "On branch feat/eval"},
+		{"two substitutions", "!`echo a` and !`echo b`", "out:echo a and out:echo b"},
+		{"failed command marker", "x !`fail` y", "x [command failed: boom] y"},
+		{"empty command untouched", "literal !`` tail", "literal !`` tail"},
+		{"no substitution", "plain text", "plain text"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := SubstituteShell(tc.text, run); got != tc.want {
+				t.Fatalf("SubstituteShell(%q) = %q, want %q", tc.text, got, tc.want)
+			}
+		})
+	}
+
+	if got := SubstituteShell("keep !`echo x`", nil); got != "keep !`echo x`" {
+		t.Fatalf("nil runner should leave text unchanged, got %q", got)
 	}
 }
 

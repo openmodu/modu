@@ -100,6 +100,12 @@ enough to implement, verify, and commit independently.
 - `/config` Provider now uses the same searchable selector pattern as model
   selection, opens an existing, preset, or custom OpenAI-compatible provider
   settings form, and discovers model entries from `<baseUrl>/models` after save.
+- Prompt-template slash commands now match Claude Code custom-command argument
+  syntax: `$ARGUMENTS` (all args), positional `$1`/`$2`/... (whitespace-split,
+  multi-digit safe), and inline ``!`command` `` shell substitution that runs in
+  the session cwd and injects the output into the prompt; legacy
+  `{{input}}`/`{{args}}` still work. The `/` picker shows a template's
+  `argument-hint` frontmatter next to its description.
 
 ## Next
 
@@ -181,3 +187,7 @@ enough to implement, verify, and commit independently.
 - 2026-05-31: `env GOCACHE=/private/tmp/modu-go-build go test ./cmd/modu_code/internal/provider ./cmd/modu_code ./pkg/tui`
   passed for the searchable `/config` provider selector and OpenAI-compatible
   model discovery.
+- 2026-06-05: `env GOCACHE=/private/tmp/modu-go-build go test ./cmd/modu_code ./pkg/coding_agent ./pkg/coding_agent/plugins/prompts ./pkg/tui ./pkg/slash`
+  passed for Claude Code-style prompt-template argument substitution
+  (`$ARGUMENTS`, positional `$N`), inline ``!`command` `` shell substitution, and
+  `argument-hint` surfacing in the slash picker.

@@ -286,7 +286,7 @@ type Extension interface {
 
 **Subagent profiles**：从 `~/.coding_agent/agents/` 和 `.coding_agent/agents/` 目录发现 Markdown profile。项目 profile 会覆盖同名全局 profile；发现到至少一个 profile 时，`extension/subagent` 会向模型暴露 `subagent` 和兼容 alias `spawn_subagent` 工具。
 
-**Prompt templates**：从 `~/.coding_agent/prompts/` 和 `.coding_agent/prompts/` 目录发现 Markdown 模板。模板文件名或 frontmatter `name` 会注册为斜杠命令，模板里的 `{{input}}` / `{{args}}` 会替换为命令参数。
+**Prompt templates**：从 `~/.coding_agent/prompts/` 和 `.coding_agent/prompts/` 目录发现 Markdown 模板。模板文件名或 frontmatter `name` 会注册为斜杠命令。模板里的参数占位符支持 Claude Code 自定义命令风格：`$ARGUMENTS`（全部参数）、`$1` / `$2` ...（按空格切分的位置参数），以及兼容旧版的 `{{input}}` / `{{args}}`。模板里的 `` !`command` `` 会在当前工作目录执行该命令，并把输出内联替换进 prompt（例如 `` 当前分支：!`git branch --show-current` ``）。模板没有任何占位符时，命令参数会追加到末尾。
 
 **本地资源包**：从 `~/.coding_agent/packages/<name>/package.json` 和 `.coding_agent/packages/<name>/package.json` 发现资源包。当前支持 `skills` 和 `prompts` 路径，`enabled: false` 可禁用包：
 
