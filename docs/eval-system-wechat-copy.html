@@ -94,6 +94,10 @@
       font-family: Menlo, Consolas, monospace;
       font-size: 14px;
     }
+    #wechat-article a {
+      color: #0f766e;
+      text-decoration: underline;
+    }
     #wechat-article pre {
       margin: 16px 0;
       padding: 14px 16px;
@@ -137,7 +141,7 @@
   <main class="wrap">
     <article id="wechat-article">
       <h1>我是怎么给 Agent 搭建 Eval 评测体系的</h1>
-      <p class="lead">Agent 的质量很难靠感觉维护。我的做法是把关键能力拆成可运行的 Eval：能确定的用程序断言，语义质量交给 grader LLM，所有结果落到 JSONL，再由 CLI 做查看、汇总和通过率门禁。</p>
+      <p class="lead">Agent 的质量很难靠感觉维护。我的做法是把关键能力拆成可运行的 Eval：能确定的用程序断言，语义质量交给 grader LLM，所有结果落到 JSONL，再由 CLI 做查看、汇总和通过率门禁。项目地址：<a href="https://github.com/openmodu/modu" target="_blank" rel="noreferrer">openmodu/modu</a>。</p>
 
       <h2>问题不是“模型聪不聪明”，而是“行为能不能回归”</h2>
       <p>做 Agent 之后，很快会遇到一个工程问题：改了 prompt、工具、上下文压缩、provider 适配之后，怎么判断系统有没有退化？</p>
@@ -411,6 +415,9 @@ evals.AssertT(e, "unrelated notes.txt is unchanged", string(data), string(data) 
       });
       root.querySelectorAll('code').forEach(el => {
         el.setAttribute('style', 'padding:2px 5px;border-radius:4px;background:#eef2f7;color:#243244;font-family:Menlo,Consolas,monospace;font-size:14px;');
+      });
+      root.querySelectorAll('a').forEach(el => {
+        el.setAttribute('style', 'color:#0f766e;text-decoration:underline;');
       });
       root.querySelectorAll('.note').forEach(el => {
         el.setAttribute('style', 'margin:18px 0;padding:14px 16px;border:1px solid #d8e0ea;border-radius:6px;background:#f8fafc;');
