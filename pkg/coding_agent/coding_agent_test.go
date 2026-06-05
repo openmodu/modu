@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -581,6 +582,328 @@ Return the child message count.
 	}
 	if got := extractTextBlocks(res.Content); !strings.Contains(got, "messages:3") {
 		t.Fatalf("fork context should include parent messages plus task, got %q", got)
+	}
+}
+
+// usageRecorder is a minimal extension that tallies subagent_child_usage
+// events so a test can assert the host emits child token usage.
+type usageRecorder struct {
+	events atomic.Int32
+	tokens atomic.Int64
+}
+
+func (r *usageRecorder) Name() string { return "usage-recorder" }
+
+func (r *usageRecorder) Init(api extension.ExtensionAPI) error {
+	api.On("subagent_child_usage", func(ev types.Event) {
+		var tok int64
+		for _, m := range ev.Messages {
+			switch am := m.(type) {
+			case *types.AssistantMessage:
+				tok += int64(am.Usage.Input + am.Usage.Output)
+			case types.AssistantMessage:
+				tok += int64(am.Usage.Input + am.Usage.Output)
+			}
+		}
+		r.events.Add(1)
+		r.tokens.Add(tok)
+	})
+	return nil
+}
+
+func TestSubagentForkEmitsChildUsage(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := t.TempDir()
+	agentsDir := filepath.Join(agentDir, "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir, "helper.md"), []byte(`---
+name: helper
+description: helper
+---
+Do the task.
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	model := newTestModel()
+	streamFn := func(ctx context.Context, _ *types.Model, _ *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+		stream := types.NewEventStream()
+		go func() {
+			defer stream.Close()
+			msg := &types.AssistantMessage{
+				Role:       "assistant",
+				ProviderID: model.ProviderID,
+				Model:      model.ID,
+				StopReason: "stop",
+				Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "done"}},
+				Usage:      types.AgentUsage{Input: 120, Output: 80, TotalTokens: 200},
+				Timestamp:  time.Now().UnixMilli(),
+			}
+			stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+			stream.Resolve(msg, nil)
+		}()
+		return stream, nil
+	}
+	rec := &usageRecorder{}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:        dir,
+		AgentDir:   agentDir,
+		Model:      model,
+		GetAPIKey:  func(provider string) (string, error) { return "", nil },
+		StreamFn:   streamFn,
+		Extensions: []extension.Extension{subagentext.New(), rec},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var subagentTool types.Tool
+	for _, tool := range session.GetAgent().GetState().Tools {
+		if tool.Name() == "subagent" {
+			subagentTool = tool
+			break
+		}
+	}
+	if subagentTool == nil {
+		t.Fatalf("expected subagent tool, got %v", session.GetActiveToolNames())
+	}
+
+	res, err := subagentTool.Execute(context.Background(), "run", map[string]any{
+		"agent": "helper",
+		"task":  "do it",
+	}, nil)
+	if err != nil || res.IsError {
+		t.Fatalf("subagent failed: err=%v res=%+v", err, res)
+	}
+
+	if rec.events.Load() == 0 {
+		t.Fatal("host did not emit any subagent_child_usage event")
+	}
+	if got := rec.tokens.Load(); got != 200 {
+		t.Fatalf("expected 200 child tokens reported, got %d", got)
+	}
+}
+
+// childEventRecorder captures subagent_child_event events the host bubbles
+// from background children.
+type childEventRecorder struct {
+	mu     sync.Mutex
+	events []types.Event
+}
+
+func (r *childEventRecorder) Name() string { return "child-event-recorder" }
+
+func (r *childEventRecorder) Init(api extension.ExtensionAPI) error {
+	api.On("subagent_child_event", func(ev types.Event) {
+		r.mu.Lock()
+		r.events = append(r.events, ev)
+		r.mu.Unlock()
+	})
+	return nil
+}
+
+func (r *childEventRecorder) snapshot() []types.Event {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]types.Event(nil), r.events...)
+}
+
+func TestSubagentBackgroundBubblesChildEvents(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	agentsDir := filepath.Join(agentDir, "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir, "helper.md"), []byte(`---
+description: background helper
+background: true
+---
+Return a short message.`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	model := newTestModel()
+	streamFn := func(ctx context.Context, _ *types.Model, _ *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+		stream := types.NewEventStream()
+		go func() {
+			msg := &types.AssistantMessage{
+				Role:       "assistant",
+				ProviderID: model.ProviderID,
+				Model:      model.ID,
+				StopReason: "stop",
+				Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "done"}},
+				Usage:      types.AgentUsage{Input: 70, Output: 30},
+				Timestamp:  time.Now().UnixMilli(),
+			}
+			stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+			stream.Resolve(msg, nil)
+			stream.Close()
+		}()
+		return stream, nil
+	}
+
+	rec := &childEventRecorder{}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:        dir,
+		AgentDir:   agentDir,
+		Model:      model,
+		GetAPIKey:  func(provider string) (string, error) { return "", nil },
+		StreamFn:   streamFn,
+		Extensions: []extension.Extension{subagentext.New(), rec},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var spawnTool types.Tool
+	for _, tool := range session.GetAgent().GetState().Tools {
+		if tool.Name() == "spawn_subagent" {
+			spawnTool = tool
+			break
+		}
+	}
+	if spawnTool == nil {
+		t.Fatalf("expected spawn_subagent tool, got %v", session.GetActiveToolNames())
+	}
+
+	result, err := spawnTool.Execute(context.Background(), "bg-1", map[string]any{
+		"name": "helper",
+		"task": "hello",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	details, _ := result.Details.(map[string]string)
+	taskID := details["task_id"]
+	if taskID == "" {
+		t.Fatalf("expected background task id, got %#v", result.Details)
+	}
+
+	// Wait for the background child to finish and bubble its events.
+	var events []types.Event
+	for i := 0; i < 50; i++ {
+		events = rec.snapshot()
+		sawAgentEnd := false
+		for _, ev := range events {
+			if ev.Reason == string(types.EventTypeAgentEnd) {
+				sawAgentEnd = true
+			}
+		}
+		if sawAgentEnd {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	var sawTurnEnd, sawAgentEnd bool
+	for _, ev := range events {
+		if ev.TaskID != taskID {
+			t.Fatalf("child event has TaskID %q, want %q", ev.TaskID, taskID)
+		}
+		switch ev.Reason {
+		case string(types.EventTypeTurnEnd):
+			sawTurnEnd = true
+		case string(types.EventTypeAgentEnd):
+			sawAgentEnd = true
+		}
+	}
+	if !sawTurnEnd || !sawAgentEnd {
+		t.Fatalf("expected bubbled turn_end and agent_end for background child; got %d events", len(events))
+	}
+}
+
+func TestBatchAsyncBubblesChildEventsUnderBatchID(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	agentsDir := filepath.Join(agentDir, "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Plain profile (no background) → batch children fork synchronously inside
+	// the batch goroutine, exercising the sync-fork bubbling seam.
+	if err := os.WriteFile(filepath.Join(agentsDir, "helper.md"), []byte(`---
+description: helper
+---
+Return a short message.`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	model := newTestModel()
+	streamFn := func(ctx context.Context, _ *types.Model, _ *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+		stream := types.NewEventStream()
+		go func() {
+			msg := &types.AssistantMessage{
+				Role:       "assistant",
+				ProviderID: model.ProviderID,
+				Model:      model.ID,
+				StopReason: "stop",
+				Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "done"}},
+				Timestamp:  time.Now().UnixMilli(),
+			}
+			stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+			stream.Resolve(msg, nil)
+			stream.Close()
+		}()
+		return stream, nil
+	}
+
+	rec := &childEventRecorder{}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:        dir,
+		AgentDir:   agentDir,
+		Model:      model,
+		GetAPIKey:  func(provider string) (string, error) { return "", nil },
+		StreamFn:   streamFn,
+		Extensions: []extension.Extension{subagentext.New(), rec},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var subagentTool types.Tool
+	for _, tool := range session.GetAgent().GetState().Tools {
+		if tool.Name() == "subagent" {
+			subagentTool = tool
+			break
+		}
+	}
+	if subagentTool == nil {
+		t.Fatalf("expected subagent tool, got %v", session.GetActiveToolNames())
+	}
+
+	_, err = subagentTool.Execute(context.Background(), "batch", map[string]any{
+		"mode":     "parallel",
+		"async":    true,
+		"parallel": []any{map[string]any{"agent": "helper", "task": "go"}},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var events []types.Event
+	for i := 0; i < 50; i++ {
+		events = rec.snapshot()
+		done := false
+		for _, ev := range events {
+			if ev.Reason == string(types.EventTypeAgentEnd) {
+				done = true
+			}
+		}
+		if done {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if len(events) == 0 {
+		t.Fatal("synchronous batch child did not bubble any events under the batch id")
+	}
+	for _, ev := range events {
+		if !strings.HasPrefix(ev.TaskID, "subagent-batch-") {
+			t.Fatalf("child event TaskID = %q, want a subagent-batch-* id", ev.TaskID)
+		}
 	}
 }
 

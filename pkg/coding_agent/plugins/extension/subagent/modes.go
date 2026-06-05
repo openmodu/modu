@@ -687,6 +687,9 @@ func forkOptionsFor(def *csubagent.SubagentDefinition, cfg Config, task string, 
 		Skills:          effectiveSkills(def, opts.skill),
 		MemoryScope:     def.MemoryScope,
 		SessionDir:      strings.TrimSpace(opts.sessionDir),
+		// Children of a batch bubble their live events under the batch id so
+		// the batch's control counters aggregate across all of them.
+		BubbleTaskID: strings.TrimSpace(opts.batchTaskID),
 	}
 }
 

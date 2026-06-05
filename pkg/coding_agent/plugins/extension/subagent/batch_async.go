@@ -143,6 +143,9 @@ func dispatchBatchAsync(ctx context.Context, ext *Extension, mode string, args m
 		}
 	}
 	stopNotice := controlActiveNoticeWatcher(ext, ctrl, task.ID, mode)
+	// Register the batch's activity-counter thresholds so child events
+	// (bubbled under task.ID) can trip turn / token / failed-tool notices.
+	ext.controlCounters.register(task.ID, mode, ctrl)
 	// Stash the batch task id so downstream runners can propagate it into
 	// each child's callOptions. The underscore-prefixed key marks this as
 	// an internal-only pseudo-arg.
@@ -153,6 +156,7 @@ func dispatchBatchAsync(ctx context.Context, ext *Extension, mode string, args m
 	// only read args).
 	go func() {
 		defer stopNotice()
+		defer ext.controlCounters.unregister(task.ID)
 		bgCtx := context.Background()
 		var (
 			out string

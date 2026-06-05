@@ -77,6 +77,14 @@ type ForkOptions struct {
 	// background-task run root. Relative paths resolve against the parent
 	// session cwd. Only meaningful for background forks; ignored otherwise.
 	SessionDir string
+	// BubbleTaskID, when set, makes the host subscribe to this child's live
+	// agent events and re-emit the control-relevant ones (turn_end,
+	// tool_execution_end, agent_end) as "subagent_child_event" tagged with
+	// this id — for both synchronous and background children. Batch dispatch
+	// sets it to the batch id so all of a batch's children aggregate under a
+	// single id for control accounting. Empty means: background children
+	// bubble under their own host task id; synchronous children do not bubble.
+	BubbleTaskID string
 }
 
 // Extension is the interface that all extensions must implement.

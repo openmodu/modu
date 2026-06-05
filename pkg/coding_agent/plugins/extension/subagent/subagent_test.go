@@ -1664,11 +1664,26 @@ func TestIntercomModeForkOnlyRequiresForkContext(t *testing.T) {
 	if len(calls) < 2 {
 		t.Fatalf("expected 2 fork calls, got %d", len(calls))
 	}
-	if strings.Contains(calls[0].SystemPrompt, "# Intercom") {
-		t.Errorf("fork-only mode + fresh context should skip auto-attach:\n%s", calls[0].SystemPrompt)
+	// The two async dispatches can land in either order, so match each by the
+	// context mode it carries ("" for fresh, "fork" for fork) rather than by
+	// snapshot index.
+	var fresh, fork *extension.ForkOptions
+	for i := range calls {
+		switch calls[i].Context {
+		case "fork":
+			fork = &calls[i]
+		case "":
+			fresh = &calls[i]
+		}
 	}
-	if !strings.Contains(calls[1].SystemPrompt, "# Intercom") {
-		t.Errorf("fork-only mode + fork context should auto-attach:\n%s", calls[1].SystemPrompt)
+	if fresh == nil || fork == nil {
+		t.Fatalf("expected one fresh and one fork dispatch, got %+v", calls)
+	}
+	if strings.Contains(fresh.SystemPrompt, "# Intercom") {
+		t.Errorf("fork-only mode + fresh context should skip auto-attach:\n%s", fresh.SystemPrompt)
+	}
+	if !strings.Contains(fork.SystemPrompt, "# Intercom") {
+		t.Errorf("fork-only mode + fork context should auto-attach:\n%s", fork.SystemPrompt)
 	}
 }
 
