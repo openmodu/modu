@@ -1607,3 +1607,127 @@ func TestCodingJSONTagsEval(t *testing.T) {
 		evals.AssertT(e, "go test ./... passes with the agent's json-tagged struct", out, passed)
 	})
 }
+
+const contextTimeoutTestSource = `package slowwork
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+)
+
+func TestDoWorkTimesOut(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := DoWork(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("DoWork err = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+func TestDoWorkCompletes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	got, err := DoWork(ctx)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if got != 42 {
+		t.Errorf("DoWork = %d, want 42", got)
+	}
+}
+`
+
+// TestCodingContextTimeoutEval: the agent must implement a function that honors
+// context cancellation — returning ctx.Err() when the deadline fires before the
+// simulated work finishes, and the result otherwise. Ground truth is `go test`,
+// which only goes green if the select-on-ctx.Done idiom is actually used (a plain
+// time.Sleep that ignores ctx fails the timeout case).
+func TestCodingContextTimeoutEval(t *testing.T) {
+	evals.Run(t, "coding: respect context timeout", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		writeEvalFile(t, dir, "go.mod", "module slowwork\n\ngo 1.22\n")
+		writeEvalFile(t, dir, "work_test.go", contextTimeoutTestSource)
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"当前目录是 Go 模块（package slowwork），work_test.go 已有测试但实现不存在。"+
+				"请创建 work.go，实现 DoWork(ctx context.Context) (int, error)："+
+				"它模拟一个约 200 毫秒的任务；如果 ctx 在任务完成前被取消或超时，立即返回 0 和 ctx.Err()；"+
+				"否则任务完成后返回 42 和 nil。必须真正响应 ctx（用 select 监听 ctx.Done()，不要用会忽略 ctx 的 time.Sleep）。"+
+				"可以用 bash 运行 `go test ./...` 自行验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		evals.ToolCalledT(e, sess.GetMessages(), "write")
+		assertGoFileParses(e, filepath.Join(dir, "work.go"))
+		out, passed := runGoTest(dir)
+		evals.AssertT(e, "go test ./... passes against the agent's context-aware DoWork", out, passed)
+	})
+}
+
+const errorWrapTestSource = `package configload
+
+import (
+	"errors"
+	"strings"
+	"testing"
+)
+
+func TestLoadWrapsNotFound(t *testing.T) {
+	_, err := Load("missing")
+	if err == nil {
+		t.Fatal("expected an error for an unknown key")
+	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err %v should wrap ErrNotFound", err)
+	}
+	if !strings.Contains(err.Error(), "missing") {
+		t.Errorf("err %q should mention the key", err.Error())
+	}
+}
+
+func TestLoadFound(t *testing.T) {
+	got, err := Load("greeting")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if got != "hello" {
+		t.Errorf("Load(greeting) = %q, want hello", got)
+	}
+}
+`
+
+// TestCodingErrorWrapEval: the agent must wrap a sentinel error with %w so that
+// errors.Is still matches it through the added context. Ground truth is `go test`
+// — errors.Is only passes when the wrapping uses %w, not %v or string concat.
+func TestCodingErrorWrapEval(t *testing.T) {
+	evals.Run(t, "coding: wrap sentinel error with %w", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		writeEvalFile(t, dir, "go.mod", "module configload\n\ngo 1.22\n")
+		writeEvalFile(t, dir, "load_test.go", errorWrapTestSource)
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"当前目录是 Go 模块（package configload），load_test.go 已有测试但实现不存在。"+
+				"请创建 load.go：定义哨兵错误 ErrNotFound，以及函数 Load(key string) (string, error)。"+
+				"当 key 为 \"greeting\" 时返回 \"hello\" 和 nil；其它 key 返回一个错误——"+
+				"用 fmt.Errorf 配合 %w 包装 ErrNotFound，并在错误信息里包含该 key（让 errors.Is(err, ErrNotFound) 成立）。"+
+				"可以用 bash 运行 `go test ./...` 自行验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		evals.ToolCalledT(e, sess.GetMessages(), "write")
+		assertGoFileParses(e, filepath.Join(dir, "load.go"))
+		out, passed := runGoTest(dir)
+		evals.AssertT(e, "go test ./... passes with errors.Is matching the wrapped ErrNotFound", out, passed)
+	})
+}
