@@ -525,6 +525,33 @@ func TestAgentNeedleInHaystackEval(t *testing.T) {
 	})
 }
 
+// TestAgentMultiStepArithmeticEval checks multi-step numeric reasoning without
+// tools. The answer (47) is a value that does not appear in the prompt, so
+// ContainsT is an exact, dup/noise-immune judge: a doubled or chatty reply still
+// passes iff the right number is present.
+func TestAgentMultiStepArithmeticEval(t *testing.T) {
+	evals.Run(t, "reasoning: multi-step arithmetic word problem", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+
+		a := agent.NewAgent(types.Config{
+			InitialState: &types.State{
+				SystemPrompt: "你是一个严谨的中文助手，按步骤计算并给出最终数值答案。",
+				Model:        e.Model,
+			},
+			MaxTokens: intPtr(2048), // reasoning models need room to think AND answer
+		})
+
+		if err := a.Prompt(context.Background(),
+			"某停车场第一小时收费 15 元，之后每多停一小时加收 8 元。小王一共停了 5 小时，应付多少元？请给出最终金额。"); err != nil {
+			e.Fatalf("prompt agent: %v", err)
+		}
+
+		output := evals.LastAssistantText(a.GetState().Messages)
+		evals.ContainsT(e, "47", output) // 15 + 8*4 = 47, a number not present in the prompt
+		evals.LLMRubricT(e, "推理得出最终应付金额是 47 元", output)
+	})
+}
+
 // extractJSON returns the first brace-balanced JSON object in s, or s trimmed if
 // none is found. Mirrors the grader's tolerance so extraction evals survive a
 // stray ```json fence or leading prose from reasoning models.
