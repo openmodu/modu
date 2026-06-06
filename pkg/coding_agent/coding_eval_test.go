@@ -1445,3 +1445,289 @@ func TestCodingPkgChangeUpdatesReadmeEval(t *testing.T) {
 		evals.AssertT(e, "go test ./... passes with hidden Clamp cases", out, passed)
 	})
 }
+
+const shapeTestSource = `package shapes
+
+import (
+	"math"
+	"testing"
+)
+
+func TestRectangleArea(t *testing.T) {
+	var s Shape = Rectangle{Width: 3, Height: 4}
+	if got := s.Area(); got != 12 {
+		t.Errorf("Rectangle.Area() = %v, want 12", got)
+	}
+}
+
+func TestCircleArea(t *testing.T) {
+	var s Shape = Circle{Radius: 10}
+	if got := s.Area(); math.Abs(got-math.Pi*100) > 1e-9 {
+		t.Errorf("Circle.Area() = %v, want %v", got, math.Pi*100)
+	}
+}
+`
+
+// TestCodingImplementInterfaceEval: the agent must define an interface and two
+// concrete types that satisfy it so a provided test suite passes. Ground truth is
+// `go test`, which only compiles if Shape/Rectangle/Circle exist with the right
+// method set — an exact, prose-independent judge.
+func TestCodingImplementInterfaceEval(t *testing.T) {
+	evals.Run(t, "coding: implement interface to pass tests", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		writeEvalFile(t, dir, "go.mod", "module shapes\n\ngo 1.22\n")
+		writeEvalFile(t, dir, "shape_test.go", shapeTestSource)
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"当前目录是 Go 模块（package shapes），shape_test.go 已有测试但实现不存在。"+
+				"请创建 shape.go：定义接口 Shape（方法 Area() float64），以及 Rectangle{Width, Height float64} "+
+				"和 Circle{Radius float64} 两个类型，都实现 Shape（矩形面积=宽*高，圆面积=π*r*r）。"+
+				"可以用 bash 运行 `go test ./...` 自行验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		evals.ToolCalledT(e, sess.GetMessages(), "write")
+		assertGoFileParses(e, filepath.Join(dir, "shape.go"))
+		out, passed := runGoTest(dir)
+		evals.AssertT(e, "go test ./... passes against the agent's interface implementation", out, passed)
+	})
+}
+
+const genericMapTestSource = `package genmap
+
+import (
+	"fmt"
+	"testing"
+)
+
+func TestMapIntToString(t *testing.T) {
+	got := Map([]int{1, 2, 3}, func(n int) string { return fmt.Sprintf("#%d", n) })
+	want := []string{"#1", "#2", "#3"}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("got[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestMapDouble(t *testing.T) {
+	got := Map([]int{2, 4, 6}, func(n int) int { return n * 2 })
+	want := []int{4, 8, 12}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("got[%d] = %d, want %d", i, got[i], want[i])
+		}
+	}
+}
+`
+
+// TestCodingGenericsEval: the agent must implement a generic function with two
+// type parameters so a provided test that instantiates it at different types
+// compiles and passes. Ground truth is `go test`.
+func TestCodingGenericsEval(t *testing.T) {
+	evals.Run(t, "coding: implement generic Map to pass tests", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		writeEvalFile(t, dir, "go.mod", "module genmap\n\ngo 1.22\n")
+		writeEvalFile(t, dir, "mapfn_test.go", genericMapTestSource)
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"当前目录是 Go 模块（package genmap），mapfn_test.go 已有测试但实现不存在。"+
+				"请创建 mapfn.go，实现泛型函数 Map[T, U any](s []T, f func(T) U) []U："+
+				"对切片 s 的每个元素调用 f，返回结果组成的新切片。"+
+				"可以用 bash 运行 `go test ./...` 自行验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		evals.ToolCalledT(e, sess.GetMessages(), "write")
+		assertGoFileParses(e, filepath.Join(dir, "mapfn.go"))
+		out, passed := runGoTest(dir)
+		evals.AssertT(e, "go test ./... passes against the agent's generic Map", out, passed)
+	})
+}
+
+const jsonTagsTestSource = `package jsontags
+
+import (
+	"encoding/json"
+	"testing"
+)
+
+func TestUserJSONTags(t *testing.T) {
+	u := User{UserName: "alice", IsActive: true, AgeYears: 30}
+	b, err := json.Marshal(u)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	got := string(b)
+	want := "{\"user_name\":\"alice\",\"is_active\":true,\"age_years\":30}"
+	if got != want {
+		t.Errorf("json.Marshal(User) = %s, want %s", got, want)
+	}
+}
+`
+
+// TestCodingJSONTagsEval: the agent must define a struct with json field tags so
+// json.Marshal emits exactly the snake_case keys the test expects. Ground truth is
+// `go test` — JSON key order follows struct field order, so the match is exact.
+func TestCodingJSONTagsEval(t *testing.T) {
+	evals.Run(t, "coding: struct json tags to pass tests", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		writeEvalFile(t, dir, "go.mod", "module jsontags\n\ngo 1.22\n")
+		writeEvalFile(t, dir, "user_test.go", jsonTagsTestSource)
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"当前目录是 Go 模块（package jsontags），user_test.go 已有测试但 User 类型不存在。"+
+				"请创建 user.go，定义结构体 User，字段为 UserName string、IsActive bool、AgeYears int，"+
+				"并通过 json 标签让 json.Marshal 输出的键名分别是 user_name、is_active、age_years。"+
+				"可以用 bash 运行 `go test ./...` 自行验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		evals.ToolCalledT(e, sess.GetMessages(), "write")
+		assertGoFileParses(e, filepath.Join(dir, "user.go"))
+		out, passed := runGoTest(dir)
+		evals.AssertT(e, "go test ./... passes with the agent's json-tagged struct", out, passed)
+	})
+}
+
+const contextTimeoutTestSource = `package slowwork
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+)
+
+func TestDoWorkTimesOut(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := DoWork(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("DoWork err = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+func TestDoWorkCompletes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	got, err := DoWork(ctx)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if got != 42 {
+		t.Errorf("DoWork = %d, want 42", got)
+	}
+}
+`
+
+// TestCodingContextTimeoutEval: the agent must implement a function that honors
+// context cancellation — returning ctx.Err() when the deadline fires before the
+// simulated work finishes, and the result otherwise. Ground truth is `go test`,
+// which only goes green if the select-on-ctx.Done idiom is actually used (a plain
+// time.Sleep that ignores ctx fails the timeout case).
+func TestCodingContextTimeoutEval(t *testing.T) {
+	evals.Run(t, "coding: respect context timeout", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		writeEvalFile(t, dir, "go.mod", "module slowwork\n\ngo 1.22\n")
+		writeEvalFile(t, dir, "work_test.go", contextTimeoutTestSource)
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"当前目录是 Go 模块（package slowwork），work_test.go 已有测试但实现不存在。"+
+				"请创建 work.go，实现 DoWork(ctx context.Context) (int, error)："+
+				"它模拟一个约 200 毫秒的任务；如果 ctx 在任务完成前被取消或超时，立即返回 0 和 ctx.Err()；"+
+				"否则任务完成后返回 42 和 nil。必须真正响应 ctx（用 select 监听 ctx.Done()，不要用会忽略 ctx 的 time.Sleep）。"+
+				"可以用 bash 运行 `go test ./...` 自行验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		evals.ToolCalledT(e, sess.GetMessages(), "write")
+		assertGoFileParses(e, filepath.Join(dir, "work.go"))
+		out, passed := runGoTest(dir)
+		evals.AssertT(e, "go test ./... passes against the agent's context-aware DoWork", out, passed)
+	})
+}
+
+const errorWrapTestSource = `package configload
+
+import (
+	"errors"
+	"strings"
+	"testing"
+)
+
+func TestLoadWrapsNotFound(t *testing.T) {
+	_, err := Load("missing")
+	if err == nil {
+		t.Fatal("expected an error for an unknown key")
+	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err %v should wrap ErrNotFound", err)
+	}
+	if !strings.Contains(err.Error(), "missing") {
+		t.Errorf("err %q should mention the key", err.Error())
+	}
+}
+
+func TestLoadFound(t *testing.T) {
+	got, err := Load("greeting")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if got != "hello" {
+		t.Errorf("Load(greeting) = %q, want hello", got)
+	}
+}
+`
+
+// TestCodingErrorWrapEval: the agent must wrap a sentinel error with %w so that
+// errors.Is still matches it through the added context. Ground truth is `go test`
+// — errors.Is only passes when the wrapping uses %w, not %v or string concat.
+func TestCodingErrorWrapEval(t *testing.T) {
+	evals.Run(t, "coding: wrap sentinel error with %w", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		writeEvalFile(t, dir, "go.mod", "module configload\n\ngo 1.22\n")
+		writeEvalFile(t, dir, "load_test.go", errorWrapTestSource)
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"当前目录是 Go 模块（package configload），load_test.go 已有测试但实现不存在。"+
+				"请创建 load.go：定义哨兵错误 ErrNotFound，以及函数 Load(key string) (string, error)。"+
+				"当 key 为 \"greeting\" 时返回 \"hello\" 和 nil；其它 key 返回一个错误——"+
+				"用 fmt.Errorf 配合 %w 包装 ErrNotFound，并在错误信息里包含该 key（让 errors.Is(err, ErrNotFound) 成立）。"+
+				"可以用 bash 运行 `go test ./...` 自行验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		evals.ToolCalledT(e, sess.GetMessages(), "write")
+		assertGoFileParses(e, filepath.Join(dir, "load.go"))
+		out, passed := runGoTest(dir)
+		evals.AssertT(e, "go test ./... passes with errors.Is matching the wrapped ErrNotFound", out, passed)
+	})
+}

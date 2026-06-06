@@ -649,3 +649,59 @@ func TestToolUseErrorHandlingEval(t *testing.T) {
 		evals.LLMRubricT(e, "回答说明天气查询失败或服务不可用，且没有编造任何具体的天气数据（例如温度、晴雨）", output)
 	})
 }
+
+// TestToolUseArrayArgEval checks the agent passes an array-typed argument with the
+// right element type and contents when the schema declares an array of integers.
+// The judge inspects the recorded call's decoded slice and sums it (order/dup-
+// immune), so it is exact regardless of how the model phrases its prose answer.
+func TestToolUseArrayArgEval(t *testing.T) {
+	evals.Run(t, "tool use: array-typed argument", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+
+		sum := &recordingTool{
+			name: "sum_numbers",
+			desc: "Sum a list of integers and return the total.",
+			params: map[string]any{
+				"type":     "object",
+				"required": []any{"numbers"},
+				"properties": map[string]any{
+					"numbers": map[string]any{
+						"type":        "array",
+						"items":       map[string]any{"type": "integer"},
+						"description": "The integers to add up",
+					},
+				},
+			},
+			result: "108",
+		}
+		a := newToolAgent(e.Model,
+			"你是一个助手。求一组数之和时必须调用 sum_numbers 工具，把这些整数放进 numbers 数组参数里。", sum)
+
+		if err := a.Prompt(context.Background(), "请计算这些数的和：4、8、15、16、23、42。"); err != nil {
+			e.Fatalf("prompt agent: %v", err)
+		}
+		messages := a.GetState().Messages
+
+		evals.ToolCalledT(e, messages, "sum_numbers")
+		if len(sum.calls) == 0 {
+			e.Fatalf("sum_numbers was never called")
+		}
+		// JSON arrays decode to []any of float64; assert the model passed the six
+		// integers as an array whose elements total 108 (order/dup-immune).
+		nums, ok := sum.calls[0]["numbers"].([]any)
+		evals.AssertT(e, "numbers decoded as a JSON array of length 6",
+			fmt.Sprintf("calls: %v", sum.calls), ok && len(nums) == 6)
+		total, allNumeric := 0.0, ok
+		for _, n := range nums {
+			f, isNum := n.(float64)
+			if !isNum {
+				allNumeric = false
+				break
+			}
+			total += f
+		}
+		evals.AssertT(e, "numbers are JSON numbers summing to 108",
+			fmt.Sprintf("calls: %v", sum.calls), allNumeric && total == 108)
+		evals.ContainsT(e, "108", evals.LastAssistantText(messages))
+	})
+}
