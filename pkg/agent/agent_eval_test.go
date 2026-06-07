@@ -649,6 +649,67 @@ func TestAgentOverrideResistanceEval(t *testing.T) {
 	})
 }
 
+// TestAgentCSVToJSONEval checks the agent transforms tabular CSV into a JSON array
+// of objects. The judge parses the array and asserts every field of every row
+// against ground truth — fully deterministic, no rubric.
+func TestAgentCSVToJSONEval(t *testing.T) {
+	evals.Run(t, "transform: CSV to JSON array", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+
+		a := agent.NewAgent(types.Config{
+			InitialState: &types.State{
+				SystemPrompt: "你是一个数据格式转换器。只输出一个 JSON 数组，不要 Markdown、不要代码块、不要任何解释。" +
+					"数组每个元素是一个对象，字段为 name（字符串）、age（数字）、city（字符串）。",
+				Model: e.Model,
+			},
+			MaxTokens: intPtr(2048), // reasoning models need room to think AND answer
+		})
+
+		if err := a.Prompt(context.Background(),
+			"把下面的 CSV 转成 JSON：\nname,age,city\n张伟,32,杭州\n李娜,28,上海"); err != nil {
+			e.Fatalf("prompt agent: %v", err)
+		}
+
+		output := evals.LastAssistantText(a.GetState().Messages)
+		arr := parseJSONArray(output)
+		evals.AssertT(e, "output is a JSON array of 2 rows", output, len(arr) == 2)
+		if len(arr) != 2 {
+			return
+		}
+		name0, _ := arr[0]["name"].(string)
+		city0, _ := arr[0]["city"].(string)
+		age0, age0OK := arr[0]["age"].(float64)
+		evals.AssertT(e, "row 0 = 张伟/32/杭州", fmt.Sprintf("%v", arr[0]),
+			strings.Contains(name0, "张伟") && age0OK && age0 == 32 && strings.Contains(city0, "杭州"))
+		name1, _ := arr[1]["name"].(string)
+		city1, _ := arr[1]["city"].(string)
+		age1, age1OK := arr[1]["age"].(float64)
+		evals.AssertT(e, "row 1 = 李娜/28/上海", fmt.Sprintf("%v", arr[1]),
+			strings.Contains(name1, "李娜") && age1OK && age1 == 28 && strings.Contains(city1, "上海"))
+	})
+}
+
+// parseJSONArray pulls a JSON array of objects out of a model reply, tolerating a
+// stray ```json fence or leading prose by falling back to the first '[' .. last ']'
+// span.
+func parseJSONArray(s string) []map[string]any {
+	try := func(b string) []map[string]any {
+		var arr []map[string]any
+		if json.Unmarshal([]byte(b), &arr) == nil {
+			return arr
+		}
+		return nil
+	}
+	if arr := try(strings.TrimSpace(s)); arr != nil {
+		return arr
+	}
+	i, j := strings.Index(s, "["), strings.LastIndex(s, "]")
+	if i >= 0 && j > i {
+		return try(s[i : j+1])
+	}
+	return nil
+}
+
 // extractJSON returns the first brace-balanced JSON object in s, or s trimmed if
 // none is found. Mirrors the grader's tolerance so extraction evals survive a
 // stray ```json fence or leading prose from reasoning models.
