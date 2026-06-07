@@ -1853,3 +1853,61 @@ func TestCodingSortInterfaceEval(t *testing.T) {
 		evals.AssertT(e, "go test ./... passes against the agent's sort.Interface implementation", out, passed)
 	})
 }
+
+const parseIntsTestSource = `package parseints
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestSumIntsValid(t *testing.T) {
+	got, err := SumInts([]string{"3", "10", "5"})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if got != 18 {
+		t.Errorf("SumInts = %d, want 18", got)
+	}
+}
+
+func TestSumIntsInvalid(t *testing.T) {
+	_, err := SumInts([]string{"3", "x", "5"})
+	if err == nil {
+		t.Fatal("expected an error for non-numeric input")
+	}
+	if !strings.Contains(err.Error(), "x") {
+		t.Errorf("err %q should mention the offending token", err.Error())
+	}
+}
+`
+
+// TestCodingParseIntsEval: the agent must parse string ints with strconv and
+// propagate a descriptive error (naming the offending token) instead of panicking
+// or swallowing it. Ground truth is `go test` — one case checks the happy-path sum,
+// the other checks an error is returned and mentions the bad token.
+func TestCodingParseIntsEval(t *testing.T) {
+	evals.Run(t, "coding: strconv parse with error path", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		writeEvalFile(t, dir, "go.mod", "module parseints\n\ngo 1.22\n")
+		writeEvalFile(t, dir, "parse_test.go", parseIntsTestSource)
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"当前目录是 Go 模块（package parseints），parse_test.go 已有测试但实现不存在。"+
+				"请创建 parse.go，实现 SumInts(parts []string) (int, error)：用 strconv.Atoi 把每个字符串解析为整数并求和；"+
+				"如果某个元素不是合法整数，返回一个错误，且错误信息里要包含那个非法的字符串。"+
+				"可以用 bash 运行 `go test ./...` 自行验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		evals.ToolCalledT(e, sess.GetMessages(), "write")
+		assertGoFileParses(e, filepath.Join(dir, "parse.go"))
+		out, passed := runGoTest(dir)
+		evals.AssertT(e, "go test ./... passes against the agent's strconv parser", out, passed)
+	})
+}
