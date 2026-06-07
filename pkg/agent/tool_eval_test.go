@@ -705,3 +705,40 @@ func TestToolUseArrayArgEval(t *testing.T) {
 		evals.ContainsT(e, "108", evals.LastAssistantText(messages))
 	})
 }
+
+// TestToolUseGroundingOverridesPriorEval checks the agent grounds its answer in the
+// tool result even for a "knowable" fact, rather than answering from its own prior.
+// The tool returns a deliberately non-real distance (1287 km); ContainsT("1287") is
+// a positive marker that the model used the tool's number, not memory.
+func TestToolUseGroundingOverridesPriorEval(t *testing.T) {
+	evals.Run(t, "tool use: ground answer in tool, not prior knowledge", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+
+		distance := &recordingTool{
+			name: "get_distance",
+			desc: "Return the distance in kilometers between two cities.",
+			params: map[string]any{
+				"type":     "object",
+				"required": []any{"from", "to"},
+				"properties": map[string]any{
+					"from": map[string]any{"type": "string", "description": "Origin city"},
+					"to":   map[string]any{"type": "string", "description": "Destination city"},
+				},
+			},
+			result: "北京到上海：1287 公里",
+		}
+		a := newToolAgent(e.Model,
+			"你是一个助手。查询两地距离必须调用 get_distance，并严格根据它返回的数字回答，不要用你自己记忆里的数字。",
+			distance)
+
+		if err := a.Prompt(context.Background(), "北京到上海大约有多远？"); err != nil {
+			e.Fatalf("prompt agent: %v", err)
+		}
+		messages := a.GetState().Messages
+
+		evals.ToolCalledT(e, messages, "get_distance")
+		// Positive marker: the tool's (non-real) number appears, so the answer is
+		// grounded in the tool result rather than the model's prior knowledge.
+		evals.ContainsT(e, "1287", evals.LastAssistantText(messages))
+	})
+}
