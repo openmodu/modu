@@ -1797,3 +1797,59 @@ func TestCodingFixOffByOneEval(t *testing.T) {
 		evals.AssertT(e, "go test ./... passes after the off-by-one fix", out, passed)
 	})
 }
+
+const sortInterfaceTestSource = `package roster
+
+import (
+	"sort"
+	"testing"
+)
+
+func TestByAgeSorts(t *testing.T) {
+	people := People{
+		{Name: "Bob", Age: 30},
+		{Name: "Alice", Age: 25},
+		{Name: "Carol", Age: 40},
+	}
+	sort.Sort(ByAge(people))
+	wantAges := []int{25, 30, 40}
+	for i, p := range people {
+		if p.Age != wantAges[i] {
+			t.Errorf("index %d: age = %d, want %d", i, p.Age, wantAges[i])
+		}
+	}
+	if people[0].Name != "Alice" {
+		t.Errorf("first = %q, want Alice", people[0].Name)
+	}
+}
+`
+
+// TestCodingSortInterfaceEval: the agent must implement the stdlib sort.Interface
+// (Len/Less/Swap) on a custom slice type so sort.Sort orders it. Ground truth is
+// `go test`, which only compiles if ByAge satisfies sort.Interface and only passes
+// if Less sorts by age ascending.
+func TestCodingSortInterfaceEval(t *testing.T) {
+	evals.Run(t, "coding: implement sort.Interface", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		writeEvalFile(t, dir, "go.mod", "module roster\n\ngo 1.22\n")
+		writeEvalFile(t, dir, "roster_test.go", sortInterfaceTestSource)
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"当前目录是 Go 模块（package roster），roster_test.go 用 sort.Sort(ByAge(people)) 按年龄升序排序，但实现不存在。"+
+				"请创建 roster.go：定义 Person{Name string, Age int}、People []Person，以及 ByAge []Person，"+
+				"并为 ByAge 实现 sort.Interface（Len/Less/Swap），按 Age 升序排列。"+
+				"可以用 bash 运行 `go test ./...` 自行验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		evals.ToolCalledT(e, sess.GetMessages(), "write")
+		assertGoFileParses(e, filepath.Join(dir, "roster.go"))
+		out, passed := runGoTest(dir)
+		evals.AssertT(e, "go test ./... passes against the agent's sort.Interface implementation", out, passed)
+	})
+}
