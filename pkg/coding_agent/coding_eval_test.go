@@ -1731,3 +1731,69 @@ func TestCodingErrorWrapEval(t *testing.T) {
 		evals.AssertT(e, "go test ./... passes with errors.Is matching the wrapped ErrNotFound", out, passed)
 	})
 }
+
+const offByOneSource = `package window
+
+// SumWindow returns the sum of the sub-slice nums[start : start+length].
+func SumWindow(nums []int, start, length int) int {
+	sum := 0
+	for i := start; i <= start+length; i++ {
+		sum += nums[i]
+	}
+	return sum
+}
+`
+
+const offByOneTestSource = `package window
+
+import "testing"
+
+func TestSumWindow(t *testing.T) {
+	nums := []int{10, 20, 30, 40, 50}
+	cases := []struct {
+		start, length, want int
+	}{
+		{1, 2, 50},  // 20+30
+		{0, 3, 60},  // 10+20+30
+		{2, 1, 30},  // 30
+	}
+	for _, c := range cases {
+		if got := SumWindow(nums, c.start, c.length); got != c.want {
+			t.Errorf("SumWindow(%d, %d) = %d, want %d", c.start, c.length, got, c.want)
+		}
+	}
+}
+`
+
+// TestCodingFixOffByOneEval: the agent must fix a classic off-by-one in a loop
+// bound (i <= start+length should be i < start+length), which currently sums one
+// element too many. Ground truth is `go test`: the seeded code is red, and only a
+// correct boundary fix turns it green.
+func TestCodingFixOffByOneEval(t *testing.T) {
+	evals.Run(t, "coding: fix off-by-one loop bound", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		writeEvalFile(t, dir, "go.mod", "module window\n\ngo 1.22\n")
+		writeEvalFile(t, dir, "window.go", offByOneSource)
+		writeEvalFile(t, dir, "window_test.go", offByOneTestSource)
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"window.go 里的 SumWindow 应返回 nums[start:start+length] 的和，但有一个 off-by-one bug，"+
+				"多累加了一个元素。请修复它，使 window_test.go 的测试通过。"+
+				"可以用 bash 运行 `go test ./...` 自行验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		msgs := sess.GetMessages()
+		if !evals.ToolCalled(msgs, "edit") && !evals.ToolCalled(msgs, "write") {
+			e.Fatalf("expected the agent to edit or rewrite the file; tools called: %v", evals.ToolCallNames(msgs))
+		}
+		assertGoFileParses(e, filepath.Join(dir, "window.go"))
+		out, passed := runGoTest(dir)
+		evals.AssertT(e, "go test ./... passes after the off-by-one fix", out, passed)
+	})
+}
