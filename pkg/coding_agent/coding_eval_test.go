@@ -1911,3 +1911,59 @@ func TestCodingParseIntsEval(t *testing.T) {
 		evals.AssertT(e, "go test ./... passes against the agent's strconv parser", out, passed)
 	})
 }
+
+const nilMapSource = `package counter
+
+// Tally returns how many times each word appears.
+func Tally(words []string) map[string]int {
+	var counts map[string]int
+	for _, w := range words {
+		counts[w]++
+	}
+	return counts
+}
+`
+
+const nilMapTestSource = `package counter
+
+import "testing"
+
+func TestTally(t *testing.T) {
+	got := Tally([]string{"a", "b", "a", "c", "a"})
+	if got["a"] != 3 || got["b"] != 1 || got["c"] != 1 {
+		t.Errorf("Tally = %v, want a:3 b:1 c:1", got)
+	}
+}
+`
+
+// TestCodingFixNilMapPanicEval: the agent must fix an assignment to a nil map (the
+// map is declared but never made), which panics at runtime. Ground truth is
+// `go test`: the seeded code panics (red) and only initializing the map turns it
+// green. A distinct panic class from index-out-of-range.
+func TestCodingFixNilMapPanicEval(t *testing.T) {
+	evals.Run(t, "coding: fix nil-map write panic", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+		dir := t.TempDir()
+		writeEvalFile(t, dir, "go.mod", "module counter\n\ngo 1.22\n")
+		writeEvalFile(t, dir, "counter.go", nilMapSource)
+		writeEvalFile(t, dir, "counter_test.go", nilMapTestSource)
+
+		sess := newCodingEvalSession(e, dir)
+		defer sess.Close("eval complete")
+
+		err := sess.Prompt(context.Background(),
+			"counter.go 里的 Tally 在运行时 panic：它向一个未初始化的 nil map 写入。"+
+				"请修复它，使 counter_test.go 通过。可以用 bash 运行 `go test ./...` 自行验证。")
+		if err != nil {
+			e.Fatalf("prompt: %v", err)
+		}
+
+		msgs := sess.GetMessages()
+		if !evals.ToolCalled(msgs, "edit") && !evals.ToolCalled(msgs, "write") {
+			e.Fatalf("expected the agent to edit or rewrite the file; tools called: %v", evals.ToolCallNames(msgs))
+		}
+		assertGoFileParses(e, filepath.Join(dir, "counter.go"))
+		out, passed := runGoTest(dir)
+		evals.AssertT(e, "go test ./... passes after the nil-map fix", out, passed)
+	})
+}
