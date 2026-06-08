@@ -10,4 +10,7 @@ use.md
 /acp-gateway.db
 /comment.md
 /evals.jsonl
+examples/runtime_demo/runtime_demo_data/
+examples/runtime_demo_live/runtime_demo_live_data/
+examples/runtime_demo_live/runtime_demo_live
 
