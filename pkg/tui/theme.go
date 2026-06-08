@@ -19,6 +19,7 @@ var (
 	uiErrorText     = lipgloss.NewStyle().Foreground(uiError).Bold(true)
 	uiMutedText     = lipgloss.NewStyle().Foreground(uiMuted)
 	uiDimText       = lipgloss.NewStyle().Foreground(uiDim)
+	uiCodeText      = lipgloss.NewStyle().Foreground(uiSecondary)
 	// No padding: the background block hugs ❯ on the left and the last content
 	// character on the right, no surrounding bg gutters.
 	uiUserPrompt         = lipgloss.NewStyle().Foreground(lipgloss.Color("#E6EDF3")).Background(lipgloss.Color("#1F2A2E"))

@@ -528,8 +528,7 @@ func (m *uiModel) renderSingleBlock(block uiBlock) string {
 		}
 		if strings.TrimSpace(block.Content) != "" {
 			if renderer != nil {
-				if md, err := renderer.Render(block.Content); err == nil {
-					md = normalizeRenderedMarkdown(md)
+				if md, err := renderAssistantMarkdown(renderer, block.Content, max(20, widthForPrefix(viewWidth)*66/100)); err == nil {
 					ab.WriteString(renderUIAssistantMarkdownBlock(md, viewWidth))
 				} else {
 					ab.WriteString(renderUIAssistantBlock(wrap.String(block.Content, contentWidth), viewWidth))
