@@ -742,3 +742,53 @@ func TestToolUseGroundingOverridesPriorEval(t *testing.T) {
 		evals.ContainsT(e, "1287", evals.LastAssistantText(messages))
 	})
 }
+
+// TestToolUseSequentialChainEval checks the agent threads three dependent tool
+// calls: each step's output must be fed as the next step's argument. The recorded
+// args verify the chaining deterministically, and the final shipment id is a
+// positive marker that the whole chain completed.
+func TestToolUseSequentialChainEval(t *testing.T) {
+	evals.Run(t, "tool use: three-step dependent chain", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+
+		custID := &recordingTool{
+			name: "get_customer_id", desc: "Look up a customer's id by name.",
+			params: objectSchema("name", "name", "string", "Customer name"), result: "CUST-001",
+		}
+		latestOrder := &recordingTool{
+			name: "get_latest_order", desc: "Return the latest order id for a customer id.",
+			params: objectSchema("customer_id", "customer_id", "string", "Customer id, e.g. CUST-001"), result: "ORD-7788",
+		}
+		orderStatus := &recordingTool{
+			name: "get_order_status", desc: "Return the shipping status for an order id.",
+			params: objectSchema("order_id", "order_id", "string", "Order id, e.g. ORD-7788"), result: "已发货，运单号 SHIP-4242",
+		}
+
+		a := newToolAgent(e.Model,
+			"你是一个助手。要查客户订单的物流状态，必须按顺序调用工具："+
+				"先用 get_customer_id 拿到客户 id，再用该 id 调用 get_latest_order 拿到订单 id，"+
+				"再用订单 id 调用 get_order_status，最后根据结果回答。",
+			custID, latestOrder, orderStatus)
+
+		if err := a.Prompt(context.Background(), "帮我查客户「王伟」最近一笔订单的物流状态。"); err != nil {
+			e.Fatalf("prompt agent: %v", err)
+		}
+		messages := a.GetState().Messages
+
+		evals.ToolCalledT(e, messages, "get_customer_id")
+		evals.ToolCalledT(e, messages, "get_latest_order")
+		evals.ToolCalledT(e, messages, "get_order_status")
+		// Chained args: each step fed the prior step's output forward.
+		if len(latestOrder.calls) > 0 {
+			cid, _ := latestOrder.calls[0]["customer_id"].(string)
+			evals.AssertT(e, "get_latest_order received the customer id from step 1",
+				fmt.Sprintf("calls: %v", latestOrder.calls), strings.Contains(cid, "CUST-001"))
+		}
+		if len(orderStatus.calls) > 0 {
+			oid, _ := orderStatus.calls[0]["order_id"].(string)
+			evals.AssertT(e, "get_order_status received the order id from step 2",
+				fmt.Sprintf("calls: %v", orderStatus.calls), strings.Contains(oid, "ORD-7788"))
+		}
+		evals.ContainsT(e, "SHIP-4242", evals.LastAssistantText(messages))
+	})
+}
