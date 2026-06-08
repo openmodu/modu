@@ -792,3 +792,49 @@ func TestToolUseSequentialChainEval(t *testing.T) {
 		evals.ContainsT(e, "SHIP-4242", evals.LastAssistantText(messages))
 	})
 }
+
+// TestToolUseOptionalParamDefaultEval checks the agent omits an optional parameter
+// (or uses its documented default) instead of inventing a value the user never
+// supplied. The user asks for weather with no unit; the call must not set
+// unit=fahrenheit — it should be absent or "celsius".
+func TestToolUseOptionalParamDefaultEval(t *testing.T) {
+	evals.Run(t, "tool use: leave optional param at default", func(e *evals.EvalT) {
+		providers.Register(e.Provider)
+
+		weather := &recordingTool{
+			name: "get_weather",
+			desc: "Get the current weather for a city.",
+			params: map[string]any{
+				"type":     "object",
+				"required": []any{"city"},
+				"properties": map[string]any{
+					"city": map[string]any{"type": "string", "description": "City name"},
+					"unit": map[string]any{
+						"type":        "string",
+						"enum":        []any{"celsius", "fahrenheit"},
+						"description": "Optional temperature unit; defaults to celsius when omitted",
+					},
+				},
+			},
+			result: "北京：晴，22°C",
+		}
+		a := newToolAgent(e.Model,
+			"你是一个助手。查询天气必须调用 get_weather。unit 是可选参数，用户没指定单位时不要自己编一个，省略它或用默认的 celsius。",
+			weather)
+
+		if err := a.Prompt(context.Background(), "北京现在天气怎么样？"); err != nil {
+			e.Fatalf("prompt agent: %v", err)
+		}
+		messages := a.GetState().Messages
+
+		evals.ToolCalledT(e, messages, "get_weather")
+		if len(weather.calls) > 0 {
+			city, _ := weather.calls[0]["city"].(string)
+			unit, _ := weather.calls[0]["unit"].(string)
+			evals.AssertT(e, "get_weather called with city 北京",
+				fmt.Sprintf("calls: %v", weather.calls), strings.Contains(city, "北京"))
+			evals.AssertT(e, "optional unit left at default (absent or celsius), not invented as fahrenheit",
+				fmt.Sprintf("calls: %v", weather.calls), unit == "" || unit == "celsius")
+		}
+	})
+}
