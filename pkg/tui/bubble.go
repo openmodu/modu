@@ -1663,6 +1663,14 @@ func (b *bubbleTUI) renderInlineLive() string {
 		if last.Kind == "assistant" && last.Streaming {
 			rendered := b.model.renderSingleBlock(last)
 			if strings.TrimSpace(stripANSIForGoTUI(rendered)) != "" {
+				// Keep the "Working (…)" activity line visible underneath the
+				// streaming block. Without this the timer/hints disappear the
+				// moment any thinking or text starts streaming, because this
+				// branch returns early before reaching renderActivityLine below.
+				activity := strings.TrimSpace(stripANSIForGoTUI(b.model.renderActivityLine()))
+				if activity != "" {
+					return strings.TrimRight(rendered, "\n") + "\n" + activity
+				}
 				return rendered
 			}
 		}
