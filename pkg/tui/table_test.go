@@ -38,11 +38,48 @@ func TestSplitMarkdownTablesIgnoresCodeFence(t *testing.T) {
 	}
 }
 
+func TestSplitMarkdownTablesIgnoresIndentedCodeBlock(t *testing.T) {
+	md := "    | not | a | table |\n    |---|---|---|"
+	segs := splitMarkdownTables(md)
+	for _, s := range segs {
+		if s.isTable {
+			t.Fatalf("table inside indented code block should be ignored: %#v", segs)
+		}
+	}
+}
+
+func TestSplitMarkdownTablesFenceUsesOpeningLength(t *testing.T) {
+	md := "````\n| not | a | table |\n|---|---|---|\n```\nstill code\n````\n\n| ok | table |\n|---|---|\n| a | b |"
+	segs := splitMarkdownTables(md)
+	var tables []mdSegment
+	for _, s := range segs {
+		if s.isTable {
+			tables = append(tables, s)
+		}
+	}
+	if len(tables) != 1 {
+		t.Fatalf("want only the table after the four-backtick fence, got %d: %#v", len(tables), segs)
+	}
+	if got := tables[0].rows[0][0]; got != "ok" {
+		t.Fatalf("unexpected table detected: first header cell=%q rows=%#v", got, tables[0].rows)
+	}
+}
+
 func TestParseTableAligns(t *testing.T) {
 	a := parseTableAligns("|:---|:--:|---:|")
 	want := []lipgloss.Position{lipgloss.Left, lipgloss.Center, lipgloss.Right}
 	if len(a) != 3 || a[0] != want[0] || a[1] != want[1] || a[2] != want[2] {
 		t.Fatalf("alignment mismatch: %#v", a)
+	}
+}
+
+func TestAssistantMarkdownTableWidthDoesNotExceedContentWidth(t *testing.T) {
+	for _, viewWidth := range []int{20, 24, 40, 120} {
+		tableWidth := assistantMarkdownTableWidth(viewWidth)
+		contentWidth := widthForPrefix(viewWidth)
+		if tableWidth > contentWidth {
+			t.Fatalf("view width %d: table width %d exceeds content width %d", viewWidth, tableWidth, contentWidth)
+		}
 	}
 }
 

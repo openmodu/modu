@@ -38,7 +38,7 @@ type mdSegment struct {
 }
 
 // splitMarkdownTables segments content into ordered table / non-table runs.
-// Lines inside fenced code blocks are never treated as tables.
+// Lines inside Markdown code blocks are never treated as tables.
 func splitMarkdownTables(content string) []mdSegment {
 	lines := strings.Split(content, "\n")
 	var segs []mdSegment
@@ -51,21 +51,26 @@ func splitMarkdownTables(content string) []mdSegment {
 	}
 
 	inFence := false
-	fenceMarker := ""
+	fenceMarker := rune(0)
+	fenceLen := 0
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
-		trimmed := strings.TrimSpace(line)
 
 		if inFence {
 			buf = append(buf, line)
-			if strings.HasPrefix(trimmed, fenceMarker) {
+			if isMarkdownFenceClose(line, fenceMarker, fenceLen) {
 				inFence = false
 			}
 			continue
 		}
-		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+		if marker, count, ok := markdownFenceOpen(line); ok {
 			inFence = true
-			fenceMarker = trimmed[:3]
+			fenceMarker = marker
+			fenceLen = count
+			buf = append(buf, line)
+			continue
+		}
+		if isIndentedCodeLine(line) {
 			buf = append(buf, line)
 			continue
 		}
@@ -80,7 +85,7 @@ func splitMarkdownTables(content string) []mdSegment {
 			for j < len(lines) {
 				bt := strings.TrimSpace(lines[j])
 				if bt == "" || !strings.Contains(lines[j], "|") ||
-					strings.HasPrefix(bt, "```") || strings.HasPrefix(bt, "~~~") {
+					isIndentedCodeLine(lines[j]) || isMarkdownFenceStart(bt) {
 					break
 				}
 				seg.rows = append(seg.rows, parseTableRow(lines[j]))
@@ -97,6 +102,71 @@ func splitMarkdownTables(content string) []mdSegment {
 	}
 	flush()
 	return segs
+}
+
+func isIndentedCodeLine(line string) bool {
+	if strings.HasPrefix(line, "\t") {
+		return true
+	}
+	spaces := 0
+	for _, r := range line {
+		if r != ' ' {
+			break
+		}
+		spaces++
+		if spaces >= 4 {
+			return true
+		}
+	}
+	return false
+}
+
+func markdownFenceOpen(line string) (rune, int, bool) {
+	trimmed := strings.TrimLeft(line, " ")
+	if len(line)-len(trimmed) > 3 {
+		return 0, 0, false
+	}
+	if trimmed == "" {
+		return 0, 0, false
+	}
+	marker := rune(trimmed[0])
+	if marker != '`' && marker != '~' {
+		return 0, 0, false
+	}
+	count := 0
+	for _, r := range trimmed {
+		if r != marker {
+			break
+		}
+		count++
+	}
+	if count < 3 {
+		return 0, 0, false
+	}
+	return marker, count, true
+}
+
+func isMarkdownFenceClose(line string, marker rune, minLen int) bool {
+	trimmed := strings.TrimLeft(line, " ")
+	if len(line)-len(trimmed) > 3 {
+		return false
+	}
+	count := 0
+	for _, r := range trimmed {
+		if r != marker {
+			break
+		}
+		count++
+	}
+	if count < minLen {
+		return false
+	}
+	return strings.TrimSpace(trimmed[count:]) == ""
+}
+
+func isMarkdownFenceStart(trimmed string) bool {
+	marker, _, ok := markdownFenceOpen(trimmed)
+	return ok && (marker == '`' || marker == '~')
 }
 
 // parseTableRow splits a table row on unescaped pipes and drops the empty
