@@ -693,7 +693,7 @@ func (b *bubbleTUI) finishPromptOperation(err error, failedPrompt string) tea.Cm
 		b.model.setStatus("")
 	}
 	b.model.state = uiStateInput
-	return nil
+	return b.printTurnSeparatorCmd()
 }
 
 func (b *bubbleTUI) continueQueuedPrompt() tea.Cmd {
@@ -1428,6 +1428,16 @@ func (b *bubbleTUI) printStringCmd(s string) tea.Cmd {
 	return tea.Println(s + "\n")
 }
 
+// printTurnSeparatorCmd emits a dim horizontal rule into the scrollback to
+// visually divide one completed turn from the next. Inline mode only.
+func (b *bubbleTUI) printTurnSeparatorCmd() tea.Cmd {
+	if !b.inline {
+		return nil
+	}
+	width := max(24, b.width-2)
+	return tea.Println(uiDimText.Render(strings.Repeat("─", width)))
+}
+
 func (b *bubbleTUI) isSessionAgentSlash(line string) bool {
 	cmd := strings.TrimPrefix(strings.TrimSpace(line), "/")
 	if i := strings.IndexAny(cmd, " \t"); i >= 0 {
@@ -1677,7 +1687,16 @@ func (b *bubbleTUI) renderInlineLive() string {
 		if last.Kind == "tool" {
 			for i := len(last.Tools) - 1; i >= 0; i-- {
 				if last.Tools[i].Status == "running" {
-					return strings.TrimRight(renderUITool(last.Tools[i], b.model.transcriptMode, b.model.viewportContentWidth()), "\n")
+					rendered := strings.TrimRight(renderUITool(last.Tools[i], b.model.transcriptMode, b.model.viewportContentWidth()), "\n")
+					// Keep the "Working (…)" activity line visible while a
+					// long-running tool executes, so the elapsed timer and
+					// hints don't vanish. Without this the branch returns
+					// early before reaching renderActivityLine below.
+					activity := strings.TrimSpace(stripANSIForGoTUI(b.model.renderActivityLine()))
+					if activity != "" {
+						return rendered + "\n" + activity
+					}
+					return rendered
 				}
 			}
 		}
