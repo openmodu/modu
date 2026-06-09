@@ -1715,6 +1715,9 @@ func (b *bubbleTUI) renderInlineHeader() string {
 	info := b.headerInfo()
 	lines := []string{uiWhiteText.Bold(true).Render("modu_code")}
 	lines = append(lines, uiDimText.Render("model  ")+uiWhiteText.Render(info.model))
+	if context := b.contextStatusLine(); context != "" {
+		lines = append(lines, uiDimText.Render("context ")+uiWhiteText.Render(strings.TrimPrefix(context, "ctx ")))
+	}
 	if info.cwd != "" {
 		lines = append(lines, uiDimText.Render("cwd    ")+uiWhiteText.Render(info.cwd))
 	}
@@ -2029,6 +2032,9 @@ func (b *bubbleTUI) renderStatusLine() string {
 		return uiDimText.Render(strings.TrimSpace(b.configHint()))
 	}
 	if status := b.model.effectiveStatusMsg(time.Now()); status != "" && status != "thinking" {
+		if context := b.contextStatusLine(); context != "" {
+			status += "  |  " + context
+		}
 		if queue := b.queueStatusLine(); queue != "" {
 			status += "  |  " + queue
 		}
@@ -2041,6 +2047,9 @@ func (b *bubbleTUI) renderStatusLine() string {
 		}
 		if b.session.ActiveWorktree() != "" {
 			parts = append(parts, "worktree")
+		}
+		if context := b.contextStatusLine(); context != "" {
+			parts = append(parts, context)
 		}
 		if queue := b.queueStatusLine(); queue != "" {
 			parts = append(parts, queue)
@@ -2055,6 +2064,42 @@ func (b *bubbleTUI) renderStatusLine() string {
 		parts = append(parts, "enter send", "ctrl+c exit")
 	}
 	return uiDimText.Render(strings.Join(parts, "  |  "))
+}
+
+func (b *bubbleTUI) contextStatusLine() string {
+	if b.session == nil {
+		return ""
+	}
+	model := b.session.GetModel()
+	if model == nil || model.ContextWindow <= 0 {
+		return ""
+	}
+	used := b.session.GetSessionStats().TotalTokens
+	if used < 0 {
+		used = 0
+	}
+	percent := used * 100 / model.ContextWindow
+	return fmt.Sprintf("ctx %s/%s %d%%", formatCompactTokens(used), formatCompactTokens(model.ContextWindow), percent)
+}
+
+func formatCompactTokens(n int) string {
+	if n < 0 {
+		n = 0
+	}
+	switch {
+	case n >= 1000000:
+		if n%1000000 == 0 {
+			return fmt.Sprintf("%dm", n/1000000)
+		}
+		return fmt.Sprintf("%.1fm", float64(n)/1000000)
+	case n >= 1000:
+		if n%1000 == 0 {
+			return fmt.Sprintf("%dk", n/1000)
+		}
+		return fmt.Sprintf("%.1fk", float64(n)/1000)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
 }
 
 func (b *bubbleTUI) queueStatusLine() string {
