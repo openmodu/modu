@@ -86,9 +86,7 @@ func newManager(cwd, dir, id, parentSession string) (*Manager, error) {
 		byID:   make(map[string]SessionEntry),
 		labels: make(map[string]string),
 	}
-	name := strings.ReplaceAll(ts.Format(time.RFC3339Nano), ":", "-")
-	name = strings.ReplaceAll(name, ".", "-")
-	m.filePath = filepath.Join(dir, name+"_"+id+".jsonl")
+	m.filePath = filepath.Join(dir, id+".jsonl")
 	return m, nil
 }
 

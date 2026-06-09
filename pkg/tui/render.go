@@ -570,6 +570,9 @@ func assistantMarkdownTableWidth(viewWidth int) int {
 func (m *uiModel) renderExitSessionMeta() string {
 	var parts []string
 	if m.session != nil {
+		if id := shortSessionID(m.session.GetSessionID()); id != "" {
+			parts = append(parts, id)
+		}
 		stats := m.session.GetSessionStats()
 		if stats.TotalTokens > 0 {
 			parts = append(parts, fmt.Sprintf("~%d tokens", stats.TotalTokens))

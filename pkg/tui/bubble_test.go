@@ -437,7 +437,7 @@ func TestBubbleStatusLineShowsContextWindowUsage(t *testing.T) {
 	root := newBubbleTUI(context.Background(), session, session.GetModel(), "", nil, CommandHooks{})
 
 	line := stripANSIForGoTUI(root.renderStatusLine())
-	if !strings.Contains(line, "ctx 1.5k/12k 12%") {
+	if !strings.Contains(line, "ctx 1.5K/12K 12%") {
 		t.Fatalf("expected status line to show context usage, got %q", line)
 	}
 }
@@ -449,10 +449,37 @@ func TestBubbleStatusLineShowsContextWindowDuringTransientStatus(t *testing.T) {
 	root.model.setTransientStatus("model changed; context cleared")
 
 	line := stripANSIForGoTUI(root.renderStatusLine())
-	for _, want := range []string{"model changed; context cleared", "ctx 0/8k 0%"} {
+	for _, want := range []string{"model changed; context cleared", "ctx 0/8K 0%"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("expected status line to contain %q, got %q", want, line)
 		}
+	}
+}
+
+func TestBubbleStatusLineResetsContextUsageAfterClear(t *testing.T) {
+	session := newUITestSessionWithStream(t, func(ctx context.Context, model *types.Model, llmCtx *types.LLMContext, opts *types.SimpleStreamOptions) (types.EventStream, error) {
+		stream := types.NewEventStream()
+		go func() {
+			msg := testAssistantMessageForLastUser(model, llmCtx)
+			msg.Usage = types.AgentUsage{Input: 1200, Output: 300, TotalTokens: 1500}
+			stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+			stream.Resolve(msg, nil)
+			stream.Close()
+		}()
+		return stream, nil
+	})
+	session.GetModel().ContextWindow = 12000
+	if err := session.Prompt(context.Background(), "hello"); err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if err := session.ClearConversation(); err != nil {
+		t.Fatalf("ClearConversation: %v", err)
+	}
+	root := newBubbleTUI(context.Background(), session, session.GetModel(), "", nil, CommandHooks{})
+
+	line := stripANSIForGoTUI(root.renderStatusLine())
+	if !strings.Contains(line, "ctx 0/12K 0%") {
+		t.Fatalf("expected status line to reset context usage, got %q", line)
 	}
 }
 
@@ -460,9 +487,9 @@ func TestFormatCompactTokens(t *testing.T) {
 	tests := map[int]string{
 		0:       "0",
 		999:     "999",
-		1500:    "1.5k",
-		12000:   "12k",
-		1250000: "1.2m",
+		1500:    "1.5K",
+		12000:   "12K",
+		1250000: "1.2M",
 	}
 	for in, want := range tests {
 		if got := formatCompactTokens(in); got != want {
@@ -480,12 +507,12 @@ func TestBubbleInlineHeaderIsPrintableButNotPersistent(t *testing.T) {
 	root.model.tgUsername = "ityike_quick_snap_bot"
 
 	header := stripANSIForGoTUI(root.renderInlineHeader())
-	for _, want := range []string{"modu_code", "Test Model", "test/test-model", "context 0/1m 0%"} {
+	for _, want := range []string{"modu_code", "session " + shortSessionID(session.GetSessionID()), "Test Model", "test/test-model", "context 0/1M 0%"} {
 		if !strings.Contains(header, want) {
 			t.Fatalf("expected printable inline header to contain %q, got %q", want, header)
 		}
 	}
-	for _, want := range []string{"model", "context", "mode"} {
+	for _, want := range []string{"session", "model", "context", "mode"} {
 		if !strings.Contains(header, want) {
 			t.Fatalf("expected printable inline header to expose %q as a separate row, got %q", want, header)
 		}
@@ -509,6 +536,27 @@ func TestBubbleInlineHeaderIsPrintableButNotPersistent(t *testing.T) {
 		if strings.Contains(view, unwanted) {
 			t.Fatalf("inline header should not be persistent in view; found %q in %q", unwanted, view)
 		}
+	}
+}
+
+func TestBubbleHeaderLineShowsSessionID(t *testing.T) {
+	session := newUITestSession(t)
+	root := newBubbleTUI(context.Background(), session, session.GetModel(), "", nil, CommandHooks{})
+	root.width = 120
+
+	header := stripANSIForGoTUI(root.renderHeaderLine(root.width))
+	if want := "session " + shortSessionID(session.GetSessionID()); !strings.Contains(header, want) {
+		t.Fatalf("expected header line to contain %q, got %q", want, header)
+	}
+}
+
+func TestBubbleExitSessionMetaShowsSessionID(t *testing.T) {
+	session := newUITestSession(t)
+	root := newBubbleTUI(context.Background(), session, session.GetModel(), "", nil, CommandHooks{})
+
+	meta := stripANSIForGoTUI(root.model.renderExitSessionMeta())
+	if want := "session: " + shortSessionID(session.GetSessionID()); !strings.Contains(meta, want) {
+		t.Fatalf("expected exit session meta to contain %q, got %q", want, meta)
 	}
 }
 

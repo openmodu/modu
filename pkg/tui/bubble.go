@@ -1714,6 +1714,9 @@ func (b *bubbleTUI) renderInlineHeader() string {
 	contentWidth := max(12, width-6)
 	info := b.headerInfo()
 	lines := []string{uiWhiteText.Bold(true).Render("modu_code")}
+	if info.sessionID != "" {
+		lines = append(lines, uiDimText.Render("session ")+uiWhiteText.Render(info.sessionID))
+	}
 	lines = append(lines, uiDimText.Render("model  ")+uiWhiteText.Render(info.model))
 	if context := b.contextStatusLine(); context != "" {
 		lines = append(lines, uiDimText.Render("context ")+uiWhiteText.Render(strings.TrimPrefix(context, "ctx ")))
@@ -1744,6 +1747,9 @@ func (b *bubbleTUI) renderHeaderLine(width int) string {
 	for _, mode := range info.modes {
 		rightParts = append(rightParts, uiSecondaryText.Render(mode))
 	}
+	if info.sessionID != "" {
+		rightParts = append(rightParts, uiSecondaryText.Render("session "+info.sessionID))
+	}
 	if info.channel != "" {
 		rightParts = append(rightParts, uiSecondaryText.Render(info.channel))
 	}
@@ -1758,10 +1764,11 @@ func (b *bubbleTUI) renderHeaderLine(width int) string {
 }
 
 type bubbleHeaderInfo struct {
-	model   string
-	cwd     string
-	modes   []string
-	channel string
+	model     string
+	sessionID string
+	cwd       string
+	modes     []string
+	channel   string
 }
 
 func (b *bubbleTUI) headerInfo() bubbleHeaderInfo {
@@ -1786,6 +1793,9 @@ func (b *bubbleTUI) headerInfo() bubbleHeaderInfo {
 		}
 	}
 	info.model = model
+	if b.session != nil {
+		info.sessionID = shortSessionID(b.session.GetSessionID())
+	}
 
 	cwd := ""
 	if b.session != nil {
@@ -1810,6 +1820,14 @@ func (b *bubbleTUI) headerInfo() bubbleHeaderInfo {
 		info.channel = "@" + strings.TrimPrefix(b.model.tgUsername, "@")
 	}
 	return info
+}
+
+func shortSessionID(id string) string {
+	id = strings.TrimSpace(id)
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
 }
 
 func (b *bubbleTUI) renderInputControl() string {
@@ -2089,14 +2107,14 @@ func formatCompactTokens(n int) string {
 	switch {
 	case n >= 1000000:
 		if n%1000000 == 0 {
-			return fmt.Sprintf("%dm", n/1000000)
+			return fmt.Sprintf("%dM", n/1000000)
 		}
-		return fmt.Sprintf("%.1fm", float64(n)/1000000)
+		return fmt.Sprintf("%.1fM", float64(n)/1000000)
 	case n >= 1000:
 		if n%1000 == 0 {
-			return fmt.Sprintf("%dk", n/1000)
+			return fmt.Sprintf("%dK", n/1000)
 		}
-		return fmt.Sprintf("%.1fk", float64(n)/1000)
+		return fmt.Sprintf("%.1fK", float64(n)/1000)
 	default:
 		return fmt.Sprintf("%d", n)
 	}
