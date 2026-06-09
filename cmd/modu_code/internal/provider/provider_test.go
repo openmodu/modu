@@ -64,6 +64,31 @@ func TestResolveUsesMultiModelConfigBeforeEnv(t *testing.T) {
 	}
 }
 
+func TestResolveAppliesConfiguredContextWindow(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeConfig(t, home, `{
+  "active": "local-qwen",
+  "models": [
+    {
+      "name": "local-qwen",
+      "provider": "lmstudio",
+      "model": "qwen/qwen3.6-35b-a3b",
+      "baseUrl": "http://127.0.0.1:1234/v1",
+      "contextWindow": 32768
+    }
+  ]
+}`)
+
+	model, _ := Resolve()
+	if model == nil {
+		t.Fatal("expected configured model")
+	}
+	if model.ContextWindow != 32768 {
+		t.Fatalf("expected contextWindow 32768, got %d", model.ContextWindow)
+	}
+}
+
 func TestResolveUsesV2ProviderConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

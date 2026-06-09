@@ -49,6 +49,9 @@ type ModelConfig struct {
 	Provider     string   `json:"provider"`
 	Model        string   `json:"model"`
 	Capabilities []string `json:"capabilities,omitempty"`
+	// ContextWindow overrides the assumed token context window for this model.
+	// When 0, the agent falls back to its built-in default.
+	ContextWindow int `json:"contextWindow,omitempty"`
 	// Legacy per-model connection fields. New config files keep these values in
 	// Config.Providers, but these remain readable for existing files.
 	BaseURL string            `json:"baseUrl,omitempty"`
@@ -109,14 +112,16 @@ const exampleConfigJSON = `{
       "description": "local coding model",
       "provider": "lmstudio",
       "model": "qwen/qwen3.6-35b-a3b",
-      "capabilities": ["tools"]
+      "capabilities": ["tools"],
+      "contextWindow": 32768
     },
     {
       "name": "deepseek",
       "description": "remote fallback model",
       "provider": "deepseek",
       "model": "deepseek-chat",
-      "capabilities": ["tools"]
+      "capabilities": ["tools"],
+      "contextWindow": 128000
     }
   ]
 }`
@@ -1028,11 +1033,12 @@ func registerModel(cfg ModelConfig, baseURL string, headers map[string]string) {
 		name = cfg.Model + " (" + cfg.Provider + ")"
 	}
 	providers.Models[cfg.Provider][cfg.Model] = &types.Model{
-		ID:         cfg.Model,
-		Name:       name,
-		ProviderID: cfg.Provider,
-		BaseURL:    baseURL,
-		Headers:    headers,
+		ID:            cfg.Model,
+		Name:          name,
+		ProviderID:    cfg.Provider,
+		BaseURL:       baseURL,
+		Headers:       headers,
+		ContextWindow: cfg.ContextWindow,
 	}
 }
 
