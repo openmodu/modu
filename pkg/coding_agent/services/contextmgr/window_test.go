@@ -28,4 +28,8 @@ func TestTokenAccountingAndReset(t *testing.T) {
 	if m.Tokens() != 200 {
 		t.Fatalf("expected 200 accumulated tokens, got %d", m.Tokens())
 	}
+	m.ResetUsage()
+	if m.Tokens() != 0 {
+		t.Fatalf("expected reset usage to clear tokens, got %d", m.Tokens())
+	}
 }

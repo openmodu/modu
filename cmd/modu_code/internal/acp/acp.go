@@ -118,7 +118,10 @@ func (s *Server) dispatch(ctx context.Context, msg *rpcMsg) {
 		n := s.sessID.Add(1)
 		// Each session/new clears history so this subprocess is stateless
 		// across sessions (matches how ACP uses (agentID,cwd) as session key).
-		s.session.GetAgent().ClearMessages()
+		if err := s.session.ClearConversation(); err != nil {
+			s.replyErr(id, -32000, err.Error())
+			return
+		}
 		s.reply(id, map[string]any{"sessionId": fmt.Sprintf("modu-sess-%d", n)})
 	case "session/prompt":
 		go s.handlePrompt(ctx, id, msg)

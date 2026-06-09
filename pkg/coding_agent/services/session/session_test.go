@@ -46,6 +46,20 @@ func TestSessionManager(t *testing.T) {
 	}
 }
 
+func TestSessionManagerFileIsNamedBySessionID(t *testing.T) {
+	dir := t.TempDir()
+
+	mgr, err := NewManager(dir, "/test/project")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := mgr.SessionID() + ".jsonl"
+	if got := filepath.Base(mgr.FilePath()); got != want {
+		t.Fatalf("session file name = %q, want %q", got, want)
+	}
+}
+
 func TestAppendSidecarDoesNotMoveLeaf(t *testing.T) {
 	dir := t.TempDir()
 

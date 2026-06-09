@@ -1058,6 +1058,10 @@ func defaultContextWindow(providerID, modelID string) int {
 		return 400000
 	case "google", "gemini", "google-gemini-cli", "google-vertex":
 		return 1000000
+	case "xiaomi-mimo":
+		if strings.Contains(modelID, "mimo-v2.5-pro") {
+			return 1000000
+		}
 	case "lmstudio", "ollama":
 		if strings.Contains(modelID, "qwen3.6-35b-a3b") {
 			return 262144

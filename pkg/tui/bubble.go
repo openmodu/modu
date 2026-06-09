@@ -1714,7 +1714,13 @@ func (b *bubbleTUI) renderInlineHeader() string {
 	contentWidth := max(12, width-6)
 	info := b.headerInfo()
 	lines := []string{uiWhiteText.Bold(true).Render("modu_code")}
+	if info.sessionID != "" {
+		lines = append(lines, uiDimText.Render("session ")+uiWhiteText.Render(info.sessionID))
+	}
 	lines = append(lines, uiDimText.Render("model  ")+uiWhiteText.Render(info.model))
+	if context := b.contextStatusLine(); context != "" {
+		lines = append(lines, uiDimText.Render("context ")+uiWhiteText.Render(strings.TrimPrefix(context, "ctx ")))
+	}
 	if info.cwd != "" {
 		lines = append(lines, uiDimText.Render("cwd    ")+uiWhiteText.Render(info.cwd))
 	}
@@ -1741,6 +1747,9 @@ func (b *bubbleTUI) renderHeaderLine(width int) string {
 	for _, mode := range info.modes {
 		rightParts = append(rightParts, uiSecondaryText.Render(mode))
 	}
+	if info.sessionID != "" {
+		rightParts = append(rightParts, uiSecondaryText.Render("session "+info.sessionID))
+	}
 	if info.channel != "" {
 		rightParts = append(rightParts, uiSecondaryText.Render(info.channel))
 	}
@@ -1755,10 +1764,11 @@ func (b *bubbleTUI) renderHeaderLine(width int) string {
 }
 
 type bubbleHeaderInfo struct {
-	model   string
-	cwd     string
-	modes   []string
-	channel string
+	model     string
+	sessionID string
+	cwd       string
+	modes     []string
+	channel   string
 }
 
 func (b *bubbleTUI) headerInfo() bubbleHeaderInfo {
@@ -1783,6 +1793,9 @@ func (b *bubbleTUI) headerInfo() bubbleHeaderInfo {
 		}
 	}
 	info.model = model
+	if b.session != nil {
+		info.sessionID = shortSessionID(b.session.GetSessionID())
+	}
 
 	cwd := ""
 	if b.session != nil {
@@ -1807,6 +1820,14 @@ func (b *bubbleTUI) headerInfo() bubbleHeaderInfo {
 		info.channel = "@" + strings.TrimPrefix(b.model.tgUsername, "@")
 	}
 	return info
+}
+
+func shortSessionID(id string) string {
+	id = strings.TrimSpace(id)
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
 }
 
 func (b *bubbleTUI) renderInputControl() string {
@@ -2029,6 +2050,9 @@ func (b *bubbleTUI) renderStatusLine() string {
 		return uiDimText.Render(strings.TrimSpace(b.configHint()))
 	}
 	if status := b.model.effectiveStatusMsg(time.Now()); status != "" && status != "thinking" {
+		if context := b.contextStatusLine(); context != "" {
+			status += "  |  " + context
+		}
 		if queue := b.queueStatusLine(); queue != "" {
 			status += "  |  " + queue
 		}
@@ -2041,6 +2065,9 @@ func (b *bubbleTUI) renderStatusLine() string {
 		}
 		if b.session.ActiveWorktree() != "" {
 			parts = append(parts, "worktree")
+		}
+		if context := b.contextStatusLine(); context != "" {
+			parts = append(parts, context)
 		}
 		if queue := b.queueStatusLine(); queue != "" {
 			parts = append(parts, queue)
@@ -2055,6 +2082,42 @@ func (b *bubbleTUI) renderStatusLine() string {
 		parts = append(parts, "enter send", "ctrl+c exit")
 	}
 	return uiDimText.Render(strings.Join(parts, "  |  "))
+}
+
+func (b *bubbleTUI) contextStatusLine() string {
+	if b.session == nil {
+		return ""
+	}
+	model := b.session.GetModel()
+	if model == nil || model.ContextWindow <= 0 {
+		return ""
+	}
+	used := b.session.GetSessionStats().TotalTokens
+	if used < 0 {
+		used = 0
+	}
+	percent := used * 100 / model.ContextWindow
+	return fmt.Sprintf("ctx %s/%s %d%%", formatCompactTokens(used), formatCompactTokens(model.ContextWindow), percent)
+}
+
+func formatCompactTokens(n int) string {
+	if n < 0 {
+		n = 0
+	}
+	switch {
+	case n >= 1000000:
+		if n%1000000 == 0 {
+			return fmt.Sprintf("%dM", n/1000000)
+		}
+		return fmt.Sprintf("%.1fM", float64(n)/1000000)
+	case n >= 1000:
+		if n%1000 == 0 {
+			return fmt.Sprintf("%dK", n/1000)
+		}
+		return fmt.Sprintf("%.1fK", float64(n)/1000)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
 }
 
 func (b *bubbleTUI) queueStatusLine() string {

@@ -107,6 +107,13 @@ func (m *Manager) Tokens() int {
 	return m.totalTokens
 }
 
+// ResetUsage clears accumulated token usage for a fresh conversation context.
+func (m *Manager) ResetUsage() {
+	m.mu.Lock()
+	m.totalTokens = 0
+	m.mu.Unlock()
+}
+
 // IsCompacting reports whether a compaction is currently running.
 func (m *Manager) IsCompacting() bool {
 	m.mu.Lock()
