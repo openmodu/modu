@@ -104,6 +104,49 @@ func TestRenderMarkdownTableCJKAligned(t *testing.T) {
 	}
 }
 
+func TestNormalizeEmojiWidthAlignsCells(t *testing.T) {
+	// ☁ ☀ 🌫 are text-default emoji: width 1 to uniseg, width 2 in the
+	// terminal. After normalization the measured width must equal the
+	// terminal width (2 each), so VS16 is appended; → and CJK stay untouched.
+	got := normalizeEmojiWidth("☁ 多云 → ☀ 晴")
+	if lipgloss.Width(got) != 15 {
+		t.Fatalf("want measured width 15 after normalization, got %d (%q)", lipgloss.Width(got), got)
+	}
+	// Plain arrow must not gain a selector.
+	if strings.ContainsRune(normalizeEmojiWidth("→"), variationSelector16) {
+		t.Fatal("arrow should not be widened")
+	}
+	// Already-wide emoji (⛅) and an emoji already carrying VS16 are unchanged.
+	if out := normalizeEmojiWidth("⛅ 局部多云"); strings.ContainsRune(out, variationSelector16) {
+		t.Fatalf("already-wide emoji should not gain a selector: %q", out)
+	}
+	withVS := "☁" + string(variationSelector16)
+	if normalizeEmojiWidth(withVS) != withVS {
+		t.Fatal("emoji already carrying VS16 should be left as-is")
+	}
+}
+
+func TestRenderMarkdownTableEmojiRowsAligned(t *testing.T) {
+	seg := mdSegment{
+		isTable: true,
+		rows: [][]string{
+			{"时间", "天气", "温度"},
+			{"上午", "☁ 多云 → ☀ 晴", "20-23°C"},
+			{"中午", "⛅ 局部多云", "25°C"},
+			{"晚上", "🌫 轻雾", "22°C"},
+		},
+		aligns: []lipgloss.Position{lipgloss.Left, lipgloss.Left, lipgloss.Left},
+	}
+	out := renderMarkdownTableSegment(seg, 80)
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	w0 := lipgloss.Width(lines[0])
+	for i, ln := range lines {
+		if lipgloss.Width(ln) != w0 {
+			t.Fatalf("line %d width %d != %d (misaligned):\n%s", i, lipgloss.Width(ln), w0, out)
+		}
+	}
+}
+
 func TestRenderMarkdownTableWidthCap(t *testing.T) {
 	seg := mdSegment{
 		isTable: true,

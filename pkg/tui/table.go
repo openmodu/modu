@@ -7,7 +7,55 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/lipgloss/table"
+	"github.com/rivo/uniseg"
 )
+
+const (
+	variationSelector16 = rune(0xFE0F) // emoji (wide) presentation selector
+	variationSelector15 = rune(0xFE0E) // text (narrow) presentation selector
+)
+
+// emojiNeedsVS16 reports whether r is an emoji base that renders one cell wide
+// to uniseg/lipgloss but two cells wide in an emoji-capable terminal. Such
+// "text-default" emoji (☁ ☀ ❤ 🌫 …) are the source of GFM table misalignment:
+// the column sizer measures width 1 while the terminal draws width 2, shifting
+// every border to the right of the cell. A rune qualifies when uniseg measures
+// it as width 1 alone but width 2 once an emoji variation selector is appended
+// — this reuses uniseg's own emoji data, so plain symbols (→ ✓ ° α) and CJK are
+// correctly left untouched.
+func emojiNeedsVS16(r rune) bool {
+	if r < 0x80 {
+		return false
+	}
+	if r >= 0x1F1E6 && r <= 0x1F1FF { // regional indicators (flags) — leave alone
+		return false
+	}
+	s := string(r)
+	return uniseg.StringWidth(s) == 1 && uniseg.StringWidth(s+string(variationSelector16)) == 2
+}
+
+// normalizeEmojiWidth appends a VS16 to bare text-default emoji so that the
+// width uniseg/lipgloss measures matches what the terminal actually draws,
+// keeping GFM table borders aligned. Emoji already followed by a variation
+// selector are left as-is.
+func normalizeEmojiWidth(s string) string {
+	if s == "" {
+		return s
+	}
+	runes := []rune(s)
+	var b strings.Builder
+	b.Grow(len(s) + 4)
+	for i, r := range runes {
+		b.WriteRune(r)
+		if i+1 < len(runes) && (runes[i+1] == variationSelector16 || runes[i+1] == variationSelector15) {
+			continue
+		}
+		if emojiNeedsVS16(r) {
+			b.WriteRune(variationSelector16)
+		}
+	}
+	return b.String()
+}
 
 // tableDelimiterRe matches a GFM table delimiter row such as "|---|:--:|".
 // The whole line must consist only of pipes, dashes, colons and spaces and
@@ -20,9 +68,11 @@ var inlineCodeRe = regexp.MustCompile("`([^`]+)`")
 
 // renderInlineCellMarkdown styles inline-code spans inside a table cell so the
 // backtick delimiters are dropped and the code is colored, instead of leaking
-// literal backticks into the rendered table. lipgloss.Width strips the added
-// ANSI before measuring, so column sizing stays correct.
+// literal backticks into the rendered table. It also normalizes emoji width so
+// the column sizer and the terminal agree. lipgloss.Width strips the added ANSI
+// before measuring, so column sizing stays correct.
 func renderInlineCellMarkdown(s string) string {
+	s = normalizeEmojiWidth(s)
 	return inlineCodeRe.ReplaceAllStringFunc(s, func(m string) string {
 		return uiCodeText.Render(m[1 : len(m)-1])
 	})
@@ -32,8 +82,8 @@ func renderInlineCellMarkdown(s string) string {
 // table (rendered with lipgloss) or plain markdown (rendered with glamour).
 type mdSegment struct {
 	isTable bool
-	text    string             // plain markdown, when isTable is false
-	rows    [][]string         // rows[0] is the header, when isTable is true
+	text    string              // plain markdown, when isTable is false
+	rows    [][]string          // rows[0] is the header, when isTable is true
 	aligns  []lipgloss.Position // per-column alignment from the delimiter row
 }
 
