@@ -2082,6 +2082,7 @@ func TestSetModelByName(t *testing.T) {
 func TestSetModelClearsConversationContextWhenModelChanges(t *testing.T) {
 	session := newTestSession(t, newTestModel())
 	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "old context"})
+	session.ctxMgr.AddUsage(5000)
 	if len(session.GetMessages()) == 0 {
 		t.Fatal("expected setup message")
 	}
@@ -2090,6 +2091,9 @@ func TestSetModelClearsConversationContextWhenModelChanges(t *testing.T) {
 
 	if got := len(session.GetMessages()); got != 0 {
 		t.Fatalf("expected model switch to clear conversation context, got %d messages", got)
+	}
+	if got := session.GetSessionStats().TotalTokens; got != 0 {
+		t.Fatalf("expected model switch to reset token usage, got %d", got)
 	}
 }
 
@@ -2110,12 +2114,16 @@ func TestSetModelRefreshesConnectedModelPrompt(t *testing.T) {
 func TestClearConversationClearsInMemoryMessages(t *testing.T) {
 	session := newTestSession(t, newTestModel())
 	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "old context"})
+	session.ctxMgr.AddUsage(5000)
 
 	if err := session.ClearConversation(); err != nil {
 		t.Fatalf("ClearConversation: %v", err)
 	}
 	if got := len(session.GetMessages()); got != 0 {
 		t.Fatalf("expected clear conversation to clear in-memory messages, got %d", got)
+	}
+	if got := session.GetSessionStats().TotalTokens; got != 0 {
+		t.Fatalf("expected clear conversation to reset token usage, got %d", got)
 	}
 }
 
