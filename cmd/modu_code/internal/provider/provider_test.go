@@ -89,6 +89,45 @@ func TestResolveAppliesConfiguredContextWindow(t *testing.T) {
 	}
 }
 
+func TestResolveAppliesProviderDefaultContextWindow(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeConfig(t, home, `{
+  "active": "deepseek",
+  "models": [
+    {
+      "name": "deepseek",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "baseUrl": "https://api.deepseek.com/v1"
+    }
+  ]
+}`)
+
+	model, _ := Resolve()
+	if model == nil {
+		t.Fatal("expected configured model")
+	}
+	if model.ContextWindow != 1000000 {
+		t.Fatalf("expected default contextWindow 1000000, got %d", model.ContextWindow)
+	}
+}
+
+func TestResolveEnvProviderDefaultContextWindow(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("DEEPSEEK_API_KEY", "deepseek-key")
+	t.Setenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
+
+	model, _ := Resolve()
+	if model == nil {
+		t.Fatal("expected env model")
+	}
+	if model.ContextWindow != 1000000 {
+		t.Fatalf("expected default contextWindow 1000000, got %d", model.ContextWindow)
+	}
+}
+
 func TestResolveUsesV2ProviderConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

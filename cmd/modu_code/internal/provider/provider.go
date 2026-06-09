@@ -113,7 +113,7 @@ const exampleConfigJSON = `{
       "provider": "lmstudio",
       "model": "qwen/qwen3.6-35b-a3b",
       "capabilities": ["tools"],
-      "contextWindow": 32768
+      "contextWindow": 262144
     },
     {
       "name": "deepseek",
@@ -121,7 +121,7 @@ const exampleConfigJSON = `{
       "provider": "deepseek",
       "model": "deepseek-chat",
       "capabilities": ["tools"],
-      "contextWindow": 128000
+      "contextWindow": 1000000
     }
   ]
 }`
@@ -146,7 +146,7 @@ func Resolve() (*types.Model, func(string) (string, error)) {
 			openai.WithAPIKey(key),
 			openai.WithHeaders(map[string]string{"anthropic-version": "2023-06-01"}),
 		))
-		model := &types.Model{ID: modelID, Name: modelID + " (Anthropic)", ProviderID: "anthropic", BaseURL: baseURL}
+		model := &types.Model{ID: modelID, Name: modelID + " (Anthropic)", ProviderID: "anthropic", BaseURL: baseURL, ContextWindow: defaultContextWindow("anthropic", modelID)}
 		return model, func(p string) (string, error) {
 			if p == "anthropic" {
 				return key, nil
@@ -165,7 +165,7 @@ func Resolve() (*types.Model, func(string) (string, error)) {
 			baseURL = "https://api.openai.com/v1"
 		}
 		providers.Register(openai.New("openai", openai.WithBaseURL(baseURL), openai.WithAPIKey(key)))
-		model := &types.Model{ID: modelID, Name: "OpenAI " + modelID, ProviderID: "openai", BaseURL: baseURL}
+		model := &types.Model{ID: modelID, Name: "OpenAI " + modelID, ProviderID: "openai", BaseURL: baseURL, ContextWindow: defaultContextWindow("openai", modelID)}
 		return model, func(p string) (string, error) {
 			if p == "openai" {
 				return key, nil
@@ -181,7 +181,7 @@ func Resolve() (*types.Model, func(string) (string, error)) {
 		}
 		baseURL := "https://api.deepseek.com/v1"
 		providers.Register(openai.New("deepseek", openai.WithBaseURL(baseURL), openai.WithAPIKey(key)))
-		model := &types.Model{ID: modelID, Name: "DeepSeek " + modelID, ProviderID: "deepseek", BaseURL: baseURL}
+		model := &types.Model{ID: modelID, Name: "DeepSeek " + modelID, ProviderID: "deepseek", BaseURL: baseURL, ContextWindow: defaultContextWindow("deepseek", modelID)}
 		return model, func(p string) (string, error) {
 			if p == "deepseek" {
 				return key, nil
@@ -198,7 +198,7 @@ func Resolve() (*types.Model, func(string) (string, error)) {
 		}
 		baseURL := strings.TrimRight(host, "/") + "/v1"
 		providers.Register(openai.New("ollama", openai.WithBaseURL(baseURL)))
-		model := &types.Model{ID: modelID, Name: modelID + " (Ollama)", ProviderID: "ollama", BaseURL: baseURL}
+		model := &types.Model{ID: modelID, Name: modelID + " (Ollama)", ProviderID: "ollama", BaseURL: baseURL, ContextWindow: defaultContextWindow("ollama", modelID)}
 		return model, func(string) (string, error) { return "", nil }
 	}
 
@@ -212,7 +212,7 @@ func Resolve() (*types.Model, func(string) (string, error)) {
 			baseURL = "http://localhost:1234/v1"
 		}
 		providers.Register(openai.New("lmstudio", openai.WithBaseURL(baseURL)))
-		model := &types.Model{ID: modelName, Name: modelName + " (LM Studio)", ProviderID: "lmstudio"}
+		model := &types.Model{ID: modelName, Name: modelName + " (LM Studio)", ProviderID: "lmstudio", BaseURL: baseURL, ContextWindow: defaultContextWindow("lmstudio", modelName)}
 		return model, func(string) (string, error) { return "", nil }
 	}
 
@@ -1032,14 +1032,38 @@ func registerModel(cfg ModelConfig, baseURL string, headers map[string]string) {
 	if name == "" {
 		name = cfg.Model + " (" + cfg.Provider + ")"
 	}
+	contextWindow := cfg.ContextWindow
+	if contextWindow == 0 {
+		contextWindow = defaultContextWindow(cfg.Provider, cfg.Model)
+	}
 	providers.Models[cfg.Provider][cfg.Model] = &types.Model{
 		ID:            cfg.Model,
 		Name:          name,
 		ProviderID:    cfg.Provider,
 		BaseURL:       baseURL,
 		Headers:       headers,
-		ContextWindow: cfg.ContextWindow,
+		ContextWindow: contextWindow,
 	}
+}
+
+func defaultContextWindow(providerID, modelID string) int {
+	providerID = strings.ToLower(strings.TrimSpace(providerID))
+	modelID = strings.ToLower(strings.TrimSpace(modelID))
+	switch providerID {
+	case "anthropic":
+		return 1000000
+	case "deepseek":
+		return 1000000
+	case "openai":
+		return 400000
+	case "google", "gemini", "google-gemini-cli", "google-vertex":
+		return 1000000
+	case "lmstudio", "ollama":
+		if strings.Contains(modelID, "qwen3.6-35b-a3b") {
+			return 262144
+		}
+	}
+	return 0
 }
 
 func unregisterModel(cfg ModelConfig) {
