@@ -46,20 +46,22 @@ go run ./cmd/modu_code
       "description": "local coding model",
       "provider": "lmstudio",
       "model": "qwen/qwen3.6-35b-a3b",
-      "capabilities": ["tools"]
+      "capabilities": ["tools"],
+      "contextWindow": 262144
     },
     {
       "name": "deepseek",
       "description": "remote fallback model",
       "provider": "deepseek",
       "model": "deepseek-chat",
-      "capabilities": ["tools"]
+      "capabilities": ["tools"],
+      "contextWindow": 1000000
     }
   ]
 }
 ```
 
-`providers` 只描述连接方式，`models` 只描述可选模型；`active` 是默认模型，`scopedModels` 是模型循环范围，`roles` 预留给 summary/dispatcher 等专用模型。
+`providers` 只描述连接方式，`models` 只描述可选模型；`active` 是默认模型，`scopedModels` 是模型循环范围，`roles` 预留给 summary/dispatcher 等专用模型。`contextWindow` 可显式覆盖模型上下文窗口；未配置时，内置厂商会按当前厂商最大窗口补默认值。
 
 运行中输入 `/model` 会打开模型选择器，可用方向键选择、`Enter` 确认、`Esc` 取消。也可以用 `/model <query>` 带初始搜索打开选择器。切换后会写回 `active`，下次启动继续使用该模型；如果实际切换到了另一个模型，会清空旧对话上下文并在状态里明确提示。
 
