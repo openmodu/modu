@@ -113,6 +113,35 @@ func TestResolveAppliesProviderDefaultContextWindow(t *testing.T) {
 	}
 }
 
+func TestResolveAppliesXiaomiMimoDefaultContextWindow(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeConfig(t, home, `{
+  "active": "mimo-v2.5-pro",
+  "providers": {
+    "xiaomi-mimo": {
+      "type": "openai-compatible",
+      "baseUrl": "https://token-plan-cn.xiaomimimo.com/v1"
+    }
+  },
+  "models": [
+    {
+      "name": "mimo-v2.5-pro",
+      "provider": "xiaomi-mimo",
+      "model": "mimo-v2.5-pro"
+    }
+  ]
+}`)
+
+	model, _ := Resolve()
+	if model == nil {
+		t.Fatal("expected configured model")
+	}
+	if model.ContextWindow != 1000000 {
+		t.Fatalf("expected default contextWindow 1000000, got %d", model.ContextWindow)
+	}
+}
+
 func TestResolveEnvProviderDefaultContextWindow(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
