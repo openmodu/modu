@@ -687,13 +687,25 @@ func (b *bubbleTUI) finishPromptOperation(err error, failedPrompt string) tea.Cm
 		finishErr = nil
 	}
 	b.markRunningQueuedUserBlock(queueStateForPromptError(err, steeringCancel))
-	b.model.finishActivity(finishErr)
+	summary := b.model.finishActivity(finishErr)
 	b.model.queryActive = false
 	if b.model.statusMsg != "interrupted" {
 		b.model.setStatus("")
 	}
 	b.model.state = uiStateInput
-	return b.printTurnSeparatorCmd()
+	sep := b.printTurnSeparatorCmd()
+	// In inline mode, commit the completion summary to the permanent
+	// scrollback (like Claude Code) instead of leaving it in the transient
+	// live region, where it would vanish after transientActivityTTL.
+	if b.inline && summary != "" {
+		b.model.clearActivity()
+		line := tea.Println("  " + uiDimText.Render(summary))
+		if sep != nil {
+			return tea.Sequence(line, sep)
+		}
+		return line
+	}
+	return sep
 }
 
 func (b *bubbleTUI) continueQueuedPrompt() tea.Cmd {

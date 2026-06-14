@@ -2,8 +2,11 @@ package tui
 
 import (
 	"context"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -752,5 +755,77 @@ func runBubbleTestCmd(t *testing.T, root *bubbleTUI, cmd tea.Cmd) {
 	next, _ := root.Update(cmd())
 	if updated, ok := next.(*bubbleTUI); ok && updated != root {
 		*root = *updated
+	}
+}
+
+// collectPrintlnBodies executes a tea.Cmd and recursively collects the bodies
+// of any tea.Println messages it emits, walking batch/sequence command slices.
+func collectPrintlnBodies(cmd tea.Cmd) []string {
+	if cmd == nil {
+		return nil
+	}
+	return collectPrintlnFromMsg(cmd())
+}
+
+func collectPrintlnFromMsg(msg tea.Msg) []string {
+	if msg == nil {
+		return nil
+	}
+	// tea.Sequence / tea.Batch produce an unexported []tea.Cmd message.
+	if v := reflect.ValueOf(msg); v.Kind() == reflect.Slice {
+		var out []string
+		for i := 0; i < v.Len(); i++ {
+			if c, ok := v.Index(i).Interface().(tea.Cmd); ok {
+				out = append(out, collectPrintlnBodies(c)...)
+			}
+		}
+		return out
+	}
+	if strings.Contains(fmt.Sprintf("%T", msg), "printLineMessage") {
+		// printLineMessage formats as "{body}".
+		return []string{strings.Trim(fmt.Sprintf("%v", msg), "{}")}
+	}
+	return nil
+}
+
+func TestBubbleInlineCommitsCompletionSummaryToScrollback(t *testing.T) {
+	root := newBubbleTUI(context.Background(), nil, &types.Model{ID: "test", Name: "Test", ProviderID: "test"}, "", nil, CommandHooks{})
+	root.inline = true
+	root.width = 80
+	root.model.state = uiStateQuerying
+	root.model.queryActive = true
+	root.model.queryStartTime = time.Now().Add(-3 * time.Second)
+
+	cmd := root.finishPromptOperation(nil, "")
+
+	bodies := collectPrintlnBodies(cmd)
+	found := false
+	for _, b := range bodies {
+		if strings.Contains(stripANSIForGoTUI(b), "Completed") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected completion summary printed to scrollback, got %#v", bodies)
+	}
+	// The transient live region must not also retain the summary (it would
+	// otherwise vanish after the TTL, the bug being fixed).
+	if got := root.model.effectiveLastActivity(time.Now()); strings.TrimSpace(stripANSIForGoTUI(got)) != "" {
+		t.Fatalf("expected transient activity cleared in inline mode, got %q", got)
+	}
+}
+
+func TestBubbleNonInlineKeepsTransientCompletionSummary(t *testing.T) {
+	root := newBubbleTUI(context.Background(), nil, &types.Model{ID: "test", Name: "Test", ProviderID: "test"}, "", nil, CommandHooks{})
+	root.inline = false
+	root.width = 80
+	root.model.state = uiStateQuerying
+	root.model.queryActive = true
+	root.model.queryStartTime = time.Now().Add(-2 * time.Second)
+
+	_ = root.finishPromptOperation(nil, "")
+
+	if got := stripANSIForGoTUI(root.model.effectiveLastActivity(time.Now())); !strings.Contains(got, "Completed") {
+		t.Fatalf("expected non-inline mode to keep transient completion summary, got %q", got)
 	}
 }
