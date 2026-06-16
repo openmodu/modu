@@ -37,16 +37,26 @@ func buildChatRequest(model *types.Model, llmCtx *types.LLMContext, opts *types.
 	if llmCtx.SystemPrompt != "" {
 		req.Messages = append(req.Messages, providers.Message{Role: providers.RoleSystem, Content: llmCtx.SystemPrompt})
 	}
-	for _, message := range llmCtx.Messages {
+	// Only the most recent assistant message keeps its thinking/reasoning content.
+	// Replaying thinking from prior turns re-injects stale reasoning paths into the
+	// model's context, so historical thinking is dropped here.
+	lastAssistantIdx := -1
+	for i, message := range llmCtx.Messages {
+		switch message.(type) {
+		case types.AssistantMessage, *types.AssistantMessage:
+			lastAssistantIdx = i
+		}
+	}
+	for i, message := range llmCtx.Messages {
 		switch v := message.(type) {
 		case types.UserMessage:
 			req.Messages = append(req.Messages, userProviderMessage(v.Content))
 		case *types.UserMessage:
 			req.Messages = append(req.Messages, userProviderMessage(v.Content))
 		case types.AssistantMessage:
-			req.Messages = append(req.Messages, assistantProviderMessage(v.Content, knownTools))
+			req.Messages = append(req.Messages, assistantProviderMessage(v.Content, knownTools, i == lastAssistantIdx))
 		case *types.AssistantMessage:
-			req.Messages = append(req.Messages, assistantProviderMessage(v.Content, knownTools))
+			req.Messages = append(req.Messages, assistantProviderMessage(v.Content, knownTools, i == lastAssistantIdx))
 		case types.ToolResultMessage:
 			req.Messages = append(req.Messages, providers.Message{
 				Role:       providers.RoleTool,
@@ -139,14 +149,14 @@ func rawBlocksToParts(blocks []interface{}) []any {
 	return parts
 }
 
-func assistantProviderMessage(content []types.ContentBlock, knownTools map[string]bool) providers.Message {
+func assistantProviderMessage(content []types.ContentBlock, knownTools map[string]bool, keepThinking bool) providers.Message {
 	msg := providers.Message{Role: providers.RoleAssistant}
 	var textBuf string
 	var reasoningBuf string
 	for _, block := range content {
 		switch tc := block.(type) {
 		case *types.ThinkingContent:
-			if tc != nil {
+			if tc != nil && keepThinking {
 				reasoningBuf += tc.Thinking
 			}
 		case *types.TextContent:

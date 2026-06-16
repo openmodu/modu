@@ -58,6 +58,43 @@ func TestBuildChatRequestDropsOrphanToolResults(t *testing.T) {
 	}
 }
 
+func TestBuildChatRequestKeepsOnlyCurrentTurnThinking(t *testing.T) {
+	req := buildChatRequest(&types.Model{ID: "test-model"}, &types.LLMContext{
+		Messages: []types.AgentMessage{
+			types.UserMessage{Role: types.RoleUser, Content: "q1"},
+			types.AssistantMessage{Role: types.RoleAssistant, Content: []types.ContentBlock{
+				&types.ThinkingContent{Type: "thinking", Thinking: "old reasoning"},
+				&types.TextContent{Type: "text", Text: "answer 1"},
+			}},
+			types.UserMessage{Role: types.RoleUser, Content: "q2"},
+			types.AssistantMessage{Role: types.RoleAssistant, Content: []types.ContentBlock{
+				&types.ThinkingContent{Type: "thinking", Thinking: "current reasoning"},
+				&types.TextContent{Type: "text", Text: "answer 2"},
+			}},
+		},
+	}, &types.SimpleStreamOptions{})
+
+	var firstAssistant, lastAssistant *providers.Message
+	for i := range req.Messages {
+		if req.Messages[i].Role != providers.RoleAssistant {
+			continue
+		}
+		if firstAssistant == nil {
+			firstAssistant = &req.Messages[i]
+		}
+		lastAssistant = &req.Messages[i]
+	}
+	if firstAssistant == nil || lastAssistant == nil || firstAssistant == lastAssistant {
+		t.Fatalf("expected two assistant messages, got %#v", req.Messages)
+	}
+	if firstAssistant.ReasoningContent != "" {
+		t.Fatalf("expected historical thinking to be dropped, got %q", firstAssistant.ReasoningContent)
+	}
+	if lastAssistant.ReasoningContent != "current reasoning" {
+		t.Fatalf("expected current-turn thinking to be kept, got %q", lastAssistant.ReasoningContent)
+	}
+}
+
 func TestBuildChatRequestKeepsValidToolCallChain(t *testing.T) {
 	req := buildChatRequest(&types.Model{ID: "test-model"}, &types.LLMContext{
 		Tools: []types.ToolDefinition{{Name: "read"}},
