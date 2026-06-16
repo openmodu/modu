@@ -28,10 +28,6 @@ var (
 				Border(lipgloss.RoundedBorder()).
 				BorderForeground(uiPrimary).
 				Padding(0, 2)
-	uiBubbleInput = lipgloss.NewStyle().
-			Border(lipgloss.NormalBorder(), true, false, true, false).
-			BorderForeground(uiMuted).
-			Padding(0, 1, 0, 0) // top/right/bottom/left: no left pad so ❯ sits flush-left
 	uiBubblePopup = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(uiSecondary).

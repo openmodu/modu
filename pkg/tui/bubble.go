@@ -39,6 +39,7 @@ type bubbleTUI struct {
 	history     []string
 	historyIdx  int
 	historyHold string
+	pastes      []pasteEntry
 
 	slashMatches []slashCommandDef
 	slashIndex   int
@@ -428,6 +429,15 @@ func (b *bubbleTUI) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Collapse a multi-line bracketed paste into a single atomic placeholder
+	// rune (rendered as "[Pasted text +N lines]"), the way Claude Code does.
+	// Keeping the input box to one short line means it never wraps, so the
+	// terminal never reflows it on resize — avoiding the "串行" corruption.
+	if msg.Paste && strings.ContainsRune(string(msg.Runes), '\n') {
+		b.insertPaste(string(msg.Runes))
+		return b, nil
+	}
+
 	for _, r := range msg.Runes {
 		b.insertRune(r)
 	}
@@ -558,7 +568,7 @@ func (b *bubbleTUI) updateModelSelectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (b *bubbleTUI) submit(text string, mode submitMode) tea.Cmd {
-	line := strings.TrimSpace(text)
+	line := strings.TrimSpace(b.expandPastes(text))
 	if line == "" {
 		if mode == submitModeSteer && b.model.queryActive {
 			b.model.setTransientStatus("steer requires a message")
@@ -567,6 +577,7 @@ func (b *bubbleTUI) submit(text string, mode submitMode) tea.Cmd {
 	}
 	b.draft = ""
 	b.cursor = 0
+	b.pastes = nil
 	b.slashMatches = nil
 	b.slashIndex = 0
 	b.appendHistory(line)
@@ -1522,6 +1533,52 @@ func (b *bubbleTUI) currentWorkingDir() string {
 	return b.session.Cwd()
 }
 
+// pasteRuneBase is the start of a Unicode Private-Use range used as atomic
+// placeholders for collapsed pastes. Paste i is represented in the draft by
+// the single rune pasteRuneBase+i, so the existing rune-based cursor/backspace
+// logic treats each collapsed paste as one indivisible unit for free.
+const pasteRuneBase rune = 0xE000
+
+type pasteEntry struct {
+	content string
+	lines   int
+}
+
+func isPasteRune(r rune, n int) bool {
+	return r >= pasteRuneBase && r < pasteRuneBase+rune(n)
+}
+
+// pasteLabel is the single-line text shown in place of a collapsed paste.
+func pasteLabel(e pasteEntry) string {
+	return fmt.Sprintf("[Pasted text +%d lines]", e.lines)
+}
+
+func (b *bubbleTUI) insertPaste(content string) {
+	idx := len(b.pastes)
+	b.pastes = append(b.pastes, pasteEntry{
+		content: content,
+		lines:   strings.Count(content, "\n") + 1,
+	})
+	b.insertRune(pasteRuneBase + rune(idx))
+}
+
+// expandPastes replaces every paste-placeholder rune with its stored content,
+// turning the collapsed draft back into the real text before it is submitted.
+func (b *bubbleTUI) expandPastes(text string) string {
+	if len(b.pastes) == 0 {
+		return text
+	}
+	var sb strings.Builder
+	for _, r := range text {
+		if isPasteRune(r, len(b.pastes)) {
+			sb.WriteString(b.pastes[r-pasteRuneBase].content)
+		} else {
+			sb.WriteRune(r)
+		}
+	}
+	return sb.String()
+}
+
 func (b *bubbleTUI) insertRune(r rune) {
 	rs := []rune(b.draft)
 	b.cursor = clampInt(b.cursor, 0, len(rs))
@@ -1869,7 +1926,13 @@ func (b *bubbleTUI) renderInputControl() string {
 		b.model.state == uiStateConfigSelect {
 		return uiBubblePopup.Width(width).Render(input)
 	}
-	return uiBubbleInput.Width(width).Render(input)
+	// Render the prompt at its natural width — no full-width border or
+	// width-padding. A full-width line (the old box's top/bottom ─ rules and
+	// the space-padded body) gets reflowed by the terminal when the window
+	// shrinks, and the inline renderer's stale line count then overwrites it
+	// mid-reflow, leaving orphan rows ("串行"). Short, natural-width lines
+	// never reflow, so the relative redraw stays correct.
+	return input
 }
 
 func (b *bubbleTUI) renderTranscript(maxRows int) string {
@@ -2171,6 +2234,9 @@ func (b *bubbleTUI) renderInput() string {
 		row.WriteString(prefix)
 		for i := rng.Start; i < rng.End; i++ {
 			ch := string(rs[i])
+			if isPasteRune(rs[i], len(b.pastes)) {
+				ch = uiDimText.Render(pasteLabel(b.pastes[rs[i]-pasteRuneBase]))
+			}
 			if i == b.cursor {
 				if rs[i] == ' ' || rs[i] == '\t' {
 					ch = "█"
