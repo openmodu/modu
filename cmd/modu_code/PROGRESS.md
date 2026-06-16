@@ -5,6 +5,10 @@ enough to implement, verify, and commit independently.
 
 ## Done
 
+- Git-backed `modu_code` startup can enter a managed branch-backed worktree via
+  `--worktree`; the default startup path stays in the current checkout.
+- Default `modu_code` startup now creates a fresh session id; previous context
+  is restored only when the caller passes `--resume <session-id>`.
 - Status line moved above the input separator, with animated running state,
   persisted completed state, and duration formatting that supports `min`.
 - Terminal resize handling keeps the user prompt visible and avoids duplicate

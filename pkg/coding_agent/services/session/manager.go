@@ -54,6 +54,16 @@ func NewManager(agentDir, projectPath string) (*Manager, error) {
 	return newManager(projectPath, dir, "", "")
 }
 
+// NewFreshManager creates a new session for projectPath, ignoring any existing
+// sessions in that per-cwd session directory.
+func NewFreshManager(agentDir, projectPath string) (*Manager, error) {
+	dir := DefaultSessionDir(agentDir, projectPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("failed to create session directory: %w", err)
+	}
+	return newManager(projectPath, dir, "", "")
+}
+
 // NewManagerFromFile creates a manager from an existing session file path.
 func NewManagerFromFile(filePath string) (*Manager, error) {
 	m := &Manager{

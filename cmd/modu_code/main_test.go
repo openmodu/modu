@@ -5,6 +5,7 @@ import (
 	"context"
 	"flag"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -290,6 +291,207 @@ func TestMainTUISessionFlows(t *testing.T) {
 	}
 }
 
+func TestMainResumeStartsRequestedSession(t *testing.T) {
+	home := t.TempDir()
+	project := filepath.Join(t.TempDir(), "project")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	var initOut bytes.Buffer
+	if err := runConfigCommand([]string{"init"}, &initOut, nil); err != nil {
+		t.Fatalf("runConfigCommand init: %v", err)
+	}
+	agentDir := filepath.Join(home, ".coding_agent")
+
+	oldArgs := os.Args
+	oldCommandLine := flag.CommandLine
+	oldRunTUI := runTUI
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		os.Args = oldArgs
+		flag.CommandLine = oldCommandLine
+		runTUI = oldRunTUI
+		if err := os.Chdir(oldwd); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+	if err := os.Chdir(project); err != nil {
+		t.Fatal(err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetFile := writeMainTestSessionFile(t, agentDir, cwd, "target session", "resume target")
+	targetMgr, err := sessionpkg.NewManagerFromFile(targetFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetID := targetMgr.SessionID()
+
+	called := false
+	runTUI = func(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool, opts tui.RunOptions) error {
+		called = true
+		if got := session.GetSessionID(); got != targetID {
+			t.Fatalf("expected resumed session id %s, got %s", targetID, got)
+		}
+		if got := session.GetSessionFile(); got != targetFile {
+			t.Fatalf("expected resumed session file %s, got %s", targetFile, got)
+		}
+		if msgs := session.GetMessages(); len(msgs) != 1 {
+			t.Fatalf("expected resumed messages, got %#v", msgs)
+		}
+		return nil
+	}
+
+	os.Args = []string{"modu_code", "--resume", targetID}
+	flag.CommandLine = flag.NewFlagSet("modu_code", flag.ContinueOnError)
+	main()
+	if !called {
+		t.Fatal("expected TUI runner to be called")
+	}
+}
+
+func TestMainDoesNotStartInWorktreeByDefaultForGitRepo(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	home := t.TempDir()
+	project := filepath.Join(t.TempDir(), "project")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initMainTestGitRepo(t, project)
+	t.Setenv("HOME", home)
+	var initOut bytes.Buffer
+	if err := runConfigCommand([]string{"init"}, &initOut, nil); err != nil {
+		t.Fatalf("runConfigCommand init: %v", err)
+	}
+
+	oldArgs := os.Args
+	oldCommandLine := flag.CommandLine
+	oldRunTUI := runTUI
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		os.Args = oldArgs
+		flag.CommandLine = oldCommandLine
+		runTUI = oldRunTUI
+		if err := os.Chdir(oldwd); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+	if err := os.Chdir(project); err != nil {
+		t.Fatal(err)
+	}
+
+	called := false
+	runTUI = func(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool, opts tui.RunOptions) error {
+		called = true
+		status := session.WorktreeStatus()
+		if status.Active {
+			t.Fatalf("expected default startup to stay in current checkout, got %#v", status)
+		}
+		if samePath, err := samePhysicalPath(status.Cwd, project); err != nil || !samePath {
+			t.Fatalf("expected cwd %s, got %#v", project, status)
+		}
+		return nil
+	}
+
+	os.Args = []string{"modu_code"}
+	flag.CommandLine = flag.NewFlagSet("modu_code", flag.ContinueOnError)
+	main()
+	if !called {
+		t.Fatal("expected TUI runner to be called")
+	}
+}
+
+func TestMainStartsInWorktreeWhenRequestedForGitRepo(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	home := t.TempDir()
+	project := filepath.Join(t.TempDir(), "project")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initMainTestGitRepo(t, project)
+	t.Setenv("HOME", home)
+	var initOut bytes.Buffer
+	if err := runConfigCommand([]string{"init"}, &initOut, nil); err != nil {
+		t.Fatalf("runConfigCommand init: %v", err)
+	}
+
+	oldArgs := os.Args
+	oldCommandLine := flag.CommandLine
+	oldRunTUI := runTUI
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		os.Args = oldArgs
+		flag.CommandLine = oldCommandLine
+		runTUI = oldRunTUI
+		if err := os.Chdir(oldwd); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+	if err := os.Chdir(project); err != nil {
+		t.Fatal(err)
+	}
+
+	called := false
+	runTUI = func(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool, opts tui.RunOptions) error {
+		called = true
+		status := session.WorktreeStatus()
+		if !status.Active {
+			t.Fatalf("expected requested startup worktree to be active, got %#v", status)
+		}
+		if samePath, err := samePhysicalPath(status.OriginalCwd, project); err != nil || !samePath {
+			t.Fatalf("expected original cwd %s, got %#v", project, status)
+		}
+		wantBase := filepath.Join(home, ".coding_agent", "worktrees")
+		if !strings.HasPrefix(status.Path, wantBase+string(os.PathSeparator)) {
+			t.Fatalf("expected managed worktree under %s, got %s", wantBase, status.Path)
+		}
+		if filepath.Base(status.Path) != filepath.Base(project) {
+			t.Fatalf("expected worktree leaf to keep repo name, got %s", status.Path)
+		}
+		if status.Cwd != status.Path {
+			t.Fatalf("expected session cwd to be worktree path, got %#v", status)
+		}
+		return nil
+	}
+
+	os.Args = []string{"modu_code", "--worktree"}
+	flag.CommandLine = flag.NewFlagSet("modu_code", flag.ContinueOnError)
+	main()
+	if !called {
+		t.Fatal("expected TUI runner to be called")
+	}
+}
+
+func samePhysicalPath(a, b string) (bool, error) {
+	aEval, err := filepath.EvalSymlinks(a)
+	if err != nil {
+		return false, err
+	}
+	bEval, err := filepath.EvalSymlinks(b)
+	if err != nil {
+		return false, err
+	}
+	return aEval == bEval, nil
+}
+
 type mainCapturePrinter struct {
 	lines []string
 }
@@ -330,4 +532,25 @@ func writeMainTestSessionFile(t *testing.T, agentDir, cwd, name, prompt string) 
 		t.Fatal(err)
 	}
 	return mgr.FilePath()
+}
+
+func initMainTestGitRepo(t *testing.T, dir string) {
+	t.Helper()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+		}
+	}
+	run("init")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "README.md")
+	run("commit", "-m", "init")
 }

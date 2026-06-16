@@ -593,6 +593,19 @@ func (m *uiModel) renderExitSessionMeta() string {
 	return "session: " + strings.Join(parts, " | ")
 }
 
+// renderResumeHint returns a Claude-Code-style hint telling the user how to
+// resume the current session by id. Empty when there is no persisted session.
+func (m *uiModel) renderResumeHint() string {
+	if m.session == nil {
+		return ""
+	}
+	id := m.session.GetSessionID()
+	if id == "" {
+		return ""
+	}
+	return fmt.Sprintf("Resume this session with:\n  modu_code --resume %s", id)
+}
+
 // ─── Block helpers ───────────────────────────────
 
 func assistantMessageFromEvent(msg types.AgentMessage) (types.AssistantMessage, bool) {

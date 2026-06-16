@@ -7,8 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
+	"github.com/google/uuid"
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/subagent"
 	"github.com/openmodu/modu/pkg/types"
@@ -304,7 +304,7 @@ func (cs *engine) forkInWorktree(ctx context.Context, def *subagent.SubagentDefi
 	if err := os.MkdirAll(baseDir, 0o755); err != nil {
 		return "", nil, err
 	}
-	path := filepath.Join(baseDir, fmt.Sprintf("subagent-wt-%d", time.Now().UnixMilli()))
+	path := filepath.Join(baseDir, uuid.NewString(), filepath.Base(root))
 	if _, err := runGitCommand(root, "worktree", "add", "--detach", path, "HEAD"); err != nil {
 		return "", nil, err
 	}
@@ -312,6 +312,7 @@ func (cs *engine) forkInWorktree(ctx context.Context, def *subagent.SubagentDefi
 		// Best-effort cleanup: if the worktree leaks the user can prune
 		// it manually via `git worktree prune`.
 		_, _ = runGitCommand(root, "worktree", "remove", "--force", path)
+		removeEmptyWorktreeParents(path, baseDir)
 	}()
 	rebound := cs.rebindToolsToCwd(path)
 	result, err := subagent.RunWithMessagesObserved(
@@ -376,4 +377,20 @@ func runGitCommand(dir string, args ...string) (string, error) {
 		return string(out), fmt.Errorf("%s", strings.TrimSpace(string(out)))
 	}
 	return string(out), nil
+}
+
+func removeEmptyWorktreeParents(path, base string) {
+	baseAbs, err := filepath.Abs(base)
+	if err != nil {
+		return
+	}
+	for parent := filepath.Dir(path); parent != baseAbs && parent != "." && parent != string(os.PathSeparator); parent = filepath.Dir(parent) {
+		parentAbs, err := filepath.Abs(parent)
+		if err != nil || parentAbs == baseAbs {
+			return
+		}
+		if err := os.Remove(parent); err != nil {
+			return
+		}
+	}
 }

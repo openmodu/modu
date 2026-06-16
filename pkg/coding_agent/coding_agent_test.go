@@ -140,6 +140,38 @@ func TestNewCodingSession(t *testing.T) {
 	}
 }
 
+func TestNewCodingSessionStartsFreshSessionForSameCwd(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+
+	opts := CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  agentDir,
+		Model:     newTestModel(),
+		GetAPIKey: func(provider string) (string, error) { return "", nil },
+	}
+	first, err := NewCodingSession(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstID := first.GetSessionID()
+	firstFile := first.GetSessionFile()
+
+	second, err := NewCodingSession(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := second.GetSessionID(); got == firstID {
+		t.Fatalf("expected fresh session id for same cwd, got %s", got)
+	}
+	if got := second.GetSessionFile(); got == firstFile {
+		t.Fatalf("expected fresh session file for same cwd, got %s", got)
+	}
+	if msgs := second.GetMessages(); len(msgs) != 0 {
+		t.Fatalf("expected fresh session messages, got %#v", msgs)
+	}
+}
+
 func TestNewCodingSessionUsesToolProvider(t *testing.T) {
 	dir := t.TempDir()
 	agentDir := filepath.Join(dir, ".coding_agent")
@@ -1326,6 +1358,13 @@ func TestEnterAndExitWorktree(t *testing.T) {
 	if path == "" || session.cwd == original {
 		t.Fatalf("expected worktree cwd change, got cwd=%s path=%s", session.cwd, path)
 	}
+	if filepath.Base(path) != filepath.Base(dir) {
+		t.Fatalf("expected managed worktree leaf to keep repo name, got %s", path)
+	}
+	branch := gitOutputForTest(t, path, "branch", "--show-current")
+	if !strings.HasPrefix(branch, "modu-code/"+filepath.Base(dir)+"-") {
+		t.Fatalf("expected modu-code worktree branch, got %q", branch)
+	}
 	status := session.WorktreeStatus()
 	if !status.Active || status.Path != path || status.Cwd != path || status.OriginalCwd != original || !status.Exists {
 		t.Fatalf("unexpected active worktree status: %#v", status)
@@ -1367,6 +1406,12 @@ func TestEnterAndExitWorktree(t *testing.T) {
 
 	if err := session.ExitWorktree(); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("expected worktree path removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Dir(path)); !os.IsNotExist(err) {
+		t.Fatalf("expected empty managed parent removed, stat err=%v", err)
 	}
 	if session.cwd != original {
 		t.Fatalf("expected cwd restored to %s, got %s", original, session.cwd)
@@ -1489,6 +1534,112 @@ Run pwd in bash and return the tool output.`
 	}
 	if !strings.Contains(capturedSystemPrompt, filepath.Join(agentDir, "worktrees")) {
 		t.Fatalf("expected system prompt to include worktree cwd, got %q", capturedSystemPrompt)
+	}
+}
+
+func TestResumeByID(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := t.TempDir()
+
+	// Create a target session in this cwd with a known message.
+	mgr, err := sessionpkg.NewManager(agentDir, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Append(sessionpkg.NewEntry(sessionpkg.EntryTypeMessage, "", sessionpkg.MessageData{
+		Role:    "user",
+		Content: "target session message",
+	})); err != nil {
+		t.Fatal(err)
+	}
+	targetID := mgr.SessionID()
+	targetPath := mgr.FilePath()
+
+	// A second, distinct session in the same cwd so resolution has to pick.
+	other, err := sessionpkg.ForkFrom(agentDir, targetPath, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.SessionID() == targetID {
+		t.Fatal("fork should produce a distinct session id")
+	}
+
+	model := &types.Model{ID: "test-model", Name: "Test", Api: "ollama", ProviderID: "ollama"}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  agentDir,
+		Model:     model,
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Resume by full id switches to the target session file and restores its messages.
+	if err := session.ResumeByID(targetID); err != nil {
+		t.Fatalf("ResumeByID(full) failed: %v", err)
+	}
+	if got := session.GetSessionFile(); got != targetPath {
+		t.Fatalf("expected session file %q, got %q", targetPath, got)
+	}
+	if got := session.GetSessionID(); got != targetID {
+		t.Fatalf("expected session id %q, got %q", targetID, got)
+	}
+	if msgs := session.GetMessages(); len(msgs) != 1 {
+		t.Fatalf("expected 1 restored message, got %d", len(msgs))
+	}
+
+	// Unique prefix resolves to the same session.
+	if err := session.ResumeByID(targetID[:8]); err != nil {
+		t.Fatalf("ResumeByID(prefix) failed: %v", err)
+	}
+	if got := session.GetSessionFile(); got != targetPath {
+		t.Fatalf("prefix resume: expected %q, got %q", targetPath, got)
+	}
+
+	// Unknown id is an error.
+	if err := session.ResumeByID("does-not-exist"); err == nil {
+		t.Fatal("expected error for unknown session id")
+	}
+}
+
+func TestNewCodingSessionResumesSessionIDWithoutCreatingExtraSession(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := t.TempDir()
+
+	mgr, err := sessionpkg.NewFreshManager(agentDir, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Append(sessionpkg.NewEntry(sessionpkg.EntryTypeMessage, "", sessionpkg.MessageData{
+		Role:    "user",
+		Content: "resume target",
+	})); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:             dir,
+		AgentDir:        agentDir,
+		Model:           newTestModel(),
+		ResumeSessionID: mgr.SessionID(),
+		GetAPIKey:       func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := session.GetSessionID(); got != mgr.SessionID() {
+		t.Fatalf("expected resumed session id %s, got %s", mgr.SessionID(), got)
+	}
+	if got := session.GetSessionFile(); got != mgr.FilePath() {
+		t.Fatalf("expected resumed session file %s, got %s", mgr.FilePath(), got)
+	}
+	infos, err := sessionpkg.List(agentDir, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 1 {
+		t.Fatalf("expected no extra session files, got %#v", infos)
 	}
 }
 
@@ -2669,6 +2820,17 @@ func initGitRepo(t *testing.T, dir string) {
 	}
 	run("add", "README.md")
 	run("commit", "-m", "init")
+}
+
+func gitOutputForTest(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func TestSessionName(t *testing.T) {

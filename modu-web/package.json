@@ -14,6 +14,7 @@
     "vite": "^6.4.2"
   },
   "overrides": {
-    "postcss": ">=8.5.10"
+    "postcss": ">=8.5.10",
+    "esbuild": ">=0.28.1"
   }
 }

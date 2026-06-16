@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
@@ -53,6 +54,9 @@ func main() {
 		rpcMode     = flag.Bool("rpc", false, "run in RPC mode: JSON-line protocol over stdin/stdout")
 		noApprove   = flag.Bool("no-approve", false, "skip user approval for tool executions (auto-allow all)")
 		acpMode     = flag.Bool("acp", false, "run as ACP stdio server (JSON-RPC 2.0 LDJSON)")
+		worktree    = flag.Bool("worktree", false, "start in an isolated git worktree")
+		noWorktree  = flag.Bool("no-worktree", false, "deprecated: current checkout is already the default")
+		resumeID    = flag.String("resume", "", "resume a saved session by id (full id or unique prefix)")
 	)
 	flag.Parse()
 
@@ -95,12 +99,19 @@ func main() {
 		GetAPIKey:       getAPIKey,
 		ScopedModels:    provider.ConfiguredModelIDs(),
 		ModelConfigPath: provider.ConfigPath(),
+		ResumeSessionID: *resumeID,
 		Extensions:      exts,
 	}
 	session, err := coding_agent.NewCodingSession(sessionOpts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to create session: %v\n", err)
 		os.Exit(1)
+	}
+	if *worktree && !*noWorktree {
+		if err := enterStartupWorktree(session); err != nil {
+			fmt.Fprintf(os.Stderr, "worktree: %v\n", err)
+			os.Exit(1)
+		}
 	}
 	defer session.Close("prompt_input_exit")
 	unsubModelPersist := session.SubscribeSession(func(ev coding_agent.SessionEvent) {
@@ -177,4 +188,24 @@ func main() {
 		fmt.Fprintf(os.Stderr, "ui error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func enterStartupWorktree(session *coding_agent.CodingSession) error {
+	if session == nil {
+		return nil
+	}
+	_, err := session.EnterWorktree()
+	if err == nil || shouldIgnoreStartupWorktreeError(err) {
+		return nil
+	}
+	return err
+}
+
+func shouldIgnoreStartupWorktreeError(err error) bool {
+	if err == nil {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "not a git repository") ||
+		strings.Contains(msg, "worktree mode is disabled")
 }
