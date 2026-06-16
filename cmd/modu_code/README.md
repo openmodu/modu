@@ -10,6 +10,19 @@
 go run ./cmd/modu_code
 ```
 
+默认启动会创建新的 session id，不会自动带入同一路径上一次的对话上下文。需要继续旧 session 时使用退出提示里的 id：
+
+```bash
+go run ./cmd/modu_code --resume <session-id>
+```
+
+默认启动会使用当前 checkout。需要隔离修改时，可以显式创建并切入 managed worktree，路径形如
+`~/.coding_agent/worktrees/<uuid>/<repo>`，分支名形如 `modu-code/<repo>-<id>`：
+
+```bash
+go run ./cmd/modu_code --worktree
+```
+
 ---
 
 ## 模型配置
@@ -131,6 +144,7 @@ Bubble Tea 的全屏 TUI 保留为实验路径；默认交互路径使用 Bubble
 | `/config` | 打开模型配置页面 |
 | `/context` | 查看当前 prompt/context 来源 |
 | `/doctor` | 查看基础运行诊断 |
+| `/worktree` | 查看 worktree 状态、diff、列表和 cleanup |
 | `/retry` | 重试上一条失败的 prompt |
 | `/steer <message>` | 任务运行中打断当前轮，并按新消息继续 |
 | `/s <message>` | `/steer` 的短别名；用于终端无法识别 Shift+Enter 时 |

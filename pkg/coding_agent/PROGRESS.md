@@ -16,6 +16,9 @@ High-priority gaps identified before this round:
 
 ## Completed In This Round
 
+- Managed session worktrees now use `<agentDir>/worktrees/<uuid>/<repo>` paths
+  and a `modu-code/<repo>-<id>` branch so active editing can live in an
+  isolated checkout instead of a detached temporary tree.
 - Moved runtime state persistence from `runtime/<project>/state.json` into
   `runtime_state` sidecar entries in the current session JSONL, and made agent
   runtime directories lazy so startup no longer pre-creates empty feature trees.

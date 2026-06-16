@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/openmodu/modu/pkg/coding_agent/services/compaction"
@@ -265,6 +266,54 @@ func (s *CodingSession) GetSessionStats() SessionStats {
 		SessionStarted: s.sessionStarted,
 		DurationMs:     now - s.sessionStarted,
 	}
+}
+
+// ResumeByID switches to a saved session in the current cwd identified by id
+// (full id or a unique prefix). Powers the `--resume <id>` CLI flag.
+func (s *CodingSession) ResumeByID(id string) error {
+	info, err := resolveSessionInfoByID(s.agentDir, s.cwd, id)
+	if err != nil {
+		return err
+	}
+	return s.SwitchSession(info.Path)
+}
+
+func newSessionManager(agentDir, cwd, resumeID string) (*session.Manager, error) {
+	if strings.TrimSpace(resumeID) == "" {
+		return session.NewFreshManager(agentDir, cwd)
+	}
+	info, err := resolveSessionInfoByID(agentDir, cwd, resumeID)
+	if err != nil {
+		return nil, err
+	}
+	return session.NewManagerFromFile(info.Path)
+}
+
+func resolveSessionInfoByID(agentDir, cwd, id string) (session.SessionInfo, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return session.SessionInfo{}, fmt.Errorf("session id is required")
+	}
+	sessions, err := session.List(agentDir, cwd)
+	if err != nil {
+		return session.SessionInfo{}, err
+	}
+	var match *session.SessionInfo
+	for i := range sessions {
+		if sessions[i].ID == id {
+			return sessions[i], nil
+		}
+		if strings.HasPrefix(sessions[i].ID, id) {
+			if match != nil {
+				return session.SessionInfo{}, fmt.Errorf("ambiguous session id prefix %q", id)
+			}
+			match = &sessions[i]
+		}
+	}
+	if match == nil {
+		return session.SessionInfo{}, fmt.Errorf("no session found with id %q", id)
+	}
+	return *match, nil
 }
 
 // SwitchSession loads messages from a different session file and replaces the current agent messages.

@@ -193,6 +193,9 @@ func runBubbleWithOptions(ctx context.Context, session *coding_agent.CodingSessi
 	if meta := strings.TrimSpace(root.model.renderExitSessionMeta()); meta != "" {
 		fmt.Println(meta)
 	}
+	if hint := strings.TrimSpace(root.model.renderResumeHint()); hint != "" {
+		fmt.Println(hint)
+	}
 	return err
 }
 

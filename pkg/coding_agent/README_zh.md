@@ -324,6 +324,7 @@ type Extension interface {
 | `/model <provider> <id>` | 切换模型 |
 | `/context` | 显示当前 prompt/context 来源 |
 | `/doctor` | 显示基础运行诊断 |
+| `/worktree` | 查看或管理当前 isolated worktree |
 | `/compact` | 手动触发上下文压缩 |
 | `/session` | 显示当前会话 ID、名称、文件、cwd、模型、消息数、tokens、plan/worktree 和资源摘要 |
 | `/session name <name>` | 设置当前会话 display name |
@@ -464,6 +465,7 @@ session, _ := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
 - `features`
   - 统一开关宿主级能力
   - 支持 `memoryTool`、`todoTool`、`taskOutputTool`、`planMode`、`worktreeMode`、`spawnSubagentTool`、`harnessActions`
+  - `worktreeMode` 开启后，host 可通过 `EnterWorktree()` 创建 managed worktree：目录在 `<agentDir>/worktrees/<uuid>/<repo>`，分支名为 `modu-code/<repo>-<id>`，便于像 Codex 一样把会话修改隔离在独立 checkout 中。
 - `permissions`
   - 统一配置工具权限规则
   - 支持 `allowTools`、`denyTools`、`allowBashPrefixes`、`denyBashPrefixes`

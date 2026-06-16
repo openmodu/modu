@@ -1,6 +1,6 @@
 // Package worktree is the isolated-git-worktree service: it creates/removes a
-// detached worktree and moves the session into and out of it. It owns the
-// active-worktree state and reaches the kernel through the narrow Host
+// managed branch-backed worktree and moves the session into and out of it. It
+// owns the active-worktree state and reaches the kernel through the narrow Host
 // interface, implementing worktreetool.WorktreeManager structurally so the
 // kernel can register the worktree tools against it.
 package worktree
@@ -10,10 +10,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
-	"time"
+
+	"github.com/google/uuid"
 )
 
 // Host is the set of kernel capabilities the worktree service needs.
@@ -97,23 +99,19 @@ func (c *Controller) ListManaged() []Info {
 	c.mu.Unlock()
 
 	dir := filepath.Join(c.host.AgentDir(), "worktrees")
-	entries, err := os.ReadDir(dir)
+	worktrees, err := discoverManagedWorktrees(dir)
+	if err != nil && activePath == "" {
+		return nil
+	}
 	if err != nil {
-		if activePath == "" {
-			return nil
-		}
 		return []Info{{Path: activePath, Active: true, Exists: pathExists(activePath)}}
 	}
 
-	seen := make(map[string]struct{}, len(entries)+1)
-	out := make([]Info, 0, len(entries)+1)
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		path := filepath.Join(dir, entry.Name())
+	seen := make(map[string]struct{}, len(worktrees)+1)
+	out := make([]Info, 0, len(worktrees)+1)
+	for _, path := range worktrees {
 		seen[path] = struct{}{}
-		out = append(out, Info{Path: path, Active: path == activePath, Exists: true})
+		out = append(out, Info{Path: path, Active: path == activePath, Exists: pathExists(path)})
 	}
 	if activePath != "" {
 		if _, ok := seen[activePath]; !ok {
@@ -127,6 +125,107 @@ func (c *Controller) ListManaged() []Info {
 		return out[i].Path < out[j].Path
 	})
 	return out
+}
+
+func discoverManagedWorktrees(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	gitRoots := make(map[string]struct{})
+	gitRootAncestors := make(map[string]struct{})
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		child := filepath.Join(dir, entry.Name())
+		roots, err := discoverGitRoots(child)
+		if err != nil {
+			return nil, err
+		}
+		if len(roots) == 0 {
+			gitRoots[child] = struct{}{}
+			continue
+		}
+		for _, root := range roots {
+			gitRoots[root] = struct{}{}
+			for parent := filepath.Dir(root); parent != dir && parent != "." && parent != string(os.PathSeparator); parent = filepath.Dir(parent) {
+				gitRootAncestors[parent] = struct{}{}
+			}
+		}
+	}
+
+	out := make([]string, 0, len(gitRoots))
+	for path := range gitRoots {
+		if _, ok := gitRootAncestors[path]; ok {
+			continue
+		}
+		out = append(out, path)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func discoverGitRoots(root string) ([]string, error) {
+	var out []string
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			return nil
+		}
+		if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
+			out = append(out, path)
+			if path != root {
+				return filepath.SkipDir
+			}
+		}
+		return nil
+	})
+	return out, err
+}
+
+func (c *Controller) managedBaseDir() string {
+	return filepath.Join(c.host.AgentDir(), "worktrees")
+}
+
+func (c *Controller) newManagedWorktreePath(root string) string {
+	repoName := filepath.Base(root)
+	if repoName == "." || repoName == string(os.PathSeparator) || repoName == "" {
+		repoName = "repo"
+	}
+	return filepath.Join(c.managedBaseDir(), uuid.NewString(), repoName)
+}
+
+func newManagedWorktreeBranch(root string) string {
+	repoName := filepath.Base(root)
+	if repoName == "." || repoName == string(os.PathSeparator) || repoName == "" {
+		repoName = "repo"
+	}
+	repoName = regexp.MustCompile(`[^A-Za-z0-9._-]+`).ReplaceAllString(repoName, "-")
+	repoName = strings.Trim(repoName, ".-")
+	if repoName == "" {
+		repoName = "repo"
+	}
+	return "modu-code/" + repoName + "-" + uuid.NewString()[:8]
+}
+
+func removeEmptyManagedParents(path, base string) {
+	baseAbs, err := filepath.Abs(base)
+	if err != nil {
+		return
+	}
+	for parent := filepath.Dir(path); parent != baseAbs && parent != "." && parent != string(os.PathSeparator); parent = filepath.Dir(parent) {
+		parentAbs, err := filepath.Abs(parent)
+		if err != nil || parentAbs == baseAbs {
+			return
+		}
+		if err := os.Remove(parent); err != nil {
+			return
+		}
+	}
 }
 
 func (c *Controller) Cleanup() ([]Info, error) {
@@ -144,6 +243,7 @@ func (c *Controller) Cleanup() ([]Info, error) {
 				return removed, err
 			}
 		}
+		removeEmptyManagedParents(wt.Path, filepath.Join(c.host.AgentDir(), "worktrees"))
 		removed = append(removed, wt)
 	}
 	return removed, nil
@@ -196,7 +296,7 @@ func (c *Controller) isManagedPath(path string) bool {
 	return rel != "." && rel != "" && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) && rel != ".."
 }
 
-// EnterWorktree creates a detached worktree and moves the session into it.
+// EnterWorktree creates a managed branch-backed worktree and moves the session into it.
 func (c *Controller) EnterWorktree() (string, error) {
 	if c == nil || c.host == nil {
 		return "", fmt.Errorf("worktree host is not configured")
@@ -216,13 +316,14 @@ func (c *Controller) EnterWorktree() (string, error) {
 		c.mu.Unlock()
 		return "", fmt.Errorf("enter_worktree: not a git repository: %w", err)
 	}
-	baseDir := filepath.Join(c.host.AgentDir(), "worktrees")
+	baseDir := c.managedBaseDir()
 	if err := os.MkdirAll(baseDir, 0o755); err != nil {
 		c.mu.Unlock()
 		return "", err
 	}
-	path := filepath.Join(baseDir, fmt.Sprintf("wt-%d", time.Now().UnixMilli()))
-	if _, err := runGit(root, "worktree", "add", "--detach", path, "HEAD"); err != nil {
+	path := c.newManagedWorktreePath(root)
+	branch := newManagedWorktreeBranch(root)
+	if _, err := runGit(root, "worktree", "add", "-b", branch, path, "HEAD"); err != nil {
 		c.mu.Unlock()
 		return "", fmt.Errorf("enter_worktree: %w", err)
 	}
@@ -254,6 +355,7 @@ func (c *Controller) ExitWorktree() error {
 	if err == nil {
 		_, _ = runGit(root, "worktree", "remove", "--force", path)
 	}
+	removeEmptyManagedParents(path, filepath.Join(c.host.AgentDir(), "worktrees"))
 	c.path = ""
 	c.orig = ""
 	c.mu.Unlock()

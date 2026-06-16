@@ -62,6 +62,9 @@ type CodingSessionOptions struct {
 	ScopedModels []string
 	// ModelConfigPath records the model config file path for diagnostics.
 	ModelConfigPath string
+	// ResumeSessionID resumes a persisted session by full id or unique prefix.
+	// When empty, NewCodingSession starts a fresh session.
+	ResumeSessionID string
 }
 
 // engine is the L1 kernel: it owns all session state, runs agent turns, wires
@@ -184,7 +187,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	})
 
 	// Create session manager
-	sessionMgr, err := session.NewManager(agentDir, opts.Cwd)
+	sessionMgr, err := newSessionManager(agentDir, opts.Cwd, opts.ResumeSessionID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create session manager: %w", err)
 	}
@@ -324,6 +327,11 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		initialContexts = append(initialContexts, ctxFile.Path)
 	}
 	cs.ctxMgr.MarkInitialContext(initialContexts)
+	if strings.TrimSpace(opts.ResumeSessionID) != "" {
+		if _, err := cs.RestoreMessages(); err != nil {
+			return nil, fmt.Errorf("failed to restore session messages: %w", err)
+		}
+	}
 
 	// Subscribe to events for token usage tracking (auto-compaction)
 	ag.Subscribe(func(event types.Event) {
