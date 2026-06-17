@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -113,23 +113,24 @@ func (b *bubbleTUI) openConfigProvider() {
 	b.model.statusMsg = "config provider"
 }
 
-func (b *bubbleTUI) updateConfigMenuKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyCtrlC, tea.KeyEsc:
+func (b *bubbleTUI) updateConfigMenuKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c", "esc":
 		b.closeConfigMenu("config closed")
-	case tea.KeyUp:
+	case "up":
 		b.moveConfigMenu(-1)
-	case tea.KeyDown:
+	case "down":
 		b.moveConfigMenu(1)
-	case tea.KeyHome:
+	case "home":
 		b.configMenuIdx = 0
-	case tea.KeyEnd:
+	case "end":
 		b.configMenuIdx = max(0, len(b.configMenuChoices)-1)
-	case tea.KeyEnter, tea.KeyCtrlJ:
+	case "enter", "ctrl+j":
 		return b, b.confirmConfigMenu()
-	case tea.KeyRunes:
-		if len(msg.Runes) == 1 {
-			switch msg.Runes[0] {
+	default:
+		runes := []rune(msg.Text)
+		if len(runes) == 1 {
+			switch runes[0] {
 			case '\r', '\n', 'y', 'Y', 'l':
 				return b, b.confirmConfigMenu()
 			case 'j':
@@ -142,7 +143,7 @@ func (b *bubbleTUI) updateConfigMenuKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				b.closeConfigMenu("config closed")
 				return b, nil
 			case '1', '2', '3', '4', '5':
-				idx := int(msg.Runes[0] - '1')
+				idx := int(runes[0] - '1')
 				if idx >= 0 && idx < len(b.configMenuChoices) {
 					b.configMenuIdx = idx
 					return b, b.confirmConfigMenu()
@@ -280,30 +281,30 @@ func (b *bubbleTUI) handleConfigModels(msg bubbleConfigModelsMsg) {
 	b.model.statusMsg = "config " + msg.action
 }
 
-func (b *bubbleTUI) updateConfigInputKey(msg tea.KeyMsg) tea.Cmd {
-	switch msg.Type {
-	case tea.KeyCtrlC, tea.KeyEsc:
+func (b *bubbleTUI) updateConfigInputKey(msg tea.KeyPressMsg) tea.Cmd {
+	switch msg.String() {
+	case "ctrl+c", "esc":
 		b.closeConfigInput("back to config")
-	case tea.KeyBackspace, tea.KeyCtrlH:
+	case "backspace", "ctrl+h":
 		b.backspaceDraft()
-	case tea.KeyDelete:
+	case "delete":
 		b.deleteDraft()
-	case tea.KeyLeft:
+	case "left":
 		if b.cursor > 0 {
 			b.cursor--
 		}
-	case tea.KeyRight:
+	case "right":
 		if b.cursor < len([]rune(b.draft)) {
 			b.cursor++
 		}
-	case tea.KeyHome:
+	case "home":
 		b.cursor = 0
-	case tea.KeyEnd:
+	case "end":
 		b.cursor = len([]rune(b.draft))
-	case tea.KeyEnter, tea.KeyCtrlJ:
+	case "enter", "ctrl+j":
 		return b.advanceConfigInput()
-	case tea.KeyRunes:
-		for _, r := range msg.Runes {
+	default:
+		for _, r := range msg.Text {
 			if r >= 0x20 {
 				b.insertRune(r)
 			}
@@ -416,29 +417,33 @@ func (b *bubbleTUI) closeConfigInput(status string) {
 	}
 }
 
-func (b *bubbleTUI) updateConfigSelectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyCtrlC, tea.KeyEsc:
+func (b *bubbleTUI) updateConfigSelectKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c", "esc":
 		b.closeConfigSelect("back to config")
-	case tea.KeyUp:
+	case "up":
 		b.moveConfigSelect(-1)
-	case tea.KeyDown:
+	case "down":
 		b.moveConfigSelect(1)
-	case tea.KeyHome:
+	case "home":
 		b.jumpConfigSelect(0)
-	case tea.KeyEnd:
+	case "end":
 		b.jumpConfigSelect(b.configSelectLen() - 1)
-	case tea.KeyPgUp:
+	case "pgup":
 		b.jumpConfigSelect(b.configSelectIdx - modelSelectVisibleRows)
-	case tea.KeyPgDown:
+	case "pgdown":
 		b.jumpConfigSelect(b.configSelectIdx + modelSelectVisibleRows)
-	case tea.KeyBackspace, tea.KeyCtrlH:
+	case "backspace", "ctrl+h":
 		b.backspaceConfigSearch()
-	case tea.KeyEnter, tea.KeyCtrlJ:
+	case "enter", "ctrl+j":
 		return b, b.confirmConfigSelect()
-	case tea.KeyRunes:
-		if len(msg.Runes) == 1 {
-			switch msg.Runes[0] {
+	default:
+		runes := []rune(msg.Text)
+		if len(runes) == 0 {
+			return b, nil
+		}
+		if len(runes) == 1 {
+			switch runes[0] {
 			case '\r', '\n', 'y', 'Y', 'l':
 				return b, b.confirmConfigSelect()
 			case 'j':
@@ -451,7 +456,7 @@ func (b *bubbleTUI) updateConfigSelectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				b.closeConfigSelect("back to config")
 				return b, nil
 			case '1', '2', '3', '4', '5', '6', '7', '8', '9':
-				idx := b.configSelectScroll + int(msg.Runes[0]-'1')
+				idx := b.configSelectScroll + int(runes[0]-'1')
 				if idx >= 0 && idx < b.configSelectLen() {
 					b.configSelectIdx = idx
 					return b, b.confirmConfigSelect()
@@ -459,7 +464,7 @@ func (b *bubbleTUI) updateConfigSelectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return b, nil
 			}
 		}
-		for _, r := range msg.Runes {
+		for _, r := range runes {
 			if r >= 0x20 {
 				b.configSearch += string(r)
 			}

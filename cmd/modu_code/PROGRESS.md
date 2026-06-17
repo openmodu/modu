@@ -238,3 +238,7 @@ enough to implement, verify, and commit independently.
   `TestControlCounterFailedToolThresholdFiresOnce`,
   `TestControlCounterTurnsAndTokens`, `TestControlCounterRespectsNotifyOn`,
   `TestControlCounterUnregisterStopsNotices`).
+- 2026-06-16: `env GOCACHE=/private/tmp/modu-go-build go test ./cmd/modu_code ./pkg/tui`
+  passed for the Bubble Tea v2 active-region resize behavior and fixed-width
+  inline turn separator (`TestBubbleInlineResizeReflowsActiveRegionAndKeepsScrollback`,
+  `TestBubbleInlineTurnSeparatorStaysBelowMinimumTerminalWidth`).
