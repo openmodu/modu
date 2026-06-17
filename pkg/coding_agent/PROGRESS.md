@@ -230,9 +230,9 @@ High-priority gaps identified before this round:
 ## Still Missing
 
 - Lua workflow orchestration still needs the later acceptance work from
-  `docs/lua-workflow-orchestration-plan.md`: real `modu_code -p` workflow
-  cases against an actual configured model and final M6 compatibility/progress
-  records.
+  `docs/lua-workflow-orchestration-plan.md`: the remaining real `modu_code -p`
+  parallel/worktree/partial-failure workflow cases against an actual
+  configured model and final M6 compatibility/progress records.
 - Deeper plan-mode revision flows beyond the current approval/rejection gate
 - Advanced worktree flows such as diff/merge handoff from isolated worktrees back to the original checkout
 - Full pi-compatible TypeScript extension/package ecosystem, including remote npm/git package install, theme resources, rich UI extension context, provider hooks, and hot reload

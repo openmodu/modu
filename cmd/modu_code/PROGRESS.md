@@ -254,3 +254,12 @@ enough to implement, verify, and commit independently.
   passed for the first Lua workflow extension slice: builtin registration,
   safe runtime basics, ForkOptions mapping, parallel concurrency/order/failure
   handling, pipeline order/failure semantics, and workflow tool result details.
+- 2026-06-17: `go run ./cmd/modu_code -p '<repo_inventory_smoke workflow prompt>'`
+  passed as a real configured-model workflow smoke case on `deepseek-v4-flash`.
+  The model called the `workflow` tool, the Lua script ran `meta` / `phase` /
+  `agent`, and the child returned `ok=true` while confirming
+  `pkg/coding_agent/plugins/extension/workflow` exists. The run also showed
+  that `grep`, `find`, and `ls` are skipped when they are requested in
+  workflow child options but are not active in the parent tool set; later real
+  cases should either enable those tools or extend the host API to expose the
+  intended full coding tool set to workflow children.
