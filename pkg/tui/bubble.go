@@ -31,16 +31,13 @@ type bubbleTUI struct {
 	promptMu     *sync.Mutex
 	commandHooks CommandHooks
 	program      *tea.Program
-	inline       bool
+	model        *uiModel
 
-	model *uiModel
-
-	useDiff  bool
 	renderer *diffRenderer
 	// pendingScroll holds completed lines waiting to be committed to real
-	// terminal scrollback on the next paint (diff mode only). Completed turns
-	// live in native scrollback — reflowed by the terminal on resize, never
-	// re-owned by the renderer — so resizing no longer wipes history.
+	// terminal scrollback on the next paint. Completed turns live in native
+	// scrollback — reflowed by the terminal on resize, never re-owned by the
+	// renderer — so resizing no longer wipes history.
 	pendingScroll []string
 
 	// Incremental scrollback streaming (diff mode): while an assistant block
@@ -186,15 +183,11 @@ type bubbleExternalUserMsg struct {
 
 type bubbleClearScreenMsg struct{}
 
-func RunBubbleTeaWithOptions(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool, opts RunOptions) error {
-	return runBubbleWithOptions(ctx, session, model, noApprove, opts, false)
-}
-
 func RunBubbleInlineWithOptions(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool, opts RunOptions) error {
-	return runBubbleWithOptions(ctx, session, model, noApprove, opts, true)
+	return runBubbleWithOptions(ctx, session, model, noApprove, opts)
 }
 
-func runBubbleWithOptions(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool, opts RunOptions, inline bool) error {
+func runBubbleWithOptions(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool, opts RunOptions) error {
 	if n, err := session.RestoreMessages(); err == nil && n > 0 {
 		_ = n
 	}
@@ -207,16 +200,16 @@ func runBubbleWithOptions(ctx context.Context, session *coding_agent.CodingSessi
 	promptMu := &sync.Mutex{}
 
 	root := newBubbleTUI(ctx, session, model, histFile, promptMu, opts.CommandHooks)
-	root.inline = inline
 	root.loadHistory()
 
-	progOpts := []tea.ProgramOption{tea.WithContext(ctx), tea.WithoutSignalHandler()}
-	if os.Getenv("MODU_TUI_DIFF") == "1" {
-		// Hybrid diff-renderer mode: bubbletea handles input/events only, we own
-		// rendering via diffRenderer for pi-style clean resize. See bubble_diff.go.
-		root.useDiff = true
-		root.renderer = newDiffRenderer(os.Stdout)
-		progOpts = append(progOpts, tea.WithoutRenderer())
+	// The diff renderer (bubble_diff.go) owns all output: bubbletea handles
+	// input/events only (WithoutRenderer), and we paint via diffRenderer for
+	// pi-style clean resize and native scrollback.
+	root.renderer = newDiffRenderer(os.Stdout)
+	progOpts := []tea.ProgramOption{
+		tea.WithContext(ctx),
+		tea.WithoutSignalHandler(),
+		tea.WithoutRenderer(),
 	}
 	prog := tea.NewProgram(root, progOpts...)
 	root.program = prog
@@ -224,11 +217,8 @@ func runBubbleWithOptions(ctx context.Context, session *coding_agent.CodingSessi
 	// (sync.Once) and must run BEFORE the exit prints below, otherwise the
 	// fmt.Println output staircases — in raw mode "\n" line-feeds without a
 	// carriage return. Deferred as a backstop for early/panic returns.
-	diffCleanup := func() {}
-	if root.useDiff {
-		diffCleanup = startDiffMode(ctx, prog, root)
-		defer diffCleanup()
-	}
+	diffCleanup := startDiffMode(ctx, prog, root)
+	defer diffCleanup()
 
 	if approvalCh != nil {
 		go watchBubbleApprovals(ctx, prog, approvalCh)
@@ -309,10 +299,7 @@ func (b *bubbleTUI) Init() tea.Cmd {
 	if b.session != nil {
 		b.session.RefreshRuntimeStateAsync()
 	}
-	if b.inline {
-		return tea.Sequence(b.printInlineHeaderCmd(), bubbleTick())
-	}
-	return bubbleTick()
+	return tea.Sequence(b.printInlineHeaderCmd(), bubbleTick())
 }
 
 func bubbleTick() tea.Cmd {
@@ -323,19 +310,17 @@ func bubbleTick() tea.Cmd {
 
 func (b *bubbleTUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	model, cmd := b.dispatch(msg)
-	// In diff mode we own output: repaint the whole frame after every message
-	// so the renderer reconciles the terminal (cheap — only changed lines, full
-	// clear+repaint only on resize). The repaint is throttled to ~60fps so a
-	// stream of events coalesces into one frame instead of one repaint each.
+	// We own output: repaint the whole frame after every message so the renderer
+	// reconciles the terminal (cheap — only changed lines, full clear+repaint only
+	// on resize). The repaint is throttled to ~60fps so a stream of events
+	// coalesces into one frame instead of one repaint each.
 	//
 	// A bubblePaintMsg already painted in dispatch — it must NOT call requestPaint
 	// again, or the throttle would schedule a fresh flush after every flush and
 	// spin forever (a burst kicks it off, then it self-sustains at ~60fps).
-	if b.useDiff {
-		if _, isFlush := msg.(bubblePaintMsg); !isFlush {
-			if pc := b.requestPaint(); pc != nil {
-				cmd = tea.Batch(cmd, pc)
-			}
+	if _, isFlush := msg.(bubblePaintMsg); !isFlush {
+		if pc := b.requestPaint(); pc != nil {
+			cmd = tea.Batch(cmd, pc)
 		}
 	}
 	return model, cmd
@@ -377,7 +362,7 @@ func (b *bubbleTUI) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		// bubbletea emits a bogus {0,0} at startup under WithoutRenderer (it
 		// never set ttyOutput); our SIGWINCH watcher feeds the real size.
-		if b.useDiff && msg.Width <= 0 {
+		if msg.Width <= 0 {
 			return b, nil
 		}
 		b.width = max(20, msg.Width)
@@ -860,7 +845,7 @@ func (b *bubbleTUI) finishPromptOperation(err error, failedPrompt string) tea.Cm
 	// emitted here — it precedes the NEXT user turn (see runPrompt), so the input
 	// box's own top rule stays the only divider before the active prompt.
 	var cmds []tea.Cmd
-	if b.inline && summary != "" {
+	if summary != "" {
 		b.model.clearActivity()
 		if line := b.printStringCmd("  " + uiDimText.Render(summary)); line != nil {
 			cmds = append(cmds, line)
@@ -1577,23 +1562,16 @@ func (b *bubbleTUI) printBlockPtrCmd(block *uiBlock) tea.Cmd {
 }
 
 func (b *bubbleTUI) printBlockCmd(block uiBlock) tea.Cmd {
-	if !b.inline {
-		return nil
-	}
 	return b.printStringCmd(b.model.renderSingleBlock(block))
 }
 
-// printAssistantTailCmd commits a finalized assistant block to scrollback. In
-// diff mode its top lines may already have streamed into scrollback during the
-// turn (commitStreamingPrefix); this commits only the remaining uncommitted tail
-// so nothing is duplicated. idx is the block's index, matched against the
-// stream-commit tracking. Outside diff mode (or with nothing pre-committed) it
-// falls back to committing the whole block.
+// printAssistantTailCmd commits a finalized assistant block to scrollback. Its
+// top lines may already have streamed into scrollback during the turn (see
+// commitStreamingPrefix); this commits only the remaining uncommitted tail so
+// nothing is duplicated. idx is the block's index, matched against the
+// stream-commit tracking; with nothing pre-committed it commits the whole block.
 func (b *bubbleTUI) printAssistantTailCmd(block uiBlock, idx int) tea.Cmd {
-	if !b.inline {
-		return nil
-	}
-	if !b.useDiff || b.streamBlockIdx != idx || b.streamCommitN <= 0 {
+	if b.streamBlockIdx != idx || b.streamCommitN <= 0 {
 		b.resetStreamTracking()
 		return b.printBlockCmd(block)
 	}
@@ -1609,39 +1587,31 @@ func (b *bubbleTUI) printAssistantTailCmd(block uiBlock, idx int) tea.Cmd {
 }
 
 func (b *bubbleTUI) printInlineHeaderCmd() tea.Cmd {
-	if !b.inline {
-		return nil
-	}
 	return b.printStringCmd(b.renderInlineHeader())
 }
 
+// printStringCmd queues a rendered block/line for commit to native scrollback on
+// the next paint. (bubbletea's tea.Println is a no-op under WithoutRenderer, so
+// we own scrollback via enqueueScrollback → InsertAbove.)
 func (b *bubbleTUI) printStringCmd(s string) tea.Cmd {
-	if !b.inline {
-		return nil
-	}
 	s = strings.TrimRight(s, "\n")
 	if strings.TrimSpace(stripANSIForGoTUI(s)) == "" {
 		return nil
 	}
-	if b.useDiff {
-		b.enqueueScrollback(s)
-		return nil
-	}
-	return tea.Println(s + "\n")
+	b.enqueueScrollback(s)
+	return nil
 }
 
 // enqueueScrollback queues a completed block's lines (plus a trailing blank for
-// separation) for commit to real terminal scrollback on the next paint. Used in
-// diff mode in place of tea.Println, which is a no-op under WithoutRenderer.
+// separation) for commit to real terminal scrollback on the next paint.
 func (b *bubbleTUI) enqueueScrollback(s string) {
 	b.pendingScroll = append(b.pendingScroll, strings.Split(s, "\n")...)
 	b.pendingScroll = append(b.pendingScroll, "")
 }
 
 // hRule returns a dim horizontal rule spanning the given width. Used for the turn
-// dividers and the input-box frame. In diff mode the whole transcript is
-// re-rendered on resize (see rerenderScrollback), so a full-width rule reflows
-// cleanly — no need to keep it artificially short anymore.
+// dividers and the input-box frame. The whole transcript is re-rendered on resize
+// (see rerenderScrollback), so a full-width rule reflows cleanly.
 func hRule(width int) string {
 	if width < 8 {
 		width = 8
@@ -1649,18 +1619,12 @@ func hRule(width int) string {
 	return uiDimText.Render(strings.Repeat("─", width))
 }
 
-// printTurnSeparatorCmd emits a dim, full-width horizontal rule into the
-// scrollback to visually divide one completed turn from the next. Inline mode
-// only. On resize the rule is regenerated at the new width by rerenderScrollback.
+// printTurnSeparatorCmd queues a dim, full-width horizontal rule into the
+// scrollback to divide one completed turn from the next. On resize the rule is
+// regenerated at the new width by rerenderScrollback.
 func (b *bubbleTUI) printTurnSeparatorCmd() tea.Cmd {
-	if !b.inline {
-		return nil
-	}
-	if b.useDiff {
-		b.enqueueScrollback(hRule(b.width))
-		return nil
-	}
-	return tea.Println(hRule(b.width))
+	b.enqueueScrollback(hRule(b.width))
+	return nil
 }
 
 func (b *bubbleTUI) isSessionAgentSlash(line string) bool {
@@ -1913,6 +1877,11 @@ func (b *bubbleTUI) clampViewWidth(s string) string {
 	return strings.Join(lines, "\n")
 }
 
+// viewString renders the active frame (live region + framed input + status) to a
+// single string — the same lines the diff renderer paints at the bottom of the
+// screen. Completed turns and the header are NOT here (they live in native
+// scrollback, committed via printBlockCmd/InsertAbove). Production paints
+// incrementally via paint(); this snapshot backs View() and tests.
 func (b *bubbleTUI) viewString() string {
 	if b.quitting {
 		return ""
@@ -1921,47 +1890,7 @@ func (b *bubbleTUI) viewString() string {
 		b.width = 80
 	}
 	b.model.width = max(20, b.width-2)
-	if b.inline {
-		return b.renderInlineView()
-	}
-
-	header := b.renderHeader()
-	status := b.renderStatusLine()
-	control := b.renderInputControl()
-	selector := b.renderSlashSuggestions()
-
-	chromeHeight := lipgloss.Height(header) + lipgloss.Height(status) + lipgloss.Height(control) + 3
-	if selector != "" {
-		chromeHeight += lipgloss.Height(selector) + 1
-	}
-	bodyRows := b.height - chromeHeight
-	if bodyRows < 1 {
-		bodyRows = 1
-	}
-	body := b.renderTranscript(bodyRows)
-
-	parts := []string{header, body}
-	if selector != "" {
-		parts = append(parts, selector)
-	}
-	parts = append(parts, control, status)
-	return strings.TrimRight(strings.Join(parts, "\n"), "\n")
-}
-
-func (b *bubbleTUI) renderInlineView() string {
-	status := b.renderStatusLine()
-	control := b.renderInputControl()
-	selector := b.renderSlashSuggestions()
-	live := b.renderInlineLive()
-	var parts []string
-	if live != "" {
-		parts = append(parts, live)
-	}
-	if selector != "" {
-		parts = append(parts, selector)
-	}
-	parts = append(parts, hRule(b.width), control, hRule(b.width), status)
-	return strings.TrimRight(strings.Join(parts, "\n"), "\n")
+	return strings.TrimRight(strings.Join(b.fullScreenLines(), "\n"), "\n")
 }
 
 func (b *bubbleTUI) renderInlineLive() string {
@@ -1974,11 +1903,11 @@ func (b *bubbleTUI) renderInlineLive() string {
 	if len(b.model.blocks) > 0 {
 		last := b.model.blocks[len(b.model.blocks)-1]
 		if last.Kind == "assistant" && last.Streaming {
-			// In diff mode the block's already-committed top lines live in
-			// scrollback (see commitStreamingPrefix); show only the uncommitted
-			// tail, reusing this paint's cached clamped lines so we don't re-render.
+			// The block's already-committed top lines live in scrollback (see
+			// commitStreamingPrefix); show only the uncommitted tail, reusing this
+			// paint's cached clamped lines so we don't re-render.
 			var rendered string
-			if b.useDiff && b.streamLines != nil {
+			if b.streamLines != nil {
 				tail := b.streamLines
 				if b.streamCommitN > 0 && b.streamCommitN <= len(tail) {
 					tail = tail[b.streamCommitN:]
@@ -2019,11 +1948,6 @@ func (b *bubbleTUI) renderInlineLive() string {
 	return strings.TrimSpace(stripANSIForGoTUI(b.model.renderActivityLine()))
 }
 
-func (b *bubbleTUI) renderHeader() string {
-	width := max(24, b.width)
-	return lipgloss.NewStyle().Width(width).Render(b.renderHeaderLine(width))
-}
-
 func (b *bubbleTUI) renderInlineHeader() string {
 	width := max(24, b.width-2)
 	contentWidth := max(12, width-6)
@@ -2048,34 +1972,6 @@ func (b *bubbleTUI) renderInlineHeader() string {
 		lines = append(lines, uiDimText.Render("channel ")+uiWhiteText.Render(info.channel))
 	}
 	return uiBubbleHeader.Width(contentWidth).Render(strings.Join(lines, "\n"))
-}
-
-func (b *bubbleTUI) renderHeaderLine(width int) string {
-	info := b.headerInfo()
-	var leftParts []string
-	leftParts = append(leftParts, uiWhiteText.Bold(true).Render("* modu_code"))
-	if info.cwd != "" {
-		leftParts = append(leftParts, uiDimText.Render(info.cwd))
-	}
-
-	rightParts := []string{uiDimText.Render(info.model)}
-	for _, mode := range info.modes {
-		rightParts = append(rightParts, uiSecondaryText.Render(mode))
-	}
-	if info.sessionID != "" {
-		rightParts = append(rightParts, uiSecondaryText.Render("session "+info.sessionID))
-	}
-	if info.channel != "" {
-		rightParts = append(rightParts, uiSecondaryText.Render(info.channel))
-	}
-
-	left := strings.Join(leftParts, uiDimText.Render(" · "))
-	right := strings.Join(rightParts, uiDimText.Render(" · "))
-	pad := width - lipgloss.Width(left) - lipgloss.Width(right)
-	if pad < 1 {
-		pad = 1
-	}
-	return left + strings.Repeat(" ", pad) + right
 }
 
 type bubbleHeaderInfo struct {
@@ -2177,36 +2073,6 @@ func (b *bubbleTUI) renderInputControl() string {
 	// mid-reflow and leaves orphan rows ("串行"). Short, natural-width lines
 	// never reflow, so the redraw stays correct at any size.
 	return input
-}
-
-func (b *bubbleTUI) renderTranscript(maxRows int) string {
-	var lines []string
-	for _, block := range b.model.blocks {
-		s := strings.TrimRight(b.model.renderSingleBlock(block), "\n")
-		if s == "" {
-			continue
-		}
-		lines = append(lines, strings.Split(s, "\n")...)
-		lines = append(lines, "")
-	}
-	if b.model.state == uiStateQuerying {
-		if activity := strings.TrimSpace(stripANSIForGoTUI(b.model.renderActivityLine())); activity != "" {
-			lines = append(lines, uiDimText.Render(activity))
-		}
-	}
-	if maxRows < 1 {
-		maxRows = 1
-	}
-	if len(lines) > maxRows {
-		lines = lines[len(lines)-maxRows:]
-	}
-	if len(lines) == 0 {
-		lines = append(lines,
-			uiDimText.Render("modu_code Bubble Tea TUI"),
-			uiDimText.Render("/ commands · /model switch model · enter send · ctrl+j newline"),
-		)
-	}
-	return strings.Join(lines, "\n")
 }
 
 func (b *bubbleTUI) renderSlashSuggestions() string {
@@ -2501,10 +2367,10 @@ func (b *bubbleTUI) renderInput() string {
 	cursorLine := inputCursorLine(ranges, b.cursor)
 	start, end, above, below := inputVisibleRange(len(ranges), cursorLine, maxInputVisibleRows)
 
-	// In diff mode the renderer places a real hardware cursor at the caret (for
-	// IME anchoring), so the input must not also draw a fake block — that would
-	// double the cursor.
-	fakeCursor := !b.useDiff
+	// The diff renderer places a real hardware cursor at the caret (for IME
+	// anchoring), so the input never draws a fake block — that would double the
+	// cursor. (Kept as a flag for the few tests that render the input directly.)
+	const fakeCursor = false
 
 	var lines []string
 	if above {

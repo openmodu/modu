@@ -2,8 +2,6 @@ package tui
 
 import (
 	"context"
-	"fmt"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -391,33 +389,37 @@ func TestBubbleTUIViewUsesAgenvoyStyleChrome(t *testing.T) {
 	root.width = 80
 	root.height = 24
 
-	view := root.viewString()
-	for _, want := range []string{"modu_code", "Bubble Tea", "/model", "Test", "❯ █"} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("expected Bubble view chrome to contain %q, got %q", want, view)
+	// The header (committed to native scrollback, re-rendered on resize) carries
+	// the model name and app title.
+	header := stripANSIForGoTUI(root.renderInlineHeader())
+	for _, want := range []string{"modu_code", "Test"} {
+		if !strings.Contains(header, want) {
+			t.Fatalf("expected header to contain %q, got %q", want, header)
 		}
 	}
-	if got := lipgloss.Height(root.renderHeader()); got != 1 {
-		t.Fatalf("expected persistent header to stay one line, got %d", got)
+	// The active frame carries the input prompt.
+	if view := root.viewString(); !strings.Contains(view, "❯") {
+		t.Fatalf("expected active frame to keep the input widget, got %q", view)
 	}
 }
 
 func TestBubbleInlineViewKeepsTranscriptOutOfRenderer(t *testing.T) {
 	root := newBubbleTUI(context.Background(), nil, &types.Model{ID: "test", Name: "Test", ProviderID: "test"}, "", nil, CommandHooks{})
-	root.inline = true
 	root.width = 80
 	root.height = 24
 	root.appendBlock(uiBlock{Kind: "user", Content: "selectable scrollback text", Source: "local"})
 
+	// The active frame (what the diff renderer paints) must NOT re-render the
+	// completed transcript — that lives in native scrollback.
 	view := root.viewString()
 	if strings.Contains(view, "selectable scrollback text") {
-		t.Fatalf("inline Bubble view should not re-render completed transcript, got %q", view)
+		t.Fatalf("active frame should not re-render completed transcript, got %q", view)
 	}
 	if strings.Contains(view, "modu_code ·") {
-		t.Fatalf("inline Bubble view should not keep a persistent full header, got %q", view)
+		t.Fatalf("active frame should not keep a persistent full header, got %q", view)
 	}
-	if !strings.Contains(view, "❯ █") {
-		t.Fatalf("expected inline Bubble view to keep the input widget, got %q", view)
+	if !strings.Contains(view, "❯") {
+		t.Fatalf("expected active frame to keep the input widget, got %q", view)
 	}
 }
 
@@ -505,7 +507,6 @@ func TestBubbleInlineHeaderIsPrintableButNotPersistent(t *testing.T) {
 	session := newUITestSession(t)
 	session.GetModel().ContextWindow = 1000000
 	root := newBubbleTUI(context.Background(), session, session.GetModel(), "", nil, CommandHooks{})
-	root.inline = true
 	root.width = 80
 	root.model.tgUsername = "ityike_quick_snap_bot"
 
@@ -547,9 +548,9 @@ func TestBubbleHeaderLineShowsSessionID(t *testing.T) {
 	root := newBubbleTUI(context.Background(), session, session.GetModel(), "", nil, CommandHooks{})
 	root.width = 120
 
-	header := stripANSIForGoTUI(root.renderHeaderLine(root.width))
+	header := stripANSIForGoTUI(root.renderInlineHeader())
 	if want := "session " + shortSessionID(session.GetSessionID()); !strings.Contains(header, want) {
-		t.Fatalf("expected header line to contain %q, got %q", want, header)
+		t.Fatalf("expected header to contain %q, got %q", want, header)
 	}
 }
 
@@ -758,60 +759,23 @@ func runBubbleTestCmd(t *testing.T, root *bubbleTUI, cmd tea.Cmd) {
 	}
 }
 
-// collectPrintlnBodies executes a tea.Cmd and recursively collects the bodies
-// of any tea.Println messages it emits, walking batch/sequence command slices.
-func collectPrintlnBodies(cmd tea.Cmd) []string {
-	if cmd == nil {
-		return nil
-	}
-	return collectPrintlnFromMsg(cmd())
-}
-
-func collectPrintlnFromMsg(msg tea.Msg) []string {
-	if msg == nil {
-		return nil
-	}
-	// tea.Sequence / tea.Batch produce an unexported []tea.Cmd message.
-	if v := reflect.ValueOf(msg); v.Kind() == reflect.Slice {
-		var out []string
-		for i := 0; i < v.Len(); i++ {
-			if c, ok := v.Index(i).Interface().(tea.Cmd); ok {
-				out = append(out, collectPrintlnBodies(c)...)
-			}
-		}
-		return out
-	}
-	if strings.Contains(fmt.Sprintf("%T", msg), "printLineMessage") {
-		// printLineMessage formats as "{body}".
-		return []string{strings.Trim(fmt.Sprintf("%v", msg), "{}")}
-	}
-	return nil
-}
-
 func TestBubbleInlineCommitsCompletionSummaryToScrollback(t *testing.T) {
 	root := newBubbleTUI(context.Background(), nil, &types.Model{ID: "test", Name: "Test", ProviderID: "test"}, "", nil, CommandHooks{})
-	root.inline = true
 	root.width = 80
 	root.model.state = uiStateQuerying
 	root.model.queryActive = true
 	root.model.queryStartTime = time.Now().Add(-3 * time.Second)
 
-	cmd := root.finishPromptOperation(nil, "")
+	_ = root.finishPromptOperation(nil, "")
 
-	bodies := collectPrintlnBodies(cmd)
-	found := false
-	for _, b := range bodies {
-		if strings.Contains(stripANSIForGoTUI(b), "Completed") {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("expected completion summary printed to scrollback, got %#v", bodies)
+	// The summary is queued to native scrollback (pendingScroll → InsertAbove).
+	if !strings.Contains(stripANSIForGoTUI(strings.Join(root.pendingScroll, "\n")), "Completed") {
+		t.Fatalf("expected completion summary queued to scrollback, got %#v", root.pendingScroll)
 	}
 	// The transient live region must not also retain the summary (it would
 	// otherwise vanish after the TTL, the bug being fixed).
 	if got := root.model.effectiveLastActivity(time.Now()); strings.TrimSpace(stripANSIForGoTUI(got)) != "" {
-		t.Fatalf("expected transient activity cleared in inline mode, got %q", got)
+		t.Fatalf("expected transient activity cleared, got %q", got)
 	}
 }
 
@@ -825,18 +789,18 @@ func TestBubbleInlineCommitsCompletionSummaryToScrollback(t *testing.T) {
 // the v1 relative-cursor renderer left behind.
 func TestBubbleInlineResizeReflowsActiveRegionAndKeepsScrollback(t *testing.T) {
 	root := newBubbleTUI(context.Background(), nil, &types.Model{ID: "test", Name: "Test", ProviderID: "test"}, "", nil, CommandHooks{})
-	root.inline = true
 
 	root.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	if root.width != 100 {
 		t.Fatalf("expected width 100 after resize, got %d", root.width)
 	}
 
-	// A completed block must land in scrollback via tea.Println, not in the
-	// active region the renderer repaints — that is what survives resize cleanly.
-	block := uiBlock{Kind: "assistant", Content: "hello world", Timestamp: time.Now()}
-	if bodies := collectPrintlnBodies(root.printBlockCmd(block)); len(bodies) == 0 {
-		t.Fatal("expected completed block to be committed to scrollback via tea.Println")
+	// A completed block must land in scrollback (pendingScroll → InsertAbove), not
+	// in the active region the renderer repaints — that is what survives resize.
+	root.pendingScroll = nil
+	root.printBlockCmd(uiBlock{Kind: "assistant", Content: "hello world", Timestamp: time.Now()})
+	if len(root.pendingScroll) == 0 {
+		t.Fatal("expected completed block to be queued to scrollback")
 	}
 
 	// Shrink the terminal. The active region must re-render at the new width
@@ -860,32 +824,20 @@ func TestBubbleInlineResizeReflowsActiveRegionAndKeepsScrollback(t *testing.T) {
 
 func TestBubbleInlineTurnSeparatorIsWidthAdaptive(t *testing.T) {
 	root := newBubbleTUI(context.Background(), nil, nil, "", nil, CommandHooks{})
-	root.inline = true
 	root.width = 120
 
-	bodies := collectPrintlnBodies(root.printTurnSeparatorCmd())
-	if len(bodies) != 1 {
-		t.Fatalf("expected one separator line, got %#v", bodies)
-	}
-	line := strings.TrimSpace(stripANSIForGoTUI(bodies[0]))
-	// The divider now spans the full terminal width (regenerated per width by the
+	root.pendingScroll = nil
+	root.printTurnSeparatorCmd()
+	// The divider spans the full terminal width (regenerated per width by the
 	// pi-style resize re-render), instead of a fixed short stub.
-	if got := lipgloss.Width(line); got != root.width {
-		t.Fatalf("expected full-width separator %d, got %d (%q)", root.width, got, line)
+	var rule string
+	for _, ln := range root.pendingScroll {
+		if s := strings.TrimSpace(stripANSIForGoTUI(ln)); s != "" {
+			rule = s
+			break
+		}
 	}
-}
-
-func TestBubbleNonInlineKeepsTransientCompletionSummary(t *testing.T) {
-	root := newBubbleTUI(context.Background(), nil, &types.Model{ID: "test", Name: "Test", ProviderID: "test"}, "", nil, CommandHooks{})
-	root.inline = false
-	root.width = 80
-	root.model.state = uiStateQuerying
-	root.model.queryActive = true
-	root.model.queryStartTime = time.Now().Add(-2 * time.Second)
-
-	_ = root.finishPromptOperation(nil, "")
-
-	if got := stripANSIForGoTUI(root.model.effectiveLastActivity(time.Now())); !strings.Contains(got, "Completed") {
-		t.Fatalf("expected non-inline mode to keep transient completion summary, got %q", got)
+	if got := lipgloss.Width(rule); got != root.width {
+		t.Fatalf("expected full-width separator %d, got %d (%q)", root.width, got, rule)
 	}
 }
