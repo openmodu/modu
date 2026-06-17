@@ -13,7 +13,8 @@ import (
 	"golang.org/x/term"
 )
 
-// Hybrid diff-renderer mode (gated by MODU_TUI_DIFF=1).
+// Hybrid diff-renderer mode — the only render path (was gated by MODU_TUI_DIFF,
+// now the default).
 //
 // bubbletea's WithoutRenderer treats the program as non-interactive: it skips
 // initInput, so neither raw mode nor SIGWINCH-driven WindowSizeMsg are set up
