@@ -35,13 +35,27 @@ type bubbleTUI struct {
 
 	model *uiModel
 
-	useDiff bool
+	useDiff  bool
 	renderer *diffRenderer
 	// pendingScroll holds completed lines waiting to be committed to real
 	// terminal scrollback on the next paint (diff mode only). Completed turns
 	// live in native scrollback — reflowed by the terminal on resize, never
 	// re-owned by the renderer — so resizing no longer wipes history.
 	pendingScroll []string
+
+	// Incremental scrollback streaming (diff mode): while an assistant block
+	// streams, its already-rendered top lines are committed to native scrollback
+	// so the live region the diff renderer owns never grows past the screen.
+	// A live region taller than the screen would scroll its top into scrollback
+	// where a resize repaint can't clear it (stacked ghost frames). streamBlockIdx
+	// is the index of the block currently being streamed-out (-1 = none),
+	// streamCommitN how many of its clamped lines are already in scrollback, and
+	// streamLines caches this paint's clamped block lines so renderInlineLive
+	// reuses them instead of re-glamouring.
+	streamBlockIdx         int
+	streamCommitN          int
+	streamCommittedContent string
+	streamLines            []string
 
 	// Diff-mode render throttle: coalesce paints to ~60fps so a burst of
 	// streaming/agent events doesn't repaint the whole frame per token. A
@@ -255,16 +269,17 @@ func newBubbleTUI(ctx context.Context, session *coding_agent.CodingSession, mode
 	m.width = 80
 	m.height = 24
 	return &bubbleTUI{
-		ctx:          ctx,
-		session:      session,
-		modelInfo:    modelInfo,
-		histFile:     histFile,
-		promptMu:     promptMu,
-		commandHooks: hooks,
-		model:        m,
-		width:        80,
-		height:       24,
-		historyIdx:   0,
+		ctx:            ctx,
+		session:        session,
+		modelInfo:      modelInfo,
+		histFile:       histFile,
+		promptMu:       promptMu,
+		commandHooks:   hooks,
+		model:          m,
+		width:          80,
+		height:         24,
+		historyIdx:     0,
+		streamBlockIdx: -1,
 	}
 }
 
@@ -1432,7 +1447,7 @@ func (b *bubbleTUI) handleAgentEvent(ev types.Event) tea.Cmd {
 			if b.model.blocks[i].Kind == "assistant" {
 				if !b.model.blocks[i].pushed {
 					b.model.blocks[i].pushed = true
-					return b.printBlockCmd(b.model.blocks[i])
+					return b.printAssistantTailCmd(b.model.blocks[i], i)
 				}
 				break
 			}
@@ -1555,6 +1570,31 @@ func (b *bubbleTUI) printBlockCmd(block uiBlock) tea.Cmd {
 		return nil
 	}
 	return b.printStringCmd(b.model.renderSingleBlock(block))
+}
+
+// printAssistantTailCmd commits a finalized assistant block to scrollback. In
+// diff mode its top lines may already have streamed into scrollback during the
+// turn (commitStreamingPrefix); this commits only the remaining uncommitted tail
+// so nothing is duplicated. idx is the block's index, matched against the
+// stream-commit tracking. Outside diff mode (or with nothing pre-committed) it
+// falls back to committing the whole block.
+func (b *bubbleTUI) printAssistantTailCmd(block uiBlock, idx int) tea.Cmd {
+	if !b.inline {
+		return nil
+	}
+	if !b.useDiff || b.streamBlockIdx != idx || b.streamCommitN <= 0 {
+		b.resetStreamTracking()
+		return b.printBlockCmd(block)
+	}
+	committed := b.streamCommitN
+	b.resetStreamTracking()
+	lines := b.streamBlockClampedLines(block)
+	if committed >= len(lines) {
+		// Whole block already streamed out; just add the block separator blank.
+		b.pendingScroll = append(b.pendingScroll, "")
+		return nil
+	}
+	return b.printStringCmd(strings.Join(lines[committed:], "\n"))
 }
 
 func (b *bubbleTUI) printInlineHeaderCmd() tea.Cmd {
@@ -1920,7 +1960,19 @@ func (b *bubbleTUI) renderInlineLive() string {
 	if len(b.model.blocks) > 0 {
 		last := b.model.blocks[len(b.model.blocks)-1]
 		if last.Kind == "assistant" && last.Streaming {
-			rendered := b.model.renderSingleBlock(last)
+			// In diff mode the block's already-committed top lines live in
+			// scrollback (see commitStreamingPrefix); show only the uncommitted
+			// tail, reusing this paint's cached clamped lines so we don't re-render.
+			var rendered string
+			if b.useDiff && b.streamLines != nil {
+				tail := b.streamLines
+				if b.streamCommitN > 0 && b.streamCommitN <= len(tail) {
+					tail = tail[b.streamCommitN:]
+				}
+				rendered = strings.Join(tail, "\n")
+			} else {
+				rendered = b.model.renderSingleBlock(last)
+			}
 			if strings.TrimSpace(stripANSIForGoTUI(rendered)) != "" {
 				// Keep the "Working (…)" activity line visible underneath the
 				// streaming block. Without this the timer/hints disappear the

@@ -91,13 +91,150 @@ func (b *bubbleTUI) paint() {
 	if b.renderer == nil {
 		return
 	}
+	b.commitStreamingPrefix()
 	if len(b.pendingScroll) > 0 {
-		b.renderer.InsertAbove(b.pendingScroll)
+		b.renderer.InsertAbove(b.pendingScroll, b.width)
 		b.pendingScroll = nil
 	}
 	lines := b.fullScreenLines()
+	// Cap the painted frame to the screen height (show the tail). commitStreaming
+	// Prefix keeps the live region small by spilling settled blocks to scrollback,
+	// but the in-progress block before its first boundary (or any unsplittable
+	// block) can still momentarily exceed the screen. Painting more rows than the
+	// screen makes the terminal SCROLL the excess into native scrollback as a
+	// "Working …" snapshot the renderer can't reclaim. Capping keeps every painted
+	// frame fully owned by the diff renderer; the real content is already in
+	// scrollback via InsertAbove.
+	if h := b.height; h > 0 && len(lines) > h {
+		drop := len(lines) - h
+		lines = lines[drop:]
+		if b.caretActive {
+			if b.caretRow -= drop; b.caretRow < 0 {
+				b.caretActive = false
+			}
+		}
+	}
 	b.renderer.Render(lines, b.width, b.height)
 	b.renderer.PlaceCaret(b.caretActive, b.caretRow, b.caretCol)
+}
+
+// streamBlockClampedLines renders the assistant block and width-clamps it to the
+// exact lines the live frame would show (matching fullScreenLines' appendClamped
+// Lines), so a committed prefix and the live tail line up perfectly.
+func (b *bubbleTUI) streamBlockClampedLines(block uiBlock) []string {
+	width := b.width
+	if width <= 0 {
+		width = 80
+	}
+	return appendClampedLines(nil, b.model.renderSingleBlock(block), width)
+}
+
+// streamChromeRows approximates the non-block rows of the live frame (activity
+// line + input + status) when deciding whether the frame would overflow.
+const streamChromeRows = 4
+
+func (b *bubbleTUI) resetStreamTracking() {
+	b.streamBlockIdx = -1
+	b.streamCommitN = 0
+	b.streamCommittedContent = ""
+	b.streamLines = nil
+}
+
+// commitStreamingPrefix bounds the live region during a streaming response: it
+// commits the streaming assistant block's settled markdown blocks to native
+// scrollback, keeping only the in-progress tail live. Without this a long reply
+// grows the live frame past the screen, its top scrolls into scrollback the diff
+// renderer can't clear, and every resize stacks a ghost copy.
+//
+// Commits are tied to CONTENT boundaries, not rendered-line counts: glamour
+// re-renders the whole block on every token (line indices and wrapping shift), so
+// committing by line count duplicates content. Instead we render the stable
+// content prefix (everything up to the last blank-line block separator, never
+// inside an open code fence), confirm it is an append-only prefix of the full
+// render, and commit only the new lines. The block's finalize-time tail commit
+// happens in printAssistantTailCmd; an interrupted stream is flushed here.
+func (b *bubbleTUI) commitStreamingPrefix() {
+	b.streamLines = nil
+	blocks := b.model.blocks
+	idx := len(blocks) - 1
+	streaming := idx >= 0 && blocks[idx].Kind == "assistant" &&
+		blocks[idx].Streaming && b.model.state == uiStateQuerying
+	if !streaming {
+		if b.streamBlockIdx >= 0 && b.streamBlockIdx < len(blocks) && b.streamCommitN > 0 {
+			lines := b.streamBlockClampedLines(blocks[b.streamBlockIdx])
+			if b.streamCommitN < len(lines) {
+				b.pendingScroll = append(b.pendingScroll, lines[b.streamCommitN:]...)
+				b.pendingScroll = append(b.pendingScroll, "")
+			}
+		}
+		b.resetStreamTracking()
+		return
+	}
+	if idx != b.streamBlockIdx {
+		b.resetStreamTracking()
+		b.streamBlockIdx = idx
+	}
+	full := blocks[idx]
+	fullLines := b.streamBlockClampedLines(full)
+	b.streamLines = fullLines
+	if b.streamCommitN > len(fullLines) {
+		b.streamCommitN = len(fullLines)
+	}
+	// Only start spilling to scrollback once the whole live frame (block + the
+	// activity/input/status chrome ≈ 4 rows) would overflow the screen — short
+	// replies that fit stay whole (committed once at MessageEnd).
+	if b.height <= 0 || len(fullLines)+streamChromeRows <= b.height {
+		return
+	}
+	cut := lastStableBlockEnd(full.Content)
+	if cut <= len(b.streamCommittedContent) {
+		return // no new settled block (in-progress block still open / too big)
+	}
+	prefix := full
+	prefix.Content = full.Content[:cut]
+	prefLines := b.streamBlockClampedLines(prefix)
+	// Confirm the prefix render is an append-only prefix of the full render before
+	// committing — otherwise glamour reflowed an earlier line and committing would
+	// duplicate. Skip this round if so (try again next paint).
+	if len(prefLines) <= b.streamCommitN || len(prefLines) > len(fullLines) {
+		return
+	}
+	for i := range prefLines {
+		if prefLines[i] != fullLines[i] {
+			return
+		}
+	}
+	b.pendingScroll = append(b.pendingScroll, prefLines[b.streamCommitN:]...)
+	b.streamCommitN = len(prefLines)
+	b.streamCommittedContent = full.Content[:cut]
+}
+
+// lastStableBlockEnd returns the byte offset after the last blank-line block
+// separator in content that is NOT inside an open ``` code fence — i.e. the end
+// of the last settled top-level markdown block. Content before it renders
+// identically whether or not more content follows, so it is safe to commit.
+// Returns 0 when nothing is settled (or a fence is still open).
+func lastStableBlockEnd(content string) int {
+	inFence := false
+	last := 0
+	pos := 0
+	lines := strings.Split(content, "\n")
+	for i, ln := range lines {
+		if strings.HasPrefix(strings.TrimSpace(ln), "```") {
+			inFence = !inFence
+		}
+		pos += len(ln)
+		if i < len(lines)-1 {
+			pos++ // the '\n'
+		}
+		if !inFence && strings.TrimSpace(ln) == "" {
+			last = pos
+		}
+	}
+	if inFence {
+		return 0
+	}
+	return last
 }
 
 // fullScreenLines builds only the active region — the in-progress turn (live

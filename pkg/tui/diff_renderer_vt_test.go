@@ -213,7 +213,7 @@ func TestDiffRendererInsertAbovePreservedAcrossResize(t *testing.T) {
 
 	// Commit more completed lines than the screen is tall, forcing some into
 	// scrollback as the frame repaints below them.
-	r.InsertAbove(vtLines("turn", 8))
+	r.InsertAbove(vtLines("turn", 8), w)
 	r.Render([]string{"❯ ", "status"}, w, h)
 
 	if len(vt.scrollback) == 0 {

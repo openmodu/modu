@@ -4,7 +4,32 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/charmbracelet/x/ansi"
 )
+
+// frameRows returns the number of physical terminal rows the given logical
+// lines occupy at the given width, accounting for the terminal's hard autowrap
+// (a line wider than width wraps onto ceil(width/W) rows). Used on resize to
+// find the true top of the previous frame after the terminal reflowed it.
+func frameRows(lines []string, width int) int {
+	if width <= 0 {
+		width = 80
+	}
+	rows := 0
+	for _, ln := range lines {
+		w := ansi.StringWidth(ln)
+		if w <= width {
+			rows++
+		} else {
+			rows += (w + width - 1) / width
+		}
+	}
+	if rows < 1 {
+		rows = 1
+	}
+	return rows
+}
 
 // diffRenderer is a Go port of pi's differential terminal renderer
 // (pi/packages/tui/src/tui.ts, TUI.doRender). It owns the full-screen line
@@ -108,20 +133,69 @@ func (s *diffRenderer) Render(newLines []string, width, height int) {
 	// full clear + home (which would erase scrollback and snap to the top), erase
 	// just the old frame in place and repaint it at the new size — history is
 	// preserved. After a width change the terminal has already reflowed the old
-	// frame's wrapped rows, so the move-to-frame-top is best-effort; with a small
-	// frame of mostly short lines this is exact in practice.
+	// frame's wrapped rows, so to reach the true frame top we move up by the
+	// REFLOWED physical row count (frameRows at the new width), not the logical
+	// line count — otherwise a line that wrapped at the smaller width leaves
+	// ghost rows above the repaint.
 	if widthChanged || heightChanged {
 		var b strings.Builder
 		b.WriteString(ansiSyncBegin)
-		if d := s.cursorRow - s.hardwareCursorRow; d > 0 {
-			fmt.Fprintf(&b, "\x1b[%dB", d)
-		} else if d < 0 {
-			fmt.Fprintf(&b, "\x1b[%dA", -d)
+		if frameRows(s.previousLines, width) >= height || s.previousViewportTop > 0 {
+			// The previous frame filled (or overflowed) the whole screen — either it
+			// reflows to ≥ the screen height now, or it was already scrolled
+			// (previousViewportTop > 0). Its top has scrolled into native
+			// scrollback, where a relative 0J can't reach it, so each resize leaves
+			// a ghost copy (stacked input/status/streaming rows). Because the frame
+			// fills the screen there are NO completed turns visible above it, so we
+			// can safely clear the entire VISIBLE screen and repaint from home.
+			// We deliberately do NOT emit \x1b[3J: native scrollback history is
+			// preserved (only the on-screen ghosts are wiped).
+			b.WriteString("\x1b[2J\x1b[H")
+		} else {
+			// Frame fits the screen with completed turns visible above it. Erase
+			// just the old frame in place and repaint — moving up by the REFLOWED
+			// physical row count (frameRows at the new width), not the logical line
+			// count, so a line that wrapped at the smaller width doesn't leave
+			// ghost rows above the repaint.
+			if d := s.cursorRow - s.hardwareCursorRow; d > 0 {
+				fmt.Fprintf(&b, "\x1b[%dB", d)
+			} else if d < 0 {
+				fmt.Fprintf(&b, "\x1b[%dA", -d)
+			}
+			if up := frameRows(s.previousLines, width) - 1; up > 0 {
+				fmt.Fprintf(&b, "\x1b[%dA", up)
+			}
+			b.WriteString("\r\x1b[0J")
 		}
-		if up := len(s.previousLines) - 1; up > 0 {
-			fmt.Fprintf(&b, "\x1b[%dA", up)
+		for i, line := range newLines {
+			if i > 0 {
+				b.WriteString("\r\n")
+			}
+			b.WriteString(line)
 		}
-		b.WriteString("\r\x1b[0J")
+		b.WriteString(ansiSyncEnd)
+		io.WriteString(s.w, b.String())
+		s.cursorRow = max(0, len(newLines)-1)
+		s.hardwareCursorRow = s.cursorRow
+		s.maxLinesRendered = max(s.maxLinesRendered, len(newLines))
+		s.previousViewportTop = max(0, len(newLines)-height)
+		s.previousLines = newLines
+		s.previousWidth = width
+		s.previousHeight = height
+		return
+	}
+
+	// Overflow→fit transition at a stable size (e.g. a tall streaming frame
+	// collapsing to the small input frame when the turn completes). While the
+	// frame overflowed (previousViewportTop > 0) the screen was entirely frame —
+	// no completed turns visible — and its top scrolled into scrollback, leaving
+	// stale rows the relative diff below won't touch (a ghost status line stuck at
+	// the top). Now that the new frame fits, clear the visible screen and repaint
+	// from home; \x1b[3J is NOT used, so native scrollback history is preserved.
+	if s.previousViewportTop > 0 && len(newLines) <= height {
+		var b strings.Builder
+		b.WriteString(ansiSyncBegin)
+		b.WriteString("\x1b[2J\x1b[H")
 		for i, line := range newLines {
 			if i > 0 {
 				b.WriteString("\r\n")
@@ -305,9 +379,12 @@ func (s *diffRenderer) Render(newLines []string, width, height int) {
 // fresh below the inserted lines. The active frame is bottom-anchored and small,
 // so this scrolls older content up into native scrollback without ever clearing
 // it — completed turns persist and the terminal reflows them on resize.
-func (s *diffRenderer) InsertAbove(lines []string) {
+func (s *diffRenderer) InsertAbove(lines []string, width int) {
 	if len(lines) == 0 {
 		return
+	}
+	if width <= 0 {
+		width = s.previousWidth
 	}
 	var b strings.Builder
 	b.WriteString(ansiSyncBegin)
@@ -334,7 +411,11 @@ func (s *diffRenderer) InsertAbove(lines []string) {
 	} else if d < 0 {
 		fmt.Fprintf(&b, "\x1b[%dA", -d)
 	}
-	if up := len(s.previousLines) - 1; up > 0 {
+	// Move up by the REFLOWED physical row count: when this commit lands on the
+	// same paint as a resize, the terminal has already re-wrapped the old frame to
+	// the new width, so the logical line count would under-shoot and leave the old
+	// (now-stale) frame to scroll into scrollback as a ghost.
+	if up := frameRows(s.previousLines, width) - 1; up > 0 {
 		fmt.Fprintf(&b, "\x1b[%dA", up)
 	}
 	b.WriteString("\r")
