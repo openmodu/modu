@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/openmodu/modu/pkg/approval"
@@ -20,11 +20,11 @@ func TestBubbleTUIInputUsesCursorEditing(t *testing.T) {
 	root := newBubbleTUI(context.Background(), nil, nil, "", nil, CommandHooks{})
 
 	for _, r := range []rune("hello") {
-		root.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		root.updateKey(tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
-	root.updateKey(tea.KeyMsg{Type: tea.KeyLeft})
-	root.updateKey(tea.KeyMsg{Type: tea.KeyLeft})
-	root.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'X'}})
+	root.updateKey(tea.KeyPressMsg{Code: tea.KeyLeft})
+	root.updateKey(tea.KeyPressMsg{Code: tea.KeyLeft})
+	root.updateKey(tea.KeyPressMsg{Code: 'X', Text: "X"})
 
 	if got := root.draft; got != "helXlo" {
 		t.Fatalf("expected cursor insert to edit draft, got %q", got)
@@ -40,7 +40,7 @@ func TestBubbleTUIApprovalAllowsWithY(t *testing.T) {
 		Response:   responseCh,
 	})
 
-	root.updatePermissionKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	root.updatePermissionKey(tea.KeyPressMsg{Code: 'y', Text: "y"})
 
 	select {
 	case got := <-responseCh:
@@ -183,9 +183,9 @@ func TestBubbleTUIConfigProviderInteractive(t *testing.T) {
 	}
 	for _, value := range []string{"openai", "sk-test", "https://api.openai.com/v1"} {
 		for _, r := range value {
-			root.updateConfigInputKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			root.updateConfigInputKey(tea.KeyPressMsg{Code: r, Text: string(r)})
 		}
-		cmd := root.updateConfigInputKey(tea.KeyMsg{Type: tea.KeyEnter})
+		cmd := root.updateConfigInputKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 		if cmd != nil {
 			msg, ok := cmd().(bubbleConfigDoneMsg)
 			if !ok {
@@ -225,7 +225,7 @@ func TestBubbleTUIConfigProviderMenuCanReturn(t *testing.T) {
 		t.Fatalf("unexpected provider selector: %q", rendered)
 	}
 
-	root.updateConfigSelectKey(tea.KeyMsg{Type: tea.KeyEsc})
+	root.updateConfigSelectKey(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if root.model.state != uiStateConfigMenu {
 		t.Fatalf("expected esc to return to config menu, got %v", root.model.state)
 	}
@@ -297,9 +297,9 @@ func TestBubbleTUIConfigAddInteractive(t *testing.T) {
 	var last tea.Cmd
 	for _, field := range fields {
 		for _, r := range field.value {
-			root.updateConfigInputKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			root.updateConfigInputKey(tea.KeyPressMsg{Code: r, Text: string(r)})
 		}
-		last = root.updateConfigInputKey(tea.KeyMsg{Type: tea.KeyEnter})
+		last = root.updateConfigInputKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 		if field.want != "" {
 			if root.configFields[root.configFieldIdx].key != field.want {
 				t.Fatalf("expected next field %q, got %q", field.want, root.configFields[root.configFieldIdx].key)
@@ -374,12 +374,12 @@ func TestBubbleTUISlashSelectorCompletesCommand(t *testing.T) {
 	root := newBubbleTUI(context.Background(), nil, nil, "", nil, CommandHooks{})
 
 	for _, r := range []rune("/hot") {
-		root.updateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		root.updateKey(tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
 	if len(root.slashMatches) == 0 {
 		t.Fatal("expected slash matches")
 	}
-	root.updateKey(tea.KeyMsg{Type: tea.KeyTab})
+	root.updateKey(tea.KeyPressMsg{Code: tea.KeyTab})
 
 	if got := root.draft; got != "/hotkeys " {
 		t.Fatalf("expected completed slash command, got %q", got)
@@ -391,7 +391,7 @@ func TestBubbleTUIViewUsesAgenvoyStyleChrome(t *testing.T) {
 	root.width = 80
 	root.height = 24
 
-	view := root.View()
+	view := root.viewString()
 	for _, want := range []string{"modu_code", "Bubble Tea", "/model", "Test", "❯ █"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected Bubble view chrome to contain %q, got %q", want, view)
@@ -409,7 +409,7 @@ func TestBubbleInlineViewKeepsTranscriptOutOfRenderer(t *testing.T) {
 	root.height = 24
 	root.appendBlock(uiBlock{Kind: "user", Content: "selectable scrollback text", Source: "local"})
 
-	view := root.View()
+	view := root.viewString()
 	if strings.Contains(view, "selectable scrollback text") {
 		t.Fatalf("inline Bubble view should not re-render completed transcript, got %q", view)
 	}
@@ -534,7 +534,7 @@ func TestBubbleInlineHeaderIsPrintableButNotPersistent(t *testing.T) {
 			t.Fatalf("expected printable inline header to use a bordered box containing %q, got %q", want, header)
 		}
 	}
-	view := stripANSIForGoTUI(root.View())
+	view := stripANSIForGoTUI(root.viewString())
 	for _, unwanted := range []string{"modu_code", "test/test"} {
 		if strings.Contains(view, unwanted) {
 			t.Fatalf("inline header should not be persistent in view; found %q in %q", unwanted, view)
@@ -607,7 +607,7 @@ func TestBubbleTUIModelSelectUpdateClosesBeforeSwitch(t *testing.T) {
 	root := newBubbleTUI(context.Background(), session, session.GetModel(), "", nil, CommandHooks{})
 
 	root.openModelSelect("bubble-update-beta")
-	next, cmd := root.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, cmd := root.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected asynchronous model switch command")
 	}
@@ -620,8 +620,8 @@ func TestBubbleTUIModelSelectUpdateClosesBeforeSwitch(t *testing.T) {
 	if got := session.GetModel().ID; got != "bubble-update-beta" {
 		t.Fatalf("expected bubble-update-beta, got %q", got)
 	}
-	if strings.Contains(root.View(), "Select model") {
-		t.Fatalf("expected view to leave selector, got %q", root.View())
+	if strings.Contains(root.viewString(), "Select model") {
+		t.Fatalf("expected view to leave selector, got %q", root.viewString())
 	}
 }
 
@@ -638,11 +638,11 @@ func TestBubbleTUIModelSelectKeysMoveAndConfirm(t *testing.T) {
 	if root.modelSelectIdx != 0 {
 		t.Fatalf("expected initial selection at current model, got %d", root.modelSelectIdx)
 	}
-	root.updateModelSelectKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
+	root.updateModelSelectKey(tea.KeyPressMsg{Code: 'j', Text: "j"})
 	if got := root.modelChoices[root.modelSelectIdx].ID; got != "bubble-key-beta" {
 		t.Fatalf("expected j to select beta, got %q", got)
 	}
-	_, cmd := root.updateModelSelectKey(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd := root.updateModelSelectKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	runBubbleTestCmd(t, root, cmd)
 	if got := session.GetModel().ID; got != "bubble-key-beta" {
 		t.Fatalf("expected enter to confirm beta, got %q", got)
@@ -662,21 +662,21 @@ func TestBubbleTUIModelSelectFallbackKeysConfirmAndClose(t *testing.T) {
 	root := newBubbleTUI(context.Background(), session, session.GetModel(), "", nil, CommandHooks{})
 
 	root.openModelSelect("bubble-fallback")
-	root.updateModelSelectKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
-	_, cmd := root.updateModelSelectKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	root.updateModelSelectKey(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	_, cmd := root.updateModelSelectKey(tea.KeyPressMsg{Code: 'y', Text: "y"})
 	runBubbleTestCmd(t, root, cmd)
 	if got := session.GetModel().ID; got != "bubble-fallback-beta" {
 		t.Fatalf("expected y to confirm beta, got %q", got)
 	}
 
 	root.openModelSelect("bubble-fallback")
-	root.updateModelSelectKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	root.updateModelSelectKey(tea.KeyPressMsg{Code: 'q', Text: "q"})
 	if root.model.state != uiStateInput {
 		t.Fatalf("expected q to close selector, got state %v", root.model.state)
 	}
 
 	root.openModelSelect("bubble-fallback")
-	_, cmd = root.updateModelSelectKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'\r'}})
+	_, cmd = root.updateModelSelectKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if root.model.state != uiStateInput {
 		t.Fatalf("expected rune carriage return to confirm and close selector, got state %v", root.model.state)
 	}
@@ -812,6 +812,66 @@ func TestBubbleInlineCommitsCompletionSummaryToScrollback(t *testing.T) {
 	// otherwise vanish after the TTL, the bug being fixed).
 	if got := root.model.effectiveLastActivity(time.Now()); strings.TrimSpace(stripANSIForGoTUI(got)) != "" {
 		t.Fatalf("expected transient activity cleared in inline mode, got %q", got)
+	}
+}
+
+// TestBubbleInlineResizeReflowsActiveRegionAndKeepsScrollback exercises the two
+// halves of the bubbletea v2 (cellbuf renderer) migration: completed turns are
+// committed to terminal scrollback via tea.Println (so the cellbuf renderer
+// never has to repaint them), and the small active region that the renderer
+// *does* own reflows to the new terminal width on a WindowSizeMsg. Under v2 the
+// renderer Erase()s and re-diffs the cell buffer on a size change, so the active
+// region must track the new width rather than keeping the stale wide layout that
+// the v1 relative-cursor renderer left behind.
+func TestBubbleInlineResizeReflowsActiveRegionAndKeepsScrollback(t *testing.T) {
+	root := newBubbleTUI(context.Background(), nil, &types.Model{ID: "test", Name: "Test", ProviderID: "test"}, "", nil, CommandHooks{})
+	root.inline = true
+
+	root.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	if root.width != 100 {
+		t.Fatalf("expected width 100 after resize, got %d", root.width)
+	}
+
+	// A completed block must land in scrollback via tea.Println, not in the
+	// active region the renderer repaints — that is what survives resize cleanly.
+	block := uiBlock{Kind: "assistant", Content: "hello world", Timestamp: time.Now()}
+	if bodies := collectPrintlnBodies(root.printBlockCmd(block)); len(bodies) == 0 {
+		t.Fatal("expected completed block to be committed to scrollback via tea.Println")
+	}
+
+	// Shrink the terminal. The active region must re-render at the new width
+	// without panicking and without leaving lines wider than the terminal.
+	root.Update(tea.WindowSizeMsg{Width: 40, Height: 20})
+	if root.width != 40 {
+		t.Fatalf("expected width 40 after resize, got %d", root.width)
+	}
+	// View().Content is what the cellbuf renderer actually paints; it must fit
+	// the resized width or v2 would clip (not wrap) the over-wide lines.
+	view := root.View().Content
+	if strings.TrimSpace(view) == "" {
+		t.Fatal("expected non-empty active-region view after resize")
+	}
+	for _, line := range strings.Split(stripANSIForGoTUI(view), "\n") {
+		if w := lipgloss.Width(line); w > 40 {
+			t.Fatalf("active-region line exceeds resized width 40: %q (w=%d)", line, w)
+		}
+	}
+}
+
+func TestBubbleInlineTurnSeparatorIsWidthAdaptive(t *testing.T) {
+	root := newBubbleTUI(context.Background(), nil, nil, "", nil, CommandHooks{})
+	root.inline = true
+	root.width = 120
+
+	bodies := collectPrintlnBodies(root.printTurnSeparatorCmd())
+	if len(bodies) != 1 {
+		t.Fatalf("expected one separator line, got %#v", bodies)
+	}
+	line := strings.TrimSpace(stripANSIForGoTUI(bodies[0]))
+	// The divider now spans the full terminal width (regenerated per width by the
+	// pi-style resize re-render), instead of a fixed short stub.
+	if got := lipgloss.Width(line); got != root.width {
+		t.Fatalf("expected full-width separator %d, got %d (%q)", root.width, got, line)
 	}
 }
 

@@ -24,14 +24,14 @@ var (
 	// character on the right, no surrounding bg gutters.
 	uiUserPrompt         = lipgloss.NewStyle().Foreground(lipgloss.Color("#E6EDF3")).Background(lipgloss.Color("#1F2A2E"))
 	uiExternalUserPrompt = lipgloss.NewStyle().Foreground(lipgloss.Color("#F2E7C9")).Background(lipgloss.Color("#2E2618"))
-	uiBubbleHeader       = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(uiPrimary).
-				Padding(0, 2)
-	uiBubbleInput = lipgloss.NewStyle().
-			Border(lipgloss.NormalBorder(), true, false, true, false).
-			BorderForeground(uiMuted).
-			Padding(0, 1, 0, 0) // top/right/bottom/left: no left pad so ❯ sits flush-left
+	// Inline header box. It is printed once into scrollback; on a window resize
+	// while it is still on screen its top/bottom rules reflow once, then it
+	// scrolls away. The active-region boxes below (input/popup) are repainted
+	// cleanly by the v2 cellbuf renderer on every resize.
+	uiBubbleHeader = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(uiPrimary).
+			Padding(0, 2)
 	uiBubblePopup = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(uiSecondary).

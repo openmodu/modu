@@ -11,8 +11,9 @@ import (
 	"sync"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/openmodu/modu/pkg/agent"
 	"github.com/openmodu/modu/pkg/approval"
@@ -34,11 +35,56 @@ type bubbleTUI struct {
 
 	model *uiModel
 
+	useDiff  bool
+	renderer *diffRenderer
+	// pendingScroll holds completed lines waiting to be committed to real
+	// terminal scrollback on the next paint (diff mode only). Completed turns
+	// live in native scrollback — reflowed by the terminal on resize, never
+	// re-owned by the renderer — so resizing no longer wipes history.
+	pendingScroll []string
+
+	// Incremental scrollback streaming (diff mode): while an assistant block
+	// streams, its already-rendered top lines are committed to native scrollback
+	// so the live region the diff renderer owns never grows past the screen.
+	// A live region taller than the screen would scroll its top into scrollback
+	// where a resize repaint can't clear it (stacked ghost frames). streamBlockIdx
+	// is the index of the block currently being streamed-out (-1 = none),
+	// streamCommitN how many of its clamped lines are already in scrollback, and
+	// streamLines caches this paint's clamped block lines so renderInlineLive
+	// reuses them instead of re-glamouring.
+	streamBlockIdx         int
+	streamCommitN          int
+	streamCommittedContent string
+	streamLines            []string
+
+	// Diff-mode render throttle: coalesce paints to ~60fps so a burst of
+	// streaming/agent events doesn't repaint the whole frame per token. A
+	// suppressed paint sets paintPending and schedules a trailing flush
+	// (bubblePaintMsg) so the final frame of a burst always lands.
+	lastPaintNano int64
+	paintPending  bool
+
+	// lastPaintW/H detect a terminal resize between paints. On resize the diff
+	// renderer can't reflow the pre-wrapped content already in native scrollback
+	// (hanging indents orphan their tail), so we clear screen+scrollback and
+	// re-render the whole transcript fresh at the new width (pi-style).
+	lastPaintW int
+	lastPaintH int
+
+	// Real-cursor caret position for the active input, computed each frame by
+	// fullScreenLines and placed by the diff renderer (see PlaceCaret). Drives
+	// IME composition-window anchoring; caretActive is false for popup/approval
+	// states that draw their own markers.
+	caretActive bool
+	caretRow    int
+	caretCol    int
+
 	draft       string
 	cursor      int
 	history     []string
 	historyIdx  int
 	historyHold string
+	pastes      []pasteEntry
 
 	slashMatches []slashCommandDef
 	slashIndex   int
@@ -76,6 +122,12 @@ type bubbleTUI struct {
 }
 
 type bubbleTickMsg time.Time
+
+// bubblePaintMsg flushes a paint that the render throttle deferred.
+type bubblePaintMsg struct{}
+
+// paintInterval bounds diff-mode repaints to ~60fps.
+const paintInterval = 16 * time.Millisecond
 
 type bubbleAgentMsg struct {
 	event types.Event
@@ -158,8 +210,25 @@ func runBubbleWithOptions(ctx context.Context, session *coding_agent.CodingSessi
 	root.inline = inline
 	root.loadHistory()
 
-	prog := tea.NewProgram(root, tea.WithContext(ctx), tea.WithoutSignalHandler())
+	progOpts := []tea.ProgramOption{tea.WithContext(ctx), tea.WithoutSignalHandler()}
+	if os.Getenv("MODU_TUI_DIFF") == "1" {
+		// Hybrid diff-renderer mode: bubbletea handles input/events only, we own
+		// rendering via diffRenderer for pi-style clean resize. See bubble_diff.go.
+		root.useDiff = true
+		root.renderer = newDiffRenderer(os.Stdout)
+		progOpts = append(progOpts, tea.WithoutRenderer())
+	}
+	prog := tea.NewProgram(root, progOpts...)
 	root.program = prog
+	// diffCleanup restores cooked mode + the hardware cursor. It is idempotent
+	// (sync.Once) and must run BEFORE the exit prints below, otherwise the
+	// fmt.Println output staircases — in raw mode "\n" line-feeds without a
+	// carriage return. Deferred as a backstop for early/panic returns.
+	diffCleanup := func() {}
+	if root.useDiff {
+		diffCleanup = startDiffMode(ctx, prog, root)
+		defer diffCleanup()
+	}
 
 	if approvalCh != nil {
 		go watchBubbleApprovals(ctx, prog, approvalCh)
@@ -190,6 +259,7 @@ func runBubbleWithOptions(ctx context.Context, session *coding_agent.CodingSessi
 	}
 
 	_, err := prog.Run()
+	diffCleanup() // restore cooked mode before the plain exit prints below
 	if meta := strings.TrimSpace(root.model.renderExitSessionMeta()); meta != "" {
 		fmt.Println(meta)
 	}
@@ -206,16 +276,17 @@ func newBubbleTUI(ctx context.Context, session *coding_agent.CodingSession, mode
 	m.width = 80
 	m.height = 24
 	return &bubbleTUI{
-		ctx:          ctx,
-		session:      session,
-		modelInfo:    modelInfo,
-		histFile:     histFile,
-		promptMu:     promptMu,
-		commandHooks: hooks,
-		model:        m,
-		width:        80,
-		height:       24,
-		historyIdx:   0,
+		ctx:            ctx,
+		session:        session,
+		modelInfo:      modelInfo,
+		histFile:       histFile,
+		promptMu:       promptMu,
+		commandHooks:   hooks,
+		model:          m,
+		width:          80,
+		height:         24,
+		historyIdx:     0,
+		streamBlockIdx: -1,
 	}
 }
 
@@ -251,17 +322,73 @@ func bubbleTick() tea.Cmd {
 }
 
 func (b *bubbleTUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	model, cmd := b.dispatch(msg)
+	// In diff mode we own output: repaint the whole frame after every message
+	// so the renderer reconciles the terminal (cheap — only changed lines, full
+	// clear+repaint only on resize). The repaint is throttled to ~60fps so a
+	// stream of events coalesces into one frame instead of one repaint each.
+	//
+	// A bubblePaintMsg already painted in dispatch — it must NOT call requestPaint
+	// again, or the throttle would schedule a fresh flush after every flush and
+	// spin forever (a burst kicks it off, then it self-sustains at ~60fps).
+	if b.useDiff {
+		if _, isFlush := msg.(bubblePaintMsg); !isFlush {
+			if pc := b.requestPaint(); pc != nil {
+				cmd = tea.Batch(cmd, pc)
+			}
+		}
+	}
+	return model, cmd
+}
+
+// requestPaint paints immediately if at least paintInterval has elapsed since
+// the last paint; otherwise it defers a single trailing flush so the last frame
+// of a burst still renders. Returns the flush command, or nil if it painted now
+// (or a flush is already scheduled).
+func (b *bubbleTUI) requestPaint() tea.Cmd {
+	now := time.Now().UnixNano()
+	if now-b.lastPaintNano >= int64(paintInterval) {
+		b.actualPaint(now)
+		return nil
+	}
+	if b.paintPending {
+		return nil
+	}
+	b.paintPending = true
+	wait := time.Duration(int64(paintInterval) - (now - b.lastPaintNano))
+	return tea.Tick(wait, func(time.Time) tea.Msg { return bubblePaintMsg{} })
+}
+
+func (b *bubbleTUI) actualPaint(now int64) {
+	b.lastPaintNano = now
+	b.paintPending = false
+	b.paint()
+}
+
+func (b *bubbleTUI) dispatch(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case bubbleTickMsg:
 		return b, bubbleTick()
+	case bubblePaintMsg:
+		if b.paintPending {
+			b.actualPaint(time.Now().UnixNano())
+		}
+		return b, nil
 	case tea.WindowSizeMsg:
+		// bubbletea emits a bogus {0,0} at startup under WithoutRenderer (it
+		// never set ttyOutput); our SIGWINCH watcher feeds the real size.
+		if b.useDiff && msg.Width <= 0 {
+			return b, nil
+		}
 		b.width = max(20, msg.Width)
 		b.height = max(8, msg.Height)
 		b.model.width = max(20, msg.Width-2)
 		b.model.height = b.height
 		return b, nil
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return b.updateKey(msg)
+	case tea.PasteMsg:
+		return b.updatePaste(msg)
 	case bubbleAgentMsg:
 		return b, b.handleAgentEvent(msg.event)
 	case bubbleSessionMsg:
@@ -308,7 +435,7 @@ func (b *bubbleTUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return b, nil
 }
 
-func (b *bubbleTUI) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (b *bubbleTUI) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if b.model.state == uiStatePermission {
 		return b, b.updatePermissionKey(msg)
 	}
@@ -428,7 +555,7 @@ func (b *bubbleTUI) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	for _, r := range msg.Runes {
+	for _, r := range msg.Text {
 		b.insertRune(r)
 	}
 	if msg.String() == "tab" && b.completeSlashMatch() {
@@ -437,7 +564,34 @@ func (b *bubbleTUI) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return b, nil
 }
 
-func (b *bubbleTUI) updatePermissionKey(msg tea.KeyMsg) tea.Cmd {
+// updatePaste handles bracketed-paste input. Under bubbletea v2 a paste arrives
+// as a dedicated tea.PasteMsg rather than a key event with a Paste flag, so the
+// collapse-into-placeholder logic that used to live in updateKey lives here.
+//
+// Multi-line pastes are collapsed into a single atomic placeholder rune
+// (rendered as "[Pasted text +N lines]"), the way Claude Code does. Keeping the
+// input box to one short line means it never wraps, so the terminal never
+// reflows it on resize — avoiding the "串行" corruption. Paste is only consumed
+// while editing the prompt draft; the modal states below ignore it, matching
+// the pre-v2 behavior where updateKey returned early for those states.
+func (b *bubbleTUI) updatePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
+	switch b.model.state {
+	case uiStatePermission, uiStatePlanReject, uiStateModelSelect,
+		uiStateConfigMenu, uiStateConfigInput, uiStateConfigSelect:
+		return b, nil
+	}
+	text := msg.Content
+	if strings.ContainsRune(text, '\n') {
+		b.insertPaste(text)
+		return b, nil
+	}
+	for _, r := range text {
+		b.insertRune(r)
+	}
+	return b, nil
+}
+
+func (b *bubbleTUI) updatePermissionKey(msg tea.KeyPressMsg) tea.Cmd {
 	perm := b.model.pendingPerm
 	if perm == nil {
 		b.model.state = uiStateInput
@@ -471,7 +625,7 @@ func (b *bubbleTUI) updatePermissionKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-func (b *bubbleTUI) updatePlanRejectKey(msg tea.KeyMsg) tea.Cmd {
+func (b *bubbleTUI) updatePlanRejectKey(msg tea.KeyPressMsg) tea.Cmd {
 	switch msg.String() {
 	case "ctrl+c", "esc":
 		b.resolvePlan("reject")
@@ -488,42 +642,42 @@ func (b *bubbleTUI) updatePlanRejectKey(msg tea.KeyMsg) tea.Cmd {
 			b.model.planRejectBuf = string(rs[:len(rs)-1])
 		}
 	default:
-		for _, r := range msg.Runes {
-			b.model.planRejectBuf += string(r)
-		}
+		b.model.planRejectBuf += msg.Text
 	}
 	return nil
 }
 
-func (b *bubbleTUI) updateModelSelectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyCtrlC, tea.KeyEsc:
+func (b *bubbleTUI) updateModelSelectKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c", "esc":
 		b.cancelModelSelect()
-	case tea.KeyUp:
+	case "up":
 		b.moveModelSelect(-1)
-	case tea.KeyDown:
+	case "down":
 		b.moveModelSelect(1)
-	case tea.KeyHome:
+	case "home":
 		b.jumpModelSelect(0)
-	case tea.KeyEnd:
+	case "end":
 		b.jumpModelSelect(len(b.modelChoices) - 1)
-	case tea.KeyPgUp:
+	case "pgup":
 		b.jumpModelSelect(b.modelSelectIdx - modelSelectVisibleRows)
-	case tea.KeyPgDown:
+	case "pgdown":
 		b.jumpModelSelect(b.modelSelectIdx + modelSelectVisibleRows)
-	case tea.KeyBackspace, tea.KeyCtrlH:
+	case "backspace", "ctrl+h":
 		b.backspaceModelSearch()
-	case tea.KeyTab:
+	case "tab":
 		b.toggleModelScope()
-	case tea.KeyEnter, tea.KeyCtrlJ:
+	case "enter", "ctrl+j":
 		return b, b.confirmModelSelect()
-	case tea.KeySpace:
+	case "space":
 		b.toggleScopedModelSelection()
-	case tea.KeyRunes:
-		if len(msg.Runes) == 1 {
-			switch msg.Runes[0] {
-			case '\r', '\n':
-				return b, b.confirmModelSelect()
+	default:
+		runes := []rune(msg.Text)
+		if len(runes) == 0 {
+			return b, nil
+		}
+		if len(runes) == 1 {
+			switch runes[0] {
 			case 'j':
 				b.moveModelSelect(1)
 				return b, nil
@@ -535,11 +689,8 @@ func (b *bubbleTUI) updateModelSelectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return b, nil
 			case 'y', 'Y', 'l':
 				return b, b.confirmModelSelect()
-			case ' ':
-				b.toggleScopedModelSelection()
-				return b, nil
 			case '1', '2', '3', '4', '5', '6', '7', '8', '9':
-				idx := b.modelSelectScroll + int(msg.Runes[0]-'1')
+				idx := b.modelSelectScroll + int(runes[0]-'1')
 				if idx >= 0 && idx < len(b.modelChoices) {
 					b.modelSelectIdx = idx
 					return b, b.confirmModelSelect()
@@ -547,18 +698,17 @@ func (b *bubbleTUI) updateModelSelectKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return b, nil
 			}
 		}
-		for _, r := range msg.Runes {
+		for _, r := range runes {
 			if r >= 0x20 {
 				b.appendModelSearch(r)
 			}
 		}
-	default:
 	}
 	return b, nil
 }
 
 func (b *bubbleTUI) submit(text string, mode submitMode) tea.Cmd {
-	line := strings.TrimSpace(text)
+	line := strings.TrimSpace(b.expandPastes(text))
 	if line == "" {
 		if mode == submitModeSteer && b.model.queryActive {
 			b.model.setTransientStatus("steer requires a message")
@@ -567,6 +717,7 @@ func (b *bubbleTUI) submit(text string, mode submitMode) tea.Cmd {
 	}
 	b.draft = ""
 	b.cursor = 0
+	b.pastes = nil
 	b.slashMatches = nil
 	b.slashIndex = 0
 	b.appendHistory(line)
@@ -626,12 +777,19 @@ func (b *bubbleTUI) runLocalOrSlash(line string) tea.Cmd {
 }
 
 func (b *bubbleTUI) runPrompt(line string) tea.Cmd {
+	// A turn divider precedes each new user turn (not the first), so the rule sits
+	// BETWEEN turns in scrollback and the input box's own top rule is the only
+	// divider before the active prompt — no redundant double line.
+	var sep tea.Cmd
+	if len(b.model.blocks) > 0 {
+		sep = b.printTurnSeparatorCmd()
+	}
 	block := uiBlock{Kind: "user", Content: line, Source: "local", Timestamp: time.Now()}
 	b.appendBlock(block)
 	runCmd := b.runPromptOperation(line, func(ctx context.Context) error {
 		return b.session.Prompt(ctx, line)
 	})
-	return tea.Sequence(b.printBlockCmd(block), runCmd)
+	return tea.Sequence(sep, b.printBlockCmd(block), runCmd)
 }
 
 func (b *bubbleTUI) runPromptOperation(failedPrompt string, run func(context.Context) error) tea.Cmd {
@@ -696,19 +854,19 @@ func (b *bubbleTUI) finishPromptOperation(err error, failedPrompt string) tea.Cm
 		b.model.setStatus("")
 	}
 	b.model.state = uiStateInput
-	sep := b.printTurnSeparatorCmd()
-	// In inline mode, commit the completion summary to the permanent
-	// scrollback (like Claude Code) instead of leaving it in the transient
-	// live region, where it would vanish after transientActivityTTL.
+	// In inline mode, commit the completion summary to the permanent scrollback
+	// (like Claude Code) instead of leaving it in the transient live region,
+	// where it would vanish after transientActivityTTL. The turn divider is NOT
+	// emitted here — it precedes the NEXT user turn (see runPrompt), so the input
+	// box's own top rule stays the only divider before the active prompt.
+	var cmds []tea.Cmd
 	if b.inline && summary != "" {
 		b.model.clearActivity()
-		line := tea.Println("  " + uiDimText.Render(summary))
-		if sep != nil {
-			return tea.Sequence(line, sep)
+		if line := b.printStringCmd("  " + uiDimText.Render(summary)); line != nil {
+			cmds = append(cmds, line)
 		}
-		return line
 	}
-	return sep
+	return tea.Sequence(cmds...)
 }
 
 func (b *bubbleTUI) continueQueuedPrompt() tea.Cmd {
@@ -1300,7 +1458,7 @@ func (b *bubbleTUI) handleAgentEvent(ev types.Event) tea.Cmd {
 			if b.model.blocks[i].Kind == "assistant" {
 				if !b.model.blocks[i].pushed {
 					b.model.blocks[i].pushed = true
-					return b.printBlockCmd(b.model.blocks[i])
+					return b.printAssistantTailCmd(b.model.blocks[i], i)
 				}
 				break
 			}
@@ -1425,6 +1583,31 @@ func (b *bubbleTUI) printBlockCmd(block uiBlock) tea.Cmd {
 	return b.printStringCmd(b.model.renderSingleBlock(block))
 }
 
+// printAssistantTailCmd commits a finalized assistant block to scrollback. In
+// diff mode its top lines may already have streamed into scrollback during the
+// turn (commitStreamingPrefix); this commits only the remaining uncommitted tail
+// so nothing is duplicated. idx is the block's index, matched against the
+// stream-commit tracking. Outside diff mode (or with nothing pre-committed) it
+// falls back to committing the whole block.
+func (b *bubbleTUI) printAssistantTailCmd(block uiBlock, idx int) tea.Cmd {
+	if !b.inline {
+		return nil
+	}
+	if !b.useDiff || b.streamBlockIdx != idx || b.streamCommitN <= 0 {
+		b.resetStreamTracking()
+		return b.printBlockCmd(block)
+	}
+	committed := b.streamCommitN
+	b.resetStreamTracking()
+	lines := b.streamBlockClampedLines(block)
+	if committed >= len(lines) {
+		// Whole block already streamed out; just add the block separator blank.
+		b.pendingScroll = append(b.pendingScroll, "")
+		return nil
+	}
+	return b.printStringCmd(strings.Join(lines[committed:], "\n"))
+}
+
 func (b *bubbleTUI) printInlineHeaderCmd() tea.Cmd {
 	if !b.inline {
 		return nil
@@ -1440,17 +1623,44 @@ func (b *bubbleTUI) printStringCmd(s string) tea.Cmd {
 	if strings.TrimSpace(stripANSIForGoTUI(s)) == "" {
 		return nil
 	}
+	if b.useDiff {
+		b.enqueueScrollback(s)
+		return nil
+	}
 	return tea.Println(s + "\n")
 }
 
-// printTurnSeparatorCmd emits a dim horizontal rule into the scrollback to
-// visually divide one completed turn from the next. Inline mode only.
+// enqueueScrollback queues a completed block's lines (plus a trailing blank for
+// separation) for commit to real terminal scrollback on the next paint. Used in
+// diff mode in place of tea.Println, which is a no-op under WithoutRenderer.
+func (b *bubbleTUI) enqueueScrollback(s string) {
+	b.pendingScroll = append(b.pendingScroll, strings.Split(s, "\n")...)
+	b.pendingScroll = append(b.pendingScroll, "")
+}
+
+// hRule returns a dim horizontal rule spanning the given width. Used for the turn
+// dividers and the input-box frame. In diff mode the whole transcript is
+// re-rendered on resize (see rerenderScrollback), so a full-width rule reflows
+// cleanly — no need to keep it artificially short anymore.
+func hRule(width int) string {
+	if width < 8 {
+		width = 8
+	}
+	return uiDimText.Render(strings.Repeat("─", width))
+}
+
+// printTurnSeparatorCmd emits a dim, full-width horizontal rule into the
+// scrollback to visually divide one completed turn from the next. Inline mode
+// only. On resize the rule is regenerated at the new width by rerenderScrollback.
 func (b *bubbleTUI) printTurnSeparatorCmd() tea.Cmd {
 	if !b.inline {
 		return nil
 	}
-	width := max(24, b.width-2)
-	return tea.Println(uiDimText.Render(strings.Repeat("─", width)))
+	if b.useDiff {
+		b.enqueueScrollback(hRule(b.width))
+		return nil
+	}
+	return tea.Println(hRule(b.width))
 }
 
 func (b *bubbleTUI) isSessionAgentSlash(line string) bool {
@@ -1520,6 +1730,52 @@ func (b *bubbleTUI) currentWorkingDir() string {
 		return cwd
 	}
 	return b.session.Cwd()
+}
+
+// pasteRuneBase is the start of a Unicode Private-Use range used as atomic
+// placeholders for collapsed pastes. Paste i is represented in the draft by
+// the single rune pasteRuneBase+i, so the existing rune-based cursor/backspace
+// logic treats each collapsed paste as one indivisible unit for free.
+const pasteRuneBase rune = 0xE000
+
+type pasteEntry struct {
+	content string
+	lines   int
+}
+
+func isPasteRune(r rune, n int) bool {
+	return r >= pasteRuneBase && r < pasteRuneBase+rune(n)
+}
+
+// pasteLabel is the single-line text shown in place of a collapsed paste.
+func pasteLabel(e pasteEntry) string {
+	return fmt.Sprintf("[Pasted text +%d lines]", e.lines)
+}
+
+func (b *bubbleTUI) insertPaste(content string) {
+	idx := len(b.pastes)
+	b.pastes = append(b.pastes, pasteEntry{
+		content: content,
+		lines:   strings.Count(content, "\n") + 1,
+	})
+	b.insertRune(pasteRuneBase + rune(idx))
+}
+
+// expandPastes replaces every paste-placeholder rune with its stored content,
+// turning the collapsed draft back into the real text before it is submitted.
+func (b *bubbleTUI) expandPastes(text string) string {
+	if len(b.pastes) == 0 {
+		return text
+	}
+	var sb strings.Builder
+	for _, r := range text {
+		if isPasteRune(r, len(b.pastes)) {
+			sb.WriteString(b.pastes[r-pasteRuneBase].content)
+		} else {
+			sb.WriteRune(r)
+		}
+	}
+	return sb.String()
 }
 
 func (b *bubbleTUI) insertRune(r rune) {
@@ -1625,7 +1881,39 @@ func (b *bubbleTUI) loadHistory() {
 	b.historyIdx = len(history)
 }
 
-func (b *bubbleTUI) View() string {
+// View satisfies the bubbletea v2 Model interface. v2's renderer takes a
+// tea.View (cellbuf-backed) rather than a raw string, so the actual layout is
+// produced by viewString and wrapped here. Inline mode (no AltScreen) is the
+// default for the returned View, which is what keeps scrollback intact while
+// the cellbuf renderer repaints the active region cleanly on resize.
+func (b *bubbleTUI) View() tea.View {
+	return tea.NewView(b.clampViewWidth(b.viewString()))
+}
+
+// clampViewWidth soft-wraps every line of the active region to the terminal
+// width. The v2 cellbuf renderer *clips* (rather than wraps) any line wider than
+// the screen, so an over-wide line would silently lose its tail on a narrow
+// terminal — visible as truncated hints/status after a shrink. Wrapping here
+// keeps the active region within bounds so the renderer can repaint it cleanly
+// at any size. ansi.Wrap breaks on whitespace and force-breaks overlong words.
+func (b *bubbleTUI) clampViewWidth(s string) string {
+	if s == "" {
+		return s
+	}
+	width := b.width
+	if width <= 0 {
+		width = 80
+	}
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		if ansi.StringWidth(line) > width {
+			lines[i] = ansi.Wrap(line, width, "")
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (b *bubbleTUI) viewString() string {
 	if b.quitting {
 		return ""
 	}
@@ -1672,7 +1960,7 @@ func (b *bubbleTUI) renderInlineView() string {
 	if selector != "" {
 		parts = append(parts, selector)
 	}
-	parts = append(parts, control, status)
+	parts = append(parts, hRule(b.width), control, hRule(b.width), status)
 	return strings.TrimRight(strings.Join(parts, "\n"), "\n")
 }
 
@@ -1686,7 +1974,19 @@ func (b *bubbleTUI) renderInlineLive() string {
 	if len(b.model.blocks) > 0 {
 		last := b.model.blocks[len(b.model.blocks)-1]
 		if last.Kind == "assistant" && last.Streaming {
-			rendered := b.model.renderSingleBlock(last)
+			// In diff mode the block's already-committed top lines live in
+			// scrollback (see commitStreamingPrefix); show only the uncommitted
+			// tail, reusing this paint's cached clamped lines so we don't re-render.
+			var rendered string
+			if b.useDiff && b.streamLines != nil {
+				tail := b.streamLines
+				if b.streamCommitN > 0 && b.streamCommitN <= len(tail) {
+					tail = tail[b.streamCommitN:]
+				}
+				rendered = strings.Join(tail, "\n")
+			} else {
+				rendered = b.model.renderSingleBlock(last)
+			}
 			if strings.TrimSpace(stripANSIForGoTUI(rendered)) != "" {
 				// Keep the "Working (…)" activity line visible underneath the
 				// streaming block. Without this the timer/hints disappear the
@@ -1869,7 +2169,14 @@ func (b *bubbleTUI) renderInputControl() string {
 		b.model.state == uiStateConfigSelect {
 		return uiBubblePopup.Width(width).Render(input)
 	}
-	return uiBubbleInput.Width(width).Render(input)
+	// Render the prompt at its natural width — no full-width border or
+	// width-padding. Even under the v2 cellbuf renderer, inline mode (no
+	// AltScreen) repaints the active region with relative cursor moves: the
+	// terminal reflows the on-screen box at the new width *before* bubbletea
+	// gets the resize event, so the renderer's stale line count overwrites it
+	// mid-reflow and leaves orphan rows ("串行"). Short, natural-width lines
+	// never reflow, so the redraw stays correct at any size.
+	return input
 }
 
 func (b *bubbleTUI) renderTranscript(maxRows int) string {
@@ -2150,12 +2457,54 @@ func (b *bubbleTUI) queueStatusLine() string {
 	return strings.Join(parts, " ")
 }
 
+// isPlainInputState reports whether the bottom chrome is the normal text input
+// (not a popup/approval), i.e. whether a real input caret should be drawn.
+func (b *bubbleTUI) isPlainInputState() bool {
+	switch b.model.state {
+	case uiStatePermission, uiStatePlanReject, uiStateModelSelect,
+		uiStateConfigMenu, uiStateConfigInput, uiStateConfigSelect:
+		return false
+	}
+	return true
+}
+
+// inputCaretPos returns the caret's row offset (within renderInput's output) and
+// column, mirroring renderInput's layout: a 2-cell prefix plus the display width
+// of the runes before the caret on its line (paste tokens and wide CJK glyphs
+// counted at their rendered width).
+func (b *bubbleTUI) inputCaretPos() (lineOffset, col int) {
+	rs := []rune(b.draft)
+	cur := clampInt(b.cursor, 0, len(rs))
+	ranges := inputLineRanges(rs)
+	cursorLine := inputCursorLine(ranges, cur)
+	start, _, above, _ := inputVisibleRange(len(ranges), cursorLine, maxInputVisibleRows)
+	lineOffset = cursorLine - start
+	if above {
+		lineOffset++
+	}
+	rng := ranges[cursorLine]
+	col = 2 // "❯ " / "  " prefix width
+	for i := rng.Start; i < cur; i++ {
+		if isPasteRune(rs[i], len(b.pastes)) {
+			col += lipgloss.Width(pasteLabel(b.pastes[rs[i]-pasteRuneBase]))
+		} else {
+			col += lipgloss.Width(string(rs[i]))
+		}
+	}
+	return lineOffset, col
+}
+
 func (b *bubbleTUI) renderInput() string {
 	rs := []rune(b.draft)
 	b.cursor = clampInt(b.cursor, 0, len(rs))
 	ranges := inputLineRanges(rs)
 	cursorLine := inputCursorLine(ranges, b.cursor)
 	start, end, above, below := inputVisibleRange(len(ranges), cursorLine, maxInputVisibleRows)
+
+	// In diff mode the renderer places a real hardware cursor at the caret (for
+	// IME anchoring), so the input must not also draw a fake block — that would
+	// double the cursor.
+	fakeCursor := !b.useDiff
 
 	var lines []string
 	if above {
@@ -2171,7 +2520,10 @@ func (b *bubbleTUI) renderInput() string {
 		row.WriteString(prefix)
 		for i := rng.Start; i < rng.End; i++ {
 			ch := string(rs[i])
-			if i == b.cursor {
+			if isPasteRune(rs[i], len(b.pastes)) {
+				ch = uiDimText.Render(pasteLabel(b.pastes[rs[i]-pasteRuneBase]))
+			}
+			if fakeCursor && i == b.cursor {
 				if rs[i] == ' ' || rs[i] == '\t' {
 					ch = "█"
 				} else {
@@ -2180,7 +2532,7 @@ func (b *bubbleTUI) renderInput() string {
 			}
 			row.WriteString(ch)
 		}
-		if b.cursor == rng.End {
+		if fakeCursor && b.cursor == rng.End {
 			row.WriteString("█")
 		}
 		lines = append(lines, row.String())
