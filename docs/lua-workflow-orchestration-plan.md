@@ -267,3 +267,29 @@ Do not merge a later milestone before the current milestone has:
 - a real case when the milestone reaches `cmd/modu_code`,
 - documentation updates for any public surface added,
 - progress log entries with the exact commands used for validation.
+
+## Compatibility Status
+
+Current implementation status on branch `feat/lua-workflow`:
+
+- `workflow` is a builtin `modu_code` extension and tool.
+- Lua scripts support `meta`, `phase`, `log`, `agent`, `parallel`, `pipeline`, `json.encode`, `json.decode`, `json.null`, `args`, `cwd`, `process.cwd()`, and `budget`.
+- `agent()` maps to `ExtensionAPI.ForkSession` and supports label, phase, model, cwd, worktree isolation, tools, disallowed tools, permission mode, max turns, thinking, skills, and memory scope.
+- `parallel()` runs child tasks with a bounded concurrency limit, preserves input order, and returns stable JSON null for failed branches.
+- `pipeline()` runs each item through ordered Lua stage functions, schedules items with a bounded concurrency limit, serializes access to the shared Lua VM, isolates per-item stage failures, and rejects nested `pipeline()` calls to avoid self-deadlock.
+- Tool updates and final result details expose the workflow snapshot shape described above.
+
+Intentional differences from `pi-dynamic-workflows`:
+
+- Script language is Lua rather than JavaScript.
+- Lua `parallel()` accepts task tables, not JavaScript thunk functions.
+- Lua stage functions run through one embedded VM, so Lua bytecode access is serialized; use `parallel()` for actual multi-agent fan-out.
+- `schema` / structured-output capture is not implemented yet. Child results are text or JSON-compatible Lua values.
+- The host currently forks children from the parent active tool set. In default `modu_code` sessions, requested tools such as `grep`, `find`, and `ls` are skipped unless they are active in the parent tool set.
+
+Real configured-model cases run on 2026-06-17:
+
+- `repo_inventory_smoke`: one workflow child inspected the repository and confirmed `pkg/coding_agent/plugins/extension/workflow` exists.
+- `parallel_smoke`: two child branches ran through `parallel()` and returned `ok=true`.
+- `worktree_smoke`: one child ran with `isolation = "worktree"`, confirmed `go.mod` was visible and the workspace was a linked git worktree, and reported no modifications.
+- `partial_failure_smoke`: one good branch returned `GOOD_BRANCH_OK`, one invalid-model branch failed to null, and `out[2] == json.null` returned `true`.

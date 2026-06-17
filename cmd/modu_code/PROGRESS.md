@@ -138,16 +138,15 @@ enough to implement, verify, and commit independently.
   The tool supports scripted `meta` / `phase` / `log` / `agent` / `parallel`
   / `pipeline` orchestration, with child execution routed through the existing
   `ExtensionAPI.ForkSession` path. Pipeline item scheduling now honors
-  `concurrency` while serializing access to the shared Lua VM.
+  `concurrency` while serializing access to the shared Lua VM. Workflow failure
+  branches return a stable `json.null` sentinel so Lua scripts can compare
+  failed branch outputs against `json.null`.
 
 ## Next
 
-1. Continue Lua `workflow` extension validation through the remaining M4-M6
-   gates, especially real `go run ./cmd/modu_code -p ...` workflow cases once
-   a model is configured.
-2. Migrate the remaining rich selectors to Bubble Tea: sessions/tree,
+1. Migrate the remaining rich selectors to Bubble Tea: sessions/tree,
    settings, skills/prompts, and file-reference completion.
-3. Add real keybindings.json remapping if custom keyboard shortcuts become a priority.
+2. Add real keybindings.json remapping if custom keyboard shortcuts become a priority.
 
 ## Validation Log
 
@@ -263,3 +262,16 @@ enough to implement, verify, and commit independently.
   workflow child options but are not active in the parent tool set; later real
   cases should either enable those tools or extend the host API to expose the
   intended full coding tool set to workflow children.
+- 2026-06-17: `go run ./cmd/modu_code -p '<parallel_smoke workflow prompt>'`
+  passed as a real configured-model `parallel()` case. Two child branches ran
+  through workflow fan-out/fan-in and returned `ok=true`, confirming the
+  `cmd/modu_code` entrypoint and workflow extension directory.
+- 2026-06-17: `go run ./cmd/modu_code -p '<worktree_smoke workflow prompt>'`
+  passed as a real configured-model `isolation="worktree"` case. The child
+  confirmed `go.mod` was visible, the workspace was a linked git worktree, and
+  no files were modified.
+- 2026-06-17: `go run ./cmd/modu_code -p '<partial_failure_smoke workflow prompt>'`
+  passed as a real configured-model partial-failure case after making
+  `json.null` stable per Lua state. The good branch returned
+  `GOOD_BRANCH_OK`, the invalid-model branch returned null, and the script's
+  `out[2] == json.null` check produced `ok=true`.

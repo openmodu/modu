@@ -12,6 +12,8 @@ import (
 
 type jsonNullSentinel struct{}
 
+const jsonNullRegistryKey = "__modu_workflow_json_null"
+
 type agentOptions struct {
 	Label           string
 	Phase           string
@@ -222,8 +224,12 @@ func goToLua(L *lua.LState, value any) lua.LValue {
 }
 
 func jsonNullValue(L *lua.LState) lua.LValue {
+	if existing := L.GetField(L.Get(lua.RegistryIndex), jsonNullRegistryKey); existing != lua.LNil {
+		return existing
+	}
 	ud := L.NewUserData()
 	ud.Value = jsonNullSentinel{}
+	L.SetField(L.Get(lua.RegistryIndex), jsonNullRegistryKey, ud)
 	return ud
 }
 

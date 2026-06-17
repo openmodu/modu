@@ -256,6 +256,31 @@ return out
 	}
 }
 
+func TestParallelFailureComparesEqualToJSONNull(t *testing.T) {
+	api := &fakeAPI{}
+	api.responder = func(ctx context.Context, opts extension.ForkOptions) (string, error) {
+		if opts.Name == "bad" {
+			return "", errors.New("boom")
+		}
+		return "ok", nil
+	}
+	result, err := newRunner(api, runOptions{Concurrency: 2}).run(context.Background(), `
+meta({ name = "json_null", description = "stable null" })
+local out = parallel({
+  { label = "good", prompt = "ok" },
+  { label = "bad", prompt = "fail" },
+})
+return { ok = out[1] ~= nil and out[2] == json.null, bad = out[2] }
+`)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	got := result.Result.(map[string]any)
+	if got["ok"] != true || got["bad"] != nil {
+		t.Fatalf("result = %#v", got)
+	}
+}
+
 func TestPipelineStagesCanCallAgent(t *testing.T) {
 	api := &fakeAPI{}
 	api.responder = func(ctx context.Context, opts extension.ForkOptions) (string, error) {
