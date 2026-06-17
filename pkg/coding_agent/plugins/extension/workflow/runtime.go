@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
 	"github.com/openmodu/modu/pkg/types"
@@ -36,6 +37,8 @@ type runner struct {
 	spent      int
 	usedAgent  bool
 	mu         sync.Mutex
+	luaMu      sync.Mutex
+	stageDepth atomic.Int32
 }
 
 func newRunner(api extension.ExtensionAPI, opts runOptions) *runner {
@@ -173,7 +176,9 @@ func (r *runner) luaPhase(L *lua.LState) int {
 		L.RaiseError("phase title must be a non-empty string")
 		return 0
 	}
+	r.mu.Lock()
 	r.current = title
+	r.mu.Unlock()
 	r.tracker.addPhase(title)
 	return 0
 }
@@ -256,6 +261,10 @@ func (r *runner) luaParallel(L *lua.LState) int {
 }
 
 func (r *runner) luaPipeline(L *lua.LState) int {
+	if r.stageDepth.Load() > 0 {
+		L.RaiseError("nested pipeline() calls are not supported")
+		return 0
+	}
 	if err := r.requireMeta(); err != nil {
 		L.RaiseError("%s", err.Error())
 		return 0
@@ -270,33 +279,101 @@ func (r *runner) luaPipeline(L *lua.LState) int {
 		L.RaiseError("pipeline() requires at least one stage")
 		return 0
 	}
-	out := L.NewTable()
-	for i := 1; i <= items.Len(); i++ {
-		original := items.RawGetInt(i)
-		value := original
-		failed := false
-		for j := 1; j <= stages.Len(); j++ {
-			stage := stages.RawGetInt(j)
-			if stage.Type() != lua.LTFunction {
-				L.RaiseError("pipeline stage %d must be a function", j)
-				return 0
-			}
-			err := L.CallByParam(lua.P{Fn: stage, NRet: 1, Protect: true}, value, original, lua.LNumber(i))
-			if err != nil {
-				r.tracker.addLog(fmt.Sprintf("pipeline[%d] failed: %v", i, err))
-				out.RawSetInt(i, jsonNullValue(L))
-				failed = true
-				break
-			}
-			value = L.Get(-1)
-			L.Pop(1)
+	limit := r.opts.Concurrency
+	if L.GetTop() >= 3 && L.Get(3) != lua.LNil {
+		options, ok := L.Get(3).(*lua.LTable)
+		if !ok {
+			L.RaiseError("pipeline options must be a table")
+			return 0
 		}
-		if !failed {
-			out.RawSetInt(i, value)
+		if n := intField(options, "concurrency"); n > 0 {
+			limit = n
+		}
+	}
+	if limit <= 0 {
+		limit = 4
+	}
+	if limit > 16 {
+		limit = 16
+	}
+
+	itemValues := make([]lua.LValue, items.Len())
+	for i := range itemValues {
+		itemValues[i] = items.RawGetInt(i + 1)
+	}
+	stageValues := make([]lua.LValue, stages.Len())
+	for i := range stageValues {
+		stage := stages.RawGetInt(i + 1)
+		if stage.Type() != lua.LTFunction {
+			L.RaiseError("pipeline stage %d must be a function", i+1)
+			return 0
+		}
+		stageValues[i] = stage
+	}
+
+	type pipelineItemResult struct {
+		value any
+		ok    bool
+	}
+	results := make([]pipelineItemResult, len(itemValues))
+	sem := make(chan struct{}, limit)
+	var wg sync.WaitGroup
+	for i, item := range itemValues {
+		wg.Add(1)
+		go func(idx int, item lua.LValue) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-L.Context().Done():
+				return
+			}
+			value, ok := r.runPipelineItem(L, idx+1, item, stageValues)
+			results[idx] = pipelineItemResult{value: value, ok: ok}
+		}(i, item)
+	}
+	wg.Wait()
+	if err := L.Context().Err(); err != nil {
+		L.RaiseError("%s", err.Error())
+		return 0
+	}
+
+	out := L.NewTable()
+	for i, result := range results {
+		if result.ok {
+			out.RawSetInt(i+1, goToLua(L, result.value))
+		} else {
+			out.RawSetInt(i+1, jsonNullValue(L))
 		}
 	}
 	L.Push(out)
 	return 1
+}
+
+func (r *runner) runPipelineItem(L *lua.LState, index int, original lua.LValue, stages []lua.LValue) (any, bool) {
+	value := original
+	for _, stage := range stages {
+		r.luaMu.Lock()
+		r.stageDepth.Add(1)
+		err := L.CallByParam(lua.P{Fn: stage, NRet: 1, Protect: true}, value, original, lua.LNumber(index))
+		r.stageDepth.Add(-1)
+		if err != nil {
+			r.luaMu.Unlock()
+			r.tracker.addLog(fmt.Sprintf("pipeline[%d] failed: %v", index, err))
+			return nil, false
+		}
+		value = L.Get(-1)
+		L.Pop(1)
+		r.luaMu.Unlock()
+	}
+	r.luaMu.Lock()
+	out, err := luaToGo(value)
+	r.luaMu.Unlock()
+	if err != nil {
+		r.tracker.addLog(fmt.Sprintf("pipeline[%d] failed: %v", index, err))
+		return nil, false
+	}
+	return out, true
 }
 
 func (r *runner) luaJSONEncode(L *lua.LState) int {

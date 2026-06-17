@@ -282,6 +282,53 @@ return pipeline({"a", "b"}, {
 	}
 }
 
+func TestPipelinePreservesOrderAndIsolatesStageFailures(t *testing.T) {
+	api := &fakeAPI{}
+	result, err := newRunner(api, runOptions{Concurrency: 2}).run(context.Background(), `
+meta({ name = "pipe_fail", description = "pipeline failures" })
+agent("anchor", { label = "anchor" })
+return pipeline({"a", "bad", "c"}, {
+  function(item, original, index)
+    if item == "bad" then error("nope") end
+    return item .. ":" .. index
+  end,
+})
+`)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	got := result.Result.([]any)
+	if got[0] != "a:1" || got[1] != nil || got[2] != "c:3" {
+		t.Fatalf("pipeline result = %#v", got)
+	}
+	if len(result.Snapshot.Logs) != 1 || !strings.Contains(result.Snapshot.Logs[0], "pipeline[2] failed") {
+		t.Fatalf("logs = %#v", result.Snapshot.Logs)
+	}
+}
+
+func TestPipelineRejectsNestedPipeline(t *testing.T) {
+	api := &fakeAPI{}
+	result, err := newRunner(api, runOptions{}).run(context.Background(), `
+meta({ name = "nested_pipe", description = "nested pipeline" })
+agent("anchor", { label = "anchor" })
+return pipeline({"a"}, {
+  function(item)
+    return pipeline({item}, { function(x) return x end })
+  end,
+})
+`)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	got := result.Result.([]any)
+	if len(got) != 1 || got[0] != nil {
+		t.Fatalf("nested pipeline should return null branch, got %#v", got)
+	}
+	if len(result.Snapshot.Logs) != 1 || !strings.Contains(result.Snapshot.Logs[0], "nested pipeline") {
+		t.Fatalf("logs = %#v", result.Snapshot.Logs)
+	}
+}
+
 func TestToolExecuteReturnsDetails(t *testing.T) {
 	api := &fakeAPI{}
 	ext := &Extension{cfg: DefaultConfig(), api: api}

@@ -136,8 +136,9 @@ enough to implement, verify, and commit independently.
   still lack a `control` entry point (see subagent `PARITY.md`).
 - `modu_code` now registers the builtin Lua `workflow` extension by default.
   The tool supports scripted `meta` / `phase` / `log` / `agent` / `parallel`
-  / basic `pipeline` orchestration, with child execution routed through the
-  existing `ExtensionAPI.ForkSession` path.
+  / `pipeline` orchestration, with child execution routed through the existing
+  `ExtensionAPI.ForkSession` path. Pipeline item scheduling now honors
+  `concurrency` while serializing access to the shared Lua VM.
 
 ## Next
 
@@ -252,4 +253,4 @@ enough to implement, verify, and commit independently.
 - 2026-06-17: `env GOCACHE=/private/tmp/modu-go-build go test ./cmd/modu_code ./pkg/coding_agent ./pkg/coding_agent/plugins/extension/workflow`
   passed for the first Lua workflow extension slice: builtin registration,
   safe runtime basics, ForkOptions mapping, parallel concurrency/order/failure
-  handling, basic pipeline stages, and workflow tool result details.
+  handling, pipeline order/failure semantics, and workflow tool result details.
