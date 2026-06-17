@@ -22,6 +22,7 @@ require (
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
 	github.com/spf13/cobra v1.10.2
 	github.com/tidwall/redcon v1.6.2
+	github.com/yuin/gopher-lua v1.1.2
 	golang.org/x/sync v0.20.0
 	golang.org/x/term v0.42.0
 	golang.org/x/text v0.36.0

@@ -225,9 +225,14 @@ High-priority gaps identified before this round:
   Added pi-style file-based intercom MVP: new `subagent_intercom_send` tool writes to `tool-results/<project>/subagents/intercom/<taskID>.jsonl`, and `action: "intercom"` reads the inbox; full publisher/subscriber pipeline + auto-attach left deferred per PARITY.md
   Expanded control overrides: added `needsAttentionAfterMs` second timer, `notifyOn` event-type filter, and `notifyChannels` routing including a new `intercom` route that appends the notice into the batch task's JSONL inbox; turn/token/tool-attempt-driven triggers stay deferred until host exposes the counters
   Added intercom auto-attach for batch async children: each child gets an `# Intercom` system-prompt section naming its batch task id and pointing at `subagent_intercom_send`, gated by a new `intercom_mode` config (`off`/`fork-only`/`always`, default `always`)
+  Added the first Lua `extension/workflow` implementation: a builtin `workflow` tool with safe Lua runtime setup, `meta` / `phase` / `log`, JSON helpers, budget view, `agent()` mapped to `ExtensionAPI.ForkSession`, `parallel()` with concurrency limiting and ordered results, and a basic `pipeline()` stage runner. Focused tests cover runtime validation, sandbox-hidden libraries, ForkOptions mapping, branch failure as JSON null, tool updates/details, and cmd/modu_code builtin registration.
 
 ## Still Missing
 
+- Lua workflow orchestration still needs the later acceptance work from
+  `docs/lua-workflow-orchestration-plan.md`: richer concurrent pipeline
+  scheduling, real `modu_code -p` workflow cases against an actual configured
+  model, and final M6 compatibility/progress records.
 - Deeper plan-mode revision flows beyond the current approval/rejection gate
 - Advanced worktree flows such as diff/merge handoff from isolated worktrees back to the original checkout
 - Full pi-compatible TypeScript extension/package ecosystem, including remote npm/git package install, theme resources, rich UI extension context, provider hooks, and hot reload
@@ -235,7 +240,9 @@ High-priority gaps identified before this round:
 
 ## Suggested Next Steps
 
-1. Improve plan/worktree semantics beyond the current minimal implementation.
-2. Expand integration coverage around background tasks, tool replacement, and session switching.
-3. Add richer host action policies such as backoff variants, command/dir allowlist presets, and per-action failure handling.
-4. Keep refining the runtime state/control plane so more session resources are represented as first-class harness-managed artifacts instead of ad hoc prompt/session state.
+1. Continue Lua workflow orchestration from the implemented M1-M3 slice toward
+   the remaining M4-M6 validation gates in `docs/lua-workflow-orchestration-plan.md`.
+2. Improve plan/worktree semantics beyond the current minimal implementation.
+3. Expand integration coverage around background tasks, tool replacement, and session switching.
+4. Add richer host action policies such as backoff variants, command/dir allowlist presets, and per-action failure handling.
+5. Keep refining the runtime state/control plane so more session resources are represented as first-class harness-managed artifacts instead of ad hoc prompt/session state.

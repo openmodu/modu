@@ -31,6 +31,7 @@ import (
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
 	_ "github.com/openmodu/modu/pkg/coding_agent/plugins/extension/goal"     // register builtin extension via init()
 	_ "github.com/openmodu/modu/pkg/coding_agent/plugins/extension/subagent" // register builtin extension via init()
+	_ "github.com/openmodu/modu/pkg/coding_agent/plugins/extension/workflow" // register builtin extension via init()
 
 	"github.com/openmodu/modu/cmd/modu_code/internal/acp"
 	"github.com/openmodu/modu/cmd/modu_code/internal/provider"

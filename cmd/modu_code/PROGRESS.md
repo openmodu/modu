@@ -134,12 +134,19 @@ enough to implement, verify, and commit independently.
   delivers an `active_long_running` / `needs_attention` notice through the
   existing `notifyOn` / `notifyChannels` routing. Single-mode background runs
   still lack a `control` entry point (see subagent `PARITY.md`).
+- `modu_code` now registers the builtin Lua `workflow` extension by default.
+  The tool supports scripted `meta` / `phase` / `log` / `agent` / `parallel`
+  / basic `pipeline` orchestration, with child execution routed through the
+  existing `ExtensionAPI.ForkSession` path.
 
 ## Next
 
-1. Migrate the remaining rich selectors to Bubble Tea: sessions/tree,
+1. Continue Lua `workflow` extension validation through the remaining M4-M6
+   gates, especially real `go run ./cmd/modu_code -p ...` workflow cases once
+   a model is configured.
+2. Migrate the remaining rich selectors to Bubble Tea: sessions/tree,
    settings, skills/prompts, and file-reference completion.
-2. Add real keybindings.json remapping if custom keyboard shortcuts become a priority.
+3. Add real keybindings.json remapping if custom keyboard shortcuts become a priority.
 
 ## Validation Log
 
@@ -242,3 +249,7 @@ enough to implement, verify, and commit independently.
   passed for the Bubble Tea v2 active-region resize behavior and fixed-width
   inline turn separator (`TestBubbleInlineResizeReflowsActiveRegionAndKeepsScrollback`,
   `TestBubbleInlineTurnSeparatorStaysBelowMinimumTerminalWidth`).
+- 2026-06-17: `env GOCACHE=/private/tmp/modu-go-build go test ./cmd/modu_code ./pkg/coding_agent ./pkg/coding_agent/plugins/extension/workflow`
+  passed for the first Lua workflow extension slice: builtin registration,
+  safe runtime basics, ForkOptions mapping, parallel concurrency/order/failure
+  handling, basic pipeline stages, and workflow tool result details.
