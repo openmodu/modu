@@ -777,12 +777,19 @@ func (b *bubbleTUI) runLocalOrSlash(line string) tea.Cmd {
 }
 
 func (b *bubbleTUI) runPrompt(line string) tea.Cmd {
+	// A turn divider precedes each new user turn (not the first), so the rule sits
+	// BETWEEN turns in scrollback and the input box's own top rule is the only
+	// divider before the active prompt — no redundant double line.
+	var sep tea.Cmd
+	if len(b.model.blocks) > 0 {
+		sep = b.printTurnSeparatorCmd()
+	}
 	block := uiBlock{Kind: "user", Content: line, Source: "local", Timestamp: time.Now()}
 	b.appendBlock(block)
 	runCmd := b.runPromptOperation(line, func(ctx context.Context) error {
 		return b.session.Prompt(ctx, line)
 	})
-	return tea.Sequence(b.printBlockCmd(block), runCmd)
+	return tea.Sequence(sep, b.printBlockCmd(block), runCmd)
 }
 
 func (b *bubbleTUI) runPromptOperation(failedPrompt string, run func(context.Context) error) tea.Cmd {
@@ -849,18 +856,15 @@ func (b *bubbleTUI) finishPromptOperation(err error, failedPrompt string) tea.Cm
 	b.model.state = uiStateInput
 	// In inline mode, commit the completion summary to the permanent scrollback
 	// (like Claude Code) instead of leaving it in the transient live region,
-	// where it would vanish after transientActivityTTL. The summary must land
-	// above the turn separator, so emit it first — in diff mode the scrollback
-	// queue is ordered by call order, not by Cmd sequencing.
+	// where it would vanish after transientActivityTTL. The turn divider is NOT
+	// emitted here — it precedes the NEXT user turn (see runPrompt), so the input
+	// box's own top rule stays the only divider before the active prompt.
 	var cmds []tea.Cmd
 	if b.inline && summary != "" {
 		b.model.clearActivity()
 		if line := b.printStringCmd("  " + uiDimText.Render(summary)); line != nil {
 			cmds = append(cmds, line)
 		}
-	}
-	if sep := b.printTurnSeparatorCmd(); sep != nil {
-		cmds = append(cmds, sep)
 	}
 	return tea.Sequence(cmds...)
 }
@@ -1634,26 +1638,29 @@ func (b *bubbleTUI) enqueueScrollback(s string) {
 	b.pendingScroll = append(b.pendingScroll, "")
 }
 
-// turnSeparatorWidth is a fixed, width-independent length for the turn divider.
-// The rule is emitted into terminal scrollback via tea.Println, where the
-// program can no longer touch it — so on a window shrink the terminal would
-// reflow a full-width rule into a broken 1.5-line wrap. Keeping it short (well
-// under the enforced minimum terminal width of 20) means it never needs to
-// reflow at any size.
-const turnSeparatorWidth = 16
+// hRule returns a dim horizontal rule spanning the given width. Used for the turn
+// dividers and the input-box frame. In diff mode the whole transcript is
+// re-rendered on resize (see rerenderScrollback), so a full-width rule reflows
+// cleanly — no need to keep it artificially short anymore.
+func hRule(width int) string {
+	if width < 8 {
+		width = 8
+	}
+	return uiDimText.Render(strings.Repeat("─", width))
+}
 
-// printTurnSeparatorCmd emits a dim, fixed-width horizontal rule into the
+// printTurnSeparatorCmd emits a dim, full-width horizontal rule into the
 // scrollback to visually divide one completed turn from the next. Inline mode
-// only.
+// only. On resize the rule is regenerated at the new width by rerenderScrollback.
 func (b *bubbleTUI) printTurnSeparatorCmd() tea.Cmd {
 	if !b.inline {
 		return nil
 	}
 	if b.useDiff {
-		b.enqueueScrollback(uiDimText.Render(strings.Repeat("─", turnSeparatorWidth)))
+		b.enqueueScrollback(hRule(b.width))
 		return nil
 	}
-	return tea.Println(uiDimText.Render(strings.Repeat("─", turnSeparatorWidth)))
+	return tea.Println(hRule(b.width))
 }
 
 func (b *bubbleTUI) isSessionAgentSlash(line string) bool {
@@ -1953,7 +1960,7 @@ func (b *bubbleTUI) renderInlineView() string {
 	if selector != "" {
 		parts = append(parts, selector)
 	}
-	parts = append(parts, control, status)
+	parts = append(parts, hRule(b.width), control, hRule(b.width), status)
 	return strings.TrimRight(strings.Join(parts, "\n"), "\n")
 }
 

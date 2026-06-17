@@ -858,10 +858,7 @@ func TestBubbleInlineResizeReflowsActiveRegionAndKeepsScrollback(t *testing.T) {
 	}
 }
 
-func TestBubbleInlineTurnSeparatorStaysBelowMinimumTerminalWidth(t *testing.T) {
-	if turnSeparatorWidth >= 20 {
-		t.Fatalf("turn separator width must stay below minimum terminal width 20, got %d", turnSeparatorWidth)
-	}
+func TestBubbleInlineTurnSeparatorIsWidthAdaptive(t *testing.T) {
 	root := newBubbleTUI(context.Background(), nil, nil, "", nil, CommandHooks{})
 	root.inline = true
 	root.width = 120
@@ -871,8 +868,10 @@ func TestBubbleInlineTurnSeparatorStaysBelowMinimumTerminalWidth(t *testing.T) {
 		t.Fatalf("expected one separator line, got %#v", bodies)
 	}
 	line := strings.TrimSpace(stripANSIForGoTUI(bodies[0]))
-	if got := lipgloss.Width(line); got != turnSeparatorWidth {
-		t.Fatalf("expected fixed separator width %d, got %d (%q)", turnSeparatorWidth, got, line)
+	// The divider now spans the full terminal width (regenerated per width by the
+	// pi-style resize re-render), instead of a fixed short stub.
+	if got := lipgloss.Width(line); got != root.width {
+		t.Fatalf("expected full-width separator %d, got %d (%q)", root.width, got, line)
 	}
 }
 

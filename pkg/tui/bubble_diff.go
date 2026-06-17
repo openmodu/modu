@@ -177,21 +177,24 @@ func (b *bubbleTUI) rerenderScrollback() []string {
 	out = appendClampedLines(out, b.renderInlineHeader(), width)
 	out = append(out, "")
 	n := len(b.model.blocks)
+	rendered := 0
 	for i := 0; i < n; i++ {
 		blk := b.model.blocks[i]
 		if i == liveIdx {
 			continue // drawn in the active frame, not scrollback
 		}
-		if blk.Kind == "user" && i > 0 {
-			out = appendClampedLines(out, uiDimText.Render(strings.Repeat("─", turnSeparatorWidth)), width)
+		// A new user turn ends the previous turn: emit its divider first.
+		if blk.Kind == "user" && rendered > 0 {
+			out = appendClampedLines(out, hRule(width), width)
 			out = append(out, "")
 		}
-		rendered := b.model.renderSingleBlock(blk)
-		if strings.TrimSpace(stripANSIForGoTUI(rendered)) == "" {
+		s := b.model.renderSingleBlock(blk)
+		if strings.TrimSpace(stripANSIForGoTUI(s)) == "" {
 			continue
 		}
-		out = appendClampedLines(out, rendered, width)
+		out = appendClampedLines(out, s, width)
 		out = append(out, "")
+		rendered++
 	}
 	return out
 }
@@ -207,9 +210,10 @@ func (b *bubbleTUI) streamBlockClampedLines(block uiBlock) []string {
 	return appendClampedLines(nil, b.model.renderSingleBlock(block), width)
 }
 
-// streamChromeRows approximates the non-block rows of the live frame (activity
-// line + input + status) when deciding whether the frame would overflow.
-const streamChromeRows = 4
+// streamChromeRows approximates the non-block rows of the live frame when
+// deciding whether the frame would overflow: activity line + input-box top rule +
+// input + input-box bottom rule + status, plus a margin.
+const streamChromeRows = 6
 
 func (b *bubbleTUI) resetStreamTracking() {
 	b.streamBlockIdx = -1
@@ -337,8 +341,10 @@ func (b *bubbleTUI) fullScreenLines() []string {
 	if sel := b.renderSlashSuggestions(); sel != "" {
 		add(sel)
 	}
+	add(hRule(width)) // frame the input box: rule above
 	inputStartRow := len(lines)
 	add(b.renderInputControl())
+	add(hRule(width)) // frame the input box: rule below
 	add(b.renderStatusLine())
 
 	// Caret: only the plain input draws a real cursor; popup/approval states
