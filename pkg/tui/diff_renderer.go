@@ -374,6 +374,24 @@ func (s *diffRenderer) Render(newLines []string, width, height int) {
 	s.previousHeight = height
 }
 
+// HardClear wipes the visible screen AND native scrollback and homes the cursor,
+// resetting the renderer to a pristine state (as if just started). Used on resize
+// to re-render the whole transcript fresh at the new width: the diff renderer
+// can't reflow the pre-wrapped lines already sitting in native scrollback, so we
+// throw them away and let bubbleTUI repaint everything re-wrapped. previousWidth/
+// Height are zeroed so the following InsertAbove/Render take the clean first-paint
+// path rather than the resize path.
+func (s *diffRenderer) HardClear() {
+	io.WriteString(s.w, ansiSyncBegin+ansiFullClear+ansiSyncEnd)
+	s.previousLines = nil
+	s.cursorRow = 0
+	s.hardwareCursorRow = 0
+	s.previousViewportTop = 0
+	s.maxLinesRendered = 0
+	s.previousWidth = 0
+	s.previousHeight = 0
+}
+
 // InsertAbove commits lines to real terminal scrollback, just above the current
 // active frame, then invalidates the frame model so the next Render repaints it
 // fresh below the inserted lines. The active frame is bottom-anchored and small,

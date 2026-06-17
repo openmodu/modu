@@ -64,6 +64,13 @@ type bubbleTUI struct {
 	lastPaintNano int64
 	paintPending  bool
 
+	// lastPaintW/H detect a terminal resize between paints. On resize the diff
+	// renderer can't reflow the pre-wrapped content already in native scrollback
+	// (hanging indents orphan their tail), so we clear screen+scrollback and
+	// re-render the whole transcript fresh at the new width (pi-style).
+	lastPaintW int
+	lastPaintH int
+
 	// Real-cursor caret position for the active input, computed each frame by
 	// fullScreenLines and placed by the diff renderer (see PlaceCaret). Drives
 	// IME composition-window anchoring; caretActive is false for popup/approval

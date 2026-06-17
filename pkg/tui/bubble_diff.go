@@ -91,6 +91,20 @@ func (b *bubbleTUI) paint() {
 	if b.renderer == nil {
 		return
 	}
+	// Resize: the diff renderer can't reflow the pre-wrapped lines already in
+	// native scrollback (hanging indents orphan their tail). Throw the screen +
+	// scrollback away and re-render the whole transcript fresh at the new width
+	// so everything re-wraps cleanly (pi-style full repaint).
+	if b.lastPaintW > 0 && (b.width != b.lastPaintW || b.height != b.lastPaintH) {
+		above := b.rerenderScrollback()
+		b.renderer.HardClear()
+		b.pendingScroll = nil
+		b.resetStreamTracking()
+		if len(above) > 0 {
+			b.renderer.InsertAbove(above, b.width)
+		}
+	}
+	b.lastPaintW, b.lastPaintH = b.width, b.height
 	b.commitStreamingPrefix()
 	if len(b.pendingScroll) > 0 {
 		b.renderer.InsertAbove(b.pendingScroll, b.width)
@@ -116,6 +130,70 @@ func (b *bubbleTUI) paint() {
 	}
 	b.renderer.Render(lines, b.width, b.height)
 	b.renderer.PlaceCaret(b.caretActive, b.caretRow, b.caretCol)
+}
+
+// liveBlockIndex returns the index of the block currently drawn in the active
+// frame (the streaming assistant block, or a tool block with a running tool), or
+// -1 if the live region is just the activity line. Mirrors renderInlineLive so
+// rerenderScrollback doesn't commit a block that is also shown live (which would
+// duplicate it on resize).
+func (b *bubbleTUI) liveBlockIndex() int {
+	if b.model.state != uiStateQuerying {
+		return -1
+	}
+	blocks := b.model.blocks
+	if len(blocks) == 0 {
+		return -1
+	}
+	last := len(blocks) - 1
+	blk := blocks[last]
+	if blk.Kind == "assistant" && blk.Streaming {
+		return last
+	}
+	if blk.Kind == "tool" {
+		for _, t := range blk.Tools {
+			if t.Status == "running" {
+				return last
+			}
+		}
+	}
+	return -1
+}
+
+// rerenderScrollback rebuilds the entire committed transcript (header + every
+// completed block, with turn separators) freshly wrapped at the current width.
+// Used on resize to replace the stale pre-wrapped native scrollback. The
+// in-progress streaming block is skipped — it is drawn in the active frame and
+// re-committed as it grows. Per-turn "Completed (…)" summaries are not retained
+// (transient), so they drop on resize; the durable content (prompts, replies,
+// tool output) all re-wraps correctly with its hanging indent intact.
+func (b *bubbleTUI) rerenderScrollback() []string {
+	width := b.width
+	if width <= 0 {
+		width = 80
+	}
+	liveIdx := b.liveBlockIndex()
+	var out []string
+	out = appendClampedLines(out, b.renderInlineHeader(), width)
+	out = append(out, "")
+	n := len(b.model.blocks)
+	for i := 0; i < n; i++ {
+		blk := b.model.blocks[i]
+		if i == liveIdx {
+			continue // drawn in the active frame, not scrollback
+		}
+		if blk.Kind == "user" && i > 0 {
+			out = appendClampedLines(out, uiDimText.Render(strings.Repeat("─", turnSeparatorWidth)), width)
+			out = append(out, "")
+		}
+		rendered := b.model.renderSingleBlock(blk)
+		if strings.TrimSpace(stripANSIForGoTUI(rendered)) == "" {
+			continue
+		}
+		out = appendClampedLines(out, rendered, width)
+		out = append(out, "")
+	}
+	return out
 }
 
 // streamBlockClampedLines renders the assistant block and width-clamps it to the
