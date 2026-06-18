@@ -3,6 +3,7 @@ package coding_agent
 import (
 	"encoding/json"
 	"path/filepath"
+	"strings"
 
 	"github.com/openmodu/modu/pkg/coding_agent/foundation/config"
 	"github.com/openmodu/modu/pkg/coding_agent/services/session"
@@ -12,6 +13,28 @@ import (
 // GetConfig returns the current configuration.
 func (s *CodingSession) GetConfig() *config.Config {
 	return s.config
+}
+
+func (s *CodingSession) SetWorkflowsDisabled(disabled bool) {
+	if s == nil || s.engine == nil {
+		return
+	}
+	if s.config != nil {
+		s.config.DisableWorkflows = disabled
+	}
+	if disabled {
+		s.ultracode = false
+		s.activeTools = removeToolByName(s.activeTools, "workflow")
+		stateTools := removeToolByName(s.agent.GetState().Tools, "workflow")
+		s.agent.SetTools(stateTools)
+		for name, cmd := range s.slashCommands {
+			if name == "workflows" || name == "deep-research" || strings.HasPrefix(name, "workflow:") || strings.HasPrefix(cmd.Description, "Run saved workflow:") {
+				delete(s.slashCommands, name)
+			}
+		}
+	}
+	s.refreshDynamicSystemPrompt()
+	s.writeRuntimeState()
 }
 
 func (s *CodingSession) EffectiveConfigJSON() string {
@@ -63,7 +86,24 @@ func (s *CodingSession) SetThinkingLevel(level types.ThinkingLevel) {
 		Type:  SessionEventThinkingChange,
 		Level: string(level),
 	})
+	s.refreshDynamicSystemPrompt()
 	s.writeRuntimeState()
+}
+
+func (s *CodingSession) SetUltracodeEnabled(enabled bool) {
+	if s == nil || s.engine == nil {
+		return
+	}
+	s.ultracode = enabled
+	s.refreshDynamicSystemPrompt()
+	s.writeRuntimeState()
+}
+
+func (s *CodingSession) UltracodeEnabled() bool {
+	if s == nil || s.engine == nil {
+		return false
+	}
+	return s.ultracode
 }
 
 // GetThinkingLevel returns the current thinking level.

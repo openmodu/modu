@@ -31,6 +31,7 @@ const (
 	uiStateConfigMenu
 	uiStateConfigInput
 	uiStateConfigSelect
+	uiStateWorkflowPanel
 	uiStatePlanReject // capturing free-form rejection feedback for a plan
 )
 

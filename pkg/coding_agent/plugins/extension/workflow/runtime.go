@@ -8,17 +8,30 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
 	"github.com/openmodu/modu/pkg/types"
 	lua "github.com/yuin/gopher-lua"
 )
 
+const structuredOutputMaxRetries = 1
+
 type runOptions struct {
 	Cwd         string
+	AgentDir    string
 	Args        any
 	Concurrency int
+	BudgetTotal int
+	MaxAgents   int
+	ScriptPath  string
+	RunDir      string
 	OnUpdate    types.ToolUpdateCallback
+	NestedDepth int
+	State       *workflowRunState
+	Resume      bool
+	Activities  *workflowActivityRegistry
+	Registry    *workflowRegistry
 }
 
 type runResult struct {
@@ -30,23 +43,98 @@ type runResult struct {
 type runner struct {
 	api        extension.ExtensionAPI
 	opts       runOptions
+	state      *workflowRunState
 	tracker    *snapshotTracker
 	meta       *metaInfo
 	current    string
-	agentCount int
-	spent      int
 	usedAgent  bool
 	mu         sync.Mutex
 	luaMu      sync.Mutex
 	stageDepth atomic.Int32
 }
 
+type workflowRunState struct {
+	mu         sync.Mutex
+	agentCount int
+	spent      int
+	reserved   int
+	cache      *workflowAgentCache
+	cursor     map[string]int
+}
+
+type workflowAgentReservation struct {
+	Index          int
+	BudgetReserved bool
+}
+
+type workflowReserveStatus string
+
+const (
+	workflowReserveOK              workflowReserveStatus = "ok"
+	workflowReserveAgentLimit      workflowReserveStatus = "agent_limit"
+	workflowReserveBudgetExhausted workflowReserveStatus = "budget_exhausted"
+)
+
 func newRunner(api extension.ExtensionAPI, opts runOptions) *runner {
-	return &runner{
+	state := opts.State
+	if state == nil {
+		state = &workflowRunState{}
+	}
+	if state.cursor == nil {
+		state.cursor = map[string]int{}
+	}
+	r := &runner{
 		api:     api,
 		opts:    opts,
+		state:   state,
 		tracker: newSnapshotTracker(opts.OnUpdate),
 	}
+	r.tracker.setScript(opts.ScriptPath, opts.RunDir)
+	return r
+}
+
+func (s *workflowRunState) reserveAgent(maxAgents, budgetTotal int) (workflowAgentReservation, workflowReserveStatus) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if maxAgents > 0 && s.agentCount >= maxAgents {
+		return workflowAgentReservation{}, workflowReserveAgentLimit
+	}
+	if budgetTotal > 0 && s.spent+s.reserved >= budgetTotal {
+		return workflowAgentReservation{}, workflowReserveBudgetExhausted
+	}
+	s.agentCount++
+	reservation := workflowAgentReservation{Index: s.agentCount}
+	if budgetTotal > 0 {
+		s.reserved++
+		reservation.BudgetReserved = true
+	}
+	return reservation, workflowReserveOK
+}
+
+func (s *workflowRunState) releaseBudgetReservation(reservation workflowAgentReservation) {
+	if !reservation.BudgetReserved {
+		return
+	}
+	s.mu.Lock()
+	if s.reserved > 0 {
+		s.reserved--
+	}
+	s.mu.Unlock()
+}
+
+func (s *workflowRunState) commitBudgetSpend(reservation workflowAgentReservation, spent, budgetTotal int) {
+	if spent < 0 {
+		spent = 0
+	}
+	s.mu.Lock()
+	if reservation.BudgetReserved && s.reserved > 0 {
+		s.reserved--
+	}
+	s.spent += spent
+	if budgetTotal > 0 && s.spent > budgetTotal {
+		s.spent = budgetTotal
+	}
+	s.mu.Unlock()
 }
 
 func (r *runner) run(ctx context.Context, script string) (runResult, error) {
@@ -55,20 +143,20 @@ func (r *runner) run(ctx context.Context, script string) (runResult, error) {
 	L.SetContext(ctx)
 	r.openSafeLibs(L)
 	if err := r.installGlobals(L); err != nil {
-		return runResult{}, err
+		return runResult{Snapshot: r.tracker.current()}, err
 	}
 	if err := L.DoString(script); err != nil {
 		if ctx.Err() != nil {
 			r.tracker.skipRunning("aborted")
-			return runResult{}, ctx.Err()
+			return runResult{Snapshot: r.tracker.current()}, ctx.Err()
 		}
-		return runResult{}, err
+		return runResult{Snapshot: r.tracker.current()}, err
 	}
 	if r.meta == nil {
-		return runResult{}, fmt.Errorf("meta({name=..., description=...}) is required")
+		return runResult{Snapshot: r.tracker.current()}, fmt.Errorf("meta({name=..., description=...}) is required")
 	}
 	if !r.usedAgent {
-		return runResult{}, fmt.Errorf("workflow scripts must call agent() or parallel() at least once")
+		return runResult{Meta: *r.meta, Snapshot: r.tracker.current()}, fmt.Errorf("workflow scripts must call agent() or parallel() at least once")
 	}
 	value := lua.LNil
 	if top := L.GetTop(); top > 0 {
@@ -76,7 +164,7 @@ func (r *runner) run(ctx context.Context, script string) (runResult, error) {
 	}
 	result, err := luaToGo(value)
 	if err != nil {
-		return runResult{}, fmt.Errorf("workflow result: %w", err)
+		return runResult{Meta: *r.meta, Snapshot: r.tracker.current()}, fmt.Errorf("workflow result: %w", err)
 	}
 	snapshot := r.tracker.complete(result)
 	return runResult{Meta: *r.meta, Result: result, Snapshot: snapshot}, nil
@@ -104,6 +192,7 @@ func (r *runner) installGlobals(L *lua.LState) error {
 	L.SetGlobal("phase", L.NewFunction(r.luaPhase))
 	L.SetGlobal("log", L.NewFunction(r.luaLog))
 	L.SetGlobal("agent", L.NewFunction(r.luaAgent))
+	L.SetGlobal("workflow", L.NewFunction(r.luaWorkflow))
 	L.SetGlobal("parallel", L.NewFunction(r.luaParallel))
 	L.SetGlobal("pipeline", L.NewFunction(r.luaPipeline))
 	if r.opts.Args == nil {
@@ -127,16 +216,30 @@ func (r *runner) installGlobals(L *lua.LState) error {
 	L.SetGlobal("json", jsonTable)
 
 	budget := L.NewTable()
-	budget.RawSetString("total", lua.LNil)
+	if r.opts.BudgetTotal > 0 {
+		budget.RawSetString("total", lua.LNumber(r.opts.BudgetTotal))
+	} else {
+		budget.RawSetString("total", lua.LNil)
+	}
 	budget.RawSetString("spent", L.NewFunction(func(L *lua.LState) int {
-		r.mu.Lock()
-		spent := r.spent
-		r.mu.Unlock()
+		r.state.mu.Lock()
+		spent := r.state.spent
+		r.state.mu.Unlock()
 		L.Push(lua.LNumber(spent))
 		return 1
 	}))
 	budget.RawSetString("remaining", L.NewFunction(func(L *lua.LState) int {
-		L.Push(lua.LNumber(1 << 60))
+		if r.opts.BudgetTotal <= 0 {
+			L.Push(lua.LNil)
+			return 1
+		}
+		r.state.mu.Lock()
+		remaining := r.opts.BudgetTotal - r.state.spent
+		r.state.mu.Unlock()
+		if remaining < 0 {
+			remaining = 0
+		}
+		L.Push(lua.LNumber(remaining))
 		return 1
 	}))
 	L.SetGlobal("budget", budget)
@@ -212,7 +315,7 @@ func (r *runner) luaAgent(L *lua.LState) int {
 			return 0
 		}
 	}
-	text, ok, err := r.runAgent(L.Context(), prompt, opts)
+	result, ok, err := r.runAgent(L.Context(), prompt, opts)
 	if err != nil {
 		L.RaiseError("%s", err.Error())
 		return 0
@@ -221,7 +324,60 @@ func (r *runner) luaAgent(L *lua.LState) int {
 		L.Push(lua.LNil)
 		return 1
 	}
-	L.Push(lua.LString(text))
+	L.Push(goToLua(L, result.value))
+	return 1
+}
+
+func (r *runner) luaWorkflow(L *lua.LState) int {
+	if err := r.requireMeta(); err != nil {
+		L.RaiseError("%s", err.Error())
+		return 0
+	}
+	if r.opts.NestedDepth >= 1 {
+		L.RaiseError("nested workflow() calls are limited to one level")
+		return 0
+	}
+	ref := strings.TrimSpace(L.CheckString(1))
+	if ref == "" {
+		L.RaiseError("workflow name or path is required")
+		return 0
+	}
+	var childArgs any
+	if L.GetTop() >= 2 && L.Get(2) != lua.LNil {
+		value, err := luaToGo(L.Get(2))
+		if err != nil {
+			L.RaiseError("workflow args must be JSON-compatible: %s", err.Error())
+			return 0
+		}
+		childArgs = value
+	}
+	script, sourcePath, err := loadNestedWorkflowScript(ref, r.opts.Cwd, r.opts.AgentDir)
+	if err != nil {
+		L.RaiseError("%s", err.Error())
+		return 0
+	}
+	child := newRunner(r.api, runOptions{
+		Cwd:         r.opts.Cwd,
+		AgentDir:    r.opts.AgentDir,
+		Args:        childArgs,
+		Concurrency: r.opts.Concurrency,
+		BudgetTotal: r.opts.BudgetTotal,
+		MaxAgents:   r.opts.MaxAgents,
+		ScriptPath:  sourcePath,
+		NestedDepth: r.opts.NestedDepth + 1,
+		State:       r.state,
+		Resume:      r.opts.Resume,
+		Activities:  r.opts.Activities,
+		Registry:    r.opts.Registry,
+	})
+	result, err := child.run(L.Context(), script)
+	if err != nil {
+		L.RaiseError("workflow %q: %s", ref, err.Error())
+		return 0
+	}
+	r.usedAgent = true
+	r.tracker.addLog(fmt.Sprintf("nested workflow %s completed with %d agent(s)", ref, result.Snapshot.AgentCount))
+	L.Push(goToLua(L, result.Result))
 	return 1
 }
 
@@ -251,7 +407,7 @@ func (r *runner) luaParallel(L *lua.LState) int {
 	out := L.NewTable()
 	for i, result := range results {
 		if result.ok {
-			out.RawSetInt(i+1, lua.LString(result.text))
+			out.RawSetInt(i+1, goToLua(L, result.value))
 		} else {
 			out.RawSetInt(i+1, jsonNullValue(L))
 		}
@@ -352,19 +508,13 @@ func (r *runner) luaPipeline(L *lua.LState) int {
 
 func (r *runner) runPipelineItem(L *lua.LState, index int, original lua.LValue, stages []lua.LValue) (any, bool) {
 	value := original
+	var err error
 	for _, stage := range stages {
-		r.luaMu.Lock()
-		r.stageDepth.Add(1)
-		err := L.CallByParam(lua.P{Fn: stage, NRet: 1, Protect: true}, value, original, lua.LNumber(index))
-		r.stageDepth.Add(-1)
+		value, err = r.callPipelineStage(L, stage, value, original, index)
 		if err != nil {
-			r.luaMu.Unlock()
 			r.tracker.addLog(fmt.Sprintf("pipeline[%d] failed: %v", index, err))
 			return nil, false
 		}
-		value = L.Get(-1)
-		L.Pop(1)
-		r.luaMu.Unlock()
 	}
 	r.luaMu.Lock()
 	out, err := luaToGo(value)
@@ -374,6 +524,19 @@ func (r *runner) runPipelineItem(L *lua.LState, index int, original lua.LValue, 
 		return nil, false
 	}
 	return out, true
+}
+
+func (r *runner) callPipelineStage(L *lua.LState, stage, value, original lua.LValue, index int) (lua.LValue, error) {
+	r.luaMu.Lock()
+	defer r.luaMu.Unlock()
+	r.stageDepth.Add(1)
+	defer r.stageDepth.Add(-1)
+	if err := L.CallByParam(lua.P{Fn: stage, NRet: 1, Protect: true}, value, original, lua.LNumber(index)); err != nil {
+		return lua.LNil, err
+	}
+	out := L.Get(-1)
+	L.Pop(1)
+	return out, nil
 }
 
 func (r *runner) luaJSONEncode(L *lua.LState) int {
@@ -402,65 +565,185 @@ func (r *runner) luaJSONDecode(L *lua.LState) int {
 	return 1
 }
 
-func (r *runner) runAgent(ctx context.Context, prompt string, opts agentOptions) (string, bool, error) {
+func (r *runner) runAgent(ctx context.Context, prompt string, opts agentOptions) (agentOutcome, bool, error) {
 	if err := ctx.Err(); err != nil {
-		return "", false, err
+		return agentOutcome{}, false, err
 	}
-	r.mu.Lock()
-	r.usedAgent = true
-	r.agentCount++
-	idx := r.agentCount
 	phase := opts.Phase
+	r.mu.Lock()
 	if phase == "" {
 		phase = r.current
 	}
-	label := strings.TrimSpace(opts.Label)
-	if label == "" {
-		if phase != "" {
-			label = fmt.Sprintf("%s agent %d", phase, idx)
-		} else {
-			label = fmt.Sprintf("workflow-agent-%d", idx)
-		}
-	}
 	r.mu.Unlock()
 
-	id := r.tracker.startAgent(label, phase, prompt)
-	task := workflowPrompt(prompt, phase, label)
-	text, err := r.api.ForkSession(ctx, extension.ForkOptions{
-		Name:            label,
-		SystemPrompt:    "",
-		Task:            task,
-		AllowedTools:    opts.Tools,
-		DisallowedTools: opts.DisallowedTools,
-		Model:           opts.Model,
-		Cwd:             opts.Cwd,
-		Isolation:       opts.Isolation,
-		PermissionMode:  opts.PermissionMode,
-		MaxTurns:        opts.MaxTurns,
-		ThinkingLevel:   opts.Thinking,
-		Skills:          opts.Skills,
-		MemoryScope:     opts.MemoryScope,
-	})
-	if err != nil {
-		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			r.tracker.finishAgent(id, statusSkipped, nil, "aborted")
-			return "", false, err
-		}
-		msg := fmt.Sprintf("agent %s failed: %v", label, err)
-		r.tracker.finishAgent(id, statusError, nil, err.Error())
-		r.tracker.addLog(msg)
-		return "", false, nil
+	result, ok, retryErr, err := r.runAgentAttempt(ctx, prompt, opts, phase, strings.TrimSpace(opts.Label))
+	if err != nil || !ok || retryErr == nil || len(opts.Schema) == 0 {
+		return result, ok, err
 	}
-	r.mu.Lock()
-	r.spent += estimateTokens(text)
-	r.mu.Unlock()
-	r.tracker.finishAgent(id, statusDone, text, "")
-	return text, true, nil
+	for attempt := 1; attempt <= structuredOutputMaxRetries; attempt++ {
+		r.tracker.addLog(fmt.Sprintf("agent %s structured output retry %d: %v", result.label, attempt, retryErr))
+		retryPrompt := structuredOutputRetryPrompt(prompt, result.text, retryErr)
+		retryLabel := result.label + fmt.Sprintf(" retry %d", attempt)
+		result, ok, retryErr, err = r.runAgentAttempt(ctx, retryPrompt, opts, phase, retryLabel)
+		if err != nil || !ok {
+			return agentOutcome{}, ok, err
+		}
+		if retryErr == nil {
+			return result, true, nil
+		}
+	}
+	r.tracker.addLog(fmt.Sprintf("agent %s structured output failed after %d retry: %v", result.label, structuredOutputMaxRetries, retryErr))
+	return agentOutcome{}, false, nil
+}
+
+func (r *runner) runAgentAttempt(ctx context.Context, prompt string, opts agentOptions, phase, label string) (agentOutcome, bool, error, error) {
+	if err := ctx.Err(); err != nil {
+		return agentOutcome{}, false, nil, err
+	}
+	maxAgents := r.opts.MaxAgents
+	if maxAgents <= 0 {
+		maxAgents = DefaultConfig().MaxAgents
+	}
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return agentOutcome{}, false, nil, err
+		}
+		reservation, status := r.state.reserveAgent(maxAgents, r.opts.BudgetTotal)
+		switch status {
+		case workflowReserveAgentLimit:
+			r.tracker.addLog(fmt.Sprintf("agent skipped: workflow agent limit exceeded (max %d)", maxAgents))
+			return agentOutcome{}, false, nil, nil
+		case workflowReserveBudgetExhausted:
+			r.tracker.addLog("agent skipped: workflow token budget exhausted")
+			return agentOutcome{}, false, nil, nil
+		}
+		r.usedAgent = true
+
+		attemptLabel := label
+		if attemptLabel == "" {
+			if phase != "" {
+				attemptLabel = fmt.Sprintf("%s agent %d", phase, reservation.Index)
+			} else {
+				attemptLabel = fmt.Sprintf("workflow-agent-%d", reservation.Index)
+			}
+		}
+		cacheKey := workflowAgentCacheKey(prompt, phase, attemptLabel, opts)
+		if r.opts.Resume && r.state.cache != nil {
+			r.state.mu.Lock()
+			cursor := r.state.cursor[cacheKey]
+			r.state.mu.Unlock()
+			if entry, ok := r.state.cache.get(cacheKey, cursor); ok {
+				r.state.mu.Lock()
+				r.state.cursor[cacheKey] = cursor + 1
+				r.state.mu.Unlock()
+				r.state.commitBudgetSpend(reservation, entry.Spent, r.opts.BudgetTotal)
+				r.tracker.cachedAgent(entry)
+				r.tracker.addLog(fmt.Sprintf("agent %s resumed from cache", entry.Label))
+				return agentOutcome{label: entry.Label, text: entry.Text, value: entry.Value}, true, nil, nil
+			}
+		}
+
+		startedAt := time.Now()
+		id := r.tracker.startAgent(attemptLabel, phase, prompt)
+		bubbleID := workflowBubbleID(r.opts.RunDir, id)
+		if r.opts.Activities != nil {
+			r.opts.Activities.register(bubbleID, id)
+		}
+		childCtx, cancel := context.WithCancel(ctx)
+		runID := workflowRunID(r.opts.RunDir)
+		unregisterControl := func() workflowAgentControlAction { return "" }
+		if r.opts.Registry != nil && runID != "" {
+			unregisterControl = r.opts.Registry.registerAgentControl(runID, id, cancel)
+		}
+		task := workflowPrompt(prompt, phase, attemptLabel, opts.Schema)
+		activity := workflowAgentActivity{}
+		text, err := r.api.ForkSession(childCtx, extension.ForkOptions{
+			Name:            attemptLabel,
+			SystemPrompt:    "",
+			Task:            task,
+			AllowedTools:    opts.Tools,
+			DisallowedTools: opts.DisallowedTools,
+			Model:           opts.Model,
+			Cwd:             opts.Cwd,
+			Isolation:       opts.Isolation,
+			PermissionMode:  opts.PermissionMode,
+			MaxTurns:        opts.MaxTurns,
+			ThinkingLevel:   opts.Thinking,
+			Skills:          opts.Skills,
+			MemoryScope:     opts.MemoryScope,
+			BubbleTaskID:    bubbleID,
+		})
+		action := unregisterControl()
+		cancel()
+		if r.opts.Activities != nil {
+			activity = r.opts.Activities.snapshot(bubbleID)
+			r.tracker.updateAgentActivity(id, activity)
+			r.opts.Activities.unregister(bubbleID)
+		}
+		if action == workflowAgentActionStop {
+			r.state.releaseBudgetReservation(reservation)
+			r.tracker.finishAgent(id, statusSkipped, nil, "stopped by user")
+			r.tracker.addLog(fmt.Sprintf("agent %s stopped by user", attemptLabel))
+			return agentOutcome{}, false, nil, nil
+		}
+		if action == workflowAgentActionRestart {
+			r.state.releaseBudgetReservation(reservation)
+			r.tracker.finishAgent(id, statusSkipped, nil, "restart requested")
+			r.tracker.addLog(fmt.Sprintf("agent %s restart requested", attemptLabel))
+			continue
+		}
+		if err != nil {
+			r.state.releaseBudgetReservation(reservation)
+			if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				r.tracker.finishAgent(id, statusSkipped, nil, "aborted")
+				return agentOutcome{}, false, nil, err
+			}
+			msg := fmt.Sprintf("agent %s failed: %v", attemptLabel, err)
+			r.tracker.finishAgent(id, statusError, nil, err.Error())
+			r.tracker.addLog(msg)
+			return agentOutcome{}, false, nil, nil
+		}
+		spent := workflowSpendTokens(text, activity)
+		r.state.commitBudgetSpend(reservation, spent, r.opts.BudgetTotal)
+		out := agentOutcome{label: attemptLabel, text: text, value: text}
+		if len(opts.Schema) > 0 {
+			value, err := parseStructuredOutput(text, opts.Schema)
+			if err != nil {
+				r.tracker.finishAgent(id, statusError, text, err.Error(), spent)
+				return out, true, err, nil
+			}
+			out.value = value
+		}
+		r.tracker.finishAgent(id, statusDone, out.value, "", spent)
+		if r.state.cache != nil {
+			endedAt := time.Now()
+			r.state.cache.add(workflowAgentCacheEntry{
+				Key:        cacheKey,
+				Label:      attemptLabel,
+				Phase:      phase,
+				Prompt:     prompt,
+				Text:       text,
+				Value:      out.value,
+				Spent:      spent,
+				StartedAt:  startedAt,
+				EndedAt:    endedAt,
+				DurationMs: endedAt.Sub(startedAt).Milliseconds(),
+			})
+		}
+		return out, true, nil, nil
+	}
+}
+
+type agentOutcome struct {
+	label string
+	text  string
+	value any
 }
 
 type parallelOutcome struct {
-	text string
-	ok   bool
+	agentOutcome
+	ok bool
 }
 
 func (r *runner) runParallel(ctx context.Context, tasks []parallelTask, limit int) []parallelOutcome {
@@ -486,18 +769,18 @@ func (r *runner) runParallel(ctx context.Context, tasks []parallelTask, limit in
 			case <-ctx.Done():
 				return
 			}
-			text, ok, err := r.runAgent(ctx, task.Prompt, task.agentOptions)
+			result, ok, err := r.runAgent(ctx, task.Prompt, task.agentOptions)
 			if err != nil {
 				return
 			}
-			results[idx] = parallelOutcome{text: text, ok: ok}
+			results[idx] = parallelOutcome{agentOutcome: result, ok: ok}
 		}(i, task)
 	}
 	wg.Wait()
 	return results
 }
 
-func workflowPrompt(prompt, phase, label string) string {
+func workflowPrompt(prompt, phase, label string, schema map[string]any) string {
 	var parts []string
 	if phase != "" {
 		parts = append(parts, "Workflow phase: "+phase)
@@ -506,6 +789,9 @@ func workflowPrompt(prompt, phase, label string) string {
 		parts = append(parts, "Task label: "+label)
 	}
 	parts = append(parts, prompt)
+	if contract := schemaContractPrompt(schema); contract != "" {
+		parts = append(parts, contract)
+	}
 	return strings.Join(parts, "\n\n")
 }
 
@@ -514,4 +800,11 @@ func estimateTokens(value string) int {
 		return 0
 	}
 	return (len(value) + 3) / 4
+}
+
+func workflowSpendTokens(text string, activity workflowAgentActivity) int {
+	if activity.UsageTokens > 0 {
+		return activity.UsageTokens
+	}
+	return estimateTokens(text)
 }

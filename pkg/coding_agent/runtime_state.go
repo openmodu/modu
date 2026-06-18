@@ -110,6 +110,7 @@ func (s *engine) RuntimeState() RuntimeStateSnapshot {
 		Thinking:  string(s.GetThinkingLevel()),
 		Modes: map[string]any{
 			"plan":      s.IsPlanMode(),
+			"ultracode": s.ultracode,
 			"worktree":  s.ActiveWorktree(),
 			"streaming": s.IsStreaming(),
 		},

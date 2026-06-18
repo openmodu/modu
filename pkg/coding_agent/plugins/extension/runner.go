@@ -10,27 +10,28 @@ import (
 
 // Runner manages the lifecycle of extensions and provides the ExtensionAPI.
 type Runner struct {
-	extensions    []Extension
-	tools         []types.Tool
-	commands      []Command
-	hooks         []ToolHook
-	handlers      map[string][]EventHandler
-	sendMsg       func(text string, options MessageOptions) error
-	setTools      func(names []string)
-	setModel      func(provider, modelID string) error
-	sessionID     func() string
-	sessionDir    func() string
-	agentDir      func() string
-	cwd           func() string
-	isIdle        func() bool
-	hasPending    func() bool
-	notify        func(extensionName, text string)
-	confirm       func(title, body string, defaultYes bool) bool
-	selectChoice  func(title string, options []string) string
-	tasks         func() []TaskSnapshot
-	interruptTask func(id, reason string) (TaskSnapshot, bool)
-	forkSession   func(ctx context.Context, opts ForkOptions) (string, error)
-	mu            sync.RWMutex
+	extensions     []Extension
+	tools          []types.Tool
+	commands       []Command
+	hooks          []ToolHook
+	handlers       map[string][]EventHandler
+	sendMsg        func(text string, options MessageOptions) error
+	setTools       func(names []string)
+	setModel       func(provider, modelID string) error
+	sessionID      func() string
+	sessionDir     func() string
+	agentDir       func() string
+	cwd            func() string
+	isIdle         func() bool
+	hasPending     func() bool
+	permissionMode func() string
+	notify         func(extensionName, text string)
+	confirm        func(title, body string, defaultYes bool) bool
+	selectChoice   func(title string, options []string) string
+	tasks          func() []TaskSnapshot
+	interruptTask  func(id, reason string) (TaskSnapshot, bool)
+	forkSession    func(ctx context.Context, opts ForkOptions) (string, error)
+	mu             sync.RWMutex
 }
 
 // NewRunner creates a new extension runner.
@@ -55,6 +56,7 @@ func (r *Runner) SetCallbacks(
 	cwd func() string,
 	isIdle func() bool,
 	hasPending func() bool,
+	permissionMode func() string,
 	notify func(extensionName, text string),
 	confirm func(title, body string, defaultYes bool) bool,
 	selectChoice func(title string, options []string) string,
@@ -73,6 +75,7 @@ func (r *Runner) SetCallbacks(
 	r.cwd = cwd
 	r.isIdle = isIdle
 	r.hasPending = hasPending
+	r.permissionMode = permissionMode
 	r.notify = notify
 	r.confirm = confirm
 	r.selectChoice = selectChoice
@@ -250,6 +253,17 @@ func (r *Runner) HasPendingMessages() bool {
 	r.mu.RUnlock()
 	if fn == nil {
 		return false
+	}
+	return fn()
+}
+
+// PermissionMode implements ExtensionAPI.
+func (r *Runner) PermissionMode() string {
+	r.mu.RLock()
+	fn := r.permissionMode
+	r.mu.RUnlock()
+	if fn == nil {
+		return ""
 	}
 	return fn()
 }

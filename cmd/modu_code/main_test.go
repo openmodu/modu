@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +18,28 @@ import (
 	"github.com/openmodu/modu/pkg/tui"
 	"github.com/openmodu/modu/pkg/types"
 )
+
+func TestMain(m *testing.M) {
+	oldArgs := os.Args
+	oldCommandLine := flag.CommandLine
+	oldRunTUI := runTUI
+	oldwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "get cwd: %v\n", err)
+		os.Exit(1)
+	}
+
+	code := m.Run()
+
+	os.Args = oldArgs
+	flag.CommandLine = oldCommandLine
+	runTUI = oldRunTUI
+	if err := os.Chdir(oldwd); err != nil && code == 0 {
+		fmt.Fprintf(os.Stderr, "restore cwd: %v\n", err)
+		code = 1
+	}
+	os.Exit(code)
+}
 
 func TestRunConfigCommandExample(t *testing.T) {
 	var out bytes.Buffer
@@ -43,6 +67,26 @@ func TestRunConfigCommandShowWhenMissing(t *testing.T) {
 	}
 }
 
+func TestRunConfigCommandShowReportsInvalidJSON(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".coding_agent")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"models":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	if err := runConfigCommand(nil, &out, nil); err != nil {
+		t.Fatalf("runConfigCommand show: %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "status: invalid JSON") {
+		t.Fatalf("expected invalid JSON status, got:\n%s", got)
+	}
+}
+
 func TestRunConfigCommandInitAndValidate(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -65,6 +109,42 @@ func TestRunConfigCommandInitAndValidate(t *testing.T) {
 	}
 	if !strings.Contains(validateOut.String(), "status: ok") {
 		t.Fatalf("expected validate ok, got:\n%s", validateOut.String())
+	}
+}
+
+func TestConfigToggleWorkflowsWritesSettings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	out, err := configToggleWorkflows(nil)
+	if err != nil {
+		t.Fatalf("configToggleWorkflows disable: %v", err)
+	}
+	path := filepath.Join(home, ".coding_agent", "settings.json")
+	if !strings.Contains(out, "dynamic workflows: disabled") || !strings.Contains(out, path) {
+		t.Fatalf("unexpected disable output:\n%s", out)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"disableWorkflows": true`) {
+		t.Fatalf("expected disableWorkflows true in settings:\n%s", string(data))
+	}
+
+	out, err = configToggleWorkflows(nil)
+	if err != nil {
+		t.Fatalf("configToggleWorkflows enable: %v", err)
+	}
+	if !strings.Contains(out, "dynamic workflows: enabled") || !strings.Contains(out, "restart or start a new session") {
+		t.Fatalf("unexpected enable output:\n%s", out)
+	}
+	data, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"disableWorkflows": true`) {
+		t.Fatalf("expected disableWorkflows not true in settings:\n%s", string(data))
 	}
 }
 
@@ -169,6 +249,35 @@ func TestSplitConfigArgsSupportsQuotedDescription(t *testing.T) {
 	}
 }
 
+func TestSplitConfigArgsEdgeCases(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  []string
+	}{
+		{name: "empty", input: "", want: nil},
+		{name: "whitespace", input: " \t\n ", want: nil},
+		{name: "escaped space", input: `add local\ model`, want: []string{"add", "local model"}},
+		{name: "trailing backslash", input: `path abc\`, want: []string{"path", `abc\`}},
+		{name: "single quotes", input: `use 'local model'`, want: []string{"use", "local model"}},
+		{name: "newlines", input: "use\nlocal", want: []string{"use", "local"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := splitConfigArgs(tc.input)
+			if err != nil {
+				t.Fatalf("splitConfigArgs: %v", err)
+			}
+			if strings.Join(got, "\x00") != strings.Join(tc.want, "\x00") {
+				t.Fatalf("split args = %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+	if _, err := splitConfigArgs(`add "unterminated`); err == nil {
+		t.Fatal("expected unterminated quote error")
+	}
+}
+
 func TestRunConfigCommandValidateFailsInvalidConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -180,13 +289,16 @@ func TestRunConfigCommandValidateFailsInvalidConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var out bytes.Buffer
-	err := runConfigCommand([]string{"validate"}, &out, nil)
+	var out, stderr bytes.Buffer
+	err := runConfigCommand([]string{"validate"}, &out, &stderr)
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
-	if !strings.Contains(out.String(), "problems") {
-		t.Fatalf("expected problems output, got:\n%s", out.String())
+	if strings.Contains(out.String(), "problems") {
+		t.Fatalf("expected problems on stderr, stdout got:\n%s", out.String())
+	}
+	if !strings.Contains(stderr.String(), "problems") {
+		t.Fatalf("expected problems output, got:\n%s", stderr.String())
 	}
 }
 
@@ -202,24 +314,7 @@ func TestMainTUISessionFlows(t *testing.T) {
 		t.Fatalf("runConfigCommand init: %v", err)
 	}
 
-	oldArgs := os.Args
-	oldCommandLine := flag.CommandLine
-	oldRunTUI := runTUI
-	oldwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		os.Args = oldArgs
-		flag.CommandLine = oldCommandLine
-		runTUI = oldRunTUI
-		if err := os.Chdir(oldwd); err != nil {
-			t.Fatalf("restore cwd: %v", err)
-		}
-	})
-	if err := os.Chdir(project); err != nil {
-		t.Fatal(err)
-	}
+	setupMainTestInvocation(t, project, "modu_code")
 
 	called := false
 	runTUI = func(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool, opts tui.RunOptions) error {
@@ -283,8 +378,6 @@ func TestMainTUISessionFlows(t *testing.T) {
 		return nil
 	}
 
-	os.Args = []string{"modu_code"}
-	flag.CommandLine = flag.NewFlagSet("modu_code", flag.ContinueOnError)
 	main()
 	if !called {
 		t.Fatal("expected TUI runner to be called")
@@ -304,24 +397,7 @@ func TestMainResumeStartsRequestedSession(t *testing.T) {
 	}
 	agentDir := filepath.Join(home, ".coding_agent")
 
-	oldArgs := os.Args
-	oldCommandLine := flag.CommandLine
-	oldRunTUI := runTUI
-	oldwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		os.Args = oldArgs
-		flag.CommandLine = oldCommandLine
-		runTUI = oldRunTUI
-		if err := os.Chdir(oldwd); err != nil {
-			t.Fatalf("restore cwd: %v", err)
-		}
-	})
-	if err := os.Chdir(project); err != nil {
-		t.Fatal(err)
-	}
+	setupMainTestInvocation(t, project, "modu_code")
 	cwd, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -332,6 +408,7 @@ func TestMainResumeStartsRequestedSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	targetID := targetMgr.SessionID()
+	os.Args = []string{"modu_code", "--resume", targetID}
 
 	called := false
 	runTUI = func(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool, opts tui.RunOptions) error {
@@ -348,8 +425,6 @@ func TestMainResumeStartsRequestedSession(t *testing.T) {
 		return nil
 	}
 
-	os.Args = []string{"modu_code", "--resume", targetID}
-	flag.CommandLine = flag.NewFlagSet("modu_code", flag.ContinueOnError)
 	main()
 	if !called {
 		t.Fatal("expected TUI runner to be called")
@@ -373,24 +448,7 @@ func TestMainDoesNotStartInWorktreeByDefaultForGitRepo(t *testing.T) {
 		t.Fatalf("runConfigCommand init: %v", err)
 	}
 
-	oldArgs := os.Args
-	oldCommandLine := flag.CommandLine
-	oldRunTUI := runTUI
-	oldwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		os.Args = oldArgs
-		flag.CommandLine = oldCommandLine
-		runTUI = oldRunTUI
-		if err := os.Chdir(oldwd); err != nil {
-			t.Fatalf("restore cwd: %v", err)
-		}
-	})
-	if err := os.Chdir(project); err != nil {
-		t.Fatal(err)
-	}
+	setupMainTestInvocation(t, project, "modu_code")
 
 	called := false
 	runTUI = func(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool, opts tui.RunOptions) error {
@@ -405,8 +463,6 @@ func TestMainDoesNotStartInWorktreeByDefaultForGitRepo(t *testing.T) {
 		return nil
 	}
 
-	os.Args = []string{"modu_code"}
-	flag.CommandLine = flag.NewFlagSet("modu_code", flag.ContinueOnError)
 	main()
 	if !called {
 		t.Fatal("expected TUI runner to be called")
@@ -430,24 +486,7 @@ func TestMainStartsInWorktreeWhenRequestedForGitRepo(t *testing.T) {
 		t.Fatalf("runConfigCommand init: %v", err)
 	}
 
-	oldArgs := os.Args
-	oldCommandLine := flag.CommandLine
-	oldRunTUI := runTUI
-	oldwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		os.Args = oldArgs
-		flag.CommandLine = oldCommandLine
-		runTUI = oldRunTUI
-		if err := os.Chdir(oldwd); err != nil {
-			t.Fatalf("restore cwd: %v", err)
-		}
-	})
-	if err := os.Chdir(project); err != nil {
-		t.Fatal(err)
-	}
+	setupMainTestInvocation(t, project, "modu_code", "--worktree")
 
 	called := false
 	runTUI = func(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool, opts tui.RunOptions) error {
@@ -472,12 +511,54 @@ func TestMainStartsInWorktreeWhenRequestedForGitRepo(t *testing.T) {
 		return nil
 	}
 
-	os.Args = []string{"modu_code", "--worktree"}
-	flag.CommandLine = flag.NewFlagSet("modu_code", flag.ContinueOnError)
 	main()
 	if !called {
 		t.Fatal("expected TUI runner to be called")
 	}
+}
+
+func TestShouldIgnoreStartupWorktreeError(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: true},
+		{name: "not git", err: errors.New("fatal: not a git repository"), want: true},
+		{name: "disabled", err: errors.New("worktree mode is disabled by config"), want: true},
+		{name: "real error", err: errors.New("permission denied"), want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldIgnoreStartupWorktreeError(tc.err); got != tc.want {
+				t.Fatalf("shouldIgnoreStartupWorktreeError(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+func setupMainTestInvocation(t *testing.T, cwd string, args ...string) {
+	t.Helper()
+	oldArgs := os.Args
+	oldCommandLine := flag.CommandLine
+	oldRunTUI := runTUI
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		os.Args = oldArgs
+		flag.CommandLine = oldCommandLine
+		runTUI = oldRunTUI
+		if err := os.Chdir(oldwd); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	})
+	if err := os.Chdir(cwd); err != nil {
+		t.Fatal(err)
+	}
+	os.Args = append([]string(nil), args...)
+	flag.CommandLine = flag.NewFlagSet("modu_code", flag.ContinueOnError)
 }
 
 func samePhysicalPath(a, b string) (bool, error) {

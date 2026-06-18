@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -84,6 +85,11 @@ func BuiltinCommands() []SlashCommand {
 			Handler:     cmdThinking,
 		},
 		{
+			Name:        "effort",
+			Description: "Set effort level (off, low, medium, high, ultracode)",
+			Handler:     cmdEffort,
+		},
+		{
 			Name:        "retry",
 			Description: "Manually trigger a retry of the last failed prompt",
 			Handler:     cmdRetry,
@@ -160,6 +166,42 @@ func cmdThinking(session *CodingSession, args string) error {
 	}
 }
 
+func cmdEffort(session *CodingSession, args string) error {
+	level := strings.ToLower(strings.TrimSpace(args))
+	if level == "" {
+		current := string(session.GetThinkingLevel())
+		if session.UltracodeEnabled() {
+			current = "ultracode"
+		}
+		fmt.Printf("Effort: %s\n", current)
+		return nil
+	}
+
+	if level == "ultracode" {
+		if !session.activeToolNamed("workflow") {
+			return fmt.Errorf("ultracode requires dynamic workflows to be enabled")
+		}
+		if !providers.SupportsXHigh(session.GetModel()) {
+			return fmt.Errorf("ultracode requires a model that supports xhigh reasoning")
+		}
+		session.SetThinkingLevel(types.ThinkingLevelXHigh)
+		session.SetUltracodeEnabled(true)
+		fmt.Println("Effort set to: ultracode")
+		return nil
+	}
+
+	tl := types.ThinkingLevel(level)
+	switch tl {
+	case types.ThinkingLevelOff, types.ThinkingLevelLow, types.ThinkingLevelMedium, types.ThinkingLevelHigh:
+		session.SetUltracodeEnabled(false)
+		session.SetThinkingLevel(tl)
+		fmt.Printf("Effort set to: %s\n", tl)
+		return nil
+	default:
+		return fmt.Errorf("invalid effort level: %s (valid: off, low, medium, high, ultracode)", level)
+	}
+}
+
 func cmdRetry(session *CodingSession, _ string) error {
 	fmt.Println("Retrying last prompt...")
 	// Reset retry counter and re-prompt
@@ -172,6 +214,7 @@ func cmdSession(session *CodingSession, _ string) error {
 	fmt.Printf("Session ID: %s\n", session.GetSessionID())
 	fmt.Printf("Model: %s (%s)\n", model.ID, model.ProviderID)
 	fmt.Printf("Thinking Level: %s\n", session.GetThinkingLevel())
+	fmt.Printf("Ultracode: %v\n", session.UltracodeEnabled())
 	fmt.Printf("Streaming: %v\n", session.IsStreaming())
 	fmt.Printf("Auto Compaction: %v\n", session.config.AutoCompaction)
 	fmt.Printf("Auto Retry: %v\n", session.config.AutoRetry)

@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/subagent"
+	toolpkg "github.com/openmodu/modu/pkg/coding_agent/tools"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -68,10 +69,7 @@ func (cs *engine) forkSession(ctx context.Context, opts extension.ForkOptions) (
 	if strings.EqualFold(opts.Isolation, "worktree") {
 		result, childMessages, err = cs.forkInWorktree(ctx, def, initialMessages, opts.Task, observe)
 	} else {
-		tools := cs.activeTools
-		if childCwd != cs.cwd {
-			tools = cs.rebindToolsToCwd(childCwd)
-		}
+		tools := cs.toolsForFork(childCwd, def.Tools)
 		runResult, runErr := subagent.RunWithMessagesObserved(
 			ctx,
 			subagent.WithWorkingDirectory(def, childCwd),
@@ -86,7 +84,7 @@ func (cs *engine) forkSession(ctx context.Context, opts extension.ForkOptions) (
 		result, childMessages, err = runResult.Text, runResult.Messages, runErr
 	}
 	cs.OnSubagentStop(def.Name, opts.Task, false, result, err)
-	cs.emitSubagentChildUsage(childMessages)
+	cs.emitSubagentChildUsage(opts.BubbleTaskID, childMessages)
 	return result, err
 }
 
@@ -105,12 +103,13 @@ func (cs *engine) childObserver(bubbleID string) func(types.Event) {
 // per-assistant-message Usage, so consumers (e.g. the goal extension)
 // can fold subagent token spend into their own accounting instead of
 // silently undercounting it. No-op when there is nothing to report.
-func (cs *engine) emitSubagentChildUsage(messages []types.AgentMessage) {
+func (cs *engine) emitSubagentChildUsage(taskID string, messages []types.AgentMessage) {
 	if cs.extensions == nil || len(messages) == 0 {
 		return
 	}
 	cs.extensions.EmitEvent(types.Event{
 		Type:     types.EventType("subagent_child_usage"),
+		TaskID:   taskID,
 		Messages: messages,
 	})
 }
@@ -135,6 +134,8 @@ func (cs *engine) emitSubagentChildEvent(taskID string, ev types.Event) {
 		TaskID:   taskID,
 		Reason:   string(ev.Type),
 		ToolName: ev.ToolName,
+		Args:     ev.Args,
+		Result:   ev.Result,
 		IsError:  ev.IsError,
 		Message:  ev.Message, // carries per-turn Usage on turn_end
 	})
@@ -170,10 +171,7 @@ func (cs *engine) forkInBackground(ctx context.Context, def *subagent.SubagentDe
 		if def != nil {
 			cs.OnSubagentStart(def.Name, task, true)
 		}
-		tools := cs.activeTools
-		if childCwd != cs.cwd {
-			tools = cs.rebindToolsToCwd(childCwd)
-		}
+		tools := cs.toolsForFork(childCwd, def.Tools)
 		result, err := subagent.RunWithMessagesObserved(
 			runCtx,
 			subagent.WithWorkingDirectory(def, childCwd),
@@ -186,7 +184,7 @@ func (cs *engine) forkInBackground(ctx context.Context, def *subagent.SubagentDe
 			cs.childObserver(bubbleID),
 		)
 		text := result.Text
-		cs.emitSubagentChildUsage(result.Messages)
+		cs.emitSubagentChildUsage(bubbleID, result.Messages)
 		if taskRecord, ok := cs.taskManager.Get(taskID); ok {
 			if writeErr := writeSubagentSessionFile(taskRecord.SessionFile, childCwd, cs.GetSessionID(), taskID, result.Messages); writeErr != nil && err == nil {
 				err = writeErr
@@ -314,7 +312,7 @@ func (cs *engine) forkInWorktree(ctx context.Context, def *subagent.SubagentDefi
 		_, _ = runGitCommand(root, "worktree", "remove", "--force", path)
 		removeEmptyWorktreeParents(path, baseDir)
 	}()
-	rebound := cs.rebindToolsToCwd(path)
+	rebound := cs.toolsForFork(path, def.Tools)
 	result, err := subagent.RunWithMessagesObserved(
 		ctx,
 		subagent.WithWorkingDirectory(def, path),
@@ -340,11 +338,58 @@ func forkName(opts extension.ForkOptions) string {
 	return name
 }
 
+func (cs *engine) toolsForFork(cwd string, requested []string) []types.Tool {
+	tools := cs.activeTools
+	if len(requested) == 0 && cs.agent != nil {
+		tools = cs.agent.GetState().Tools
+	}
+	if cwd != cs.cwd {
+		tools = cs.rebindToolsToCwd(cwd, tools)
+	}
+	return ensureRequestedReadOnlyTools(tools, requested, cwd)
+}
+
+func ensureRequestedReadOnlyTools(active []types.Tool, requested []string, cwd string) []types.Tool {
+	if len(requested) == 0 {
+		return active
+	}
+	have := make(map[string]bool, len(active))
+	for _, tool := range active {
+		have[tool.Name()] = true
+	}
+	want := make(map[string]bool, len(requested))
+	for _, name := range requested {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			want[name] = true
+		}
+	}
+	out := append([]types.Tool(nil), active...)
+	for _, tool := range toolpkg.ReadOnlyTools(cwd) {
+		name := tool.Name()
+		if name == "read" {
+			continue
+		}
+		if want[name] && !have[name] {
+			out = append(out, tool)
+			have[name] = true
+		}
+	}
+	for _, tool := range toolpkg.ResearchTools() {
+		name := tool.Name()
+		if want[name] && !have[name] {
+			out = append(out, tool)
+			have[name] = true
+		}
+	}
+	return out
+}
+
 // rebindToolsToCwd returns a copy of tools where cwd-bound tools point at the
 // given path. Unknown tools pass through unchanged.
-func (cs *engine) rebindToolsToCwd(cwd string) []types.Tool {
-	out := make([]types.Tool, 0, len(cs.activeTools))
-	for _, tool := range cs.activeTools {
+func (cs *engine) rebindToolsToCwd(cwd string, in []types.Tool) []types.Tool {
+	out := make([]types.Tool, 0, len(in))
+	for _, tool := range in {
 		if rebound, ok := cs.toolProvider.Rebind(tool, types.ToolContext{Cwd: cwd}); ok {
 			out = append(out, rebound)
 			continue

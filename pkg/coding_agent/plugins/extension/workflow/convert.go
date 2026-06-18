@@ -27,6 +27,7 @@ type agentOptions struct {
 	Thinking        string
 	Skills          []string
 	MemoryScope     string
+	Schema          map[string]any
 }
 
 type parallelTask struct {
@@ -82,6 +83,10 @@ func decodePhases(t *lua.LTable) ([]phaseInfo, error) {
 }
 
 func decodeAgentOptions(t *lua.LTable) (agentOptions, error) {
+	maxTurns, err := positiveIntField(t, "max_turns")
+	if err != nil {
+		return agentOptions{}, err
+	}
 	opts := agentOptions{
 		Label:          strings.TrimSpace(stringValue(t, "label")),
 		Phase:          strings.TrimSpace(stringValue(t, "phase")),
@@ -89,14 +94,16 @@ func decodeAgentOptions(t *lua.LTable) (agentOptions, error) {
 		Cwd:            strings.TrimSpace(stringValue(t, "cwd")),
 		Isolation:      strings.TrimSpace(stringValue(t, "isolation")),
 		PermissionMode: strings.TrimSpace(stringValue(t, "permission_mode")),
-		MaxTurns:       intField(t, "max_turns"),
+		MaxTurns:       maxTurns,
 		Thinking:       strings.TrimSpace(stringValue(t, "thinking")),
 		MemoryScope:    strings.TrimSpace(stringValue(t, "memory_scope")),
 	}
 	if opts.Isolation != "" && opts.Isolation != "worktree" {
 		return opts, fmt.Errorf("isolation must be \"worktree\" when set")
 	}
-	var err error
+	if !validMemoryScope(opts.MemoryScope) {
+		return opts, fmt.Errorf("memory_scope must be one of none, user, global, project, local, both, or all")
+	}
 	if opts.Tools, err = stringListField(t, "tools"); err != nil {
 		return opts, err
 	}
@@ -106,7 +113,19 @@ func decodeAgentOptions(t *lua.LTable) (agentOptions, error) {
 	if opts.Skills, err = stringListField(t, "skills"); err != nil {
 		return opts, err
 	}
+	if opts.Schema, err = schemaField(t, "schema"); err != nil {
+		return opts, err
+	}
 	return opts, nil
+}
+
+func validMemoryScope(scope string) bool {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "", "none", "user", "global", "project", "local", "both", "all":
+		return true
+	default:
+		return false
+	}
 }
 
 func decodeParallelTasks(t *lua.LTable) ([]parallelTask, error) {
@@ -154,6 +173,22 @@ func intField(t *lua.LTable, key string) int {
 	return 0
 }
 
+func positiveIntField(t *lua.LTable, key string) (int, error) {
+	raw := t.RawGetString(key)
+	if raw == lua.LNil {
+		return 0, nil
+	}
+	n, ok := raw.(lua.LNumber)
+	if !ok {
+		return 0, fmt.Errorf("%s must be a positive integer", key)
+	}
+	f := float64(n)
+	if f != math.Trunc(f) || f <= 0 || f > float64(math.MaxInt) {
+		return 0, fmt.Errorf("%s must be a positive integer", key)
+	}
+	return int(f), nil
+}
+
 func stringListField(t *lua.LTable, key string) ([]string, error) {
 	raw := t.RawGetString(key)
 	if raw == lua.LNil {
@@ -174,6 +209,25 @@ func stringListField(t *lua.LTable, key string) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+func schemaField(t *lua.LTable, key string) (map[string]any, error) {
+	raw := t.RawGetString(key)
+	if raw == lua.LNil {
+		return nil, nil
+	}
+	value, err := luaToGo(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s must be a JSON-compatible schema: %w", key, err)
+	}
+	schema, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%s must be a JSON object", key)
+	}
+	if err := validateSchemaDefinition(schema, "schema"); err != nil {
+		return nil, err
+	}
+	return schema, nil
 }
 
 func goToLua(L *lua.LState, value any) lua.LValue {

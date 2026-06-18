@@ -123,6 +123,41 @@ func TestRequestPermissionDeniesUnknownOption(t *testing.T) {
 	}
 }
 
+func TestRequestPermissionReturnsErrorWhenParamsCannotMarshal(t *testing.T) {
+	var out bytes.Buffer
+	s := testACPServer(&out)
+	decision, err := s.requestPermission(context.Background(), "bad", "call-1", map[string]any{"bad": func() {}})
+	if err == nil {
+		t.Fatal("expected marshal error")
+	}
+	if decision != types.ToolApprovalDeny {
+		t.Fatalf("expected deny on marshal error, got %q", decision)
+	}
+	if strings.TrimSpace(out.String()) != "" {
+		t.Fatalf("expected no frame on marshal error, got %q", out.String())
+	}
+	if len(s.reverse) != 0 {
+		t.Fatalf("expected reverse request cleanup, got %#v", s.reverse)
+	}
+}
+
+func TestReplySendsErrorFrameWhenResultCannotMarshal(t *testing.T) {
+	var out bytes.Buffer
+	s := testACPServer(&out)
+	s.reply(7, map[string]any{"bad": func() {}})
+	lines := waitWrittenLines(t, s, &out)
+	if len(lines) != 1 {
+		t.Fatalf("expected one frame, got %d", len(lines))
+	}
+	var frame rpcMsg
+	if err := json.Unmarshal([]byte(lines[0]), &frame); err != nil {
+		t.Fatal(err)
+	}
+	if frame.ID == nil || *frame.ID != 7 || frame.Error == nil || frame.Error.Code != -32603 {
+		t.Fatalf("expected error reply frame, got %#v", frame)
+	}
+}
+
 func testACPServer(out *bytes.Buffer) *Server {
 	return &Server{
 		out:     bufio.NewWriter(out),

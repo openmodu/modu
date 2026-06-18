@@ -3,14 +3,19 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/openmodu/modu/cmd/modu_code/internal/provider"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
+	agentconfig "github.com/openmodu/modu/pkg/coding_agent/foundation/config"
 	"github.com/openmodu/modu/pkg/tui"
 )
 
@@ -20,7 +25,7 @@ func runConfigHook(args string, session *coding_agent.CodingSession) (string, er
 		return "", parseErr
 	}
 	var out bytes.Buffer
-	err := runConfigCommand(fields, &out, nil)
+	err := runConfigCommand(fields, &out, &out)
 	if err == nil && len(fields) == 2 && fields[0] == "use" && session != nil {
 		if switchErr := session.SetModelByName(fields[1]); switchErr != nil {
 			fmt.Fprintf(&out, "current session: unchanged (%v)\n", switchErr)
@@ -47,7 +52,7 @@ func configModelEntries() ([]tui.ConfigModelEntry, error) {
 			Provider:    model.Provider,
 			Model:       model.Model,
 			BaseURL:     cfg.Providers[model.Provider].BaseURL,
-			Active:      configTargetMatches(model, cfg.Active),
+			Active:      provider.ModelMatchesTarget(model, cfg.Active),
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -174,10 +179,46 @@ func configRemoveModel(target string) (string, error) {
 	return fmt.Sprintf("removed model: %s\nconfig: %s\n", modelLabel(model), provider.ConfigPath()), nil
 }
 
+func configToggleWorkflows(session *coding_agent.CodingSession) (string, error) {
+	path := filepath.Join(coding_agent.DefaultAgentDir(), "settings.json")
+	cfg := agentconfig.Default()
+	if data, err := os.ReadFile(path); err == nil {
+		if err := json.Unmarshal(data, cfg); err != nil {
+			return "", fmt.Errorf("read settings %s: %w", path, err)
+		}
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("read settings %s: %w", path, err)
+	}
+
+	nextDisabled := !cfg.DisableWorkflows
+	cfg.DisableWorkflows = nextDisabled
+	if err := agentconfig.Save(cfg, path); err != nil {
+		return "", err
+	}
+	if session != nil {
+		session.SetWorkflowsDisabled(nextDisabled)
+	}
+
+	state := "enabled"
+	if nextDisabled {
+		state = "disabled"
+	}
+	var out bytes.Buffer
+	fmt.Fprintf(&out, "dynamic workflows: %s\nsettings: %s\n", state, path)
+	if nextDisabled {
+		fmt.Fprintln(&out, "current session: workflow tool and commands removed")
+	} else {
+		fmt.Fprintln(&out, "current session: restart or start a new session to register workflow commands")
+	}
+	return out.String(), nil
+}
+
 func runConfigCommand(args []string, stdout, stderr io.Writer) error {
-	_ = stderr
 	if stdout == nil {
 		stdout = io.Discard
+	}
+	if stderr == nil {
+		stderr = io.Discard
 	}
 	if len(args) == 0 {
 		return printConfigShow(stdout)
@@ -268,9 +309,9 @@ func runConfigCommand(args []string, stdout, stderr io.Writer) error {
 			_, err := fmt.Fprintln(stdout, "status: ok")
 			return err
 		}
-		fmt.Fprintf(stdout, "problems (%d):\n", len(result.Problems))
+		fmt.Fprintf(stderr, "problems (%d):\n", len(result.Problems))
 		for _, problem := range result.Problems {
-			fmt.Fprintf(stdout, "  - %s\n", problem)
+			fmt.Fprintf(stderr, "  - %s\n", problem)
 		}
 		return fmt.Errorf("config validation failed")
 	default:
@@ -282,7 +323,13 @@ func printConfigShow(stdout io.Writer) error {
 	cfg, exists, err := provider.LoadConfigFile()
 	fmt.Fprintf(stdout, "config: %s\n", provider.ConfigPath())
 	if err != nil {
-		fmt.Fprintf(stdout, "status: invalid JSON: %v\n", err)
+		var syntaxErr *json.SyntaxError
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &syntaxErr) || errors.As(err, &typeErr) {
+			fmt.Fprintf(stdout, "status: invalid JSON: %v\n", err)
+		} else {
+			fmt.Fprintf(stdout, "status: unreadable: %v\n", err)
+		}
 	} else if !exists {
 		fmt.Fprintln(stdout, "status: missing")
 	} else if len(cfg.Models) == 0 {
@@ -324,7 +371,7 @@ func printConfigList(stdout io.Writer) error {
 	fmt.Fprintf(stdout, "models: %d\n", len(models))
 	for _, model := range models {
 		marker := " "
-		if configTargetMatches(model, cfg.Active) {
+		if provider.ModelMatchesTarget(model, cfg.Active) {
 			marker = "*"
 		}
 		line := fmt.Sprintf("%s %s  %s  %s", marker, modelLabel(model), model.Provider+"/"+model.Model, cfg.Providers[model.Provider].BaseURL)
@@ -374,13 +421,6 @@ func modelLabel(model provider.ModelConfig) string {
 		return model.Name
 	}
 	return model.Provider + "/" + model.Model
-}
-
-func configTargetMatches(model provider.ModelConfig, target string) bool {
-	return target != "" && (target == model.Name ||
-		target == model.Model ||
-		target == model.Provider+"/"+model.Model ||
-		target == model.Provider+":"+model.Model)
 }
 
 func valueOr(value, fallback string) string {

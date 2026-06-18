@@ -190,22 +190,27 @@ func (s *Server) requestPermission(ctx context.Context, toolName, toolCallID str
 		{"optionId": "reject_once", "name": "Reject once", "kind": "reject_once"},
 		{"optionId": "reject_always", "name": "Always reject", "kind": "reject_always"},
 	}
+	params, err := json.Marshal(map[string]any{
+		"toolCall": map[string]any{
+			"toolCallId": toolCallID,
+			"title":      toolName,
+			"kind":       "execute",
+			"arguments":  args,
+		},
+		"options": options,
+	})
+	if err != nil {
+		s.revMu.Lock()
+		delete(s.reverse, reqID)
+		s.revMu.Unlock()
+		fmt.Fprintf(os.Stderr, "modu_code acp: marshal permission request: %v\n", err)
+		return types.ToolApprovalDeny, err
+	}
 	s.writeFrame(rpcMsg{
 		JSONRPC: "2.0",
 		ID:      &reqID,
 		Method:  "session/request_permission",
-		Params: func() json.RawMessage {
-			raw, _ := json.Marshal(map[string]any{
-				"toolCall": map[string]any{
-					"toolCallId": toolCallID,
-					"title":      toolName,
-					"kind":       "execute",
-					"arguments":  args,
-				},
-				"options": options,
-			})
-			return raw
-		}(),
+		Params:  params,
 	})
 
 	select {
@@ -243,17 +248,27 @@ func (s *Server) requestPermission(ctx context.Context, toolName, toolCallID str
 
 // ─── wire helpers ───────────────────────────────────────────────────────────
 
-func (s *Server) writeFrame(v any) {
-	b, _ := json.Marshal(v)
+func (s *Server) writeFrame(v any) bool {
+	b, err := json.Marshal(v)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "modu_code acp: marshal frame: %v\n", err)
+		return false
+	}
 	s.outMu.Lock()
 	s.out.Write(b)
 	s.out.WriteByte('\n')
 	s.out.Flush()
 	s.outMu.Unlock()
+	return true
 }
 
 func (s *Server) reply(id int64, result any) {
-	raw, _ := json.Marshal(result)
+	raw, err := json.Marshal(result)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "modu_code acp: marshal reply result: %v\n", err)
+		s.replyErr(id, -32603, "failed to encode result")
+		return
+	}
 	s.writeFrame(rpcMsg{JSONRPC: "2.0", ID: &id, Result: raw})
 }
 
@@ -262,6 +277,10 @@ func (s *Server) replyErr(id int64, code int, msg string) {
 }
 
 func (s *Server) notify(method string, params any) {
-	raw, _ := json.Marshal(params)
+	raw, err := json.Marshal(params)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "modu_code acp: marshal notification params: %v\n", err)
+		return
+	}
 	s.writeFrame(rpcMsg{JSONRPC: "2.0", Method: method, Params: raw})
 }

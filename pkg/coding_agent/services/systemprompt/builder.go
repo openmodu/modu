@@ -86,6 +86,20 @@ When asked to review, audit, or analyse a package or module:
 
 Write safe code by default. Avoid command injection, SQL injection, path traversal, and hardcoded secrets. If you notice a security issue in existing code, flag it explicitly.`
 
+const dynamicWorkflowPrompt = `# Dynamic Workflows
+
+When the ` + "`" + `workflow` + "`" + ` tool is available, you can write and run Lua workflow scripts that orchestrate many subagents.
+
+Use a workflow when the user explicitly asks for ` + "`" + `workflow` + "`" + `, ` + "`" + `dynamic workflow` + "`" + `, or ` + "`" + `ultracode` + "`" + `, or when a task needs repeatable fan-out/fan-in across many independent files, packages, sources, or review angles. Do not use a workflow for small one-off edits or simple questions.
+
+When writing a workflow:
+- Call the ` + "`" + `workflow` + "`" + ` tool with exactly one source: ` + "`" + `script` + "`" + `, ` + "`" + `script_path` + "`" + `, or ` + "`" + `name` + "`" + `; pass ` + "`" + `args` + "`" + ` when the workflow needs structured input.
+- The ` + "`" + `workflow` + "`" + ` tool is not a status or management API. Never call it with ` + "`" + `action` + "`" + `, ` + "`" + `status` + "`" + `, ` + "`" + `id` + "`" + `, ` + "`" + `run_id` + "`" + `, or ` + "`" + `agent_id` + "`" + `; use slash commands such as ` + "`" + `/workflows show <run-id>` + "`" + `, ` + "`" + `/workflows agent <run-id> <agent-id>` + "`" + `, ` + "`" + `/workflows stop <run-id>` + "`" + `, or the exact ` + "`" + `/workflows` + "`" + ` TUI panel to inspect or control runs.
+- Write Lua, not JavaScript. Available globals include ` + "`" + `meta` + "`" + `, ` + "`" + `phase` + "`" + `, ` + "`" + `log` + "`" + `, ` + "`" + `agent` + "`" + `, ` + "`" + `parallel` + "`" + `, ` + "`" + `pipeline` + "`" + `, ` + "`" + `workflow` + "`" + `, ` + "`" + `json` + "`" + `, ` + "`" + `args` + "`" + `, ` + "`" + `cwd` + "`" + `, and ` + "`" + `budget` + "`" + `.
+- The Lua script coordinates work only. It cannot read files or run shell directly; use ` + "`" + `agent()` + "`" + ` tasks with explicit tools and permission mode for repository work.
+- Give each workflow a ` + "`" + `meta({ name = ..., description = ... })` + "`" + ` header, clear ` + "`" + `phase()` + "`" + ` names, stable agent labels, and bounded ` + "`" + `parallel(..., { concurrency = N })` + "`" + ` fan-out.
+- For long-running or reusable runs, prefer ` + "`" + `async = true` + "`" + ` and tell the user to inspect or manage progress with ` + "`" + `/workflows` + "`" + `.`
+
 // MemoryProvider supplies the persistent memory context block. *MemoryStore in
 // the parent package satisfies this; the interface keeps this package free of a
 // dependency back on coding_agent.
@@ -180,6 +194,9 @@ func (b *Builder) Build() string {
 			toolDescs = append(toolDescs, fmt.Sprintf("## %s\n%s", tool.Name(), tool.Description()))
 		}
 		parts = append(parts, strings.Join(toolDescs, "\n\n"))
+		if hasToolNamed(b.tools, "workflow") {
+			parts = append(parts, dynamicWorkflowPrompt)
+		}
 	}
 
 	remainingContextBudget := maxTotalContextBytes
@@ -267,6 +284,15 @@ func (b *Builder) Build() string {
 	parts = append(parts, b.modeBlocks...)
 
 	return strings.Join(parts, sectionSeparator)
+}
+
+func hasToolNamed(tools []types.Tool, name string) bool {
+	for _, tool := range tools {
+		if tool != nil && tool.Name() == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *Builder) loadContextFile(path string, maxBytes int) (string, int) {

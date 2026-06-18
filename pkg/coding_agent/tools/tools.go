@@ -10,6 +10,7 @@ import (
 	memorytool "github.com/openmodu/modu/pkg/coding_agent/tools/memory"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/planning"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/read"
+	webtools "github.com/openmodu/modu/pkg/coding_agent/tools/web"
 	worktreetool "github.com/openmodu/modu/pkg/coding_agent/tools/worktree"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/write"
 	"github.com/openmodu/modu/pkg/types"
@@ -88,6 +89,10 @@ func (p DefaultProvider) Rebind(tool types.Tool, ctx types.ToolContext) (types.T
 		return find.NewTool(ctx.Cwd), true
 	case "ls":
 		return ls.NewTool(ctx.Cwd), true
+	case "web_fetch":
+		return webtools.NewFetchTool(), true
+	case "web_search":
+		return webtools.NewSearchTool(), true
 	default:
 		return nil, false
 	}
@@ -140,4 +145,13 @@ func ReadOnlyTools(cwd string) []types.Tool {
 // AllTools returns all available built-in coding tools.
 func AllTools(cwd string) []types.Tool {
 	return NewProvider(ToolSetAll).baseTools(cwd)
+}
+
+// ResearchTools returns opt-in network research tools. They are not part of
+// the default coding set and must be explicitly requested by child agents.
+func ResearchTools() []types.Tool {
+	return []types.Tool{
+		webtools.NewFetchTool(),
+		webtools.NewSearchTool(),
+	}
 }

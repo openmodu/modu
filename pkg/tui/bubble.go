@@ -110,6 +110,20 @@ type bubbleTUI struct {
 	configProviderChoices []ConfigProviderEntry
 	configProviderAll     []ConfigProviderEntry
 
+	workflowPanelState   map[string]any
+	workflowRuns         []workflowPanelRun
+	workflowPanelLevel   workflowPanelLevel
+	workflowSelectIdx    int
+	workflowScroll       int
+	workflowPhaseIdx     int
+	workflowPhaseScroll  int
+	workflowAgentIdx     int
+	workflowAgentScroll  int
+	workflowDetailScroll int
+	workflowSaveReturn   workflowPanelLevel
+	workflowSaveName     string
+	workflowSaveScope    string
+
 	width  int
 	height int
 
@@ -439,6 +453,9 @@ func (b *bubbleTUI) updateKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if b.model.state == uiStateConfigSelect {
 		return b.updateConfigSelectKey(msg)
 	}
+	if b.model.state == uiStateWorkflowPanel {
+		return b.updateWorkflowPanelKey(msg)
+	}
 
 	switch msg.String() {
 	case "ctrl+c":
@@ -754,6 +771,11 @@ func (b *bubbleTUI) runLocalOrSlash(line string) tea.Cmd {
 		return b.appendSystemSection("Plan", planPanelContent(b.session))
 	case line == "/worktree":
 		return b.appendSystemSection("Worktree", worktreePanelContent(b.session))
+	case line == "/workflows":
+		if b.openWorkflowPanel() {
+			return nil
+		}
+		return b.runSlash(line)
 	case line == "/queue" || strings.HasPrefix(line, "/queue "):
 		b.runQueueCommand(strings.TrimSpace(strings.TrimPrefix(line, "/queue")))
 		return nil
@@ -2056,13 +2078,16 @@ func (b *bubbleTUI) renderInputControl() string {
 		input = b.renderConfigInput()
 	} else if b.model.state == uiStateConfigSelect {
 		input = b.renderConfigSelect()
+	} else if b.model.state == uiStateWorkflowPanel {
+		input = b.renderWorkflowPanel()
 	}
 	if b.model.state == uiStatePermission ||
 		b.model.state == uiStatePlanReject ||
 		b.model.state == uiStateModelSelect ||
 		b.model.state == uiStateConfigMenu ||
 		b.model.state == uiStateConfigInput ||
-		b.model.state == uiStateConfigSelect {
+		b.model.state == uiStateConfigSelect ||
+		b.model.state == uiStateWorkflowPanel {
 		return uiBubblePopup.Width(width).Render(input)
 	}
 	// Render the prompt at its natural width — no full-width border or
@@ -2141,6 +2166,9 @@ func (b *bubbleTUI) inputHeight() int {
 			return len(configProviderFields) + 4
 		}
 		return 6
+	}
+	if b.model.state == uiStateWorkflowPanel {
+		return min(b.workflowPanelItemCount(), modelSelectVisibleRows) + 5
 	}
 	if b.model.state == uiStatePermission {
 		return 5
@@ -2237,6 +2265,9 @@ func (b *bubbleTUI) renderStatusLine() string {
 	if b.model.state == uiStateConfigMenu || b.model.state == uiStateConfigInput || b.model.state == uiStateConfigSelect {
 		return uiDimText.Render(strings.TrimSpace(b.configHint()))
 	}
+	if b.model.state == uiStateWorkflowPanel {
+		return uiDimText.Render(strings.TrimSpace(b.currentWorkflowPanelHint()))
+	}
 	if status := b.model.effectiveStatusMsg(time.Now()); status != "" && status != "thinking" {
 		if context := b.contextStatusLine(); context != "" {
 			status += "  |  " + context
@@ -2259,6 +2290,9 @@ func (b *bubbleTUI) renderStatusLine() string {
 		}
 		if queue := b.queueStatusLine(); queue != "" {
 			parts = append(parts, queue)
+		}
+		if indicator := workflowIndicator(b.session.ExtensionRuntimeStates()); indicator != "" {
+			parts = append(parts, indicator)
 		}
 		if indicator := goalWatchIndicator(b.session.ExtensionRuntimeStates()); indicator != "" {
 			parts = append(parts, indicator)
@@ -2328,7 +2362,8 @@ func (b *bubbleTUI) queueStatusLine() string {
 func (b *bubbleTUI) isPlainInputState() bool {
 	switch b.model.state {
 	case uiStatePermission, uiStatePlanReject, uiStateModelSelect,
-		uiStateConfigMenu, uiStateConfigInput, uiStateConfigSelect:
+		uiStateConfigMenu, uiStateConfigInput, uiStateConfigSelect,
+		uiStateWorkflowPanel:
 		return false
 	}
 	return true

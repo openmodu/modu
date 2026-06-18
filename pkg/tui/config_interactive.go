@@ -26,6 +26,7 @@ type configMenuChoice struct {
 var configMenuChoices = []configMenuChoice{
 	{Key: "use", Label: "Active Model", Description: "choose default model"},
 	{Key: "provider", Label: "Provider", Description: "set model source and API key"},
+	{Key: "workflows", Label: "Dynamic workflows", Description: "toggle workflow tool and commands"},
 }
 
 var configAddFields = []configInputField{
@@ -173,8 +174,21 @@ func (b *bubbleTUI) confirmConfigMenu() tea.Cmd {
 		return b.openConfigProviderMenu()
 	case "use":
 		return b.openConfigSelect("use")
+	case "workflows":
+		return b.confirmConfigWorkflows()
 	default:
 		return nil
+	}
+}
+
+func (b *bubbleTUI) confirmConfigWorkflows() tea.Cmd {
+	if b.commandHooks.ConfigWorkflows == nil {
+		b.model.setTransientStatus("dynamic workflow config is not available")
+		return nil
+	}
+	return func() tea.Msg {
+		out, err := b.commandHooks.ConfigWorkflows()
+		return bubbleConfigDoneMsg{out: out, err: err}
 	}
 }
 

@@ -107,6 +107,39 @@ func TestBuilderIncludesToolDescriptions(t *testing.T) {
 	}
 }
 
+func TestBuilderIncludesDynamicWorkflowGuidanceWhenWorkflowToolAvailable(t *testing.T) {
+	prompt := NewBuilder(t.TempDir()).
+		SetTools([]types.Tool{
+			stubTool{name: "read", desc: "reads a file"},
+			stubTool{name: "workflow", desc: "runs Lua workflows"},
+		}).
+		Build()
+
+	for _, want := range []string{
+		"# Dynamic Workflows",
+		"When the `workflow` tool is available",
+		"`ultracode`",
+		"Write Lua, not JavaScript",
+		"`meta`",
+		"`parallel(..., { concurrency = N })`",
+		"`/workflows`",
+		"not a status or management API",
+		"`action`",
+		"`/workflows show <run-id>`",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected workflow prompt to contain %q, got:\n%s", want, prompt)
+		}
+	}
+
+	withoutWorkflow := NewBuilder(t.TempDir()).
+		SetTools([]types.Tool{stubTool{name: "read", desc: "reads a file"}}).
+		Build()
+	if strings.Contains(withoutWorkflow, "# Dynamic Workflows") {
+		t.Fatalf("workflow guidance should only appear when workflow tool is available, got:\n%s", withoutWorkflow)
+	}
+}
+
 func TestBuilderAppendsAndIncludesMemory(t *testing.T) {
 	prompt := NewBuilder(t.TempDir()).
 		AppendPrompt("EXTRA SETTINGS PROMPT").
@@ -133,9 +166,12 @@ func TestBuilderTruncatesOversizedMemory(t *testing.T) {
 
 func TestBuilderAppendsModeBlocks(t *testing.T) {
 	prompt := NewBuilder(t.TempDir()).
-		SetModeBlocks([]string{PlanModeBlock, WorktreeBlock("/tmp/wt")}).
+		SetModeBlocks([]string{UltracodeBlock, PlanModeBlock, WorktreeBlock("/tmp/wt")}).
 		Build()
 
+	if !strings.Contains(prompt, "## Active Mode: Ultracode") {
+		t.Fatalf("expected ultracode mode block, got:\n%s", prompt)
+	}
 	if !strings.Contains(prompt, "## Active Mode: Plan") {
 		t.Fatalf("expected plan mode block, got:\n%s", prompt)
 	}

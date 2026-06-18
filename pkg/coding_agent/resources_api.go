@@ -21,6 +21,7 @@ func (s *engine) SetActiveTools(names []string) {
 	}
 
 	s.agent.SetTools(active)
+	s.refreshDynamicSystemPrompt()
 	s.writeRuntimeState()
 }
 
