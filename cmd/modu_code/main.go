@@ -31,6 +31,7 @@ import (
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
 	_ "github.com/openmodu/modu/pkg/coding_agent/plugins/extension/goal"     // register builtin extension via init()
 	_ "github.com/openmodu/modu/pkg/coding_agent/plugins/extension/subagent" // register builtin extension via init()
+	_ "github.com/openmodu/modu/pkg/coding_agent/plugins/extension/workflow" // register builtin extension via init()
 
 	"github.com/openmodu/modu/cmd/modu_code/internal/acp"
 	"github.com/openmodu/modu/cmd/modu_code/internal/provider"
@@ -127,7 +128,9 @@ func main() {
 		if *printJSON {
 			printMode = modes.PrintModeJSON
 		}
-		if err := modes.RunPrint(context.Background(), modes.PrintOptions{
+		ctx, cancel := signalContext()
+		defer cancel()
+		if err := modes.RunPrint(ctx, modes.PrintOptions{
 			Mode:     printMode,
 			Messages: []string{*printPrompt},
 			Session:  session,
@@ -140,13 +143,8 @@ func main() {
 	}
 
 	if *rpcMode {
-		ctx, cancel := context.WithCancel(context.Background())
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-		go func() {
-			<-sigCh
-			cancel()
-		}()
+		ctx, cancel := signalContext()
+		defer cancel()
 		if err := rpc.NewRpcMode(session).Run(ctx); err != nil && err != context.Canceled {
 			fmt.Fprintf(os.Stderr, "rpc error: %v\n", err)
 			os.Exit(1)
@@ -155,13 +153,8 @@ func main() {
 	}
 
 	if *acpMode {
-		ctx, cancel := context.WithCancel(context.Background())
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-		go func() {
-			<-sigCh
-			cancel()
-		}()
+		ctx, cancel := signalContext()
+		defer cancel()
 		if err := acp.New(session).Run(ctx); err != nil && err != context.Canceled {
 			fmt.Fprintf(os.Stderr, "acp error: %v\n", err)
 			os.Exit(1)
@@ -183,6 +176,7 @@ func main() {
 			return configUseModel(target, session)
 		},
 		ConfigRemove:     configRemoveModel,
+		ConfigWorkflows:  func() (string, error) { return configToggleWorkflows(session) },
 		SaveScopedModels: provider.SetScopedModelIDs,
 	}}); err != nil {
 		fmt.Fprintf(os.Stderr, "ui error: %v\n", err)
@@ -208,4 +202,19 @@ func shouldIgnoreStartupWorktreeError(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "not a git repository") ||
 		strings.Contains(msg, "worktree mode is disabled")
+}
+
+func signalContext() (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		select {
+		case <-sigCh:
+			cancel()
+		case <-ctx.Done():
+		}
+		signal.Stop(sigCh)
+	}()
+	return ctx, cancel
 }

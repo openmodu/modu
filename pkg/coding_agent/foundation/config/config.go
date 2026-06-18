@@ -55,6 +55,9 @@ type Config struct {
 	// BlockImages prevents image content from being sent to the model.
 	BlockImages bool `json:"blockImages,omitempty"`
 
+	// DisableWorkflows disables dynamic workflow extensions for the session.
+	DisableWorkflows bool `json:"disableWorkflows,omitempty"`
+
 	// Harness controls host-side runtime behavior.
 	Harness HarnessConfig `json:"harness,omitempty"`
 
@@ -74,6 +77,7 @@ type FeatureConfig struct {
 }
 
 type PermissionConfig struct {
+	DefaultMode       string   `json:"defaultMode,omitempty"`
 	AllowTools        []string `json:"allowTools,omitempty"`
 	DenyTools         []string `json:"denyTools,omitempty"`
 	AllowBashPrefixes []string `json:"allowBashPrefixes,omitempty"`

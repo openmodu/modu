@@ -168,6 +168,8 @@ type ExtensionAPI interface {
 	IsIdle() bool
 	// HasPendingMessages reports whether queued steering/follow-up messages exist.
 	HasPendingMessages() bool
+	// PermissionMode returns the host session's permission mode, when configured.
+	PermissionMode() string
 	// SendFollowUpMessage queues a follow-up message and triggers a turn if idle.
 	SendFollowUpMessage(text string) error
 	// SendMessageWithOptions injects a message with extension metadata.

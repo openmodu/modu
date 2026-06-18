@@ -70,6 +70,7 @@ func (f *fakeAPI) Cwd() string {
 }
 func (f *fakeAPI) IsIdle() bool             { return true }
 func (f *fakeAPI) HasPendingMessages() bool { return false }
+func (f *fakeAPI) PermissionMode() string   { return "" }
 func (f *fakeAPI) Notify(_ string, text string) {
 	f.mu.Lock()
 	f.notices = append(f.notices, text)

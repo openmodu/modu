@@ -483,6 +483,16 @@ func TestReadOnlyTools(t *testing.T) {
 	}
 }
 
+func TestResearchToolsAreOptInNetworkTools(t *testing.T) {
+	rt := ResearchTools()
+	names := toolNames(rt)
+	for _, name := range []string{"web_fetch", "web_search"} {
+		if !containsName(names, name) {
+			t.Fatalf("expected %s in research tools, got %v", name, names)
+		}
+	}
+}
+
 func TestDefaultProviderBuildsAndRebindsTools(t *testing.T) {
 	provider := NewProvider(ToolSetReadOnly)
 	tools := provider.Tools(types.ToolContext{

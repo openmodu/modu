@@ -111,3 +111,66 @@ func goalWatchIndicator(states map[string]any) string {
 	indicator, _ := state["indicator"].(string)
 	return strings.TrimSpace(indicator)
 }
+
+// workflowIndicator extracts the active workflow indicator from extension
+// runtime state. It only renders while at least one workflow is running.
+func workflowIndicator(states map[string]any) string {
+	if len(states) == 0 {
+		return ""
+	}
+	raw, ok := states["workflow"]
+	if !ok {
+		return ""
+	}
+	state, ok := raw.(map[string]any)
+	if !ok {
+		return ""
+	}
+	if runtimeStateNumber(state["runningCount"]) <= 0 {
+		return ""
+	}
+	indicator, _ := state["indicator"].(string)
+	return strings.TrimSpace(indicator)
+}
+
+func runtimeStateNumber(value any) int {
+	switch v := value.(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	case jsonNumber:
+		n, _ := v.Int64()
+		return int(n)
+	default:
+		return 0
+	}
+}
+
+func runtimeStateFloat(value any) float64 {
+	switch v := value.(type) {
+	case float64:
+		return v
+	case float32:
+		return float64(v)
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case jsonFloatNumber:
+		n, _ := v.Float64()
+		return n
+	default:
+		return 0
+	}
+}
+
+type jsonNumber interface {
+	Int64() (int64, error)
+}
+
+type jsonFloatNumber interface {
+	Float64() (float64, error)
+}

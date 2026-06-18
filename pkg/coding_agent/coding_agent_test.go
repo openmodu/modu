@@ -16,6 +16,7 @@ import (
 	"github.com/openmodu/modu/pkg/coding_agent/foundation/config"
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
 	subagentext "github.com/openmodu/modu/pkg/coding_agent/plugins/extension/subagent"
+	workflowext "github.com/openmodu/modu/pkg/coding_agent/plugins/extension/workflow"
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/subagent"
 	"github.com/openmodu/modu/pkg/coding_agent/services/bgtask"
 	"github.com/openmodu/modu/pkg/coding_agent/services/memory"
@@ -137,6 +138,181 @@ func TestNewCodingSession(t *testing.T) {
 	cfg := session.GetConfig()
 	if cfg == nil {
 		t.Fatal("config should not be nil")
+	}
+}
+
+func TestForkToolSetCanAddRequestedReadOnlyDiscoveryTools(t *testing.T) {
+	active := tools.CodingTools("/tmp/project")
+	got := ensureRequestedReadOnlyTools(active, []string{"read", "grep", "find", "ls", "web_search", "web_fetch", "bash", "write"}, "/tmp/project")
+	names := toolNamesFromTools(got)
+	for _, name := range []string{"read", "bash", "edit", "write", "grep", "find", "ls", "web_search", "web_fetch"} {
+		if !containsTool(names, name) {
+			t.Fatalf("expected %s in fork tools, got %v", name, names)
+		}
+	}
+	if countToolName(names, "bash") != 1 || countToolName(names, "write") != 1 {
+		t.Fatalf("non-read-only tools should not be duplicated by explicit request, got %v", names)
+	}
+
+	got = ensureRequestedReadOnlyTools(active, nil, "/tmp/project")
+	names = toolNamesFromTools(got)
+	for _, name := range []string{"grep", "find", "ls", "web_search", "web_fetch"} {
+		if containsTool(names, name) {
+			t.Fatalf("empty request should preserve default active tools, got %v", names)
+		}
+	}
+}
+
+func TestForkSessionAddsRequestedReadOnlyDiscoveryTools(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	var seenTools []string
+	model := newTestModel()
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  agentDir,
+		Model:     model,
+		GetAPIKey: func(provider string) (string, error) { return "", nil },
+		StreamFn: func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+			seenTools = toolNamesFromDefinitions(llmCtx.Tools)
+			stream := types.NewEventStream()
+			go func() {
+				defer stream.Close()
+				msg := &types.AssistantMessage{
+					Role:       "assistant",
+					ProviderID: model.ProviderID,
+					Model:      model.ID,
+					StopReason: "stop",
+					Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "done"}},
+					Timestamp:  time.Now().UnixMilli(),
+				}
+				stream.Push(types.StreamEvent{Type: types.EventDone, Reason: "stop", Message: msg})
+				stream.Resolve(msg, nil)
+			}()
+			return stream, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close("test")
+
+	text, err := session.forkSession(context.Background(), extension.ForkOptions{
+		Name:         "scan",
+		Task:         "scan",
+		AllowedTools: []string{"read", "grep", "find", "ls"},
+	})
+	if err != nil {
+		t.Fatalf("forkSession: %v", err)
+	}
+	if text != "done" {
+		t.Fatalf("fork result = %q", text)
+	}
+	for _, name := range []string{"read", "grep", "find", "ls"} {
+		if !containsTool(seenTools, name) {
+			t.Fatalf("expected child LLM context to include %s, got %v", name, seenTools)
+		}
+	}
+}
+
+func TestForkSessionForwardsRequestedCustomTool(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	var seenTools []string
+	model := newTestModel()
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:         dir,
+		AgentDir:    agentDir,
+		Model:       model,
+		CustomTools: []types.Tool{namedTestTool("mcp_lookup")},
+		GetAPIKey:   func(provider string) (string, error) { return "", nil },
+		StreamFn: func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+			seenTools = toolNamesFromDefinitions(llmCtx.Tools)
+			stream := types.NewEventStream()
+			go func() {
+				defer stream.Close()
+				msg := &types.AssistantMessage{
+					Role:       "assistant",
+					ProviderID: model.ProviderID,
+					Model:      model.ID,
+					StopReason: "stop",
+					Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "done"}},
+					Timestamp:  time.Now().UnixMilli(),
+				}
+				stream.Push(types.StreamEvent{Type: types.EventDone, Reason: "stop", Message: msg})
+				stream.Resolve(msg, nil)
+			}()
+			return stream, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close("test")
+
+	text, err := session.forkSession(context.Background(), extension.ForkOptions{
+		Name:         "lookup",
+		Task:         "lookup",
+		AllowedTools: []string{"mcp_lookup"},
+	})
+	if err != nil {
+		t.Fatalf("forkSession: %v", err)
+	}
+	if text != "done" {
+		t.Fatalf("fork result = %q", text)
+	}
+	if !containsTool(seenTools, "mcp_lookup") || len(seenTools) != 1 {
+		t.Fatalf("expected only requested custom tool in child LLM context, got %v", seenTools)
+	}
+}
+
+func TestForkSessionInheritsCurrentToolAllowlistWhenToolsUnset(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	var seenTools []string
+	model := newTestModel()
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  agentDir,
+		Model:     model,
+		GetAPIKey: func(provider string) (string, error) { return "", nil },
+		StreamFn: func(ctx context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+			seenTools = toolNamesFromDefinitions(llmCtx.Tools)
+			stream := types.NewEventStream()
+			go func() {
+				defer stream.Close()
+				msg := &types.AssistantMessage{
+					Role:       "assistant",
+					ProviderID: model.ProviderID,
+					Model:      model.ID,
+					StopReason: "stop",
+					Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "done"}},
+					Timestamp:  time.Now().UnixMilli(),
+				}
+				stream.Push(types.StreamEvent{Type: types.EventDone, Reason: "stop", Message: msg})
+				stream.Resolve(msg, nil)
+			}()
+			return stream, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close("test")
+	session.SetActiveTools([]string{"read"})
+
+	text, err := session.forkSession(context.Background(), extension.ForkOptions{
+		Name: "inherit",
+		Task: "inherit",
+	})
+	if err != nil {
+		t.Fatalf("forkSession: %v", err)
+	}
+	if text != "done" {
+		t.Fatalf("fork result = %q", text)
+	}
+	if len(seenTools) != 1 || seenTools[0] != "read" {
+		t.Fatalf("expected child to inherit current read-only allowlist, got %v", seenTools)
 	}
 }
 
@@ -1702,7 +1878,7 @@ func TestLoadConfigFromFile(t *testing.T) {
 	agentDir := filepath.Join(dir, "agent")
 	os.MkdirAll(agentDir, 0o755)
 
-	configContent := `{"thinkingLevel":"high","autoCompaction":false}`
+	configContent := `{"thinkingLevel":"high","autoCompaction":false,"disableWorkflows":true,"permissions":{"defaultMode":"auto"}}`
 	os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(configContent), 0o644)
 
 	cfg, err := config.Load(agentDir, dir)
@@ -1714,6 +1890,350 @@ func TestLoadConfigFromFile(t *testing.T) {
 	}
 	if cfg.AutoCompaction {
 		t.Fatal("auto compaction should be false from config")
+	}
+	if !cfg.DisableWorkflows {
+		t.Fatal("disableWorkflows should be true from config")
+	}
+	if cfg.Permissions.DefaultMode != "auto" {
+		t.Fatalf("permissions.defaultMode = %q, want auto", cfg.Permissions.DefaultMode)
+	}
+}
+
+func TestDisableWorkflowsSettingDisablesWorkflowExtension(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, "agent")
+	cwd := filepath.Join(dir, "repo")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(`{"disableWorkflows":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:        cwd,
+		AgentDir:   agentDir,
+		Model:      newTestModel(),
+		Extensions: []extension.Extension{workflowext.New()},
+	})
+	if err != nil {
+		t.Fatalf("NewCodingSession: %v", err)
+	}
+	if session.HasSlashCommand("workflows") {
+		t.Fatal("workflow settings disable should skip /workflows command")
+	}
+	if session.HasSlashCommand("deep-research") {
+		t.Fatal("workflow settings disable should skip /deep-research command")
+	}
+	for _, tool := range session.activeTools {
+		if tool.Name() == "workflow" {
+			t.Fatal("workflow settings disable should skip workflow tool")
+		}
+	}
+	if prompt := session.GetAgent().GetState().SystemPrompt; strings.Contains(prompt, "# Dynamic Workflows") {
+		t.Fatalf("workflow settings disable should skip workflow authoring prompt, got:\n%s", prompt)
+	}
+}
+
+func TestWorkflowExtensionAddsWorkflowAuthoringPrompt(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, "agent")
+	cwd := filepath.Join(dir, "repo")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:        cwd,
+		AgentDir:   agentDir,
+		Model:      newTestModel(),
+		Extensions: []extension.Extension{workflowext.New()},
+	})
+	if err != nil {
+		t.Fatalf("NewCodingSession: %v", err)
+	}
+	prompt := session.GetAgent().GetState().SystemPrompt
+	for _, want := range []string{
+		"# Dynamic Workflows",
+		"`ultracode`",
+		"Write Lua, not JavaScript",
+		"`meta`",
+		"`parallel(..., { concurrency = N })`",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected workflow authoring prompt to contain %q, got:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestWorkflowToolCapturesRealForkTranscript(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, "agent")
+	cwd := filepath.Join(dir, "repo")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	model := newTestModel()
+	streamFn := func(ctx context.Context, _ *types.Model, _ *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+		stream := types.NewEventStream()
+		go func() {
+			defer stream.Close()
+			msg := &types.AssistantMessage{
+				Role:       types.RoleAssistant,
+				ProviderID: model.ProviderID,
+				Model:      model.ID,
+				StopReason: "stop",
+				Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "CHILD_TRANSCRIPT_OK"}},
+				Usage:      types.AgentUsage{Input: 11, Output: 7, TotalTokens: 18},
+				Timestamp:  time.Now().UnixMilli(),
+			}
+			stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+			stream.Resolve(msg, nil)
+		}()
+		return stream, nil
+	}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:        cwd,
+		AgentDir:   agentDir,
+		Model:      model,
+		StreamFn:   streamFn,
+		Extensions: []extension.Extension{workflowext.New()},
+	})
+	if err != nil {
+		t.Fatalf("NewCodingSession: %v", err)
+	}
+	var workflowTool types.Tool
+	for _, tool := range session.GetAgent().GetState().Tools {
+		if tool.Name() == "workflow" {
+			workflowTool = tool
+			break
+		}
+	}
+	if workflowTool == nil {
+		t.Fatalf("workflow tool not registered; tools=%v", session.GetActiveToolNames())
+	}
+	res, err := workflowTool.Execute(context.Background(), "wf-transcript", map[string]any{
+		"script": `
+meta({ name = "real_transcript", description = "capture transcript" })
+return agent("capture transcript", { label = "child" })
+`,
+	}, nil)
+	if err != nil {
+		t.Fatalf("workflow Execute: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("workflow returned error: %s", extractTextBlocks(res.Content))
+	}
+	data, err := json.Marshal(res.Details)
+	if err != nil {
+		t.Fatalf("marshal workflow details: %v", err)
+	}
+	var snapshot struct {
+		Agents []struct {
+			Transcript []struct {
+				Role  string `json:"role"`
+				Text  string `json:"text"`
+				Usage struct {
+					Input       int `json:"input"`
+					Output      int `json:"output"`
+					TotalTokens int `json:"totalTokens"`
+				} `json:"usage"`
+			} `json:"transcript"`
+		} `json:"agents"`
+	}
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		t.Fatalf("decode workflow snapshot: %v\n%s", err, string(data))
+	}
+	if len(snapshot.Agents) != 1 || len(snapshot.Agents[0].Transcript) == 0 {
+		t.Fatalf("expected captured transcript, got %s", string(data))
+	}
+	found := false
+	for _, entry := range snapshot.Agents[0].Transcript {
+		if entry.Role == types.RoleAssistant && strings.Contains(entry.Text, "CHILD_TRANSCRIPT_OK") && entry.Usage.TotalTokens == 18 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("assistant transcript with usage not found: %s", string(data))
+	}
+}
+
+func TestEffortUltracodeEnablesWorkflowFirstMode(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, "agent")
+	cwd := filepath.Join(dir, "repo")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:      cwd,
+		AgentDir: agentDir,
+		Model: &types.Model{
+			ID:            "gpt-5.2",
+			ProviderID:    "openai",
+			ContextWindow: 8192,
+			MaxTokens:     2048,
+		},
+		Extensions: []extension.Extension{workflowext.New()},
+	})
+	if err != nil {
+		t.Fatalf("NewCodingSession: %v", err)
+	}
+	if err := cmdEffort(session, "ultracode"); err != nil {
+		t.Fatalf("/effort ultracode: %v", err)
+	}
+	if !session.UltracodeEnabled() {
+		t.Fatal("expected ultracode enabled")
+	}
+	if got := session.GetThinkingLevel(); got != types.ThinkingLevelXHigh {
+		t.Fatalf("thinking level = %q, want xhigh", got)
+	}
+	prompt := session.GetAgent().GetState().SystemPrompt
+	if !strings.Contains(prompt, "## Active Mode: Ultracode") || !strings.Contains(prompt, "Use dynamic workflow orchestration for every substantive task") {
+		t.Fatalf("expected ultracode prompt block, got:\n%s", prompt)
+	}
+	if got := session.RuntimeState().Modes["ultracode"]; got != true {
+		t.Fatalf("runtime ultracode mode = %#v, want true", got)
+	}
+
+	if err := cmdEffort(session, "high"); err != nil {
+		t.Fatalf("/effort high: %v", err)
+	}
+	if session.UltracodeEnabled() {
+		t.Fatal("expected high effort to disable ultracode")
+	}
+	if got := session.GetThinkingLevel(); got != types.ThinkingLevelHigh {
+		t.Fatalf("thinking level = %q, want high", got)
+	}
+	if prompt := session.GetAgent().GetState().SystemPrompt; strings.Contains(prompt, "## Active Mode: Ultracode") {
+		t.Fatalf("expected ultracode prompt removed, got:\n%s", prompt)
+	}
+}
+
+func TestEffortUltracodeRequiresWorkflowAndXHighModel(t *testing.T) {
+	noWorkflow := newTestSession(t, &types.Model{
+		ID:            "gpt-5.2",
+		ProviderID:    "openai",
+		ContextWindow: 8192,
+		MaxTokens:     2048,
+	})
+	if err := cmdEffort(noWorkflow, "ultracode"); err == nil || !strings.Contains(err.Error(), "dynamic workflows") {
+		t.Fatalf("expected workflow requirement error, got %v", err)
+	}
+
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, "agent")
+	cwd := filepath.Join(dir, "repo")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	unsupportedModel, err := NewCodingSession(CodingSessionOptions{
+		Cwd:        cwd,
+		AgentDir:   agentDir,
+		Model:      newTestModel(),
+		Extensions: []extension.Extension{workflowext.New()},
+	})
+	if err != nil {
+		t.Fatalf("NewCodingSession: %v", err)
+	}
+	if err := cmdEffort(unsupportedModel, "ultracode"); err == nil || !strings.Contains(err.Error(), "xhigh") {
+		t.Fatalf("expected xhigh requirement error, got %v", err)
+	}
+}
+
+func TestSetWorkflowsDisabledRemovesLiveWorkflowSurface(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, "agent")
+	cwd := filepath.Join(dir, "repo")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cwd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	savedDir := filepath.Join(cwd, ".claude", "workflows")
+	if err := os.MkdirAll(savedDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(savedDir, "review.lua"), []byte(`
+meta({ name = "review", description = "review" })
+return agent("review", { label = "review" })
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:        cwd,
+		AgentDir:   agentDir,
+		Model:      newTestModel(),
+		Extensions: []extension.Extension{workflowext.New()},
+	})
+	if err != nil {
+		t.Fatalf("NewCodingSession: %v", err)
+	}
+	if !session.HasSlashCommand("workflows") {
+		t.Fatal("expected /workflows before disabling")
+	}
+	if !session.HasSlashCommand("deep-research") {
+		t.Fatal("expected /deep-research before disabling")
+	}
+	if !session.HasSlashCommand("review") {
+		t.Fatal("expected saved /review workflow before disabling")
+	}
+	if !session.HasSlashCommand("workflow:review") {
+		t.Fatal("expected compatibility /workflow:review before disabling")
+	}
+	foundWorkflowTool := false
+	for _, tool := range session.activeTools {
+		if tool.Name() == "workflow" {
+			foundWorkflowTool = true
+			break
+		}
+	}
+	if !foundWorkflowTool {
+		t.Fatal("expected workflow tool before disabling")
+	}
+
+	session.SetWorkflowsDisabled(true)
+	if session.HasSlashCommand("workflows") {
+		t.Fatal("expected /workflows removed after disabling")
+	}
+	if session.HasSlashCommand("deep-research") {
+		t.Fatal("expected /deep-research removed after disabling")
+	}
+	if session.HasSlashCommand("review") {
+		t.Fatal("expected saved /review workflow removed after disabling")
+	}
+	if session.HasSlashCommand("workflow:review") {
+		t.Fatal("expected compatibility /workflow:review removed after disabling")
+	}
+	if prompt := session.GetAgent().GetState().SystemPrompt; strings.Contains(prompt, "# Dynamic Workflows") {
+		t.Fatalf("expected workflow authoring prompt removed after disabling, got:\n%s", prompt)
+	}
+	for _, tool := range session.activeTools {
+		if tool.Name() == "workflow" {
+			t.Fatal("expected workflow tool removed after disabling")
+		}
+	}
+	if !session.GetConfig().DisableWorkflows {
+		t.Fatal("expected session config to mark workflows disabled")
 	}
 }
 
@@ -2790,6 +3310,32 @@ func containsTool(names []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func toolNamesFromTools(tools []types.Tool) []string {
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		names = append(names, tool.Name())
+	}
+	return names
+}
+
+func toolNamesFromDefinitions(tools []types.ToolDefinition) []string {
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		names = append(names, tool.Name)
+	}
+	return names
+}
+
+func countToolName(names []string, want string) int {
+	var count int
+	for _, name := range names {
+		if name == want {
+			count++
+		}
+	}
+	return count
 }
 
 func extractTextBlocks(content []types.ContentBlock) string {

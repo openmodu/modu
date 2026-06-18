@@ -15,6 +15,7 @@ type CommandHooks struct {
 	ConfigSetProvider func(ConfigProviderInput) (string, error)
 	ConfigUse         func(target string) (string, error)
 	ConfigRemove      func(target string) (string, error)
+	ConfigWorkflows   func() (string, error)
 	SaveScopedModels  func(ids []string) error
 }
 

@@ -18,6 +18,9 @@ func (s *engine) refreshDynamicSystemPrompt() {
 		// always reflects what's on disk right now.
 		s.promptBuilder.SetSkillsPrompt(s.skillManager.FormatForPrompt())
 	}
+	if s.agent != nil {
+		s.promptBuilder.SetTools(s.agent.GetState().Tools)
+	}
 	s.promptBuilder.SetModeBlocks(s.currentModeBlocks())
 	s.agent.SetSystemPrompt(s.promptBuilder.Build())
 }
@@ -29,6 +32,9 @@ func (s *engine) currentModeBlocks() []string {
 	worktreePath := s.worktree.ActiveWorktree()
 
 	var blocks []string
+	if s.ultracode && s.activeToolNamed("workflow") {
+		blocks = append(blocks, systemprompt.UltracodeBlock)
+	}
 	if planMode {
 		blocks = append(blocks, systemprompt.PlanModeBlock)
 	}
@@ -36,4 +42,16 @@ func (s *engine) currentModeBlocks() []string {
 		blocks = append(blocks, systemprompt.WorktreeBlock(worktreePath))
 	}
 	return blocks
+}
+
+func (s *engine) activeToolNamed(name string) bool {
+	if s == nil || s.agent == nil {
+		return false
+	}
+	for _, tool := range s.agent.GetState().Tools {
+		if tool != nil && tool.Name() == name {
+			return true
+		}
+	}
+	return false
 }

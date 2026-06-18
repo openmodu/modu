@@ -100,6 +100,7 @@ type engine struct {
 	scopedModels    []string
 	modelConfigPath string
 	thinkingLevel   types.ThinkingLevel
+	ultracode       bool
 	sessionName     string
 	sessionStarted  int64
 
@@ -370,6 +371,10 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		cs.slashCommands[cmd.Name] = cmd
 	}
 
+	if err := applySettingsExtensionConfig(opts.Extensions, cfg); err != nil {
+		return nil, err
+	}
+
 	// Initialize extensions
 	if len(opts.Extensions) > 0 {
 		sendExtensionMessage := func(text string, options extension.MessageOptions) error {
@@ -434,6 +439,12 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 			func() string { return cs.cwd },
 			func() bool { return !ag.GetState().IsStreaming },
 			func() bool { return ag.HasQueuedMessages() },
+			func() string {
+				if cs.config == nil {
+					return ""
+				}
+				return cs.config.Permissions.DefaultMode
+			},
 			func(extensionName, text string) {
 				cs.emitSessionEvent(SessionEvent{
 					Type:          SessionEventExtensionNotify,
@@ -539,11 +550,31 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	}
 
 	cs.installHarnessLayer()
+	cs.refreshDynamicSystemPrompt()
 	cs.writeRuntimeState()
 
 	sess := &CodingSession{engine: cs}
 	cs.self = sess
 	return sess, nil
+}
+
+func applySettingsExtensionConfig(extensions []extension.Extension, cfg *config.Config) error {
+	if cfg == nil || !cfg.DisableWorkflows {
+		return nil
+	}
+	for _, ext := range extensions {
+		if ext == nil || ext.Name() != "workflow" {
+			continue
+		}
+		configurable, ok := ext.(extension.ConfigurableExtension)
+		if !ok {
+			continue
+		}
+		if err := configurable.ApplyConfig(map[string]any{"disabled": true}); err != nil {
+			return fmt.Errorf("apply settings to extension %q: %w", ext.Name(), err)
+		}
+	}
+	return nil
 }
 
 // wireComponents constructs the session's stateful sub-components and wires

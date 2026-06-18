@@ -134,6 +134,224 @@ enough to implement, verify, and commit independently.
   delivers an `active_long_running` / `needs_attention` notice through the
   existing `notifyOn` / `notifyChannels` routing. Single-mode background runs
   still lack a `control` entry point (see subagent `PARITY.md`).
+- `modu_code` now registers the builtin Lua `workflow` extension by default.
+  The tool supports scripted `meta` / `phase` / `log` / `agent` / `parallel`
+  / `pipeline` orchestration, with child execution routed through the existing
+  `ExtensionAPI.ForkSession` path. Pipeline item scheduling now honors
+  `concurrency` while serializing access to the shared Lua VM. Workflow failure
+  branches return a stable `json.null` sentinel so Lua scripts can compare
+  failed branch outputs against `json.null`.
+- Follow-up workflow review findings are fixed: `workflow` exposes a real
+  optional `budget` parameter instead of a fake infinite remaining budget,
+  validates `memory_scope`, hardens pipeline stage locking, and documents that
+  child `tools` are filtered from the parent active tool set. `modu_code`
+  config validation now writes problem diagnostics to stderr for CLI callers
+  while `/config` still merges them into TUI output; config show distinguishes
+  invalid JSON from unreadable config files. ACP JSON marshal failures now log
+  and return protocol error frames instead of silently dropping responses,
+  invalid active model names no longer fall back to the first configured model,
+  and print/RPC/ACP modes share SIGINT/SIGTERM cancellation wiring.
+- Claude Code dynamic-workflow parity was re-audited against the official docs,
+  `pi-dynamic-workflows` source, and the upstream issue audit. The plan now
+  records gaps for structured output, persisted scripts, `/workflows`,
+  resume/replay, real token usage, nested workflows, MCP forwarding, and config
+  disable toggles. The implemented runtime now enforces the static resource
+  guardrails that can be done without widening host APIs: max concurrency 16,
+  max 1000 forked agents per run by default, and budget exhaustion preventing
+  later `agent()` forks.
+- Workflow inline scripts are now persisted under the active session directory
+  at `extensions/workflow/runs/<run-id>/script.lua` when `SessionDir()` is
+  available. Final workflow details include `scriptPath` and `runDir`, giving
+  users a concrete script artifact to inspect or diff before the later saved
+  workflow/relaunch/resume work.
+- The workflow tool now also loads scripts from `script_path` and saved
+  workflow `name`, with an exactly-one source rule across `script`,
+  `script_path`, and `name`. Saved names resolve project
+  Claude-compatible `.claude/workflows/<name>.lua` and legacy
+  `.coding_agent/workflows/<name>.lua` before sibling `~/.claude/workflows/<name>.lua`
+  and user/agent-dir `workflows/<name>.lua`, giving `modu_code` a minimal
+  Claude-style saved workflow/relaunch primitive before adding a registry or
+  `/workflows` manager.
+- `/workflows` now provides the first read-only management surface for persisted
+  workflow runs: list current-session run scripts and show a run by id/prefix or
+  `latest`. This intentionally does not expose pause/kill/resume until workflow
+  runs become host-managed background tasks.
+- Workflow can now be disabled without removing code: workflow `config.disabled:
+  true` in `extensions.yaml`, `disableWorkflows: true` in global/project
+  `settings.json`, `/config` -> `Dynamic workflows`,
+  `MODU_CODE_DISABLE_WORKFLOWS=1`, or
+  `CLAUDE_CODE_DISABLE_WORKFLOWS=1` skips registration of the workflow tool and
+  `/workflows`. Disabling from `/config` also removes the current session's
+  workflow tool and slash commands; re-enabling requires a new session or
+  restart to register them again.
+- Workflow structured output now has a first local implementation: `schema` on
+  `agent()` / `parallel()` tasks injects a final JSON contract, parses and
+  validates the child result, retries once with corrective context, and returns
+  Lua tables or `json.null` on final failure. Host-level terminating tools
+  remain future work.
+- Workflow scripts can now compose one saved/path workflow via
+  `workflow(nameOrRef, args)`. Nested child agents share the parent workflow's
+  budget, cancellation context, concurrency default, and max-agent cap; deeper
+  nesting and saved-command registry integration remain future work.
+- Saved workflow files present at startup are now registered as
+  `/workflow:<name> [json-args]` commands. Project workflows take precedence
+  over user workflows with the same name; live registry metadata remained
+  future work for a later slice.
+- `/deep-research <question>` is now registered as a bundled workflow command.
+  It starts a background Lua workflow with scope, parallel research,
+  cross-check, and synthesis phases. It can now request built-in opt-in
+  `web_search` / `web_fetch` tools from forked children; true cited
+  web-research parity still depends on runtime network permission and a
+  reachable search endpoint.
+- The main agent system prompt now includes workflow authoring guidance when
+  the `workflow` tool is active. Explicit `workflow` / `dynamic workflow` /
+  `ultracode` requests and large fan-out/fan-in tasks instruct the model to
+  write Lua and call the `workflow` tool. Keyword highlighting and approval
+  cards remain follow-ups.
+- `/effort ultracode` now enables a session-local workflow-first mode when the
+  workflow tool is active and the current model supports xhigh reasoning. It
+  sets thinking to `xhigh`, appends an Ultracode prompt block, and
+  `/effort high|medium|low|off` exits the mode. Keyword highlighting,
+  dismissal shortcuts, and approval cards remain follow-ups.
+- Workflow starts now have a pre-run approval gate through host `Select`.
+  The workflow tool, saved `/workflow:<name>` commands, `/deep-research`, and
+  `/workflows restart` show workflow metadata, inferred phases, resource
+  limits, and a Lua script preview before any child agent forks; denial cancels
+  the run. Run-once, always-allow-this-project, and cancel choices are
+  supported, with always-allow records stored in `workflow_approvals.json`.
+  View-raw-script is also available and returns to the approval choice after
+  showing the full Lua script. `permissions.defaultMode: "auto"` now remembers
+  a run-once workflow approval for the same project/workflow/script, and
+  `permissions.defaultMode: "bypassPermissions"` skips workflow launch
+  approval; editor actions, ultracode-specific direct skips, and Desktop card
+  rendering remain follow-ups.
+- Completed workflow runs now persist `snapshot.json` next to `script.lua`.
+  `/workflows list/show` can display completed run metadata, including workflow
+  name, agent/error counts, duration/result preview, and script path. This is
+  still a completed-run registry slice, not live background pause/kill/resume.
+- Workflow now has the first live management slice: `workflow` accepts
+  `async:true` to return a run id immediately, saved workflow slash commands
+  start in the background, `/workflows list/show` overlays live registry state
+  with persisted scripts/snapshots, and `/workflows stop <run-id>` cancels a
+  running workflow. Pause/resume, memoized replay, cross-process registry
+  recovery, and TUI workflow panel remain future work.
+- `/workflows save <run-id|latest> <name> [project|user]` now saves a run's
+  persisted `script.lua` into project or user workflows for reuse in future
+  sessions. The command validates saved workflow names and asks before
+  overwriting existing files. Claude-style TUI save dialog remains future work.
+- Saved project workflow discovery now walks from the active cwd up to the git
+  root with nearest-directory precedence before falling back to user workflows.
+  Project saves use the nearest existing project `.claude/workflows` directory,
+  or the git root `.claude/workflows` when no project workflows directory exists.
+- `/workflows restart <run-id|latest>` now relaunches a persisted run script as
+  a fresh background workflow run. This is a relaunch path, not memoized
+  resume/replay.
+- Background workflow runs now persist `status.json` beside `script.lua` and
+  `snapshot.json`; `/workflows` reads it so stopped/failed/completed state
+  survives extension/process recreation. This is persisted status recovery; a
+  run found only from persisted files still restarts fresh, matching Claude's
+  documented process-exit behavior.
+- Workflow snapshots now track each agent's `startedAt`, `endedAt`, and
+  `durationMs`, and `/workflows show` renders per-agent durations. Real
+  token/cost accounting is still pending a `ForkSession` result/API that
+  exposes child usage.
+- `/workflows resume <run-id|latest>` now resumes a stopped in-memory workflow
+  in the same session. Completed agent results are returned from cache without
+  another `ForkSession`, while incomplete branches run live. Runs recovered only
+  from persisted files still require fresh `/workflows restart`, matching
+  Claude's documented fresh-start behavior after process exit.
+- `/workflows pause <run-id>` now provides the slash-level pause counterpart to
+  Claude's workflow progress controls. It cancels the live run into stopped
+  state with `pause requested`, and `/workflows resume <run-id|latest>` can
+  continue that same in-memory run with completed agent results cached.
+- Workflow snapshots now include phase progress summaries: each agent records
+  text-based `estimatedTokens`, and `phaseSummaries` aggregate agent counts,
+  done/running/error counts, estimated tokens, and elapsed duration per phase.
+  `/workflows show` renders phase progress before agent details; real token/cost
+  accounting still needs a richer `ForkSession` result or usage correlation.
+- `/workflows agent <run-id|latest> <agent-id>` now provides a slash drill-down
+  for one workflow agent, showing run status, agent status, label, phase,
+  estimated tokens, timing, error/result preview, and prompt. Child events now
+  add `turnTokens`, failed tool-call count, and recent child tool names/errors
+  to the snapshot and drill-down.
+- Recent workflow child tool calls now retain short `argsPreview` and
+  `resultPreview` fields in the workflow snapshot, and `/workflows agent
+  <run-id|latest> <agent-id>` renders them under `RecentToolCalls`. This
+  closes the slash-level Claude drill-down requirement for recent tool-call
+  args/results; full child transcript browsing is handled by the later
+  `/workflows transcript` slice.
+- Workflow live run state is now exposed through
+  `RuntimeState().Extensions["workflow"]`: running/stopped/completed/failed
+  counts, latest run metadata, and a running-workflow indicator. The TUI
+  statusbar renders that indicator while background workflows are active, giving
+  users a visible progress-view entry point before the later navigable workflow
+  panel and key-binding layer.
+- Exact `/workflows` in the TUI now renders a local workflow overview panel
+  from workflow runtime state. It shows live run counts, recent runs, and the
+  existing `/workflows show/agent/pause/stop/resume/restart/agent-stop/
+  agent-restart` command paths. Selectable Enter/Esc/p/x/r navigation remains a
+  later slice.
+- Workflow runtime state now includes per-run agent summaries (`id`, `label`,
+  `phase`, `status`, token/tool counters, and duration), and the TUI
+  `/workflows` overview renders the latest run's agent list. This moves the TUI
+  progress data closer to Claude's workflow view while leaving selectable
+  drill-down and p/x/r/s key bindings as a later slice.
+- Agent summaries now also carry result/error previews and recent child
+  tool-call previews (`toolName`, error flag, args preview, result preview).
+  The TUI `/workflows` overview renders those short previews under each latest
+  run agent, narrowing the gap to Claude's agent drill-down while still keeping
+  selectable navigation for a later slice.
+- Workflow runtime state and the TUI `/workflows` overview now include
+  phase-level summaries for the latest run: agent counts, done/running/error
+  counts, estimated tokens, and elapsed duration. This covers another visible
+  piece of Claude's progress view before implementing a selectable panel.
+- Workflow runtime-state agent summaries now include capped `promptPreview`,
+  and the TUI `/workflows` overview renders that prompt preview under each
+  latest-run agent. Full prompts remain available through `/workflows agent
+  <run-id|latest> <agent-id>`.
+- 2026-06-18 validation for the workflow overview prompt-preview slice:
+  `gofmt -w pkg/coding_agent/plugins/extension/workflow/runtime_state.go pkg/coding_agent/plugins/extension/workflow/workflow_test.go pkg/tui/workflow_panel.go pkg/tui/workflow_panel_test.go`,
+  `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/tui ./pkg/coding_agent ./cmd/modu_code`,
+  `env GOCACHE=/private/tmp/modu-go-build go test ./...`, and
+  `git diff --check` all passed.
+- 2026-06-18 validation for the workflow overview phase-summary slice:
+  `gofmt -w pkg/coding_agent/plugins/extension/workflow/runtime_state.go pkg/coding_agent/plugins/extension/workflow/workflow_test.go pkg/tui/workflow_panel.go pkg/tui/workflow_panel_test.go`,
+  `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/tui ./pkg/coding_agent ./cmd/modu_code`,
+  `env GOCACHE=/private/tmp/modu-go-build go test ./...`, and
+  `git diff --check` all passed.
+- 2026-06-18 validation for the workflow overview agent-preview slice:
+  `gofmt -w pkg/coding_agent/plugins/extension/workflow/runtime_state.go pkg/coding_agent/plugins/extension/workflow/workflow_test.go pkg/tui/workflow_panel.go pkg/tui/workflow_panel_test.go`,
+  `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/tui ./pkg/coding_agent ./cmd/modu_code`,
+  `env GOCACHE=/private/tmp/modu-go-build go test ./...`, and
+  `git diff --check` all passed.
+- 2026-06-18 validation for the workflow runtime-state agent-summary slice:
+  `gofmt -w pkg/coding_agent/plugins/extension/workflow/runtime_state.go pkg/coding_agent/plugins/extension/workflow/workflow_test.go pkg/tui/workflow_panel.go pkg/tui/workflow_panel_test.go`,
+  `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/tui ./pkg/coding_agent ./cmd/modu_code`,
+  `env GOCACHE=/private/tmp/modu-go-build go test ./...`, and
+  `git diff --check` all passed.
+- 2026-06-18 validation for the TUI workflow overview panel slice:
+  `gofmt -w pkg/tui/workflow_panel.go pkg/tui/workflow_panel_test.go pkg/tui/bubble.go pkg/tui/model.go`,
+  `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/tui`,
+  `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/coding_agent ./cmd/modu_code`,
+  `env GOCACHE=/private/tmp/modu-go-build go test ./...`, and
+  `git diff --check` all passed.
+- 2026-06-18 validation for the workflow runtime-state/statusbar slice:
+  `gofmt -w pkg/coding_agent/plugins/extension/workflow/runtime_state.go pkg/coding_agent/plugins/extension/workflow/workflow_test.go pkg/tui/statusbar.go pkg/tui/statusbar_test.go pkg/tui/bubble.go`,
+  `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/tui`,
+  `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent ./cmd/modu_code`,
+  `env GOCACHE=/private/tmp/modu-go-build go test ./...`, and
+  `git diff --check` all passed.
+- 2026-06-18 validation for the child tool args/results drill-down slice:
+  `gofmt -w pkg/coding_agent/fork_session.go pkg/coding_agent/plugins/extension/workflow/activity.go pkg/coding_agent/plugins/extension/workflow/commands.go pkg/coding_agent/plugins/extension/workflow/workflow_test.go`,
+  `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/coding_agent ./cmd/modu_code`,
+  `env GOCACHE=/private/tmp/modu-go-build go test ./...`, and
+  `git diff --check` all passed.
+- `/workflows agent-stop <run-id|latest> <agent-id>` and `/workflows
+  agent-restart <run-id|latest> <agent-id>` now provide selected-agent control
+  from the slash layer. Stop cancels one running child and lets the workflow
+  continue with nil for that branch; restart cancels the selected child and
+  reruns the same prompt/options as a new agent snapshot. TUI `x`/`r`
+  keybindings remain a UI follow-up.
 
 ## Next
 
@@ -242,3 +460,303 @@ enough to implement, verify, and commit independently.
   passed for the Bubble Tea v2 active-region resize behavior and fixed-width
   inline turn separator (`TestBubbleInlineResizeReflowsActiveRegionAndKeepsScrollback`,
   `TestBubbleInlineTurnSeparatorStaysBelowMinimumTerminalWidth`).
+- 2026-06-17: `env GOCACHE=/private/tmp/modu-go-build go test ./cmd/modu_code ./pkg/coding_agent ./pkg/coding_agent/plugins/extension/workflow`
+  passed for the first Lua workflow extension slice: builtin registration,
+  safe runtime basics, ForkOptions mapping, parallel concurrency/order/failure
+  handling, pipeline order/failure semantics, and workflow tool result details.
+- 2026-06-17: `go run ./cmd/modu_code -p '<repo_inventory_smoke workflow prompt>'`
+  passed as a real configured-model workflow smoke case on `deepseek-v4-flash`.
+  The model called the `workflow` tool, the Lua script ran `meta` / `phase` /
+  `agent`, and the child returned `ok=true` while confirming
+  `pkg/coding_agent/plugins/extension/workflow` exists. The run also showed
+  that `grep`, `find`, and `ls` are skipped when they are requested in
+  workflow child options but are not active in the parent tool set; later real
+  cases should either enable those tools or extend the host API to expose the
+  intended full coding tool set to workflow children.
+- 2026-06-17: `go run ./cmd/modu_code -p '<parallel_smoke workflow prompt>'`
+  passed as a real configured-model `parallel()` case. Two child branches ran
+  through workflow fan-out/fan-in and returned `ok=true`, confirming the
+  `cmd/modu_code` entrypoint and workflow extension directory.
+- 2026-06-17: `go run ./cmd/modu_code -p '<worktree_smoke workflow prompt>'`
+  passed as a real configured-model `isolation="worktree"` case. The child
+  confirmed `go.mod` was visible, the workspace was a linked git worktree, and
+  no files were modified.
+- 2026-06-17: `go run ./cmd/modu_code -p '<partial_failure_smoke workflow prompt>'`
+  passed as a real configured-model partial-failure case after making
+  `json.null` stable per Lua state. The good branch returned
+  `GOOD_BRANCH_OK`, the invalid-model branch returned null, and the script's
+  `out[2] == json.null` check produced `ok=true`.
+- 2026-06-18: `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./cmd/modu_code/internal/provider ./cmd/modu_code/internal/acp ./cmd/modu_code`
+  passed for the workflow hardening and `modu_code` follow-up fixes: real
+  optional workflow budget semantics, memory-scope and explicit max-turns
+  validation, preview bounds, ACP marshal-error handling, invalid active-model
+  rejection, config stderr diagnostics, and signal-aware print mode wiring.
+  Forked workflow/subagent children also receive explicitly requested
+  `grep` / `find` / `ls` read-only discovery tools while the parent coding
+  session keeps those tools opt-in by default, resolving the real workflow
+  review case where child repository-inspection tasks had those tools skipped.
+  Coverage includes a host-level `forkSession` test proving the child LLM
+  context receives those requested read-only tools.
+  Config target matching is now shared through `provider.ModelMatchesTarget`
+  instead of duplicating active-model matching logic in `cmd/modu_code`.
+- 2026-06-18: `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/coding_agent ./cmd/modu_code && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the Claude Code parity guardrail slice. Coverage includes
+  workflow budget exhaustion preventing extra forks, the default max-agent cap,
+  the existing workflow/subagent host integration tests, and full-repo tests.
+- 2026-06-18: `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/coding_agent ./cmd/modu_code && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the workflow saved-loader and `/workflows` read-only manager
+  slices. Focused tests cover `script_path`, saved `name` resolution with
+  project precedence, exactly-one source validation, and `/workflows list/show`.
+- 2026-06-18: `env GOCACHE=/private/tmp/modu-go-build go run ./cmd/modu_code --no-approve -p '<budget workflow smoke prompt>'`
+  passed as a real configured-model workflow budget smoke case on
+  `deepseek-v4-flash`: the model called `workflow` with `budget=20`, Lua
+  observed `budget_total=20` and `budget_before=20`, and the child agent output
+  drove `budget_after=0`. The child did not strictly limit itself to the
+  requested fixed string, so future deterministic child-output tests should use
+  stronger system/profile constraints.
+- 2026-06-18: `env GOCACHE=/private/tmp/modu-go-build go run ./cmd/modu_code --no-approve -p '<workflow child ls smoke prompt>'`
+  passed as a real configured-model workflow child-tool case. The main agent
+  called `workflow` directly, the Lua script spawned a child with
+  `tools={"ls"}`, and the child returned `{"ok":true,"checked":"cmd/modu_code"}`
+  without the previous `unknown tool "ls"` skip.
+- 2026-06-18: `env GOCACHE=/private/tmp/modu-go-build go run ./cmd/modu_code --no-approve -p '<budget stop workflow smoke prompt>'`
+  passed as a real configured-model workflow guardrail case. The main agent
+  called `workflow` with `budget=1`; the first child returned `12345678`, Lua
+  reported `spent=2` and `remaining=0`, and the second child result was
+  absent/nil, confirming budget exhaustion prevented the later `agent()` fork.
+- 2026-06-18: `env GOCACHE=/private/tmp/modu-go-build go run ./cmd/modu_code --no-approve -p '<persist visible workflow smoke prompt>'`
+  passed as a real configured-model workflow script-persistence case. The
+  workflow tool returned a visible `Script:` path under
+  `~/.coding_agent/sessions/.../extensions/workflow/runs/<run-id>/script.lua`,
+  and reading that file confirmed it contained the `persist_visible_smoke`
+  inline Lua script.
+- 2026-06-18: `env GOCACHE=/private/tmp/modu-go-build go run ./cmd/modu_code --no-approve -p '<script_path workflow relaunch prompt>'`
+  passed as a real configured-model workflow relaunch case. The workflow tool
+  loaded the previously persisted `persist_visible_smoke` `script.lua` via
+  `script_path`, returned `PERSIST_VISIBLE_OK`, and persisted a new run script
+  under a later `extensions/workflow/runs/<run-id>/script.lua` path.
+- 2026-06-18: `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/coding_agent ./cmd/modu_code && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the workflow disable/config slice. Focused coverage includes
+  workflow `config.disabled`, `MODU_CODE_DISABLE_WORKFLOWS`, invalid config
+  key/type handling, and preserving normal registration when disable switches
+  are unset.
+- 2026-06-18: `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/coding_agent ./cmd/modu_code && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the workflow structured-output slice. Focused coverage includes
+  `schema` prompt contracts, validated Lua table returns, schema validation
+  failures returning `json.null`, one corrective retry before success, and
+  invalid schema definition errors.
+- 2026-06-18: `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/coding_agent ./cmd/modu_code && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the one-level nested workflow slice. Focused coverage includes
+  saved workflow name resolution from project workflow directories, nested args,
+  shared budget accounting, shared max-agent enforcement, and rejecting
+  second-level nesting.
+- 2026-06-18: `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/coding_agent ./cmd/modu_code && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the saved workflow slash-command slice. Focused coverage includes
+  `/workflow:<name>` registration at extension init, project-over-user
+  precedence, JSON args passed into Lua, command result notification, persisted
+  run script paths, and invalid JSON args being rejected before execution.
+- 2026-06-18: `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/coding_agent ./cmd/modu_code && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the completed workflow snapshot metadata slice. Focused coverage
+  includes persisting `snapshot.json` next to `script.lua`, `/workflows`
+  list/show metadata rendering, and saved workflow slash-command runs writing
+  completed metadata.
+- 2026-06-18: `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/coding_agent ./cmd/modu_code && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the live workflow management slice. Focused coverage includes
+  `workflow(async=true)` returning a run id immediately, `/workflows` listing a
+  running workflow, `/workflows stop <run-id>` cancelling it, stopped status in
+  `/workflows show`, and saved workflow slash commands starting background runs
+  while still persisting completed metadata.
+- 2026-06-18: `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/coding_agent ./cmd/modu_code && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the workflow save-from-run slash slice. Focused coverage
+  includes `/workflows save latest <name>` writing project workflows,
+  `/workflows save latest <name> user` writing user workflows, and invalid
+  saved workflow names being rejected without writing files.
+- 2026-06-18: `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/coding_agent ./cmd/modu_code && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the nearest project workflow directory slice. Focused coverage
+  includes saved workflow name resolution preferring the nearest project
+  directory over parent/user workflows, startup command discovery using the same
+  precedence, project saves choosing the nearest existing `.claude/workflows`
+  directory, and fallback saves writing to git root `.claude/workflows`.
+- 2026-06-18: `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/coding_agent ./cmd/modu_code && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the `/workflows restart` relaunch slice. Focused coverage
+  includes restarting a persisted run script as a new background workflow,
+  emitting the new run id, executing one new child agent, and listing the
+  restarted run metadata.
+- 2026-06-18: `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/coding_agent ./cmd/modu_code && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the workflow status persistence slice. Focused coverage includes
+  writing `status.json` for a stopped background workflow and showing the
+  stopped status plus error from a fresh extension instance that only reads
+  persisted run files.
+- 2026-06-18: `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/coding_agent ./cmd/modu_code && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the workflow per-agent timing slice. Focused coverage includes
+  completed agent `startedAt`/`endedAt`/`durationMs` metadata and
+  `/workflows show` rendering per-agent duration.
+- 2026-06-18: `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/coding_agent ./cmd/modu_code && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the workflow same-session resume slice. Focused coverage
+  includes stopping a two-agent background workflow, resuming it, proving the
+  completed first agent is not forked again, running only the incomplete second
+  agent live, and showing the cached marker in `/workflows show`.
+- 2026-06-18: `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/coding_agent ./cmd/modu_code && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the workflow phase-progress summary slice. Focused coverage
+  includes per-agent `estimatedTokens`, generated `phaseSummaries`, and
+  `/workflows show` rendering phase-level agent counts, estimated tokens, and
+  duration before individual agent details.
+- 2026-06-18: `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/coding_agent ./cmd/modu_code && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the workflow agent-detail drill-down slice. Focused coverage
+  includes `/workflows agent latest 1` rendering workflow name, agent status,
+  phase, result preview, prompt, and invalid agent-id validation.
+- 2026-06-18: `gofmt -w pkg/coding_agent/plugins/extension/workflow/{activity.go,workflow.go,runtime.go,snapshot.go,registry.go,tool.go,commands.go,workflow_test.go} && env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow && env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent ./cmd/modu_code && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the workflow child-event activity slice. Focused coverage
+  includes `subagent_child_event` correlation through `BubbleTaskID`,
+  per-agent `turnTokens`, failed tool-call count, recent child tool names/errors
+  in the workflow snapshot, and `/workflows agent latest 1` rendering those
+  fields.
+- 2026-06-18: `gofmt -w pkg/coding_agent/foundation/config/config.go pkg/coding_agent/coding_agent.go pkg/coding_agent/coding_agent_test.go && env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/coding_agent ./cmd/modu_code && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the workflow settings-disable slice. Focused coverage includes
+  reading `disableWorkflows` from `settings.json` and proving a session created
+  with the real workflow extension does not register the `workflow` tool or
+  `/workflows` command when that setting is true.
+- 2026-06-18: `gofmt -w pkg/tui/run.go pkg/tui/config_interactive.go pkg/tui/bubble_test.go pkg/coding_agent/config_api.go pkg/coding_agent/coding_agent_test.go cmd/modu_code/main.go cmd/modu_code/config_command.go cmd/modu_code/main_test.go && env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/tui ./pkg/coding_agent ./cmd/modu_code && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the `/config` dynamic-workflows toggle slice. Focused coverage
+  includes the TUI `Dynamic workflows` config row, writing
+  `disableWorkflows` to global `settings.json`, removing the current session's
+  `workflow` tool and workflow slash commands when disabled, and full-repo
+  regression tests.
+- 2026-06-18: `gofmt -w pkg/coding_agent/plugins/extension/workflow/tool.go pkg/coding_agent/plugins/extension/workflow/saved_commands.go pkg/coding_agent/plugins/extension/workflow/commands.go pkg/coding_agent/plugins/extension/workflow/workflow_test.go && env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/coding_agent ./cmd/modu_code && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the Claude-compatible saved workflow directory slice. Focused
+  coverage includes loading nested workflows from project `.claude/workflows`,
+  discovering `/workflow:<name>` commands from nearest `.claude/workflows`,
+  discovering sibling `~/.claude/workflows`, and preserving `.coding_agent`
+  discovery fallback behavior.
+  Updated saved workflow save/load precedence for Claude parity: `.claude/workflows`
+  wins over legacy `.coding_agent/workflows`, personal `~/.claude/workflows`
+  wins over agent-dir workflows, project saves write the nearest existing
+  project `.claude/workflows` or git root `.claude/workflows`, and user saves
+  write `~/.claude/workflows`.
+- 2026-06-18: `gofmt -w pkg/coding_agent/plugins/extension/workflow/bundled.go pkg/coding_agent/plugins/extension/workflow/workflow.go pkg/coding_agent/plugins/extension/workflow/workflow_test.go && env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow && env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/coding_agent ./cmd/modu_code && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the bundled `/deep-research` workflow slice. Focused coverage
+  includes command registration, empty-question usage output, background run
+  startup, six child-agent phases/calls, and final workflow completion output
+  containing the question and report.
+- 2026-06-18: `gofmt -w pkg/coding_agent/services/systemprompt/builder.go pkg/coding_agent/services/systemprompt/builder_test.go pkg/coding_agent/prompt_refresh.go pkg/coding_agent/resources_api.go pkg/coding_agent/config_api.go pkg/coding_agent/coding_agent.go pkg/coding_agent/coding_agent_test.go && env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/services/systemprompt ./pkg/coding_agent ./cmd/modu_code ./pkg/coding_agent/plugins/extension/workflow && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the workflow authoring-prompt slice. Focused coverage includes
+  builder-level workflow guidance only when the `workflow` tool is present,
+  real sessions with the workflow extension exposing Lua workflow instructions
+  in the system prompt, and disabled workflow sessions removing both the tool
+  and authoring guidance.
+- 2026-06-18: `gofmt -w pkg/coding_agent/services/systemprompt/modes.go pkg/coding_agent/services/systemprompt/builder_test.go pkg/coding_agent/coding_agent.go pkg/coding_agent/config_api.go pkg/coding_agent/prompt_refresh.go pkg/coding_agent/runtime_state.go pkg/coding_agent/slash_commands.go pkg/coding_agent/coding_agent_test.go && env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/services/systemprompt ./pkg/coding_agent ./cmd/modu_code ./pkg/coding_agent/plugins/extension/workflow && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the `/effort ultracode` slice. Focused coverage includes
+  requiring both the workflow tool and an xhigh-capable model, setting thinking
+  to `xhigh`, adding/removing the Ultracode system-prompt block, recording
+  `modes.ultracode` in runtime state, and ordinary effort levels exiting
+  ultracode mode.
+- 2026-06-18: `gofmt -w pkg/coding_agent/plugins/extension/workflow/approval.go pkg/coding_agent/plugins/extension/workflow/tool.go pkg/coding_agent/plugins/extension/workflow/saved_commands.go pkg/coding_agent/plugins/extension/workflow/bundled.go pkg/coding_agent/plugins/extension/workflow/commands.go pkg/coding_agent/plugins/extension/workflow/workflow_test.go && env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/coding_agent ./cmd/modu_code && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the workflow pre-run approval slice. Focused coverage includes
+  confirmation prompts containing workflow name, description, inferred phases,
+  source, script preview, and resource limits; denial for direct tool and saved
+  workflow command paths prevents any `ForkSession` calls; `/deep-research`
+  still starts when approval allows it.
+- 2026-06-18: `gofmt -w pkg/coding_agent/plugins/extension/workflow/approval.go pkg/coding_agent/plugins/extension/workflow/approval_store.go pkg/coding_agent/plugins/extension/workflow/workflow_test.go && env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/coding_agent ./cmd/modu_code && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the workflow always-allow approval slice. Focused coverage
+  includes run-once / always-allow / cancel choices, writing
+  `workflow_approvals.json`, and skipping future approval prompts for the same
+  project/workflow/script while still executing the workflow.
+- 2026-06-18: `gofmt -w pkg/coding_agent/plugins/extension/workflow/approval.go pkg/coding_agent/plugins/extension/workflow/workflow_test.go && env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/coding_agent ./cmd/modu_code && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the workflow view-raw approval slice. Focused coverage includes
+  selecting `View raw script`, receiving the full Lua script in a workflow
+  notification, returning to the approval choice, and then running once without
+  skipping execution.
+- 2026-06-18: exact `/workflows` in the Bubble Tea TUI now opens a selectable
+  workflow run panel instead of only writing a static overview block. The panel
+  uses workflow runtime state, supports `j/k` or arrows, `Enter`/right to route
+  through the existing `/workflows show <run-id>` command, and `Esc`/`q` close.
+  Phase/agent nested drill-down and `p`/`x`/`r`/`s` controls remain follow-up
+  slices.
+- 2026-06-18: `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/tui ./pkg/coding_agent ./cmd/modu_code && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the selectable TUI `/workflows` run-list slice.
+- 2026-06-18: exact `/workflows` in the Bubble Tea TUI now has a second
+  progress-view layer. Selecting a run with phase summaries opens a phase list
+  with per-phase agent counts, done/running/error counts, estimated tokens, and
+  elapsed duration; `Esc`/left returns to the run list. Agent-level selection
+  and `p`/`x`/`r`/`s` controls remain follow-up slices.
+- 2026-06-18: `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/tui ./pkg/coding_agent ./cmd/modu_code && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the selectable TUI `/workflows` phase-view slice.
+- 2026-06-18: exact `/workflows` in the Bubble Tea TUI now supports the next
+  progress-view layer: phase -> agent list -> agent detail. Agent detail shows
+  status, phase, token/tool counters, prompt preview, result/error preview, and
+  recent tool-call args/results from runtime state. Full prompt/transcript
+  rendering and `p`/`x`/`r`/`s` controls remain follow-up slices.
+- 2026-06-18: `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/tui ./pkg/coding_agent ./cmd/modu_code && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the selectable TUI `/workflows` agent drill-down slice.
+- 2026-06-18: exact `/workflows` in the Bubble Tea TUI now wires progress-view
+  controls to existing slash commands: `p` pauses/resumes the selected run,
+  `x` stops the selected agent or whole run depending on focus, and `r`
+  restarts the selected agent. `s` currently shows the explicit
+  `/workflows save <run-id> <name> [project|user]` command until the save-name
+  input UI is implemented.
+- 2026-06-18: `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/tui ./pkg/coding_agent ./cmd/modu_code && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the TUI `/workflows` p/x/r control-key slice.
+- 2026-06-18: exact `/workflows` in the Bubble Tea TUI now implements the `s`
+  save dialog. It captures a safe workflow name, toggles project/user scope with
+  `Tab`, returns to the previous panel layer with `Esc`, and delegates the
+  actual write to the existing `/workflows save <run-id> <name> <scope>` slash
+  command.
+- 2026-06-18: `env GOCACHE=/private/tmp/modu-go-build go test ./pkg/coding_agent/plugins/extension/workflow ./pkg/tui ./pkg/coding_agent ./cmd/modu_code && env GOCACHE=/private/tmp/modu-go-build go test ./... && git diff --check`
+  passed after the TUI `/workflows` save dialog slice.
+- 2026-06-18: workflow runtime state now includes a capped per-agent prompt
+  payload, and the TUI `/workflows` agent detail view renders multi-line
+  prompts instead of only the preview. Runtime state and the slash drill-down
+  both keep a 4000-byte display boundary.
+- 2026-06-18: fixed stopped workflow status persistence so a user-facing
+  stop/pause reason is not overwritten by the background runner's later
+  `context canceled` error. The focused async stop regression now checks the
+  persisted `status.json` after extension reload.
+- 2026-06-18: workflow child transcript capture is now wired into the progress
+  view. Host `subagent_child_usage` events include the workflow bubble task id,
+  workflow snapshots persist normalized child transcript entries, and
+  `/workflows transcript <run-id|latest> <agent-id>` renders the captured
+  user/assistant/tool-result messages, tool-call args, and usage while keeping
+  heavy transcript payloads out of lightweight runtime state.
+- 2026-06-18: validation includes a real `CodingSession` + workflow extension
+  case (`TestWorkflowToolCapturesRealForkTranscript`) where the workflow tool
+  runs a Lua script, forks a child through the host, receives a fake child model
+  reply, and verifies the child transcript plus usage in the workflow snapshot.
+- 2026-06-18: workflow budget accounting now uses captured child token usage
+  from `subagent_child_usage` when available, falling back to final-text
+  estimation only when child usage is absent. New workflow tests cover both
+  visible `budget.spent()` / `budget.remaining()` values and budget exhaustion
+  when the child final text is short but the real child usage exceeds the
+  budget.
+- 2026-06-18: workflow/subagent child tool forwarding now matches the intended
+  allowlist boundary more closely: omitted `tools` inherits the current
+  main-agent visible tools, while explicit `tools` requests are filtered from
+  the parent session tool catalog so session-connected/custom/MCP-style tools
+  can be forwarded by name. Focused host tests cover explicit custom-tool
+  forwarding, narrowed allowlist inheritance, and the existing read-only
+  discovery-tool opt-in behavior.
+- 2026-06-18: saved workflows now register Claude-style direct slash commands
+  such as `/review [json-args]` when the name is not reserved, while preserving
+  the compatibility `/workflow:review` command. Reserved names like
+  `workflows.lua` do not override built-in/extension commands, and disabling
+  workflows removes both direct and compatibility saved workflow commands.
+- 2026-06-18: workflow observed cost now flows through the child usage path.
+  When `subagent_child_usage` or live child turn events include
+  `Usage.Cost.Total`, snapshots aggregate it at agent/phase/workflow level and
+  `/workflows show`, `/workflows agent`, runtime state, and the TUI workflow
+  panel render it. The runner does not synthesize cost from model pricing.
+- 2026-06-18: hardened stopped workflow persistence against async completion
+  races. Once `status.json` records a stopped run, later background
+  completed/failed writes cannot overwrite it unless the user explicitly
+  resumes the run back to running.
+- 2026-06-18: workflow budget admission is now concurrency-aware. Each live
+  child fork atomically reserves one budget slot alongside the agent-count
+  check, releases it on failed/stopped attempts, and caps committed
+  `budget.spent()` at `budget.total` while retaining real per-agent observed
+  token counts in snapshots. Parallel budget tests cover the previous
+  oversubscription window, and docs now state default concurrency 4 with a
+  hard cap of 16.
+- 2026-06-18: clarified the workflow tool/manager boundary after a real TUI
+  misuse case tried `workflow(action=status id=...)`. Tool descriptions,
+  dynamic-workflow prompt guidance, Ultracode guidance, and README docs now say
+  the `workflow` tool only starts runs and `/workflows ...` commands handle
+  status, agent details, stop/resume, restart, save, and the TUI panel.

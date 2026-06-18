@@ -80,6 +80,7 @@ func (f *fakeAPI) AgentDir() string                 { return "" }
 func (f *fakeAPI) Cwd() string                      { return "/tmp/project" }
 func (f *fakeAPI) IsIdle() bool                     { return true }
 func (f *fakeAPI) HasPendingMessages() bool         { return false }
+func (f *fakeAPI) PermissionMode() string           { return "" }
 func (f *fakeAPI) BackgroundTasks() []extension.TaskSnapshot {
 	return nil
 }

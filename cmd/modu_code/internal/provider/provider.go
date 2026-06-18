@@ -133,60 +133,40 @@ func Resolve() (*types.Model, func(string) (string, error)) {
 		return registerConfig(cfg)
 	}
 
-	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
-		modelID := os.Getenv("ANTHROPIC_MODEL")
-		if modelID == "" {
-			fmt.Fprintln(os.Stderr, "ANTHROPIC_API_KEY set but ANTHROPIC_MODEL is empty")
-			return nil, nil
-		}
-		baseURL := "https://api.anthropic.com/v1"
-		providers.Register(openai.New(
-			"anthropic",
-			openai.WithBaseURL(baseURL),
-			openai.WithAPIKey(key),
-			openai.WithHeaders(map[string]string{"anthropic-version": "2023-06-01"}),
-		))
-		model := &types.Model{ID: modelID, Name: modelID + " (Anthropic)", ProviderID: "anthropic", BaseURL: baseURL, ContextWindow: defaultContextWindow("anthropic", modelID)}
-		return model, func(p string) (string, error) {
-			if p == "anthropic" {
-				return key, nil
-			}
-			return "", fmt.Errorf("no key for %s", p)
-		}
-	}
-
-	if key := os.Getenv("OPENAI_API_KEY"); key != "" {
-		modelID := os.Getenv("OPENAI_MODEL")
-		if modelID == "" {
-			modelID = "gpt-4o"
-		}
-		baseURL := os.Getenv("OPENAI_BASE_URL")
-		if baseURL == "" {
-			baseURL = "https://api.openai.com/v1"
-		}
-		providers.Register(openai.New("openai", openai.WithBaseURL(baseURL), openai.WithAPIKey(key)))
-		model := &types.Model{ID: modelID, Name: "OpenAI " + modelID, ProviderID: "openai", BaseURL: baseURL, ContextWindow: defaultContextWindow("openai", modelID)}
-		return model, func(p string) (string, error) {
-			if p == "openai" {
-				return key, nil
-			}
-			return "", fmt.Errorf("no key for %s", p)
-		}
-	}
-
-	if key := os.Getenv("DEEPSEEK_API_KEY"); key != "" {
-		modelID := os.Getenv("DEEPSEEK_MODEL")
-		if modelID == "" {
-			modelID = "deepseek-chat"
-		}
-		baseURL := "https://api.deepseek.com/v1"
-		providers.Register(openai.New("deepseek", openai.WithBaseURL(baseURL), openai.WithAPIKey(key)))
-		model := &types.Model{ID: modelID, Name: "DeepSeek " + modelID, ProviderID: "deepseek", BaseURL: baseURL, ContextWindow: defaultContextWindow("deepseek", modelID)}
-		return model, func(p string) (string, error) {
-			if p == "deepseek" {
-				return key, nil
-			}
-			return "", fmt.Errorf("no key for %s", p)
+	for _, spec := range []envProviderSpec{
+		{
+			ProviderID:          "anthropic",
+			KeyEnv:              "ANTHROPIC_API_KEY",
+			ModelEnv:            "ANTHROPIC_MODEL",
+			MissingModelMessage: "ANTHROPIC_API_KEY set but ANTHROPIC_MODEL is empty",
+			BaseURL:             func() string { return "https://api.anthropic.com/v1" },
+			DisplayName:         func(modelID string) string { return modelID + " (Anthropic)" },
+			Headers:             map[string]string{"anthropic-version": "2023-06-01"},
+		},
+		{
+			ProviderID:   "openai",
+			KeyEnv:       "OPENAI_API_KEY",
+			ModelEnv:     "OPENAI_MODEL",
+			DefaultModel: "gpt-4o",
+			BaseURL: func() string {
+				if baseURL := os.Getenv("OPENAI_BASE_URL"); baseURL != "" {
+					return baseURL
+				}
+				return "https://api.openai.com/v1"
+			},
+			DisplayName: func(modelID string) string { return "OpenAI " + modelID },
+		},
+		{
+			ProviderID:   "deepseek",
+			KeyEnv:       "DEEPSEEK_API_KEY",
+			ModelEnv:     "DEEPSEEK_MODEL",
+			DefaultModel: "deepseek-chat",
+			BaseURL:      func() string { return "https://api.deepseek.com/v1" },
+			DisplayName:  func(modelID string) string { return "DeepSeek " + modelID },
+		},
+	} {
+		if model, getAPIKey, matched := resolveFromEnvProvider(spec); matched {
+			return model, getAPIKey
 		}
 	}
 
@@ -217,6 +197,51 @@ func Resolve() (*types.Model, func(string) (string, error)) {
 	}
 
 	return nil, nil
+}
+
+type envProviderSpec struct {
+	ProviderID          string
+	KeyEnv              string
+	ModelEnv            string
+	DefaultModel        string
+	MissingModelMessage string
+	BaseURL             func() string
+	DisplayName         func(string) string
+	Headers             map[string]string
+}
+
+func resolveFromEnvProvider(spec envProviderSpec) (*types.Model, func(string) (string, error), bool) {
+	key := os.Getenv(spec.KeyEnv)
+	if key == "" {
+		return nil, nil, false
+	}
+	modelID := os.Getenv(spec.ModelEnv)
+	if modelID == "" {
+		if spec.DefaultModel == "" {
+			fmt.Fprintln(os.Stderr, spec.MissingModelMessage)
+			return nil, nil, true
+		}
+		modelID = spec.DefaultModel
+	}
+	baseURL := spec.BaseURL()
+	opts := []openai.Option{openai.WithBaseURL(baseURL), openai.WithAPIKey(key)}
+	if len(spec.Headers) > 0 {
+		opts = append(opts, openai.WithHeaders(spec.Headers))
+	}
+	providers.Register(openai.New(spec.ProviderID, opts...))
+	model := &types.Model{
+		ID:            modelID,
+		Name:          spec.DisplayName(modelID),
+		ProviderID:    spec.ProviderID,
+		BaseURL:       baseURL,
+		ContextWindow: defaultContextWindow(spec.ProviderID, modelID),
+	}
+	return model, func(p string) (string, error) {
+		if p == spec.ProviderID {
+			return key, nil
+		}
+		return "", fmt.Errorf("no key for %s", p)
+	}, true
 }
 
 // ResolveThinkingLevel maps the THINKING_LEVEL env var to an types.ThinkingLevel.
@@ -513,7 +538,7 @@ func SetActiveModel(target string) (ModelConfig, error) {
 		return ModelConfig{}, fmt.Errorf("model target is required")
 	}
 	for _, model := range cfg.modelConfigs() {
-		if modelMatchesActive(model, target) {
+		if ModelMatchesTarget(model, target) {
 			if model.Name != "" {
 				cfg.Active = model.Name
 			} else {
@@ -544,7 +569,7 @@ func RemoveModelConfig(target string) (ModelConfig, error) {
 	idx := -1
 	var removed ModelConfig
 	for i, model := range cfg.Models {
-		if modelMatchesActive(model, target) {
+		if ModelMatchesTarget(model, target) {
 			idx = i
 			removed = model
 			break
@@ -555,7 +580,7 @@ func RemoveModelConfig(target string) (ModelConfig, error) {
 	}
 
 	cfg.Models = append(cfg.Models[:idx], cfg.Models[idx+1:]...)
-	if cfg.Active != "" && modelMatchesActive(removed, cfg.Active) {
+	if cfg.Active != "" && ModelMatchesTarget(removed, cfg.Active) {
 		cfg.Active = ""
 		if len(cfg.modelConfigs()) > 0 {
 			next := cfg.modelConfigs()[0]
@@ -728,7 +753,7 @@ func validateModelConfig(i int, model ModelConfig, result *ConfigValidation) {
 
 func activeMatchesAny(cfg Config) bool {
 	for _, model := range cfg.modelConfigs() {
-		if modelMatchesActive(model, cfg.Active) {
+		if ModelMatchesTarget(model, cfg.Active) {
 			return true
 		}
 	}
@@ -745,11 +770,11 @@ func (cfg Config) activeModel() (ModelConfig, bool) {
 		return models[0], true
 	}
 	for _, m := range models {
-		if modelMatchesActive(m, active) {
+		if ModelMatchesTarget(m, active) {
 			return m, true
 		}
 	}
-	return models[0], true
+	return ModelConfig{}, false
 }
 
 func (cfg Config) findModel(provider, modelID string) (ModelConfig, bool) {
@@ -761,11 +786,11 @@ func (cfg Config) findModel(provider, modelID string) (ModelConfig, bool) {
 	return ModelConfig{}, false
 }
 
-func modelMatchesActive(m ModelConfig, active string) bool {
-	return active == m.Name ||
-		active == m.Model ||
-		active == m.Provider+"/"+m.Model ||
-		active == m.Provider+":"+m.Model
+func ModelMatchesTarget(m ModelConfig, target string) bool {
+	return target != "" && (target == m.Name ||
+		target == m.Model ||
+		target == m.Provider+"/"+m.Model ||
+		target == m.Provider+":"+m.Model)
 }
 
 func registerConfig(cfg Config) (*types.Model, func(string) (string, error)) {
@@ -979,7 +1004,7 @@ func upsertProviderForModel(cfg *Config, model ModelConfig) {
 
 func configModelTargetExists(cfg Config, target string) bool {
 	for _, model := range cfg.Models {
-		if modelMatchesActive(model, target) || modelScopeID(model) == target {
+		if ModelMatchesTarget(model, target) || modelScopeID(model) == target {
 			return true
 		}
 	}
@@ -997,7 +1022,7 @@ func configTargetsToModelIDs(cfg Config, targets []string) []string {
 	out := make([]string, 0, len(targets))
 	for _, target := range targets {
 		for _, model := range cfg.Models {
-			if modelMatchesActive(model, target) || modelScopeID(model) == target {
+			if ModelMatchesTarget(model, target) || modelScopeID(model) == target {
 				out = append(out, model.Model)
 				break
 			}
@@ -1011,7 +1036,7 @@ func configTargetsToScopeIDs(cfg Config, targets []string) []string {
 	seen := map[string]bool{}
 	for _, target := range targets {
 		for _, model := range cfg.Models {
-			if modelMatchesActive(model, target) || modelScopeID(model) == target {
+			if ModelMatchesTarget(model, target) || modelScopeID(model) == target {
 				scopeID := modelScopeID(model)
 				if !seen[scopeID] {
 					out = append(out, scopeID)

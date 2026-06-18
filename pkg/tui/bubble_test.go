@@ -148,7 +148,7 @@ func TestBubbleTUIConfigOpensMenu(t *testing.T) {
 		t.Fatalf("expected config menu state, got %v", root.model.state)
 	}
 	rendered := root.renderConfigMenu()
-	for _, want := range []string{"Config", "Active Model", "Provider"} {
+	for _, want := range []string{"Config", "Active Model", "Provider", "Dynamic workflows"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected menu to contain %q, got %q", want, rendered)
 		}
@@ -157,6 +157,35 @@ func TestBubbleTUIConfigOpensMenu(t *testing.T) {
 		if strings.Contains(rendered, notWant) {
 			t.Fatalf("expected menu not to contain %q, got %q", notWant, rendered)
 		}
+	}
+}
+
+func TestBubbleTUIConfigDynamicWorkflows(t *testing.T) {
+	called := false
+	root := newBubbleTUI(context.Background(), nil, nil, "", nil, CommandHooks{
+		ConfigWorkflows: func() (string, error) {
+			called = true
+			return "dynamic workflows: disabled", nil
+		},
+	})
+
+	root.openConfigMenu()
+	for i, choice := range root.configMenuChoices {
+		if choice.Key == "workflows" {
+			root.configMenuIdx = i
+			break
+		}
+	}
+	cmd := root.confirmConfigMenu()
+	if cmd == nil {
+		t.Fatal("expected dynamic workflow config command")
+	}
+	msg, ok := cmd().(bubbleConfigDoneMsg)
+	if !ok {
+		t.Fatalf("expected bubbleConfigDoneMsg, got %T", msg)
+	}
+	if !called || msg.err != nil || !strings.Contains(msg.out, "dynamic workflows: disabled") {
+		t.Fatalf("unexpected workflow config result: called=%v out=%q err=%v", called, msg.out, msg.err)
 	}
 }
 

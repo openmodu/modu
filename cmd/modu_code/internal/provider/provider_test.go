@@ -189,6 +189,28 @@ func TestResolveUsesV2ProviderConfig(t *testing.T) {
 	}
 }
 
+func TestResolveRejectsConfigWithUnknownActiveModel(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("OPENAI_API_KEY", "env-key")
+	writeConfig(t, home, `{
+  "active": "missing-model",
+  "models": [
+    {
+      "name": "local-qwen",
+      "provider": "lmstudio",
+      "model": "qwen",
+      "baseUrl": "http://127.0.0.1:1234/v1"
+    }
+  ]
+}`)
+
+	model, getAPIKey := Resolve()
+	if model != nil || getAPIKey != nil {
+		t.Fatalf("expected invalid active config to block fallback, got model=%#v keyNil=%v", model, getAPIKey == nil)
+	}
+}
+
 func TestSaveActiveModelUpdatesConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -215,6 +237,20 @@ func TestSaveActiveModelUpdatesConfig(t *testing.T) {
 	}
 	if cfg.Providers["lmstudio"].BaseURL == "" || cfg.Providers["deepseek"].BaseURL == "" {
 		t.Fatalf("expected provider baseUrls after migration: %#v", cfg.Providers)
+	}
+}
+
+func TestModelMatchesTarget(t *testing.T) {
+	model := ModelConfig{Name: "local", Provider: "lmstudio", Model: "qwen"}
+	for _, target := range []string{"local", "qwen", "lmstudio/qwen", "lmstudio:qwen"} {
+		if !ModelMatchesTarget(model, target) {
+			t.Fatalf("expected target %q to match", target)
+		}
+	}
+	for _, target := range []string{"", "other", "openai/qwen"} {
+		if ModelMatchesTarget(model, target) {
+			t.Fatalf("expected target %q not to match", target)
+		}
 	}
 }
 
