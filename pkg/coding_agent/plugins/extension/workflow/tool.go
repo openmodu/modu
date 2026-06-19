@@ -119,7 +119,9 @@ type workflowExecution struct {
 }
 
 func (e *Extension) prepareWorkflowExecution(args map[string]any, onUpdate types.ToolUpdateCallback) (workflowExecution, error) {
-	script, sourcePath, err := loadWorkflowScript(args, e.api.Cwd(), e.api.AgentDir())
+	// The resolved source path is intentionally discarded: it's captured in the
+	// persisted run dir, and writing it back would mutate the caller's args map.
+	script, _, err := loadWorkflowScript(args, e.api.Cwd(), e.api.AgentDir())
 	if err != nil {
 		return workflowExecution{}, err
 	}
@@ -130,9 +132,6 @@ func (e *Extension) prepareWorkflowExecution(args map[string]any, onUpdate types
 	budgetTotal, err := decodePositiveInt(args["budget"], "budget")
 	if err != nil {
 		return workflowExecution{}, err
-	}
-	if sourcePath != "" {
-		args["script_path"] = sourcePath
 	}
 	scriptPath, runDir, err := persistWorkflowScript(e.api.SessionDir(), script)
 	if err != nil {
