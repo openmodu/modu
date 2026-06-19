@@ -47,7 +47,7 @@ type runner struct {
 	tracker    *snapshotTracker
 	meta       *metaInfo
 	current    string
-	usedAgent  bool
+	usedAgent  atomic.Bool // set from parallel agent goroutines; read on the main thread
 	mu         sync.Mutex
 	luaMu      sync.Mutex
 	stageDepth atomic.Int32
@@ -122,6 +122,21 @@ func (s *workflowRunState) releaseBudgetReservation(reservation workflowAgentRes
 	s.mu.Unlock()
 }
 
+// releaseReservation fully undoes reserveAgent (both the agent-count slot and the
+// budget reservation). Used when an attempt is going to be redone — e.g. a user
+// restart — so retrying the same logical agent doesn't permanently consume slots
+// toward MaxAgents.
+func (s *workflowRunState) releaseReservation(reservation workflowAgentReservation) {
+	s.mu.Lock()
+	if s.agentCount > 0 {
+		s.agentCount--
+	}
+	if reservation.BudgetReserved && s.reserved > 0 {
+		s.reserved--
+	}
+	s.mu.Unlock()
+}
+
 func (s *workflowRunState) commitBudgetSpend(reservation workflowAgentReservation, spent, budgetTotal int) {
 	if spent < 0 {
 		spent = 0
@@ -155,7 +170,7 @@ func (r *runner) run(ctx context.Context, script string) (runResult, error) {
 	if r.meta == nil {
 		return runResult{Snapshot: r.tracker.current()}, fmt.Errorf("meta({name=..., description=...}) is required")
 	}
-	if !r.usedAgent {
+	if !r.usedAgent.Load() {
 		return runResult{Meta: *r.meta, Snapshot: r.tracker.current()}, fmt.Errorf("workflow scripts must call agent() or parallel() at least once")
 	}
 	value := lua.LNil
@@ -375,7 +390,7 @@ func (r *runner) luaWorkflow(L *lua.LState) int {
 		L.RaiseError("workflow %q: %s", ref, err.Error())
 		return 0
 	}
-	r.usedAgent = true
+	r.usedAgent.Store(true)
 	r.tracker.addLog(fmt.Sprintf("nested workflow %s completed with %d agent(s)", ref, result.Snapshot.AgentCount))
 	L.Push(goToLua(L, result.Result))
 	return 1
@@ -618,7 +633,7 @@ func (r *runner) runAgentAttempt(ctx context.Context, prompt string, opts agentO
 			r.tracker.addLog("agent skipped: workflow token budget exhausted")
 			return agentOutcome{}, false, nil, nil
 		}
-		r.usedAgent = true
+		r.usedAgent.Store(true)
 
 		attemptLabel := label
 		if attemptLabel == "" {
@@ -688,7 +703,7 @@ func (r *runner) runAgentAttempt(ctx context.Context, prompt string, opts agentO
 			return agentOutcome{}, false, nil, nil
 		}
 		if action == workflowAgentActionRestart {
-			r.state.releaseBudgetReservation(reservation)
+			r.state.releaseReservation(reservation)
 			r.tracker.finishAgent(id, statusSkipped, nil, "restart requested")
 			r.tracker.addLog(fmt.Sprintf("agent %s restart requested", attemptLabel))
 			continue

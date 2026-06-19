@@ -84,6 +84,50 @@ type workflowSnapshot struct {
 	Meta           *metaInfo       `json:"meta,omitempty"`
 }
 
+// clone returns a deep copy whose slices share no backing array with s. The
+// tracker emits/returns snapshots to consumers (onUpdate → registry → TUI,
+// json.Marshal) that read them WITHOUT the tracker lock, while parallel agent
+// goroutines keep mutating the live snapshot's Agents/Logs in place — so every
+// snapshot that leaves the lock must be cloned or it is a data race.
+func (s workflowSnapshot) clone() workflowSnapshot {
+	out := s
+	out.Phases = cloneStringSlice(s.Phases)
+	out.Logs = cloneStringSlice(s.Logs)
+	if s.PhaseSummaries != nil {
+		out.PhaseSummaries = append([]phaseSummary(nil), s.PhaseSummaries...)
+	}
+	if s.Agents != nil {
+		agents := make([]agentSnapshot, len(s.Agents))
+		for i, a := range s.Agents {
+			if a.RecentToolCalls != nil {
+				a.RecentToolCalls = append([]workflowToolCallSnapshot(nil), a.RecentToolCalls...)
+			}
+			if a.Transcript != nil {
+				a.Transcript = append([]workflowTranscriptEntry(nil), a.Transcript...)
+			}
+			agents[i] = a
+		}
+		out.Agents = agents
+	}
+	if s.Meta != nil {
+		m := *s.Meta
+		if s.Meta.Phases != nil {
+			m.Phases = append([]phaseInfo(nil), s.Meta.Phases...)
+		}
+		out.Meta = &m
+	}
+	return out
+}
+
+func cloneStringSlice(in []string) []string {
+	if in == nil {
+		return nil
+	}
+	out := make([]string, len(in))
+	copy(out, in)
+	return out
+}
+
 type snapshotTracker struct {
 	mu       sync.Mutex
 	started  time.Time
@@ -224,7 +268,7 @@ func (s *snapshotTracker) complete(result any) workflowSnapshot {
 	s.mu.Lock()
 	duration := time.Since(s.started).Milliseconds()
 	s.recomputeLocked(duration, result)
-	out := s.snapshot
+	out := s.snapshot.clone()
 	s.mu.Unlock()
 	s.emitSnapshot(out, true)
 	return out
@@ -234,7 +278,7 @@ func (s *snapshotTracker) current() workflowSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.recomputeLocked(time.Since(s.started).Milliseconds(), nil)
-	return s.snapshot
+	return s.snapshot.clone()
 }
 
 func (s *snapshotTracker) updateAgentActivity(agentID int, activity workflowAgentActivity) {
@@ -400,7 +444,7 @@ func applyAgentActivity(agent *agentSnapshot, activity workflowAgentActivity) {
 
 func (s *snapshotTracker) emit(completed bool) {
 	s.mu.Lock()
-	snapshot := s.snapshot
+	snapshot := s.snapshot.clone()
 	s.mu.Unlock()
 	s.emitSnapshot(snapshot, completed)
 }
