@@ -49,7 +49,6 @@ type runner struct {
 	current    string
 	usedAgent  atomic.Bool // set from parallel agent goroutines; read on the main thread
 	mu         sync.Mutex
-	luaMu      sync.Mutex
 	stageDepth atomic.Int32
 }
 
@@ -431,6 +430,14 @@ func (r *runner) luaParallel(L *lua.LState) int {
 	return 1
 }
 
+// luaPipeline runs each item through the full stage chain. The stages are Lua
+// closures and gopher-lua's LState is single-threaded, so items run SEQUENTIALLY
+// on the one VM — there is no way to execute Lua closures concurrently on a
+// shared state (the previous goroutine/semaphore version was serialized by a
+// mutex around every stage call, so it added a data-race surface for zero
+// parallelism). For concurrent agent fan-out use parallel() — whose tasks are
+// data, not closures, so they fork in parallel — including parallel() *inside* a
+// stage. The concurrency option is accepted for compatibility but does not apply.
 func (r *runner) luaPipeline(L *lua.LState) int {
 	if r.stageDepth.Load() > 0 {
 		L.RaiseError("nested pipeline() calls are not supported")
@@ -450,28 +457,13 @@ func (r *runner) luaPipeline(L *lua.LState) int {
 		L.RaiseError("pipeline() requires at least one stage")
 		return 0
 	}
-	limit := r.opts.Concurrency
 	if L.GetTop() >= 3 && L.Get(3) != lua.LNil {
-		options, ok := L.Get(3).(*lua.LTable)
-		if !ok {
+		if _, ok := L.Get(3).(*lua.LTable); !ok {
 			L.RaiseError("pipeline options must be a table")
 			return 0
 		}
-		if n := intField(options, "concurrency"); n > 0 {
-			limit = n
-		}
-	}
-	if limit <= 0 {
-		limit = 4
-	}
-	if limit > 16 {
-		limit = 16
 	}
 
-	itemValues := make([]lua.LValue, items.Len())
-	for i := range itemValues {
-		itemValues[i] = items.RawGetInt(i + 1)
-	}
 	stageValues := make([]lua.LValue, stages.Len())
 	for i := range stageValues {
 		stage := stages.RawGetInt(i + 1)
@@ -482,39 +474,17 @@ func (r *runner) luaPipeline(L *lua.LState) int {
 		stageValues[i] = stage
 	}
 
-	type pipelineItemResult struct {
-		value any
-		ok    bool
-	}
-	results := make([]pipelineItemResult, len(itemValues))
-	sem := make(chan struct{}, limit)
-	var wg sync.WaitGroup
-	for i, item := range itemValues {
-		wg.Add(1)
-		go func(idx int, item lua.LValue) {
-			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-			case <-L.Context().Done():
-				return
-			}
-			value, ok := r.runPipelineItem(L, idx+1, item, stageValues)
-			results[idx] = pipelineItemResult{value: value, ok: ok}
-		}(i, item)
-	}
-	wg.Wait()
-	if err := L.Context().Err(); err != nil {
-		L.RaiseError("%s", err.Error())
-		return 0
-	}
-
 	out := L.NewTable()
-	for i, result := range results {
-		if result.ok {
-			out.RawSetInt(i+1, goToLua(L, result.value))
+	for i := 1; i <= items.Len(); i++ {
+		if err := L.Context().Err(); err != nil {
+			L.RaiseError("%s", err.Error())
+			return 0
+		}
+		value, ok := r.runPipelineItem(L, i, items.RawGetInt(i), stageValues)
+		if ok {
+			out.RawSetInt(i, goToLua(L, value))
 		} else {
-			out.RawSetInt(i+1, jsonNullValue(L))
+			out.RawSetInt(i, jsonNullValue(L))
 		}
 	}
 	L.Push(out)
@@ -523,35 +493,25 @@ func (r *runner) luaPipeline(L *lua.LState) int {
 
 func (r *runner) runPipelineItem(L *lua.LState, index int, original lua.LValue, stages []lua.LValue) (any, bool) {
 	value := original
-	var err error
 	for _, stage := range stages {
-		value, err = r.callPipelineStage(L, stage, value, original, index)
+		r.stageDepth.Add(1)
+		err := L.CallByParam(lua.P{Fn: stage, NRet: 1, Protect: true}, value, original, lua.LNumber(index))
+		if err == nil {
+			value = L.Get(-1)
+			L.Pop(1)
+		}
+		r.stageDepth.Add(-1)
 		if err != nil {
 			r.tracker.addLog(fmt.Sprintf("pipeline[%d] failed: %v", index, err))
 			return nil, false
 		}
 	}
-	r.luaMu.Lock()
 	out, err := luaToGo(value)
-	r.luaMu.Unlock()
 	if err != nil {
 		r.tracker.addLog(fmt.Sprintf("pipeline[%d] failed: %v", index, err))
 		return nil, false
 	}
 	return out, true
-}
-
-func (r *runner) callPipelineStage(L *lua.LState, stage, value, original lua.LValue, index int) (lua.LValue, error) {
-	r.luaMu.Lock()
-	defer r.luaMu.Unlock()
-	r.stageDepth.Add(1)
-	defer r.stageDepth.Add(-1)
-	if err := L.CallByParam(lua.P{Fn: stage, NRet: 1, Protect: true}, value, original, lua.LNumber(index)); err != nil {
-		return lua.LNil, err
-	}
-	out := L.Get(-1)
-	L.Pop(1)
-	return out, nil
 }
 
 func (r *runner) luaJSONEncode(L *lua.LState) int {
