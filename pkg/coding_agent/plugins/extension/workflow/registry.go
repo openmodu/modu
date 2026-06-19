@@ -325,7 +325,9 @@ func (r *workflowRegistry) list() []liveWorkflowRun {
 	for _, run := range r.runs {
 		cp := *run
 		if run.Snapshot != nil {
-			s := *run.Snapshot
+			// Deep clone: updateAgentActivity mutates Snapshot.Agents in place
+			// under r.mu, but callers read the returned snapshot without it.
+			s := run.Snapshot.clone()
 			cp.Snapshot = &s
 		}
 		out = append(out, cp)
