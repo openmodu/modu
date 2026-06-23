@@ -342,6 +342,9 @@ func (b *bubbleTUI) fullScreenLines() []string {
 	if sel := b.renderSlashSuggestions(); sel != "" {
 		add(sel)
 	}
+	if todos := b.renderTodoPanel(); todos != "" {
+		add(todos)
+	}
 	add(hRule(width)) // frame the input box: rule above
 	inputStartRow := len(lines)
 	add(b.renderInputControl())

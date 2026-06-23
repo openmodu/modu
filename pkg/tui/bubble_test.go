@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/openmodu/modu/pkg/approval"
+	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/types"
 )
@@ -449,6 +450,53 @@ func TestBubbleInlineViewKeepsTranscriptOutOfRenderer(t *testing.T) {
 	}
 	if !strings.Contains(view, "❯") {
 		t.Fatalf("expected active frame to keep the input widget, got %q", view)
+	}
+}
+
+func TestBubbleTodoPanelRendersAboveInput(t *testing.T) {
+	session := newUITestSession(t)
+	session.SetTodos([]coding_agent.TodoItem{
+		{Content: "first step", Status: "completed"},
+		{Content: "second step", Status: "in_progress"},
+		{Content: "third step", Status: "pending"},
+	})
+	root := newBubbleTUI(context.Background(), session, testUIModel(), "", nil, CommandHooks{})
+	root.width = 80
+	root.height = 24
+
+	view := stripANSIForGoTUI(root.viewString())
+	if !strings.Contains(view, "Todos") {
+		t.Fatalf("expected todo panel to contain title %q, got %q", "Todos", view)
+	}
+	if strings.Index(view, "Todos") > strings.Index(view, "first step") {
+		t.Fatalf("expected title to appear before todo items, got %q", view)
+	}
+	for _, want := range []string{"first step", "second step", "third step"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected todo panel to contain %q, got %q", want, view)
+		}
+	}
+	// Order is preserved as the agent set it, and the completed item carries a
+	// checked box while the rest stay unchecked.
+	if got := strings.Index(view, "first step"); got == -1 || got > strings.Index(view, "second step") {
+		t.Fatalf("expected todos to keep their order, got %q", view)
+	}
+	if !strings.Contains(view, "☑ first step") {
+		t.Fatalf("expected completed todo to show a checked box, got %q", view)
+	}
+	// The panel sits above the input box, so the ❯ prompt comes after the todos.
+	if strings.Index(view, "third step") > strings.LastIndex(view, "❯") {
+		t.Fatalf("expected todo panel above the input box, got %q", view)
+	}
+}
+
+func TestBubbleTodoPanelHiddenWhenEmpty(t *testing.T) {
+	session := newUITestSession(t)
+	root := newBubbleTUI(context.Background(), session, testUIModel(), "", nil, CommandHooks{})
+	root.width = 80
+	root.height = 24
+	if got := root.renderTodoPanel(); got != "" {
+		t.Fatalf("expected empty todo panel with no todos, got %q", got)
 	}
 }
 
