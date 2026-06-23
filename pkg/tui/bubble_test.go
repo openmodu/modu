@@ -500,6 +500,71 @@ func TestBubbleTodoPanelHiddenWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestBubbleTodoPanelTitle(t *testing.T) {
+	t.Run("shows title when todos exist", func(t *testing.T) {
+		session := newUITestSession(t)
+		session.SetTodos([]coding_agent.TodoItem{
+			{Content: "step one", Status: "in_progress"},
+			{Content: "step two", Status: "pending"},
+		})
+		root := newBubbleTUI(context.Background(), session, testUIModel(), "", nil, CommandHooks{})
+		root.width = 80
+		root.height = 24
+
+		view := stripANSIForGoTUI(root.renderTodoPanel())
+		if !strings.Contains(view, "Todos") {
+			t.Fatalf("expected todo panel to contain title %q, got %q", "Todos", view)
+		}
+		// Title must be the first visible line (after leading whitespace).
+		firstLine := strings.Fields(view)[0]
+		if firstLine != "Todos" {
+			t.Fatalf("expected title as first element, got %q", firstLine)
+		}
+	})
+
+	t.Run("hidden when no todos", func(t *testing.T) {
+		session := newUITestSession(t)
+		root := newBubbleTUI(context.Background(), session, testUIModel(), "", nil, CommandHooks{})
+		root.width = 80
+		root.height = 24
+		if got := root.renderTodoPanel(); got != "" {
+			t.Fatalf("expected empty todo panel, got %q", got)
+		}
+	})
+
+	t.Run("hidden when all completed", func(t *testing.T) {
+		session := newUITestSession(t)
+		session.SetTodos([]coding_agent.TodoItem{
+			{Content: "done", Status: "completed"},
+		})
+		root := newBubbleTUI(context.Background(), session, testUIModel(), "", nil, CommandHooks{})
+		root.width = 80
+		root.height = 24
+		if got := root.renderTodoPanel(); got != "" {
+			t.Fatalf("expected hidden todo panel when all completed, got %q", got)
+		}
+	})
+}
+
+func TestBubbleTodoPanelHiddenWhenAllCompleted(t *testing.T) {
+	session := newUITestSession(t)
+	session.SetTodos([]coding_agent.TodoItem{
+		{Content: "first step", Status: "completed"},
+		{Content: "second step", Status: "completed"},
+	})
+	root := newBubbleTUI(context.Background(), session, testUIModel(), "", nil, CommandHooks{})
+	root.width = 80
+	root.height = 24
+	// A fully-checked list represents no outstanding work, so the panel should
+	// disappear rather than linger above the input on later turns.
+	if got := root.renderTodoPanel(); got != "" {
+		t.Fatalf("expected hidden todo panel when all todos completed, got %q", got)
+	}
+	if strings.Contains(stripANSIForGoTUI(root.viewString()), "first step") {
+		t.Fatalf("expected completed todos to be hidden from the active frame")
+	}
+}
+
 func TestBubbleStatusLineShowsContextWindowUsage(t *testing.T) {
 	session := newUITestSessionWithStream(t, func(ctx context.Context, model *types.Model, llmCtx *types.LLMContext, opts *types.SimpleStreamOptions) (types.EventStream, error) {
 		stream := types.NewEventStream()
