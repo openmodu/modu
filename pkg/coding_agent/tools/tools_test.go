@@ -471,8 +471,17 @@ func TestAllToolsCreation(t *testing.T) {
 
 func TestCodingTools(t *testing.T) {
 	ct := CodingTools("/tmp")
-	if len(ct) != 4 {
-		t.Fatalf("expected 4 coding tools, got %d", len(ct))
+	names := toolNames(ct)
+	// The default coding set includes the read-only navigation tools
+	// (grep/find/ls) so Claude-Code-trained models don't hit "Tool not found"
+	// when they reach for ls instead of shelling out via bash.
+	for _, name := range []string{"read", "bash", "edit", "write", "grep", "find", "ls"} {
+		if !containsName(names, name) {
+			t.Fatalf("expected %s in coding tools, got %v", name, names)
+		}
+	}
+	if len(ct) != 7 {
+		t.Fatalf("expected 7 coding tools, got %d (%v)", len(ct), names)
 	}
 }
 

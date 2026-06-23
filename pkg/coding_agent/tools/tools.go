@@ -128,6 +128,9 @@ func (p DefaultProvider) baseTools(cwd string) []types.Tool {
 			bash.NewTool(cwd),
 			edit.NewTool(cwd),
 			write.NewTool(cwd),
+			grep.NewTool(cwd),
+			find.NewTool(cwd),
+			ls.NewTool(cwd),
 		}
 	}
 }

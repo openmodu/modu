@@ -128,9 +128,16 @@ func TestNewCodingSession(t *testing.T) {
 	if len(toolNames) == 0 {
 		t.Fatal("expected tools to be initialized")
 	}
+	// grep/find/ls are part of the default coding set so models that reflexively
+	// reach for ls don't hit "Tool not found". Network research tools stay opt-in.
 	for _, name := range []string{"grep", "find", "ls"} {
+		if !containsTool(toolNames, name) {
+			t.Fatalf("expected search/list tool %s in default tools, got %v", name, toolNames)
+		}
+	}
+	for _, name := range []string{"web_search", "web_fetch"} {
 		if containsTool(toolNames, name) {
-			t.Fatalf("expected search/list tool %s to be opt-in, got default tools %v", name, toolNames)
+			t.Fatalf("expected network tool %s to be opt-in, got default tools %v", name, toolNames)
 		}
 	}
 
@@ -156,9 +163,16 @@ func TestForkToolSetCanAddRequestedReadOnlyDiscoveryTools(t *testing.T) {
 
 	got = ensureRequestedReadOnlyTools(active, nil, "/tmp/project")
 	names = toolNamesFromTools(got)
-	for _, name := range []string{"grep", "find", "ls", "web_search", "web_fetch"} {
+	// grep/find/ls now ship in the default coding set, so an empty request keeps
+	// them; only the network research tools remain strictly opt-in.
+	for _, name := range []string{"grep", "find", "ls"} {
+		if !containsTool(names, name) {
+			t.Fatalf("empty request should keep default discovery tools, got %v", names)
+		}
+	}
+	for _, name := range []string{"web_search", "web_fetch"} {
 		if containsTool(names, name) {
-			t.Fatalf("empty request should preserve default active tools, got %v", names)
+			t.Fatalf("empty request should not add opt-in network tools, got %v", names)
 		}
 	}
 }
