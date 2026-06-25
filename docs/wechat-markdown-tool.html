@@ -1,0 +1,699 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Markdown 公众号排版工具</title>
+  <style>
+    :root {
+      --ink: #182230;
+      --muted: #667085;
+      --line: #d0d8e3;
+      --soft: #f5f8fb;
+      --paper: #ffffff;
+      --accent: #0f766e;
+      --accent-dark: #115e59;
+      --accent-soft: #e8f5f2;
+      --code: #f6f8fa;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: #eef2f6;
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.72;
+    }
+
+    .app {
+      min-height: 100vh;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 12px 18px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, .96);
+      backdrop-filter: blur(8px);
+    }
+
+    .title {
+      min-width: 0;
+    }
+
+    .title h1 {
+      margin: 0;
+      color: #111827;
+      font-size: 18px;
+      line-height: 1.35;
+      letter-spacing: 0;
+    }
+
+    .title p {
+      margin: 2px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    button {
+      border: 0;
+      border-radius: 6px;
+      background: var(--accent);
+      color: #fff;
+      padding: 9px 13px;
+      font-size: 14px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    button.secondary {
+      background: #344054;
+    }
+
+    button.ghost {
+      color: #344054;
+      background: #eef2f7;
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(320px, 1fr) minmax(360px, 1fr);
+      gap: 16px;
+      width: min(100%, 1280px);
+      margin: 0 auto;
+      padding: 18px;
+    }
+
+    .panel {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--paper);
+      overflow: hidden;
+    }
+
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      background: #f8fafc;
+    }
+
+    .panel-head h2 {
+      margin: 0;
+      color: #1f2937;
+      font-size: 15px;
+      line-height: 1.35;
+      letter-spacing: 0;
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    textarea {
+      display: block;
+      width: 100%;
+      min-height: calc(100vh - 156px);
+      resize: vertical;
+      border: 0;
+      outline: none;
+      padding: 16px;
+      color: #17202a;
+      background: #fbfdff;
+      font-family: Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 14px;
+      line-height: 1.62;
+    }
+
+    .preview-wrap {
+      max-height: calc(100vh - 156px);
+      overflow: auto;
+      padding: 18px;
+      background: #fff;
+    }
+
+    #wechatArticle {
+      max-width: 720px;
+      margin: 0 auto;
+      outline: none;
+    }
+
+    #wechatArticle h1 {
+      margin: 0 0 22px;
+      color: #111827;
+      font-size: 28px;
+      line-height: 1.35;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    #wechatArticle h2 {
+      margin: 36px 0 14px;
+      padding-left: 12px;
+      border-left: 4px solid var(--accent);
+      color: #111827;
+      font-size: 22px;
+      line-height: 1.4;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    #wechatArticle h3 {
+      margin: 26px 0 10px;
+      color: #1f2937;
+      font-size: 18px;
+      line-height: 1.45;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    #wechatArticle p {
+      margin: 14px 0;
+      color: #263445;
+      font-size: 16px;
+      line-height: 1.82;
+    }
+
+    #wechatArticle blockquote {
+      margin: 18px 0 24px;
+      padding: 14px 16px;
+      border-left: 4px solid var(--accent);
+      background: var(--accent-soft);
+      color: var(--accent-dark);
+    }
+
+    #wechatArticle blockquote p {
+      margin: 0;
+      color: inherit;
+    }
+
+    #wechatArticle ul,
+    #wechatArticle ol {
+      margin: 14px 0;
+      padding-left: 24px;
+      color: #263445;
+      font-size: 16px;
+      line-height: 1.8;
+    }
+
+    #wechatArticle li {
+      margin: 6px 0;
+    }
+
+    #wechatArticle a {
+      color: var(--accent);
+      text-decoration: underline;
+    }
+
+    #wechatArticle code {
+      padding: 2px 5px;
+      border-radius: 4px;
+      background: #eef2f7;
+      color: #243244;
+      font-family: Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 14px;
+    }
+
+    #wechatArticle pre {
+      margin: 16px 0;
+      padding: 14px 16px;
+      overflow: auto;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      background: var(--code);
+      color: #1f2937;
+      font-family: Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 13px;
+      line-height: 1.65;
+      white-space: pre;
+    }
+
+    #wechatArticle pre code {
+      padding: 0;
+      border-radius: 0;
+      background: transparent;
+      color: inherit;
+      font-size: inherit;
+    }
+
+    #wechatArticle hr {
+      height: 1px;
+      margin: 30px 0;
+      border: 0;
+      background: #d8e0ea;
+    }
+
+    .status {
+      min-height: 20px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 860px) {
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .actions {
+        justify-content: flex-start;
+      }
+
+      .workspace {
+        grid-template-columns: 1fr;
+        padding: 12px;
+      }
+
+      textarea,
+      .preview-wrap {
+        min-height: 360px;
+        max-height: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="title">
+        <h1>Markdown 公众号排版工具</h1>
+        <p>粘贴 Markdown，生成适合微信公众号编辑器的富文本。</p>
+      </div>
+      <div class="actions">
+        <button id="renderBtn">生成排版</button>
+        <button id="copyBtn">复制富文本</button>
+        <button id="selectBtn" class="secondary">选中富文本</button>
+        <button id="sampleBtn" class="ghost">加载示例</button>
+        <button id="clearBtn" class="ghost">清空</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Markdown 输入</h2>
+          <span class="hint">支持标题、列表、引用、链接、粗体、代码块</span>
+        </div>
+        <textarea id="markdownInput" spellcheck="false"></textarea>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>公众号预览</h2>
+          <span class="status" id="status">输入 Markdown 后点击生成排版。</span>
+        </div>
+        <div class="preview-wrap">
+          <article id="wechatArticle"></article>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const input = document.getElementById('markdownInput');
+    const article = document.getElementById('wechatArticle');
+    const statusEl = document.getElementById('status');
+
+    const sampleMarkdown = `# Agent 不能靠感觉迭代：我用 Go test 搭了一套 Eval 评测体系
+
+> Agent 的质量很难靠感觉维护。我的做法是把关键能力拆成可运行的 Eval：能确定的用程序断言，语义质量交给 grader LLM。
+
+项目地址：[openmodu/modu](https://github.com/openmodu/modu)
+
+## 为什么需要 Eval
+
+普通单元测试能覆盖确定性代码，但覆盖不了模型行为。人工试几轮又太主观，而且很难留下可比较的记录。
+
+所以这套 Eval 体系有三个基本要求：
+
+- 必须能像普通测试一样被组织、选择和编译
+- 必须能检查真实行为，比如 tool call、文件写入、go test 结果
+- 必须能记录每条 rubric 的输出、理由、分数和 pass/fail
+
+## 核心入口
+
+\`\`\`go
+func Run(t *testing.T, name string, f func(e *EvalT)) {
+    numEvals := NumEvalsOrSkip(t)
+    specs := providerSpecsFromEnv()
+    for _, spec := range specs {
+        eval, _ := NewEval(spec)
+        t.Run(name, func(t *testing.T) {
+            f(&EvalT{T: t, Eval: eval})
+        })
+    }
+}
+\`\`\`
+
+## 设计原则
+
+1. 能用确定性断言，就不用 LLM 评分
+2. 工具使用必须检查真实 tool call
+3. Coding Agent 必须检查真实文件副作用
+
+---
+
+当 Eval 能做到这一点，Agent 才不只是一个“看起来能用”的聊天系统，而是一个可以持续改、持续测、持续收敛的工程系统。`;
+
+    function escapeHTML(value) {
+      return value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function renderInline(value) {
+      let html = escapeHTML(value);
+      html = html.replace(/`([^`]+)`/g, (_, code) => `<code>${code}</code>`);
+      html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+      return html;
+    }
+
+    function markdownToHTML(markdown) {
+      const lines = markdown.replace(/\r\n/g, '\n').split('\n');
+      const out = [];
+      let paragraph = [];
+      let listType = '';
+      let listItems = [];
+      let inCode = false;
+      let codeLines = [];
+      let blockquote = [];
+
+      function flushParagraph() {
+        if (!paragraph.length) return;
+        out.push(`<p>${renderInline(paragraph.join(' '))}</p>`);
+        paragraph = [];
+      }
+
+      function flushList() {
+        if (!listType) return;
+        out.push(`<${listType}>${listItems.map(item => `<li>${renderInline(item)}</li>`).join('')}</${listType}>`);
+        listType = '';
+        listItems = [];
+      }
+
+      function flushBlockquote() {
+        if (!blockquote.length) return;
+        const parts = [];
+        let current = [];
+        for (const item of blockquote) {
+          if (item === '') {
+            if (current.length) {
+              parts.push(current.join(' '));
+              current = [];
+            }
+            continue;
+          }
+          current.push(item);
+        }
+        if (current.length) {
+          parts.push(current.join(' '));
+        }
+        if (parts.length) {
+          out.push(`<blockquote>${parts.map(part => `<p>${renderInline(part)}</p>`).join('')}</blockquote>`);
+        }
+        blockquote = [];
+      }
+
+      function flushAllBlocks() {
+        flushParagraph();
+        flushList();
+        flushBlockquote();
+      }
+
+      function addList(type, item) {
+        flushParagraph();
+        flushBlockquote();
+        if (listType && listType !== type) flushList();
+        listType = type;
+        listItems.push(item);
+      }
+
+      for (const rawLine of lines) {
+        const line = rawLine.replace(/\s+$/, '');
+        const trimmed = line.trim();
+
+        if (/^```/.test(trimmed)) {
+          if (inCode) {
+            out.push(`<pre><code>${escapeHTML(codeLines.join('\n'))}</code></pre>`);
+            codeLines = [];
+            inCode = false;
+          } else {
+            flushAllBlocks();
+            inCode = true;
+            codeLines = [];
+          }
+          continue;
+        }
+
+        if (inCode) {
+          codeLines.push(rawLine);
+          continue;
+        }
+
+        if (!trimmed) {
+          flushAllBlocks();
+          continue;
+        }
+
+        if (/^---+$/.test(trimmed)) {
+          flushAllBlocks();
+          out.push('<hr>');
+          continue;
+        }
+
+        const heading = line.match(/^(#{1,3})\s+(.+)$/);
+        if (heading) {
+          flushAllBlocks();
+          const level = heading[1].length;
+          out.push(`<h${level}>${renderInline(heading[2].trim())}</h${level}>`);
+          continue;
+        }
+
+        const quote = line.match(/^>\s?(.*)$/);
+        if (quote) {
+          flushParagraph();
+          flushList();
+          const content = quote[1].trim();
+          if (content === '') {
+            if (blockquote.length && blockquote[blockquote.length - 1] !== '') {
+              blockquote.push('');
+            }
+          } else {
+            blockquote.push(content);
+          }
+          continue;
+        }
+
+        const unordered = line.match(/^\s*[-*+]\s+(.+)$/);
+        if (unordered) {
+          addList('ul', unordered[1].trim());
+          continue;
+        }
+
+        const ordered = line.match(/^\s*\d+\.\s+(.+)$/);
+        if (ordered) {
+          addList('ol', ordered[1].trim());
+          continue;
+        }
+
+        flushList();
+        flushBlockquote();
+        paragraph.push(trimmed);
+      }
+
+      if (inCode) {
+        out.push(`<pre><code>${escapeHTML(codeLines.join('\n'))}</code></pre>`);
+      }
+      flushAllBlocks();
+      return out.join('\n');
+    }
+
+    function codeToWechatHTML(value) {
+      return escapeHTML(value)
+        .replace(/ /g, '&nbsp;')
+        .replace(/\t/g, '&nbsp;&nbsp;&nbsp;&nbsp;')
+        .replace(/\n/g, '<br>');
+    }
+
+    function inlineWechatStyles(root) {
+      root.querySelectorAll('h1').forEach(el => {
+        el.setAttribute('style', 'margin:0 0 22px;color:#111827;font-size:28px;line-height:1.35;font-weight:700;letter-spacing:0;');
+      });
+      root.querySelectorAll('h2').forEach(el => {
+        el.setAttribute('style', 'margin:36px 0 14px;padding-left:12px;border-left:4px solid #0f766e;color:#111827;font-size:22px;line-height:1.4;font-weight:700;letter-spacing:0;');
+      });
+      root.querySelectorAll('h3').forEach(el => {
+        el.setAttribute('style', 'margin:26px 0 10px;color:#1f2937;font-size:18px;line-height:1.45;font-weight:700;letter-spacing:0;');
+      });
+      root.querySelectorAll('p').forEach(el => {
+        el.setAttribute('style', 'margin:14px 0;color:#263445;font-size:16px;line-height:1.82;');
+      });
+      root.querySelectorAll('blockquote').forEach(el => {
+        el.setAttribute('style', 'margin:18px 0 24px;padding:14px 16px;border-left:4px solid #0f766e;background:#e8f5f2;color:#115e59;');
+        el.querySelectorAll('p').forEach(p => {
+          p.setAttribute('style', 'margin:0;color:#115e59;font-size:16px;line-height:1.82;');
+        });
+      });
+      root.querySelectorAll('ul,ol').forEach(el => {
+        el.setAttribute('style', 'margin:14px 0;padding-left:24px;color:#263445;font-size:16px;line-height:1.8;');
+      });
+      root.querySelectorAll('li').forEach(el => {
+        el.setAttribute('style', 'margin:6px 0;');
+      });
+      root.querySelectorAll('a').forEach(el => {
+        el.setAttribute('style', 'color:#0f766e;text-decoration:underline;');
+      });
+      root.querySelectorAll('code').forEach(el => {
+        el.setAttribute('style', 'padding:2px 5px;border-radius:4px;background:#eef2f7;color:#243244;font-family:Menlo,Consolas,monospace;font-size:14px;');
+      });
+      root.querySelectorAll('hr').forEach(el => {
+        el.setAttribute('style', 'height:1px;margin:30px 0;border:0;background:#d8e0ea;');
+      });
+      root.querySelectorAll('pre').forEach(pre => {
+        const code = pre.textContent.replace(/\n$/, '');
+        const block = document.createElement('section');
+        block.setAttribute('style', 'margin:16px 0;padding:14px 16px;border-radius:6px;background:#f6f8fa;border:1px solid #e5e7eb;overflow-x:auto;');
+        const inner = document.createElement('section');
+        inner.setAttribute('style', 'color:#1f2937;font-family:Menlo,Consolas,monospace;font-size:13px;line-height:1.65;letter-spacing:0;white-space:normal;word-break:normal;');
+        inner.innerHTML = codeToWechatHTML(code);
+        block.appendChild(inner);
+        pre.replaceWith(block);
+      });
+    }
+
+    function render() {
+      const markdown = input.value.trim();
+      if (!markdown) {
+        statusEl.textContent = '请先粘贴 Markdown。';
+        input.focus();
+        return;
+      }
+      article.innerHTML = markdownToHTML(markdown);
+      statusEl.textContent = '已生成，可检查预览后复制。';
+    }
+
+    function buildCopyHTML() {
+      const cloned = article.cloneNode(true);
+      inlineWechatStyles(cloned);
+      return '<meta charset="utf-8">' + cloned.innerHTML;
+    }
+
+    function plainText() {
+      return article.innerText.replace(/\n{3,}/g, '\n\n');
+    }
+
+    function copyViaSelection(html) {
+      const holder = document.createElement('div');
+      holder.setAttribute('contenteditable', 'true');
+      holder.style.position = 'fixed';
+      holder.style.left = '-9999px';
+      holder.style.top = '0';
+      holder.innerHTML = html;
+      document.body.appendChild(holder);
+      try {
+        const range = document.createRange();
+        range.selectNodeContents(holder);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+        const ok = document.execCommand('copy');
+        selection.removeAllRanges();
+        if (!ok) throw new Error('copy returned false');
+      } finally {
+        holder.remove();
+      }
+    }
+
+    async function copyRichText() {
+      if (!article.innerHTML.trim()) render();
+      const html = buildCopyHTML();
+      try {
+        if (navigator.clipboard && window.ClipboardItem) {
+          await navigator.clipboard.write([
+            new ClipboardItem({
+              'text/html': new Blob([html], { type: 'text/html' }),
+              'text/plain': new Blob([plainText()], { type: 'text/plain' })
+            })
+          ]);
+        } else {
+          copyViaSelection(html);
+        }
+        statusEl.textContent = '已复制富文本，可粘贴到公众号编辑器。';
+      } catch (err) {
+        try {
+          copyViaSelection(html);
+          statusEl.textContent = '已复制富文本，可粘贴到公众号编辑器。';
+        } catch (fallbackErr) {
+          statusEl.textContent = '自动复制失败，请点“选中富文本”后按 Cmd+C。';
+        }
+      }
+    }
+
+    function selectRichText() {
+      if (!article.innerHTML.trim()) render();
+      const html = buildCopyHTML();
+      const holder = document.createElement('div');
+      holder.id = 'manual-copy-holder';
+      holder.setAttribute('contenteditable', 'true');
+      holder.style.margin = '16px 0';
+      holder.style.padding = '18px';
+      holder.style.border = '2px solid #0f766e';
+      holder.style.borderRadius = '8px';
+      holder.style.background = '#fff';
+      holder.innerHTML = html;
+      article.parentNode.insertBefore(holder, article);
+      const range = document.createRange();
+      range.selectNodeContents(holder);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      statusEl.textContent = '已选中富文本，请按 Cmd+C，再粘贴到公众号。';
+    }
+
+    function loadSample() {
+      input.value = sampleMarkdown;
+      render();
+    }
+
+    function clearAll() {
+      input.value = '';
+      article.innerHTML = '';
+      statusEl.textContent = '已清空。';
+      input.focus();
+    }
+
+    document.getElementById('renderBtn').addEventListener('click', render);
+    document.getElementById('copyBtn').addEventListener('click', copyRichText);
+    document.getElementById('selectBtn').addEventListener('click', selectRichText);
+    document.getElementById('sampleBtn').addEventListener('click', loadSample);
+    document.getElementById('clearBtn').addEventListener('click', clearAll);
+
+    loadSample();
+  </script>
+</body>
+</html>
