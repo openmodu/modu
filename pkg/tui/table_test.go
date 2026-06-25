@@ -92,7 +92,7 @@ func TestRenderMarkdownTableCJKAligned(t *testing.T) {
 	out := renderMarkdownTableSegment(seg, 80)
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 	// Box must be present (top + header rule + bottom borders).
-	if !strings.HasPrefix(lines[0], "┏") || !strings.HasPrefix(lines[len(lines)-1], "┗") {
+	if !strings.HasPrefix(lines[0], "┌") || !strings.HasPrefix(lines[len(lines)-1], "└") {
 		t.Fatalf("missing box borders:\n%s", out)
 	}
 	// All rendered lines must share the same display width (CJK-aware).
@@ -143,6 +143,31 @@ func TestRenderMarkdownTableEmojiRowsAligned(t *testing.T) {
 	for i, ln := range lines {
 		if lipgloss.Width(ln) != w0 {
 			t.Fatalf("line %d width %d != %d (misaligned):\n%s", i, lipgloss.Width(ln), w0, out)
+		}
+	}
+}
+
+func TestRenderInlineCellMarkdownStripsMarkers(t *testing.T) {
+	cases := []struct {
+		in     string
+		absent string // marker that must not leak into the rendered cell
+		want   string // visible text after markers are stripped
+	}{
+		{"**141933**", "*", "141933"},
+		{"✅ **丢失**", "*", "✅ 丢失"},
+		{"*斜体*", "*", "斜体"},
+		{"~~删除~~", "~", "删除"},
+		{"`code`", "`", "code"},
+		{"snake_case_id", "", "snake_case_id"}, // underscores left untouched
+		{"a * b", "", "a * b"},                 // bare asterisk with spaces, not emphasis
+	}
+	for _, c := range cases {
+		got := renderInlineCellMarkdown(c.in)
+		if c.absent != "" && strings.Contains(got, c.absent) {
+			t.Errorf("%q: marker %q leaked: %q", c.in, c.absent, got)
+		}
+		if stripped := stripANSIForGoTUI(got); stripped != c.want {
+			t.Errorf("%q: visible text = %q, want %q", c.in, stripped, c.want)
 		}
 	}
 }

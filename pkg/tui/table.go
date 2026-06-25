@@ -63,19 +63,42 @@ func normalizeEmojiWidth(s string) string {
 // a bare "---" horizontal rule is not mistaken for a single-column table.
 var tableDelimiterRe = regexp.MustCompile(`^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$`)
 
-// inlineCodeRe matches a GFM inline-code span (single backtick delimited).
-var inlineCodeRe = regexp.MustCompile("`([^`]+)`")
+// Inline GFM markup spans recognized inside table cells. Order of application
+// matters: inline code is consumed first (so emphasis markers inside a code
+// span stay literal), then bold (**) before italic (*) so "**x**" is not
+// misread as two italic runs. Underscore emphasis is intentionally left
+// unhandled to avoid mangling snake_case identifiers, which GFM also treats as
+// non-emphasis intra-word.
+var (
+	inlineCodeRe = regexp.MustCompile("`([^`]+)`")
+	boldRe       = regexp.MustCompile(`\*\*([^*]+)\*\*`)
+	strikeRe     = regexp.MustCompile(`~~([^~]+)~~`)
+	// Italic requires the delimited text not to begin or end with whitespace,
+	// matching GFM and avoiding false positives like "a * b".
+	italicRe = regexp.MustCompile(`\*(\S|\S[^*]*?\S)\*`)
+)
 
-// renderInlineCellMarkdown styles inline-code spans inside a table cell so the
-// backtick delimiters are dropped and the code is colored, instead of leaking
-// literal backticks into the rendered table. It also normalizes emoji width so
-// the column sizer and the terminal agree. lipgloss.Width strips the added ANSI
-// before measuring, so column sizing stays correct.
+// renderInlineCellMarkdown styles inline GFM spans (code, bold, italic,
+// strikethrough) inside a table cell so the markup delimiters are dropped and
+// the text is styled, instead of leaking literal `*`/`~`/backticks into the
+// rendered table. It also normalizes emoji width so the column sizer and the
+// terminal agree. lipgloss.Width strips the added ANSI before measuring, so
+// column sizing stays correct.
 func renderInlineCellMarkdown(s string) string {
 	s = normalizeEmojiWidth(s)
-	return inlineCodeRe.ReplaceAllStringFunc(s, func(m string) string {
+	s = inlineCodeRe.ReplaceAllStringFunc(s, func(m string) string {
 		return uiCodeText.Render(m[1 : len(m)-1])
 	})
+	s = boldRe.ReplaceAllStringFunc(s, func(m string) string {
+		return uiBoldText.Render(m[2 : len(m)-2])
+	})
+	s = strikeRe.ReplaceAllStringFunc(s, func(m string) string {
+		return uiStrikeText.Render(m[2 : len(m)-2])
+	})
+	s = italicRe.ReplaceAllStringFunc(s, func(m string) string {
+		return uiItalicText.Render(m[1 : len(m)-1])
+	})
+	return s
 }
 
 // mdSegment is a contiguous run of assistant markdown that is either a GFM
@@ -298,7 +321,7 @@ func renderMarkdownTableSegment(seg mdSegment, maxWidth int) string {
 
 	build := func(width int) string {
 		t := table.New().
-			Border(lipgloss.ThickBorder()).
+			Border(lipgloss.NormalBorder()).
 			BorderStyle(uiMutedText).
 			BorderRow(true).
 			Headers(norm(seg.rows[0])...).
