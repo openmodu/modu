@@ -37,6 +37,53 @@
       color: #526173;
       font-size: 14px;
     }
+    .composer {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 22px 18px 0;
+    }
+    .composer-panel {
+      padding: 18px;
+      border: 1px solid #d8e0ea;
+      border-radius: 8px;
+      background: #fff;
+    }
+    .composer h2 {
+      margin: 0 0 10px;
+      color: #111827;
+      font-size: 20px;
+      line-height: 1.35;
+    }
+    .composer p {
+      margin: 0 0 14px;
+      color: #526173;
+      font-size: 14px;
+    }
+    textarea {
+      width: 100%;
+      min-height: 260px;
+      resize: vertical;
+      border: 1px solid #cdd6e1;
+      border-radius: 8px;
+      padding: 14px;
+      outline: none;
+      color: #17202a;
+      background: #fbfdff;
+      font-family: Menlo, Consolas, monospace;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+    textarea:focus {
+      border-color: #0f766e;
+      box-shadow: 0 0 0 3px rgba(15, 118, 110, .12);
+    }
+    .composer-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin-top: 12px;
+    }
     .wrap {
       max-width: 760px;
       margin: 0 auto;
@@ -138,6 +185,33 @@
     <button id="selectBtn" style="background:#344054;">选中内联样式正文</button>
     <span class="status" id="status">复制后到公众号草稿编辑器里粘贴即可</span>
   </div>
+  <section class="composer">
+    <div class="composer-panel">
+      <h2>Markdown → 公众号排版</h2>
+      <p>支持标题、段落、列表、引用、链接、加粗、行内代码和 fenced code block。生成后下方会显示公众号预览，再点复制。</p>
+      <textarea id="markdownInput" placeholder="把 Markdown 粘贴到这里，例如：
+
+# 标题
+
+这是一段正文，支持 [链接](https://github.com/openmodu/modu)、**加粗** 和 `inline code`。
+
+## 小标题
+
+- 列表项一
+- 列表项二
+
+```go
+func main() {
+    fmt.Println(&quot;hello&quot;)
+}
+```"></textarea>
+      <div class="composer-actions">
+        <button id="renderBtn">生成公众号排版</button>
+        <button id="clearBtn" style="background:#667085;">清空输入</button>
+        <span class="status" id="renderStatus">当前下方是示例文章，可直接复制。</span>
+      </div>
+    </div>
+  </section>
   <main class="wrap">
     <article id="wechat-article">
       <h1>我是怎么给 Agent 搭建 Eval 评测体系的</h1>
@@ -391,6 +465,138 @@ evals.AssertT(e, "unrelated notes.txt is unchanged", string(data), string(data) 
         .replace(/\n/g, '<br>');
     }
 
+    function renderInlineMarkdown(value) {
+      let html = escapeHTML(value);
+      html = html.replace(/`([^`]+)`/g, (_, code) => `<code>${code}</code>`);
+      html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+      return html;
+    }
+
+    function markdownToWechatHTML(markdown) {
+      const lines = markdown.replace(/\r\n/g, '\n').split('\n');
+      const out = [];
+      let paragraph = [];
+      let listType = '';
+      let listItems = [];
+      let inCode = false;
+      let codeLines = [];
+
+      function flushParagraph() {
+        if (paragraph.length === 0) return;
+        out.push(`<p>${renderInlineMarkdown(paragraph.join(' '))}</p>`);
+        paragraph = [];
+      }
+
+      function flushList() {
+        if (!listType) return;
+        out.push(`<${listType}>${listItems.map(item => `<li>${renderInlineMarkdown(item)}</li>`).join('')}</${listType}>`);
+        listType = '';
+        listItems = [];
+      }
+
+      function openList(type, item) {
+        flushParagraph();
+        if (listType && listType !== type) {
+          flushList();
+        }
+        listType = type;
+        listItems.push(item);
+      }
+
+      for (const rawLine of lines) {
+        const line = rawLine.replace(/\s+$/, '');
+
+        if (/^```/.test(line.trim())) {
+          if (inCode) {
+            out.push(`<pre><code>${escapeHTML(codeLines.join('\n'))}</code></pre>`);
+            codeLines = [];
+            inCode = false;
+          } else {
+            flushParagraph();
+            flushList();
+            inCode = true;
+            codeLines = [];
+          }
+          continue;
+        }
+
+        if (inCode) {
+          codeLines.push(rawLine);
+          continue;
+        }
+
+        if (line.trim() === '') {
+          flushParagraph();
+          flushList();
+          continue;
+        }
+
+        const heading = line.match(/^(#{1,3})\s+(.+)$/);
+        if (heading) {
+          flushParagraph();
+          flushList();
+          const level = heading[1].length;
+          out.push(`<h${level}>${renderInlineMarkdown(heading[2].trim())}</h${level}>`);
+          continue;
+        }
+
+        const quote = line.match(/^>\s?(.*)$/);
+        if (quote) {
+          flushParagraph();
+          flushList();
+          const content = quote[1].trim();
+          if (content !== '') {
+            out.push(`<p class="lead">${renderInlineMarkdown(content)}</p>`);
+          }
+          continue;
+        }
+
+        const unordered = line.match(/^\s*[-*+]\s+(.+)$/);
+        if (unordered) {
+          openList('ul', unordered[1].trim());
+          continue;
+        }
+
+        const ordered = line.match(/^\s*\d+\.\s+(.+)$/);
+        if (ordered) {
+          openList('ol', ordered[1].trim());
+          continue;
+        }
+
+        if (listType) flushList();
+        paragraph.push(line.trim());
+      }
+
+      if (inCode) {
+        out.push(`<pre><code>${escapeHTML(codeLines.join('\n'))}</code></pre>`);
+      }
+      flushParagraph();
+      flushList();
+
+      return out.join('\n');
+    }
+
+    function renderMarkdownInput() {
+      const input = document.getElementById('markdownInput');
+      const renderStatus = document.getElementById('renderStatus');
+      const markdown = input.value.trim();
+      if (!markdown) {
+        renderStatus.textContent = '请先粘贴 Markdown 内容。';
+        input.focus();
+        return;
+      }
+      article.innerHTML = markdownToWechatHTML(markdown);
+      renderStatus.textContent = '已生成公众号排版。检查下方预览后点击复制。';
+      statusEl.textContent = '已生成新内容，点复制即可粘贴到公众号。';
+      article.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    function clearMarkdownInput() {
+      document.getElementById('markdownInput').value = '';
+      document.getElementById('renderStatus').textContent = '输入已清空。下方仍保留当前预览。';
+    }
+
     function inlineWechatStyles(root) {
       root.querySelectorAll('h1').forEach(el => {
         el.setAttribute('style', 'margin:0 0 22px;color:#111827;font-size:28px;line-height:1.35;font-weight:700;');
@@ -524,6 +730,8 @@ evals.AssertT(e, "unrelated notes.txt is unchanged", string(data), string(data) 
 
     document.getElementById('copyBtn').addEventListener('click', copyArticle);
     document.getElementById('selectBtn').addEventListener('click', selectInlineArticleForManualCopy);
+    document.getElementById('renderBtn').addEventListener('click', renderMarkdownInput);
+    document.getElementById('clearBtn').addEventListener('click', clearMarkdownInput);
   </script>
 </body>
 </html>
