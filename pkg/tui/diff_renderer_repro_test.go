@@ -70,6 +70,13 @@ func TestLastStableBlockEnd(t *testing.T) {
 	if got := lastStableBlockEnd(c2); got == 0 || c2[:got] != "intro\n\n```\ncode\n```\n\n" {
 		t.Fatalf("closed fence: got %d -> %q", got, c2[:got])
 	}
+	// A trailing newline is NOT a block separator: the in-progress last block
+	// (here a streaming GFM table whose completed rows each end in "\n") must not
+	// be committed, or it splits across scrollback at stale column widths.
+	c3 := "intro\n\n| a | b |\n|---|---|\n| r1 | r2 |\n"
+	if got := lastStableBlockEnd(c3); c3[:got] != "intro\n\n" {
+		t.Fatalf("trailing newline mid-table: want prefix %q, got %q", "intro\\n\\n", c3[:got])
+	}
 }
 
 // frameRows must count the PHYSICAL rows a frame occupies after the terminal

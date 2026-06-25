@@ -297,6 +297,13 @@ func (b *bubbleTUI) commitStreamingPrefix() {
 // of the last settled top-level markdown block. Content before it renders
 // identically whether or not more content follows, so it is safe to commit.
 // Returns 0 when nothing is settled (or a fence is still open).
+//
+// A blank line only counts as a separator when more content follows it: the
+// final element of strings.Split is the trailing-newline artifact (content
+// ending in "\n" yields a final ""), not a real blank line. Treating it as a
+// boundary would commit the in-progress last block — e.g. a streaming GFM table
+// whose every completed row ends in "\n" — at stale column widths, splitting it
+// across scrollback as later rows widen the columns.
 func lastStableBlockEnd(content string) int {
 	inFence := false
 	last := 0
@@ -310,7 +317,7 @@ func lastStableBlockEnd(content string) int {
 		if i < len(lines)-1 {
 			pos++ // the '\n'
 		}
-		if !inFence && strings.TrimSpace(ln) == "" {
+		if !inFence && i < len(lines)-1 && strings.TrimSpace(ln) == "" {
 			last = pos
 		}
 	}
