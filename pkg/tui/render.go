@@ -580,8 +580,11 @@ func (m *uiModel) renderSingleBlock(block uiBlock) string {
 }
 
 func assistantMarkdownTableWidth(viewWidth int) int {
-	contentWidth := widthForPrefix(viewWidth)
-	return min(contentWidth, max(20, contentWidth*66/100))
+	// Let tables use the full available content width. The table renderer only
+	// clamps to this when the natural (content-sized) width exceeds it, so
+	// narrow tables stay compact while wide multi-column tables wrap as little
+	// as possible instead of being squeezed into a fraction of the terminal.
+	return widthForPrefix(viewWidth)
 }
 
 // ─── Exit rendering ───────────────────────────────
