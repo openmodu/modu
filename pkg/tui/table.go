@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -359,11 +360,59 @@ func renderMarkdownTableSegment(seg mdSegment, maxWidth int) string {
 	return out
 }
 
+// firstTableStart returns the byte offset of the first GFM table's first line,
+// or len(content) when there is no table. Pipes inside a code fence or indented
+// code block are ignored (mirrors splitMarkdownTables' fence handling). The
+// stream committer uses this to never commit at or past a table while streaming:
+// a table only renders correctly once complete, so everything from the first
+// table onward stays in the live frame (as placeholders) until finalize.
+func firstTableStart(content string) int {
+	lines := strings.Split(content, "\n")
+	inFence := false
+	fenceMarker := rune(0)
+	fenceLen := 0
+	pos := 0
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		if inFence {
+			if isMarkdownFenceClose(line, fenceMarker, fenceLen) {
+				inFence = false
+			}
+		} else if marker, count, ok := markdownFenceOpen(line); ok {
+			inFence, fenceMarker, fenceLen = true, marker, count
+		} else if !isIndentedCodeLine(line) && strings.Contains(line, "|") && i+1 < len(lines) &&
+			strings.Contains(lines[i+1], "|") && tableDelimiterRe.MatchString(lines[i+1]) {
+			return pos
+		}
+		pos += len(line) + 1 // +1 for the '\n' that strings.Split removed
+	}
+	return len(content)
+}
+
+// streamingTablePlaceholder renders a one-line progress stand-in for a table
+// that is still being streamed. Drawing the partial table (as a reflowing box or
+// as raw markdown) looks broken in the live frame AND makes the frame height
+// jump between fit and overflow, which flickers the screen; a single compact
+// line keeps the active region small and stable until the box is committed.
+func streamingTablePlaceholder(rows int) string {
+	label := "rendering table…"
+	if rows > 0 {
+		label = fmt.Sprintf("rendering table… (%d rows)", rows)
+	}
+	return uiMutedText.Render("┄ " + label)
+}
+
 // renderAssistantMarkdown renders assistant content, routing GFM tables
 // through the lipgloss table renderer (square borders, CJK-correct widths)
 // and everything else through glamour. tableWidth caps table width to the
 // available content width so rendered tables never re-wrap downstream.
-func renderAssistantMarkdown(renderer *glamour.TermRenderer, content string, tableWidth int) (string, error) {
+//
+// While streaming, EVERY table is collapsed to a one-line progress placeholder:
+// a table's box only renders correctly once all its rows are known, and drawing
+// a growing/clipped box mid-stream both looks broken and makes the live frame's
+// height oscillate (fit↔overflow), which flickers the whole screen. Tables snap
+// to their boxes on finalize (streaming=false), committed once to scrollback.
+func renderAssistantMarkdown(renderer *glamour.TermRenderer, content string, tableWidth int, streaming bool) (string, error) {
 	segs := splitMarkdownTables(content)
 	hasTable := false
 	for _, s := range segs {
@@ -383,7 +432,11 @@ func renderAssistantMarkdown(renderer *glamour.TermRenderer, content string, tab
 	var parts []string
 	for _, s := range segs {
 		if s.isTable {
-			parts = append(parts, renderMarkdownTableSegment(s, tableWidth))
+			if streaming {
+				parts = append(parts, streamingTablePlaceholder(len(s.rows)-1))
+			} else {
+				parts = append(parts, renderMarkdownTableSegment(s, tableWidth))
+			}
 			continue
 		}
 		if strings.TrimSpace(s.text) == "" {

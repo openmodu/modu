@@ -270,6 +270,13 @@ func (b *bubbleTUI) commitStreamingPrefix() {
 		return
 	}
 	cut := lastStableBlockEnd(full.Content)
+	// Never commit at or past a table while streaming: a table renders as a
+	// one-line placeholder until it is complete, so committing it now would
+	// freeze that placeholder into scrollback. Hold everything from the first
+	// table onward in the live frame until finalize re-renders it as a box.
+	if ts := firstTableStart(full.Content); ts < cut {
+		cut = ts
+	}
 	if cut <= len(b.streamCommittedContent) {
 		return // no new settled block (in-progress block still open / too big)
 	}

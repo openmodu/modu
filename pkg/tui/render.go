@@ -529,7 +529,7 @@ func (m *uiModel) renderSingleBlock(block uiBlock) string {
 		if strings.TrimSpace(block.Content) != "" {
 			if renderer != nil {
 				contentWidth := widthForPrefix(viewWidth)
-				if md, err := renderAssistantMarkdown(renderer, block.Content, assistantMarkdownTableWidth(viewWidth)); err == nil {
+				if md, err := renderAssistantMarkdown(renderer, block.Content, assistantMarkdownTableWidth(viewWidth), block.Streaming); err == nil {
 					ab.WriteString(renderUIAssistantMarkdownBlock(md, viewWidth))
 				} else {
 					ab.WriteString(renderUIAssistantBlock(wrap.String(block.Content, contentWidth), viewWidth))
@@ -556,7 +556,7 @@ func (m *uiModel) renderSingleBlock(block uiBlock) string {
 		if strings.TrimSpace(block.Content) != "" {
 			var rendered string
 			if renderer != nil {
-				if md, err := renderAssistantMarkdown(renderer, block.Content, assistantMarkdownTableWidth(viewWidth)); err == nil {
+				if md, err := renderAssistantMarkdown(renderer, block.Content, assistantMarkdownTableWidth(viewWidth), false); err == nil {
 					rendered = md
 				}
 			}

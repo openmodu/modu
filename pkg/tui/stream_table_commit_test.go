@@ -19,11 +19,12 @@ func streamTable(t *testing.T, width, height int, steps []string) []string {
 		b.model.blocks = []uiBlock{{Kind: "assistant", Streaming: true, Content: content}}
 		b.commitStreamingPrefix()
 	}
-	// Stream end: block stops streaming, the tail flush commits the remainder.
+	// Stream end: MessageEnd marks the block done and printAssistantTailCmd commits
+	// whatever wasn't already streamed out (the real finalize path).
 	final := steps[len(steps)-1]
-	b.model.state = uiStateQuerying
+	idx := len(b.model.blocks) - 1
 	b.model.blocks = []uiBlock{{Kind: "assistant", Streaming: false, Content: final}}
-	b.commitStreamingPrefix()
+	b.printAssistantTailCmd(b.model.blocks[idx], idx)
 	return b.pendingScroll
 }
 
