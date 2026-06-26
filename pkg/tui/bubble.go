@@ -1522,7 +1522,7 @@ func (b *bubbleTUI) handleSessionEvent(ev coding_agent.SessionEvent) tea.Cmd {
 		}
 		msg := strings.TrimSpace(ev.Message)
 		if msg != "" {
-			block := uiBlock{Kind: "section", Title: title, Content: msg, Timestamp: time.Now()}
+			block := uiBlock{Kind: "notify", Title: title, Content: msg, Timestamp: time.Now()}
 			b.appendBlock(block)
 			return b.printBlockCmd(block)
 		}

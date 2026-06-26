@@ -547,6 +547,25 @@ func (m *uiModel) renderSingleBlock(block uiBlock) string {
 		s = tb.String()
 	case "section":
 		s = renderUISection(block.Title, block.Content, viewWidth)
+	case "notify":
+		// Extension notifications (e.g. workflow completion reports) carry
+		// markdown content, so render the body through the same markdown
+		// pipeline as assistant blocks, under a section-style title header.
+		var nb strings.Builder
+		nb.WriteString("  " + uiPrimaryText.Render(block.Title) + "\n")
+		if strings.TrimSpace(block.Content) != "" {
+			var rendered string
+			if renderer != nil {
+				if md, err := renderAssistantMarkdown(renderer, block.Content, assistantMarkdownTableWidth(viewWidth)); err == nil {
+					rendered = md
+				}
+			}
+			if rendered == "" {
+				rendered = block.Content
+			}
+			writeWrappedStyledLines(&nb, rendered, widthForPrefix(viewWidth), "  ", "  ", lipgloss.NewStyle())
+		}
+		s = nb.String()
 	default:
 		var db strings.Builder
 		for _, line := range strings.Split(block.Content, "\n") {
