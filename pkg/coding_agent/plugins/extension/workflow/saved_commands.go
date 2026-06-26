@@ -106,10 +106,10 @@ func discoverSavedWorkflowCommands(cwd, agentDir string) ([]savedWorkflowCommand
 		}
 		sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 		for _, entry := range entries {
-			if entry.IsDir() || filepath.Ext(entry.Name()) != ".lua" {
+			if entry.IsDir() || filepath.Ext(entry.Name()) != ".js" {
 				continue
 			}
-			name := strings.TrimSuffix(entry.Name(), ".lua")
+			name := strings.TrimSuffix(entry.Name(), ".js")
 			if !savedWorkflowCommandNameRE.MatchString(name) || seen[name] {
 				continue
 			}

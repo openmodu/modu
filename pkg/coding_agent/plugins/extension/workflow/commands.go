@@ -210,7 +210,7 @@ func (e *Extension) cmdWorkflowsShow(selector string) error {
 		if len(script) > 4000 {
 			script = script[:4000] + "\n..."
 		}
-		fmt.Fprintf(&b, "\n```lua\n%s\n```", script)
+		fmt.Fprintf(&b, "\n```js\n%s\n```", script)
 	}
 	e.tell(b.String())
 	return nil
@@ -587,8 +587,8 @@ func (e *Extension) cmdWorkflowsSave(selector, name, scope string) error {
 
 func (e *Extension) saveWorkflowRunScript(run workflowRunSummary, name, scope string) (string, error) {
 	name = strings.TrimSpace(name)
-	if filepath.Ext(name) == ".lua" {
-		name = strings.TrimSuffix(name, ".lua")
+	if filepath.Ext(name) == ".js" {
+		name = strings.TrimSuffix(name, ".js")
 	}
 	if !savedWorkflowCommandNameRE.MatchString(name) {
 		return "", fmt.Errorf("workflow name must match %s", savedWorkflowCommandNameRE.String())
@@ -628,7 +628,7 @@ func (e *Extension) saveWorkflowRunScript(run workflowRunSummary, name, scope st
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return "", fmt.Errorf("create workflow directory %s: %w", root, err)
 	}
-	path := filepath.Join(root, name+".lua")
+	path := filepath.Join(root, name+".js")
 	if _, err := os.Stat(path); err == nil {
 		if e.api == nil || !e.api.Confirm("Overwrite saved workflow?", fmt.Sprintf("%s already exists. Overwrite it?", path), false) {
 			return "", fmt.Errorf("saved workflow already exists: %s", path)
@@ -703,7 +703,7 @@ func (e *Extension) persistedWorkflowRuns() ([]workflowRunSummary, string, error
 		if !entry.IsDir() {
 			continue
 		}
-		path := filepath.Join(dir, entry.Name(), "script.lua")
+		path := filepath.Join(dir, entry.Name(), "script.js")
 		info, err := os.Stat(path)
 		if err != nil || info.IsDir() {
 			continue

@@ -1,18 +1,10 @@
 package workflow
 
 import (
-	"encoding/json"
 	"fmt"
 	"math"
-	"sort"
 	"strings"
-
-	lua "github.com/yuin/gopher-lua"
 )
-
-type jsonNullSentinel struct{}
-
-const jsonNullRegistryKey = "__modu_workflow_json_null"
 
 type agentOptions struct {
 	Label           string
@@ -30,19 +22,35 @@ type agentOptions struct {
 	Schema          map[string]any
 }
 
-type parallelTask struct {
-	Prompt string
-	agentOptions
+// objectField returns the map for a JS object argument exported via goja's
+// Value.Export(). Nil/undefined exports as nil; anything that is not an object
+// is rejected so the caller can surface a clear error.
+func objectField(raw any) (map[string]any, bool) {
+	m, ok := raw.(map[string]any)
+	return m, ok
 }
 
-func decodeMeta(t *lua.LTable) (metaInfo, error) {
-	meta := metaInfo{
-		Name:        strings.TrimSpace(stringValue(t, "name")),
-		Description: strings.TrimSpace(stringValue(t, "description")),
-		WhenToUse:   strings.TrimSpace(stringValue(t, "when_to_use")),
+// firstKey reads the first present key (camelCase preferred, snake_case
+// accepted) so workflow authors can use either JS-idiomatic or snake_case
+// option names without surprises.
+func firstKey(m map[string]any, keys ...string) any {
+	for _, k := range keys {
+		if v, ok := m[k]; ok && v != nil {
+			return v
+		}
 	}
-	if meta.WhenToUse == "" {
-		meta.WhenToUse = strings.TrimSpace(stringValue(t, "whenToUse"))
+	return nil
+}
+
+func decodeMeta(raw any) (metaInfo, error) {
+	m, ok := objectField(raw)
+	if !ok {
+		return metaInfo{}, fmt.Errorf("meta() requires an object argument")
+	}
+	meta := metaInfo{
+		Name:        strings.TrimSpace(stringField(m, "name")),
+		Description: strings.TrimSpace(stringField(m, "description")),
+		WhenToUse:   strings.TrimSpace(stringFieldAny(m, "whenToUse", "when_to_use")),
 	}
 	if meta.Name == "" {
 		return meta, fmt.Errorf("meta.name must be a non-empty string")
@@ -50,10 +58,12 @@ func decodeMeta(t *lua.LTable) (metaInfo, error) {
 	if meta.Description == "" {
 		return meta, fmt.Errorf("meta.description must be a non-empty string")
 	}
-	if phases, ok := t.RawGetString("phases").(*lua.LTable); ok {
-		var decoded []phaseInfo
-		var err error
-		decoded, err = decodePhases(phases)
+	if rawPhases := firstKey(m, "phases"); rawPhases != nil {
+		list, ok := rawPhases.([]any)
+		if !ok {
+			return meta, fmt.Errorf("meta.phases must be an array")
+		}
+		decoded, err := decodePhases(list)
 		if err != nil {
 			return meta, err
 		}
@@ -62,17 +72,17 @@ func decodeMeta(t *lua.LTable) (metaInfo, error) {
 	return meta, nil
 }
 
-func decodePhases(t *lua.LTable) ([]phaseInfo, error) {
+func decodePhases(list []any) ([]phaseInfo, error) {
 	var out []phaseInfo
-	for i := 1; i <= t.Len(); i++ {
-		item, ok := t.RawGetInt(i).(*lua.LTable)
+	for _, item := range list {
+		obj, ok := objectField(item)
 		if !ok {
-			return nil, fmt.Errorf("each meta phase must be a table")
+			return nil, fmt.Errorf("each meta phase must be an object")
 		}
 		p := phaseInfo{
-			Title:  strings.TrimSpace(stringValue(item, "title")),
-			Detail: strings.TrimSpace(stringValue(item, "detail")),
-			Model:  strings.TrimSpace(stringValue(item, "model")),
+			Title:  strings.TrimSpace(stringField(obj, "title")),
+			Detail: strings.TrimSpace(stringField(obj, "detail")),
+			Model:  strings.TrimSpace(stringField(obj, "model")),
 		}
 		if p.Title == "" {
 			return nil, fmt.Errorf("each meta phase must have a title string")
@@ -82,38 +92,45 @@ func decodePhases(t *lua.LTable) ([]phaseInfo, error) {
 	return out, nil
 }
 
-func decodeAgentOptions(t *lua.LTable) (agentOptions, error) {
-	maxTurns, err := positiveIntField(t, "max_turns")
+func decodeAgentOptions(raw any) (agentOptions, error) {
+	if raw == nil {
+		return agentOptions{}, nil
+	}
+	m, ok := objectField(raw)
+	if !ok {
+		return agentOptions{}, fmt.Errorf("agent options must be an object")
+	}
+	maxTurns, err := positiveIntField(m, "maxTurns", "max_turns")
 	if err != nil {
 		return agentOptions{}, err
 	}
 	opts := agentOptions{
-		Label:          strings.TrimSpace(stringValue(t, "label")),
-		Phase:          strings.TrimSpace(stringValue(t, "phase")),
-		Model:          strings.TrimSpace(stringValue(t, "model")),
-		Cwd:            strings.TrimSpace(stringValue(t, "cwd")),
-		Isolation:      strings.TrimSpace(stringValue(t, "isolation")),
-		PermissionMode: strings.TrimSpace(stringValue(t, "permission_mode")),
+		Label:          strings.TrimSpace(stringField(m, "label")),
+		Phase:          strings.TrimSpace(stringField(m, "phase")),
+		Model:          strings.TrimSpace(stringField(m, "model")),
+		Cwd:            strings.TrimSpace(stringField(m, "cwd")),
+		Isolation:      strings.TrimSpace(stringField(m, "isolation")),
+		PermissionMode: strings.TrimSpace(stringFieldAny(m, "permissionMode", "permission_mode")),
 		MaxTurns:       maxTurns,
-		Thinking:       strings.TrimSpace(stringValue(t, "thinking")),
-		MemoryScope:    strings.TrimSpace(stringValue(t, "memory_scope")),
+		Thinking:       strings.TrimSpace(stringField(m, "thinking")),
+		MemoryScope:    strings.TrimSpace(stringFieldAny(m, "memoryScope", "memory_scope")),
 	}
 	if opts.Isolation != "" && opts.Isolation != "worktree" {
 		return opts, fmt.Errorf("isolation must be \"worktree\" when set")
 	}
 	if !validMemoryScope(opts.MemoryScope) {
-		return opts, fmt.Errorf("memory_scope must be one of none, user, global, project, local, both, or all")
+		return opts, fmt.Errorf("memoryScope must be one of none, user, global, project, local, both, or all")
 	}
-	if opts.Tools, err = stringListField(t, "tools"); err != nil {
+	if opts.Tools, err = stringListField(m, "tools"); err != nil {
 		return opts, err
 	}
-	if opts.DisallowedTools, err = stringListField(t, "disallowed_tools"); err != nil {
+	if opts.DisallowedTools, err = stringListFieldAny(m, "disallowedTools", "disallowed_tools"); err != nil {
 		return opts, err
 	}
-	if opts.Skills, err = stringListField(t, "skills"); err != nil {
+	if opts.Skills, err = stringListField(m, "skills"); err != nil {
 		return opts, err
 	}
-	if opts.Schema, err = schemaField(t, "schema"); err != nil {
+	if opts.Schema, err = schemaField(m, "schema"); err != nil {
 		return opts, err
 	}
 	return opts, nil
@@ -128,99 +145,79 @@ func validMemoryScope(scope string) bool {
 	}
 }
 
-func decodeParallelTasks(t *lua.LTable) ([]parallelTask, error) {
-	var tasks []parallelTask
-	for i := 1; i <= t.Len(); i++ {
-		item, ok := t.RawGetInt(i).(*lua.LTable)
-		if !ok {
-			return nil, fmt.Errorf("parallel task %d must be a table", i)
-		}
-		opts, err := decodeAgentOptions(item)
-		if err != nil {
-			return nil, fmt.Errorf("parallel task %d: %w", i, err)
-		}
-		prompt := strings.TrimSpace(stringValue(item, "prompt"))
-		if prompt == "" {
-			prompt = strings.TrimSpace(stringValue(item, "task"))
-		}
-		if prompt == "" {
-			return nil, fmt.Errorf("parallel task %d requires prompt", i)
-		}
-		tasks = append(tasks, parallelTask{Prompt: prompt, agentOptions: opts})
-	}
-	if len(tasks) == 0 {
-		return nil, fmt.Errorf("parallel() requires at least one task")
-	}
-	return tasks, nil
-}
-
-func stringValue(t *lua.LTable, key string) string {
-	v := t.RawGetString(key)
-	if s, ok := v.(lua.LString); ok {
-		return string(s)
+func stringField(m map[string]any, key string) string {
+	if s, ok := m[key].(string); ok {
+		return s
 	}
 	return ""
 }
 
-func intField(t *lua.LTable, key string) int {
-	switch v := t.RawGetString(key).(type) {
-	case lua.LNumber:
-		f := float64(v)
-		if f == math.Trunc(f) && f > 0 && f <= float64(math.MaxInt) {
-			return int(f)
-		}
+func stringFieldAny(m map[string]any, keys ...string) string {
+	if s, ok := firstKey(m, keys...).(string); ok {
+		return s
 	}
-	return 0
+	return ""
 }
 
-func positiveIntField(t *lua.LTable, key string) (int, error) {
-	raw := t.RawGetString(key)
-	if raw == lua.LNil {
+func positiveIntField(m map[string]any, keys ...string) (int, error) {
+	raw := firstKey(m, keys...)
+	if raw == nil {
 		return 0, nil
 	}
-	n, ok := raw.(lua.LNumber)
-	if !ok {
-		return 0, fmt.Errorf("%s must be a positive integer", key)
-	}
-	f := float64(n)
-	if f != math.Trunc(f) || f <= 0 || f > float64(math.MaxInt) {
-		return 0, fmt.Errorf("%s must be a positive integer", key)
+	f, ok := numberValue(raw)
+	if !ok || f != math.Trunc(f) || f <= 0 || f > float64(math.MaxInt) {
+		return 0, fmt.Errorf("%s must be a positive integer", keys[0])
 	}
 	return int(f), nil
 }
 
-func stringListField(t *lua.LTable, key string) ([]string, error) {
-	raw := t.RawGetString(key)
-	if raw == lua.LNil {
+// numberValue normalizes the numeric kinds goja's Export produces (int64 for
+// integral JS numbers, float64 otherwise).
+func numberValue(raw any) (float64, bool) {
+	switch v := raw.(type) {
+	case int64:
+		return float64(v), true
+	case int:
+		return float64(v), true
+	case float64:
+		return v, true
+	default:
+		return 0, false
+	}
+}
+
+func stringListField(m map[string]any, key string) ([]string, error) {
+	return stringListFieldAny(m, key)
+}
+
+func stringListFieldAny(m map[string]any, keys ...string) ([]string, error) {
+	raw := firstKey(m, keys...)
+	if raw == nil {
 		return nil, nil
 	}
-	table, ok := raw.(*lua.LTable)
+	list, ok := raw.([]any)
 	if !ok {
-		return nil, fmt.Errorf("%s must be an array of strings", key)
+		return nil, fmt.Errorf("%s must be an array of strings", keys[0])
 	}
-	out := make([]string, 0, table.Len())
-	for i := 1; i <= table.Len(); i++ {
-		s, ok := table.RawGetInt(i).(lua.LString)
+	out := make([]string, 0, len(list))
+	for i, item := range list {
+		s, ok := item.(string)
 		if !ok {
-			return nil, fmt.Errorf("%s[%d] must be a string", key, i)
+			return nil, fmt.Errorf("%s[%d] must be a string", keys[0], i)
 		}
-		if trimmed := strings.TrimSpace(string(s)); trimmed != "" {
+		if trimmed := strings.TrimSpace(s); trimmed != "" {
 			out = append(out, trimmed)
 		}
 	}
 	return out, nil
 }
 
-func schemaField(t *lua.LTable, key string) (map[string]any, error) {
-	raw := t.RawGetString(key)
-	if raw == lua.LNil {
+func schemaField(m map[string]any, key string) (map[string]any, error) {
+	raw := firstKey(m, key)
+	if raw == nil {
 		return nil, nil
 	}
-	value, err := luaToGo(raw)
-	if err != nil {
-		return nil, fmt.Errorf("%s must be a JSON-compatible schema: %w", key, err)
-	}
-	schema, ok := value.(map[string]any)
+	schema, ok := raw.(map[string]any)
 	if !ok {
 		return nil, fmt.Errorf("%s must be a JSON object", key)
 	}
@@ -228,146 +225,4 @@ func schemaField(t *lua.LTable, key string) (map[string]any, error) {
 		return nil, err
 	}
 	return schema, nil
-}
-
-func goToLua(L *lua.LState, value any) lua.LValue {
-	switch v := value.(type) {
-	case nil:
-		return jsonNullValue(L)
-	case bool:
-		return lua.LBool(v)
-	case string:
-		return lua.LString(v)
-	case int:
-		return lua.LNumber(v)
-	case int64:
-		return lua.LNumber(v)
-	case float64:
-		return lua.LNumber(v)
-	case json.Number:
-		f, _ := v.Float64()
-		return lua.LNumber(f)
-	case []any:
-		t := L.NewTable()
-		for i, item := range v {
-			t.RawSetInt(i+1, goToLua(L, item))
-		}
-		return t
-	case map[string]any:
-		t := L.NewTable()
-		keys := make([]string, 0, len(v))
-		for k := range v {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			t.RawSetString(k, goToLua(L, v[k]))
-		}
-		return t
-	default:
-		data, err := json.Marshal(value)
-		if err != nil {
-			return lua.LString(fmt.Sprint(value))
-		}
-		var decoded any
-		if err := json.Unmarshal(data, &decoded); err != nil {
-			return lua.LString(fmt.Sprint(value))
-		}
-		return goToLua(L, decoded)
-	}
-}
-
-func jsonNullValue(L *lua.LState) lua.LValue {
-	if existing := L.GetField(L.Get(lua.RegistryIndex), jsonNullRegistryKey); existing != lua.LNil {
-		return existing
-	}
-	ud := L.NewUserData()
-	ud.Value = jsonNullSentinel{}
-	L.SetField(L.Get(lua.RegistryIndex), jsonNullRegistryKey, ud)
-	return ud
-}
-
-func luaToGo(value lua.LValue) (any, error) {
-	return luaToGoSeen(value, map[*lua.LTable]bool{})
-}
-
-func luaToGoSeen(value lua.LValue, seen map[*lua.LTable]bool) (any, error) {
-	if value == lua.LNil {
-		return nil, nil
-	}
-	switch v := value.(type) {
-	case lua.LBool:
-		return bool(v), nil
-	case lua.LNumber:
-		f := float64(v)
-		if math.Trunc(f) == f {
-			return int64(f), nil
-		}
-		return f, nil
-	case lua.LString:
-		return string(v), nil
-	case *lua.LTable:
-		if seen[v] {
-			return nil, fmt.Errorf("cyclic tables are not JSON-compatible")
-		}
-		seen[v] = true
-		defer delete(seen, v)
-		return luaTableToGo(v, seen)
-	case *lua.LUserData:
-		if _, ok := v.Value.(jsonNullSentinel); ok {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("unsupported Lua userdata")
-	default:
-		return nil, fmt.Errorf("unsupported Lua value %s", value.Type().String())
-	}
-}
-
-func luaTableToGo(t *lua.LTable, seen map[*lua.LTable]bool) (any, error) {
-	maxIndex := 0
-	count := 0
-	isArray := true
-	t.ForEach(func(k, v lua.LValue) {
-		count++
-		if n, ok := k.(lua.LNumber); ok && float64(n) == math.Trunc(float64(n)) && int(n) > 0 {
-			if int(n) > maxIndex {
-				maxIndex = int(n)
-			}
-			return
-		}
-		isArray = false
-	})
-	if isArray && count == maxIndex {
-		out := make([]any, maxIndex)
-		for i := 1; i <= maxIndex; i++ {
-			item, err := luaToGoSeen(t.RawGetInt(i), seen)
-			if err != nil {
-				return nil, err
-			}
-			out[i-1] = item
-		}
-		return out, nil
-	}
-	out := map[string]any{}
-	var firstErr error
-	t.ForEach(func(k, v lua.LValue) {
-		if firstErr != nil {
-			return
-		}
-		var key string
-		switch kk := k.(type) {
-		case lua.LString:
-			key = string(kk)
-		case lua.LNumber:
-			key = fmt.Sprint(float64(kk))
-		default:
-			firstErr = fmt.Errorf("table key %s is not JSON-compatible", k.Type().String())
-			return
-		}
-		out[key], firstErr = luaToGoSeen(v, seen)
-	})
-	if firstErr != nil {
-		return nil, firstErr
-	}
-	return out, nil
 }

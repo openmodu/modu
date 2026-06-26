@@ -1976,9 +1976,9 @@ func TestWorkflowExtensionAddsWorkflowAuthoringPrompt(t *testing.T) {
 	for _, want := range []string{
 		"# Dynamic Workflows",
 		"`ultracode`",
-		"Write Lua, not JavaScript",
+		"Write plain async JavaScript",
 		"`meta`",
-		"`parallel(..., { concurrency = N })`",
+		"await pipeline(items, stage1, stage2, ...)",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("expected workflow authoring prompt to contain %q, got:\n%s", want, prompt)
@@ -2037,8 +2037,8 @@ func TestWorkflowToolCapturesRealForkTranscript(t *testing.T) {
 	}
 	res, err := workflowTool.Execute(context.Background(), "wf-transcript", map[string]any{
 		"script": `
-meta({ name = "real_transcript", description = "capture transcript" })
-return agent("capture transcript", { label = "child" })
+meta({ name: "real_transcript", description: "capture transcript" });
+return await agent("capture transcript", { label: "child" });
 `,
 	}, nil)
 	if err != nil {
@@ -2186,9 +2186,9 @@ func TestSetWorkflowsDisabledRemovesLiveWorkflowSurface(t *testing.T) {
 	if err := os.MkdirAll(savedDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(savedDir, "review.lua"), []byte(`
-meta({ name = "review", description = "review" })
-return agent("review", { label = "review" })
+	if err := os.WriteFile(filepath.Join(savedDir, "review.js"), []byte(`
+meta({ name: "review", description: "review" });
+return await agent("review", { label: "review" });
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}

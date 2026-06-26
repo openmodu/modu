@@ -1,4 +1,4 @@
-// Package workflow provides a Lua-scripted workflow extension for orchestrating
+// Package workflow provides a JavaScript-scripted workflow extension for orchestrating
 // multiple forked coding-agent children through ExtensionAPI.ForkSession.
 package workflow
 

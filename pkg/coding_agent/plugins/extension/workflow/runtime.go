@@ -10,12 +10,49 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/dop251/goja"
+	"github.com/dop251/goja_nodejs/eventloop"
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
 	"github.com/openmodu/modu/pkg/types"
-	lua "github.com/yuin/gopher-lua"
 )
 
-const structuredOutputMaxRetries = 1
+// structuredOutputMaxRetries bounds how many extra attempts an agent gets to
+// satisfy its JSON schema before the call is treated as failed. Kept >1 so a
+// single malformed response does not drop a result the workflow depends on.
+const structuredOutputMaxRetries = 2
+
+// jsPrelude defines parallel()/pipeline() in terms of native Promises. Because
+// agent() returns a Promise resolved from a Go goroutine, Promise.all fans the
+// real work out concurrently; the actual cap on simultaneous ForkSession calls
+// is enforced inside runAgentAttempt via a shared semaphore. pipeline() runs
+// each item through every stage independently with no barrier between stages,
+// matching Claude-Code semantics. A throwing thunk/stage drops that slot to
+// null rather than failing the whole batch.
+const jsPrelude = `
+globalThis.parallel = async function parallel(thunks) {
+  if (!Array.isArray(thunks)) throw new TypeError("parallel() requires an array of functions");
+  return await Promise.all(thunks.map(async (t) => {
+    if (typeof t !== "function") throw new TypeError("parallel() items must be functions returning a promise");
+    try { return await t(); } catch (e) { return null; }
+  }));
+};
+globalThis.pipeline = async function pipeline(items, ...stages) {
+  if (!Array.isArray(items)) throw new TypeError("pipeline() requires an array of items");
+  if (stages.length === 0) throw new TypeError("pipeline() requires at least one stage");
+  return await Promise.all(items.map(async (item, index) => {
+    let value = item;
+    for (const stage of stages) {
+      try {
+        value = await stage(value, item, index);
+      } catch (e) {
+        log("pipeline[" + index + "] failed: " + (e && e.message ? e.message : String(e)));
+        return null;
+      }
+    }
+    return value;
+  }));
+};
+`
 
 type runOptions struct {
 	Cwd         string
@@ -47,9 +84,12 @@ type runner struct {
 	tracker    *snapshotTracker
 	meta       *metaInfo
 	current    string
-	usedAgent  atomic.Bool // set from parallel agent goroutines; read on the main thread
+	usedAgent  atomic.Bool
 	mu         sync.Mutex
-	stageDepth atomic.Int32
+	ctx        context.Context
+	loop       *eventloop.EventLoop
+	vm         *goja.Runtime
+	jsonParse  goja.Callable
 }
 
 type workflowRunState struct {
@@ -59,6 +99,9 @@ type workflowRunState struct {
 	reserved   int
 	cache      *workflowAgentCache
 	cursor     map[string]int
+
+	semOnce sync.Once
+	sem     chan struct{}
 }
 
 type workflowAgentReservation struct {
@@ -151,101 +194,155 @@ func (s *workflowRunState) commitBudgetSpend(reservation workflowAgentReservatio
 	s.mu.Unlock()
 }
 
-func (r *runner) run(ctx context.Context, script string) (runResult, error) {
-	L := lua.NewState(lua.Options{SkipOpenLibs: true})
-	defer L.Close()
-	L.SetContext(ctx)
-	r.openSafeLibs(L)
-	if err := r.installGlobals(L); err != nil {
-		return runResult{Snapshot: r.tracker.current()}, err
+// concurrencyLimit clamps the configured concurrency to a safe range. Applies to
+// the whole run (shared across parallel/pipeline and nested workflows).
+func concurrencyLimit(n int) int {
+	if n <= 0 {
+		n = 4
 	}
-	if err := L.DoString(script); err != nil {
-		if ctx.Err() != nil {
-			r.tracker.skipRunning("aborted")
-			return runResult{Snapshot: r.tracker.current()}, ctx.Err()
+	if n > 16 {
+		n = 16
+	}
+	return n
+}
+
+func (r *runner) acquireSlot(ctx context.Context) error {
+	r.state.semOnce.Do(func() {
+		r.state.sem = make(chan struct{}, concurrencyLimit(r.opts.Concurrency))
+	})
+	select {
+	case r.state.sem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (r *runner) releaseSlot() {
+	select {
+	case <-r.state.sem:
+	default:
+	}
+}
+
+func (r *runner) run(ctx context.Context, script string) (runResult, error) {
+	r.ctx = ctx
+	loop := eventloop.NewEventLoop(eventloop.EnableConsole(false))
+	r.loop = loop
+
+	var (
+		result  any
+		runErr  string
+		hadErr  bool
+		setupErr error
+		done    = make(chan struct{})
+		once    sync.Once
+	)
+	finish := func() { once.Do(func() { close(done) }) }
+
+	loop.Start()
+	loop.RunOnLoop(func(vm *goja.Runtime) {
+		if err := r.installGlobals(vm); err != nil {
+			setupErr = err
+			finish()
+			return
 		}
-		return runResult{Snapshot: r.tracker.current()}, err
+		vm.Set("__resolve", func(call goja.FunctionCall) goja.Value {
+			result = call.Argument(0).Export()
+			finish()
+			return goja.Undefined()
+		})
+		vm.Set("__reject", func(call goja.FunctionCall) goja.Value {
+			runErr = call.Argument(0).String()
+			hadErr = true
+			finish()
+			return goja.Undefined()
+		})
+		wrapped := jsPrelude + "\n(async () => { try { const __r = await (async () => {\n" +
+			script + "\n})(); __resolve(__r === undefined ? null : __r); } catch (__e) { __reject(__e && __e.stack ? __e.stack : String(__e)); } })();"
+		if _, err := vm.RunString(wrapped); err != nil {
+			runErr = err.Error()
+			hadErr = true
+			finish()
+		}
+	})
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		loop.Terminate()
+		r.tracker.skipRunning("aborted")
+		return runResult{Meta: r.metaOrZero(), Snapshot: r.tracker.current()}, ctx.Err()
+	}
+	loop.Stop()
+
+	if setupErr != nil {
+		return runResult{Snapshot: r.tracker.current()}, setupErr
+	}
+	if ctx.Err() != nil {
+		r.tracker.skipRunning("aborted")
+		return runResult{Meta: r.metaOrZero(), Snapshot: r.tracker.current()}, ctx.Err()
+	}
+	if hadErr {
+		return runResult{Meta: r.metaOrZero(), Snapshot: r.tracker.current()}, fmt.Errorf("%s", runErr)
 	}
 	if r.meta == nil {
-		return runResult{Snapshot: r.tracker.current()}, fmt.Errorf("meta({name=..., description=...}) is required")
+		return runResult{Snapshot: r.tracker.current()}, fmt.Errorf("meta({name:..., description:...}) is required")
 	}
 	if !r.usedAgent.Load() {
 		return runResult{Meta: *r.meta, Snapshot: r.tracker.current()}, fmt.Errorf("workflow scripts must call agent() or parallel() at least once")
-	}
-	value := lua.LNil
-	if top := L.GetTop(); top > 0 {
-		value = L.Get(top)
-	}
-	result, err := luaToGo(value)
-	if err != nil {
-		return runResult{Meta: *r.meta, Snapshot: r.tracker.current()}, fmt.Errorf("workflow result: %w", err)
 	}
 	snapshot := r.tracker.complete(result)
 	return runResult{Meta: *r.meta, Result: result, Snapshot: snapshot}, nil
 }
 
-func (r *runner) openSafeLibs(L *lua.LState) {
-	lua.OpenBase(L)
-	lua.OpenTable(L)
-	lua.OpenString(L)
-	lua.OpenMath(L)
-	for _, name := range []string{
-		"dofile", "loadfile", "load", "require", "collectgarbage", "print",
-	} {
-		L.SetGlobal(name, lua.LNil)
+func (r *runner) metaOrZero() metaInfo {
+	if r.meta != nil {
+		return *r.meta
 	}
-	if mathValue := L.GetGlobal("math"); mathValue.Type() == lua.LTTable {
-		mathTable := mathValue.(*lua.LTable)
-		mathTable.RawSetString("random", lua.LNil)
-		mathTable.RawSetString("randomseed", lua.LNil)
-	}
+	return metaInfo{}
 }
 
-func (r *runner) installGlobals(L *lua.LState) error {
-	L.SetGlobal("meta", L.NewFunction(r.luaMeta))
-	L.SetGlobal("phase", L.NewFunction(r.luaPhase))
-	L.SetGlobal("log", L.NewFunction(r.luaLog))
-	L.SetGlobal("agent", L.NewFunction(r.luaAgent))
-	L.SetGlobal("workflow", L.NewFunction(r.luaWorkflow))
-	L.SetGlobal("parallel", L.NewFunction(r.luaParallel))
-	L.SetGlobal("pipeline", L.NewFunction(r.luaPipeline))
-	if r.opts.Args == nil {
-		L.SetGlobal("args", lua.LNil)
-	} else {
-		L.SetGlobal("args", goToLua(L, r.opts.Args))
+func (r *runner) installGlobals(vm *goja.Runtime) error {
+	r.vm = vm
+	parse, ok := goja.AssertFunction(vm.Get("JSON").ToObject(vm).Get("parse"))
+	if !ok {
+		return fmt.Errorf("JSON.parse unavailable")
 	}
-	L.SetGlobal("cwd", lua.LString(r.opts.Cwd))
+	r.jsonParse = parse
 
-	process := L.NewTable()
-	process.RawSetString("cwd", L.NewFunction(func(L *lua.LState) int {
-		L.Push(lua.LString(r.opts.Cwd))
-		return 1
-	}))
-	L.SetGlobal("process", process)
+	must := func(err error) {
+		if err != nil {
+			panic(vm.ToValue(err.Error()))
+		}
+	}
+	must(vm.Set("meta", r.jsMeta))
+	must(vm.Set("phase", r.jsPhase))
+	must(vm.Set("log", r.jsLog))
+	must(vm.Set("agent", r.jsAgent))
+	must(vm.Set("workflow", r.jsWorkflow))
+	must(vm.Set("args", r.toJS(vm, r.opts.Args)))
+	must(vm.Set("cwd", r.opts.Cwd))
 
-	jsonTable := L.NewTable()
-	jsonTable.RawSetString("encode", L.NewFunction(r.luaJSONEncode))
-	jsonTable.RawSetString("decode", L.NewFunction(r.luaJSONDecode))
-	jsonTable.RawSetString("null", jsonNullValue(L))
-	L.SetGlobal("json", jsonTable)
+	process := vm.NewObject()
+	must(process.Set("cwd", func(goja.FunctionCall) goja.Value { return vm.ToValue(r.opts.Cwd) }))
+	must(vm.Set("process", process))
 
-	budget := L.NewTable()
+	budget := vm.NewObject()
 	if r.opts.BudgetTotal > 0 {
-		budget.RawSetString("total", lua.LNumber(r.opts.BudgetTotal))
+		must(budget.Set("total", r.opts.BudgetTotal))
 	} else {
-		budget.RawSetString("total", lua.LNil)
+		must(budget.Set("total", goja.Null()))
 	}
-	budget.RawSetString("spent", L.NewFunction(func(L *lua.LState) int {
+	must(budget.Set("spent", func(goja.FunctionCall) goja.Value {
 		r.state.mu.Lock()
 		spent := r.state.spent
 		r.state.mu.Unlock()
-		L.Push(lua.LNumber(spent))
-		return 1
+		return vm.ToValue(spent)
 	}))
-	budget.RawSetString("remaining", L.NewFunction(func(L *lua.LState) int {
+	must(budget.Set("remaining", func(goja.FunctionCall) goja.Value {
 		if r.opts.BudgetTotal <= 0 {
-			L.Push(lua.LNil)
-			return 1
+			return goja.Null()
 		}
 		r.state.mu.Lock()
 		remaining := r.opts.BudgetTotal - r.state.spent
@@ -253,289 +350,151 @@ func (r *runner) installGlobals(L *lua.LState) error {
 		if remaining < 0 {
 			remaining = 0
 		}
-		L.Push(lua.LNumber(remaining))
-		return 1
+		return vm.ToValue(remaining)
 	}))
-	L.SetGlobal("budget", budget)
+	must(vm.Set("budget", budget))
 	return nil
 }
 
-func (r *runner) requireMeta() error {
-	if r.meta == nil {
-		return fmt.Errorf("meta() must be called before phase/log/agent/parallel/pipeline")
-	}
-	return nil
-}
-
-func (r *runner) luaMeta(L *lua.LState) int {
-	if r.meta != nil {
-		L.RaiseError("meta() may only be called once")
-		return 0
-	}
-	table := L.CheckTable(1)
-	meta, err := decodeMeta(table)
+// toJS injects a Go value into the runtime as a NATIVE JS value (via JSON.parse)
+// so scripts can use Array/Object prototype methods (.map/.filter/...) on agent
+// results and args without host-object quirks. Must be called on the loop.
+func (r *runner) toJS(vm *goja.Runtime, value any) goja.Value {
+	data, err := json.Marshal(value)
 	if err != nil {
-		L.RaiseError("%s", err.Error())
-		return 0
+		return goja.Null()
+	}
+	v, err := r.jsonParse(goja.Undefined(), vm.ToValue(string(data)))
+	if err != nil {
+		return goja.Null()
+	}
+	return v
+}
+
+func (r *runner) requireMeta(vm *goja.Runtime) {
+	if r.meta == nil {
+		panic(vm.ToValue("meta() must be called before phase/log/agent/parallel/pipeline"))
+	}
+}
+
+func (r *runner) jsMeta(call goja.FunctionCall) goja.Value {
+	vm := r.vm
+	if r.meta != nil {
+		panic(vm.ToValue("meta() may only be called once"))
+	}
+	meta, err := decodeMeta(call.Argument(0).Export())
+	if err != nil {
+		panic(vm.ToValue(err.Error()))
 	}
 	r.meta = &meta
 	r.tracker.setMeta(meta)
-	return 0
+	return goja.Undefined()
 }
 
-func (r *runner) luaPhase(L *lua.LState) int {
-	if err := r.requireMeta(); err != nil {
-		L.RaiseError("%s", err.Error())
-		return 0
-	}
-	title := strings.TrimSpace(L.CheckString(1))
+func (r *runner) jsPhase(call goja.FunctionCall) goja.Value {
+	vm := r.vm
+	r.requireMeta(vm)
+	title := strings.TrimSpace(call.Argument(0).String())
 	if title == "" {
-		L.RaiseError("phase title must be a non-empty string")
-		return 0
+		panic(vm.ToValue("phase title must be a non-empty string"))
 	}
 	r.mu.Lock()
 	r.current = title
 	r.mu.Unlock()
 	r.tracker.addPhase(title)
-	return 0
+	return goja.Undefined()
 }
 
-func (r *runner) luaLog(L *lua.LState) int {
-	if err := r.requireMeta(); err != nil {
-		L.RaiseError("%s", err.Error())
-		return 0
-	}
-	r.tracker.addLog(L.CheckString(1))
-	return 0
+func (r *runner) jsLog(call goja.FunctionCall) goja.Value {
+	vm := r.vm
+	r.requireMeta(vm)
+	r.tracker.addLog(call.Argument(0).String())
+	return goja.Undefined()
 }
 
-func (r *runner) luaAgent(L *lua.LState) int {
-	if err := r.requireMeta(); err != nil {
-		L.RaiseError("%s", err.Error())
-		return 0
-	}
-	prompt := L.CheckString(1)
-	opts := agentOptions{}
-	if L.GetTop() >= 2 && L.Get(2) != lua.LNil {
-		table, ok := L.Get(2).(*lua.LTable)
-		if !ok {
-			L.RaiseError("agent options must be a table")
-			return 0
-		}
-		var err error
-		opts, err = decodeAgentOptions(table)
-		if err != nil {
-			L.RaiseError("%s", err.Error())
-			return 0
-		}
-	}
-	result, ok, err := r.runAgent(L.Context(), prompt, opts)
+func (r *runner) jsAgent(call goja.FunctionCall) goja.Value {
+	vm := r.vm
+	r.requireMeta(vm)
+	prompt := call.Argument(0).String()
+	opts, err := decodeAgentOptions(call.Argument(1).Export())
 	if err != nil {
-		L.RaiseError("%s", err.Error())
-		return 0
+		panic(vm.ToValue(err.Error()))
 	}
-	if !ok {
-		L.Push(lua.LNil)
-		return 1
+	// Capture the active phase synchronously, in script order, so a later
+	// phase() call cannot mislabel an already-scheduled agent.
+	r.mu.Lock()
+	if opts.Phase == "" {
+		opts.Phase = r.current
 	}
-	L.Push(goToLua(L, result.value))
-	return 1
+	r.mu.Unlock()
+	r.usedAgent.Store(true)
+
+	p, resolve, reject := vm.NewPromise()
+	ctx := r.ctx
+	go func() {
+		outcome, ok, runErr := r.runAgent(ctx, prompt, opts)
+		r.loop.RunOnLoop(func(vm *goja.Runtime) {
+			switch {
+			case runErr != nil:
+				reject(vm.ToValue(runErr.Error()))
+			case !ok:
+				resolve(goja.Null())
+			default:
+				resolve(r.toJS(vm, outcome.value))
+			}
+		})
+	}()
+	return vm.ToValue(p)
 }
 
-func (r *runner) luaWorkflow(L *lua.LState) int {
-	if err := r.requireMeta(); err != nil {
-		L.RaiseError("%s", err.Error())
-		return 0
-	}
+func (r *runner) jsWorkflow(call goja.FunctionCall) goja.Value {
+	vm := r.vm
+	r.requireMeta(vm)
 	if r.opts.NestedDepth >= 1 {
-		L.RaiseError("nested workflow() calls are limited to one level")
-		return 0
+		panic(vm.ToValue("nested workflow() calls are limited to one level"))
 	}
-	ref := strings.TrimSpace(L.CheckString(1))
+	ref := strings.TrimSpace(call.Argument(0).String())
 	if ref == "" {
-		L.RaiseError("workflow name or path is required")
-		return 0
+		panic(vm.ToValue("workflow name or path is required"))
 	}
 	var childArgs any
-	if L.GetTop() >= 2 && L.Get(2) != lua.LNil {
-		value, err := luaToGo(L.Get(2))
-		if err != nil {
-			L.RaiseError("workflow args must be JSON-compatible: %s", err.Error())
-			return 0
-		}
-		childArgs = value
+	if a := call.Argument(1); !goja.IsUndefined(a) && !goja.IsNull(a) {
+		childArgs = a.Export()
 	}
 	script, sourcePath, err := loadNestedWorkflowScript(ref, r.opts.Cwd, r.opts.AgentDir)
 	if err != nil {
-		L.RaiseError("%s", err.Error())
-		return 0
-	}
-	child := newRunner(r.api, runOptions{
-		Cwd:         r.opts.Cwd,
-		AgentDir:    r.opts.AgentDir,
-		Args:        childArgs,
-		Concurrency: r.opts.Concurrency,
-		BudgetTotal: r.opts.BudgetTotal,
-		MaxAgents:   r.opts.MaxAgents,
-		ScriptPath:  sourcePath,
-		NestedDepth: r.opts.NestedDepth + 1,
-		State:       r.state,
-		Resume:      r.opts.Resume,
-		Activities:  r.opts.Activities,
-		Registry:    r.opts.Registry,
-	})
-	result, err := child.run(L.Context(), script)
-	if err != nil {
-		L.RaiseError("workflow %q: %s", ref, err.Error())
-		return 0
-	}
-	r.usedAgent.Store(true)
-	r.tracker.addLog(fmt.Sprintf("nested workflow %s completed with %d agent(s)", ref, result.Snapshot.AgentCount))
-	L.Push(goToLua(L, result.Result))
-	return 1
-}
-
-func (r *runner) luaParallel(L *lua.LState) int {
-	if err := r.requireMeta(); err != nil {
-		L.RaiseError("%s", err.Error())
-		return 0
-	}
-	taskTable := L.CheckTable(1)
-	tasks, err := decodeParallelTasks(taskTable)
-	if err != nil {
-		L.RaiseError("%s", err.Error())
-		return 0
-	}
-	limit := r.opts.Concurrency
-	if L.GetTop() >= 2 && L.Get(2) != lua.LNil {
-		options, ok := L.Get(2).(*lua.LTable)
-		if !ok {
-			L.RaiseError("parallel options must be a table")
-			return 0
-		}
-		if n := intField(options, "concurrency"); n > 0 {
-			limit = n
-		}
-	}
-	results := r.runParallel(L.Context(), tasks, limit)
-	out := L.NewTable()
-	for i, result := range results {
-		if result.ok {
-			out.RawSetInt(i+1, goToLua(L, result.value))
-		} else {
-			out.RawSetInt(i+1, jsonNullValue(L))
-		}
-	}
-	L.Push(out)
-	return 1
-}
-
-// luaPipeline runs each item through the full stage chain. The stages are Lua
-// closures and gopher-lua's LState is single-threaded, so items run SEQUENTIALLY
-// on the one VM — there is no way to execute Lua closures concurrently on a
-// shared state. For concurrent agent fan-out use parallel() (its tasks are data,
-// not closures, so they fork in parallel), including parallel() *inside* a stage.
-// The concurrency option is accepted for compatibility but does not apply here.
-func (r *runner) luaPipeline(L *lua.LState) int {
-	if r.stageDepth.Load() > 0 {
-		L.RaiseError("nested pipeline() calls are not supported")
-		return 0
-	}
-	if err := r.requireMeta(); err != nil {
-		L.RaiseError("%s", err.Error())
-		return 0
-	}
-	items := L.CheckTable(1)
-	stages := L.CheckTable(2)
-	if items.Len() == 0 {
-		L.Push(L.NewTable())
-		return 1
-	}
-	if stages.Len() == 0 {
-		L.RaiseError("pipeline() requires at least one stage")
-		return 0
-	}
-	if L.GetTop() >= 3 && L.Get(3) != lua.LNil {
-		if _, ok := L.Get(3).(*lua.LTable); !ok {
-			L.RaiseError("pipeline options must be a table")
-			return 0
-		}
+		panic(vm.ToValue(err.Error()))
 	}
 
-	stageValues := make([]lua.LValue, stages.Len())
-	for i := range stageValues {
-		stage := stages.RawGetInt(i + 1)
-		if stage.Type() != lua.LTFunction {
-			L.RaiseError("pipeline stage %d must be a function", i+1)
-			return 0
-		}
-		stageValues[i] = stage
-	}
-
-	out := L.NewTable()
-	for i := 1; i <= items.Len(); i++ {
-		if err := L.Context().Err(); err != nil {
-			L.RaiseError("%s", err.Error())
-			return 0
-		}
-		value, ok := r.runPipelineItem(L, i, items.RawGetInt(i), stageValues)
-		if ok {
-			out.RawSetInt(i, goToLua(L, value))
-		} else {
-			out.RawSetInt(i, jsonNullValue(L))
-		}
-	}
-	L.Push(out)
-	return 1
-}
-
-func (r *runner) runPipelineItem(L *lua.LState, index int, original lua.LValue, stages []lua.LValue) (any, bool) {
-	value := original
-	for _, stage := range stages {
-		r.stageDepth.Add(1)
-		err := L.CallByParam(lua.P{Fn: stage, NRet: 1, Protect: true}, value, original, lua.LNumber(index))
-		if err == nil {
-			value = L.Get(-1)
-			L.Pop(1)
-		}
-		r.stageDepth.Add(-1)
-		if err != nil {
-			r.tracker.addLog(fmt.Sprintf("pipeline[%d] failed: %v", index, err))
-			return nil, false
-		}
-	}
-	out, err := luaToGo(value)
-	if err != nil {
-		r.tracker.addLog(fmt.Sprintf("pipeline[%d] failed: %v", index, err))
-		return nil, false
-	}
-	return out, true
-}
-
-func (r *runner) luaJSONEncode(L *lua.LState) int {
-	value, err := luaToGo(L.Get(1))
-	if err != nil {
-		L.RaiseError("%s", err.Error())
-		return 0
-	}
-	data, err := json.Marshal(value)
-	if err != nil {
-		L.RaiseError("%s", err.Error())
-		return 0
-	}
-	L.Push(lua.LString(data))
-	return 1
-}
-
-func (r *runner) luaJSONDecode(L *lua.LState) int {
-	text := L.CheckString(1)
-	var value any
-	if err := json.Unmarshal([]byte(text), &value); err != nil {
-		L.RaiseError("%s", err.Error())
-		return 0
-	}
-	L.Push(goToLua(L, value))
-	return 1
+	p, resolve, reject := vm.NewPromise()
+	ctx := r.ctx
+	go func() {
+		child := newRunner(r.api, runOptions{
+			Cwd:         r.opts.Cwd,
+			AgentDir:    r.opts.AgentDir,
+			Args:        childArgs,
+			Concurrency: r.opts.Concurrency,
+			BudgetTotal: r.opts.BudgetTotal,
+			MaxAgents:   r.opts.MaxAgents,
+			ScriptPath:  sourcePath,
+			NestedDepth: r.opts.NestedDepth + 1,
+			State:       r.state,
+			Resume:      r.opts.Resume,
+			Activities:  r.opts.Activities,
+			Registry:    r.opts.Registry,
+		})
+		res, err := child.run(ctx, script)
+		r.loop.RunOnLoop(func(vm *goja.Runtime) {
+			if err != nil {
+				reject(vm.ToValue(fmt.Sprintf("workflow %q: %s", ref, err.Error())))
+				return
+			}
+			r.usedAgent.Store(true)
+			r.tracker.addLog(fmt.Sprintf("nested workflow %s completed with %d agent(s)", ref, res.Snapshot.AgentCount))
+			resolve(r.toJS(vm, res.Result))
+		})
+	}()
+	return vm.ToValue(p)
 }
 
 func (r *runner) runAgent(ctx context.Context, prompt string, opts agentOptions) (agentOutcome, bool, error) {
@@ -565,7 +524,7 @@ func (r *runner) runAgent(ctx context.Context, prompt string, opts agentOptions)
 			return result, true, nil
 		}
 	}
-	r.tracker.addLog(fmt.Sprintf("agent %s structured output failed after %d retry: %v", result.label, structuredOutputMaxRetries, retryErr))
+	r.tracker.addLog(fmt.Sprintf("agent %s structured output failed after %d retries: %v", result.label, structuredOutputMaxRetries, retryErr))
 	return agentOutcome{}, false, nil
 }
 
@@ -617,6 +576,15 @@ func (r *runner) runAgentAttempt(ctx context.Context, prompt string, opts agentO
 			}
 		}
 
+		// Bound concurrent ForkSession calls across the whole run. parallel()
+		// and pipeline() schedule every agent at once via Promise.all; this
+		// semaphore is what actually caps simultaneous child sessions.
+		if err := r.acquireSlot(ctx); err != nil {
+			r.state.releaseBudgetReservation(reservation)
+			r.tracker.addLog("agent skipped: aborted before start")
+			return agentOutcome{}, false, nil, err
+		}
+
 		startedAt := time.Now()
 		id := r.tracker.startAgent(attemptLabel, phase, prompt)
 		bubbleID := workflowBubbleID(r.opts.RunDir, id)
@@ -647,6 +615,7 @@ func (r *runner) runAgentAttempt(ctx context.Context, prompt string, opts agentO
 			MemoryScope:     opts.MemoryScope,
 			BubbleTaskID:    bubbleID,
 		})
+		r.releaseSlot()
 		action := unregisterControl()
 		cancel()
 		if r.opts.Activities != nil {
@@ -712,45 +681,6 @@ type agentOutcome struct {
 	label string
 	text  string
 	value any
-}
-
-type parallelOutcome struct {
-	agentOutcome
-	ok bool
-}
-
-func (r *runner) runParallel(ctx context.Context, tasks []parallelTask, limit int) []parallelOutcome {
-	if limit <= 0 {
-		limit = r.opts.Concurrency
-	}
-	if limit <= 0 {
-		limit = 4
-	}
-	if limit > 16 {
-		limit = 16
-	}
-	results := make([]parallelOutcome, len(tasks))
-	sem := make(chan struct{}, limit)
-	var wg sync.WaitGroup
-	for i, task := range tasks {
-		wg.Add(1)
-		go func(idx int, task parallelTask) {
-			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-			case <-ctx.Done():
-				return
-			}
-			result, ok, err := r.runAgent(ctx, task.Prompt, task.agentOptions)
-			if err != nil {
-				return
-			}
-			results[idx] = parallelOutcome{agentOutcome: result, ok: ok}
-		}(i, task)
-	}
-	wg.Wait()
-	return results
 }
 
 func workflowPrompt(prompt, phase, label string, schema map[string]any) string {

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -26,11 +27,23 @@ func (t *workflowTool) Name() string  { return "workflow" }
 func (t *workflowTool) Label() string { return "Workflow" }
 func (t *workflowTool) Description() string {
 	return strings.Join([]string{
-		"Execute a deterministic Lua workflow that orchestrates forked subagents with agent(), parallel(), and pipeline().",
+		"Execute a JavaScript workflow that orchestrates forked subagents with agent(), parallel(), and pipeline().",
 		"Use only when the user explicitly asks for a workflow, fan-out, or multi-agent orchestration.",
-		"The script must call meta({name=..., description=...}) before phase/log/agent/parallel/pipeline and must call at least one agent.",
-		"This tool only starts workflow runs; do not pass action, status, id, run_id, or agent_id. Inspect or control runs with slash commands such as /workflows show <run-id>, /workflows agent <run-id> <agent-id>, /workflows stop <run-id>, or the /workflows TUI panel.",
-	}, " ")
+		"",
+		"The script is plain async JavaScript (no ES modules, no require, no Markdown fences). It MUST call meta({name, description}) first and MUST await at least one agent().",
+		"",
+		"API:",
+		"- meta({name, description, whenToUse?, phases?}) — phases is [{title, detail?, model?}]. Call once, first.",
+		"- await agent(prompt, opts?) — fork one subagent; returns its final text, or a validated object when opts.schema (a JSON Schema) is set. opts: {label, phase, model, tools:[], disallowedTools:[], permissionMode, isolation:'worktree', maxTurns, thinking, skills:[], memoryScope, schema}. Returns null if the agent is skipped (limit/budget) — guard with `if (x)` or `.filter(Boolean)`.",
+		"- await parallel([() => agent(...), () => agent(...)]) — run thunks concurrently; results in input order; a throwing thunk becomes null. BARRIER: waits for all.",
+		"- await pipeline(items, stage1, stage2, ...) — run each item through every stage independently, no barrier between stages. Each stage gets (prevResult, originalItem, index).",
+		"- phase(title) groups following agents in the UI; log(message) emits a progress line; workflow(nameOrPath, args?) runs another workflow (one level deep).",
+		"- Globals: args (the args input), cwd, process.cwd(), budget {total, spent(), remaining()}, JSON.",
+		"",
+		"Rules for reliable runs: always `await` agent/parallel/pipeline; end the script with `return <result>`; default to pipeline() and only use parallel() when you truly need all results at once; pass data between stages via the prompt string (use JSON.stringify for structured context); set opts.phase inside parallel/pipeline stages so agents are grouped correctly.",
+		"",
+		"This tool only starts workflow runs; do not pass action, status, id, run_id, or agent_id. Inspect or control runs with /workflows show <run-id>, /workflows agent <run-id> <agent-id>, /workflows stop <run-id>, or the /workflows TUI panel.",
+	}, "\n")
 }
 
 func (t *workflowTool) Parameters() any {
@@ -39,18 +52,18 @@ func (t *workflowTool) Parameters() any {
 		"properties": map[string]any{
 			"script": map[string]any{
 				"type":        "string",
-				"description": "Raw Lua workflow script, with no Markdown fences. Exactly one of script, script_path, or name is required.",
+				"description": "Raw JavaScript workflow script, with no Markdown fences. Exactly one of script, script_path, or name is required.",
 			},
 			"script_path": map[string]any{
 				"type":        "string",
-				"description": "Path to a Lua workflow script. Relative paths resolve from the current cwd.",
+				"description": "Path to a JavaScript workflow script (.js). Relative paths resolve from the current cwd.",
 			},
 			"name": map[string]any{
 				"type":        "string",
 				"description": "Saved workflow name. Looks in project .coding_agent/.claude workflows, then user workflows.",
 			},
 			"args": map[string]any{
-				"description": "Optional JSON value exposed to the Lua script as global args.",
+				"description": "Optional JSON value exposed to the script as the global args.",
 			},
 			"concurrency": map[string]any{
 				"type":        "integer",
@@ -60,7 +73,7 @@ func (t *workflowTool) Parameters() any {
 			"budget": map[string]any{
 				"type":        "integer",
 				"minimum":     1,
-				"description": "Optional token budget exposed to Lua as budget.total and budget.remaining().",
+				"description": "Optional token budget exposed as budget.total and budget.remaining().",
 			},
 			"async": map[string]any{
 				"type":        "boolean",
@@ -235,16 +248,81 @@ func (e *Extension) runBackgroundWorkflow(runID string, ctx context.Context, exe
 }
 
 func formatWorkflowCompletion(result runResult) string {
-	data, err := json.MarshalIndent(result.Result, "", "  ")
-	if err != nil {
-		data = []byte(fmt.Sprint(result.Result))
+	body := strings.TrimSpace(renderWorkflowResult(result.Result))
+	if body == "" {
+		body = "(workflow returned no result)"
 	}
-	text := fmt.Sprintf("Workflow %s completed with %d agent(s).\n\nResult:\n%s",
-		result.Meta.Name, result.Snapshot.AgentCount, string(data))
+	text := fmt.Sprintf("Workflow %s completed with %d agent(s).\n\n%s",
+		result.Meta.Name, result.Snapshot.AgentCount, body)
 	if result.Snapshot.ScriptPath != "" {
 		text += "\n\nScript: " + result.Snapshot.ScriptPath
 	}
 	return text
+}
+
+// renderWorkflowResult turns a workflow's returned value into readable text
+// instead of escaped JSON. Object keys become Markdown section headers, arrays
+// become numbered items, and string leaves print verbatim (real newlines, not
+// "\n" escapes). Scalars/unknown shapes fall back to compact JSON. This is what
+// the user reads in the TUI, so it must not be a json.Marshal dump.
+func renderWorkflowResult(v any) string {
+	var b strings.Builder
+	renderResultValue(&b, v, 0)
+	return b.String()
+}
+
+func renderResultValue(b *strings.Builder, v any, depth int) {
+	switch val := v.(type) {
+	case nil:
+		b.WriteString("(none)")
+	case string:
+		b.WriteString(strings.TrimSpace(val))
+	case map[string]any:
+		for i, k := range orderedResultKeys(val) {
+			if i > 0 {
+				b.WriteString("\n\n")
+			}
+			b.WriteString(strings.Repeat("#", min(depth+2, 6)) + " " + k + "\n\n")
+			renderResultValue(b, val[k], depth+1)
+		}
+	case []any:
+		for i, item := range val {
+			if i > 0 {
+				b.WriteString("\n\n")
+			}
+			fmt.Fprintf(b, "%d. ", i+1)
+			renderResultValue(b, item, depth+1)
+		}
+	default:
+		if data, err := json.Marshal(val); err == nil {
+			b.Write(data)
+		} else {
+			fmt.Fprint(b, val)
+		}
+	}
+}
+
+// orderedResultKeys lists object keys with the most answer-like fields first
+// (so a deep-research "report" shows before its "scope"/"findings" scaffolding),
+// then the rest alphabetically for stable output.
+func orderedResultKeys(m map[string]any) []string {
+	preferred := []string{"report", "answer", "summary", "conclusion", "result", "output", "final"}
+	seen := make(map[string]bool, len(m))
+	var head []string
+	for _, k := range preferred {
+		if _, ok := m[k]; ok {
+			head = append(head, k)
+			seen[k] = true
+		}
+	}
+	var rest []string
+	for k := range m {
+		if !seen[k] {
+			rest = append(rest, k)
+		}
+	}
+	sort.Strings(rest)
+	return append(head, rest...)
 }
 
 func loadWorkflowScript(args map[string]any, cwd, agentDir string) (string, string, error) {
@@ -294,7 +372,7 @@ func loadNestedWorkflowScript(ref, cwd, agentDir string) (string, string, error)
 		return "", "", fmt.Errorf("workflow name or path is required")
 	}
 	args := map[string]any{}
-	if strings.ContainsAny(ref, `/\`) || filepath.Ext(ref) == ".lua" {
+	if strings.ContainsAny(ref, `/\`) || filepath.Ext(ref) == ".js" {
 		args["script_path"] = ref
 	} else {
 		args["name"] = ref
@@ -327,7 +405,7 @@ func resolveSavedWorkflowName(cwd, agentDir, name string) (string, error) {
 		return "", fmt.Errorf("workflow name must be a simple file name")
 	}
 	if filepath.Ext(name) == "" {
-		name += ".lua"
+		name += ".js"
 	}
 	var candidates []string
 	for _, dir := range projectWorkflowDirs(cwd) {
@@ -342,9 +420,9 @@ func resolveSavedWorkflowName(cwd, agentDir, name string) (string, error) {
 		}
 	}
 	if len(candidates) == 0 {
-		return "", fmt.Errorf("workflow %q not found", strings.TrimSuffix(name, ".lua"))
+		return "", fmt.Errorf("workflow %q not found", strings.TrimSuffix(name, ".js"))
 	}
-	return "", fmt.Errorf("workflow %q not found in %s", strings.TrimSuffix(name, ".lua"), strings.Join(candidates, ", "))
+	return "", fmt.Errorf("workflow %q not found in %s", strings.TrimSuffix(name, ".js"), strings.Join(candidates, ", "))
 }
 
 func projectWorkflowDirs(cwd string) []string {
@@ -431,7 +509,7 @@ func persistWorkflowScript(sessionDir, script string) (string, string, error) {
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		return "", "", fmt.Errorf("persist workflow script: %w", err)
 	}
-	path := filepath.Join(runDir, "script.lua")
+	path := filepath.Join(runDir, "script.js")
 	if err := os.WriteFile(path, []byte(script+"\n"), 0o600); err != nil {
 		return "", "", fmt.Errorf("persist workflow script: %w", err)
 	}

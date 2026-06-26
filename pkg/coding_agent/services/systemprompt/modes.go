@@ -6,9 +6,9 @@ const UltracodeBlock = "## Active Mode: Ultracode\n" +
 	"Use dynamic workflow orchestration for every substantive task in this " +
 	"session. For small clarifications, direct answers, and trivial edits, answer " +
 	"normally. For implementation, audit, migration, research, planning, or " +
-	"verification work, first decide whether a Lua workflow can split the task " +
+	"verification work, first decide whether a JavaScript workflow can split the task " +
 	"into repeatable phases, parallel agents, cross-checking, or verification. " +
-	"When it can, write the Lua workflow and call the `workflow` tool instead of " +
+	"When it can, write the JavaScript workflow and call the `workflow` tool instead of " +
 	"managing the fan-out turn by turn. Keep workflow scripts bounded and use " +
 	"`/workflows` for long-running progress. The `workflow` tool only starts " +
 	"runs; never call it with action/status/id fields for management."

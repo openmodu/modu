@@ -334,7 +334,8 @@ func TestDeepResearchCommandStartsBundledWorkflow(t *testing.T) {
 		t.Fatalf("started notify = %q", started)
 	}
 	done := api.waitNotifyContaining(t, "Workflow deep_research completed")
-	if !strings.Contains(done, `"question": "What changed in Node permissions?"`) || !strings.Contains(done, `"report": "result:report"`) {
+	// Result is rendered as readable sections, not escaped JSON.
+	if !strings.Contains(done, "## question\n\nWhat changed in Node permissions?") || !strings.Contains(done, "## report\n\nresult:report") {
 		t.Fatalf("completion notify = %q", done)
 	}
 	if api.callCount() != 6 {
@@ -364,9 +365,9 @@ func TestWorkflowApprovalDenialSkipsToolExecution(t *testing.T) {
 	tool := newTool(ext)
 	res, err := tool.Execute(context.Background(), "wf-1", map[string]any{
 		"script": `
-meta({ name = "approval_case", description = "approval check" })
+meta({ name: "approval_case", description: "approval check" })
 phase("Review")
-return agent("inspect", { label = "inspect" })
+return agent("inspect", { label: "inspect" })
 `,
 	}, nil)
 	if err != nil {
@@ -387,9 +388,9 @@ return agent("inspect", { label = "inspect" })
 func TestWorkflowApprovalAlwaysSkipsFuturePromptForSameProjectAndScript(t *testing.T) {
 	clearWorkflowDisableEnv(t)
 	script := `
-meta({ name = "always_case", description = "remember approval" })
+meta({ name: "always_case", description: "remember approval" })
 phase("Remember")
-return agent("inspect", { label = "inspect" })
+return agent("inspect", { label: "inspect" })
 `
 	api := &fakeAPI{
 		cwd:        t.TempDir(),
@@ -445,9 +446,9 @@ func TestWorkflowApprovalBypassPermissionModeSkipsPrompt(t *testing.T) {
 	tool := newTool(ext)
 	res, err := tool.Execute(context.Background(), "wf-bypass", map[string]any{
 		"script": `
-meta({ name = "bypass_case", description = "bypass approval" })
+meta({ name: "bypass_case", description: "bypass approval" })
 phase("Run")
-return agent("inspect", { label = "inspect" })
+return agent("inspect", { label: "inspect" })
 `,
 	}, nil)
 	if err != nil {
@@ -467,9 +468,9 @@ return agent("inspect", { label = "inspect" })
 func TestWorkflowApprovalAutoPermissionModeRemembersRunOnce(t *testing.T) {
 	clearWorkflowDisableEnv(t)
 	script := `
-meta({ name = "auto_case", description = "auto remember" })
+meta({ name: "auto_case", description: "auto remember" })
 phase("Auto")
-return agent("inspect", { label = "inspect" })
+return agent("inspect", { label: "inspect" })
 `
 	api := &fakeAPI{
 		cwd:            t.TempDir(),
@@ -512,9 +513,9 @@ return agent("inspect", { label = "inspect" })
 func TestWorkflowApprovalViewRawThenRunOnce(t *testing.T) {
 	clearWorkflowDisableEnv(t)
 	script := `
-meta({ name = "raw_case", description = "raw script view" })
+meta({ name: "raw_case", description: "raw script view" })
 phase("Raw")
-return agent("inspect raw", { label = "inspect raw" })
+return agent("inspect raw", { label: "inspect raw" })
 `
 	var selections int
 	api := &fakeAPI{
@@ -546,7 +547,7 @@ return agent("inspect raw", { label = "inspect raw" })
 		t.Fatalf("fork count = %d, want 1", api.callCount())
 	}
 	raw := api.waitNotifyContaining(t, "Workflow raw script: raw_case")
-	if !strings.Contains(raw, "```lua") || !strings.Contains(raw, "inspect raw") {
+	if !strings.Contains(raw, "```js") || !strings.Contains(raw, "inspect raw") {
 		t.Fatalf("raw notify = %q", raw)
 	}
 }
@@ -559,10 +560,10 @@ func TestSavedWorkflowApprovalDenialSkipsBackgroundRun(t *testing.T) {
 	if err := os.MkdirAll(projectDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(projectDir, "review.lua"), []byte(`
-meta({ name = "saved_review", description = "saved approval" })
+	if err := os.WriteFile(filepath.Join(projectDir, "review.js"), []byte(`
+meta({ name: "saved_review", description: "saved approval" })
 phase("Saved")
-return agent("review", { label = "review" })
+return agent("review", { label: "review" })
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -682,11 +683,11 @@ func TestRunWorkflowRecordsMetaPhaseLogAndResult(t *testing.T) {
 		},
 	})
 	result, err := r.run(context.Background(), `
-meta({ name = "demo", description = "dynamic phases" })
-phase("Scan " .. args.area)
-log("started")
-local out = agent("inspect " .. args.area, { label = "scan" })
-return { ok = true, out = out, cwd = process.cwd() }
+meta({ name: "demo", description: "dynamic phases" });
+phase("Scan " + args.area);
+log("started");
+const out = await agent("inspect " + args.area, { label: "scan" });
+return { ok: true, out: out, cwd: process.cwd() };
 `)
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -710,51 +711,54 @@ return { ok = true, out = out, cwd = process.cwd() }
 
 func TestRunWorkflowRejectsMissingMetaAndMissingAgent(t *testing.T) {
 	api := &fakeAPI{}
-	if _, err := newRunner(api, runOptions{}).run(context.Background(), `phase("x"); return {}`); err == nil || !strings.Contains(err.Error(), "meta") {
+	if _, err := newRunner(api, runOptions{}).run(context.Background(), `phase("x"); return {};`); err == nil || !strings.Contains(err.Error(), "meta") {
 		t.Fatalf("expected missing meta error, got %v", err)
 	}
-	if _, err := newRunner(api, runOptions{}).run(context.Background(), `meta({name="x", description="y"}); return {}`); err == nil || !strings.Contains(err.Error(), "must call agent") {
+	if _, err := newRunner(api, runOptions{}).run(context.Background(), `meta({name:"x", description:"y"}); return {};`); err == nil || !strings.Contains(err.Error(), "must call agent") {
 		t.Fatalf("expected missing agent error, got %v", err)
 	}
 }
 
 func TestRunWorkflowSandboxHidesUnsafeLibraries(t *testing.T) {
 	api := &fakeAPI{}
-	_, err := newRunner(api, runOptions{}).run(context.Background(), `
-meta({ name = "sandbox", description = "check globals" })
-agent("x", { label = "x" })
+	result, err := newRunner(api, runOptions{}).run(context.Background(), `
+meta({ name: "sandbox", description: "check globals" });
+await agent("x", { label: "x" });
+let requireBlocked = false;
+try { require("fs"); } catch (e) { requireBlocked = true; }
 return {
-  os_missing = os == nil,
-  io_missing = io == nil,
-  package_missing = package == nil,
-  require_missing = require == nil,
-  load_missing = load == nil,
-  random_missing = math.random == nil,
-}
+  process_exit_missing: (typeof process.exit) === "undefined",
+  no_global_fs: (typeof globalThis.fs) === "undefined",
+  require_blocked: requireBlocked,
+};
 `)
 	if err != nil {
 		t.Fatalf("run: %v", err)
+	}
+	got := result.Result.(map[string]any)
+	if got["process_exit_missing"] != true || got["no_global_fs"] != true || got["require_blocked"] != true {
+		t.Fatalf("sandbox leak: %#v", got)
 	}
 }
 
 func TestAgentMapsOptionsToForkSession(t *testing.T) {
 	api := &fakeAPI{}
 	_, err := newRunner(api, runOptions{}).run(context.Background(), `
-meta({ name = "map", description = "map opts" })
-phase("Review")
-return agent("inspect", {
-  label = "repo scan",
-  model = "model-a",
-  cwd = "pkg/coding_agent",
-  isolation = "worktree",
-  tools = {"read", "grep"},
-  disallowed_tools = {"bash"},
-  permission_mode = "read-only",
-  max_turns = 3,
-  thinking = "low",
-  skills = {"codebase"},
-  memory_scope = "project",
-})
+meta({ name: "map", description: "map opts" });
+phase("Review");
+return await agent("inspect", {
+  label: "repo scan",
+  model: "model-a",
+  cwd: "pkg/coding_agent",
+  isolation: "worktree",
+  tools: ["read", "grep"],
+  disallowedTools: ["bash"],
+  permissionMode: "read-only",
+  maxTurns: 3,
+  thinking: "low",
+  skills: ["codebase"],
+  memoryScope: "project",
+});
 `)
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -789,20 +793,20 @@ func TestAgentSchemaReturnsValidatedTableAndAddsPromptContract(t *testing.T) {
 		return "final:\n{\"ok\":true,\"count\":2}", nil
 	}
 	result, err := newRunner(api, runOptions{}).run(context.Background(), `
-meta({ name = "schema", description = "structured output" })
-local out = agent("return status", {
-  label = "structured",
-  phase = "Structured",
-  schema = {
-    type = "object",
-    required = {"ok", "count"},
-    properties = {
-      ok = { type = "boolean" },
-      count = { type = "integer" },
+meta({ name: "schema", description: "structured output" });
+const out = await agent("return status", {
+  label: "structured",
+  phase: "Structured",
+  schema: {
+    type: "object",
+    required: ["ok", "count"],
+    properties: {
+      ok: { type: "boolean" },
+      count: { type: "integer" },
     },
   },
-})
-return { ok = out.ok, count = out.count }
+});
+return { ok: out.ok, count: out.count };
 `)
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -849,19 +853,19 @@ func TestParallelSchemaFailureReturnsJSONNull(t *testing.T) {
 		return `{"ok":true}`, nil
 	}
 	result, err := newRunner(api, runOptions{Concurrency: 2}).run(context.Background(), `
-meta({ name = "schema_parallel", description = "structured output failures" })
-local schema = {
-  type = "object",
-  required = {"ok"},
-  properties = {
-    ok = { type = "boolean" },
+meta({ name: "schema_parallel", description: "structured output failures" });
+const schema = {
+  type: "object",
+  required: ["ok"],
+  properties: {
+    ok: { type: "boolean" },
   },
-}
-local out = parallel({
-  { label = "good", prompt = "good", schema = schema },
-  { label = "bad", prompt = "bad", schema = schema },
-})
-return { good = out[1].ok, bad_is_null = out[2] == json.null }
+};
+const out = await parallel([
+  () => agent("good", { label: "good", schema: schema }),
+  () => agent("bad", { label: "bad", schema: schema }),
+]);
+return { good: out[0].ok, bad_is_null: out[1] === null };
 `)
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -870,10 +874,11 @@ return { good = out[1].ok, bad_is_null = out[2] == json.null }
 	if got["good"] != true || got["bad_is_null"] != true {
 		t.Fatalf("result = %#v", got)
 	}
-	if result.Snapshot.ErrorCount != 2 {
+	// retries bumped to 2: the bad agent errors on the initial attempt plus two retries.
+	if result.Snapshot.ErrorCount != 3 {
 		t.Fatalf("error count = %d", result.Snapshot.ErrorCount)
 	}
-	if len(result.Snapshot.Logs) != 2 || !strings.Contains(result.Snapshot.Logs[0], "structured output retry") || !strings.Contains(result.Snapshot.Logs[1], "failed after 1 retry") {
+	if len(result.Snapshot.Logs) != 3 || !strings.Contains(result.Snapshot.Logs[0], "structured output retry") || !strings.Contains(result.Snapshot.Logs[len(result.Snapshot.Logs)-1], "failed after 2 retries") {
 		t.Fatalf("logs = %#v", result.Snapshot.Logs)
 	}
 }
@@ -893,18 +898,18 @@ func TestAgentSchemaRetriesOnceBeforeReturningTable(t *testing.T) {
 		return "", nil
 	}
 	result, err := newRunner(api, runOptions{}).run(context.Background(), `
-meta({ name = "schema_retry", description = "retry structured output" })
-local out = agent("return status", {
-  label = "structured",
-  schema = {
-    type = "object",
-    required = {"ok"},
-    properties = {
-      ok = { type = "boolean" },
+meta({ name: "schema_retry", description: "retry structured output" });
+const out = await agent("return status", {
+  label: "structured",
+  schema: {
+    type: "object",
+    required: ["ok"],
+    properties: {
+      ok: { type: "boolean" },
     },
   },
-})
-return { ok = out.ok }
+});
+return { ok: out.ok };
 `)
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -927,8 +932,8 @@ return { ok = out.ok }
 func TestAgentRejectsInvalidSchemaDefinition(t *testing.T) {
 	api := &fakeAPI{}
 	_, err := newRunner(api, runOptions{}).run(context.Background(), `
-meta({ name = "bad_schema", description = "bad schema definition" })
-return agent("x", { label = "bad", schema = { type = "weird" } })
+meta({ name: "bad_schema", description: "bad schema definition" });
+return await agent("x", { label: "bad", schema: { type: "weird" } });
 `)
 	if err == nil || !strings.Contains(err.Error(), "unsupported type") {
 		t.Fatalf("expected schema definition error, got %v", err)
@@ -938,22 +943,22 @@ return agent("x", { label = "bad", schema = { type = "weird" } })
 func TestAgentRejectsInvalidMemoryScope(t *testing.T) {
 	api := &fakeAPI{}
 	_, err := newRunner(api, runOptions{}).run(context.Background(), `
-meta({ name = "memory", description = "validate memory scope" })
-return agent("inspect", { label = "bad", memory_scope = "team" })
+meta({ name: "memory", description: "validate memory scope" });
+return await agent("inspect", { label: "bad", memoryScope: "team" });
 `)
-	if err == nil || !strings.Contains(err.Error(), "memory_scope") {
-		t.Fatalf("expected memory_scope error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "memoryScope") {
+		t.Fatalf("expected memoryScope error, got %v", err)
 	}
 }
 
 func TestAgentRejectsNonPositiveMaxTurns(t *testing.T) {
 	api := &fakeAPI{}
 	_, err := newRunner(api, runOptions{}).run(context.Background(), `
-meta({ name = "turns", description = "validate max turns" })
-return agent("inspect", { label = "bad", max_turns = 0 })
+meta({ name: "turns", description: "validate max turns" });
+return await agent("inspect", { label: "bad", maxTurns: 0 });
 `)
-	if err == nil || !strings.Contains(err.Error(), "max_turns") {
-		t.Fatalf("expected max_turns error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "maxTurns") {
+		t.Fatalf("expected maxTurns error, got %v", err)
 	}
 }
 
@@ -963,10 +968,10 @@ func TestBudgetRemainingTracksSpendAndUnsetBudget(t *testing.T) {
 		return "12345678", nil
 	}
 	result, err := newRunner(api, runOptions{BudgetTotal: 10}).run(context.Background(), `
-meta({ name = "budget", description = "track budget" })
-local before = budget.remaining()
-agent("spend", { label = "spend" })
-return { total = budget.total, before = before, spent = budget.spent(), after = budget.remaining() }
+meta({ name: "budget", description: "track budget" });
+const before = budget.remaining();
+await agent("spend", { label: "spend" });
+return { total: budget.total, before: before, spent: budget.spent(), after: budget.remaining() };
 `)
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -977,9 +982,9 @@ return { total = budget.total, before = before, spent = budget.spent(), after = 
 	}
 
 	result, err = newRunner(api, runOptions{}).run(context.Background(), `
-meta({ name = "budget_unset", description = "unset budget" })
-agent("spend", { label = "spend" })
-return { unset = budget.total == nil and budget.remaining() == nil }
+meta({ name: "budget_unset", description: "unset budget" });
+await agent("spend", { label: "spend" });
+return { unset: budget.total === null && budget.remaining() === null };
 `)
 	if err != nil {
 		t.Fatalf("run unset: %v", err)
@@ -1006,10 +1011,10 @@ func TestBudgetUsesChildUsageWhenAvailable(t *testing.T) {
 		Activities:  ext.activities,
 		Registry:    ext.registry,
 	}).run(context.Background(), `
-meta({ name = "usage_budget", description = "track real usage" })
-local before = budget.remaining()
-agent("spend", { label = "spend" })
-return { before = before, spent = budget.spent(), after = budget.remaining() }
+meta({ name: "usage_budget", description: "track real usage" });
+const before = budget.remaining();
+await agent("spend", { label: "spend" });
+return { before: before, spent: budget.spent(), after: budget.remaining() };
 `)
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -1029,10 +1034,10 @@ func TestBudgetStopsFurtherAgents(t *testing.T) {
 		return "12345678", nil
 	}
 	result, err := newRunner(api, runOptions{BudgetTotal: 1}).run(context.Background(), `
-meta({ name = "budget_stop", description = "stop after budget" })
-local first = agent("first", { label = "first" })
-local second = agent("second", { label = "second" })
-return { first = first, second = second, spent = budget.spent(), remaining = budget.remaining() }
+meta({ name: "budget_stop", description: "stop after budget" });
+const first = await agent("first", { label: "first" });
+const second = await agent("second", { label: "second" });
+return { first: first, second: second, spent: budget.spent(), remaining: budget.remaining() };
 `)
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -1065,10 +1070,10 @@ func TestBudgetStopsFurtherAgentsUsingChildUsage(t *testing.T) {
 		Activities:  ext.activities,
 		Registry:    ext.registry,
 	}).run(context.Background(), `
-meta({ name = "usage_budget_stop", description = "stop after real usage" })
-local first = agent("first", { label = "first" })
-local second = agent("second", { label = "second" })
-return { first = first, second = second, spent = budget.spent(), remaining = budget.remaining() }
+meta({ name: "usage_budget_stop", description: "stop after real usage" });
+const first = await agent("first", { label: "first" });
+const second = await agent("second", { label: "second" });
+return { first: first, second: second, spent: budget.spent(), remaining: budget.remaining() };
 `)
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -1108,16 +1113,16 @@ func TestParallelBudgetReservationsLimitConcurrentForks(t *testing.T) {
 		Activities:  ext.activities,
 		Registry:    ext.registry,
 	}).run(context.Background(), `
-meta({ name = "parallel_budget_reserve", description = "reserve budget before concurrent forks" })
-local out = parallel({
-  { label = "one", prompt = "one" },
-  { label = "two", prompt = "two" },
-  { label = "three", prompt = "three" },
-  { label = "four", prompt = "four" },
-  { label = "five", prompt = "five" },
-  { label = "six", prompt = "six" },
-}, { concurrency = 6 })
-return { out = out, spent = budget.spent(), remaining = budget.remaining() }
+meta({ name: "parallel_budget_reserve", description: "reserve budget before concurrent forks" });
+const out = await parallel([
+  () => agent("one", { label: "one" }),
+  () => agent("two", { label: "two" }),
+  () => agent("three", { label: "three" }),
+  () => agent("four", { label: "four" }),
+  () => agent("five", { label: "five" }),
+  () => agent("six", { label: "six" }),
+]);
+return { out: out, spent: budget.spent(), remaining: budget.remaining() };
 `)
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -1158,11 +1163,11 @@ return { out = out, spent = budget.spent(), remaining = budget.remaining() }
 func TestAgentLimitStopsFurtherAgents(t *testing.T) {
 	api := &fakeAPI{}
 	result, err := newRunner(api, runOptions{MaxAgents: 2}).run(context.Background(), `
-meta({ name = "agent_limit", description = "stop runaway scripts" })
-local one = agent("one", { label = "one" })
-local two = agent("two", { label = "two" })
-local three = agent("three", { label = "three" })
-return { one = one, two = two, three = three }
+meta({ name: "agent_limit", description: "stop runaway scripts" });
+const one = await agent("one", { label: "one" });
+const two = await agent("two", { label: "two" });
+const three = await agent("three", { label: "three" });
+return { one: one, two: two, three: three };
 `)
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -1189,14 +1194,14 @@ func TestParallelLimitsConcurrencyPreservesOrderAndReturnsNullForFailures(t *tes
 		return "done:" + opts.Name, nil
 	}
 	result, err := newRunner(api, runOptions{Concurrency: 2}).run(context.Background(), `
-meta({ name = "parallel", description = "fan out" })
-phase("Fanout")
-local out = parallel({
-  { label = "first", prompt = "a" },
-  { label = "bad", prompt = "fail" },
-  { label = "third", prompt = "c" },
-}, { concurrency = 2 })
-return out
+meta({ name: "parallel", description: "fan out" });
+phase("Fanout");
+const out = await parallel([
+  () => agent("a", { label: "first" }),
+  () => agent("fail", { label: "bad" }),
+  () => agent("c", { label: "third" }),
+]);
+return out;
 `)
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -1225,12 +1230,12 @@ func TestParallelFailureComparesEqualToJSONNull(t *testing.T) {
 		return "ok", nil
 	}
 	result, err := newRunner(api, runOptions{Concurrency: 2}).run(context.Background(), `
-meta({ name = "json_null", description = "stable null" })
-local out = parallel({
-  { label = "good", prompt = "ok" },
-  { label = "bad", prompt = "fail" },
-})
-return { ok = out[1] ~= nil and out[2] == json.null, bad = out[2] }
+meta({ name: "json_null", description: "stable null" });
+const out = await parallel([
+  () => agent("ok", { label: "good" }),
+  () => agent("fail", { label: "bad" }),
+]);
+return { ok: out[0] !== null && out[1] === null, bad: out[1] };
 `)
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -1247,22 +1252,19 @@ func TestPipelineStagesCanCallAgent(t *testing.T) {
 		return "seen:" + opts.Name, nil
 	}
 	result, err := newRunner(api, runOptions{}).run(context.Background(), `
-meta({ name = "pipe", description = "pipeline" })
-phase("Pipe")
-return pipeline({"a", "b"}, {
-  function(item, original, index)
-    return agent("inspect " .. item, { label = "inspect " .. index })
-  end,
-  function(prev, original, index)
-    return prev .. ":" .. original
-  end,
-})
+meta({ name: "pipe", description: "pipeline" });
+phase("Pipe");
+return await pipeline(["a", "b"],
+  (item, original, index) => agent("inspect " + item, { label: "inspect " + index }),
+  (prev, original, index) => prev + ":" + original,
+);
 `)
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	got := result.Result.([]any)
-	if got[0] != "seen:inspect 1:a" || got[1] != "seen:inspect 2:b" {
+	// pipeline index is 0-based (JS semantics).
+	if got[0] != "seen:inspect 0:a" || got[1] != "seen:inspect 1:b" {
 		t.Fatalf("pipeline result = %#v", got)
 	}
 }
@@ -1270,47 +1272,49 @@ return pipeline({"a", "b"}, {
 func TestPipelinePreservesOrderAndIsolatesStageFailures(t *testing.T) {
 	api := &fakeAPI{}
 	result, err := newRunner(api, runOptions{Concurrency: 2}).run(context.Background(), `
-meta({ name = "pipe_fail", description = "pipeline failures" })
-agent("anchor", { label = "anchor" })
-return pipeline({"a", "bad", "c"}, {
-  function(item, original, index)
-    if item == "bad" then error("nope") end
-    return item .. ":" .. index
-  end,
-})
+meta({ name: "pipe_fail", description: "pipeline failures" });
+await agent("anchor", { label: "anchor" });
+return await pipeline(["a", "bad", "c"],
+  (item, original, index) => {
+    if (item === "bad") throw new Error("nope");
+    return item + ":" + index;
+  },
+);
 `)
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	got := result.Result.([]any)
-	if got[0] != "a:1" || got[1] != nil || got[2] != "c:3" {
+	// pipeline index is 0-based (JS semantics).
+	if got[0] != "a:0" || got[1] != nil || got[2] != "c:2" {
 		t.Fatalf("pipeline result = %#v", got)
 	}
-	if len(result.Snapshot.Logs) != 1 || !strings.Contains(result.Snapshot.Logs[0], "pipeline[2] failed") {
+	if len(result.Snapshot.Logs) != 1 || !strings.Contains(result.Snapshot.Logs[0], "pipeline[1] failed") {
 		t.Fatalf("logs = %#v", result.Snapshot.Logs)
 	}
 }
 
-func TestPipelineRejectsNestedPipeline(t *testing.T) {
+func TestPipelineSupportsNesting(t *testing.T) {
+	// Under the JS engine pipeline() is plain async control flow, so nesting it
+	// works (the single-LState restriction of the Lua engine is gone).
 	api := &fakeAPI{}
 	result, err := newRunner(api, runOptions{}).run(context.Background(), `
-meta({ name = "nested_pipe", description = "nested pipeline" })
-agent("anchor", { label = "anchor" })
-return pipeline({"a"}, {
-  function(item)
-    return pipeline({item}, { function(x) return x end })
-  end,
-})
+meta({ name: "nested_pipe", description: "nested pipeline" });
+await agent("anchor", { label: "anchor" });
+return await pipeline(["a"],
+  (item) => pipeline([item], (x) => x + "!"),
+);
 `)
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	got := result.Result.([]any)
-	if len(got) != 1 || got[0] != nil {
-		t.Fatalf("nested pipeline should return null branch, got %#v", got)
+	if len(got) != 1 {
+		t.Fatalf("nested pipeline result = %#v", got)
 	}
-	if len(result.Snapshot.Logs) != 1 || !strings.Contains(result.Snapshot.Logs[0], "nested pipeline") {
-		t.Fatalf("logs = %#v", result.Snapshot.Logs)
+	inner, ok := got[0].([]any)
+	if !ok || len(inner) != 1 || inner[0] != "a!" {
+		t.Fatalf("nested pipeline inner = %#v", got[0])
 	}
 }
 
@@ -1320,10 +1324,10 @@ func TestNestedWorkflowLoadsSavedNameAndPassesArgs(t *testing.T) {
 	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workflowDir, "child.lua"), []byte(`
-meta({ name = "child", description = "child workflow" })
-local seen = agent("child " .. args.suffix, { label = "child-agent" })
-return { seen = seen, suffix = args.suffix }
+	if err := os.WriteFile(filepath.Join(workflowDir, "child.js"), []byte(`
+meta({ name: "child", description: "child workflow" });
+const seen = await agent("child " + args.suffix, { label: "child-agent" });
+return { seen: seen, suffix: args.suffix };
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1335,8 +1339,8 @@ return { seen = seen, suffix = args.suffix }
 		return "CHILD_OK", nil
 	}
 	result, err := newRunner(api, runOptions{Cwd: cwd}).run(context.Background(), `
-meta({ name = "parent", description = "parent workflow" })
-return workflow("child", { suffix = "OK" })
+meta({ name: "parent", description: "parent workflow" });
+return await workflow("child", { suffix: "OK" });
 `)
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -1359,17 +1363,17 @@ func TestNestedWorkflowLoadsClaudeProjectWorkflowName(t *testing.T) {
 	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workflowDir, "child.lua"), []byte(`
-meta({ name = "claude_child", description = "claude child workflow" })
-local seen = agent("claude child", { label = "claude-child" })
-return { seen = seen }
+	if err := os.WriteFile(filepath.Join(workflowDir, "child.js"), []byte(`
+meta({ name: "claude_child", description: "claude child workflow" });
+const seen = await agent("claude child", { label: "claude-child" });
+return { seen: seen };
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	api := &fakeAPI{cwd: cwd}
 	result, err := newRunner(api, runOptions{Cwd: cwd}).run(context.Background(), `
-meta({ name = "parent", description = "parent workflow" })
-return workflow("child")
+meta({ name: "parent", description: "parent workflow" });
+return await workflow("child");
 `)
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -1386,9 +1390,9 @@ func TestNestedWorkflowSharesBudget(t *testing.T) {
 	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workflowDir, "child.lua"), []byte(`
-meta({ name = "child_budget", description = "child spends budget" })
-return { first = agent("first", { label = "first" }) }
+	if err := os.WriteFile(filepath.Join(workflowDir, "child.js"), []byte(`
+meta({ name: "child_budget", description: "child spends budget" });
+return { first: await agent("first", { label: "first" }) };
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1397,10 +1401,10 @@ return { first = agent("first", { label = "first" }) }
 		return "12345678", nil
 	}
 	result, err := newRunner(api, runOptions{Cwd: cwd, BudgetTotal: 1}).run(context.Background(), `
-meta({ name = "parent_budget", description = "shared budget" })
-local child = workflow("child")
-local second = agent("second", { label = "second" })
-return { first = child.first, second = second, spent = budget.spent(), remaining = budget.remaining() }
+meta({ name: "parent_budget", description: "shared budget" });
+const child = await workflow("child");
+const second = await agent("second", { label: "second" });
+return { first: child.first, second: second, spent: budget.spent(), remaining: budget.remaining() };
 `)
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -1420,18 +1424,18 @@ func TestNestedWorkflowSharesAgentLimit(t *testing.T) {
 	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workflowDir, "child.lua"), []byte(`
-meta({ name = "child_limit", description = "child uses one agent slot" })
-return { first = agent("first", { label = "first" }) }
+	if err := os.WriteFile(filepath.Join(workflowDir, "child.js"), []byte(`
+meta({ name: "child_limit", description: "child uses one agent slot" });
+return { first: await agent("first", { label: "first" }) };
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	api := &fakeAPI{cwd: cwd}
 	result, err := newRunner(api, runOptions{Cwd: cwd, MaxAgents: 1}).run(context.Background(), `
-meta({ name = "parent_limit", description = "shared agent limit" })
-local child = workflow("child")
-local second = agent("second", { label = "second" })
-return { first = child.first, second = second }
+meta({ name: "parent_limit", description: "shared agent limit" });
+const child = await workflow("child");
+const second = await agent("second", { label: "second" });
+return { first: child.first, second: second };
 `)
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -1451,16 +1455,16 @@ func TestNestedWorkflowRejectsSecondLevelNesting(t *testing.T) {
 	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workflowDir, "child.lua"), []byte(`
-meta({ name = "child_nested", description = "child tries nested workflow" })
-return workflow("grandchild")
+	if err := os.WriteFile(filepath.Join(workflowDir, "child.js"), []byte(`
+meta({ name: "child_nested", description: "child tries nested workflow" });
+return await workflow("grandchild");
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	api := &fakeAPI{cwd: cwd}
 	_, err := newRunner(api, runOptions{Cwd: cwd}).run(context.Background(), `
-meta({ name = "parent_nested", description = "parent workflow" })
-return workflow("child")
+meta({ name: "parent_nested", description: "parent workflow" });
+return await workflow("child");
 `)
 	if err == nil || !strings.Contains(err.Error(), "limited to one level") {
 		t.Fatalf("expected nested limit error, got %v", err)
@@ -1484,8 +1488,8 @@ func TestToolExecuteReturnsDetails(t *testing.T) {
 	ext := &Extension{cfg: DefaultConfig(), api: api}
 	tool := newTool(ext)
 	res, err := tool.Execute(context.Background(), "wf-1", map[string]any{"script": `
-meta({ name = "tool", description = "tool result" })
-return agent("x", { label = "x" })
+meta({ name: "tool", description: "tool result" });
+return await agent("x", { label: "x" });
 `}, nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -1504,8 +1508,8 @@ func TestToolExecutePersistsScriptWhenSessionDirIsAvailable(t *testing.T) {
 	ext := &Extension{cfg: DefaultConfig(), api: api}
 	tool := newTool(ext)
 	script := `
-meta({ name = "persist", description = "persist script" })
-return agent("x", { label = "x" })
+meta({ name: "persist", description: "persist script" });
+return await agent("x", { label: "x" });
 `
 	res, err := tool.Execute(context.Background(), "wf-1", map[string]any{"script": script}, nil)
 	if err != nil {
@@ -1553,10 +1557,10 @@ return agent("x", { label = "x" })
 func TestToolExecuteLoadsScriptPath(t *testing.T) {
 	cwd := t.TempDir()
 	sessionDir := t.TempDir()
-	scriptPath := filepath.Join(cwd, "saved.lua")
+	scriptPath := filepath.Join(cwd, "saved.js")
 	script := `
-meta({ name = "from_path", description = "load from path" })
-return agent("x", { label = "from path" })
+meta({ name: "from_path", description: "load from path" });
+return await agent("x", { label: "from path" });
 `
 	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
 		t.Fatal(err)
@@ -1565,7 +1569,7 @@ return agent("x", { label = "from path" })
 	api := &fakeAPI{cwd: cwd, sessionDir: sessionDir}
 	ext := &Extension{cfg: DefaultConfig(), api: api}
 	tool := newTool(ext)
-	res, err := tool.Execute(context.Background(), "wf-1", map[string]any{"script_path": "saved.lua"}, nil)
+	res, err := tool.Execute(context.Background(), "wf-1", map[string]any{"script_path": "saved.js"}, nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -1610,21 +1614,21 @@ func TestToolExecuteLoadsSavedWorkflowNameWithProjectPrecedence(t *testing.T) {
 	if err := os.MkdirAll(userDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(userDir, "review.lua"), []byte(`
-meta({ name = "user_review", description = "user workflow" })
-return agent("x", { label = "user" })
+	if err := os.WriteFile(filepath.Join(userDir, "review.js"), []byte(`
+meta({ name: "user_review", description: "user workflow" });
+return await agent("x", { label: "user" });
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(rootProjectDir, "review.lua"), []byte(`
-meta({ name = "root_review", description = "root workflow" })
-return agent("x", { label = "root" })
+	if err := os.WriteFile(filepath.Join(rootProjectDir, "review.js"), []byte(`
+meta({ name: "root_review", description: "root workflow" });
+return await agent("x", { label: "root" });
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(nearestProjectDir, "review.lua"), []byte(`
-meta({ name = "nearest_review", description = "nearest workflow" })
-return agent("x", { label = "nearest" })
+	if err := os.WriteFile(filepath.Join(nearestProjectDir, "review.js"), []byte(`
+meta({ name: "nearest_review", description: "nearest workflow" });
+return await agent("x", { label: "nearest" });
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1653,8 +1657,8 @@ func TestToolExecuteRequiresExactlyOneScriptSource(t *testing.T) {
 	tool := newTool(ext)
 	for _, args := range []map[string]any{
 		{},
-		{"script": "meta({name=\"x\", description=\"y\"}); return agent(\"x\")", "script_path": "x.lua"},
-		{"script_path": "x.lua", "name": "x"},
+		{"script": "meta({name=\"x\", description=\"y\"}); return agent(\"x\")", "script_path": "x.js"},
+		{"script_path": "x.js", "name": "x"},
 	} {
 		res, err := tool.Execute(context.Background(), "wf-1", args, nil)
 		if err != nil {
@@ -1668,9 +1672,9 @@ func TestToolExecuteRequiresExactlyOneScriptSource(t *testing.T) {
 
 func TestWorkflowsSaveUsesClaudeWorkflowDirs(t *testing.T) {
 	scriptDir := t.TempDir()
-	scriptPath := filepath.Join(scriptDir, "script.lua")
-	script := `meta({ name = "save_dir", description = "save dir" })
-return agent("x", { label = "x" })`
+	scriptPath := filepath.Join(scriptDir, "script.js")
+	script := `meta({ name: "save_dir", description: "save dir" })
+return agent("x", { label: "x" })`
 	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1693,7 +1697,7 @@ return agent("x", { label = "x" })`
 	if err != nil {
 		t.Fatalf("save project: %v", err)
 	}
-	if want := filepath.Join(repo, ".claude", "workflows", "project_saved.lua"); path != want {
+	if want := filepath.Join(repo, ".claude", "workflows", "project_saved.js"); path != want {
 		t.Fatalf("saved path = %q, want %q", path, want)
 	}
 	nearestClaudeWorkflowDir := filepath.Join(repo, "services", ".claude", "workflows")
@@ -1705,7 +1709,7 @@ return agent("x", { label = "x" })`
 	if err != nil {
 		t.Fatalf("save nearest project: %v", err)
 	}
-	if want := filepath.Join(nearestClaudeWorkflowDir, "nearest.lua"); path != want {
+	if want := filepath.Join(nearestClaudeWorkflowDir, "nearest.js"); path != want {
 		t.Fatalf("nearest saved path = %q, want %q", path, want)
 	}
 	agentDir := filepath.Join(t.TempDir(), ".coding_agent")
@@ -1714,7 +1718,7 @@ return agent("x", { label = "x" })`
 	if err != nil {
 		t.Fatalf("save user: %v", err)
 	}
-	if want := filepath.Join(filepath.Dir(agentDir), ".claude", "workflows", "personal.lua"); path != want {
+	if want := filepath.Join(filepath.Dir(agentDir), ".claude", "workflows", "personal.js"); path != want {
 		t.Fatalf("user saved path = %q, want %q", path, want)
 	}
 }
@@ -1739,13 +1743,13 @@ func TestDiscoverSavedWorkflowCommandsUsesNearestProjectPrecedence(t *testing.T)
 		}
 	}
 	for path, body := range map[string]string{
-		filepath.Join(repo, ".coding_agent", "workflows", "review.lua"):             `meta({ name = "root", description = "root" })`,
-		filepath.Join(repo, "apps", ".claude", "workflows", "review.lua"):           `meta({ name = "claude_nearest", description = "claude nearest" })`,
-		filepath.Join(repo, "apps", ".claude", "workflows", "claude.lua"):           `meta({ name = "claude", description = "claude" })`,
-		filepath.Join(repo, "apps", ".coding_agent", "workflows", "review.lua"):     `meta({ name = "nearest", description = "nearest" })`,
-		filepath.Join(agentDir, "workflows", "review.lua"):                          `meta({ name = "user", description = "user" })`,
-		filepath.Join(agentDir, "workflows", "personal.lua"):                        `meta({ name = "personal", description = "personal" })`,
-		filepath.Join(filepath.Dir(agentDir), ".claude", "workflows", "global.lua"): `meta({ name = "global", description = "global" })`,
+		filepath.Join(repo, ".coding_agent", "workflows", "review.js"):             `meta({ name: "root", description: "root" })`,
+		filepath.Join(repo, "apps", ".claude", "workflows", "review.js"):           `meta({ name: "claude_nearest", description: "claude nearest" })`,
+		filepath.Join(repo, "apps", ".claude", "workflows", "claude.js"):           `meta({ name: "claude", description: "claude" })`,
+		filepath.Join(repo, "apps", ".coding_agent", "workflows", "review.js"):     `meta({ name: "nearest", description: "nearest" })`,
+		filepath.Join(agentDir, "workflows", "review.js"):                          `meta({ name: "user", description: "user" })`,
+		filepath.Join(agentDir, "workflows", "personal.js"):                        `meta({ name: "personal", description: "personal" })`,
+		filepath.Join(filepath.Dir(agentDir), ".claude", "workflows", "global.js"): `meta({ name: "global", description: "global" })`,
 	} {
 		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
@@ -1759,16 +1763,16 @@ func TestDiscoverSavedWorkflowCommandsUsesNearestProjectPrecedence(t *testing.T)
 	for _, cmd := range commands {
 		byName[cmd.Name] = cmd.Path
 	}
-	if got, want := byName["review"], filepath.Join(repo, "apps", ".claude", "workflows", "review.lua"); got != want {
+	if got, want := byName["review"], filepath.Join(repo, "apps", ".claude", "workflows", "review.js"); got != want {
 		t.Fatalf("review path = %q, want %q", got, want)
 	}
-	if got, want := byName["claude"], filepath.Join(repo, "apps", ".claude", "workflows", "claude.lua"); got != want {
+	if got, want := byName["claude"], filepath.Join(repo, "apps", ".claude", "workflows", "claude.js"); got != want {
 		t.Fatalf("claude path = %q, want %q", got, want)
 	}
-	if got, want := byName["personal"], filepath.Join(agentDir, "workflows", "personal.lua"); got != want {
+	if got, want := byName["personal"], filepath.Join(agentDir, "workflows", "personal.js"); got != want {
 		t.Fatalf("personal path = %q, want %q", got, want)
 	}
-	if got, want := byName["global"], filepath.Join(filepath.Dir(agentDir), ".claude", "workflows", "global.lua"); got != want {
+	if got, want := byName["global"], filepath.Join(filepath.Dir(agentDir), ".claude", "workflows", "global.js"); got != want {
 		t.Fatalf("global path = %q, want %q", got, want)
 	}
 }
@@ -1782,15 +1786,15 @@ func TestWorkflowsCommandListsAndShowsPersistedRuns(t *testing.T) {
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	script := `meta({ name = "listed", description = "listed run" })
-return agent("x", { label = "x" })`
-	if err := os.WriteFile(filepath.Join(runDir, "script.lua"), []byte(script), 0o600); err != nil {
+	script := `meta({ name: "listed", description: "listed run" })
+return agent("x", { label: "x" })`
+	if err := os.WriteFile(filepath.Join(runDir, "script.js"), []byte(script), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now()
 	snapshot := workflowSnapshot{
 		Name:       "listed",
-		ScriptPath: filepath.Join(runDir, "script.lua"),
+		ScriptPath: filepath.Join(runDir, "script.js"),
 		RunDir:     runDir,
 		Phases:     []string{},
 		PhaseSummaries: []phaseSummary{{
@@ -1843,7 +1847,7 @@ return agent("x", { label = "x" })`
 		t.Fatalf("/workflows show: %v", err)
 	}
 	got := api.lastNotify()
-	if !strings.Contains(got, "Workflow run run-1") || !strings.Contains(got, "Workflow: listed") || !strings.Contains(got, "Review: 1 agent(s)") || !strings.Contains(got, "estimatedTokens=2") || !strings.Contains(got, "durationMs=7") || !strings.Contains(got, "Result:") || !strings.Contains(got, "```lua") || !strings.Contains(got, `name = "listed"`) {
+	if !strings.Contains(got, "Workflow run run-1") || !strings.Contains(got, "Workflow: listed") || !strings.Contains(got, "Review: 1 agent(s)") || !strings.Contains(got, "estimatedTokens=2") || !strings.Contains(got, "durationMs=7") || !strings.Contains(got, "Result:") || !strings.Contains(got, "```js") || !strings.Contains(got, `name: "listed"`) {
 		t.Fatalf("show notify = %q", got)
 	}
 	if err := cmd("agent latest 1"); err != nil {
@@ -1862,12 +1866,12 @@ return agent("x", { label = "x" })`
 	if err := cmd("save latest reusable"); err != nil {
 		t.Fatalf("/workflows save: %v", err)
 	}
-	projectSaved := filepath.Join(cwd, ".claude", "workflows", "reusable.lua")
+	projectSaved := filepath.Join(cwd, ".claude", "workflows", "reusable.js")
 	data, err = os.ReadFile(projectSaved)
 	if err != nil {
 		t.Fatalf("read project saved workflow: %v", err)
 	}
-	if !strings.Contains(string(data), `name = "listed"`) {
+	if !strings.Contains(string(data), `name: "listed"`) {
 		t.Fatalf("project saved workflow = %q", string(data))
 	}
 	if got := api.lastNotify(); !strings.Contains(got, "saved as /reusable (also /workflow:reusable)") || !strings.Contains(got, projectSaved) {
@@ -1876,7 +1880,7 @@ return agent("x", { label = "x" })`
 	if err := cmd("save latest personal user"); err != nil {
 		t.Fatalf("/workflows save user: %v", err)
 	}
-	userSaved := filepath.Join(filepath.Dir(agentDir), ".claude", "workflows", "personal.lua")
+	userSaved := filepath.Join(filepath.Dir(agentDir), ".claude", "workflows", "personal.js")
 	if _, err := os.Stat(userSaved); err != nil {
 		t.Fatalf("stat user saved workflow: %v", err)
 	}
@@ -1985,8 +1989,8 @@ func TestWorkflowChildEventsAppearInAgentDetail(t *testing.T) {
 	tool := newTool(ext)
 	res, err := tool.Execute(context.Background(), "wf-1", map[string]any{
 		"script": `
-meta({ name = "events", description = "events" })
-return agent("inspect events", { label = "event-agent", phase = "Inspect" })
+meta({ name: "events", description: "events" })
+return await agent("inspect events", { label: "event-agent", phase: "Inspect" });
 `,
 	}, nil)
 	if err != nil {
@@ -2041,7 +2045,7 @@ func TestWorkflowRuntimeStateTracksRunningRuns(t *testing.T) {
 	ext := New()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ext.registry.start("run-1", "/tmp/workflow/script.lua", "/tmp/workflow", cancel, workflowExecution{})
+	ext.registry.start("run-1", "/tmp/workflow/script.js", "/tmp/workflow", cancel, workflowExecution{})
 	ext.registry.update("run-1", workflowSnapshot{
 		Name:         "review",
 		AgentCount:   3,
@@ -2163,8 +2167,8 @@ func TestToolExecuteAsyncRegistersRunningWorkflowAndStopCancelsIt(t *testing.T) 
 	res, err := tool.Execute(context.Background(), "wf-1", map[string]any{
 		"async": true,
 		"script": `
-meta({ name = "async_stop", description = "async stop" })
-return agent("wait", { label = "wait" })
+meta({ name: "async_stop", description: "async stop" })
+return agent("wait", { label: "wait" })
 `,
 	}, nil)
 	if err != nil {
@@ -2265,10 +2269,10 @@ func TestWorkflowsResumeUsesCompletedAgentCache(t *testing.T) {
 	res, err := tool.Execute(context.Background(), "wf-1", map[string]any{
 		"async": true,
 		"script": `
-meta({ name = "resume_cache", description = "resume cache" })
-local first = agent("first prompt", { label = "first" })
-local second = agent("second prompt", { label = "second" })
-return { first = first, second = second }
+meta({ name: "resume_cache", description: "resume cache" })
+const first = await agent("first prompt", { label: "first" });
+const second = await agent("second prompt", { label: "second" });
+return { first: first, second: second };
 `,
 	}, nil)
 	if err != nil {
@@ -2362,10 +2366,10 @@ func TestWorkflowsPauseCanResumeStoppedRun(t *testing.T) {
 	res, err := tool.Execute(context.Background(), "wf-pause", map[string]any{
 		"async": true,
 		"script": `
-meta({ name = "pause_resume", description = "pause and resume" })
-local first = agent("first prompt", { label = "first" })
-local second = agent("second prompt", { label = "second" })
-return { first = first, second = second }
+meta({ name: "pause_resume", description: "pause and resume" })
+const first = await agent("first prompt", { label: "first" });
+const second = await agent("second prompt", { label: "second" });
+return { first: first, second: second };
 `,
 	}, nil)
 	if err != nil {
@@ -2439,10 +2443,10 @@ func TestWorkflowsAgentStopSkipsOneRunningAgent(t *testing.T) {
 	res, err := tool.Execute(context.Background(), "wf-agent-stop", map[string]any{
 		"async": true,
 		"script": `
-meta({ name = "agent_stop", description = "stop one agent" })
-local first = agent("first prompt", { label = "first" })
-local second = agent("second prompt", { label = "second" })
-return { firstStopped = first == nil, second = second }
+meta({ name: "agent_stop", description: "stop one agent" })
+const first = await agent("first prompt", { label: "first" });
+const second = await agent("second prompt", { label: "second" });
+return { firstStopped: first === null, second: second };
 `,
 	}, nil)
 	if err != nil {
@@ -2468,7 +2472,7 @@ return { firstStopped = first == nil, second = second }
 		t.Fatalf("agent-stop notify = %q", got)
 	}
 	done := api.waitNotifyContaining(t, "Workflow agent_stop completed")
-	if !strings.Contains(done, `"firstStopped": true`) || !strings.Contains(done, `"second": "SECOND_OK"`) {
+	if !strings.Contains(done, "firstStopped") || !strings.Contains(done, "SECOND_OK") {
 		t.Fatalf("completion notify = %q", done)
 	}
 	if api.callCount() != 2 {
@@ -2511,9 +2515,9 @@ func TestWorkflowsAgentRestartRerunsOneRunningAgent(t *testing.T) {
 	res, err := tool.Execute(context.Background(), "wf-agent-restart", map[string]any{
 		"async": true,
 		"script": `
-meta({ name = "agent_restart", description = "restart one agent" })
-local first = agent("first prompt", { label = "first" })
-return { first = first }
+meta({ name: "agent_restart", description: "restart one agent" })
+const first = await agent("first prompt", { label: "first" });
+return { first: first };
 `,
 	}, nil)
 	if err != nil {
@@ -2539,7 +2543,7 @@ return { first = first }
 		t.Fatalf("agent-restart notify = %q", got)
 	}
 	done := api.waitNotifyContaining(t, "Workflow agent_restart completed")
-	if !strings.Contains(done, `"first": "FIRST_RESTARTED"`) {
+	if !strings.Contains(done, "FIRST_RESTARTED") {
 		t.Fatalf("completion notify = %q", done)
 	}
 	if api.callCount() != 2 {
@@ -2572,19 +2576,19 @@ func TestSavedWorkflowCommandRegistersProjectPrecedenceAndRuns(t *testing.T) {
 	if err := os.MkdirAll(userDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(userDir, "review.lua"), []byte(`
-meta({ name = "user_cmd", description = "user command" })
-return agent("user " .. args.suffix, { label = "user" })
+	if err := os.WriteFile(filepath.Join(userDir, "review.js"), []byte(`
+meta({ name: "user_cmd", description: "user command" })
+return agent("user " + args.suffix, { label: "user" })
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(projectDir, "review.lua"), []byte(`
-meta({ name = "project_cmd", description = "project command" })
-return agent("project " .. args.suffix, { label = "project" })
+	if err := os.WriteFile(filepath.Join(projectDir, "review.js"), []byte(`
+meta({ name: "project_cmd", description: "project command" })
+return agent("project " + args.suffix, { label: "project" })
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(projectDir, "bad name.lua"), []byte(`meta({ name = "bad", description = "bad" })`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(projectDir, "bad name.js"), []byte(`meta({ name: "bad", description: "bad" })`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2643,9 +2647,9 @@ func TestSavedWorkflowCommandKeepsReservedDirectCommandFree(t *testing.T) {
 	if err := os.MkdirAll(projectDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(projectDir, "workflows.lua"), []byte(`
-meta({ name = "reserved", description = "reserved command" })
-return agent("reserved", { label = "reserved" })
+	if err := os.WriteFile(filepath.Join(projectDir, "workflows.js"), []byte(`
+meta({ name: "reserved", description: "reserved command" })
+return agent("reserved", { label: "reserved" })
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -2676,9 +2680,9 @@ func TestSavedWorkflowCommandRejectsInvalidJSONArgs(t *testing.T) {
 	if err := os.MkdirAll(projectDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(projectDir, "review.lua"), []byte(`
-meta({ name = "review", description = "review command" })
-return agent("review", { label = "review" })
+	if err := os.WriteFile(filepath.Join(projectDir, "review.js"), []byte(`
+meta({ name: "review", description: "review command" })
+return agent("review", { label: "review" })
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}

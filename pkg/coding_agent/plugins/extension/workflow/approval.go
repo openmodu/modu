@@ -15,10 +15,10 @@ const (
 )
 
 var (
-	workflowNameRE        = regexp.MustCompile(`(?m)\bname\s*=\s*["']([^"']+)["']`)
-	workflowDescriptionRE = regexp.MustCompile(`(?m)\bdescription\s*=\s*["']([^"']+)["']`)
+	workflowNameRE        = regexp.MustCompile(`(?m)\bname\s*[:=]\s*["']([^"']+)["']`)
+	workflowDescriptionRE = regexp.MustCompile(`(?m)\bdescription\s*[:=]\s*["']([^"']+)["']`)
 	workflowPhaseRE       = regexp.MustCompile(`\bphase\s*\(\s*["']([^"']+)["']\s*\)`)
-	workflowPhaseTitleRE  = regexp.MustCompile(`(?m)\btitle\s*=\s*["']([^"']+)["']`)
+	workflowPhaseTitleRE  = regexp.MustCompile(`(?m)\btitle\s*[:=]\s*["']([^"']+)["']`)
 )
 
 type workflowApprovalSummary struct {
@@ -157,7 +157,7 @@ func formatWorkflowApprovalBody(summary workflowApprovalSummary, exec workflowEx
 		fmt.Fprintf(&b, "Budget: %d\n", exec.BudgetTotal)
 	}
 	b.WriteString("\nWorkflow agents may read, edit, and run tools according to their prompts and your active allowlist.\n\n")
-	b.WriteString("Script preview:\n```lua\n")
+	b.WriteString("Script preview:\n```js\n")
 	b.WriteString(truncateWorkflowScript(exec.Script, 3000))
 	b.WriteString("\n```")
 	return b.String()
@@ -184,7 +184,7 @@ func formatWorkflowRawScript(summary workflowApprovalSummary, exec workflowExecu
 	if exec.ScriptPath != "" {
 		fmt.Fprintf(&b, "Script: %s\n", exec.ScriptPath)
 	}
-	b.WriteString("\n```lua\n")
+	b.WriteString("\n```js\n")
 	b.WriteString(strings.TrimSpace(exec.Script))
 	b.WriteString("\n```")
 	return b.String()

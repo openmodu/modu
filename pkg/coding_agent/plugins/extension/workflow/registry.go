@@ -113,7 +113,7 @@ func persistWorkflowRunStatus(runDir string, status workflowRunStatus, errText s
 	data, err := json.MarshalIndent(workflowRunStatusFile{
 		ID:         id,
 		Status:     status,
-		ScriptPath: filepath.Join(runDir, "script.lua"),
+		ScriptPath: filepath.Join(runDir, "script.js"),
 		RunDir:     runDir,
 		Error:      errText,
 		StartedAt:  startedAt,

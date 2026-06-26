@@ -111,7 +111,7 @@ func TestBuilderIncludesDynamicWorkflowGuidanceWhenWorkflowToolAvailable(t *test
 	prompt := NewBuilder(t.TempDir()).
 		SetTools([]types.Tool{
 			stubTool{name: "read", desc: "reads a file"},
-			stubTool{name: "workflow", desc: "runs Lua workflows"},
+			stubTool{name: "workflow", desc: "runs JavaScript workflows"},
 		}).
 		Build()
 
@@ -119,9 +119,9 @@ func TestBuilderIncludesDynamicWorkflowGuidanceWhenWorkflowToolAvailable(t *test
 		"# Dynamic Workflows",
 		"When the `workflow` tool is available",
 		"`ultracode`",
-		"Write Lua, not JavaScript",
+		"Write plain async JavaScript",
 		"`meta`",
-		"`parallel(..., { concurrency = N })`",
+		"await pipeline(items, stage1, stage2, ...)",
 		"`/workflows`",
 		"not a status or management API",
 		"`action`",
