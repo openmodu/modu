@@ -37,10 +37,19 @@ enough to implement, verify, and commit independently.
 - `pkg/modu-tui` now has a reusable `CardBlock` heavy-border card renderer,
   and approval/slash popups share that card style instead of hardcoding panel
   borders in the model.
+- Fresh `modu-tui` sessions now open with a `CardBlock` startup information
+  card showing app, model, cwd, session id, and basic `/` command guidance;
+  the card is UI-only and stays at the top after transcript messages exist.
+- `pkg/modu-tui` input now collapses large pasted text into a `[Pasted text ...]`
+  token in the bottom input while submitting and rendering the full expanded
+  content in the conversation transcript.
 - The `modu-tui` runner now supports slash command suggestions: typing `/`
   opens a fixed bottom card, `Tab` completes the selected command, and `Enter`
   routes slash commands through `pkg/slash` or the session slash/prompt/skill
   path instead of sending them to the model as plain text.
+- Slash command output in the `modu-tui` runner is now marked preformatted, so
+  multiline outputs such as `/help` keep line breaks and column alignment
+  instead of being reflowed as a Markdown paragraph.
 - `pkg/modu-tui` markdown rendering now disables Glamour's heavy inline-code
   red/background styling while preserving fenced-code highlighting and table
   rendering, keeping status text such as commit summaries readable.
