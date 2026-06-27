@@ -1,6 +1,6 @@
 // modu_code is an interactive coding assistant built on modu's CodingAgent and
-// pkg/tui. It provides a REPL where the AI can read, write, and search files in
-// the current working directory.
+// pkg/modu-tui. It provides a REPL where the AI can read, write, and search
+// files in the current working directory.
 //
 // Provider selection (first matching wins):
 //
@@ -35,10 +35,9 @@ import (
 
 	"github.com/openmodu/modu/cmd/modu_code/internal/acp"
 	"github.com/openmodu/modu/cmd/modu_code/internal/provider"
-	"github.com/openmodu/modu/pkg/tui"
 )
 
-var runTUI = tui.RunWithOptions
+var runTUI = runModuTUI
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "config" {
@@ -164,7 +163,7 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if err := runTUI(ctx, session, model, *noApprove, tui.RunOptions{CommandHooks: tui.CommandHooks{
+	if err := runTUI(ctx, session, model, *noApprove, RunOptions{CommandHooks: CommandHooks{
 		Config: func(args string) (string, error) {
 			return runConfigHook(args, session)
 		},

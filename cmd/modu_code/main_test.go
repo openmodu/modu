@@ -15,7 +15,6 @@ import (
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/services/session"
 	"github.com/openmodu/modu/pkg/slash"
-	"github.com/openmodu/modu/pkg/tui"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -317,7 +316,7 @@ func TestMainTUISessionFlows(t *testing.T) {
 	setupMainTestInvocation(t, project, "modu_code")
 
 	called := false
-	runTUI = func(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool, opts tui.RunOptions) error {
+	runTUI = func(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool, opts RunOptions) error {
 		called = true
 		if noApprove {
 			t.Fatal("expected noApprove false")
@@ -411,7 +410,7 @@ func TestMainResumeStartsRequestedSession(t *testing.T) {
 	os.Args = []string{"modu_code", "--resume", targetID}
 
 	called := false
-	runTUI = func(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool, opts tui.RunOptions) error {
+	runTUI = func(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool, opts RunOptions) error {
 		called = true
 		if got := session.GetSessionID(); got != targetID {
 			t.Fatalf("expected resumed session id %s, got %s", targetID, got)
@@ -451,7 +450,7 @@ func TestMainDoesNotStartInWorktreeByDefaultForGitRepo(t *testing.T) {
 	setupMainTestInvocation(t, project, "modu_code")
 
 	called := false
-	runTUI = func(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool, opts tui.RunOptions) error {
+	runTUI = func(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool, opts RunOptions) error {
 		called = true
 		status := session.WorktreeStatus()
 		if status.Active {
@@ -489,7 +488,7 @@ func TestMainStartsInWorktreeWhenRequestedForGitRepo(t *testing.T) {
 	setupMainTestInvocation(t, project, "modu_code", "--worktree")
 
 	called := false
-	runTUI = func(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool, opts tui.RunOptions) error {
+	runTUI = func(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool, opts RunOptions) error {
 		called = true
 		status := session.WorktreeStatus()
 		if !status.Active {

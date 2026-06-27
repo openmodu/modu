@@ -5,6 +5,28 @@ enough to implement, verify, and commit independently.
 
 ## Done
 
+- Started the `pkg/modu-tui` backed `modu_code` runner on branch
+  `codex/modu-code-modu-tui`: the default interactive entry no longer imports
+  `pkg/tui`, core session events are converted into `modu-tui` messages, and
+  config hook types are owned by `cmd/modu_code`.
+- The `modu_code` `modu-tui` runner now seeds Bubble Tea with the current
+  terminal size, matching `tuipoc2` startup sizing and avoiding a wrong-size
+  first frame on small mobile terminals.
+- `pkg/modu-tui` render output now pads every terminal row to the current
+  width, so scrolling from a longer previous frame to shorter content clears
+  stale tail cells on mobile terminals.
+- `pkg/modu-tui` now renders `Jump to bottom` once in a fixed row above the
+  input instead of as a viewport overlay, preserving tap-to-bottom behavior
+  while avoiding duplicated jump hints during mobile terminal redraws.
+- `modu_code` tool calls now merge assistant call, execution start/end, and
+  tool result updates by `ToolID` into one `pkg/modu-tui` block. Bash renders
+  collapsed as `Ran 1 shell command` and expanded as a Claude Code-style
+  `⏺ Bash(...)` block with output below it.
+- Expanded `pkg/modu-tui` tool blocks now render with a faint full-width
+  background so command details read as one grouped block.
+- `pkg/modu-tui` now owns reusable tool approval UI primitives:
+  `ApprovalBlock`, `RequestToolApprovalMsg`, approval decision constants, and
+  keyboard handling for allow/deny decisions.
 - Git-backed `modu_code` startup can enter a managed branch-backed worktree via
   `--worktree`; the default startup path stays in the current checkout.
 - Default `modu_code` startup now creates a fresh session id; previous context

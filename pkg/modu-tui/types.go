@@ -13,16 +13,20 @@ const (
 )
 
 type Message struct {
-	Role     Role
-	Text     string
-	Tool     bool
-	ToolID   string
-	ToolName string
-	Summary  string
-	Detail   string
-	Expanded bool
-	Language string
-	Code     string
+	Role       Role
+	Text       string
+	Tool       bool
+	ToolID     string
+	ToolName   string
+	Summary    string
+	Detail     string
+	ToolInput  string
+	ToolOutput string
+	ToolError  bool
+	ToolDone   bool
+	Expanded   bool
+	Language   string
+	Code       string
 }
 
 type ToolPermissionState string
@@ -39,10 +43,37 @@ type ToolCall struct {
 	Name    string
 	Summary string
 	Detail  string
+	Input   string
+	Output  string
+	Error   bool
+	Done    bool
+}
+
+type ToolApprovalDecision string
+
+const (
+	ToolApprovalAllow       ToolApprovalDecision = "allow"
+	ToolApprovalAllowAlways ToolApprovalDecision = "allow_always"
+	ToolApprovalDeny        ToolApprovalDecision = "deny"
+	ToolApprovalDenyAlways  ToolApprovalDecision = "deny_always"
+)
+
+type ToolApprovalRequest struct {
+	ID       string
+	ToolName string
+	Summary  string
+	Detail   string
+}
+
+type ToolApprovalResult struct {
+	Request  ToolApprovalRequest
+	Decision ToolApprovalDecision
 }
 
 type Hooks struct {
-	ToolPermission func(ToolCall) ToolPermissionState
+	ToolPermission       func(ToolCall) ToolPermissionState
+	ToolApprovalDecision func(ToolApprovalResult)
+	Submit               func(text string)
 }
 
 type MessageBlockFactory func(Message) (Block, bool)
@@ -56,4 +87,25 @@ type Options struct {
 	Hooks           Hooks
 	BlockFactories  []MessageBlockFactory
 	BlockGap        int
+}
+
+type AppendMessageMsg struct {
+	Message Message
+}
+
+type SetStatusMsg struct {
+	Status string
+}
+
+type SetBusyMsg struct {
+	Busy bool
+}
+
+type RequestToolApprovalMsg struct {
+	Request ToolApprovalRequest
+	Respond chan<- ToolApprovalDecision
+}
+
+type CancelToolApprovalMsg struct {
+	ID string
 }

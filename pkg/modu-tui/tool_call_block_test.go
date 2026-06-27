@@ -3,6 +3,8 @@ package modutui
 import (
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestToolCallBlockRendersCollapsedAndExpanded(t *testing.T) {
@@ -15,6 +17,42 @@ func TestToolCallBlockRendersCollapsedAndExpanded(t *testing.T) {
 	expanded := ToolCallBlock{CollapsibleBlock: CollapsibleBlock{Summary: "Ran command", Detail: "visible", Expanded: true}}.Render(ctx)
 	if got := strings.Join(renderedTexts(expanded), "\n"); !strings.Contains(got, "visible") {
 		t.Fatalf("expanded tool block missing detail:\n%s", got)
+	}
+}
+
+func TestToolCallBlockRendersClaudeStyleBashCall(t *testing.T) {
+	ctx := RenderContext{ContentWidth: 80, Markdown: markdownRenderer(80)}
+	block := ToolCallBlock{
+		CollapsibleBlock: CollapsibleBlock{Summary: "Ran 1 shell command", Expanded: true},
+		Call: ToolCall{
+			Name:   "bash",
+			Input:  "go test ./pkg/modu-tui",
+			Output: "ok github.com/openmodu/modu/pkg/modu-tui",
+			Done:   true,
+		},
+	}
+	got := strings.Join(renderedTexts(block.Render(ctx)), "\n")
+	if !strings.Contains(got, "⏺ Bash(go test ./pkg/modu-tui)") {
+		t.Fatalf("expanded bash call missing Claude-style header:\n%s", got)
+	}
+	first := renderedTexts(block.Render(ctx))[0]
+	if strings.HasPrefix(first, "▾") || strings.HasPrefix(first, "▸") {
+		t.Fatalf("expanded bash call should not render an arrow prefix: %q", first)
+	}
+	if !strings.HasPrefix(first, "⏺ ") {
+		t.Fatalf("expanded bash call should start with bullet: %q", first)
+	}
+	if !strings.Contains(got, "ok github.com/openmodu/modu/pkg/modu-tui") {
+		t.Fatalf("expanded bash call missing output:\n%s", got)
+	}
+	if got, want := toolExpandedStyle.GetBackground(), lipgloss.Color("236"); got != want {
+		t.Fatalf("expanded tool background = %#v, want %#v", got, want)
+	}
+	rendered := block.Render(ctx)
+	for i, line := range rendered.Lines {
+		if got := lipgloss.Width(line.Text); got != ctx.ContentWidth {
+			t.Fatalf("expanded bash call line %d width = %d, want %d: %q", i, got, ctx.ContentWidth, line.Text)
+		}
 	}
 }
 

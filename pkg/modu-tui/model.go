@@ -12,6 +12,11 @@ import (
 type streamTickMsg struct{}
 type autoScrollTickMsg struct{}
 
+type pendingApproval struct {
+	request ToolApprovalRequest
+	respond chan<- ToolApprovalDecision
+}
+
 type Model struct {
 	width, height int
 
@@ -26,6 +31,8 @@ type Model struct {
 	streamRunes []rune
 	streamIdx   int
 	streamReply string
+	busy        bool
+	approval    *pendingApproval
 
 	selecting        bool
 	selStart, selEnd cell
@@ -65,12 +72,14 @@ func NewModel(options ...Options) Model {
 		follow:         true,
 		selStart:       cell{line: -1},
 		selEnd:         cell{line: -1},
-		messages:       opts.InitialMessages,
 		streamReply:    opts.StreamReply,
 		statusHint:     opts.StatusHint,
 		hooks:          opts.Hooks,
 		blockFactories: opts.BlockFactories,
 		blockGap:       opts.BlockGap,
+	}
+	for _, msg := range opts.InitialMessages {
+		m.appendMessage(msg)
 	}
 	m.rebuild()
 	return m
@@ -89,6 +98,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.rebuild()
 
 	case tea.KeyPressMsg:
+		if m.approval != nil {
+			return m.handleApprovalKey(msg)
+		}
 		switch {
 		case msg.String() == "ctrl+c":
 			return m, tea.Quit
@@ -99,12 +111,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.Code == tea.KeyPgDown:
 			m.scroll(max(1, m.vpHeight()-1))
 		case msg.Code == tea.KeyEnter:
-			if v := strings.TrimSpace(m.input.Value); v != "" && !m.streaming {
+			if v := strings.TrimSpace(m.input.Value); v != "" && !m.streaming && !m.busy {
 				m.messages = append(m.messages, Message{Role: RoleUser, Text: v})
 				m.input.Reset()
 				m.clearSelection()
 				m.follow = true
 				m.rebuild()
+				if m.hooks.Submit != nil {
+					m.hooks.Submit(v)
+				}
 				if m.streamReply != "" {
 					m.startStream()
 					m.rebuild()
@@ -179,9 +194,66 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.tick()
 			}
 		}
+
+	case AppendMessageMsg:
+		m.appendMessage(msg.Message)
+		m.follow = true
+		m.rebuild()
+
+	case SetStatusMsg:
+		m.status = msg.Status
+
+	case SetBusyMsg:
+		m.busy = msg.Busy
+
+	case RequestToolApprovalMsg:
+		m.approval = &pendingApproval{request: msg.Request, respond: msg.Respond}
+		m.follow = true
+		m.rebuild()
+
+	case CancelToolApprovalMsg:
+		if m.approval != nil && (msg.ID == "" || msg.ID == m.approval.request.ID) {
+			m.approval = nil
+			m.rebuild()
+		}
 	}
 
 	return m, nil
+}
+
+func (m *Model) appendMessage(msg Message) {
+	if msg.Tool && msg.ToolID != "" {
+		for i := range m.messages {
+			if m.messages[i].Tool && m.messages[i].ToolID == msg.ToolID {
+				m.messages[i] = mergeToolMessage(m.messages[i], msg)
+				return
+			}
+		}
+	}
+	m.messages = append(m.messages, msg)
+}
+
+func mergeToolMessage(base, update Message) Message {
+	base.Tool = true
+	if update.ToolName != "" {
+		base.ToolName = update.ToolName
+	}
+	if update.Summary != "" && (!base.ToolDone || update.ToolDone) {
+		base.Summary = update.Summary
+	}
+	if update.Detail != "" {
+		base.Detail = update.Detail
+	}
+	if update.ToolInput != "" {
+		base.ToolInput = update.ToolInput
+	}
+	if update.ToolOutput != "" {
+		base.ToolOutput = update.ToolOutput
+	}
+	base.ToolError = base.ToolError || update.ToolError
+	base.ToolDone = base.ToolDone || update.ToolDone
+	base.Expanded = base.Expanded || update.Expanded
+	return base
 }
 
 func (m Model) View() tea.View {
@@ -189,11 +261,29 @@ func (m Model) View() tea.View {
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	_, caretX := m.input.Render(m.width)
-	v.Cursor = tea.NewCursor(caretX, m.vpHeight()+1)
+	if m.approval != nil {
+		caretX = 0
+	}
+	v.Cursor = tea.NewCursor(caretX, m.vpHeight()+m.approvalPanelHeight()+m.jumpPanelHeight()+1)
 	return v
 }
 
-func (m *Model) vpHeight() int { return max(1, m.height-4) }
+func (m *Model) vpHeight() int {
+	return max(1, m.height-4-m.approvalPanelHeight()-m.jumpPanelHeight())
+}
+func (m *Model) approvalPanelHeight() int {
+	return len(m.approvalPanelLines())
+}
+func (m *Model) jumpPanelHeight() int {
+	if m.showJumpPanel() {
+		return 1
+	}
+	return 0
+}
+func (m *Model) showJumpPanel() bool {
+	heightWithoutJump := max(1, m.height-4-m.approvalPanelHeight())
+	return m.yOffset < max(0, len(m.lines)-heightWithoutJump)
+}
 func (m *Model) maxOffset() int {
 	return max(0, len(m.lines)-m.vpHeight())
 }
@@ -295,18 +385,22 @@ func (m *Model) render() string {
 		if li < len(m.lines) {
 			window = append(window, fitLine(m.highlightLine(li), m.width))
 		} else {
-			window = append(window, "")
+			window = append(window, fitLine("", m.width))
 		}
 	}
 	view := strings.Join(window, "\n")
-	if !m.atBottom() {
-		view = overlayJumpHint(view, m.width)
-	}
 
 	input, _ := m.input.Render(m.width)
+	if m.approval != nil {
+		input = fitLine(dimStyle.Render(" approval pending "), m.width)
+	}
 	state := "○ idle"
 	if m.streaming {
 		state = "● streaming"
+	} else if m.approval != nil {
+		state = "● approval"
+	} else if m.busy {
+		state = "● busy"
 	}
 	hint := m.status
 	if hint == "" {
@@ -314,13 +408,136 @@ func (m *Model) render() string {
 	}
 	status := fitLine(dimStyle.Render(fmt.Sprintf(" %s · %s ", state, hint)), m.width)
 
-	return strings.Join([]string{
-		view,
+	parts := []string{view}
+	if panel := m.approvalPanelLines(); len(panel) > 0 {
+		parts = append(parts, panel...)
+	}
+	if panel := m.jumpPanelLines(); len(panel) > 0 {
+		parts = append(parts, panel...)
+	}
+	parts = append(parts,
 		ruleStyle.Render(strings.Repeat("─", max(0, m.width))),
 		input,
 		ruleStyle.Render(strings.Repeat("─", max(0, m.width))),
 		status,
-	}, "\n")
+	)
+	return strings.Join(parts, "\n")
+}
+
+func (m *Model) jumpPanelLines() []string {
+	if !m.showJumpPanel() {
+		return nil
+	}
+	return []string{centeredLine(jumpHint(), m.width)}
+}
+
+func (m *Model) approvalPanelLines() []string {
+	if m.approval == nil {
+		return nil
+	}
+	width := max(1, m.width)
+	innerWidth := max(1, width-2)
+	req := m.approval.request
+	title := strings.TrimSpace(req.Summary)
+	if title == "" {
+		title = "Tool approval"
+	}
+	if req.ToolName != "" && !strings.Contains(strings.ToLower(title), strings.ToLower(req.ToolName)) {
+		title += ": " + req.ToolName
+	}
+
+	var body []string
+	body = append(body, botStyle.Render("Approval required"))
+	body = append(body, "tool: "+req.ToolName)
+	detail := strings.TrimSpace(req.Detail)
+	if detail != "" {
+		body = append(body, "args:")
+		body = append(body, limitedWrappedLines(detail, innerWidth-2, m.maxApprovalDetailLines())...)
+	}
+	body = append(body, ApprovalBlock{Request: req}.ActionsLine())
+
+	top := "╭" + strings.Repeat("─", max(0, innerWidth)) + "╮"
+	bottom := "╰" + strings.Repeat("─", max(0, innerWidth)) + "╯"
+	lines := make([]string, 0, len(body)+2)
+	lines = append(lines, ruleStyle.Render(fitLine(top, width)))
+	for i, line := range body {
+		if i == 0 && title != "" {
+			line = line + dimStyle.Render(" · "+title)
+		}
+		lines = append(lines, borderedPanelLine(line, innerWidth))
+	}
+	lines = append(lines, ruleStyle.Render(fitLine(bottom, width)))
+	return lines
+}
+
+func (m *Model) maxApprovalDetailLines() int {
+	return max(1, min(4, m.height-7))
+}
+
+func limitedWrappedLines(text string, width int, limit int) []string {
+	width = max(1, width)
+	limit = max(1, limit)
+	var out []string
+	for _, raw := range strings.Split(text, "\n") {
+		wrapped := ansi.Wrap(raw, width, "")
+		if wrapped == "" {
+			wrapped = "\n"
+		}
+		for _, line := range strings.Split(strings.TrimSuffix(wrapped, "\n"), "\n") {
+			out = append(out, "  "+line)
+		}
+	}
+	if len(out) > limit {
+		out = out[:limit]
+		out[len(out)-1] = ansi.Truncate(out[len(out)-1], width+2, "…")
+	}
+	return out
+}
+
+func borderedPanelLine(content string, innerWidth int) string {
+	plainWidth := max(1, innerWidth)
+	fitted := fitLine(content, plainWidth)
+	if pad := plainWidth - ansi.StringWidth(fitted); pad > 0 {
+		fitted += strings.Repeat(" ", pad)
+	}
+	return ruleStyle.Render("│") + fitted + ruleStyle.Render("│")
+}
+
+func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "y", "Y":
+		return m.resolveApproval(ToolApprovalAllow), nil
+	case "a", "A":
+		return m.resolveApproval(ToolApprovalAllowAlways), nil
+	case "n", "N":
+		return m.resolveApproval(ToolApprovalDeny), nil
+	case "d", "D":
+		return m.resolveApproval(ToolApprovalDenyAlways), nil
+	case "esc":
+		return m.resolveApproval(ToolApprovalDeny), nil
+	}
+	return m, nil
+}
+
+func (m Model) resolveApproval(decision ToolApprovalDecision) Model {
+	if m.approval == nil {
+		return m
+	}
+	approval := m.approval
+	if approval.respond != nil {
+		go func() {
+			approval.respond <- decision
+		}()
+	}
+	if m.hooks.ToolApprovalDecision != nil {
+		m.hooks.ToolApprovalDecision(ToolApprovalResult{Request: approval.request, Decision: decision})
+	}
+	m.status = "approval: " + string(decision)
+	m.approval = nil
+	m.rebuild()
+	return m
 }
 
 func (m *Model) startStream() {

@@ -20,7 +20,11 @@ func fitLine(s string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	return ansi.Truncate(s, width, "")
+	fitted := ansi.Truncate(s, width, "")
+	if pad := width - ansi.StringWidth(fitted); pad > 0 {
+		fitted += strings.Repeat(" ", pad)
+	}
+	return fitted
 }
 
 func cellSlice(plain string, from, to int) string {
@@ -42,27 +46,13 @@ func cellSlice(plain string, from, to int) string {
 	return b.String()
 }
 
-func jumpHint() string           { return jumpStyle.Render("Jump to bottom (ctrl+End) ↓") }
-func jumpHintWidth() int         { return lipgloss.Width(jumpHint()) }
-func jumpHintLeft(width int) int { return max(0, (width-jumpHintWidth())/2) }
+func jumpHintText() string { return "Jump to bottom (ctrl+End) ↓" }
+func jumpHint() string     { return jumpStyle.Render(jumpHintText()) }
 
-func overlayJumpHint(view string, width int) string {
+func centeredLine(s string, width int) string {
 	if width <= 0 {
-		return view
+		return ""
 	}
-	pill := jumpHint()
-	pw := lipgloss.Width(pill)
-	left := jumpHintLeft(width)
-	lines := strings.Split(view, "\n")
-	if len(lines) == 0 {
-		return view
-	}
-	last := lines[len(lines)-1]
-	leftPart := ansi.Truncate(last, left, "")
-	if pad := left - lipgloss.Width(leftPart); pad > 0 {
-		leftPart += strings.Repeat(" ", pad)
-	}
-	right := ansi.Truncate(ansi.TruncateLeft(last, left+pw, ""), max(0, width-left-pw), "")
-	lines[len(lines)-1] = ansi.Truncate(leftPart+pill+right, width, "")
-	return strings.Join(lines, "\n")
+	left := max(0, (width-lipgloss.Width(s))/2)
+	return fitLine(strings.Repeat(" ", left)+s, width)
 }

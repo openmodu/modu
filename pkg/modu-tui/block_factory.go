@@ -2,7 +2,16 @@ package modutui
 
 func defaultBlockFromMessage(m Message) Block {
 	if m.Tool {
-		call := ToolCall{ID: m.ToolID, Name: m.ToolName, Summary: m.Summary, Detail: m.Detail}
+		call := ToolCall{
+			ID:      m.ToolID,
+			Name:    m.ToolName,
+			Summary: m.Summary,
+			Detail:  m.Detail,
+			Input:   m.ToolInput,
+			Output:  m.ToolOutput,
+			Error:   m.ToolError,
+			Done:    m.ToolDone,
+		}
 		return ToolCallBlock{
 			CollapsibleBlock: CollapsibleBlock{
 				Summary:  m.Summary,

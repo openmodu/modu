@@ -1,0 +1,148 @@
+package main
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	tea "charm.land/bubbletea/v2"
+
+	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
+	modutui "github.com/openmodu/modu/pkg/modu-tui"
+	"github.com/openmodu/modu/pkg/types"
+)
+
+func TestMessagesFromAssistantMessageIncludesTextAndToolCall(t *testing.T) {
+	messages := messagesFromAgentMessage(types.AssistantMessage{
+		Role: types.RoleAssistant,
+		Content: []types.ContentBlock{
+			&types.TextContent{Type: "text", Text: "hello"},
+			&types.ToolCallContent{Type: "toolCall", ID: "call-1", Name: "read", Arguments: map[string]any{"path": "main.go"}},
+		},
+	})
+
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2: %#v", len(messages), messages)
+	}
+	if got := messages[0].Text; got != "hello" {
+		t.Fatalf("text message = %q, want hello", got)
+	}
+	if !messages[1].Tool || messages[1].ToolName != "read" || !strings.Contains(messages[1].Detail, "main.go") {
+		t.Fatalf("tool message not converted: %#v", messages[1])
+	}
+}
+
+func TestMessagesFromAgentEventSkipsUserMessageEnd(t *testing.T) {
+	user := types.Event{
+		Type: types.EventTypeMessageEnd,
+		Message: types.UserMessage{
+			Role:    types.RoleUser,
+			Content: "hello",
+		},
+	}
+	if got := messagesFromAgentEvent(user); len(got) != 0 {
+		t.Fatalf("user message_end should not render because submit already appended it: %#v", got)
+	}
+
+	assistant := types.Event{
+		Type: types.EventTypeMessageEnd,
+		Message: types.AssistantMessage{
+			Role:    types.RoleAssistant,
+			Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "reply"}},
+		},
+	}
+	got := messagesFromAgentEvent(assistant)
+	if len(got) != 1 || got[0].Text != "reply" {
+		t.Fatalf("assistant message_end should render, got %#v", got)
+	}
+}
+
+func TestMessageFromSessionEventIncludesPermissionDenied(t *testing.T) {
+	msg, ok := messageFromSessionEvent(coding_agent.SessionEvent{
+		Type:     coding_agent.SessionEventPermissionDeny,
+		ToolName: "bash",
+		Reason:   "dangerous command",
+	})
+	if !ok {
+		t.Fatal("expected permission denied event to render")
+	}
+	if !strings.Contains(msg.Text, "bash") || !strings.Contains(msg.Text, "dangerous command") {
+		t.Fatalf("unexpected message text: %q", msg.Text)
+	}
+}
+
+func TestMessagesFromAgentEventFormatsBashToolAsSingleClaudeStyleBlock(t *testing.T) {
+	start := messagesFromAgentEvent(types.Event{
+		Type:       types.EventTypeToolExecutionStart,
+		ToolCallID: "call-1",
+		ToolName:   "bash",
+		Args:       map[string]any{"command": "go test ./pkg/modu-tui"},
+	})
+	if len(start) != 1 {
+		t.Fatalf("start messages len = %d, want 1", len(start))
+	}
+	if got := start[0]; got.Summary != "Running shell command" || got.ToolInput != "go test ./pkg/modu-tui" {
+		t.Fatalf("unexpected start message: %#v", got)
+	}
+
+	end := messagesFromAgentEvent(types.Event{
+		Type:       types.EventTypeToolExecutionEnd,
+		ToolCallID: "call-1",
+		ToolName:   "bash",
+		Result:     types.ToolResult{Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "ok"}}},
+	})
+	if len(end) != 1 {
+		t.Fatalf("end messages len = %d, want 1", len(end))
+	}
+	if got := end[0]; got.Summary != "Ran 1 shell command" || got.ToolOutput != "ok" || !got.ToolDone {
+		t.Fatalf("unexpected end message: %#v", got)
+	}
+}
+
+func TestToolApprovalDecisionToTypes(t *testing.T) {
+	tests := map[modutui.ToolApprovalDecision]types.ToolApprovalDecision{
+		modutui.ToolApprovalAllow:       types.ToolApprovalAllow,
+		modutui.ToolApprovalAllowAlways: types.ToolApprovalAllowAlways,
+		modutui.ToolApprovalDeny:        types.ToolApprovalDeny,
+		modutui.ToolApprovalDenyAlways:  types.ToolApprovalDenyAlways,
+	}
+	for input, want := range tests {
+		if got := toolApprovalDecisionToTypes(input); got != want {
+			t.Fatalf("decision %q mapped to %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestInitialTerminalSizeFallsBackWhenSizeIsUnavailable(t *testing.T) {
+	width, height := initialTerminalSize(-1, 120, 35)
+	if width != 120 || height != 35 {
+		t.Fatalf("initialTerminalSize = %dx%d, want 120x35", width, height)
+	}
+}
+
+func TestModuTUIPrompterApproveToolUsesModuTUIRequest(t *testing.T) {
+	requests := make(chan modutui.RequestToolApprovalMsg, 1)
+	prompter := &moduTUIPrompter{
+		ctx: context.Background(),
+		send: func(msg tea.Msg) {
+			req, ok := msg.(modutui.RequestToolApprovalMsg)
+			if !ok {
+				t.Fatalf("unexpected message type %T", msg)
+			}
+			requests <- req
+			req.Respond <- modutui.ToolApprovalAllowAlways
+		},
+	}
+
+	decision, err := prompter.ApproveTool("bash", "call-1", map[string]any{"command": "go test ./..."})
+	if err != nil {
+		t.Fatalf("ApproveTool returned error: %v", err)
+	}
+	if decision != types.ToolApprovalAllowAlways {
+		t.Fatalf("decision = %q, want %q", decision, types.ToolApprovalAllowAlways)
+	}
+	req := <-requests
+	if req.Request.ID != "call-1" || req.Request.ToolName != "bash" || !strings.Contains(req.Request.Detail, "go test ./...") {
+		t.Fatalf("unexpected approval request: %#v", req.Request)
+	}
+}
