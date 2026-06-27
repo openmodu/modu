@@ -217,7 +217,31 @@ func newModel() model {
 	}
 }
 
-func (m model) Init() tea.Cmd { return textarea.Blink }
+// glamourStyle picks dark/light WITHOUT querying the terminal (which would leak
+// over SSH). Order: explicit TUIPOC_STYLE override, then the COLORFGBG env var
+// some terminals set (last field is the background: 7/15 = light), else dark —
+// the right default for coding-agent terminals.
+func glamourStyle() string {
+	if s := os.Getenv("TUIPOC_STYLE"); s == "light" || s == "dark" {
+		return s
+	}
+	if fgbg := os.Getenv("COLORFGBG"); fgbg != "" {
+		parts := strings.Split(fgbg, ";")
+		switch parts[len(parts)-1] {
+		case "7", "15":
+			return "light"
+		}
+	}
+	return "dark"
+}
+
+
+func (m model) Init() tea.Cmd {
+	return tea.Batch(
+		textarea.Blink,
+		func() tea.Msg { return tea.WindowSizeMsg{Width: 100, Height: 30} },
+	)
+}
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
@@ -602,7 +626,12 @@ func (m *model) renderTranscript() string {
 // line can toggle the block expanded/collapsed.
 func (m *model) buildTranscript() ([]string, map[int]int) {
 	width := max(m.vp.Width, 10)
-	r, _ := glamour.NewTermRenderer(glamour.WithAutoStyle(), glamour.WithWordWrap(width-2))
+	// Fixed style --- NOT WithAutoStyle, which queries the terminal background color
+	// (OSC 11) on every renderer creation. Over SSH that reply comes back
+	// asynchronously and leaks into the input box as "]11;rgb:1e1e/...". We pick
+	// dark/light from non-querying signals instead, so nothing leaks.
+
+	r, _ := glamour.NewTermRenderer(glamour.WithStandardStyle(glamourStyle()), glamour.WithWordWrap(width-2))
 
 	var lines []string
 	headers := map[int]int{}

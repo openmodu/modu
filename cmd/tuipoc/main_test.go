@@ -173,6 +173,27 @@ func TestPOCInputSanitizesMouseLeak(t *testing.T) {
 	}
 }
 
+// glamourStyle picks dark/light from non-querying signals (no OSC leak).
+func TestPOCGlamourStyle(t *testing.T) {
+	t.Setenv("TUIPOC_STYLE", "")
+	t.Setenv("COLORFGBG", "")
+	if got := glamourStyle(); got != "dark" {
+		t.Fatalf("default style = %q, want dark", got)
+	}
+	t.Setenv("COLORFGBG", "0;15") // bg 15 → light
+	if got := glamourStyle(); got != "light" {
+		t.Fatalf("COLORFGBG light = %q, want light", got)
+	}
+	t.Setenv("COLORFGBG", "15;0") // bg 0 → dark
+	if got := glamourStyle(); got != "dark" {
+		t.Fatalf("COLORFGBG dark = %q, want dark", got)
+	}
+	t.Setenv("TUIPOC_STYLE", "light") // explicit override wins
+	if got := glamourStyle(); got != "light" {
+		t.Fatalf("override = %q, want light", got)
+	}
+}
+
 // Interacting during streaming: scrolling up mid-stream stops auto-follow, and
 // subsequent streaming output must NOT yank the view back to the bottom.
 func TestPOCInteractiveDuringStreaming(t *testing.T) {
