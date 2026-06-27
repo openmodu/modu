@@ -178,7 +178,7 @@ func TestModuTUIPrompterApproveToolUsesModuTUIRequest(t *testing.T) {
 		t.Fatalf("decision = %q, want %q", decision, types.ToolApprovalAllowAlways)
 	}
 	req := <-requests
-	if req.Request.ID != "call-1" || req.Request.ToolName != "bash" || !strings.Contains(req.Request.Detail, "go test ./...") {
+	if req.Request.ID != "call-1" || req.Request.ToolName != "bash" || req.Request.Detail != "go test ./..." {
 		t.Fatalf("unexpected approval request: %#v", req.Request)
 	}
 }

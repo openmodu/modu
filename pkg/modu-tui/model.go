@@ -449,13 +449,13 @@ func (m *Model) approvalPanelLines() []string {
 	}
 
 	var body []string
-	body = append(body, botStyle.Render("Approval required"))
-	body = append(body, "tool: "+req.ToolName)
+	body = append(body, botStyle.Render("Approval required")+" "+dimStyle.Render("for "+toolDisplayName(req.ToolName)))
 	detail := strings.TrimSpace(req.Detail)
 	if detail != "" {
-		body = append(body, "args:")
-		body = append(body, limitedWrappedLines(detail, innerWidth-2, m.maxApprovalDetailLines())...)
+		body = append(body, dimStyle.Render(toolDisplayName(req.ToolName)+" command:"))
+		body = append(body, approvalDetailLines(detail, innerWidth-2, m.maxApprovalDetailLines())...)
 	}
+	body = append(body, "")
 	body = append(body, ApprovalBlock{Request: req}.ActionsLine())
 
 	top := "╭" + strings.Repeat("─", max(0, innerWidth)) + "╮"
@@ -494,6 +494,14 @@ func limitedWrappedLines(text string, width int, limit int) []string {
 		out[len(out)-1] = ansi.Truncate(out[len(out)-1], width+2, "…")
 	}
 	return out
+}
+
+func approvalDetailLines(text string, width int, limit int) []string {
+	lines := limitedWrappedLines(text, width, limit)
+	for i, line := range lines {
+		lines[i] = toolExpandedLine(width+2, strings.TrimPrefix(line, "  "))
+	}
+	return lines
 }
 
 func borderedPanelLine(content string, innerWidth int) string {

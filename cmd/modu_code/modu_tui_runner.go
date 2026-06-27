@@ -130,7 +130,7 @@ func (p *moduTUIPrompter) ApproveTool(toolName, toolCallID string, args map[stri
 			ID:       toolCallID,
 			ToolName: toolName,
 			Summary:  "approval required: " + toolName,
-			Detail:   formatJSON(args),
+			Detail:   toolInputFromArgs(toolName, args),
 		},
 		Respond: ch,
 	})

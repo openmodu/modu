@@ -30,5 +30,5 @@ func (b ApprovalBlock) Render(ctx RenderContext) BlockRender {
 }
 
 func (b ApprovalBlock) ActionsLine() string {
-	return "[y] allow  [a] always allow  [n] deny  [d] always deny  [esc] deny"
+	return "[y] allow  [a] always allow    [n] deny  [d] always deny  [esc] cancel"
 }

@@ -333,7 +333,7 @@ func TestPOC2ToolApprovalResolvesFromKeyboard(t *testing.T) {
 		t.Fatal("expected pending approval")
 	}
 	rendered := ansi.Strip(pending.render())
-	if !strings.Contains(rendered, "Tool approval: bash") || !strings.Contains(rendered, "[y] allow") {
+	if !strings.Contains(rendered, "Approval required for Bash") || !strings.Contains(rendered, "[y] allow") {
 		t.Fatalf("pending approval not rendered:\n%s", rendered)
 	}
 	if got := strings.Join(pending.Lines(), "\n"); strings.Contains(ansi.Strip(got), "approval required") {
@@ -376,7 +376,7 @@ func TestPOC2ToolApprovalPanelIsFixedAboveInput(t *testing.T) {
 			ID:       "call-1",
 			ToolName: "bash",
 			Summary:  "approval required: bash",
-			Detail:   `{"command":"go test ./..."}`,
+			Detail:   "go test ./...",
 		},
 		Respond: make(chan ToolApprovalDecision, 1),
 	})
@@ -396,6 +396,10 @@ func TestPOC2ToolApprovalPanelIsFixedAboveInput(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(rendered[panelTop:inputRule], "\n"), "[y] allow") {
 		t.Fatalf("approval panel should include actions:\n%s", strings.Join(rendered[panelTop:inputRule], "\n"))
+	}
+	if !strings.Contains(strings.Join(rendered[panelTop:inputRule], "\n"), "Bash command:") ||
+		!strings.Contains(strings.Join(rendered[panelTop:inputRule], "\n"), "go test ./...") {
+		t.Fatalf("approval panel should include command preview:\n%s", strings.Join(rendered[panelTop:inputRule], "\n"))
 	}
 }
 

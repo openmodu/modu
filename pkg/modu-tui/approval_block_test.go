@@ -21,7 +21,7 @@ func TestApprovalBlockRendersPendingToolApproval(t *testing.T) {
 			t.Fatalf("approval block missing %q:\n%s", want, got)
 		}
 	}
-	if actions := block.ActionsLine(); !strings.Contains(actions, "[y] allow") || !strings.Contains(actions, "[d] always deny") {
+	if actions := block.ActionsLine(); !strings.Contains(actions, "[y] allow") || !strings.Contains(actions, "[d] always deny") || !strings.Contains(actions, "[esc] cancel") {
 		t.Fatalf("approval actions line is incomplete: %q", actions)
 	}
 }

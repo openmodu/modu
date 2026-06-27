@@ -42,7 +42,8 @@ Component layout:
 - `approval_block.go` renders a pending tool approval request as a fixed panel
   above the bottom input area. Hosts send `RequestToolApprovalMsg` with a
   response channel; the model handles `y/a/n/d/esc` and returns a
-  `ToolApprovalDecision`.
+  `ToolApprovalDecision`. Approval panels show a compact command preview and
+  grouped allow/deny shortcuts.
 - `code_block.go` owns fenced-code rendering and syntax highlighting via Glamour.
 - `block_factory.go` maps `Message` values to block structs.
 - `Options.BlockFactories` lets callers register custom `Message -> Block`

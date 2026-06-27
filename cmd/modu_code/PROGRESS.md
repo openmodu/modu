@@ -30,6 +30,8 @@ enough to implement, verify, and commit independently.
   grouped block without dark reset artifacts.
 - Collapsed `pkg/modu-tui` tool summaries are indented, while clicking any
   rendered line inside an expanded tool block collapses it.
+- Tool approval cards now use compact command previews instead of JSON args,
+  with clearer grouped allow/deny shortcuts.
 - `pkg/modu-tui` markdown rendering now disables Glamour's heavy inline-code
   red/background styling while preserving fenced-code highlighting and table
   rendering, keeping status text such as commit summaries readable.
