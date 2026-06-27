@@ -1,6 +1,11 @@
 package modutui
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/charmbracelet/x/ansi"
+)
 
 func TestInputBlockEditsAtCursor(t *testing.T) {
 	var input InputBlock
@@ -18,5 +23,36 @@ func TestInputBlockEditsAtCursor(t *testing.T) {
 	input.DeleteForward()
 	if got, want := input.Value, "bc"; got != want {
 		t.Fatalf("after delete = %q, want %q", got, want)
+	}
+}
+
+func TestInputBlockLargePasteRendersCollapsedAndExpandsForSubmit(t *testing.T) {
+	content := strings.Repeat("alpha ", 50)
+	var input InputBlock
+	input.Insert("before ")
+	input.InsertPaste(content)
+	input.Insert(" after")
+
+	if strings.Contains(input.Value, content) {
+		t.Fatalf("input Value should keep the paste collapsed, got %q", input.Value)
+	}
+	if got := input.ExpandedValue(); got != "before "+content+" after" {
+		t.Fatalf("expanded value mismatch:\n%q", got)
+	}
+	line, _ := input.Render(80)
+	rendered := ansi.Strip(line)
+	if !strings.Contains(rendered, "[Pasted text") || strings.Contains(rendered, content) {
+		t.Fatalf("rendered input should show the paste label only:\n%s", rendered)
+	}
+}
+
+func TestInputBlockShortPasteKeepsExistingSingleLineBehavior(t *testing.T) {
+	var input InputBlock
+	input.InsertPaste("alpha\nbeta\rgamma\r\ndelta")
+	if got, want := input.Value, "alpha beta gamma delta"; got != want {
+		t.Fatalf("short paste value = %q, want %q", got, want)
+	}
+	if got := input.ExpandedValue(); got != input.Value {
+		t.Fatalf("short paste should not use collapsed expansion: %q vs %q", got, input.Value)
 	}
 }

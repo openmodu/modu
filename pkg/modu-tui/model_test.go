@@ -269,6 +269,44 @@ func TestPOC2PasteStaysSingleLine(t *testing.T) {
 	}
 }
 
+func TestPOC2LargePasteCollapsesInInputAndSubmitsExpandedText(t *testing.T) {
+	pasted := strings.Join([]string{
+		"line 1",
+		"line 2",
+		"line 3",
+		"line 4",
+		"line 5",
+		"line 6",
+	}, "\n")
+	var submitted string
+	var tm tea.Model = NewModel(Options{
+		Width:  72,
+		Height: 10,
+		Hooks: Hooks{Submit: func(text string) {
+			submitted = text
+		}},
+	})
+	tm, _ = tm.Update(tea.PasteMsg{Content: pasted})
+
+	m := tm.(Model)
+	rendered := ansi.Strip(m.render())
+	if !strings.Contains(rendered, "[Pasted text 6 lines]") {
+		t.Fatalf("large paste should render as a collapsed label:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "line 6") {
+		t.Fatalf("large paste content should not be expanded in the input:\n%s", rendered)
+	}
+
+	tm, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = tm.(Model)
+	if got := submitted; got != pasted {
+		t.Fatalf("submitted paste = %q, want %q", got, pasted)
+	}
+	if len(m.messages) != 1 || m.messages[0].Text != pasted {
+		t.Fatalf("transcript message should keep the expanded paste: %#v", m.messages)
+	}
+}
+
 func TestPOC2SubmitHookReceivesEnteredText(t *testing.T) {
 	var submitted string
 	var tm tea.Model = NewModel(Options{

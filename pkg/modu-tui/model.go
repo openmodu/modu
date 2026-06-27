@@ -119,7 +119,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.Code == tea.KeyPgDown:
 			m.scroll(max(1, m.vpHeight()-1))
 		case msg.Code == tea.KeyEnter:
-			if v := strings.TrimSpace(m.input.Value); v != "" && !m.streaming && !m.busy {
+			if v := strings.TrimSpace(m.input.ExpandedValue()); v != "" && !m.streaming && !m.busy {
 				if len(m.slashMatches) > 0 {
 					v = m.slashMatches[clamp(m.slashIndex, 0, len(m.slashMatches)-1)].Name
 				}
@@ -170,7 +170,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.PasteMsg:
-		m.input.Insert(msg.Content)
+		m.input.InsertPaste(msg.Content)
 		m.updateSlashMatches()
 
 	case tea.MouseWheelMsg:
