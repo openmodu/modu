@@ -173,12 +173,13 @@ func messagesFromAgentEvent(ev types.Event) []modutui.Message {
 			ToolInput: input,
 		}}
 	case types.EventTypeToolExecutionEnd:
+		output := toolOutputFromResult(ev.ToolName, ev.IsError, ev.Result)
 		return []modutui.Message{{
 			Tool:       true,
 			ToolID:     ev.ToolCallID,
 			ToolName:   ev.ToolName,
-			Summary:    toolDoneSummary(ev.ToolName, ev.IsError),
-			ToolOutput: toolOutputFromResult(ev.Result),
+			Summary:    toolDoneSummary(ev.ToolName, ev.IsError, output),
+			ToolOutput: output,
 			ToolError:  ev.IsError,
 			ToolDone:   true,
 			Expanded:   ev.IsError,
@@ -266,12 +267,13 @@ func messagesFromAssistantMessage(msg types.AssistantMessage) []modutui.Message 
 }
 
 func messageFromToolResult(msg types.ToolResultMessage) modutui.Message {
+	output := toolOutputFromContent(msg.ToolName, msg.IsError, msg.Content)
 	return modutui.Message{
 		Tool:       true,
 		ToolID:     msg.ToolCallID,
 		ToolName:   msg.ToolName,
-		Summary:    toolDoneSummary(msg.ToolName, msg.IsError),
-		ToolOutput: contentBlocksText(msg.Content),
+		Summary:    toolDoneSummary(msg.ToolName, msg.IsError, output),
+		ToolOutput: output,
 		ToolError:  msg.IsError,
 		ToolDone:   true,
 		Expanded:   msg.IsError,
@@ -289,12 +291,18 @@ func toolRunningSummary(toolName string) string {
 	return "Running " + name
 }
 
-func toolDoneSummary(toolName string, isError bool) string {
+func toolDoneSummary(toolName string, isError bool, output string) string {
 	if strings.EqualFold(toolName, "bash") {
 		if isError {
 			return "Shell command failed"
 		}
 		return "Ran 1 shell command"
+	}
+	if strings.EqualFold(toolName, "read") && !isError {
+		if strings.HasPrefix(output, "Read ") {
+			return output
+		}
+		return "Read file"
 	}
 	name := strings.TrimSpace(toolName)
 	if name == "" {
@@ -312,6 +320,9 @@ func toolInputFromArgs(toolName string, args any) string {
 			return command
 		}
 	}
+	if strings.EqualFold(toolName, "read") {
+		return readInputFromArgs(args)
+	}
 	return formatJSON(args)
 }
 
@@ -328,10 +339,10 @@ func mapStringValue(v any, key string) (string, bool) {
 	}
 }
 
-func toolOutputFromResult(result any) string {
+func toolOutputFromResult(toolName string, isError bool, result any) string {
 	switch r := result.(type) {
 	case types.ToolResult:
-		if text := contentBlocksText(r.Content); text != "" {
+		if text := toolOutputFromContent(toolName, isError || r.IsError, r.Content); text != "" {
 			return text
 		}
 		return formatJSON(r.Details)
@@ -339,13 +350,91 @@ func toolOutputFromResult(result any) string {
 		if r == nil {
 			return ""
 		}
-		if text := contentBlocksText(r.Content); text != "" {
+		if text := toolOutputFromContent(toolName, isError || r.IsError, r.Content); text != "" {
 			return text
 		}
 		return formatJSON(r.Details)
 	default:
 		return formatJSON(result)
 	}
+}
+
+func toolOutputFromContent(toolName string, isError bool, content []types.ContentBlock) string {
+	text := contentBlocksText(content)
+	if strings.EqualFold(toolName, "read") && !isError {
+		return readOutputSummary(text)
+	}
+	return text
+}
+
+func readInputFromArgs(args any) string {
+	path, _ := mapStringValue(args, "path")
+	if path == "" {
+		return formatJSON(args)
+	}
+	start := intArgValue(args, "offset", 1)
+	limit := intArgValue(args, "limit", 0)
+	if limit > 0 {
+		return fmt.Sprintf("%s · lines %d-%d", path, start, start+limit-1)
+	}
+	if start > 1 {
+		return fmt.Sprintf("%s · lines %d-", path, start)
+	}
+	return path
+}
+
+func readOutputSummary(text string) string {
+	count := 0
+	for _, line := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+		if readResultLine(line) {
+			count++
+		}
+	}
+	if count == 1 {
+		return "Read 1 line"
+	}
+	return fmt.Sprintf("Read %d lines", count)
+}
+
+func readResultLine(line string) bool {
+	tab := strings.IndexByte(line, '\t')
+	if tab <= 0 {
+		return false
+	}
+	for _, r := range line[:tab] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func intArgValue(v any, key string, fallback int) int {
+	switch m := v.(type) {
+	case map[string]any:
+		return intValue(m[key], fallback)
+	case map[string]string:
+		return intValue(m[key], fallback)
+	default:
+		return fallback
+	}
+}
+
+func intValue(v any, fallback int) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	case string:
+		var parsed int
+		if _, err := fmt.Sscanf(n, "%d", &parsed); err == nil {
+			return parsed
+		}
+	}
+	return fallback
 }
 
 func messageFromSessionEvent(ev coding_agent.SessionEvent) (modutui.Message, bool) {

@@ -15,8 +15,14 @@ It owns only the reusable UI shell:
 - independent input, text, markdown, collapsible, tool-call, and code blocks
 - tool-call messages with the same `ToolID` are merged into a single block so
   call/start/result updates do not scatter through the transcript
-- expanded tool-call blocks use a faint full-width background to separate the
-  command and output from surrounding transcript content
+- Read-style tool calls can render as compact `Read(path · lines x-y)` blocks
+  with a `Read N lines` result summary instead of dumping file content inline
+- expanded tool-call blocks use a faint full-width background without nested
+  ANSI styling so the command and output read as one consistent block
+- collapsed tool-call summaries are indented, while every rendered line of an
+  expanded tool-call block can be clicked to collapse it
+- markdown inline code renders without Glamour's default red foreground and
+  dark background so status text such as commit hashes stays readable
 - optional simulated streaming reply for demos and integration experiments
 
 Call `NewModel(Options{...})` to create a Bubble Tea v2 model. The directory is

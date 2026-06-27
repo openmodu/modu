@@ -38,13 +38,13 @@ func (b ToolCallBlock) Render(ctx RenderContext) BlockRender {
 
 	out := BlockRender{}
 	if !b.Expanded {
-		out.Add(dimStyle.Render(summary), 0)
+		out.Add(dimStyle.Render("  "+summary), 0)
 		return out
 	}
 
-	out.Add(toolExpandedLine(ctx.ContentWidth, botStyle.Render("⏺ ")+dimStyle.Render(toolInvocationLine(b.Call))), 0)
+	out.Add(toolExpandedLine(ctx.ContentWidth, "⏺ "+toolInvocationLine(b.Call)), 0)
 	for _, line := range toolDetailLines(b.Call) {
-		out.Add(toolExpandedLine(ctx.ContentWidth, dimStyle.Render("  "+line)), 0)
+		out.Add(toolExpandedLine(ctx.ContentWidth, "  "+line), 0)
 	}
 	return out
 }

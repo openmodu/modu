@@ -22,8 +22,17 @@ enough to implement, verify, and commit independently.
   tool result updates by `ToolID` into one `pkg/modu-tui` block. Bash renders
   collapsed as `Ran 1 shell command` and expanded as a Claude Code-style
   `⏺ Bash(...)` block with output below it.
+- `modu_code` Read tool calls now render like Claude Code: expanded as
+  `⏺ Read(path · lines x-y)` with a compact `Read N lines` result summary
+  instead of dumping file contents into the tool block.
 - Expanded `pkg/modu-tui` tool blocks now render with a faint full-width
-  background so command details read as one grouped block.
+  background without nested ANSI styling, so command details read as one
+  grouped block without dark reset artifacts.
+- Collapsed `pkg/modu-tui` tool summaries are indented, while clicking any
+  rendered line inside an expanded tool block collapses it.
+- `pkg/modu-tui` markdown rendering now disables Glamour's heavy inline-code
+  red/background styling while preserving fenced-code highlighting and table
+  rendering, keeping status text such as commit summaries readable.
 - `pkg/modu-tui` now owns reusable tool approval UI primitives:
   `ApprovalBlock`, `RequestToolApprovalMsg`, approval decision constants, and
   keyboard handling for allow/deny decisions.

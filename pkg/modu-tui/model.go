@@ -337,10 +337,12 @@ func (m *Model) buildTranscript() ([]string, []int, map[int]int) {
 	}
 
 	for idx, msg := range m.messages {
-		if msg.Tool {
-			headers[len(lines)] = idx
-		}
-		for _, line := range m.blockFromMessage(msg).Render(ctx).Lines {
+		startLine := len(lines)
+		rendered := m.blockFromMessage(msg).Render(ctx).Lines
+		for offset, line := range rendered {
+			if msg.Tool && (offset == 0 || msg.Expanded) {
+				headers[startLine+offset] = idx
+			}
 			lines = append(lines, line.Text)
 			gutters = append(gutters, line.Gutter)
 		}

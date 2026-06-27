@@ -12,6 +12,12 @@ import (
 // markdownRenderer builds a glamour renderer with the document Margin zeroed, so
 // finalized markdown sits flush against the left edge.
 func markdownRenderer(width int) *glamour.TermRenderer {
+	style := markdownStyleConfig()
+	r, _ := glamour.NewTermRenderer(glamour.WithStyles(style), glamour.WithWordWrap(width))
+	return r
+}
+
+func markdownStyleConfig() glamouransi.StyleConfig {
 	style := glamourstyles.DarkStyleConfig
 	if glamourStyle() == "light" {
 		style = glamourstyles.LightStyleConfig
@@ -21,8 +27,8 @@ func markdownRenderer(width int) *glamour.TermRenderer {
 		StylePrimitive: style.Document.StylePrimitive,
 		Margin:         &noMargin,
 	}
-	r, _ := glamour.NewTermRenderer(glamour.WithStyles(style), glamour.WithWordWrap(width))
-	return r
+	style.Code = glamouransi.StyleBlock{}
+	return style
 }
 
 // glamourStyle picks dark/light WITHOUT querying the terminal (no OSC leak).

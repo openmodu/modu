@@ -22,6 +22,19 @@ func TestToolCallBlockRendersCollapsedAndExpanded(t *testing.T) {
 
 func TestToolCallBlockRendersClaudeStyleBashCall(t *testing.T) {
 	ctx := RenderContext{ContentWidth: 80, Markdown: markdownRenderer(80)}
+	collapsed := ToolCallBlock{
+		CollapsibleBlock: CollapsibleBlock{Summary: "Ran 1 shell command"},
+		Call: ToolCall{
+			Name:   "bash",
+			Input:  "go test ./pkg/modu-tui",
+			Output: "ok github.com/openmodu/modu/pkg/modu-tui",
+			Done:   true,
+		},
+	}
+	if first := renderedTexts(collapsed.Render(ctx))[0]; !strings.HasPrefix(first, "  Ran 1 shell command") {
+		t.Fatalf("collapsed bash call should indent summary: %q", first)
+	}
+
 	block := ToolCallBlock{
 		CollapsibleBlock: CollapsibleBlock{Summary: "Ran 1 shell command", Expanded: true},
 		Call: ToolCall{
@@ -45,7 +58,7 @@ func TestToolCallBlockRendersClaudeStyleBashCall(t *testing.T) {
 	if !strings.Contains(got, "ok github.com/openmodu/modu/pkg/modu-tui") {
 		t.Fatalf("expanded bash call missing output:\n%s", got)
 	}
-	if got, want := toolExpandedStyle.GetBackground(), lipgloss.Color("236"); got != want {
+	if got, want := toolExpandedStyle.GetBackground(), lipgloss.Color("235"); got != want {
 		t.Fatalf("expanded tool background = %#v, want %#v", got, want)
 	}
 	rendered := block.Render(ctx)
@@ -53,6 +66,28 @@ func TestToolCallBlockRendersClaudeStyleBashCall(t *testing.T) {
 		if got := lipgloss.Width(line.Text); got != ctx.ContentWidth {
 			t.Fatalf("expanded bash call line %d width = %d, want %d: %q", i, got, ctx.ContentWidth, line.Text)
 		}
+	}
+}
+
+func TestToolCallBlockRendersClaudeStyleReadCall(t *testing.T) {
+	ctx := RenderContext{ContentWidth: 100, Markdown: markdownRenderer(100)}
+	path := "/Users/ityike/Code/go/src/github.com/openmodu/modu/cmd/tuipoc2/main.go"
+	block := ToolCallBlock{
+		CollapsibleBlock: CollapsibleBlock{Summary: "Read 14 lines", Expanded: true},
+		Call: ToolCall{
+			Name:   "read",
+			Input:  path + " · lines 205-218",
+			Output: "Read 14 lines",
+			Done:   true,
+		},
+	}
+
+	got := strings.Join(renderedTexts(block.Render(ctx)), "\n")
+	if !strings.Contains(got, "⏺ Read("+path+" · lines 205-218)") {
+		t.Fatalf("expanded read call missing Claude-style header:\n%s", got)
+	}
+	if !strings.Contains(got, "Read 14 lines") {
+		t.Fatalf("expanded read call missing summary output:\n%s", got)
 	}
 }
 

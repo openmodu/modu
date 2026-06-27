@@ -99,6 +99,42 @@ func TestMessagesFromAgentEventFormatsBashToolAsSingleClaudeStyleBlock(t *testin
 	}
 }
 
+func TestMessagesFromAgentEventFormatsReadToolLikeClaudeCode(t *testing.T) {
+	path := "/Users/ityike/Code/go/src/github.com/openmodu/modu/cmd/tuipoc2/main.go"
+	start := messagesFromAgentEvent(types.Event{
+		Type:       types.EventTypeToolExecutionStart,
+		ToolCallID: "call-1",
+		ToolName:   "read",
+		Args: map[string]any{
+			"path":   path,
+			"offset": float64(205),
+			"limit":  float64(14),
+		},
+	})
+	if len(start) != 1 {
+		t.Fatalf("start messages len = %d, want 1", len(start))
+	}
+	if got, want := start[0].ToolInput, path+" · lines 205-218"; got != want {
+		t.Fatalf("read input = %q, want %q", got, want)
+	}
+
+	end := messagesFromAgentEvent(types.Event{
+		Type:       types.EventTypeToolExecutionEnd,
+		ToolCallID: "call-1",
+		ToolName:   "read",
+		Result: types.ToolResult{Content: []types.ContentBlock{&types.TextContent{
+			Type: "text",
+			Text: "205\tfunc a() {}\n206\tfunc b() {}\n",
+		}}},
+	})
+	if len(end) != 1 {
+		t.Fatalf("end messages len = %d, want 1", len(end))
+	}
+	if got := end[0]; got.Summary != "Read 2 lines" || got.ToolOutput != "Read 2 lines" || !got.ToolDone {
+		t.Fatalf("unexpected read end message: %#v", got)
+	}
+}
+
 func TestToolApprovalDecisionToTypes(t *testing.T) {
 	tests := map[modutui.ToolApprovalDecision]types.ToolApprovalDecision{
 		modutui.ToolApprovalAllow:       types.ToolApprovalAllow,

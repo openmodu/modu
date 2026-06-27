@@ -281,6 +281,34 @@ func TestPOC2InitialToolMessagesAreMerged(t *testing.T) {
 	}
 }
 
+func TestPOC2ExpandedToolBlockCanCollapseFromAnyRenderedLine(t *testing.T) {
+	m := NewModel(Options{
+		Width:  80,
+		Height: 12,
+		InitialMessages: []Message{{
+			Tool:       true,
+			ToolID:     "call-1",
+			ToolName:   "bash",
+			Summary:    "Ran 1 shell command",
+			ToolInput:  "go test ./pkg/modu-tui",
+			ToolOutput: "ok ./pkg/modu-tui",
+			ToolDone:   true,
+			Expanded:   true,
+		}},
+	})
+	if !m.messages[0].Expanded {
+		t.Fatal("setup should start expanded")
+	}
+	if _, ok := m.headers[1]; !ok {
+		t.Fatalf("expanded tool output line should be clickable, headers=%#v", m.headers)
+	}
+
+	_ = m.onPress(1, 1)
+	if m.messages[0].Expanded {
+		t.Fatal("clicking an expanded tool output line should collapse the block")
+	}
+}
+
 func TestPOC2ToolApprovalResolvesFromKeyboard(t *testing.T) {
 	results := make(chan ToolApprovalResult, 1)
 	decisions := make(chan ToolApprovalDecision, 1)
