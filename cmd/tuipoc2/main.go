@@ -12,8 +12,9 @@
 //   - mouse arrives as typed messages (MouseWheelMsg / MouseClickMsg / …).
 //
 // Run:  go run ./cmd/tuipoc2
-// Keys: Enter = send · wheel/PgUp = scroll · drag = select+copy · click ▸ = fold
-//       ctrl+End = jump to bottom · Ctrl+C = quit
+// Keys:
+//   - Enter = send · wheel/PgUp/PgDn = scroll · drag = select+copy
+//   - click ▸ = fold · ctrl+End = jump to bottom · Ctrl+C = quit
 package main
 
 import (
@@ -132,6 +133,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case msg.String() == "ctrl+end":
 			m.jumpToBottom()
+		case msg.Code == tea.KeyPgUp:
+			m.scroll(-max(1, m.vpHeight()-1))
+		case msg.Code == tea.KeyPgDown:
+			m.scroll(max(1, m.vpHeight()-1))
 		case msg.Code == tea.KeyEnter:
 			if v := strings.TrimSpace(m.input); v != "" && !m.streaming {
 				m.messages = append(m.messages, message{role: roleUser, text: v})
@@ -225,7 +230,7 @@ func (m model) View() tea.View {
 	// composition window (without it CJK can't be entered), and it shows where in
 	// the line edits land so the middle of the text can be modified.
 	caret := clamp(m.cursor, 0, m.inputLen())
-	caretX := 2 + lipgloss.Width(string([]rune(m.input)[:caret]))
+	_, caretX := m.inputLine(caret)
 	v.Cursor = tea.NewCursor(caretX, m.vpHeight()+1)
 	return v
 }
@@ -255,6 +260,7 @@ func (m *model) jumpToBottom() {
 // never on a pure scroll, or markdown re-renders every frame and the scroll janks.
 func (m *model) rebuild() {
 	m.lines, m.gutters, m.headers = m.buildTranscript()
+	m.clampSelection()
 	m.clampScroll()
 }
 
@@ -276,6 +282,30 @@ func (m *model) clampScroll() {
 	}
 }
 
+func (m *model) lineWidth(li int) int {
+	if li < 0 || li >= len(m.lines) {
+		return 0
+	}
+	return ansi.StringWidth(ansi.Strip(m.lines[li]))
+}
+
+func (m *model) clampSelection() {
+	if !m.hasSelection() {
+		return
+	}
+	if len(m.lines) == 0 {
+		m.clearSelection()
+		return
+	}
+	clampCell := func(c cell) cell {
+		c.line = clamp(c.line, 0, len(m.lines)-1)
+		c.col = clamp(c.col, 0, m.lineWidth(c.line))
+		return c
+	}
+	m.selStart = clampCell(m.selStart)
+	m.selEnd = clampCell(m.selEnd)
+}
+
 // ─── transcript ─────────────────────────────────────
 
 // buildTranscript renders the messages into display lines plus, for each line, a
@@ -284,8 +314,9 @@ func (m *model) clampScroll() {
 // gutter, so the bullet/prompt is never highlighted or copied, and every wrapped
 // paragraph line stays aligned under the first line's text.
 func (m *model) buildTranscript() ([]string, []int, map[int]int) {
-	width := max(m.width, 20)
-	r := markdownRenderer(width - 2)
+	width := max(m.width, 1)
+	contentWidth := max(1, width-2)
+	r := markdownRenderer(contentWidth)
 	var lines []string
 	var gutters []int
 	headers := map[int]int{}
@@ -298,13 +329,21 @@ func (m *model) buildTranscript() ([]string, []int, map[int]int) {
 	// continuation lines, all with a gutter of 2 so content aligns and the marker
 	// is excluded from selection.
 	addBody := func(marker, body string, styleLine func(string) string) {
-		for i, bl := range strings.Split(body, "\n") {
-			prefix := "  "
-			if i == 0 {
-				prefix = marker
+		first := true
+		for _, raw := range strings.Split(body, "\n") {
+			wrapped := ansi.Wrap(raw, contentWidth, "")
+			if wrapped == "" {
+				wrapped = "\n"
 			}
-			lines = append(lines, prefix+styleLine(bl))
-			gutters = append(gutters, 2)
+			for _, bl := range strings.Split(strings.TrimSuffix(wrapped, "\n"), "\n") {
+				prefix := "  "
+				if first {
+					prefix = marker
+					first = false
+				}
+				lines = append(lines, prefix+styleLine(bl))
+				gutters = append(gutters, 2)
+			}
 		}
 	}
 	identity := func(s string) string { return s }
@@ -353,7 +392,7 @@ func (m *model) render() string {
 	for i := range h {
 		li := m.yOffset + i
 		if li < len(m.lines) {
-			window = append(window, m.highlightLine(li))
+			window = append(window, m.fitLine(m.highlightLine(li)))
 		} else {
 			window = append(window, "")
 		}
@@ -363,7 +402,7 @@ func (m *model) render() string {
 		view = overlayJumpHint(view, m.width)
 	}
 
-	input := youStyle.Render("❯ ") + m.input // hardware cursor (View.Cursor) sits at the end
+	input, _ := m.inputLine(clamp(m.cursor, 0, m.inputLen()))
 	state := "○ idle"
 	if m.streaming {
 		state = "● streaming"
@@ -372,14 +411,47 @@ func (m *model) render() string {
 	if hint == "" {
 		hint = "拖拽选择→复制 · 点 ▸ 折叠 · Enter 发送 · 滚轮滚动 · ctrl+End 到底 · Ctrl+C 退出"
 	}
-	status := dimStyle.Render(fmt.Sprintf(" %s · %s ", state, hint))
+	status := m.fitLine(dimStyle.Render(fmt.Sprintf(" %s · %s ", state, hint)))
 
 	return strings.Join([]string{
 		view,
-		ruleStyle.Render(strings.Repeat("─", m.width)),
+		ruleStyle.Render(strings.Repeat("─", max(0, m.width))),
 		input,
 		status,
 	}, "\n")
+}
+
+func (m *model) fitLine(s string) string {
+	if m.width <= 0 {
+		return ""
+	}
+	return ansi.Truncate(s, m.width, "")
+}
+
+func (m *model) inputLine(caret int) (string, int) {
+	prefix := youStyle.Render("❯ ")
+	prefixWidth := lipgloss.Width(prefix)
+	contentWidth := max(1, m.width-prefixWidth-1)
+	runes := []rune(m.input)
+	caret = clamp(caret, 0, len(runes))
+	before := string(runes[:caret])
+	after := string(runes[caret:])
+	beforeWidth := ansi.StringWidth(before)
+	totalWidth := beforeWidth + ansi.StringWidth(after)
+
+	visible := m.input
+	cursorX := prefixWidth + beforeWidth
+	if totalWidth > contentWidth {
+		if beforeWidth >= contentWidth {
+			visible = ansi.TruncateLeft(before, contentWidth, "")
+			cursorX = prefixWidth + ansi.StringWidth(visible)
+		} else {
+			visible = before + ansi.Truncate(after, contentWidth-beforeWidth, "")
+			cursorX = prefixWidth + beforeWidth
+		}
+	}
+	cursorX = clamp(cursorX, 0, max(0, m.width-1))
+	return m.fitLine(prefix + visible), cursorX
 }
 
 func (m *model) highlightLine(li int) string {
@@ -414,6 +486,7 @@ func (m *model) inputLen() int { return len([]rune(m.input)) }
 
 // insertInput inserts s at the caret and advances the caret past it.
 func (m *model) insertInput(s string) {
+	s = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(s)
 	r, ins := []rune(m.input), []rune(s)
 	out := make([]rune, 0, len(r)+len(ins))
 	out = append(out, r[:m.cursor]...)
@@ -524,7 +597,9 @@ func (m *model) cellAt(line, x int) cell {
 }
 
 func (m *model) hasSelection() bool { return m.selStart.line >= 0 && m.selEnd.line >= 0 }
-func (m *model) clearSelection()    { m.selStart, m.selEnd, m.selecting = cell{line: -1}, cell{line: -1}, false }
+func (m *model) clearSelection() {
+	m.selStart, m.selEnd, m.selecting = cell{line: -1}, cell{line: -1}, false
+}
 
 func (m *model) selRange() (cell, cell) {
 	if m.selEnd.before(m.selStart) {
@@ -538,6 +613,10 @@ func (m *model) selectedText() string {
 		return ""
 	}
 	lo, hi := m.selRange()
+	lo.line = clamp(lo.line, 0, len(m.lines)-1)
+	hi.line = clamp(hi.line, 0, len(m.lines)-1)
+	lo.col = clamp(lo.col, 0, m.lineWidth(lo.line))
+	hi.col = clamp(hi.col, 0, m.lineWidth(hi.line))
 	// start always clamped past the gutter, so the bullet/prompt/indent is dropped
 	start := func(li, col int) int { return max(col, m.gutterAt(li)) }
 	if lo.line == hi.line {
@@ -571,10 +650,13 @@ func (m model) tick() tea.Cmd {
 // ─── helpers ────────────────────────────────────────
 
 func jumpHint() string           { return jumpStyle.Render("Jump to bottom (ctrl+End) ↓") }
-func jumpHintWidth() int          { return lipgloss.Width(jumpHint()) }
-func jumpHintLeft(width int) int  { return max(0, (width-jumpHintWidth())/2) }
+func jumpHintWidth() int         { return lipgloss.Width(jumpHint()) }
+func jumpHintLeft(width int) int { return max(0, (width-jumpHintWidth())/2) }
 
 func overlayJumpHint(view string, width int) string {
+	if width <= 0 {
+		return view
+	}
 	pill := jumpHint()
 	pw := lipgloss.Width(pill)
 	left := jumpHintLeft(width)
@@ -588,7 +670,7 @@ func overlayJumpHint(view string, width int) string {
 		leftPart += strings.Repeat(" ", pad)
 	}
 	right := ansi.Truncate(ansi.TruncateLeft(last, left+pw, ""), max(0, width-left-pw), "")
-	lines[len(lines)-1] = leftPart + pill + right
+	lines[len(lines)-1] = ansi.Truncate(leftPart+pill+right, width, "")
 	return strings.Join(lines, "\n")
 }
 
