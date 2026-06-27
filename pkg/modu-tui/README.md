@@ -57,6 +57,8 @@ Component layout:
 - `block_factory.go` maps `Message` values to block structs.
 - `Options.BlockFactories` lets callers register custom `Message -> Block`
   mapping before the default mapping runs.
+- `Options.InfoCardLines` lets callers provide a non-message startup card for
+  model/session/context information on a fresh screen.
 - `Hooks.Submit` lets host applications receive bottom-input submissions.
 - `Hooks.SlashCommand` lets host applications route selected or typed slash
   commands without sending them as normal prompts.

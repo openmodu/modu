@@ -44,6 +44,7 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		Height:          height,
 		InitialMessages: initial,
 		StatusHint:      "Enter 发送 · Ctrl+C 退出 · 当前为 modu-tui runner",
+		InfoCardLines:   moduTUIInfoCardLines(session, model),
 		SlashCommands:   moduTUISlashCommands(session),
 		Hooks: modutui.Hooks{
 			Submit: func(text string) {
@@ -150,6 +151,48 @@ func runModuTUISlash(ctx context.Context, line string, session *coding_agent.Cod
 		return
 	}
 	send(modutui.AppendMessageMsg{Message: modutui.Message{Role: modutui.RoleAssistant, Text: "unknown command: " + line}})
+}
+
+func moduTUIInfoCardLines(session *coding_agent.CodingSession, model *types.Model) []string {
+	lines := []string{"modu_code"}
+	if model != nil {
+		label := strings.TrimSpace(model.Name)
+		if label == "" {
+			label = model.ID
+		}
+		var parts []string
+		if strings.TrimSpace(model.ProviderID) != "" {
+			parts = append(parts, strings.TrimSpace(model.ProviderID))
+		}
+		if strings.TrimSpace(model.ID) != "" {
+			parts = append(parts, strings.TrimSpace(model.ID))
+		}
+		detail := strings.Join(parts, " / ")
+		if detail != "" && detail != label {
+			label += " (" + detail + ")"
+		}
+		if label != "" {
+			lines = append(lines, "model: "+label)
+		}
+	}
+	if session != nil {
+		if cwd := strings.TrimSpace(session.RuntimeState().Cwd); cwd != "" {
+			lines = append(lines, "cwd: "+cwd)
+		}
+		if id := shortModuTUISessionID(session.GetSessionID()); id != "" {
+			lines = append(lines, "session: "+id)
+		}
+	}
+	lines = append(lines, "commands: type /  send: Enter  quit: Ctrl+C")
+	return lines
+}
+
+func shortModuTUISessionID(id string) string {
+	id = strings.TrimSpace(id)
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
 }
 
 func isSessionAgentSlash(session *coding_agent.CodingSession, line string) bool {

@@ -209,6 +209,31 @@ func TestModuTUISlashCommandsIncludeBaseAndSessionCommands(t *testing.T) {
 	}
 }
 
+func TestModuTUIInfoCardLinesIncludeStartupContext(t *testing.T) {
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       t.TempDir(),
+		AgentDir:  t.TempDir(),
+		Model:     &types.Model{ID: "test-model", Name: "Test Model", ProviderID: "test-provider"},
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lines := strings.Join(moduTUIInfoCardLines(session, session.GetModel()), "\n")
+	for _, want := range []string{
+		"modu_code",
+		"model: Test Model (test-provider / test-model)",
+		"cwd: " + session.RuntimeState().Cwd,
+		"session: " + shortModuTUISessionID(session.GetSessionID()),
+		"commands: type /",
+	} {
+		if !strings.Contains(lines, want) {
+			t.Fatalf("info card lines missing %q:\n%s", want, lines)
+		}
+	}
+}
+
 func TestModuTUISlashPrinterCapturesSectionsAndClear(t *testing.T) {
 	var printer moduTUISlashPrinter
 	printer.PrintInfo("alpha")

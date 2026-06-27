@@ -90,6 +90,7 @@ type Options struct {
 	InitialMessages []Message
 	StreamReply     string
 	StatusHint      string
+	InfoCardLines   []string
 	Hooks           Hooks
 	BlockFactories  []MessageBlockFactory
 	BlockGap        int

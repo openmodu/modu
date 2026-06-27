@@ -111,6 +111,42 @@ func TestPOC2RenderPadsEveryLineToTerminalWidth(t *testing.T) {
 	}
 }
 
+func TestPOC2InfoCardStaysAtTopAfterFirstMessage(t *testing.T) {
+	var submitted string
+	var tm tea.Model = NewModel(Options{
+		Width:         48,
+		Height:        10,
+		InfoCardLines: []string{"modu_code", "model: Test", "commands: type /"},
+		Hooks: Hooks{Submit: func(text string) {
+			submitted = text
+		}},
+	})
+
+	m := tm.(Model)
+	rendered := ansi.Strip(m.render())
+	for _, want := range []string{"┏", "modu_code", "model: Test", "commands: type /"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("initial info card missing %q:\n%s", want, rendered)
+		}
+	}
+
+	tm, _ = m.Update(tea.KeyPressMsg(tea.Key{Text: "h", Code: 'h'}))
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: "i", Code: 'i'}))
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = tm.(Model)
+
+	if got, want := submitted, "hi"; got != want {
+		t.Fatalf("submitted = %q, want %q", got, want)
+	}
+	afterSubmit := ansi.Strip(m.render())
+	if !strings.Contains(afterSubmit, "commands: type /") {
+		t.Fatalf("info card should stay at the top after the first submitted message:\n%s", afterSubmit)
+	}
+	if !strings.Contains(afterSubmit, "❯ hi") {
+		t.Fatalf("submitted message should render below the info card:\n%s", afterSubmit)
+	}
+}
+
 func TestPOC2JumpHintStaysInFixedRowAboveInput(t *testing.T) {
 	m := NewModel(Options{Width: 72, Height: 8})
 	for i := 0; i < 20; i++ {

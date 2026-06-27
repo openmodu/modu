@@ -41,6 +41,7 @@ type Model struct {
 	autoScrolling    bool // a tick loop is currently live
 	status           string
 	statusHint       string
+	infoCardLines    []string
 	hooks            Hooks
 	blockFactories   []MessageBlockFactory
 	blockGap         int
@@ -60,6 +61,7 @@ func NewModel(options ...Options) Model {
 		}
 		opts.InitialMessages = append([]Message(nil), options[0].InitialMessages...)
 		opts.StreamReply = options[0].StreamReply
+		opts.InfoCardLines = append([]string(nil), options[0].InfoCardLines...)
 		opts.Hooks = options[0].Hooks
 		opts.BlockFactories = append([]MessageBlockFactory(nil), options[0].BlockFactories...)
 		opts.SlashCommands = append([]SlashCommand(nil), options[0].SlashCommands...)
@@ -78,6 +80,7 @@ func NewModel(options ...Options) Model {
 		selEnd:         cell{line: -1},
 		streamReply:    opts.StreamReply,
 		statusHint:     opts.StatusHint,
+		infoCardLines:  cleanInfoCardLines(opts.InfoCardLines),
 		hooks:          opts.Hooks,
 		blockFactories: opts.BlockFactories,
 		blockGap:       opts.BlockGap,
@@ -371,6 +374,16 @@ func (m *Model) buildTranscript() ([]string, []int, map[int]int) {
 		}
 	}
 
+	if len(m.infoCardLines) > 0 {
+		for _, line := range (CardBlock{Lines: m.infoCardLines}).RenderWidth(width) {
+			lines = append(lines, line)
+			gutters = append(gutters, 0)
+		}
+		if len(m.messages) > 0 || m.streaming {
+			addGap()
+		}
+	}
+
 	for idx, msg := range m.messages {
 		startLine := len(lines)
 		rendered := m.blockFromMessage(msg).Render(ctx).Lines
@@ -527,6 +540,17 @@ func normalizeSlashCommands(commands []SlashCommand) []SlashCommand {
 		}
 		seen[key] = struct{}{}
 		out = append(out, SlashCommand{Name: name, Description: strings.TrimSpace(cmd.Description)})
+	}
+	return out
+}
+
+func cleanInfoCardLines(lines []string) []string {
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			out = append(out, line)
+		}
 	}
 	return out
 }
