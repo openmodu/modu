@@ -182,3 +182,47 @@ func TestModuTUIPrompterApproveToolUsesModuTUIRequest(t *testing.T) {
 		t.Fatalf("unexpected approval request: %#v", req.Request)
 	}
 }
+
+func TestModuTUISlashCommandsIncludeBaseAndSessionCommands(t *testing.T) {
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       t.TempDir(),
+		AgentDir:  t.TempDir(),
+		Model:     &types.Model{ID: "test", Name: "Test", ProviderID: "test"},
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	commands := moduTUISlashCommands(session)
+	seen := map[string]bool{}
+	for _, cmd := range commands {
+		if seen[cmd.Name] {
+			t.Fatalf("duplicate slash command %q in %#v", cmd.Name, commands)
+		}
+		seen[cmd.Name] = true
+	}
+	for _, want := range []string{"/help", "/clear", "/tokens", "/compact"} {
+		if !seen[want] {
+			t.Fatalf("missing slash command %q in %#v", want, commands)
+		}
+	}
+}
+
+func TestModuTUISlashPrinterCapturesSectionsAndClear(t *testing.T) {
+	var printer moduTUISlashPrinter
+	printer.PrintInfo("alpha")
+	printer.PrintSection("Beta", []string{"one", "two"})
+	printer.PrintError(context.Canceled)
+	printer.ClearScreen()
+
+	if !printer.clear {
+		t.Fatal("expected clear flag")
+	}
+	text := printer.Text()
+	for _, want := range []string{"alpha", "Beta", "one", "two", "error: context canceled"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("printer text missing %q:\n%s", want, text)
+		}
+	}
+}

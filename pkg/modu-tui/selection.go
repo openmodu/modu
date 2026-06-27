@@ -62,7 +62,7 @@ func (m *Model) highlightLine(li int) string {
 
 func (m *Model) onPress(x, y int) tea.Cmd {
 	h := m.vpHeight()
-	if m.showJumpPanel() && y == h+m.approvalPanelHeight() {
+	if m.showJumpPanel() && y == h+m.approvalPanelHeight()+m.slashPanelHeight() {
 		m.jumpToBottom()
 		return nil
 	}

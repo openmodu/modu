@@ -44,6 +44,9 @@ type Model struct {
 	hooks            Hooks
 	blockFactories   []MessageBlockFactory
 	blockGap         int
+	slashCommands    []SlashCommand
+	slashMatches     []SlashCommand
+	slashIndex       int
 }
 
 func NewModel(options ...Options) Model {
@@ -59,6 +62,7 @@ func NewModel(options ...Options) Model {
 		opts.StreamReply = options[0].StreamReply
 		opts.Hooks = options[0].Hooks
 		opts.BlockFactories = append([]MessageBlockFactory(nil), options[0].BlockFactories...)
+		opts.SlashCommands = append([]SlashCommand(nil), options[0].SlashCommands...)
 		if options[0].BlockGap > 0 {
 			opts.BlockGap = options[0].BlockGap
 		}
@@ -77,6 +81,7 @@ func NewModel(options ...Options) Model {
 		hooks:          opts.Hooks,
 		blockFactories: opts.BlockFactories,
 		blockGap:       opts.BlockGap,
+		slashCommands:  normalizeSlashCommands(opts.SlashCommands),
 	}
 	for _, msg := range opts.InitialMessages {
 		m.appendMessage(msg)
@@ -112,12 +117,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scroll(max(1, m.vpHeight()-1))
 		case msg.Code == tea.KeyEnter:
 			if v := strings.TrimSpace(m.input.Value); v != "" && !m.streaming && !m.busy {
+				if len(m.slashMatches) > 0 {
+					v = m.slashMatches[clamp(m.slashIndex, 0, len(m.slashMatches)-1)].Name
+				}
 				m.messages = append(m.messages, Message{Role: RoleUser, Text: v})
 				m.input.Reset()
+				m.clearSlashMatches()
 				m.clearSelection()
 				m.follow = true
 				m.rebuild()
-				if m.hooks.Submit != nil {
+				if strings.HasPrefix(strings.TrimSpace(v), "/") && m.hooks.SlashCommand != nil {
+					m.hooks.SlashCommand(v)
+				} else if m.hooks.Submit != nil {
 					m.hooks.Submit(v)
 				}
 				if m.streamReply != "" {
@@ -136,14 +147,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.input.MoveEnd()
 		case msg.Code == tea.KeyBackspace, msg.String() == "ctrl+h":
 			m.input.Backspace()
+			m.updateSlashMatches()
 		case msg.Code == tea.KeyDelete:
 			m.input.DeleteForward()
+			m.updateSlashMatches()
+		case msg.Code == tea.KeyTab:
+			m.completeSlashMatch()
+		case msg.Code == tea.KeyUp:
+			if len(m.slashMatches) > 0 {
+				m.slashIndex = (m.slashIndex - 1 + len(m.slashMatches)) % len(m.slashMatches)
+			}
+		case msg.Code == tea.KeyDown:
+			if len(m.slashMatches) > 0 {
+				m.slashIndex = (m.slashIndex + 1) % len(m.slashMatches)
+			}
 		case msg.Text != "":
 			m.input.Insert(msg.Text)
+			m.updateSlashMatches()
 		}
 
 	case tea.PasteMsg:
 		m.input.Insert(msg.Content)
+		m.updateSlashMatches()
 
 	case tea.MouseWheelMsg:
 		switch msg.Button {
@@ -206,8 +231,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case SetBusyMsg:
 		m.busy = msg.Busy
 
+	case ClearMessagesMsg:
+		m.messages = nil
+		m.clearSelection()
+		m.follow = true
+		m.rebuild()
+
 	case RequestToolApprovalMsg:
 		m.approval = &pendingApproval{request: msg.Request, respond: msg.Respond}
+		m.clearSlashMatches()
 		m.follow = true
 		m.rebuild()
 
@@ -264,15 +296,18 @@ func (m Model) View() tea.View {
 	if m.approval != nil {
 		caretX = 0
 	}
-	v.Cursor = tea.NewCursor(caretX, m.vpHeight()+m.approvalPanelHeight()+m.jumpPanelHeight()+1)
+	v.Cursor = tea.NewCursor(caretX, m.vpHeight()+m.approvalPanelHeight()+m.slashPanelHeight()+m.jumpPanelHeight()+1)
 	return v
 }
 
 func (m *Model) vpHeight() int {
-	return max(1, m.height-4-m.approvalPanelHeight()-m.jumpPanelHeight())
+	return max(1, m.height-4-m.approvalPanelHeight()-m.slashPanelHeight()-m.jumpPanelHeight())
 }
 func (m *Model) approvalPanelHeight() int {
 	return len(m.approvalPanelLines())
+}
+func (m *Model) slashPanelHeight() int {
+	return len(m.slashPanelLines())
 }
 func (m *Model) jumpPanelHeight() int {
 	if m.showJumpPanel() {
@@ -281,7 +316,7 @@ func (m *Model) jumpPanelHeight() int {
 	return 0
 }
 func (m *Model) showJumpPanel() bool {
-	heightWithoutJump := max(1, m.height-4-m.approvalPanelHeight())
+	heightWithoutJump := max(1, m.height-4-m.approvalPanelHeight()-m.slashPanelHeight())
 	return m.yOffset < max(0, len(m.lines)-heightWithoutJump)
 }
 func (m *Model) maxOffset() int {
@@ -414,6 +449,9 @@ func (m *Model) render() string {
 	if panel := m.approvalPanelLines(); len(panel) > 0 {
 		parts = append(parts, panel...)
 	}
+	if panel := m.slashPanelLines(); len(panel) > 0 {
+		parts = append(parts, panel...)
+	}
 	if panel := m.jumpPanelLines(); len(panel) > 0 {
 		parts = append(parts, panel...)
 	}
@@ -431,6 +469,66 @@ func (m *Model) jumpPanelLines() []string {
 		return nil
 	}
 	return []string{centeredLine(jumpHint(), m.width)}
+}
+
+func (m *Model) slashPanelLines() []string {
+	if m.approval != nil || len(m.slashMatches) == 0 {
+		return nil
+	}
+	return SlashCommandBlock{
+		Commands: m.slashMatches,
+		Selected: m.slashIndex,
+		MaxRows:  8,
+	}.RenderWidth(m.width)
+}
+
+func (m *Model) updateSlashMatches() {
+	matches := matchSlashCommands(m.input.Value, m.slashCommands)
+	if len(matches) == 0 {
+		m.clearSlashMatches()
+		return
+	}
+	if m.slashIndex >= len(matches) {
+		m.slashIndex = len(matches) - 1
+	}
+	m.slashMatches = matches
+}
+
+func (m *Model) clearSlashMatches() {
+	m.slashMatches = nil
+	m.slashIndex = 0
+}
+
+func (m *Model) completeSlashMatch() bool {
+	if len(m.slashMatches) == 0 {
+		return false
+	}
+	chosen := m.slashMatches[clamp(m.slashIndex, 0, len(m.slashMatches)-1)]
+	m.input.Value = chosen.Name + " "
+	m.input.Cursor = m.input.Len()
+	m.clearSlashMatches()
+	return true
+}
+
+func normalizeSlashCommands(commands []SlashCommand) []SlashCommand {
+	out := make([]SlashCommand, 0, len(commands))
+	seen := map[string]struct{}{}
+	for _, cmd := range commands {
+		name := strings.TrimSpace(cmd.Name)
+		if name == "" {
+			continue
+		}
+		if !strings.HasPrefix(name, "/") {
+			name = "/" + name
+		}
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, SlashCommand{Name: name, Description: strings.TrimSpace(cmd.Description)})
+	}
+	return out
 }
 
 func (m *Model) approvalPanelLines() []string {
@@ -458,18 +556,12 @@ func (m *Model) approvalPanelLines() []string {
 	body = append(body, "")
 	body = append(body, ApprovalBlock{Request: req}.ActionsLine())
 
-	top := "╭" + strings.Repeat("─", max(0, innerWidth)) + "╮"
-	bottom := "╰" + strings.Repeat("─", max(0, innerWidth)) + "╯"
-	lines := make([]string, 0, len(body)+2)
-	lines = append(lines, ruleStyle.Render(fitLine(top, width)))
 	for i, line := range body {
 		if i == 0 && title != "" {
-			line = line + dimStyle.Render(" · "+title)
+			body[i] = line + dimStyle.Render(" · "+title)
 		}
-		lines = append(lines, borderedPanelLine(line, innerWidth))
 	}
-	lines = append(lines, ruleStyle.Render(fitLine(bottom, width)))
-	return lines
+	return CardBlock{Lines: body, BorderStyle: approvalBorderStyle}.RenderWidth(width)
 }
 
 func (m *Model) maxApprovalDetailLines() int {
@@ -502,15 +594,6 @@ func approvalDetailLines(text string, width int, limit int) []string {
 		lines[i] = toolExpandedLine(width+2, strings.TrimPrefix(line, "  "))
 	}
 	return lines
-}
-
-func borderedPanelLine(content string, innerWidth int) string {
-	plainWidth := max(1, innerWidth)
-	fitted := fitLine(content, plainWidth)
-	if pad := plainWidth - ansi.StringWidth(fitted); pad > 0 {
-		fitted += strings.Repeat(" ", pad)
-	}
-	return ruleStyle.Render("│") + fitted + ruleStyle.Render("│")
 }
 
 func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {

@@ -32,6 +32,15 @@ enough to implement, verify, and commit independently.
   rendered line inside an expanded tool block collapses it.
 - Tool approval cards now use compact command previews instead of JSON args,
   with clearer grouped allow/deny shortcuts.
+- Tool approval cards now use a heavier, higher-contrast border so the fixed
+  approval panel reads as a distinct card on mobile terminals.
+- `pkg/modu-tui` now has a reusable `CardBlock` heavy-border card renderer,
+  and approval/slash popups share that card style instead of hardcoding panel
+  borders in the model.
+- The `modu-tui` runner now supports slash command suggestions: typing `/`
+  opens a fixed bottom card, `Tab` completes the selected command, and `Enter`
+  routes slash commands through `pkg/slash` or the session slash/prompt/skill
+  path instead of sending them to the model as plain text.
 - `pkg/modu-tui` markdown rendering now disables Glamour's heavy inline-code
   red/background styling while preserving fenced-code highlighting and table
   rendering, keeping status text such as commit summaries readable.

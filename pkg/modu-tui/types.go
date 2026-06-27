@@ -73,10 +73,16 @@ type ToolApprovalResult struct {
 type Hooks struct {
 	ToolPermission       func(ToolCall) ToolPermissionState
 	ToolApprovalDecision func(ToolApprovalResult)
+	SlashCommand         func(line string)
 	Submit               func(text string)
 }
 
 type MessageBlockFactory func(Message) (Block, bool)
+
+type SlashCommand struct {
+	Name        string
+	Description string
+}
 
 type Options struct {
 	Width           int
@@ -87,6 +93,7 @@ type Options struct {
 	Hooks           Hooks
 	BlockFactories  []MessageBlockFactory
 	BlockGap        int
+	SlashCommands   []SlashCommand
 }
 
 type AppendMessageMsg struct {
@@ -100,6 +107,8 @@ type SetStatusMsg struct {
 type SetBusyMsg struct {
 	Busy bool
 }
+
+type ClearMessagesMsg struct{}
 
 type RequestToolApprovalMsg struct {
 	Request ToolApprovalRequest

@@ -13,6 +13,7 @@ import (
 
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	modutui "github.com/openmodu/modu/pkg/modu-tui"
+	"github.com/openmodu/modu/pkg/slash"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -43,6 +44,7 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		Height:          height,
 		InitialMessages: initial,
 		StatusHint:      "Enter 发送 · Ctrl+C 退出 · 当前为 modu-tui runner",
+		SlashCommands:   moduTUISlashCommands(session),
 		Hooks: modutui.Hooks{
 			Submit: func(text string) {
 				go func() {
@@ -59,6 +61,9 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 					}
 					send(modutui.SetBusyMsg{Busy: false})
 				}()
+			},
+			SlashCommand: func(line string) {
+				go runModuTUISlash(ctx, line, session, model, send)
 			},
 		},
 	})
@@ -83,6 +88,160 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 	programMu.Unlock()
 	_, err := prog.Run()
 	return err
+}
+
+type moduTUISlashPrinter struct {
+	lines []string
+	clear bool
+}
+
+func (p *moduTUISlashPrinter) PrintInfo(s string) {
+	p.lines = append(p.lines, s)
+}
+
+func (p *moduTUISlashPrinter) PrintError(err error) {
+	if err != nil {
+		p.lines = append(p.lines, "error: "+err.Error())
+	}
+}
+
+func (p *moduTUISlashPrinter) PrintSection(title string, lines []string) {
+	if strings.TrimSpace(title) != "" {
+		p.lines = append(p.lines, title)
+	}
+	p.lines = append(p.lines, lines...)
+}
+
+func (p *moduTUISlashPrinter) ClearScreen() {
+	p.clear = true
+}
+
+func (p *moduTUISlashPrinter) Text() string {
+	return strings.TrimSpace(strings.Join(p.lines, "\n"))
+}
+
+func runModuTUISlash(ctx context.Context, line string, session *coding_agent.CodingSession, model *types.Model, send func(tea.Msg)) {
+	send(modutui.SetBusyMsg{Busy: true})
+	send(modutui.SetStatusMsg{Status: "running slash command"})
+	defer func() {
+		send(modutui.SetBusyMsg{Busy: false})
+		send(modutui.SetStatusMsg{Status: "idle"})
+	}()
+
+	printer := &moduTUISlashPrinter{}
+	handled, exit := slash.Handle(ctx, line, session, printer, model)
+	if handled {
+		if printer.clear {
+			send(modutui.ClearMessagesMsg{})
+		}
+		if text := printer.Text(); text != "" {
+			send(modutui.AppendMessageMsg{Message: modutui.Message{Role: modutui.RoleAssistant, Text: text}})
+		}
+		if exit {
+			send(tea.Quit())
+		}
+		return
+	}
+	if isSessionAgentSlash(session, line) {
+		if err := session.Prompt(ctx, line); err != nil && err != context.Canceled {
+			send(modutui.AppendMessageMsg{Message: modutui.Message{Role: modutui.RoleAssistant, Text: "error: " + err.Error()}})
+			send(modutui.SetStatusMsg{Status: "error"})
+		}
+		return
+	}
+	send(modutui.AppendMessageMsg{Message: modutui.Message{Role: modutui.RoleAssistant, Text: "unknown command: " + line}})
+}
+
+func isSessionAgentSlash(session *coding_agent.CodingSession, line string) bool {
+	if session == nil || !strings.HasPrefix(strings.TrimSpace(line), "/") {
+		return false
+	}
+	cmd := strings.TrimPrefix(strings.TrimSpace(line), "/")
+	if i := strings.IndexAny(cmd, " \t\n\r"); i >= 0 {
+		cmd = cmd[:i]
+	}
+	if cmd == "" {
+		return false
+	}
+	if session.HasSlashCommand(cmd) {
+		return true
+	}
+	for _, skill := range session.GetSkills() {
+		if skill.Name == cmd {
+			return true
+		}
+	}
+	for _, prompt := range session.GetPromptTemplates() {
+		if prompt.Name == cmd {
+			return true
+		}
+	}
+	return false
+}
+
+func moduTUISlashCommands(session *coding_agent.CodingSession) []modutui.SlashCommand {
+	seen := map[string]struct{}{}
+	add := func(out *[]modutui.SlashCommand, name, desc string) {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return
+		}
+		if !strings.HasPrefix(name, "/") {
+			name = "/" + name
+		}
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		*out = append(*out, modutui.SlashCommand{Name: name, Description: strings.TrimSpace(desc)})
+	}
+
+	var out []modutui.SlashCommand
+	for _, cmd := range baseModuTUISlashCommands() {
+		add(&out, cmd.Name, cmd.Description)
+	}
+	if session == nil {
+		return out
+	}
+	for _, cmd := range session.RegisteredSlashCommands() {
+		add(&out, cmd.Name, cmd.Description)
+	}
+	for _, skill := range session.GetSkills() {
+		add(&out, skill.Name, skill.Description)
+	}
+	for _, prompt := range session.GetPromptTemplates() {
+		desc := prompt.Description
+		if prompt.ArgumentHint != "" {
+			if desc != "" {
+				desc += " "
+			}
+			desc += "(" + prompt.ArgumentHint + ")"
+		}
+		add(&out, prompt.Name, desc)
+	}
+	return out
+}
+
+func baseModuTUISlashCommands() []modutui.SlashCommand {
+	return []modutui.SlashCommand{
+		{Name: "/help", Description: "Show available commands"},
+		{Name: "/clear", Description: "Clear the current session"},
+		{Name: "/model", Description: "Switch the active model"},
+		{Name: "/compact", Description: "Manually trigger context compaction"},
+		{Name: "/tokens", Description: "Show token usage"},
+		{Name: "/context", Description: "Show loaded context"},
+		{Name: "/session", Description: "Show current session information"},
+		{Name: "/sessions", Description: "List or manage saved sessions"},
+		{Name: "/tree", Description: "Show conversation tree"},
+		{Name: "/fork", Description: "Fork from an entry id"},
+		{Name: "/tools", Description: "List active tools"},
+		{Name: "/skills", Description: "List available skills"},
+		{Name: "/prompts", Description: "List prompt templates"},
+		{Name: "/plan", Description: "Show or update plan mode"},
+		{Name: "/worktree", Description: "Manage the current worktree"},
+		{Name: "/quit", Description: "Exit modu_code"},
+	}
 }
 
 func initialTerminalSize(fd int, fallbackWidth, fallbackHeight int) (int, int) {

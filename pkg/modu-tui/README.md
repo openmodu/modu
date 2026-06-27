@@ -13,6 +13,11 @@ It owns only the reusable UI shell:
   away from the bottom, avoiding repeated viewport overlays on mobile terminals
 - drag selection with local clipboard plus OSC52 copy
 - independent input, text, markdown, collapsible, tool-call, and code blocks
+- fixed bottom cards are rendered through `CardBlock`, so approval and slash
+  command popups share one heavy-border card style
+- slash commands can be supplied through `Options.SlashCommands`; typing `/`
+  opens a bottom card with filtered command matches, `Tab` completes, and
+  `Enter` dispatches through `Hooks.SlashCommand`
 - tool-call messages with the same `ToolID` are merged into a single block so
   call/start/result updates do not scatter through the transcript
 - Read-style tool calls can render as compact `Read(path · lines x-y)` blocks
@@ -39,16 +44,22 @@ Component layout:
 - `collapsible_block.go` owns generic expand/collapse rendering.
 - `tool_call_block.go` embeds `CollapsibleBlock` for command/tool output and can
   render permission state from `Hooks.ToolPermission`.
+- `card_block.go` owns reusable heavy-border card rendering for fixed bottom
+  panels and future popup-style blocks.
+- `slash_command_block.go` renders slash command suggestions as an independent
+  bottom card.
 - `approval_block.go` renders a pending tool approval request as a fixed panel
   above the bottom input area. Hosts send `RequestToolApprovalMsg` with a
   response channel; the model handles `y/a/n/d/esc` and returns a
   `ToolApprovalDecision`. Approval panels show a compact command preview and
-  grouped allow/deny shortcuts.
+  grouped allow/deny shortcuts inside a high-contrast heavy border.
 - `code_block.go` owns fenced-code rendering and syntax highlighting via Glamour.
 - `block_factory.go` maps `Message` values to block structs.
 - `Options.BlockFactories` lets callers register custom `Message -> Block`
   mapping before the default mapping runs.
 - `Hooks.Submit` lets host applications receive bottom-input submissions.
+- `Hooks.SlashCommand` lets host applications route selected or typed slash
+  commands without sending them as normal prompts.
 - `Hooks.ToolApprovalDecision` lets host applications observe approval decisions.
 - `AppendMessageMsg`, `SetStatusMsg`, and `SetBusyMsg` let host applications
   feed external session events into the model without coupling this package to
@@ -56,5 +67,5 @@ Component layout:
 - `Model` owns spacing between transcript blocks; individual blocks do not add
   their own trailing blank lines. The default block gap is one blank line.
 
-This package intentionally does not know about coding-agent sessions, tools, or
-approval flows. Those stay in higher-level packages such as `cmd/modu_code`.
+This package intentionally does not know about coding-agent sessions or command
+execution. Those stay in higher-level packages such as `cmd/modu_code`.

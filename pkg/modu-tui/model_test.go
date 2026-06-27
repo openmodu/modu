@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -226,6 +227,55 @@ func TestPOC2SubmitHookReceivesEnteredText(t *testing.T) {
 	}
 }
 
+func TestPOC2SlashPickerCompletesCommandWithTab(t *testing.T) {
+	var tm tea.Model = NewModel(Options{
+		Width:         50,
+		Height:        10,
+		SlashCommands: []SlashCommand{{Name: "/help", Description: "Show help"}},
+	})
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: "/", Code: '/'}))
+	m := tm.(Model)
+	if got := ansi.Strip(m.render()); !strings.Contains(got, "/help") || !strings.Contains(got, "┏") {
+		t.Fatalf("slash picker not rendered:\n%s", got)
+	}
+
+	tm, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	m = tm.(Model)
+	if got, want := m.input.Value, "/help "; got != want {
+		t.Fatalf("completed slash input = %q, want %q", got, want)
+	}
+	if len(m.slashMatches) != 0 {
+		t.Fatalf("slash matches should clear after completion: %#v", m.slashMatches)
+	}
+}
+
+func TestPOC2SlashCommandHookReceivesSelectedCommand(t *testing.T) {
+	var submitted string
+	var slashLine string
+	var tm tea.Model = NewModel(Options{
+		Width:         50,
+		Height:        10,
+		SlashCommands: []SlashCommand{{Name: "/help", Description: "Show help"}},
+		Hooks: Hooks{
+			Submit: func(text string) {
+				submitted = text
+			},
+			SlashCommand: func(line string) {
+				slashLine = line
+			},
+		},
+	})
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: "/", Code: '/'}))
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+
+	if got, want := slashLine, "/help"; got != want {
+		t.Fatalf("slash command line = %q, want %q", got, want)
+	}
+	if submitted != "" {
+		t.Fatalf("normal submit should not run for slash command, got %q", submitted)
+	}
+}
+
 func TestPOC2AcceptsExternalMessagesAndBusyState(t *testing.T) {
 	var tm tea.Model = NewModel(Options{Width: 40, Height: 8})
 	tm, _ = tm.Update(AppendMessageMsg{Message: Message{Role: RoleAssistant, Text: "external reply"}})
@@ -387,8 +437,11 @@ func TestPOC2ToolApprovalPanelIsFixedAboveInput(t *testing.T) {
 		t.Fatalf("rendered lines = %d, want %d:\n%s", got, want, strings.Join(rendered, "\n"))
 	}
 	panelTop := m.vpHeight()
-	if !strings.HasPrefix(rendered[panelTop], "╭") {
+	if !strings.HasPrefix(rendered[panelTop], "┏") {
 		t.Fatalf("approval panel should start immediately below viewport at line %d:\n%s", panelTop, strings.Join(rendered, "\n"))
+	}
+	if got, want := approvalBorderStyle.GetForeground(), lipgloss.Color("248"); got != want {
+		t.Fatalf("approval border color = %#v, want %#v", got, want)
 	}
 	inputRule := m.vpHeight() + m.approvalPanelHeight()
 	if got, want := rendered[inputRule], strings.Repeat("─", m.width); got != want {
