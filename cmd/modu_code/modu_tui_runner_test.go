@@ -251,3 +251,40 @@ func TestModuTUISlashPrinterCapturesSectionsAndClear(t *testing.T) {
 		}
 	}
 }
+
+func TestRunModuTUISlashSendsPreformattedHelpOutput(t *testing.T) {
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       t.TempDir(),
+		AgentDir:  t.TempDir(),
+		Model:     &types.Model{ID: "test", Name: "Test", ProviderID: "test"},
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var messages []tea.Msg
+	runModuTUISlash(context.Background(), "/help", session, session.GetModel(), func(msg tea.Msg) {
+		messages = append(messages, msg)
+	})
+
+	var got *modutui.Message
+	for _, msg := range messages {
+		if appendMsg, ok := msg.(modutui.AppendMessageMsg); ok {
+			next := appendMsg.Message
+			got = &next
+			break
+		}
+	}
+	if got == nil {
+		t.Fatalf("expected AppendMessageMsg in %#v", messages)
+	}
+	if !got.Preformatted {
+		t.Fatalf("slash help output should be preformatted: %#v", got)
+	}
+	for _, want := range []string{"Help", "/help, /h", "/quit, /exit", "tool approval"} {
+		if !strings.Contains(got.Text, want) {
+			t.Fatalf("help output missing %q:\n%s", want, got.Text)
+		}
+	}
+}

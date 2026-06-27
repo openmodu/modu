@@ -136,7 +136,7 @@ func runModuTUISlash(ctx context.Context, line string, session *coding_agent.Cod
 			send(modutui.ClearMessagesMsg{})
 		}
 		if text := printer.Text(); text != "" {
-			send(modutui.AppendMessageMsg{Message: modutui.Message{Role: modutui.RoleAssistant, Text: text}})
+			send(modutui.AppendMessageMsg{Message: modutui.Message{Role: modutui.RoleAssistant, Text: text, Preformatted: true}})
 		}
 		if exit {
 			send(tea.Quit())

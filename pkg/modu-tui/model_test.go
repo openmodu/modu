@@ -147,6 +147,34 @@ func TestPOC2InfoCardStaysAtTopAfterFirstMessage(t *testing.T) {
 	}
 }
 
+func TestPOC2PreformattedAssistantMessagePreservesSlashHelpLines(t *testing.T) {
+	m := NewModel(Options{
+		Width:  72,
+		Height: 12,
+		InitialMessages: []Message{{
+			Role:         RoleAssistant,
+			Text:         "Help\n/help, /h           — show this help\n/quit, /exit        — exit\n\nkeys\nctrl+j         — insert newline",
+			Preformatted: true,
+		}},
+	})
+
+	rendered := ansi.Strip(m.render())
+	for _, want := range []string{
+		"● Help",
+		"  /help, /h           — show this help",
+		"  /quit, /exit        — exit",
+		"  keys",
+		"  ctrl+j         — insert newline",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("preformatted help missing %q:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "Help /help") {
+		t.Fatalf("preformatted help should not collapse newlines into a paragraph:\n%s", rendered)
+	}
+}
+
 func TestPOC2JumpHintStaysInFixedRowAboveInput(t *testing.T) {
 	m := NewModel(Options{Width: 72, Height: 8})
 	for i := 0; i < 20; i++ {

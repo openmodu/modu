@@ -28,6 +28,9 @@ func defaultBlockFromMessage(m Message) Block {
 	if m.Code != "" {
 		return CodeBlock{Marker: marker, Language: m.Language, Code: m.Code}
 	}
+	if m.Preformatted {
+		return TextBlock{Marker: marker, Text: m.Text}
+	}
 	if m.Role == RoleAssistant {
 		return MarkdownBlock{Marker: marker, Text: m.Text}
 	}

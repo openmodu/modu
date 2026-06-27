@@ -28,6 +28,8 @@ It owns only the reusable UI shell:
   expanded tool-call block can be clicked to collapse it
 - markdown inline code renders without Glamour's default red foreground and
   dark background so status text such as commit hashes stays readable
+- assistant messages marked `Preformatted` render through `TextBlock` instead
+  of Markdown so command output such as `/help` keeps its line layout
 - optional simulated streaming reply for demos and integration experiments
 
 Call `NewModel(Options{...})` to create a Bubble Tea v2 model. The directory is

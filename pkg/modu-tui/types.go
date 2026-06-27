@@ -13,20 +13,21 @@ const (
 )
 
 type Message struct {
-	Role       Role
-	Text       string
-	Tool       bool
-	ToolID     string
-	ToolName   string
-	Summary    string
-	Detail     string
-	ToolInput  string
-	ToolOutput string
-	ToolError  bool
-	ToolDone   bool
-	Expanded   bool
-	Language   string
-	Code       string
+	Role         Role
+	Text         string
+	Tool         bool
+	ToolID       string
+	ToolName     string
+	Summary      string
+	Detail       string
+	ToolInput    string
+	ToolOutput   string
+	ToolError    bool
+	ToolDone     bool
+	Expanded     bool
+	Preformatted bool
+	Language     string
+	Code         string
 }
 
 type ToolPermissionState string
