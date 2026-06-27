@@ -154,8 +154,12 @@ func TestPOCInputSanitizesMouseLeak(t *testing.T) {
 		{"normal text", "normal text"},
 		{"a[b]c", "a[b]c"}, // ordinary brackets are not touched
 	}
+	cases = append(cases,
+		struct{ in, want string }{"]11;rgb:1e1e/1e1e/1e1e", ""},
+		struct{ in, want string }{"\x1b]11;rgb:1e1e/2a2a/3f3f", ""},
+	)
 	for _, c := range cases {
-		if got := mouseSeqRe.ReplaceAllString(c.in, ""); got != c.want {
+		if got := leakRe.ReplaceAllString(c.in, ""); got != c.want {
 			t.Errorf("sanitize(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}

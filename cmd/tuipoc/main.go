@@ -150,12 +150,19 @@ var (
 	jumpStyle   = lipgloss.NewStyle().Background(lipgloss.Color("63")).Foreground(lipgloss.Color("231")).Padding(0, 1)
 )
 
-// mouseSeqRe matches SGR (and X10) mouse-report fragments that bubbletea's input
-// parser can leak as text when a read is split mid-sequence (common over SSH).
-// We strip these from the input box so scrolling never types garbage like
-// "[<65;55;23M". The leading ESC is optional because the parser sometimes emits
-// the params only after consuming the CSI introducer.
-var mouseSeqRe = regexp.MustCompile("\x1b?\\[(?:<\\d+;\\d+;\\d+[Mm]|M...)")
+// leakRe matches terminal *report* sequences that bubbletea's input parser can
+// leak as text when a read is split mid-sequence (common over SSH) — mouse
+// reports, cursor-position/DA replies, and OSC color replies. We strip these
+// from the input box so scrolling/startup never types garbage like
+// "[<65;55;23M" or "]11;rgb:1e1e/1e1e/1e1e". The leading ESC is optional because
+// the parser sometimes emits only the params after consuming the introducer.
+var leakRe = regexp.MustCompile("\x1b?(?:" +
+	"\\[<\\d+;\\d+;\\d+[Mm]" + // SGR mouse report
+	"|\\[M..." + // X10 mouse report
+	"|\\[\\?[0-9;]*[a-zA-Z]" + // DA1 / kitty-keyboard reply (private CSI)
+	"|\\[\\d+;\\d+R" + // cursor position report
+	"|\\][0-9]+;rgb:[0-9a-fA-F/]+" + // OSC 4/10/11 color reply
+	")")
 
 func jumpHint() string   { return jumpStyle.Render("Jump to bottom (ctrl+End) ↓") }
 func jumpHintWidth() int { return lipgloss.Width(jumpHint()) }
@@ -359,10 +366,10 @@ func (m *model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 // sanitizeInput removes any leaked mouse-report fragments from the input box.
 func (m *model) sanitizeInput() {
 	v := m.input.Value()
-	if !strings.Contains(v, "[") {
+	if !strings.ContainsAny(v, "[]") {
 		return
 	}
-	if cleaned := mouseSeqRe.ReplaceAllString(v, ""); cleaned != v {
+	if cleaned := leakRe.ReplaceAllString(v, ""); cleaned != v {
 		m.input.SetValue(cleaned)
 	}
 }
