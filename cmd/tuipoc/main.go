@@ -19,10 +19,15 @@ package main
 
 import (
 	"fmt"
+	"io"
+	"os"
+	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/atotto/clipboard"
+	osc52 "github.com/aymanbagabas/go-osc52/v2"
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -57,6 +62,12 @@ const (
 type message struct {
 	role role
 	text string
+
+	// collapsible tool block (like modu's "Ran 1 shell command")
+	tool     bool
+	summary  string // one-line header shown when collapsed
+	detail   string // command + output, shown when expanded
+	expanded bool
 }
 
 type streamTickMsg struct{}
@@ -85,14 +96,41 @@ type model struct {
 	// drag-selection state. The transcript is a TUI viewport (terminal native
 	// selection is swallowed once mouse reporting is on), so we implement our own
 	// line selection and copy to the system clipboard.
-	displayLines     []string // the exact lines currently shown in the viewport
-	selecting        bool     // left button is held and dragging
-	selStart, selEnd cell     // selection endpoints (line index + cell column); line<0 = none
-	dragCol          int      // last pointer column, used to extend selection during edge scroll
-	dragDir          int      // edge auto-scroll direction while dragging: -1 up, +1 down, 0 none
-	autoScrolling    bool     // an auto-scroll ticker is in flight
-	status           string   // transient status (e.g. "copied N chars")
+	displayLines     []string    // the exact lines currently shown in the viewport
+	selecting        bool        // left button is held and dragging
+	selStart, selEnd cell        // selection endpoints (line index + cell column); line<0 = none
+	dragCol          int         // last pointer column, used to extend selection during edge scroll
+	dragDir          int         // edge auto-scroll direction while dragging: -1 up, +1 down, 0 none
+	autoScrolling    bool        // an auto-scroll ticker is in flight
+	status           string      // transient status (e.g. "copied N chars")
+	out              io.Writer   // where OSC 52 clipboard sequences are written (os.Stdout)
+	toolHeaders      map[int]int // display-line index of a tool header -> message index
 }
+
+// syncWriter serializes writes to the terminal so our OSC 52 clipboard sequence
+// never interleaves with a bubbletea frame. Both the program (via WithOutput)
+// and copySelection write through this one mutex; without it, a raw write to
+// os.Stdout can land in the middle of a frame's escape codes — especially over a
+// high-latency SSH link — corrupting the sequence so its base64 leaks as garbage.
+//
+// It wraps the real *os.File and exposes Fd()/Read()/Close() so bubbletea still
+// sees a term.File (and can measure the terminal size — otherwise the program
+// never receives a WindowSizeMsg and stays on "loading…"). Close is a no-op so
+// the program teardown can't close the shared os.Stdout.
+type syncWriter struct {
+	mu sync.Mutex
+	f  *os.File
+}
+
+func (s *syncWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.f.Write(p)
+}
+
+func (s *syncWriter) Read(p []byte) (int, error) { return s.f.Read(p) }
+func (s *syncWriter) Fd() uintptr                { return s.f.Fd() }
+func (s *syncWriter) Close() error               { return nil }
 
 // cell is a position in the rendered transcript: a display-line index plus a
 // terminal-cell column (wide CJK glyphs occupy 2 columns).
@@ -109,7 +147,42 @@ var (
 	ruleStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
 	statusStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 	selStyle    = lipgloss.NewStyle().Background(lipgloss.Color("240")).Foreground(lipgloss.Color("231"))
+	jumpStyle   = lipgloss.NewStyle().Background(lipgloss.Color("63")).Foreground(lipgloss.Color("231")).Padding(0, 1)
 )
+
+// mouseSeqRe matches SGR (and X10) mouse-report fragments that bubbletea's input
+// parser can leak as text when a read is split mid-sequence (common over SSH).
+// We strip these from the input box so scrolling never types garbage like
+// "[<65;55;23M". The leading ESC is optional because the parser sometimes emits
+// the params only after consuming the CSI introducer.
+var mouseSeqRe = regexp.MustCompile("\x1b?\\[(?:<\\d+;\\d+;\\d+[Mm]|M...)")
+
+func jumpHint() string   { return jumpStyle.Render("Jump to bottom (ctrl+End) ↓") }
+func jumpHintWidth() int { return lipgloss.Width(jumpHint()) }
+
+// jumpHintLeft is the left cell of the centered pill on the bottom line.
+func jumpHintLeft(width int) int { return max(0, (width-jumpHintWidth())/2) }
+
+// overlayJumpHint paints the jump-to-bottom pill centered on the viewport's last
+// line (a floating affordance shown only while scrolled up), keeping the
+// original line content on either side of it.
+func overlayJumpHint(view string, width int) string {
+	pill := jumpHint()
+	pw := lipgloss.Width(pill)
+	left := jumpHintLeft(width)
+	lines := strings.Split(view, "\n")
+	if len(lines) == 0 {
+		return view
+	}
+	last := lines[len(lines)-1]
+	leftPart := ansi.Truncate(last, left, "")
+	if pad := left - lipgloss.Width(leftPart); pad > 0 {
+		leftPart += strings.Repeat(" ", pad)
+	}
+	rightPart := ansi.Truncate(ansi.TruncateLeft(last, left+pw, ""), max(0, width-left-pw), "")
+	lines[len(lines)-1] = leftPart + pill + rightPart
+	return strings.Join(lines, "\n")
+}
 
 func newModel() model {
 	ta := textarea.New()
@@ -123,10 +196,16 @@ func newModel() model {
 	return model{
 		input:    ta,
 		follow:   true,
+		out:      os.Stdout,
 		selStart: cell{line: -1},
 		selEnd:   cell{line: -1},
 		messages: []message{
 			{role: roleAssistant, text: "POC: 全屏 viewport 架构。底部输入框固定,上方 transcript 独立滚动(自维护 offset,不依赖终端 scrollback)。Enter 发送会模拟一段含表格的流式回复。"},
+			{
+				tool:    true,
+				summary: "Ran 1 shell command",
+				detail:  "$ go test ./cmd/tuipoc/\nok  github.com/openmodu/modu/cmd/tuipoc  0.5s\n\n点 ▸ / ▾ 这一行可以展开或折叠明细。",
+			},
 		},
 	}
 }
@@ -147,6 +226,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c", "esc":
 			return m, tea.Quit
+		case "ctrl+end":
+			m.jumpToBottom()
+			return m, nil
 		case "enter":
 			if v := strings.TrimSpace(m.input.Value()); v != "" && !m.streaming {
 				m.messages = append(m.messages, message{role: roleUser, text: v})
@@ -197,6 +279,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	cmds = append(cmds, cmd)
+	m.sanitizeInput()
 	m.vp, cmd = m.vp.Update(msg)
 	cmds = append(cmds, cmd)
 	if !m.selecting {
@@ -216,6 +299,22 @@ func (m *model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	}
 	switch msg.Action {
 	case tea.MouseActionPress:
+		// Click on the floating jump-to-bottom pill → jump instead of select.
+		if !m.vp.AtBottom() && msg.Y == m.vp.Height-1 {
+			if left := jumpHintLeft(m.width); msg.X >= left && msg.X < left+jumpHintWidth() {
+				m.jumpToBottom()
+				return nil
+			}
+		}
+		// Click on a collapsible tool header → toggle expand/collapse.
+		if msg.Y >= 0 && msg.Y < m.vp.Height {
+			if idx, ok := m.toolHeaders[m.vp.YOffset+msg.Y]; ok {
+				m.messages[idx].expanded = !m.messages[idx].expanded
+				m.clearSelection()
+				m.refresh()
+				return nil
+			}
+		}
 		if msg.Y >= 0 && msg.Y < m.vp.Height {
 			m.selecting = true
 			m.follow = false
@@ -257,6 +356,25 @@ func (m *model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	return nil
 }
 
+// sanitizeInput removes any leaked mouse-report fragments from the input box.
+func (m *model) sanitizeInput() {
+	v := m.input.Value()
+	if !strings.Contains(v, "[") {
+		return
+	}
+	if cleaned := mouseSeqRe.ReplaceAllString(v, ""); cleaned != v {
+		m.input.SetValue(cleaned)
+	}
+}
+
+// jumpToBottom scrolls to the latest content and resumes auto-follow.
+func (m *model) jumpToBottom() {
+	m.clearSelection()
+	m.follow = true
+	m.dragDir = 0
+	m.refresh() // follow && !selecting → GotoBottom
+}
+
 func (m model) autoScrollTick() tea.Cmd {
 	return tea.Tick(50*time.Millisecond, func(time.Time) tea.Msg { return autoScrollMsg{} })
 }
@@ -295,8 +413,10 @@ func (m *model) selRange() (cell, cell) {
 }
 
 // copySelection writes the selected text (ANSI stripped, cell-accurate) to the
-// system clipboard. atotto/clipboard uses pbcopy on macOS; over SSH you would
-// instead emit an OSC 52 sequence so the *local* terminal does the copy.
+// clipboard via two paths so it works both locally and over SSH:
+//   - OSC 52: the *local* terminal sets its own clipboard, even across SSH/tmux.
+//   - atotto/clipboard: the local OS clipboard (pbcopy/xclip). Best-effort —
+//     unavailable on a bare remote host, so its error is ignored.
 func (m *model) copySelection() {
 	if !m.hasSelection() || len(m.displayLines) == 0 {
 		return
@@ -305,11 +425,38 @@ func (m *model) copySelection() {
 	if text == "" {
 		return
 	}
-	if err := clipboard.WriteAll(text); err != nil {
-		m.status = "clipboard error: " + err.Error()
-		return
+	// Local OS clipboard first (pbcopy/xclip). Works when NOT over SSH.
+	localOK := clipboard.WriteAll(text) == nil
+	// OSC 52 only when it's actually needed: over SSH (the local clipboard is
+	// unreachable from the remote host) or when the local copy failed. Emitting
+	// it on a local terminal that doesn't understand OSC 52 (e.g. Terminal.app)
+	// would just leak the base64 as visible garbage, so we avoid it there.
+	via := "clipboard"
+	if (isRemoteSession() || !localOK) && m.out != nil {
+		_, _ = io.WriteString(m.out, clipboardSequence(text))
+		via = "OSC52"
+		if localOK {
+			via = "OSC52+clipboard"
+		}
 	}
-	m.status = fmt.Sprintf("✓ copied %d chars", len([]rune(text)))
+	m.status = fmt.Sprintf("✓ copied %d chars (%s)", len([]rune(text)), via)
+}
+
+func isRemoteSession() bool {
+	return os.Getenv("SSH_TTY") != "" || os.Getenv("SSH_CONNECTION") != ""
+}
+
+// clipboardSequence builds the OSC 52 escape that asks the terminal to set the
+// system clipboard, with tmux/screen passthrough so it survives a multiplexer.
+func clipboardSequence(text string) string {
+	seq := osc52.New(text)
+	switch {
+	case os.Getenv("TMUX") != "":
+		seq = seq.Tmux()
+	case strings.HasPrefix(os.Getenv("TERM"), "screen"):
+		seq = seq.Screen()
+	}
+	return seq.String()
 }
 
 // selectedText is the plain (ANSI-stripped) text of the current character-level
@@ -339,12 +486,16 @@ func (m model) View() string {
 	state := map[bool]string{true: "● streaming", false: "○ idle"}[m.streaming]
 	hint := m.status
 	if hint == "" {
-		hint = "拖拽选择→复制 · Enter 发送 · 滚轮/PgUp 滚动 · Ctrl+C 退出"
+		hint = "拖拽选择→复制 · 点 ▸ 展开/折叠 · Enter 发送 · 滚轮滚动 · Ctrl+C 退出"
 	}
 	status := statusStyle.Render(fmt.Sprintf(" %s  ·  %s ", state, hint))
+	vpView := m.vp.View()
+	if !m.vp.AtBottom() {
+		vpView = overlayJumpHint(vpView, m.width)
+	}
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
-		m.vp.View(),
+		vpView,
 		ruleStyle.Render(strings.Repeat("─", m.width)),
 		m.input.View(),
 		status,
@@ -370,7 +521,7 @@ func (m *model) layout() {
 // range (if any) is highlighted before the content is handed to the viewport.
 func (m *model) refresh() {
 	m.layout()
-	m.displayLines = strings.Split(m.renderTranscript(), "\n")
+	m.displayLines, m.toolHeaders = m.buildTranscript()
 	m.vp.SetContent(m.viewportContent())
 	if m.follow && !m.selecting {
 		m.vp.GotoBottom()
@@ -435,39 +586,61 @@ func cellSlice(plain string, from, to int) string {
 }
 
 func (m *model) renderTranscript() string {
+	lines, _ := m.buildTranscript()
+	return strings.Join(lines, "\n")
+}
+
+// buildTranscript renders the transcript as individual display lines and a map
+// from a tool block's header line index to its message index, so a click on that
+// line can toggle the block expanded/collapsed.
+func (m *model) buildTranscript() ([]string, map[int]int) {
 	width := max(m.vp.Width, 10)
 	r, _ := glamour.NewTermRenderer(glamour.WithAutoStyle(), glamour.WithWordWrap(width-2))
 
-	var b strings.Builder
-	render := func(mm message, streaming bool) {
-		switch mm.role {
-		case roleUser:
-			b.WriteString(youStyle.Render("you") + "\n")
-			b.WriteString(mm.text + "\n\n")
-		case roleAssistant:
-			b.WriteString(botStyle.Render("assistant") + "\n")
-			if streaming {
-				// While streaming, show raw text (fast, stable). It snaps to the
-				// glamour-rendered box only once finalized — no growing box.
-				b.WriteString(dimStyle.Render(mm.text) + "\n")
-				b.WriteString(dimStyle.Render("┄ streaming…") + "\n\n")
-			} else if r != nil {
-				if out, err := r.Render(mm.text); err == nil {
-					b.WriteString(strings.TrimRight(out, "\n") + "\n\n")
-				} else {
-					b.WriteString(mm.text + "\n\n")
+	var lines []string
+	headers := map[int]int{}
+	add := func(s string) { lines = append(lines, strings.Split(s, "\n")...) }
+
+	for idx, mm := range m.messages {
+		switch {
+		case mm.tool:
+			arrow := "▸"
+			if mm.expanded {
+				arrow = "▾"
+			}
+			headers[len(lines)] = idx // this line is the clickable header
+			add(dimStyle.Render(arrow + " " + mm.summary))
+			if mm.expanded {
+				for _, dl := range strings.Split(strings.TrimRight(mm.detail, "\n"), "\n") {
+					add(dimStyle.Render("    " + dl))
 				}
 			}
+			add("")
+		case mm.role == roleUser:
+			add(youStyle.Render("you"))
+			add(mm.text)
+			add("")
+		case mm.role == roleAssistant:
+			add(botStyle.Render("assistant"))
+			if r != nil {
+				if out, err := r.Render(mm.text); err == nil {
+					add(strings.TrimRight(out, "\n"))
+				} else {
+					add(mm.text)
+				}
+			}
+			add("")
 		}
 	}
-
-	for _, mm := range m.messages {
-		render(mm, false)
-	}
 	if m.streaming {
-		render(message{role: roleAssistant, text: string(m.streamRunes[:m.streamIdx])}, true)
+		add(botStyle.Render("assistant"))
+		add(dimStyle.Render(string(m.streamRunes[:m.streamIdx])))
+		add(dimStyle.Render("┄ streaming…"))
 	}
-	return strings.TrimRight(b.String(), "\n")
+	for len(lines) > 0 && strings.TrimSpace(ansi.Strip(lines[len(lines)-1])) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines, headers
 }
 
 func (m *model) startStream() {
@@ -488,10 +661,16 @@ func (m model) tick() tea.Cmd {
 }
 
 func main() {
+	// One mutex-guarded writer shared by the renderer and our clipboard writes,
+	// so OSC 52 can never interleave with a frame (the SSH garbage cause).
+	out := &syncWriter{f: os.Stdout}
+	m := newModel()
+	m.out = out
 	p := tea.NewProgram(
-		newModel(),
+		m,
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
+		tea.WithOutput(out),
 	)
 	if _, err := p.Run(); err != nil {
 		fmt.Println("error:", err)

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/base64"
 	"strings"
 	"testing"
 
@@ -113,6 +115,173 @@ func TestPOCDragSelectionText(t *testing.T) {
 	m.handleMouse(tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease, X: 0, Y: 2})
 	if m.selecting {
 		t.Fatal("release should end selecting")
+	}
+}
+
+// OSC 52: the clipboard sequence carries the base64 of the text, and a remote
+// (SSH) session emits it through the model's output writer so the *local*
+// terminal can set its clipboard.
+func TestPOCClipboardOSC52(t *testing.T) {
+	seq := clipboardSequence("hi")
+	if !strings.Contains(seq, "\x1b]52") {
+		t.Fatalf("not an OSC 52 sequence: %q", seq)
+	}
+	if want := base64.StdEncoding.EncodeToString([]byte("hi")); !strings.Contains(seq, want) {
+		t.Fatalf("OSC 52 missing base64 payload %q: %q", want, seq)
+	}
+
+	// Force a "remote" session so copySelection emits OSC 52 to our buffer.
+	t.Setenv("SSH_TTY", "/dev/pts/0")
+	var buf bytes.Buffer
+	m := newModel()
+	m.out = &buf
+	m.displayLines = []string{"0123456789"}
+	m.selStart = cell{line: 0, col: 0}
+	m.selEnd = cell{line: 0, col: 5}
+	m.copySelection()
+	if want := base64.StdEncoding.EncodeToString([]byte("01234")); !strings.Contains(buf.String(), want) {
+		t.Fatalf("remote copySelection did not emit OSC 52 for the selection: %q", buf.String())
+	}
+}
+
+// Leaked SGR mouse-report fragments (from split reads over SSH) must be stripped
+// from the input box instead of being typed as garbage.
+func TestPOCInputSanitizesMouseLeak(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"[<65;55;23M[<64;55;23M", ""},
+		{"\x1b[<65;55;23M", ""},
+		{"hello[<65;55;23Mworld", "helloworld"},
+		{"normal text", "normal text"},
+		{"a[b]c", "a[b]c"}, // ordinary brackets are not touched
+	}
+	for _, c := range cases {
+		if got := mouseSeqRe.ReplaceAllString(c.in, ""); got != c.want {
+			t.Errorf("sanitize(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+
+	// End-to-end: typing the leaked fragment leaves the input box clean.
+	var m tea.Model = newModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 20})
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[<65;55;23M")})
+	if v := m.(model).input.Value(); strings.Contains(v, "[<") {
+		t.Fatalf("input box kept leaked mouse codes: %q", v)
+	}
+}
+
+// Interacting during streaming: scrolling up mid-stream stops auto-follow, and
+// subsequent streaming output must NOT yank the view back to the bottom.
+func TestPOCInteractiveDuringStreaming(t *testing.T) {
+	var m tea.Model = newModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 90, Height: 10})
+	mm := m.(model)
+	for range 40 {
+		mm.messages = append(mm.messages, message{role: roleAssistant, text: "history line"})
+	}
+	m = mm
+
+	// Start a streaming reply (jumps to bottom + follows).
+	for _, r := range "go" {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	for range 5 {
+		m, _ = m.Update(streamTickMsg{})
+	}
+	if !m.(model).streaming {
+		t.Fatal("should be streaming")
+	}
+
+	// Scroll up while streaming → follow stops.
+	m, _ = m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	if m.(model).follow {
+		t.Fatal("scrolling up during streaming should stop auto-follow")
+	}
+	parked := m.(model).vp.YOffset
+
+	// More streaming output must not move our scroll position to the bottom.
+	for range 15 {
+		m, _ = m.Update(streamTickMsg{})
+	}
+	if m.(model).follow {
+		t.Fatal("streaming should not re-enable follow on its own")
+	}
+	if m.(model).vp.AtBottom() {
+		t.Fatal("streaming output yanked the view back to the bottom")
+	}
+	if m.(model).vp.YOffset != parked {
+		t.Fatalf("scroll position drifted during streaming: %d -> %d", parked, m.(model).vp.YOffset)
+	}
+}
+
+// Clicking a collapsible tool header toggles its detail; clicking again
+// collapses it.
+func TestPOCToolToggle(t *testing.T) {
+	m := newModel()
+	m.width, m.height = 90, 30
+	m.refresh()
+
+	headerLine, msgIdx := -1, -1
+	for ln, idx := range m.toolHeaders {
+		headerLine, msgIdx = ln, idx
+		break
+	}
+	if headerLine < 0 {
+		t.Fatal("no tool header found in transcript")
+	}
+	if m.messages[msgIdx].expanded {
+		t.Fatal("tool block should start collapsed")
+	}
+	collapsed := len(m.displayLines)
+
+	click := tea.MouseMsg{Button: tea.MouseButtonLeft, Action: tea.MouseActionPress, X: 1, Y: headerLine - m.vp.YOffset}
+	m.handleMouse(click)
+	if !m.messages[msgIdx].expanded {
+		t.Fatal("clicking the header should expand the block")
+	}
+	if len(m.displayLines) <= collapsed {
+		t.Fatal("expanding should add detail lines")
+	}
+	if !strings.Contains(strings.Join(m.displayLines, "\n"), "go test") {
+		t.Fatal("expanded block should show its detail")
+	}
+
+	m.handleMouse(click)
+	if m.messages[msgIdx].expanded {
+		t.Fatal("clicking again should collapse the block")
+	}
+}
+
+// While scrolled up, a jump-to-bottom pill is shown; ctrl+End returns to the
+// bottom, re-enables follow, and hides the pill.
+func TestPOCJumpToBottom(t *testing.T) {
+	var m tea.Model = newModel()
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 90, Height: 8})
+	mm := m.(model)
+	for range 60 {
+		mm.messages = append(mm.messages, message{role: roleAssistant, text: "history line"})
+	}
+	mm.follow = false
+	mm.refresh()
+	mm.vp.GotoTop()
+	m = mm
+
+	if m.(model).vp.AtBottom() {
+		t.Fatal("setup: should be scrolled up, not at bottom")
+	}
+	if !strings.Contains(m.(model).View(), "Jump to bottom") {
+		t.Fatal("expected the jump-to-bottom pill while scrolled up")
+	}
+
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlEnd})
+	if !m.(model).vp.AtBottom() {
+		t.Fatal("ctrl+End should scroll to the bottom")
+	}
+	if !m.(model).follow {
+		t.Fatal("ctrl+End should re-enable auto-follow")
+	}
+	if strings.Contains(m.(model).View(), "Jump to bottom") {
+		t.Fatal("pill should be hidden once at the bottom")
 	}
 }
 
