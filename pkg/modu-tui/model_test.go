@@ -975,6 +975,54 @@ func TestPOC2ToolApprovalPanelIsFixedAboveInput(t *testing.T) {
 	}
 }
 
+func TestPOC2TodoPanelRendersAboveInput(t *testing.T) {
+	m := NewModel(Options{
+		Width:  50,
+		Height: 12,
+		InitialMessages: []Message{
+			{Role: RoleAssistant, Text: strings.Repeat("history\n", 12)},
+		},
+		Todos: []TodoItem{
+			{Content: "first step", Status: "in_progress"},
+			{Content: "second step", Status: "pending"},
+		},
+	})
+
+	rendered := strings.Split(ansi.Strip(m.render()), "\n")
+	if got, want := len(rendered), m.height; got != want {
+		t.Fatalf("rendered lines = %d, want %d:\n%s", got, want, strings.Join(rendered, "\n"))
+	}
+	panelTop := m.vpHeight()
+	inputRule := m.vpHeight() + m.todoPanelHeight()
+	if !strings.HasPrefix(rendered[panelTop], "┏") {
+		t.Fatalf("todo panel should start immediately below viewport at line %d:\n%s", panelTop, strings.Join(rendered, "\n"))
+	}
+	panel := strings.Join(rendered[panelTop:inputRule], "\n")
+	for _, want := range []string{"Todos", "first step", "second step"} {
+		if !strings.Contains(panel, want) {
+			t.Fatalf("todo panel missing %q:\n%s", want, panel)
+		}
+	}
+	if got, want := rendered[inputRule], strings.Repeat("─", m.width); got != want {
+		t.Fatalf("input top rule line = %q, want %q", got, want)
+	}
+}
+
+func TestPOC2SetTodosMsgUpdatesTodoPanel(t *testing.T) {
+	var tm tea.Model = NewModel(Options{Width: 50, Height: 10})
+	tm, _ = tm.Update(SetTodosMsg{Todos: []TodoItem{{Content: "new task", Status: "pending"}}})
+	m := tm.(Model)
+	if got := ansi.Strip(m.render()); !strings.Contains(got, "new task") {
+		t.Fatalf("expected todo panel after SetTodosMsg:\n%s", got)
+	}
+
+	tm, _ = tm.Update(SetTodosMsg{Todos: []TodoItem{{Content: "new task", Status: "completed"}}})
+	m = tm.(Model)
+	if got := ansi.Strip(m.render()); strings.Contains(got, "new task") || strings.Contains(got, "Todos") {
+		t.Fatalf("completed-only todos should hide panel:\n%s", got)
+	}
+}
+
 func TestPOC2ToolApprovalBlocksInputEditing(t *testing.T) {
 	var tm tea.Model = NewModel()
 	tm, _ = tm.Update(RequestToolApprovalMsg{

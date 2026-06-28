@@ -559,6 +559,17 @@ High-priority gaps identified before this round:
   provider-created `write` rejects existing-file overwrites before read, `edit`
   succeeds after a full read, and successful edits refresh shared read state so
   subsequent writes can proceed.
+- Added `ToSemanticInt` and `ToSemanticBool` helper functions in
+  `tools/common/helpers.go` so model-supplied string arguments (e.g. `"10"`,
+  `"true"`) are converted to Go native int/bool using Claude Code compatible
+  semantic rules, reducing schema/framework-level friction in argument parsing.
+- Added `session.Manager.Flush()` to force the session header JSONL record to
+  disk even when no entries have been appended, ensuring an empty session can
+  be written and later recovered by `--resume`.
+- Refactored `session/entry.go` `messagePayload()` to use a typed switch list
+  covering `UserMessage`, `AssistantMessage`, `ToolResultMessage` and their
+  pointer variants, so message type information is preserved during JSONL
+  serialization regardless of the concrete Go type the caller passes.
 
 ## Still Missing
 

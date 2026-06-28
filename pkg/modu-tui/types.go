@@ -58,6 +58,11 @@ type ToolCall struct {
 	NoCollapse bool
 }
 
+type TodoItem struct {
+	Content string
+	Status  string
+}
+
 type ToolApprovalDecision string
 
 const (
@@ -113,6 +118,7 @@ type Options struct {
 	Height          int
 	InitialMessages []Message
 	InputHistory    []string
+	Todos           []TodoItem
 	StreamReply     string
 	StatusHint      string
 	InfoCardLines   []string
@@ -134,6 +140,10 @@ type SetStatusMsg struct {
 
 type SetBusyMsg struct {
 	Busy bool
+}
+
+type SetTodosMsg struct {
+	Todos []TodoItem
 }
 
 type ClearMessagesMsg struct{}

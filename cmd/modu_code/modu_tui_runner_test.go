@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -211,23 +212,27 @@ func TestMessagesFromAgentEventFormatsReadToolLikeClaudeCode(t *testing.T) {
 }
 
 func TestMessagesFromAgentEventFormatsWriteToolAsExpandedCodeBlock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "main.go")
 	start := messagesFromAgentEvent(types.Event{
 		Type:       types.EventTypeToolExecutionStart,
 		ToolCallID: "call-1",
 		ToolName:   "write",
 		Args: map[string]any{
-			"path":    "main.go",
+			"path":    path,
 			"content": "package main\nfunc main() {}\n",
 		},
 	})
 	if len(start) != 1 {
 		t.Fatalf("start messages len = %d, want 1", len(start))
 	}
-	if got := start[0]; !got.ToolNoCollapse || !got.Expanded || got.ToolInput != "main.go" || got.ToolCode == "" || got.ToolLanguage != "go" {
+	if got := start[0]; !got.ToolNoCollapse || !got.Expanded || got.ToolInput != path || got.ToolCode == "" || got.ToolLanguage != "go" {
 		t.Fatalf("unexpected write start message: %#v", got)
 	}
 	if !strings.Contains(start[0].ToolOutput, "Wrote 2 lines") {
 		t.Fatalf("write summary missing line count: %#v", start[0])
+	}
+	if !strings.Contains(start[0].ToolCode, "1  package main") || !strings.Contains(start[0].ToolCode, "2  func main() {}") {
+		t.Fatalf("write code should include line numbers: %#v", start[0])
 	}
 
 	end := messagesFromAgentEvent(types.Event{
@@ -247,15 +252,75 @@ func TestMessagesFromAgentEventFormatsWriteToolAsExpandedCodeBlock(t *testing.T)
 	}
 }
 
-func TestMessagesFromAgentEventFormatsEditToolAsExpandedDiffBlock(t *testing.T) {
+func TestMessagesFromAgentEventFormatsExistingWriteAsUpdateDiff(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "main.go")
+	if err := os.WriteFile(path, []byte("package main\n\nfunc main() {\n\tprintln(\"old\")\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	start := messagesFromAgentEvent(types.Event{
+		Type:       types.EventTypeToolExecutionStart,
+		ToolCallID: "call-1",
+		ToolName:   "write",
+		Args: map[string]any{
+			"path":    path,
+			"content": "package main\n\nfunc main() {\n\tprintln(\"new\")\n}\n",
+		},
+	})
+	if len(start) != 1 {
+		t.Fatalf("start messages len = %d, want 1", len(start))
+	}
+	got := start[0]
+	if got.ToolName != "update" || got.ToolLanguage != "diff" || !got.ToolNoCollapse || !got.Expanded {
+		t.Fatalf("unexpected update write message: %#v", got)
+	}
+	for _, want := range []string{"Added 1 lines, removed 1 lines", "@@ -4,1 +4,1 @@", "  3  func main() {", "- 4  \tprintln(\"old\")", "+ 4  \tprintln(\"new\")", "  5  }"} {
+		if !strings.Contains(got.ToolOutput+"\n"+got.ToolCode, want) {
+			t.Fatalf("update write message missing %q: %#v", want, got)
+		}
+	}
+}
+
+func TestMessagesFromAgentEventUsesSessionCwdForRelativeUpdateDiff(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cwd, "main.go"), []byte("before\nold\nafter\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	start := messagesFromAgentEventWithCwd(types.Event{
 		Type:       types.EventTypeToolExecutionStart,
 		ToolCallID: "call-1",
 		ToolName:   "edit",
 		Args: map[string]any{
 			"path":     "main.go",
-			"old_text": "fmt.Println(\"old\")\n",
-			"new_text": "fmt.Println(\"new\")\n",
+			"old_text": "old\n",
+			"new_text": "new\n",
+		},
+	}, cwd)
+	if len(start) != 1 {
+		t.Fatalf("start messages len = %d, want 1", len(start))
+	}
+	for _, want := range []string{"@@ -2,1 +2,1 @@", "  1  before", "- 2  old", "+ 2  new", "  3  after"} {
+		if !strings.Contains(start[0].ToolCode, want) {
+			t.Fatalf("relative edit diff missing %q: %#v", want, start[0])
+		}
+	}
+}
+
+func TestMessagesFromAgentEventFormatsEditToolAsExpandedDiffBlock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "main.go")
+	if err := os.WriteFile(path, []byte("package main\n\nfunc main() {\n\tfmt.Println(\"old\")\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	start := messagesFromAgentEvent(types.Event{
+		Type:       types.EventTypeToolExecutionStart,
+		ToolCallID: "call-1",
+		ToolName:   "edit",
+		Args: map[string]any{
+			"path":     path,
+			"old_text": "\tfmt.Println(\"old\")\n",
+			"new_text": "\tfmt.Println(\"new\")\n",
 		},
 	})
 	if len(start) != 1 {
@@ -265,10 +330,31 @@ func TestMessagesFromAgentEventFormatsEditToolAsExpandedDiffBlock(t *testing.T) 
 	if got.ToolName != "update" || !got.ToolNoCollapse || got.ToolLanguage != "diff" {
 		t.Fatalf("unexpected edit message: %#v", got)
 	}
-	for _, want := range []string{"Added 1 lines, removed 1 lines", "- fmt.Println(\"old\")", "+ fmt.Println(\"new\")"} {
+	for _, want := range []string{"Added 1 lines, removed 1 lines", "@@ -4,1 +4,1 @@", "  3  func main() {", "- 4  \tfmt.Println(\"old\")", "+ 4  \tfmt.Println(\"new\")", "  5  }"} {
 		if !strings.Contains(got.ToolOutput+"\n"+got.ToolCode, want) {
 			t.Fatalf("edit message missing %q: %#v", want, got)
 		}
+	}
+
+	end := messagesFromAgentEvent(types.Event{
+		Type:       types.EventTypeToolExecutionEnd,
+		ToolCallID: "call-1",
+		ToolName:   "edit",
+		Result: types.ToolResult{Content: []types.ContentBlock{&types.TextContent{
+			Type: "text",
+			Text: "Successfully edited main.go (1 replacement(s))\n\n--- main.go\n+++ main.go\n@@ -10,1 +10,1 @@\n  9  before\n- 10  old\n+ 10  new\n  11  after\n",
+		}}},
+	})
+	if len(end) != 1 {
+		t.Fatalf("end messages len = %d, want 1", len(end))
+	}
+	for _, want := range []string{"@@ -10,1 +10,1 @@", "  9  before", "- 10  old", "+ 10  new", "  11  after"} {
+		if !strings.Contains(end[0].ToolCode, want) {
+			t.Fatalf("edit end diff missing %q: %#v", want, end[0])
+		}
+	}
+	if end[0].ToolOutput != "" || end[0].ToolLanguage != "diff" {
+		t.Fatalf("edit end should hide raw success text and keep diff language: %#v", end[0])
 	}
 }
 
@@ -415,6 +501,30 @@ func TestModuTUIInfoCardLinesIncludeStartupContext(t *testing.T) {
 		if !strings.Contains(lines, want) {
 			t.Fatalf("info card lines missing %q:\n%s", want, lines)
 		}
+	}
+}
+
+func TestModuTUITodosConvertsSessionTodos(t *testing.T) {
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       t.TempDir(),
+		AgentDir:  t.TempDir(),
+		Model:     &types.Model{ID: "test", Name: "Test", ProviderID: "test"},
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.SetTodos([]coding_agent.TodoItem{
+		{Content: "first", Status: "in_progress"},
+		{Content: "second", Status: "pending"},
+	})
+
+	got := moduTUITodos(session)
+	if len(got) != 2 {
+		t.Fatalf("todos len = %d, want 2: %#v", len(got), got)
+	}
+	if got[0].Content != "first" || got[0].Status != "in_progress" || got[1].Content != "second" {
+		t.Fatalf("unexpected converted todos: %#v", got)
 	}
 }
 

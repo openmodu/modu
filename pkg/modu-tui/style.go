@@ -15,7 +15,5 @@ var (
 	approvalBorderStyle           = cardBorderStyle
 	selStyle                      = lipgloss.NewStyle().Background(lipgloss.Color("240")).Foreground(lipgloss.Color("231"))
 	jumpStyle                     = lipgloss.NewStyle().Background(lipgloss.Color("63")).Foreground(lipgloss.Color("231")).Padding(0, 1)
-	toolExpandedStyle             = lipgloss.NewStyle().
-					Background(lipgloss.Color("235")).
-					Foreground(lipgloss.Color("244"))
+	toolExpandedStyle             = lipgloss.NewStyle()
 )

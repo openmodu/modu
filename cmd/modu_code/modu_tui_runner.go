@@ -25,7 +25,7 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		_ = n
 	}
 
-	initial := messagesFromAgentMessages(session.GetMessages())
+	initial := messagesFromAgentMessagesWithCwd(session.GetMessages(), session.Cwd())
 	var program *tea.Program
 	var programMu sync.RWMutex
 	var promptMu sync.Mutex
@@ -158,6 +158,7 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		Height:          height,
 		InitialMessages: initial,
 		InputHistory:    inputHistory,
+		Todos:           moduTUITodos(session),
 		StatusHint:      "Enter 发送 · Ctrl+C 退出 · 当前为 modu-tui runner",
 		InfoCardLines:   moduTUIInfoCardLines(session, model),
 		SlashCommands:   moduTUISlashCommands(session),
@@ -192,8 +193,11 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		if msg, ok := durationTracker.Handle(ev); ok {
 			send(modutui.AppendMessageMsg{Message: msg})
 		}
-		for _, msg := range messagesFromAgentEvent(ev) {
+		for _, msg := range messagesFromAgentEventWithCwd(ev, session.Cwd()) {
 			send(modutui.AppendMessageMsg{Message: msg})
+		}
+		if ev.Type == types.EventTypeToolExecutionEnd {
+			send(modutui.SetTodosMsg{Todos: moduTUITodos(session)})
 		}
 	})
 	defer unsubAgent()
@@ -327,6 +331,7 @@ func runModuTUISlash(ctx context.Context, line string, session *coding_agent.Cod
 	send(modutui.SetBusyMsg{Busy: true})
 	send(modutui.SetStatusMsg{Status: "running slash command"})
 	defer func() {
+		send(modutui.SetTodosMsg{Todos: moduTUITodos(session)})
 		send(modutui.SetBusyMsg{Busy: false})
 		send(modutui.SetStatusMsg{Status: "idle"})
 	}()
@@ -387,6 +392,18 @@ func moduTUIInfoCardLines(session *coding_agent.CodingSession, model *types.Mode
 	}
 	lines = append(lines, "commands: type /  send: Enter  quit: Ctrl+C")
 	return lines
+}
+
+func moduTUITodos(session *coding_agent.CodingSession) []modutui.TodoItem {
+	if session == nil {
+		return nil
+	}
+	todos := session.GetTodos()
+	out := make([]modutui.TodoItem, 0, len(todos))
+	for _, todo := range todos {
+		out = append(out, modutui.TodoItem{Content: todo.Content, Status: todo.Status})
+	}
+	return out
 }
 
 func shortModuTUISessionID(id string) string {
@@ -623,24 +640,28 @@ func (p *moduTUIPrompter) notify(summary, detail string) {
 }
 
 func messagesFromAgentEvent(ev types.Event) []modutui.Message {
+	return messagesFromAgentEventWithCwd(ev, "")
+}
+
+func messagesFromAgentEventWithCwd(ev types.Event, cwd string) []modutui.Message {
 	switch ev.Type {
 	case types.EventTypeMessageEnd:
 		if isUserMessage(ev.Message) {
 			return nil
 		}
-		return messagesFromAgentMessage(ev.Message)
+		return messagesFromAgentMessageWithCwd(ev.Message, cwd)
 	case types.EventTypeToolExecutionStart:
 		input := toolInputFromArgs(ev.ToolName, ev.Args)
 		return []modutui.Message{{
 			Tool:           true,
 			ToolID:         ev.ToolCallID,
-			ToolName:       toolRenderName(ev.ToolName, nil),
+			ToolName:       toolRenderNameFromArgsWithCwd(ev.ToolName, ev.Args, cwd),
 			Summary:        toolRunningSummary(ev.ToolName),
 			Detail:         input,
 			ToolInput:      input,
-			ToolOutput:     toolPreviewOutputFromArgs(ev.ToolName, ev.Args),
-			ToolCode:       toolCodeFromArgs(ev.ToolName, ev.Args),
-			ToolLanguage:   toolLanguageFromArgs(ev.ToolName, ev.Args),
+			ToolOutput:     toolPreviewOutputFromArgsWithCwd(ev.ToolName, ev.Args, cwd),
+			ToolCode:       toolCodeFromArgsWithCwd(ev.ToolName, ev.Args, cwd),
+			ToolLanguage:   toolLanguageFromArgsWithCwd(ev.ToolName, ev.Args, cwd),
 			ToolNoCollapse: isWriteLikeTool(ev.ToolName),
 			Expanded:       isWriteLikeTool(ev.ToolName),
 		}}
@@ -652,6 +673,8 @@ func messagesFromAgentEvent(ev types.Event) []modutui.Message {
 			ToolName:       toolRenderName(ev.ToolName, ev.Result),
 			Summary:        toolDoneSummary(ev.ToolName, ev.IsError, output),
 			ToolOutput:     toolDisplayOutput(ev.ToolName, ev.IsError, output),
+			ToolCode:       toolCodeFromResult(ev.ToolName, output),
+			ToolLanguage:   toolLanguageFromResult(ev.ToolName),
 			ToolError:      ev.IsError,
 			ToolDone:       true,
 			ToolNoCollapse: isWriteLikeTool(ev.ToolName),
@@ -672,14 +695,22 @@ func isUserMessage(msg types.AgentMessage) bool {
 }
 
 func messagesFromAgentMessages(messages []types.AgentMessage) []modutui.Message {
+	return messagesFromAgentMessagesWithCwd(messages, "")
+}
+
+func messagesFromAgentMessagesWithCwd(messages []types.AgentMessage, cwd string) []modutui.Message {
 	out := make([]modutui.Message, 0, len(messages))
 	for _, msg := range messages {
-		out = append(out, messagesFromAgentMessage(msg)...)
+		out = append(out, messagesFromAgentMessageWithCwd(msg, cwd)...)
 	}
 	return out
 }
 
 func messagesFromAgentMessage(msg types.AgentMessage) []modutui.Message {
+	return messagesFromAgentMessageWithCwd(msg, "")
+}
+
+func messagesFromAgentMessageWithCwd(msg types.AgentMessage, cwd string) []modutui.Message {
 	switch m := msg.(type) {
 	case types.UserMessage:
 		return []modutui.Message{{Role: modutui.RoleUser, Text: contentText(m.Content)}}
@@ -689,25 +720,29 @@ func messagesFromAgentMessage(msg types.AgentMessage) []modutui.Message {
 		}
 		return []modutui.Message{{Role: modutui.RoleUser, Text: contentText(m.Content)}}
 	case types.AssistantMessage:
-		return messagesFromAssistantMessage(m)
+		return messagesFromAssistantMessageWithCwd(m, cwd)
 	case *types.AssistantMessage:
 		if m == nil {
 			return nil
 		}
-		return messagesFromAssistantMessage(*m)
+		return messagesFromAssistantMessageWithCwd(*m, cwd)
 	case types.ToolResultMessage:
-		return []modutui.Message{messageFromToolResult(m)}
+		return []modutui.Message{messageFromToolResultWithCwd(m, cwd)}
 	case *types.ToolResultMessage:
 		if m == nil {
 			return nil
 		}
-		return []modutui.Message{messageFromToolResult(*m)}
+		return []modutui.Message{messageFromToolResultWithCwd(*m, cwd)}
 	default:
 		return nil
 	}
 }
 
 func messagesFromAssistantMessage(msg types.AssistantMessage) []modutui.Message {
+	return messagesFromAssistantMessageWithCwd(msg, "")
+}
+
+func messagesFromAssistantMessageWithCwd(msg types.AssistantMessage, cwd string) []modutui.Message {
 	var thinking []string
 	var out []modutui.Message
 	for _, block := range msg.Content {
@@ -726,13 +761,13 @@ func messagesFromAssistantMessage(msg types.AssistantMessage) []modutui.Message 
 				out = append(out, modutui.Message{
 					Tool:           true,
 					ToolID:         b.ID,
-					ToolName:       toolRenderName(b.Name, nil),
+					ToolName:       toolRenderNameFromArgsWithCwd(b.Name, b.Arguments, cwd),
 					Summary:        toolRunningSummary(b.Name),
 					Detail:         input,
 					ToolInput:      input,
-					ToolOutput:     toolPreviewOutputFromArgs(b.Name, b.Arguments),
-					ToolCode:       toolCodeFromArgs(b.Name, b.Arguments),
-					ToolLanguage:   toolLanguageFromArgs(b.Name, b.Arguments),
+					ToolOutput:     toolPreviewOutputFromArgsWithCwd(b.Name, b.Arguments, cwd),
+					ToolCode:       toolCodeFromArgsWithCwd(b.Name, b.Arguments, cwd),
+					ToolLanguage:   toolLanguageFromArgsWithCwd(b.Name, b.Arguments, cwd),
 					ToolNoCollapse: isWriteLikeTool(b.Name),
 					Expanded:       isWriteLikeTool(b.Name),
 				})
@@ -753,6 +788,10 @@ func messagesFromAssistantMessage(msg types.AssistantMessage) []modutui.Message 
 }
 
 func messageFromToolResult(msg types.ToolResultMessage) modutui.Message {
+	return messageFromToolResultWithCwd(msg, "")
+}
+
+func messageFromToolResultWithCwd(msg types.ToolResultMessage, cwd string) modutui.Message {
 	output := toolOutputFromContent(msg.ToolName, msg.IsError, msg.Content)
 	return modutui.Message{
 		Tool:           true,
@@ -760,6 +799,8 @@ func messageFromToolResult(msg types.ToolResultMessage) modutui.Message {
 		ToolName:       toolRenderName(msg.ToolName, nil),
 		Summary:        toolDoneSummary(msg.ToolName, msg.IsError, output),
 		ToolOutput:     toolDisplayOutput(msg.ToolName, msg.IsError, output),
+		ToolCode:       toolCodeFromResult(msg.ToolName, output),
+		ToolLanguage:   toolLanguageFromResult(msg.ToolName),
 		ToolError:      msg.IsError,
 		ToolDone:       true,
 		ToolNoCollapse: isWriteLikeTool(msg.ToolName),
@@ -817,6 +858,20 @@ func toolRenderName(toolName string, result any) string {
 	return toolName
 }
 
+func toolRenderNameFromArgs(toolName string, args any) string {
+	return toolRenderNameFromArgsWithCwd(toolName, args, "")
+}
+
+func toolRenderNameFromArgsWithCwd(toolName string, args any, cwd string) string {
+	if strings.EqualFold(toolName, "edit") {
+		return "update"
+	}
+	if strings.EqualFold(toolName, "write") && writeArgsExistingFileInCwd(args, cwd) {
+		return "update"
+	}
+	return toolName
+}
+
 func toolDisplayOutput(toolName string, isError bool, output string) string {
 	if isWriteLikeTool(toolName) && !isError {
 		return ""
@@ -825,6 +880,10 @@ func toolDisplayOutput(toolName string, isError bool, output string) string {
 }
 
 func toolPreviewOutputFromArgs(toolName string, args any) string {
+	return toolPreviewOutputFromArgsWithCwd(toolName, args, "")
+}
+
+func toolPreviewOutputFromArgsWithCwd(toolName string, args any, cwd string) string {
 	if strings.EqualFold(toolName, "edit") {
 		oldText, _ := firstStringValue(args, "old_text", "old_string")
 		newText, _ := firstStringValue(args, "new_text", "new_string")
@@ -837,6 +896,10 @@ func toolPreviewOutputFromArgs(toolName string, args any) string {
 		if !ok {
 			return ""
 		}
+		if oldContent, ok := previewFileContentFromArgs(args, cwd); ok {
+			added, removed := changedLineCounts(oldContent, content)
+			return fmt.Sprintf("Added %d lines, removed %d lines", added, removed)
+		}
 		lines := countContentLines(content)
 		bytes := len([]byte(content))
 		if lines == 1 {
@@ -848,23 +911,54 @@ func toolPreviewOutputFromArgs(toolName string, args any) string {
 }
 
 func toolCodeFromArgs(toolName string, args any) string {
+	return toolCodeFromArgsWithCwd(toolName, args, "")
+}
+
+func toolCodeFromArgsWithCwd(toolName string, args any, cwd string) string {
 	if strings.EqualFold(toolName, "write") {
 		content, _ := mapStringValue(args, "content")
-		return content
+		if diff := contextualWriteDiffFromArgs(args, content, cwd); diff != "" {
+			return diff
+		}
+		return numberedContent(content)
 	}
 	if strings.EqualFold(toolName, "edit") {
 		oldText, _ := firstStringValue(args, "old_text", "old_string")
 		newText, _ := firstStringValue(args, "new_text", "new_string")
+		if diff := contextualEditDiffFromArgs(args, oldText, newText, cwd); diff != "" {
+			return diff
+		}
 		return simpleEditDiff(oldText, newText)
 	}
 	return ""
 }
 
+func toolCodeFromResult(toolName string, output string) string {
+	if strings.EqualFold(toolName, "edit") {
+		return editDiffFromOutput(output)
+	}
+	return ""
+}
+
+func toolLanguageFromResult(toolName string) string {
+	if strings.EqualFold(toolName, "edit") {
+		return "diff"
+	}
+	return ""
+}
+
 func toolLanguageFromArgs(toolName string, args any) string {
+	return toolLanguageFromArgsWithCwd(toolName, args, "")
+}
+
+func toolLanguageFromArgsWithCwd(toolName string, args any, cwd string) string {
 	if strings.EqualFold(toolName, "edit") {
 		return "diff"
 	}
 	if strings.EqualFold(toolName, "write") {
+		if writeArgsExistingFileInCwd(args, cwd) {
+			return "diff"
+		}
 		path, _ := firstStringValue(args, "path", "file_path")
 		return languageFromPath(path)
 	}
@@ -880,6 +974,183 @@ func simpleEditDiff(oldText, newText string) string {
 		lines = append(lines, "+ "+line)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func editDiffFromOutput(output string) string {
+	output = strings.TrimSpace(output)
+	if output == "" {
+		return ""
+	}
+	if idx := strings.Index(output, "\n\n--- "); idx >= 0 {
+		return strings.TrimSpace(output[idx+2:])
+	}
+	if strings.HasPrefix(output, "--- ") {
+		return output
+	}
+	return ""
+}
+
+func contextualEditDiffFromArgs(args any, oldText, newText, cwd string) string {
+	if strings.TrimSpace(oldText) == "" {
+		return ""
+	}
+	path, _ := firstStringValue(args, "path", "file_path")
+	fileContent, ok := previewFileContentInCwd(path, cwd)
+	if !ok {
+		return ""
+	}
+	return replacementPreviewDiff(path, fileContent, oldText, newText)
+}
+
+func contextualWriteDiffFromArgs(args any, newContent string, cwd string) string {
+	path, _ := firstStringValue(args, "path", "file_path")
+	oldContent, ok := previewFileContentInCwd(path, cwd)
+	if !ok || oldContent == newContent {
+		return ""
+	}
+	return contentPreviewDiff(path, oldContent, newContent)
+}
+
+func previewFileContentFromArgs(args any, cwd string) (string, bool) {
+	path, _ := firstStringValue(args, "path", "file_path")
+	return previewFileContentInCwd(path, cwd)
+}
+
+func previewFileContent(path string) (string, bool) {
+	return previewFileContentInCwd(path, "")
+}
+
+func previewFileContentInCwd(path, cwd string) (string, bool) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", false
+	}
+	if !filepath.IsAbs(path) {
+		if strings.TrimSpace(cwd) != "" {
+			path = filepath.Join(cwd, path)
+		} else {
+			path = filepath.Clean(path)
+		}
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		return "", false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", false
+	}
+	return string(data), true
+}
+
+func writeArgsExistingFile(args any) bool {
+	return writeArgsExistingFileInCwd(args, "")
+}
+
+func writeArgsExistingFileInCwd(args any, cwd string) bool {
+	path, _ := firstStringValue(args, "path", "file_path")
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+	if !filepath.IsAbs(path) {
+		if strings.TrimSpace(cwd) != "" {
+			path = filepath.Join(cwd, path)
+		} else {
+			path = filepath.Clean(path)
+		}
+	}
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+func replacementPreviewDiff(path, fileContent, oldText, newText string) string {
+	idx := strings.Index(fileContent, oldText)
+	if idx < 0 {
+		return ""
+	}
+	startLine := strings.Count(fileContent[:idx], "\n") + 1
+	oldLines := splitContentLines(oldText)
+	newLines := splitContentLines(newText)
+	fileLines := splitContentLines(fileContent)
+	return localizedPreviewDiff(path, fileLines, startLine, oldLines, newLines)
+}
+
+func contentPreviewDiff(path, oldContent, newContent string) string {
+	oldLines := splitContentLines(oldContent)
+	newLines := splitContentLines(newContent)
+	prefix, suffix := commonLineWindow(oldLines, newLines)
+	removed := oldLines[prefix : len(oldLines)-suffix]
+	added := newLines[prefix : len(newLines)-suffix]
+	return localizedPreviewDiff(path, oldLines, prefix+1, removed, added)
+}
+
+func localizedPreviewDiff(path string, fileLines []string, startLine int, removed, added []string) string {
+	const contextLines = 3
+	if len(removed) == 0 && len(added) == 0 {
+		return ""
+	}
+	if startLine < 1 {
+		startLine = 1
+	}
+	contextStart := startLine - 1 - contextLines
+	if contextStart < 0 {
+		contextStart = 0
+	}
+	afterStart := startLine - 1 + len(removed)
+	contextEnd := afterStart + contextLines
+	if contextEnd > len(fileLines) {
+		contextEnd = len(fileLines)
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "--- %s\n", path)
+	fmt.Fprintf(&sb, "+++ %s\n", path)
+	fmt.Fprintf(&sb, "@@ -%d,%d +%d,%d @@\n", startLine, len(removed), startLine, len(added))
+	for i := contextStart; i < startLine-1 && i < len(fileLines); i++ {
+		fmt.Fprintf(&sb, "  %d  %s\n", i+1, fileLines[i])
+	}
+	for i, line := range removed {
+		fmt.Fprintf(&sb, "- %d  %s\n", startLine+i, line)
+	}
+	for i, line := range added {
+		fmt.Fprintf(&sb, "+ %d  %s\n", startLine+i, line)
+	}
+	for i := afterStart; i < contextEnd && i < len(fileLines); i++ {
+		fmt.Fprintf(&sb, "  %d  %s\n", i+1, fileLines[i])
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+func commonLineWindow(oldLines, newLines []string) (prefix, suffix int) {
+	for prefix < len(oldLines) && prefix < len(newLines) && oldLines[prefix] == newLines[prefix] {
+		prefix++
+	}
+	for suffix < len(oldLines)-prefix && suffix < len(newLines)-prefix &&
+		oldLines[len(oldLines)-1-suffix] == newLines[len(newLines)-1-suffix] {
+		suffix++
+	}
+	return prefix, suffix
+}
+
+func changedLineCounts(oldContent, newContent string) (added, removed int) {
+	oldLines := splitContentLines(oldContent)
+	newLines := splitContentLines(newContent)
+	prefix, suffix := commonLineWindow(oldLines, newLines)
+	return len(newLines) - prefix - suffix, len(oldLines) - prefix - suffix
+}
+
+func numberedContent(content string) string {
+	lines := splitContentLines(content)
+	if len(lines) == 0 {
+		return ""
+	}
+	width := len(fmt.Sprintf("%d", len(lines)))
+	out := make([]string, 0, len(lines))
+	for i, line := range lines {
+		out = append(out, fmt.Sprintf("%*d  %s", width, i+1, line))
+	}
+	return strings.Join(out, "\n")
 }
 
 func splitContentLines(text string) []string {
