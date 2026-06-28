@@ -3,6 +3,7 @@ package tools
 import (
 	backendtask "github.com/openmodu/modu/pkg/coding_agent/tools/backend_task"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/bash"
+	"github.com/openmodu/modu/pkg/coding_agent/tools/common"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/edit"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/find"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/grep"
@@ -37,20 +38,22 @@ const (
 )
 
 type DefaultProvider struct {
-	Set ToolSet
+	Set       ToolSet
+	readState *common.FileReadState
 }
 
 func NewProvider(set ToolSet) DefaultProvider {
 	if set == "" {
 		set = ToolSetCoding
 	}
-	return DefaultProvider{Set: set}
+	return DefaultProvider{Set: set, readState: common.NewFileReadState()}
 }
 
 func (p DefaultProvider) Tools(ctx types.ToolContext) []types.Tool {
+	readState := p.state()
 	out := append([]types.Tool{}, ctx.BaseTools...)
 	if ctx.BaseTools == nil {
-		out = p.baseTools(ctx.Cwd)
+		out = p.baseTools(ctx.Cwd, readState)
 	}
 	out = append(out, ctx.ExtraTools...)
 	if ctx.FeatureEnabled(FeatureMemory) {
@@ -74,13 +77,14 @@ func (p DefaultProvider) Tools(ctx types.ToolContext) []types.Tool {
 }
 
 func (p DefaultProvider) Rebind(tool types.Tool, ctx types.ToolContext) (types.Tool, bool) {
+	readState := p.state()
 	switch tool.Name() {
 	case "read":
-		return read.NewTool(ctx.Cwd), true
+		return read.NewTrackedTool(ctx.Cwd, readState), true
 	case "write":
-		return write.NewTool(ctx.Cwd), true
+		return write.NewTrackedTool(ctx.Cwd, readState), true
 	case "edit":
-		return edit.NewTool(ctx.Cwd), true
+		return edit.NewTrackedTool(ctx.Cwd, readState), true
 	case "bash":
 		return bash.NewTool(ctx.Cwd), true
 	case "grep":
@@ -98,25 +102,35 @@ func (p DefaultProvider) Rebind(tool types.Tool, ctx types.ToolContext) (types.T
 	}
 }
 
+func (p DefaultProvider) state() *common.FileReadState {
+	if p.readState != nil {
+		return p.readState
+	}
+	return common.NewFileReadState()
+}
+
 func valueAs[T any](ctx types.ToolContext, name string) T {
 	v, _ := ctx.Value(name).(T)
 	return v
 }
 
-func (p DefaultProvider) baseTools(cwd string) []types.Tool {
+func (p DefaultProvider) baseTools(cwd string, readState *common.FileReadState) []types.Tool {
+	if readState == nil {
+		readState = p.state()
+	}
 	switch p.Set {
 	case ToolSetReadOnly:
 		return []types.Tool{
-			read.NewTool(cwd),
+			read.NewTrackedTool(cwd, readState),
 			grep.NewTool(cwd),
 			find.NewTool(cwd),
 			ls.NewTool(cwd),
 		}
 	case ToolSetAll:
 		return []types.Tool{
-			read.NewTool(cwd),
-			write.NewTool(cwd),
-			edit.NewTool(cwd),
+			read.NewTrackedTool(cwd, readState),
+			write.NewTrackedTool(cwd, readState),
+			edit.NewTrackedTool(cwd, readState),
 			bash.NewTool(cwd),
 			grep.NewTool(cwd),
 			find.NewTool(cwd),
@@ -124,10 +138,10 @@ func (p DefaultProvider) baseTools(cwd string) []types.Tool {
 		}
 	default:
 		return []types.Tool{
-			read.NewTool(cwd),
+			read.NewTrackedTool(cwd, readState),
 			bash.NewTool(cwd),
-			edit.NewTool(cwd),
-			write.NewTool(cwd),
+			edit.NewTrackedTool(cwd, readState),
+			write.NewTrackedTool(cwd, readState),
 			grep.NewTool(cwd),
 			find.NewTool(cwd),
 			ls.NewTool(cwd),
@@ -137,17 +151,17 @@ func (p DefaultProvider) baseTools(cwd string) []types.Tool {
 
 // CodingTools returns the core coding tools: read, bash, edit, write.
 func CodingTools(cwd string) []types.Tool {
-	return NewProvider(ToolSetCoding).baseTools(cwd)
+	return NewProvider(ToolSetCoding).baseTools(cwd, nil)
 }
 
 // ReadOnlyTools returns read-only tools: read, grep, find, ls.
 func ReadOnlyTools(cwd string) []types.Tool {
-	return NewProvider(ToolSetReadOnly).baseTools(cwd)
+	return NewProvider(ToolSetReadOnly).baseTools(cwd, nil)
 }
 
 // AllTools returns all available built-in coding tools.
 func AllTools(cwd string) []types.Tool {
-	return NewProvider(ToolSetAll).baseTools(cwd)
+	return NewProvider(ToolSetAll).baseTools(cwd, nil)
 }
 
 // ResearchTools returns opt-in network research tools. They are not part of
