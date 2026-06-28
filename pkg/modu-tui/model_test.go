@@ -105,9 +105,15 @@ func TestPOC2RenderPadsEveryLineToTerminalWidth(t *testing.T) {
 	if got, want := len(lines), m.height; got != want {
 		t.Fatalf("rendered line count = %d, want %d", got, want)
 	}
+	inputRow := m.vpHeight() + 1
 	for i, line := range lines {
-		if got := ansi.StringWidth(line); got != m.width {
-			t.Fatalf("render line %d width = %d, want %d: %q", i, got, m.width, line)
+		stripped := ansi.Strip(strings.TrimSuffix(line, "\x1b[K"))
+		want := m.width
+		if i == inputRow {
+			want = m.inputRenderWidth()
+		}
+		if got := ansi.StringWidth(stripped); got != want {
+			t.Fatalf("render line %d width = %d, want %d: %q", i, got, want, line)
 		}
 	}
 }
@@ -350,6 +356,27 @@ func TestPOC2HistoryHintRendersOnTopInputRule(t *testing.T) {
 	}
 	if !strings.Contains(inputLine, "❯ second") {
 		t.Fatalf("history input line should keep selected text only, got %q", inputLine)
+	}
+}
+
+func TestPOC2InputLineLeavesLastColumnForMobileTerminals(t *testing.T) {
+	m := NewModel(Options{Width: 24, Height: 8})
+	m.input.Insert(strings.Repeat("j", 120))
+	rendered := m.render()
+	lines := strings.Split(rendered, "\n")
+	inputLine := lines[m.vpHeight()+1]
+	if strings.Contains(inputLine, "\x1b[?7l") || strings.Contains(inputLine, "\x1b[?7h") {
+		t.Fatalf("input line should not toggle terminal autowrap, got %q", inputLine)
+	}
+	if !strings.HasSuffix(inputLine, "\x1b[K") {
+		t.Fatalf("input line should clear to end of line, got %q", inputLine)
+	}
+	stripped := ansi.Strip(strings.TrimSuffix(inputLine, "\x1b[K"))
+	if strings.Contains(stripped, "\r") {
+		t.Fatalf("input line should not return carriage, got %q", inputLine)
+	}
+	if got, want := ansi.StringWidth(stripped), m.inputRenderWidth(); got != want {
+		t.Fatalf("stripped input line width = %d, want %d: %q", got, want, stripped)
 	}
 }
 

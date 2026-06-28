@@ -358,7 +358,7 @@ func (m Model) View() tea.View {
 	v := tea.NewView(m.render())
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
-	_, caretX := m.input.Render(m.width)
+	_, caretX := m.input.Render(m.inputRenderWidth())
 	if m.approval != nil {
 		caretX = 0
 	}
@@ -507,10 +507,11 @@ func (m *Model) render() string {
 	}
 	view := strings.Join(window, "\n")
 
-	input, _ := m.input.Render(m.width)
+	input, _ := m.input.Render(m.inputRenderWidth())
 	if m.approval != nil {
-		input = fitLine(dimStyle.Render(" approval pending "), m.width)
+		input = fitLine(dimStyle.Render(" approval pending "), m.inputRenderWidth())
 	}
+	input = clearToEndOfLine(input)
 	state := "○ idle"
 	if m.streaming {
 		state = "● streaming"
@@ -542,6 +543,17 @@ func (m *Model) render() string {
 		status,
 	)
 	return strings.Join(parts, "\n")
+}
+
+func (m *Model) inputRenderWidth() int {
+	if m.width <= 1 {
+		return max(1, m.width)
+	}
+	return m.width - 1
+}
+
+func clearToEndOfLine(line string) string {
+	return line + "\x1b[K"
 }
 
 func (m *Model) inputTopRuleLine() string {
