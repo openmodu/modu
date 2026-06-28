@@ -31,3 +31,20 @@ func TestDefaultAssistantMarkerIsWhite(t *testing.T) {
 		t.Fatalf("assistant marker foreground = %#v, want %#v", got, want)
 	}
 }
+
+func TestPlainMessageRendersWithoutMarker(t *testing.T) {
+	m := NewModel(Options{
+		Width:  40,
+		Height: 8,
+		InitialMessages: []Message{
+			{Role: RoleAssistant, Text: "✓ Completed (2s)", Preformatted: true, Plain: true},
+		},
+	})
+	got := strings.Join(m.Lines(), "\n")
+	if !strings.Contains(got, "✓ Completed (2s)") {
+		t.Fatalf("plain message missing text:\n%s", got)
+	}
+	if strings.Contains(got, "● ✓ Completed") {
+		t.Fatalf("plain message should not render assistant marker:\n%s", got)
+	}
+}

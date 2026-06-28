@@ -18,6 +18,14 @@ It owns only the reusable UI shell:
   input rule
 - fixed bottom cards are rendered through `CardBlock`, so approval and slash
   command popups share one heavy-border card style
+- bottom popups are height-budgeted during terminal resize so the fixed input
+  row and cursor remain visible before optional slash/jump detail rows
+- `Options.DisableMouse` disables terminal mouse reporting for SSH/mobile
+  clients that can flood the event loop with touch-motion sequences
+- `Options.ArrowKeysScroll` lets Up/Down scroll the transcript when the input is
+  empty, matching mobile SSH clients that translate swipe gestures into arrows
+- selection auto-scroll has a missing-release guard so mobile SSH clients that
+  drop mouse release events cannot leave a permanent 30ms redraw loop running
 - slash commands can be supplied through `Options.SlashCommands`; typing `/`
   opens a bottom card with filtered command matches, `Tab` completes, and
   `Enter` dispatches through `Hooks.SlashCommand`
@@ -29,10 +37,14 @@ It owns only the reusable UI shell:
   leading tool marker so the command and output read as one consistent block
 - collapsed tool-call summaries are indented, while every rendered line of an
   expanded tool-call block can be clicked to collapse it
+- tool-call messages can set `ToolNoCollapse`, `ToolCode`, and `ToolLanguage`
+  to render a permanently expanded syntax-highlighted code/diff block
 - markdown inline code renders without Glamour's default red foreground and
   dark background so status text such as commit hashes stays readable
 - assistant messages marked `Preformatted` render through `TextBlock` instead
   of Markdown so command output such as `/help` keeps its line layout
+- messages marked `Plain` render without the usual user/assistant marker, for
+  status rows such as `✓ Completed (...)`
 - assistant thinking messages render through `ThinkingBlock` as one collapsed
   block that can be expanded independently from the final assistant reply
 - optional simulated streaming reply for demos and integration experiments

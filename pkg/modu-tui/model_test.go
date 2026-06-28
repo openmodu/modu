@@ -553,6 +553,49 @@ func TestPOC2InputHistoryNavigatesWithUpAndDown(t *testing.T) {
 	}
 }
 
+func TestPOC2ArrowKeysScrollWhenConfiguredAndInputEmpty(t *testing.T) {
+	var tm tea.Model = NewModel(Options{
+		Width:           40,
+		Height:          8,
+		InputHistory:    []string{"previous prompt"},
+		ArrowKeysScroll: true,
+	})
+	m := tm.(Model)
+	for i := 0; i < 30; i++ {
+		m.messages = append(m.messages, Message{Role: RoleAssistant, Text: "history line"})
+	}
+	m.rebuild()
+	before := m.yOffset
+	if before == 0 {
+		t.Fatal("setup should start at scrollable bottom")
+	}
+
+	tm, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+	m = tm.(Model)
+	if got := m.yOffset; got >= before {
+		t.Fatalf("up arrow should scroll transcript when input is empty: %d -> %d", before, got)
+	}
+	if got := m.input.Value; got != "" {
+		t.Fatalf("up arrow should not enter input history when input is empty in arrow-scroll mode, got %q", got)
+	}
+}
+
+func TestPOC2ArrowKeysStillNavigateHistoryWhenInputHasText(t *testing.T) {
+	var tm tea.Model = NewModel(Options{
+		Width:           40,
+		Height:          8,
+		InputHistory:    []string{"previous prompt"},
+		ArrowKeysScroll: true,
+	})
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: "d", Code: 'd'}))
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+
+	m := tm.(Model)
+	if got, want := m.input.Value, "previous prompt"; got != want {
+		t.Fatalf("up arrow should still navigate history when input has text, got %q want %q", got, want)
+	}
+}
+
 func TestPOC2InputHistoryKeepsMostRecent100AndSavesOnSubmit(t *testing.T) {
 	history := make([]string, 105)
 	for i := range history {
@@ -625,6 +668,76 @@ func TestPOC2SlashPickerCompletesCommandWithTab(t *testing.T) {
 	}
 }
 
+func TestPOC2ResizeKeepsInputAndCursorAlignedWithSlashPanel(t *testing.T) {
+	var tm tea.Model = NewModel(Options{
+		Width:  50,
+		Height: 14,
+		SlashCommands: []SlashCommand{
+			{Name: "/help", Description: "Show help"},
+			{Name: "/model", Description: "Switch model"},
+			{Name: "/tokens", Description: "Show tokens"},
+			{Name: "/tools", Description: "Show tools"},
+		},
+	})
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: "/", Code: '/'}))
+	tm, _ = tm.Update(tea.WindowSizeMsg{Width: 28, Height: 8})
+
+	m := tm.(Model)
+	view := m.View()
+	lines := strings.Split(ansi.Strip(view.Content), "\n")
+	if got, want := len(lines), m.height; got != want {
+		t.Fatalf("rendered lines after resize = %d, want %d:\n%s", got, want, strings.Join(lines, "\n"))
+	}
+	if view.Cursor == nil || view.Cursor.Y < 0 || view.Cursor.Y >= len(lines) {
+		t.Fatalf("cursor should stay inside resized view, cursor=%#v lines=%d", view.Cursor, len(lines))
+	}
+	if got := lines[view.Cursor.Y]; !strings.Contains(got, "❯ /") {
+		t.Fatalf("cursor row should be the input line after resize, got row %d: %q\n%s", view.Cursor.Y, got, strings.Join(lines, "\n"))
+	}
+}
+
+func TestPOC2ViewCanDisableMouseReporting(t *testing.T) {
+	enabled := NewModel(Options{Width: 24, Height: 8}).View()
+	if got, want := enabled.MouseMode, tea.MouseModeCellMotion; got != want {
+		t.Fatalf("default mouse mode = %v, want %v", got, want)
+	}
+
+	disabled := NewModel(Options{Width: 24, Height: 8, DisableMouse: true}).View()
+	if got, want := disabled.MouseMode, tea.MouseModeNone; got != want {
+		t.Fatalf("disabled mouse mode = %v, want %v", got, want)
+	}
+}
+
+func TestPOC2AutoScrollStopsWhenMouseReleaseIsMissing(t *testing.T) {
+	m := NewModel(Options{Width: 40, Height: 8})
+	for i := 0; i < 30; i++ {
+		m.messages = append(m.messages, Message{Role: RoleAssistant, Text: "history line"})
+	}
+	m.rebuild()
+	if cmd := m.onPress(1, 0); cmd != nil {
+		t.Fatalf("press should not start a command, got %#v", cmd)
+	}
+	if cmd := m.onDrag(1, m.vpHeight()); cmd == nil {
+		t.Fatal("dragging past viewport edge should start auto-scroll")
+	}
+	if !m.selecting || !m.autoScrolling || m.autoScroll == 0 {
+		t.Fatalf("setup should be auto-scrolling, selecting=%v autoScrolling=%v autoScroll=%d", m.selecting, m.autoScrolling, m.autoScroll)
+	}
+
+	var tm tea.Model = m
+	for i := 0; i <= maxAutoScrollTicksWithoutDrag; i++ {
+		tm, _ = tm.Update(autoScrollTickMsg{})
+	}
+	m = tm.(Model)
+	if m.selecting || m.autoScrolling || m.autoScroll != 0 {
+		t.Fatalf("missing mouse release should stop auto-scroll, selecting=%v autoScrolling=%v autoScroll=%d ticks=%d",
+			m.selecting, m.autoScrolling, m.autoScroll, m.autoScrollTicks)
+	}
+	if m.hasSelection() {
+		t.Fatal("missing mouse release should clear the partial selection")
+	}
+}
+
 func TestPOC2SlashCommandHookReceivesSelectedCommand(t *testing.T) {
 	var submitted string
 	var slashLine string
@@ -649,6 +762,36 @@ func TestPOC2SlashCommandHookReceivesSelectedCommand(t *testing.T) {
 	}
 	if submitted != "" {
 		t.Fatalf("normal submit should not run for slash command, got %q", submitted)
+	}
+}
+
+func TestPOC2ResizeKeepsApprovalInputAndCursorVisible(t *testing.T) {
+	var tm tea.Model = NewModel(Options{Width: 42, Height: 12})
+	tm, _ = tm.Update(RequestToolApprovalMsg{
+		Request: ToolApprovalRequest{
+			ID:       "call-1",
+			ToolName: "bash",
+			Summary:  "approval required: bash",
+			Detail:   "go test ./pkg/modu-tui && git diff --check",
+		},
+		Respond: make(chan ToolApprovalDecision, 1),
+	})
+	tm, _ = tm.Update(tea.WindowSizeMsg{Width: 30, Height: 8})
+
+	m := tm.(Model)
+	view := m.View()
+	lines := strings.Split(ansi.Strip(view.Content), "\n")
+	if got, want := len(lines), m.height; got != want {
+		t.Fatalf("rendered lines after approval resize = %d, want %d:\n%s", got, want, strings.Join(lines, "\n"))
+	}
+	if view.Cursor == nil || view.Cursor.Y < 0 || view.Cursor.Y >= len(lines) {
+		t.Fatalf("approval cursor should stay inside resized view, cursor=%#v lines=%d", view.Cursor, len(lines))
+	}
+	if got := lines[view.Cursor.Y]; !strings.Contains(got, "approval pending") {
+		t.Fatalf("approval cursor row should be the fixed input line, got row %d: %q\n%s", view.Cursor.Y, got, strings.Join(lines, "\n"))
+	}
+	if m.approvalPanelHeight() > m.approvalPanelBudget() {
+		t.Fatalf("approval panel height = %d exceeds budget %d", m.approvalPanelHeight(), m.approvalPanelBudget())
 	}
 }
 
