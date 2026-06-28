@@ -2916,6 +2916,74 @@ func TestPromptPersistsAssistantAndToolMessages(t *testing.T) {
 	}
 }
 
+func TestPromptPersistsAndResumesAssistantWhenStreamClosesAfterResolve(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	model := newTestModel()
+
+	streamFn := func(ctx context.Context, _ *types.Model, _ *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+		stream := types.NewEventStream()
+		go func() {
+			msg := &types.AssistantMessage{
+				Role:       types.RoleAssistant,
+				ProviderID: model.ProviderID,
+				Model:      model.ID,
+				StopReason: "stop",
+				Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "assistant after close"}},
+				Timestamp:  time.Now().UnixMilli(),
+			}
+			stream.Resolve(msg, nil)
+			stream.Close()
+		}()
+		return stream, nil
+	}
+
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  agentDir,
+		Model:     model,
+		GetAPIKey: func(p string) (string, error) { return "", nil },
+		StreamFn:  streamFn,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Prompt(context.Background(), "remember this"); err != nil {
+		t.Fatal(err)
+	}
+
+	resumed, err := NewCodingSession(CodingSessionOptions{
+		Cwd:             dir,
+		AgentDir:        agentDir,
+		Model:           model,
+		GetAPIKey:       func(p string) (string, error) { return "", nil },
+		StreamFn:        streamFn,
+		ResumeSessionID: session.GetSessionID(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	messages := resumed.GetMessages()
+	if len(messages) != 2 {
+		t.Fatalf("resumed message count = %d, want 2: %#v", len(messages), messages)
+	}
+	if _, ok := messages[0].(types.UserMessage); !ok {
+		t.Fatalf("first resumed message should be user, got %T", messages[0])
+	}
+	assistant, ok := messages[1].(types.AssistantMessage)
+	if !ok {
+		t.Fatalf("second resumed message should be assistant, got %T", messages[1])
+	}
+	if len(assistant.Content) != 1 {
+		t.Fatalf("assistant content length = %d, want 1: %#v", len(assistant.Content), assistant.Content)
+	}
+	text, ok := assistant.Content[0].(*types.TextContent)
+	if !ok || text.Text != "assistant after close" {
+		t.Fatalf("assistant text block = %#v, want assistant after close", assistant.Content[0])
+	}
+}
+
 func TestPromptSlashSkillPinsSkillForMainAgentTurn(t *testing.T) {
 	dir := t.TempDir()
 	agentDir := filepath.Join(dir, ".coding_agent")

@@ -56,6 +56,8 @@ The default implementations provide these behaviours:
 - nil `StreamFn` uses `StreamDefault`, which looks up the provider by
   `model.ProviderID`
 - nil `ConvertToLLM` filters messages to provider-compatible roles
+- `DefaultLLM` emits assistant start/end events even when a stream closes after
+  resolving the final message without an explicit done event
 - tool arguments are validated against JSON schema before execution
 - tool calls can run in parallel when tools implement `ParallelTool`
 - the stateful `Agent` appends an assistant error message when execution fails

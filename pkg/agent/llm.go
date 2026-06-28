@@ -161,6 +161,10 @@ func collectAssistantMessage(response types.EventStream, events types.EventSink)
 	if finalMessage == nil {
 		return nil, fmt.Errorf("missing final message")
 	}
+	if !addedStart {
+		events.Emit(types.Event{Type: types.EventTypeMessageStart, Message: *finalMessage})
+	}
+	events.Emit(types.Event{Type: types.EventTypeMessageEnd, Message: *finalMessage})
 	return finalMessage, nil
 }
 
