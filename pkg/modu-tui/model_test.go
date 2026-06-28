@@ -1,6 +1,7 @@
 package modutui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -272,6 +273,28 @@ func TestPOC2InputHasTopAndBottomRules(t *testing.T) {
 	}
 }
 
+func TestPOC2HistoryHintRendersOnTopInputRule(t *testing.T) {
+	var tm tea.Model = NewModel(Options{
+		Width:        32,
+		Height:       8,
+		InputHistory: []string{"first", "second"},
+	})
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+	m := tm.(Model)
+	lines := strings.Split(ansi.Strip(m.render()), "\n")
+	topRule := lines[m.vpHeight()]
+	inputLine := lines[m.vpHeight()+1]
+	if !strings.Contains(topRule, "History 2/2") {
+		t.Fatalf("history hint should render on top rule, got %q in:\n%s", topRule, strings.Join(lines, "\n"))
+	}
+	if strings.Contains(inputLine, "History") {
+		t.Fatalf("history hint should not render inside input line, got %q", inputLine)
+	}
+	if !strings.Contains(inputLine, "❯ second") {
+		t.Fatalf("history input line should keep selected text only, got %q", inputLine)
+	}
+}
+
 func TestPOC2AddsGapBetweenBlocks(t *testing.T) {
 	m := NewModel(Options{
 		Width:  40,
@@ -401,6 +424,97 @@ func TestPOC2SubmitMessageReportsPromptFollowUpAndSteer(t *testing.T) {
 				t.Fatalf("submit event = %#v, want text %q kind %q", got, "next instruction", tt.want)
 			}
 		})
+	}
+}
+
+func TestPOC2InputHistoryNavigatesWithUpAndDown(t *testing.T) {
+	var tm tea.Model = NewModel(Options{
+		Width:        72,
+		Height:       10,
+		InputHistory: []string{"first", "second", "third"},
+	})
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: "d", Code: 'd'}))
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: "r", Code: 'r'}))
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: "a", Code: 'a'}))
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: "f", Code: 'f'}))
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: "t", Code: 't'}))
+
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+	m := tm.(Model)
+	if got, want := m.input.Value, "third"; got != want {
+		t.Fatalf("first history up = %q, want %q", got, want)
+	}
+	if got := ansi.Strip(m.render()); !strings.Contains(got, "History 3/3") {
+		t.Fatalf("history hint missing after up:\n%s", got)
+	}
+
+	tm, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+	m = tm.(Model)
+	if got, want := m.input.Value, "second"; got != want {
+		t.Fatalf("second history up = %q, want %q", got, want)
+	}
+	if got := ansi.Strip(m.render()); !strings.Contains(got, "History 2/3") {
+		t.Fatalf("history hint should update index:\n%s", got)
+	}
+
+	tm, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	m = tm.(Model)
+	if got, want := m.input.Value, "draft"; got != want {
+		t.Fatalf("down should restore held draft = %q, want %q", got, want)
+	}
+	if got := ansi.Strip(m.render()); strings.Contains(got, "History ") {
+		t.Fatalf("history hint should hide after returning to draft:\n%s", got)
+	}
+}
+
+func TestPOC2InputHistoryKeepsMostRecent100AndSavesOnSubmit(t *testing.T) {
+	history := make([]string, 105)
+	for i := range history {
+		history[i] = fmt.Sprintf("old-%03d", i)
+	}
+	var saved []string
+	var submitted string
+	var tm tea.Model = NewModel(Options{
+		InputHistory: history,
+		Hooks: Hooks{
+			InputHistoryChanged: func(history []string) {
+				saved = append([]string(nil), history...)
+			},
+			Submit: func(text string) {
+				submitted = text
+			},
+		},
+	})
+	m := tm.(Model)
+	if got, want := len(m.inputHistory), 100; got != want {
+		t.Fatalf("initial input history len = %d, want %d", got, want)
+	}
+	if got, want := m.inputHistory[0], "old-005"; got != want {
+		t.Fatalf("oldest retained history = %q, want %q", got, want)
+	}
+	tm, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+	m = tm.(Model)
+	if got := ansi.Strip(m.render()); !strings.Contains(got, "History 100/100") {
+		t.Fatalf("full history hint should render History 100/100:\n%s", got)
+	}
+	tm, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	m = tm.(Model)
+
+	tm, _ = m.Update(tea.PasteMsg{Content: "new prompt"})
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = tm.(Model)
+	if got, want := submitted, "new prompt"; got != want {
+		t.Fatalf("submitted = %q, want %q", got, want)
+	}
+	if got, want := len(m.inputHistory), 100; got != want {
+		t.Fatalf("history len after submit = %d, want %d", got, want)
+	}
+	if got, want := m.inputHistory[len(m.inputHistory)-1], "new prompt"; got != want {
+		t.Fatalf("newest history = %q, want %q", got, want)
+	}
+	if len(saved) != 100 || saved[len(saved)-1] != "new prompt" {
+		t.Fatalf("saved history should receive trimmed latest 100 entries: len=%d last=%q", len(saved), saved[len(saved)-1])
 	}
 }
 

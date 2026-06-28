@@ -124,6 +124,13 @@ enough to implement, verify, and commit independently.
 - `pkg/modu-tui` now reports bottom-input submit intent as prompt, follow-up,
   or steer events so `cmd/modu_code` can route running-task input without
   coupling the reusable UI package to coding-agent sessions.
+- `pkg/modu-tui` now renders assistant thinking as one collapsed block at the
+  top of each assistant turn, with separate marker colors for assistant replies,
+  streaming replies, and expanded tool calls.
+- `modu-tui` input history is wired into `modu_code`: Up/Down navigates the
+  last 100 submitted inputs, shows a `History n/total` hint on the top input
+  rule, restores the current draft, and persists through the session input
+  history file.
 - Added `/queue` to inspect pending steer/follow-up messages, clear all or one
   queue type, and drop the last pending message after accidental input.
 - Telegram input now mirrors the TUI queue semantics: plain messages become

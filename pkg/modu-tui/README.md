@@ -13,6 +13,9 @@ It owns only the reusable UI shell:
   away from the bottom, avoiding repeated viewport overlays on mobile terminals
 - drag selection with local clipboard plus OSC52 copy
 - independent input, text, markdown, collapsible, tool-call, and code blocks
+- bottom input history supports Up/Down navigation, keeps a temporary draft,
+  and caps retained entries at 100 with a `History n/total` hint on the top
+  input rule
 - fixed bottom cards are rendered through `CardBlock`, so approval and slash
   command popups share one heavy-border card style
 - slash commands can be supplied through `Options.SlashCommands`; typing `/`
@@ -67,6 +70,8 @@ Component layout:
 - `Hooks.SubmitMessage` lets host applications receive typed submissions with
   prompt, follow-up, or steer intent. `Hooks.Submit` remains as a simple text
   fallback for callers that do not need submit kinds.
+- `Options.InputHistory` seeds input history and `Hooks.InputHistoryChanged`
+  lets hosts persist the trimmed history list after each submission.
 - `Hooks.SlashCommand` lets host applications route selected or typed slash
   commands without sending them as normal prompts.
 - `Hooks.ToolApprovalDecision` lets host applications observe approval decisions.

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -43,6 +44,8 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 	if !noApprove {
 		session.SetPrompter(&moduTUIPrompter{ctx: ctx, send: send})
 	}
+	historyFile := session.InputHistoryFile()
+	inputHistory, _ := loadModuTUIInputHistory(historyFile)
 
 	isPromptActive := func() bool {
 		promptMu.Lock()
@@ -151,10 +154,14 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		Width:           width,
 		Height:          height,
 		InitialMessages: initial,
+		InputHistory:    inputHistory,
 		StatusHint:      "Enter 发送 · Ctrl+C 退出 · 当前为 modu-tui runner",
 		InfoCardLines:   moduTUIInfoCardLines(session, model),
 		SlashCommands:   moduTUISlashCommands(session),
 		Hooks: modutui.Hooks{
+			InputHistoryChanged: func(history []string) {
+				_ = saveModuTUIInputHistory(historyFile, history)
+			},
 			SubmitMessage: func(ev modutui.SubmitEvent) {
 				submit(ev)
 			},
@@ -348,6 +355,44 @@ func moduTUIQueueCommand(line string) (modutui.SubmitKind, string, bool) {
 		}
 	}
 	return "", "", false
+}
+
+func loadModuTUIInputHistory(path string) ([]string, error) {
+	if strings.TrimSpace(path) == "" {
+		return nil, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	items := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	out := make([]string, 0, min(len(items), 100))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			out = append(out, item)
+		}
+	}
+	if len(out) > 100 {
+		out = append([]string(nil), out[len(out)-100:]...)
+	}
+	return out, nil
+}
+
+func saveModuTUIInputHistory(path string, history []string) error {
+	if strings.TrimSpace(path) == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	if len(history) > 100 {
+		history = history[len(history)-100:]
+	}
+	return os.WriteFile(path, []byte(strings.Join(history, "\n")+"\n"), 0o600)
 }
 
 func moduTUISlashCommands(session *coding_agent.CodingSession) []modutui.SlashCommand {

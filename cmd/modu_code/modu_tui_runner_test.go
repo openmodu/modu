@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -257,6 +258,30 @@ func TestModuTUIQueueCommandParsesSteerAndFollowUp(t *testing.T) {
 				t.Fatalf("moduTUIQueueCommand(%q) = %q, %q, %v; want %q, %q, %v", tt.line, gotKind, gotText, gotOK, tt.wantKind, tt.wantText, tt.wantOK)
 			}
 		})
+	}
+}
+
+func TestModuTUIInputHistoryPersistenceTrimsTo100(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "history", "input_history")
+	history := make([]string, 105)
+	for i := range history {
+		history[i] = "prompt"
+	}
+	history[0] = ""
+	history[104] = "latest"
+
+	if err := saveModuTUIInputHistory(path, history); err != nil {
+		t.Fatalf("saveModuTUIInputHistory returned error: %v", err)
+	}
+	got, err := loadModuTUIInputHistory(path)
+	if err != nil {
+		t.Fatalf("loadModuTUIInputHistory returned error: %v", err)
+	}
+	if len(got) != 100 {
+		t.Fatalf("loaded history len = %d, want 100", len(got))
+	}
+	if got[len(got)-1] != "latest" {
+		t.Fatalf("loaded newest history = %q, want latest", got[len(got)-1])
 	}
 }
 

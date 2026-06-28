@@ -12,6 +12,8 @@ import (
 type streamTickMsg struct{}
 type autoScrollTickMsg struct{}
 
+const maxInputHistory = 100
+
 type pendingApproval struct {
 	request ToolApprovalRequest
 	respond chan<- ToolApprovalDecision
@@ -20,20 +22,23 @@ type pendingApproval struct {
 type Model struct {
 	width, height int
 
-	messages    []Message
-	lines       []string    // rendered transcript lines (the viewport's content)
-	gutters     []int       // per-line leading decoration width to skip on select/copy
-	headers     map[int]int // tool-header line index -> Message index
-	yOffset     int         // top visible transcript line
-	follow      bool        // stick to the bottom
-	unseen      int         // messages appended while the user is away from bottom
-	input       InputBlock
-	streaming   bool
-	streamRunes []rune
-	streamIdx   int
-	streamReply string
-	busy        bool
-	approval    *pendingApproval
+	messages     []Message
+	lines        []string    // rendered transcript lines (the viewport's content)
+	gutters      []int       // per-line leading decoration width to skip on select/copy
+	headers      map[int]int // tool-header line index -> Message index
+	yOffset      int         // top visible transcript line
+	follow       bool        // stick to the bottom
+	unseen       int         // messages appended while the user is away from bottom
+	input        InputBlock
+	inputHistory []string
+	historyIdx   int
+	historyHold  string
+	streaming    bool
+	streamRunes  []rune
+	streamIdx    int
+	streamReply  string
+	busy         bool
+	approval     *pendingApproval
 
 	selecting        bool
 	selStart, selEnd cell
@@ -61,6 +66,7 @@ func NewModel(options ...Options) Model {
 			opts.Height = options[0].Height
 		}
 		opts.InitialMessages = append([]Message(nil), options[0].InitialMessages...)
+		opts.InputHistory = append([]string(nil), options[0].InputHistory...)
 		opts.StreamReply = options[0].StreamReply
 		opts.InfoCardLines = append([]string(nil), options[0].InfoCardLines...)
 		opts.Hooks = options[0].Hooks
@@ -86,7 +92,9 @@ func NewModel(options ...Options) Model {
 		blockFactories: opts.BlockFactories,
 		blockGap:       opts.BlockGap,
 		slashCommands:  normalizeSlashCommands(opts.SlashCommands),
+		inputHistory:   normalizeInputHistory(opts.InputHistory),
 	}
+	m.historyIdx = len(m.inputHistory)
 	for _, msg := range opts.InitialMessages {
 		m.appendMessage(msg)
 	}
@@ -120,7 +128,10 @@ func (m *Model) submitInput(steer bool) tea.Cmd {
 	}
 
 	m.messages = append(m.messages, Message{Role: RoleUser, Text: v})
+	m.appendInputHistory(v)
 	m.input.Reset()
+	m.historyIdx = len(m.inputHistory)
+	m.historyHold = ""
 	m.clearSlashMatches()
 	m.clearSelection()
 	m.follow = true
@@ -180,27 +191,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.input.MoveEnd()
 		case msg.Code == tea.KeyBackspace, msg.String() == "ctrl+h":
 			m.input.Backspace()
+			m.clearHistorySelection()
 			m.updateSlashMatches()
 		case msg.Code == tea.KeyDelete:
 			m.input.DeleteForward()
+			m.clearHistorySelection()
 			m.updateSlashMatches()
 		case msg.Code == tea.KeyTab:
 			m.completeSlashMatch()
 		case msg.Code == tea.KeyUp:
 			if len(m.slashMatches) > 0 {
 				m.slashIndex = (m.slashIndex - 1 + len(m.slashMatches)) % len(m.slashMatches)
+			} else {
+				m.navigateInputHistory(-1)
 			}
 		case msg.Code == tea.KeyDown:
 			if len(m.slashMatches) > 0 {
 				m.slashIndex = (m.slashIndex + 1) % len(m.slashMatches)
+			} else {
+				m.navigateInputHistory(1)
 			}
 		case msg.Text != "":
 			m.input.Insert(msg.Text)
+			m.clearHistorySelection()
 			m.updateSlashMatches()
 		}
 
 	case tea.PasteMsg:
 		m.input.InsertPaste(msg.Content)
+		m.clearHistorySelection()
 		m.updateSlashMatches()
 
 	case tea.MouseWheelMsg:
@@ -514,12 +533,30 @@ func (m *Model) render() string {
 		parts = append(parts, panel...)
 	}
 	parts = append(parts,
-		ruleStyle.Render(strings.Repeat("─", max(0, m.width))),
+		m.inputTopRuleLine(),
 		input,
 		ruleStyle.Render(strings.Repeat("─", max(0, m.width))),
 		status,
 	)
 	return strings.Join(parts, "\n")
+}
+
+func (m *Model) inputTopRuleLine() string {
+	width := max(0, m.width)
+	hint := m.inputHistoryHint()
+	if hint == "" || width <= 0 {
+		return ruleStyle.Render(strings.Repeat("─", width))
+	}
+	label := " " + hint + " "
+	labelWidth := ansi.StringWidth(label)
+	if labelWidth >= width {
+		return dimStyle.Render(ansi.Truncate(label, width, ""))
+	}
+	leftWidth := min(3, width-labelWidth)
+	rightWidth := max(0, width-labelWidth-leftWidth)
+	return ruleStyle.Render(strings.Repeat("─", leftWidth)) +
+		dimStyle.Render(label) +
+		ruleStyle.Render(strings.Repeat("─", rightWidth))
 }
 
 func (m *Model) jumpPanelLines() []string {
@@ -568,6 +605,51 @@ func (m *Model) completeSlashMatch() bool {
 	return true
 }
 
+func (m *Model) appendInputHistory(line string) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return
+	}
+	m.inputHistory = append(m.inputHistory, line)
+	m.inputHistory = trimInputHistory(m.inputHistory)
+	m.historyIdx = len(m.inputHistory)
+	m.historyHold = ""
+	if m.hooks.InputHistoryChanged != nil {
+		m.hooks.InputHistoryChanged(append([]string(nil), m.inputHistory...))
+	}
+}
+
+func (m *Model) navigateInputHistory(delta int) {
+	if len(m.inputHistory) == 0 {
+		return
+	}
+	if m.historyIdx == len(m.inputHistory) {
+		m.historyHold = m.input.ExpandedValue()
+	}
+	next := clamp(m.historyIdx+delta, 0, len(m.inputHistory))
+	m.historyIdx = next
+	if m.historyIdx == len(m.inputHistory) {
+		m.input.Value = m.historyHold
+	} else {
+		m.input.Value = m.inputHistory[m.historyIdx]
+		m.input.Pastes = nil
+	}
+	m.input.Cursor = m.input.Len()
+	m.updateSlashMatches()
+}
+
+func (m *Model) clearHistorySelection() {
+	m.historyIdx = len(m.inputHistory)
+	m.historyHold = ""
+}
+
+func (m *Model) inputHistoryHint() string {
+	if len(m.inputHistory) == 0 || m.historyIdx < 0 || m.historyIdx >= len(m.inputHistory) {
+		return ""
+	}
+	return fmt.Sprintf("History %d/%d", m.historyIdx+1, len(m.inputHistory))
+}
+
 func normalizeSlashCommands(commands []SlashCommand) []SlashCommand {
 	out := make([]SlashCommand, 0, len(commands))
 	seen := map[string]struct{}{}
@@ -587,6 +669,24 @@ func normalizeSlashCommands(commands []SlashCommand) []SlashCommand {
 		out = append(out, SlashCommand{Name: name, Description: strings.TrimSpace(cmd.Description)})
 	}
 	return out
+}
+
+func normalizeInputHistory(history []string) []string {
+	out := make([]string, 0, min(len(history), maxInputHistory))
+	for _, item := range history {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			out = append(out, item)
+		}
+	}
+	return trimInputHistory(out)
+}
+
+func trimInputHistory(history []string) []string {
+	if len(history) <= maxInputHistory {
+		return history
+	}
+	return append([]string(nil), history[len(history)-maxInputHistory:]...)
 }
 
 func cleanInfoCardLines(lines []string) []string {

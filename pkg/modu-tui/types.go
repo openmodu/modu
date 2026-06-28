@@ -88,6 +88,7 @@ type SubmitEvent struct {
 type Hooks struct {
 	ToolPermission       func(ToolCall) ToolPermissionState
 	ToolApprovalDecision func(ToolApprovalResult)
+	InputHistoryChanged  func([]string)
 	SlashCommand         func(line string)
 	Submit               func(text string)
 	SubmitMessage        func(SubmitEvent)
@@ -104,6 +105,7 @@ type Options struct {
 	Width           int
 	Height          int
 	InitialMessages []Message
+	InputHistory    []string
 	StreamReply     string
 	StatusHint      string
 	InfoCardLines   []string
