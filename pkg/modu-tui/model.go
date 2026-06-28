@@ -42,6 +42,7 @@ type Model struct {
 	streamReply  string
 	busy         bool
 	approval     *pendingApproval
+	todos        []TodoItem
 
 	selecting        bool
 	selStart, selEnd cell
@@ -73,6 +74,7 @@ func NewModel(options ...Options) Model {
 		}
 		opts.InitialMessages = append([]Message(nil), options[0].InitialMessages...)
 		opts.InputHistory = append([]string(nil), options[0].InputHistory...)
+		opts.Todos = append([]TodoItem(nil), options[0].Todos...)
 		opts.StreamReply = options[0].StreamReply
 		opts.InfoCardLines = append([]string(nil), options[0].InfoCardLines...)
 		opts.DisableMouse = options[0].DisableMouse
@@ -96,6 +98,7 @@ func NewModel(options ...Options) Model {
 		streamReply:     opts.StreamReply,
 		statusHint:      opts.StatusHint,
 		infoCardLines:   cleanInfoCardLines(opts.InfoCardLines),
+		todos:           normalizeTodos(opts.Todos),
 		disableMouse:    opts.DisableMouse,
 		arrowKeysScroll: opts.ArrowKeysScroll,
 		hooks:           opts.Hooks,
@@ -316,6 +319,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case SetBusyMsg:
 		m.busy = msg.Busy
 
+	case SetTodosMsg:
+		m.todos = normalizeTodos(msg.Todos)
+		m.clampScroll()
+
 	case ClearMessagesMsg:
 		m.messages = nil
 		m.clearSelection()
@@ -395,18 +402,21 @@ func (m Model) View() tea.View {
 	if m.approval != nil {
 		caretX = 0
 	}
-	v.Cursor = tea.NewCursor(caretX, m.vpHeight()+m.approvalPanelHeight()+m.slashPanelHeight()+m.jumpPanelHeight()+1)
+	v.Cursor = tea.NewCursor(caretX, m.vpHeight()+m.approvalPanelHeight()+m.slashPanelHeight()+m.todoPanelHeight()+m.jumpPanelHeight()+1)
 	return v
 }
 
 func (m *Model) vpHeight() int {
-	return max(m.minViewportRows(), m.height-bottomFixedRows-m.approvalPanelHeight()-m.slashPanelHeight()-m.jumpPanelHeight())
+	return max(m.minViewportRows(), m.height-bottomFixedRows-m.approvalPanelHeight()-m.slashPanelHeight()-m.todoPanelHeight()-m.jumpPanelHeight())
 }
 func (m *Model) approvalPanelHeight() int {
 	return len(m.approvalPanelLines())
 }
 func (m *Model) slashPanelHeight() int {
 	return len(m.slashPanelLines())
+}
+func (m *Model) todoPanelHeight() int {
+	return len(m.todoPanelLines())
 }
 func (m *Model) jumpPanelHeight() int {
 	if m.showJumpPanel() {
@@ -415,7 +425,7 @@ func (m *Model) jumpPanelHeight() int {
 	return 0
 }
 func (m *Model) showJumpPanel() bool {
-	heightWithoutJump := m.height - bottomFixedRows - m.approvalPanelHeight() - m.slashPanelHeight()
+	heightWithoutJump := m.height - bottomFixedRows - m.approvalPanelHeight() - m.slashPanelHeight() - m.todoPanelHeight()
 	if heightWithoutJump <= m.minViewportRows() {
 		return false
 	}
@@ -576,6 +586,9 @@ func (m *Model) render() string {
 	if panel := m.slashPanelLines(); len(panel) > 0 {
 		parts = append(parts, panel...)
 	}
+	if panel := m.todoPanelLines(); len(panel) > 0 {
+		parts = append(parts, panel...)
+	}
 	if panel := m.jumpPanelLines(); len(panel) > 0 {
 		parts = append(parts, panel...)
 	}
@@ -648,6 +661,18 @@ func (m *Model) slashPanelLines() []string {
 		Selected: selected,
 		MaxRows:  min(8, maxRows),
 	}.RenderWidth(m.width)
+}
+
+func (m *Model) todoPanelLines() []string {
+	if m.approval != nil {
+		return nil
+	}
+	budget := m.height - bottomFixedRows - m.minViewportRows() - m.approvalPanelHeight() - m.slashPanelHeight()
+	if budget < 3 {
+		return nil
+	}
+	maxRows := max(1, min(todoBlockMaxRows, budget-2))
+	return (TodoBlock{Items: m.todos, MaxRows: maxRows}).RenderWidth(m.width)
 }
 
 func (m *Model) updateSlashMatches() {

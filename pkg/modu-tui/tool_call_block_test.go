@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestToolCallBlockRendersCollapsedAndExpanded(t *testing.T) {
@@ -61,8 +62,8 @@ func TestToolCallBlockRendersClaudeStyleBashCall(t *testing.T) {
 	if !strings.Contains(got, "ok github.com/openmodu/modu/pkg/modu-tui") {
 		t.Fatalf("expanded bash call missing output:\n%s", got)
 	}
-	if got, want := toolExpandedStyle.GetBackground(), lipgloss.Color("235"); got != want {
-		t.Fatalf("expanded tool background = %#v, want %#v", got, want)
+	if got, blocked := toolExpandedStyle.GetBackground(), lipgloss.Color("235"); got == blocked {
+		t.Fatalf("expanded tool background should not use dark container color %#v", got)
 	}
 	rendered := block.Render(ctx)
 	for i, line := range rendered.Lines {
@@ -107,13 +108,63 @@ func TestToolCallBlockRendersNoCollapseCode(t *testing.T) {
 		},
 	}
 	got := strings.Join(renderedTexts(block.Render(ctx)), "\n")
-	for _, want := range []string{"Update(main.go)", "Added 1 lines, removed 1 lines", "fmt.Println(\"old\")", "fmt.Println(\"new\")"} {
+	for _, want := range []string{"Update(main.go)", "└ Added 1 lines, removed 1 lines", "fmt.Println(\"old\")", "fmt.Println(\"new\")"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expanded write block missing %q:\n%s", want, got)
 		}
 	}
 	if strings.Contains(got, "Ran update") {
 		t.Fatalf("no-collapse write block should not render collapsed summary:\n%s", got)
+	}
+	rendered := block.Render(ctx)
+	var codeRaw strings.Builder
+	for _, line := range rendered.Lines {
+		if strings.Contains(line.Text, "fmt.Println") {
+			codeRaw.WriteString(line.Text)
+			codeRaw.WriteByte('\n')
+		}
+	}
+	if !strings.Contains(codeRaw.String(), "\x1b[") {
+		t.Fatalf("code lines should preserve syntax-highlight ANSI sequences: %q", codeRaw.String())
+	}
+	if strings.Contains(codeRaw.String(), "\x1b[48;5;235") {
+		t.Fatalf("code lines should not inherit tool background: %q", codeRaw.String())
+	}
+}
+
+func TestToolCallBlockRendersDiffWithLineNumbersAndBackground(t *testing.T) {
+	ctx := RenderContext{ContentWidth: 96, Markdown: markdownRenderer(96)}
+	block := ToolCallBlock{
+		Call: ToolCall{
+			Name:       "update",
+			Input:      "/tmp/main.go",
+			Output:     "Added 1 lines, removed 1 lines",
+			Code:       "--- /tmp/main.go\n+++ /tmp/main.go\n@@ -12,1 +12,1 @@\n  11  func main() {\n- 12  if oldValue {\n+ 12  if newValue {\n  13  }\n",
+			Language:   "diff",
+			NoCollapse: true,
+		},
+	}
+	rendered := block.Render(ctx)
+	var rawLines []string
+	for _, line := range rendered.Lines {
+		rawLines = append(rawLines, line.Text)
+	}
+	raw := strings.Join(rawLines, "\n")
+	stripped := ansi.Strip(raw)
+
+	for _, want := range []string{"Update(/tmp/main.go)", "└ Added 1 lines, removed 1 lines", "    - 12  if oldValue {", "    + 12  if newValue {", "      11  func main() {"} {
+		if !strings.Contains(stripped, want) {
+			t.Fatalf("rendered diff missing %q:\n%s", want, stripped)
+		}
+	}
+	if !strings.Contains(raw, "\x1b[48;5;52m") {
+		t.Fatalf("deleted diff line should have red background ANSI, got:\n%q", raw)
+	}
+	if !strings.Contains(raw, "\x1b[48;5;22m") {
+		t.Fatalf("inserted diff line should have green background ANSI, got:\n%q", raw)
+	}
+	if !strings.Contains(raw, "\x1b[38;5;") {
+		t.Fatalf("diff code should preserve syntax foreground ANSI, got:\n%q", raw)
 	}
 }
 

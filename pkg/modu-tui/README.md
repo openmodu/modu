@@ -20,6 +20,11 @@ It owns only the reusable UI shell:
   command popups share one heavy-border card style
 - bottom popups are height-budgeted during terminal resize so the fixed input
   row and cursor remain visible before optional slash/jump detail rows
+- active todos can be supplied through `Options.Todos` and updated with
+  `SetTodosMsg`; `normalizeTodos` filters empty content and validates status
+  before rendering; outstanding items render as a fixed card above the input;
+  the todo panel respects resize budget (`todoPanelHeight/todoPanelLines`) and
+  is hidden when an approval panel is active
 - `Options.DisableMouse` disables terminal mouse reporting for SSH/mobile
   clients that can flood the event loop with touch-motion sequences
 - `Options.ArrowKeysScroll` lets Up/Down scroll the transcript when the input is
@@ -33,12 +38,17 @@ It owns only the reusable UI shell:
   call/start/result updates do not scatter through the transcript
 - Read-style tool calls can render as compact `Read(path · lines x-y)` blocks
   with a `Read N lines` result summary instead of dumping file content inline
-- expanded tool-call blocks use a faint full-width background with a green
-  leading tool marker so the command and output read as one consistent block
+- expanded tool-call blocks use a green leading tool marker without a container
+  background; code and diff lines keep their own syntax-highlighted styling
 - collapsed tool-call summaries are indented, while every rendered line of an
   expanded tool-call block can be clicked to collapse it
 - tool-call messages can set `ToolNoCollapse`, `ToolCode`, and `ToolLanguage`
-  to render a permanently expanded syntax-highlighted code/diff block
+  to render a permanently expanded syntax-highlighted code/diff block; callers
+  can include line numbers and nearby context in `ToolCode`; diff blocks render
+  under a `└` summary line, indent their body by two levels, use
+  red/green/gray per-line backgrounds with syntax highlighting applied to the
+  code portion of each line, and infer the highlighting language from the tool
+  input file extension
 - markdown inline code renders without Glamour's default red foreground and
   dark background so status text such as commit hashes stays readable
 - assistant messages marked `Preformatted` render through `TextBlock` instead
@@ -66,6 +76,10 @@ Component layout:
   render permission state from `Hooks.ToolPermission`.
 - `card_block.go` owns reusable heavy-border card rendering for fixed bottom
   panels and future popup-style blocks.
+- `todo_block.go` renders active todo items from `Options.Todos` as a fixed
+  card above the input; completed-only or empty lists are hidden, and
+  `SetTodosMsg` refreshes the card after host state changes; `normalizeTodos`
+  filters empty content and validates status before rendering.
 - `slash_command_block.go` renders slash command suggestions as an independent
   bottom card.
 - `approval_block.go` renders a pending tool approval request as a fixed panel
@@ -84,6 +98,9 @@ Component layout:
   fallback for callers that do not need submit kinds.
 - `Options.InputHistory` seeds input history and `Hooks.InputHistoryChanged`
   lets hosts persist the trimmed history list after each submission.
+- `Options.Todos` seeds the fixed todo card; completed-only or empty todo lists
+  are hidden, and `SetTodosMsg` refreshes the card after host state changes;
+  `normalizeTodos` validates and normalizes the provided items before use.
 - `Hooks.SlashCommand` lets host applications route selected or typed slash
   commands without sending them as normal prompts.
 - `Hooks.ToolApprovalDecision` lets host applications observe approval decisions.

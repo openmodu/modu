@@ -26,10 +26,15 @@ enough to implement, verify, and commit independently.
   `⏺ Read(path · lines x-y)` with a compact `Read N lines` result summary
   instead of dumping file contents into the tool block.
 - `modu_code` write/edit tool calls now render as explicit non-collapsible
-  blocks with a short write/diff summary and syntax-highlighted content or diff.
-- Expanded `pkg/modu-tui` tool blocks now render with a faint full-width
-  background without nested ANSI styling, so command details read as one
-  grouped block without dark reset artifacts.
+  blocks with a short write/diff summary and syntax-highlighted content or
+  diff. Existing-file `write` and `edit` previews include line numbers plus
+  nearby context when the target file can be read locally.
+- Expanded `pkg/modu-tui` tool blocks now avoid a dark container background;
+  command details stay dimmed while code/diff lines preserve their own syntax
+  highlighting. Diff blocks now use red/green/gray per-line backgrounds with
+  syntax highlighting applied only to the code portion of each line, and
+  `toolDiffSourceLanguage` infers the highlighting language from the file
+  extension in the diff header.
 - Collapsed `pkg/modu-tui` tool summaries are indented, while clicking any
   rendered line inside an expanded tool block collapses it.
 - Tool approval cards now use compact command previews instead of JSON args,
@@ -42,6 +47,12 @@ enough to implement, verify, and commit independently.
 - Fresh `modu-tui` sessions now open with a `CardBlock` startup information
   card showing app, model, cwd, session id, and basic `/` command guidance;
   the card is UI-only and stays at the top after transcript messages exist.
+- The `modu-tui` runner now passes session todos into a fixed todo card above
+  the input and refreshes it after tool/slash state changes. Cwd-aware `WithCwd`
+  variants resolve relative file paths for local preview and update detection;
+  writes to existing files render as "update" with a contextual diff preview
+  including line numbers and added/removed counts; edit end events extract the
+  final diff from tool output for `ToolCode` and `ToolLanguage: "diff"`.
 - `pkg/modu-tui` input now collapses large pasted text into a `[Pasted text ...]`
   token in the bottom input while submitting and rendering the full expanded
   content in the conversation transcript.

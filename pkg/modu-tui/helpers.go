@@ -57,6 +57,24 @@ func newMessagesHintText(count int) string {
 	return fmt.Sprintf("Have %d new messages (ctrl+End) ↓", count)
 }
 
+func normalizeTodos(items []TodoItem) []TodoItem {
+	out := make([]TodoItem, 0, len(items))
+	for _, item := range items {
+		content := strings.TrimSpace(item.Content)
+		if content == "" {
+			continue
+		}
+		status := strings.TrimSpace(item.Status)
+		switch status {
+		case "pending", "in_progress", "completed":
+		default:
+			status = "pending"
+		}
+		out = append(out, TodoItem{Content: content, Status: status})
+	}
+	return out
+}
+
 func (m *Model) jumpHint() string {
 	if m.unseen > 0 {
 		return jumpStyle.Render(newMessagesHintText(m.unseen))
