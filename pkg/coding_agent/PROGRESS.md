@@ -21,6 +21,135 @@ High-priority gaps identified before this round:
   models are steered toward `read`, `grep`, `find`, `ls`, `edit`, and `write`
   before falling back to `bash`; added deterministic `modu_eval` coverage for
   the prompt contract.
+- Tightened the `read` tool range contract: `offset` is now schema-checked and
+  runtime-checked as non-negative, and `limit` is checked as positive so invalid
+  model arguments fail loudly instead of silently falling back to default reads.
+- Aligned `read` range arguments with Claude Code semantic number handling:
+  `offset` and `limit` now accept valid integer strings such as `"10"` while
+  preserving the existing non-negative/positive bounds.
+- Added `read` tool safety guards for large and binary inputs: non-image binary
+  extensions and binary-looking content now return targeted errors, and large
+  text files require an explicit `limit` so models read a focused range.
+- Aligned empty-file reads with Claude Code by returning a system-reminder
+  warning instead of rendering an empty file as line `1`.
+- Aligned read offsets beyond EOF with Claude Code by returning a
+  system-reminder warning that includes the requested offset and total line
+  count.
+- Aligned read line numbering with `cat -n` style output by avoiding an extra
+  numbered blank line for files that simply end with a newline while preserving
+  real blank lines.
+- Added Claude-style `read` protection for device paths such as `/dev/zero`,
+  `/dev/stdin`, and stdio fd aliases that would block or produce infinite
+  output if read like normal files.
+- Tightened the `edit` tool no-op contract: edits where `old_text` and
+  `new_text` are identical now fail before reading or writing, matching Claude
+  Code's "No changes to make" behavior.
+- Made `edit` fuzzy matching safer by mapping normalized line matches back to
+  the original file slice before replacement, so unmatched Unicode punctuation
+  and whitespace are not rewritten as a side effect.
+- Aligned `edit` fuzzy quote handling with Claude Code by preserving curly
+  single/double quote style from the actual matched text when applying
+  replacement text generated with straight quotes.
+- Aligned `edit` empty-string replacements with Claude Code by deleting a
+  trailing newline when the matched text is followed by one, so whole-line
+  removals do not leave blank lines.
+- Aligned `edit` empty `old_string` behavior with Claude Code: an explicit empty
+  match now creates a missing file or fills an empty file, while still rejecting
+  attempts to overwrite an existing non-empty file.
+- Added Claude-compatible `file_path`, `old_string`, and `new_string` alias
+  support to the `edit` tool while preserving the existing
+  `path`/`old_text`/`new_text` parameters.
+- Aligned `edit`'s `replace_all` parameter with Claude Code's semantic boolean
+  handling by accepting the exact string literals `"true"` and `"false"` in
+  addition to JSON booleans.
+- Added Claude-compatible `file_path` alias support to the `write` tool so model
+  calls shaped like Claude Code's `Write` schema validate and execute correctly.
+- Tightened `write` runtime validation so missing `content` fails loudly even
+  when direct tool execution bypasses JSON schema validation, while explicit
+  empty-string content remains a valid empty-file write.
+- Added Claude-compatible `output_mode` support to the `grep` tool for explicit
+  `content`, `files_with_matches`, and `count` result shapes while preserving
+  the existing default content output.
+- Added Claude-compatible `-i`, `-C`, and `head_limit` alias support to the
+  `grep` tool by mapping them onto existing case-insensitive, context, and
+  result-limit behavior.
+- Added Claude-compatible `grep -n` handling so content output keeps line
+  numbers by default but can hide them when `-n=false` is passed.
+- Tightened `grep` path validation to match Claude Code: an explicit `path`
+  must exist, while both file paths and directory paths remain valid search
+  targets.
+- Aligned `grep` glob parsing with Claude Code by accepting space- or
+  comma-separated glob patterns while preserving brace patterns such as
+  `*.{ts,tsx}`.
+- Aligned `grep` dash-leading patterns with Claude Code by passing them to
+  ripgrep via `-e`, so searches like `-needle` are not parsed as flags.
+- Aligned `grep` hidden-file handling with Claude Code: ripgrep now searches
+  hidden files while excluding VCS directories such as `.git`, `.hg`, and `.jj`;
+  the built-in fallback uses the same VCS skip list.
+- Aligned `grep` closer to Claude Code defaults by making the implicit
+  `output_mode` return matching file paths, adding `-A`/`-B`, `offset`, `type`,
+  and `multiline` parameters, and applying `head_limit`/`offset` across output
+  modes.
+- Aligned `grep` semantic boolean handling with Claude Code for `-i`, `-n`, and
+  `multiline`, accepting exact `"true"` / `"false"` strings in addition to JSON
+  booleans.
+- Aligned `grep` semantic number handling with Claude Code for context, `-A`,
+  `-B`, `-C`, `head_limit`, and `offset`, accepting valid decimal numeric
+  strings in addition to JSON numbers.
+- Tightened the `find` tool path contract to match Claude Code's `Glob` input
+  validation: the optional `path` must exist and be a directory, with clear
+  errors for missing paths or file paths.
+- Aligned `find` result shaping closer to Claude Code's `Glob`: default results
+  are capped at 100, sorted by modification time, and only show truncation
+  guidance when additional matches actually exist.
+- Aligned `find`'s optional `limit` with the semantic number tolerance used by
+  Claude-style tool schemas, accepting valid integer strings while preserving
+  the existing default for non-positive values.
+- Tightened the `ls` tool path contract so it now validates the target exists
+  and is a directory before reading, with clear errors that steer known-file
+  inspection back to `read`.
+- Added `ls` ignore-pattern support for shallow directory listings so models can
+  hide entries such as `*.log`, `build/`, or `vendor/**` without falling back to
+  shell `ls` pipelines.
+- Aligned the `ls` ignore schema with its runtime behavior by accepting either
+  a single glob string or an array of glob strings, so simple model calls such
+  as `ignore: "*.log"` validate before execution.
+- Aligned `ls`'s `limit` parameter the same way, accepting valid integer
+  strings while preserving the existing default for non-positive values.
+- Added Claude-compatible `run_in_background` alias support to the `bash` tool
+  while preserving the existing `background` parameter and detached-process
+  behavior.
+- Added Claude-compatible bash timeout handling: `timeout` values above 600 are
+  now interpreted as milliseconds, `timeout_ms` is accepted explicitly, and
+  smaller `timeout` values remain second-based for existing callers.
+- Aligned bash timeout/background parameters with Claude Code's semantic
+  coercion style: `timeout`/`timeout_ms` accept integer strings, and
+  `background`/`run_in_background` accept exact `"true"` / `"false"` strings.
+- Added a Claude-style bash foreground sleep guard so `sleep N` and leading
+  `sleep N && ...`/`sleep N; ...` commands with waits of 2 seconds or longer
+  are rejected unless explicitly run in the background.
+- Added a bash guard for simple `sed -i`/`sed --in-place` edits so file
+  mutations are steered back to the native `edit` tool instead of shell-based
+  source rewrites.
+- Added a bash guard for simple `cat`/`head`/`tail <file>` reads so ordinary
+  file inspection is steered back to the native `read` tool with its
+  offset/limit and binary safeguards.
+- Expanded the bash simple file-read guard to cover common read-only flags such
+  as `cat -n`, `head -n 20`, and `tail --lines=20` while still allowing
+  pipelines and shell-expanded commands to run through bash.
+- Added a bash guard for simple `grep`/`rg` content searches so ordinary
+  pattern lookup is steered back to the native `grep` tool with consistent
+  output modes, paging, and path handling.
+- Added a bash guard for simple `find`/`fd` file-name searches such as
+  `find . -name '*.go'` or `fd '*.go'`, steering ordinary file discovery back
+  to the native `find` tool while leaving complex shell find commands alone.
+- Added a bash guard for simple `ls` directory listings such as `ls`, `ls .`,
+  and `ls -la path`, steering ordinary directory inspection back to the native
+  `ls` tool while leaving shell pipelines and complex listing commands alone.
+- Hardened the bash native-tool guards with conservative quote-aware tokenizing
+  so simple reads, searches, file-name discovery, and directory listings still
+  route back to native tools when paths contain spaces, such as
+  `cat "my file.txt"` or `ls "my dir"`.
 - Managed session worktrees now use `<agentDir>/worktrees/<uuid>/<repo>` paths
   and a `modu-code/<repo>-<id>` branch so active editing can live in an
   isolated checkout instead of a detached temporary tree.
@@ -312,6 +441,124 @@ High-priority gaps identified before this round:
   prompt guidance, Ultracode guidance, and README docs now say the `workflow`
   tool only starts runs and `/workflows ...` commands handle status, agent
   details, stop/resume, restart, save, and the TUI panel.
+  Continued Claude Code native-tool parity for `grep`: default result window
+  now matches Claude's 250-entry `head_limit`, and explicit `head_limit: 0`
+  is treated as unlimited instead of falling back to the default. Tests cover
+  both the default cap and the unlimited escape hatch.
+  Continued Claude Code native-tool parity for `find`/Glob: the fd path now
+  searches hidden files and ordinary `.gitignore`-ignored files by default
+  (`--hidden --no-ignore`), matching Claude's Glob defaults more closely while
+  still excluding VCS metadata directories to avoid noisy repository internals.
+  The built-in fallback now follows the same hidden/no-ignore behavior instead
+  of skipping generated/vendor directories.
+  Strengthened the `find` built-in fallback with segment-based `**` glob
+  matching so common Claude Glob patterns such as `**/*.go` and
+  `src/**/*.ts` still work when `fd` is unavailable.
+  Added Claude-style text-read mitigation output: successful `read` results for
+  text files now append the system reminder that potentially malicious code may
+  be analyzed but must not be improved or augmented. Empty-file and offset
+  warnings remain warning-only, matching Claude's boundary.
+  Aligned `grep` ripgrep execution with Claude's long-line guard by passing
+  `--max-columns 500`, so base64 or minified one-line matches are omitted by
+  ripgrep instead of flooding the tool result before post-processing.
+  Added Claude-style oversized-file protection to `edit`: existing targets over
+  1.0GB are rejected before `os.ReadFile`, preventing accidental memory spikes
+  when a model attempts targeted edits against huge or sparse files.
+  Aligned `write` result wording closer to Claude Code: successful writes now
+  report whether the operation created a new file or updated an existing file,
+  and the tool result details expose the same `type` for host/UI consumers.
+  Strengthened the `bash` foreground sleep guard to catch decimal and
+  `s`-suffixed sleep durations such as `sleep 2.5` and `sleep 2s && ...`,
+  keeping long waits on the background path as the tool guidance requires.
+  Added Claude-style `.ipynb` support to `read`: Jupyter notebooks are parsed
+  into cell-tagged text blocks, text outputs, error outputs, and supported
+  image outputs so models can inspect notebook content without falling back to
+  raw JSON or shell commands.
+  Tightened `write` path validation so an existing directory target returns a
+  clear tool error instead of falling through to a low-level `os.WriteFile`
+  failure while being classified like a file create.
+  Tightened `edit` path validation the same way: an existing directory target
+  is rejected before read/write attempts with a clear file-vs-directory tool
+  error.
+  Aligned `grep` count-mode pagination with Claude Code: when `head_limit` or
+  `offset` is applied, the occurrence/file summary now reflects the displayed
+  count entries instead of the unpaged full result set.
+  Aligned `grep` ripgrep output for explicit file paths with Claude Code's
+  relative-path display: single-file searches under the workspace no longer
+  leak absolute paths in files/content/count output.
+  Aligned `grep` result path display with Claude Code for narrowed directory
+  searches: matches under the workspace are now shown relative to the working
+  directory even when `path` points at a subdirectory.
+  Aligned `read` notebook handling for oversized cell outputs with Claude Code:
+  large per-cell output payloads are replaced with focused `jq` guidance instead
+  of being truncated into a still-large tool result.
+  Aligned `read` image extension handling with Claude Code: only PNG/JPG/JPEG/GIF/WEBP
+  are returned as image blocks, while SVG is read as text and BMP remains in the
+  binary-file rejection path.
+  Aligned `find`/Glob result path display with Claude Code: results are now
+  shown relative to the working directory even when a narrower `path` argument
+  is used, preserving directory context in tool output.
+  Tightened `read` semantic number validation so string offsets must be
+  non-negative integers and string limits must be positive integers at the
+  schema layer, matching the runtime bounds instead of accepting invalid ranges
+  until execution.
+  Aligned `find`/Glob absolute pattern handling with Claude Code: absolute
+  glob patterns now derive their static directory prefix as the search root
+  before matching, so calls such as `/tmp/project/**/*.go` work without an
+  explicit `path` argument.
+  Aligned the `grep` built-in fallback with Claude Code's Grep scope: when
+  ripgrep is unavailable, it now searches ordinary directories named
+  `node_modules` or `vendor` instead of hard-skipping them, while still
+  excluding VCS metadata directories.
+  Aligned `grep` files-with-matches ordering with Claude Code: matching file
+  paths are now sorted by modification time newest-first before applying
+  `head_limit` and `offset`, with filename tiebreaking for stable output.
+  Added Claude-style macOS screenshot path fallback to `read`: screenshot PNG
+  filenames with regular spaces or narrow no-break spaces before `AM`/`PM` now
+  resolve interchangeably when the initially requested path is missing.
+  Added Claude-compatible `dangerouslyDisableSandbox` support to `bash` schema:
+  the semantic boolean flag now validates for model calls while execution policy
+  remains controlled by the host process.
+  Aligned `edit` notebook handling with Claude Code: existing `.ipynb` files
+  are now rejected by the plain text edit tool instead of being modified as raw
+  JSON, preserving notebook structure expectations.
+  Added Claude-style read-before-overwrite protection for provider-created
+  native `write`: full text reads now record content/mtime, and overwriting an
+  existing file is rejected when the file was not read, was only partially read,
+  or changed after the read. Direct `write.NewTool` construction keeps its
+  previous standalone behavior.
+  Extended the same Claude-style read-before-edit protection to provider-created
+  native `edit`: existing non-empty-target edits now require a fresh full read,
+  partial reads are rejected, and successful edits refresh the shared read state
+  so later edits/writes see the latest content.
+  Fixed provider read-state sharing for direct `DefaultProvider{}` construction:
+  each built-in tool set now captures one shared state per `Tools()` call, so
+  `read`, `edit`, and `write` stay coherent even outside the `NewProvider`
+  helper path.
+  Tightened the `bash` read-tool handoff for Claude-style read-only commands:
+  simple `tac <file>` invocations are now blocked like `cat`/`head`/`tail` so
+  ordinary file-content reads continue through the native `read` safeguards.
+  Extended that `bash` read-tool handoff to simple `nl <file>` invocations:
+  line-numbered file reads now route through the native `read` tool instead of
+  bypassing offset/limit, binary, and read-state safeguards.
+  Extended the same handoff to simple `less <file>` and `more <file>` attempts:
+  interactive or pager-style file views are now stopped before they can bypass
+  the native `read` tool's bounded output behavior.
+  Expanded the `bash` content-search handoff for common `grep`/`rg` flags:
+  searches such as `grep -i`, `grep -R -n`, `grep -e`, `rg -n`, `rg -C`, and
+  `rg --type` now route to the native `grep` tool instead of bypassing its
+  output modes, paging, and path handling.
+  Extended that handoff to regex/glob-shaped searches such as
+  `grep 'need.*' file`, `rg -g '*.go' needle`, and `rg --glob=*.go needle`,
+  steering file filters back to the native `grep` tool's `glob` support.
+  Extended the same `bash` content-search handoff to conservative sed/awk
+  search forms such as `sed -n '/needle/p' file` and `awk '/needle/' file`,
+  keeping pure pattern lookup on the native `grep` path while leaving
+  transformations and complex scripts in bash.
+  Added deterministic `modu_eval` coverage for native tool runtime safety:
+  provider-created `write` rejects existing-file overwrites before read, `edit`
+  succeeds after a full read, and successful edits refresh shared read state so
+  subsequent writes can proceed.
 
 ## Still Missing
 
