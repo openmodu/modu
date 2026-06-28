@@ -3,6 +3,8 @@ package modutui
 import (
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestCustomBlockFactoryOverridesMessageRendering(t *testing.T) {
@@ -21,5 +23,11 @@ func TestCustomBlockFactoryOverridesMessageRendering(t *testing.T) {
 	got := strings.Join(m.Lines(), "\n")
 	if !strings.Contains(got, "factory original") {
 		t.Fatalf("custom block factory was not used:\n%s", got)
+	}
+}
+
+func TestDefaultAssistantMarkerIsWhite(t *testing.T) {
+	if got, want := assistantMarkerStyle.GetForeground(), lipgloss.Color("231"); got != want {
+		t.Fatalf("assistant marker foreground = %#v, want %#v", got, want)
 	}
 }

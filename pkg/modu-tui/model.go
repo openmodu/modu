@@ -433,7 +433,7 @@ func (m *Model) buildTranscript() ([]string, []int, map[int]int) {
 		startLine := len(lines)
 		rendered := m.blockFromMessage(msg).Render(ctx).Lines
 		for offset, line := range rendered {
-			if msg.Tool && (offset == 0 || msg.Expanded) {
+			if (msg.Tool || msg.Thinking) && (offset == 0 || msg.Expanded) {
 				headers[startLine+offset] = idx
 			}
 			lines = append(lines, line.Text)
@@ -448,11 +448,11 @@ func (m *Model) buildTranscript() ([]string, []int, map[int]int) {
 			addGap()
 		}
 		block := TextBlock{
-			Marker: botStyle.Render("● "),
+			Marker: streamingAssistantMarkerStyle.Render("● "),
 			Text:   string(m.streamRunes[:m.streamIdx]),
 		}.Render(ctx)
 		for _, line := range block.Lines {
-			lines = append(lines, dimStyle.Render(line.Text))
+			lines = append(lines, line.Text)
 			gutters = append(gutters, line.Gutter)
 		}
 		lines, gutters = append(lines, "  "+dimStyle.Render("┄ streaming…")), append(gutters, 2)

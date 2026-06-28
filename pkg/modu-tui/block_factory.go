@@ -1,6 +1,12 @@
 package modutui
 
 func defaultBlockFromMessage(m Message) Block {
+	if m.Thinking {
+		return ThinkingBlock{
+			Text:     m.Text,
+			Expanded: m.Expanded,
+		}
+	}
 	if m.Tool {
 		call := ToolCall{
 			ID:      m.ToolID,
@@ -21,7 +27,7 @@ func defaultBlockFromMessage(m Message) Block {
 			Call: call,
 		}
 	}
-	marker := botStyle.Render("● ")
+	marker := assistantMarkerStyle.Render("● ")
 	if m.Role == RoleUser {
 		marker = youStyle.Render("❯ ")
 	}

@@ -175,6 +175,47 @@ func TestPOC2PreformattedAssistantMessagePreservesSlashHelpLines(t *testing.T) {
 	}
 }
 
+func TestPOC2ThinkingBlockIsCollapsedAndClickable(t *testing.T) {
+	m := NewModel(Options{
+		Width:  72,
+		Height: 10,
+		InitialMessages: []Message{{
+			Role:     RoleAssistant,
+			Text:     "reasoning detail",
+			Thinking: true,
+		}},
+	})
+	rendered := ansi.Strip(m.render())
+	if !strings.Contains(rendered, "● Thinking") {
+		t.Fatalf("thinking block summary missing:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "reasoning detail") {
+		t.Fatalf("thinking block should default collapsed:\n%s", rendered)
+	}
+	if _, ok := m.headers[0]; !ok {
+		t.Fatalf("thinking block header should be clickable, headers=%#v", m.headers)
+	}
+
+	_ = m.onPress(1, 0)
+	rendered = ansi.Strip(m.render())
+	if !strings.Contains(rendered, "reasoning detail") {
+		t.Fatalf("clicking thinking block should expand detail:\n%s", rendered)
+	}
+}
+
+func TestPOC2StreamingAssistantMarkerBlinks(t *testing.T) {
+	m := NewModel(Options{Width: 72, Height: 10, StreamReply: "streaming reply"})
+	m.startStream()
+	m.streamIdx = len(m.streamRunes)
+	m.rebuild()
+	if got, want := streamingAssistantMarkerStyle.GetForeground(), lipgloss.Color("231"); got != want {
+		t.Fatalf("streaming assistant marker foreground = %#v, want %#v", got, want)
+	}
+	if !streamingAssistantMarkerStyle.GetBlink() {
+		t.Fatal("streaming assistant marker should blink")
+	}
+}
+
 func TestPOC2JumpHintStaysInFixedRowAboveInput(t *testing.T) {
 	m := NewModel(Options{Width: 72, Height: 8})
 	for i := 0; i < 20; i++ {

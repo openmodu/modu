@@ -4,6 +4,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 type ToolCallBlock struct {
@@ -42,11 +44,22 @@ func (b ToolCallBlock) Render(ctx RenderContext) BlockRender {
 		return out
 	}
 
-	out.Add(toolExpandedLine(ctx.ContentWidth, "⏺ "+toolInvocationLine(b.Call)), 0)
+	out.Add(toolExpandedHeaderLine(ctx.ContentWidth, b.Call), 0)
 	for _, line := range toolDetailLines(b.Call) {
 		out.Add(toolExpandedLine(ctx.ContentWidth, "  "+line), 0)
 	}
 	return out
+}
+
+func toolExpandedHeaderLine(width int, call ToolCall) string {
+	width = max(1, width)
+	markerText := "⏺ "
+	markerWidth := max(0, lipgloss.Width(markerText))
+	marker := toolExpandedMarkerStyle.
+		Background(toolExpandedStyle.GetBackground()).
+		Render(markerText)
+	rest := toolExpandedStyle.Width(max(1, width-markerWidth)).Render(toolInvocationLine(call))
+	return marker + rest
 }
 
 func toolExpandedLine(width int, text string) string {

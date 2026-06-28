@@ -32,6 +32,34 @@ func TestMessagesFromAssistantMessageIncludesTextAndToolCall(t *testing.T) {
 	}
 }
 
+func TestMessagesFromAssistantMessageGroupsThinkingAtTop(t *testing.T) {
+	messages := messagesFromAgentMessage(types.AssistantMessage{
+		Role: types.RoleAssistant,
+		Content: []types.ContentBlock{
+			&types.TextContent{Type: "text", Text: "final answer"},
+			&types.ThinkingContent{Type: "thinking", Thinking: "first thought"},
+			&types.ToolCallContent{Type: "toolCall", ID: "call-1", Name: "read", Arguments: map[string]any{"path": "main.go"}},
+			&types.ThinkingContent{Type: "thinking", Thinking: "second thought"},
+		},
+	})
+
+	if len(messages) != 3 {
+		t.Fatalf("messages len = %d, want 3: %#v", len(messages), messages)
+	}
+	if !messages[0].Thinking {
+		t.Fatalf("first message should be grouped thinking block: %#v", messages)
+	}
+	if !strings.Contains(messages[0].Text, "first thought") || !strings.Contains(messages[0].Text, "second thought") {
+		t.Fatalf("thinking block should contain all thinking text: %#v", messages[0])
+	}
+	if messages[1].Text != "final answer" {
+		t.Fatalf("assistant text should follow thinking, got %#v", messages[1])
+	}
+	if !messages[2].Tool || messages[2].ToolName != "read" {
+		t.Fatalf("tool call should stay after thinking and text, got %#v", messages[2])
+	}
+}
+
 func TestMessagesFromAgentEventSkipsUserMessageEnd(t *testing.T) {
 	user := types.Event{
 		Type: types.EventTypeMessageEnd,

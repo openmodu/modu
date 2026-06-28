@@ -55,6 +55,9 @@ func TestToolCallBlockRendersClaudeStyleBashCall(t *testing.T) {
 	if !strings.HasPrefix(first, "⏺ ") {
 		t.Fatalf("expanded bash call should start with bullet: %q", first)
 	}
+	if got, want := toolExpandedMarkerStyle.GetForeground(), lipgloss.Color("2"); got != want {
+		t.Fatalf("expanded tool marker foreground = %#v, want %#v", got, want)
+	}
 	if !strings.Contains(got, "ok github.com/openmodu/modu/pkg/modu-tui") {
 		t.Fatalf("expanded bash call missing output:\n%s", got)
 	}

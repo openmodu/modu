@@ -569,6 +569,7 @@ func messagesFromAgentMessage(msg types.AgentMessage) []modutui.Message {
 }
 
 func messagesFromAssistantMessage(msg types.AssistantMessage) []modutui.Message {
+	var thinking []string
 	var out []modutui.Message
 	for _, block := range msg.Content {
 		switch b := block.(type) {
@@ -578,7 +579,7 @@ func messagesFromAssistantMessage(msg types.AssistantMessage) []modutui.Message 
 			}
 		case *types.ThinkingContent:
 			if b != nil && strings.TrimSpace(b.Thinking) != "" {
-				out = append(out, modutui.Message{Role: modutui.RoleAssistant, Text: "Thinking:\n\n" + b.Thinking})
+				thinking = append(thinking, strings.TrimSpace(b.Thinking))
 			}
 		case *types.ToolCallContent:
 			if b != nil {
@@ -593,6 +594,13 @@ func messagesFromAssistantMessage(msg types.AssistantMessage) []modutui.Message 
 				})
 			}
 		}
+	}
+	if len(thinking) > 0 {
+		out = append([]modutui.Message{{
+			Role:     modutui.RoleAssistant,
+			Text:     strings.Join(thinking, "\n\n"),
+			Thinking: true,
+		}}, out...)
 	}
 	if len(out) == 0 && msg.ErrorMessage != "" {
 		out = append(out, modutui.Message{Role: modutui.RoleAssistant, Text: "error: " + msg.ErrorMessage})

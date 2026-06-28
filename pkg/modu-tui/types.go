@@ -15,6 +15,7 @@ const (
 type Message struct {
 	Role         Role
 	Text         string
+	Thinking     bool
 	Tool         bool
 	ToolID       string
 	ToolName     string
