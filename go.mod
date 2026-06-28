@@ -26,6 +26,7 @@ require (
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
 	github.com/spf13/cobra v1.10.2
 	github.com/tidwall/redcon v1.6.2
+	github.com/yuin/goldmark v1.7.8
 	golang.org/x/net v0.53.0
 	golang.org/x/sync v0.20.0
 	golang.org/x/term v0.42.0
@@ -80,7 +81,6 @@ require (
 	github.com/tidwall/btree v1.8.1 // indirect
 	github.com/tidwall/match v1.2.0 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	github.com/yuin/goldmark v1.7.8 // indirect
 	github.com/yuin/goldmark-emoji v1.0.5 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.68.0 // indirect

@@ -16,7 +16,6 @@ import (
 	"github.com/openmodu/modu/cmd/modu_code/internal/provider"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	agentconfig "github.com/openmodu/modu/pkg/coding_agent/foundation/config"
-	"github.com/openmodu/modu/pkg/tui"
 )
 
 func runConfigHook(args string, session *coding_agent.CodingSession) (string, error) {
@@ -36,7 +35,7 @@ func runConfigHook(args string, session *coding_agent.CodingSession) (string, er
 	return out.String(), err
 }
 
-func configModelEntries() ([]tui.ConfigModelEntry, error) {
+func configModelEntries() ([]ConfigModelEntry, error) {
 	cfg, exists, err := provider.LoadConfigFile()
 	if err != nil {
 		return nil, err
@@ -44,9 +43,9 @@ func configModelEntries() ([]tui.ConfigModelEntry, error) {
 	if !exists {
 		return nil, nil
 	}
-	out := make([]tui.ConfigModelEntry, 0, len(cfg.Models))
+	out := make([]ConfigModelEntry, 0, len(cfg.Models))
 	for _, model := range cfg.Models {
-		out = append(out, tui.ConfigModelEntry{
+		out = append(out, ConfigModelEntry{
 			Name:        model.Name,
 			Description: model.Description,
 			Provider:    model.Provider,
@@ -67,7 +66,7 @@ func configModelEntries() ([]tui.ConfigModelEntry, error) {
 	return out, nil
 }
 
-func configProviderEntries() ([]tui.ConfigProviderEntry, error) {
+func configProviderEntries() ([]ConfigProviderEntry, error) {
 	cfg, exists, err := provider.LoadConfigFile()
 	if err != nil {
 		return nil, err
@@ -75,11 +74,11 @@ func configProviderEntries() ([]tui.ConfigProviderEntry, error) {
 	if !exists {
 		return configProviderPresetEntries(nil), nil
 	}
-	out := make([]tui.ConfigProviderEntry, 0, len(cfg.Providers))
+	out := make([]ConfigProviderEntry, 0, len(cfg.Providers))
 	seen := map[string]bool{}
 	for name, pc := range cfg.Providers {
 		seen[name] = true
-		out = append(out, tui.ConfigProviderEntry{
+		out = append(out, ConfigProviderEntry{
 			Name:      name,
 			Type:      pc.Type,
 			BaseURL:   pc.BaseURL,
@@ -92,14 +91,14 @@ func configProviderEntries() ([]tui.ConfigProviderEntry, error) {
 	return out, nil
 }
 
-func configProviderPresetEntries(seen map[string]bool) []tui.ConfigProviderEntry {
-	presets := []tui.ConfigProviderEntry{
+func configProviderPresetEntries(seen map[string]bool) []ConfigProviderEntry {
+	presets := []ConfigProviderEntry{
 		{Name: "deepseek", Type: "openai-compatible", BaseURL: "https://api.deepseek.com/v1", APIKeyEnv: "DEEPSEEK_API_KEY"},
 		{Name: "lmstudio", Type: "openai-compatible", BaseURL: "http://127.0.0.1:1234/v1"},
 		{Name: "ollama", Type: "openai-compatible", BaseURL: "http://127.0.0.1:11434/v1"},
 		{Name: "openai", Type: "openai-compatible", BaseURL: "https://api.openai.com/v1", APIKeyEnv: "OPENAI_API_KEY"},
 	}
-	out := make([]tui.ConfigProviderEntry, 0, len(presets))
+	out := make([]ConfigProviderEntry, 0, len(presets))
 	for _, preset := range presets {
 		if seen != nil && seen[preset.Name] {
 			continue
@@ -109,7 +108,7 @@ func configProviderPresetEntries(seen map[string]bool) []tui.ConfigProviderEntry
 	return out
 }
 
-func configAddModel(input tui.ConfigModelInput) (string, error) {
+func configAddModel(input ConfigModelInput) (string, error) {
 	entry := provider.ModelConfig{
 		Name:        input.Name,
 		Description: input.Description,
@@ -129,7 +128,7 @@ func configAddModel(input tui.ConfigModelInput) (string, error) {
 	return fmt.Sprintf("%s model: %s\nconfig: %s\n", action, entry.Name, provider.ConfigPath()), nil
 }
 
-func configSetProvider(input tui.ConfigProviderInput) (string, error) {
+func configSetProvider(input ConfigProviderInput) (string, error) {
 	err := provider.UpsertProviderConfig(input.Provider, provider.ProviderConfig{
 		Type:      input.Type,
 		BaseURL:   input.BaseURL,

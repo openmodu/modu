@@ -5,6 +5,57 @@ enough to implement, verify, and commit independently.
 
 ## Done
 
+- Started the `pkg/modu-tui` backed `modu_code` runner on branch
+  `codex/modu-code-modu-tui`: the default interactive entry no longer imports
+  `pkg/tui`, core session events are converted into `modu-tui` messages, and
+  config hook types are owned by `cmd/modu_code`.
+- The `modu_code` `modu-tui` runner now seeds Bubble Tea with the current
+  terminal size, matching `tuipoc2` startup sizing and avoiding a wrong-size
+  first frame on small mobile terminals.
+- `pkg/modu-tui` render output now pads every terminal row to the current
+  width, so scrolling from a longer previous frame to shorter content clears
+  stale tail cells on mobile terminals.
+- `pkg/modu-tui` now renders `Jump to bottom` once in a fixed row above the
+  input instead of as a viewport overlay, preserving tap-to-bottom behavior
+  while avoiding duplicated jump hints during mobile terminal redraws.
+- `modu_code` tool calls now merge assistant call, execution start/end, and
+  tool result updates by `ToolID` into one `pkg/modu-tui` block. Bash renders
+  collapsed as `Ran 1 shell command` and expanded as a Claude Code-style
+  `⏺ Bash(...)` block with output below it.
+- `modu_code` Read tool calls now render like Claude Code: expanded as
+  `⏺ Read(path · lines x-y)` with a compact `Read N lines` result summary
+  instead of dumping file contents into the tool block.
+- Expanded `pkg/modu-tui` tool blocks now render with a faint full-width
+  background without nested ANSI styling, so command details read as one
+  grouped block without dark reset artifacts.
+- Collapsed `pkg/modu-tui` tool summaries are indented, while clicking any
+  rendered line inside an expanded tool block collapses it.
+- Tool approval cards now use compact command previews instead of JSON args,
+  with clearer grouped allow/deny shortcuts.
+- Tool approval cards now use a heavier, higher-contrast border so the fixed
+  approval panel reads as a distinct card on mobile terminals.
+- `pkg/modu-tui` now has a reusable `CardBlock` heavy-border card renderer,
+  and approval/slash popups share that card style instead of hardcoding panel
+  borders in the model.
+- Fresh `modu-tui` sessions now open with a `CardBlock` startup information
+  card showing app, model, cwd, session id, and basic `/` command guidance;
+  the card is UI-only and stays at the top after transcript messages exist.
+- `pkg/modu-tui` input now collapses large pasted text into a `[Pasted text ...]`
+  token in the bottom input while submitting and rendering the full expanded
+  content in the conversation transcript.
+- The `modu-tui` runner now supports slash command suggestions: typing `/`
+  opens a fixed bottom card, `Tab` completes the selected command, and `Enter`
+  routes slash commands through `pkg/slash` or the session slash/prompt/skill
+  path instead of sending them to the model as plain text.
+- Slash command output in the `modu-tui` runner is now marked preformatted, so
+  multiline outputs such as `/help` keep line breaks and column alignment
+  instead of being reflowed as a Markdown paragraph.
+- `pkg/modu-tui` markdown rendering now disables Glamour's heavy inline-code
+  red/background styling while preserving fenced-code highlighting and table
+  rendering, keeping status text such as commit summaries readable.
+- `pkg/modu-tui` now owns reusable tool approval UI primitives:
+  `ApprovalBlock`, `RequestToolApprovalMsg`, approval decision constants, and
+  keyboard handling for allow/deny decisions.
 - Git-backed `modu_code` startup can enter a managed branch-backed worktree via
   `--worktree`; the default startup path stays in the current checkout.
 - Default `modu_code` startup now creates a fresh session id; previous context
@@ -70,6 +121,16 @@ enough to implement, verify, and commit independently.
   a follow-up, Shift+Enter or `/steer <message>` interrupts and steers, and
   `/followup <message>` queues explicitly. `/s` and `/f` provide terminal-safe
   short aliases when Shift+Enter is not distinguishable from Enter.
+- `pkg/modu-tui` now reports bottom-input submit intent as prompt, follow-up,
+  or steer events so `cmd/modu_code` can route running-task input without
+  coupling the reusable UI package to coding-agent sessions.
+- `pkg/modu-tui` now renders assistant thinking as one collapsed block at the
+  top of each assistant turn, with separate marker colors for assistant replies,
+  streaming replies, and expanded tool calls.
+- `modu-tui` input history is wired into `modu_code`: Up/Down navigates the
+  last 100 submitted inputs, shows a `History n/total` hint on the top input
+  rule, restores the current draft, and persists through the session input
+  history file.
 - Added `/queue` to inspect pending steer/follow-up messages, clear all or one
   queue type, and drop the last pending message after accidental input.
 - Telegram input now mirrors the TUI queue semantics: plain messages become
