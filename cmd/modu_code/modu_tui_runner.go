@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"golang.org/x/term"
@@ -32,6 +33,7 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 	var currentPromptID int
 	var nextPromptID int
 	var continueQueuedAfterCancel bool
+	durationTracker := newModuTUIAgentDurationTracker(time.Now)
 	send := func(msg tea.Msg) {
 		programMu.RLock()
 		p := program
@@ -150,6 +152,7 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 	}
 
 	width, height := initialTerminalSize(int(os.Stdout.Fd()), 120, 35)
+	mouseDisabled := moduTUIMouseDisabledFromEnv(os.Environ())
 	ui := modutui.NewModel(modutui.Options{
 		Width:           width,
 		Height:          height,
@@ -158,6 +161,8 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		StatusHint:      "Enter 发送 · Ctrl+C 退出 · 当前为 modu-tui runner",
 		InfoCardLines:   moduTUIInfoCardLines(session, model),
 		SlashCommands:   moduTUISlashCommands(session),
+		DisableMouse:    mouseDisabled,
+		ArrowKeysScroll: mouseDisabled,
 		Hooks: modutui.Hooks{
 			InputHistoryChanged: func(history []string) {
 				_ = saveModuTUIInputHistory(historyFile, history)
@@ -184,6 +189,9 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 	})
 
 	unsubAgent := session.Subscribe(func(ev types.Event) {
+		if msg, ok := durationTracker.Handle(ev); ok {
+			send(modutui.AppendMessageMsg{Message: msg})
+		}
 		for _, msg := range messagesFromAgentEvent(ev) {
 			send(modutui.AppendMessageMsg{Message: msg})
 		}
@@ -203,6 +211,86 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 	programMu.Unlock()
 	_, err := prog.Run()
 	return err
+}
+
+type moduTUIAgentDurationTracker struct {
+	mu      sync.Mutex
+	now     func() time.Time
+	started time.Time
+}
+
+func newModuTUIAgentDurationTracker(now func() time.Time) *moduTUIAgentDurationTracker {
+	if now == nil {
+		now = time.Now
+	}
+	return &moduTUIAgentDurationTracker{now: now}
+}
+
+func (t *moduTUIAgentDurationTracker) Handle(ev types.Event) (modutui.Message, bool) {
+	switch ev.Type {
+	case types.EventTypeAgentStart:
+		t.mu.Lock()
+		t.started = t.now()
+		t.mu.Unlock()
+	case types.EventTypeAgentEnd:
+		t.mu.Lock()
+		started := t.started
+		t.started = time.Time{}
+		t.mu.Unlock()
+		if started.IsZero() {
+			break
+		}
+		return modutui.Message{
+			Role:         modutui.RoleAssistant,
+			Text:         "✓ Completed (" + formatModuTUIActivityDuration(t.now().Sub(started)) + ")",
+			Preformatted: true,
+			Plain:        true,
+		}, true
+	}
+	return modutui.Message{}, false
+}
+
+func formatModuTUIActivityDuration(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	seconds := int(d.Round(time.Second).Seconds())
+	if seconds < 60 {
+		return fmt.Sprintf("%ds", seconds)
+	}
+	minutes := seconds / 60
+	seconds %= 60
+	if seconds == 0 {
+		return fmt.Sprintf("%dmin", minutes)
+	}
+	return fmt.Sprintf("%dmin %02ds", minutes, seconds)
+}
+
+func moduTUIMouseDisabledFromEnv(env []string) bool {
+	if mode, ok := envValue(env, "MODU_TUI_MOUSE"); ok {
+		switch strings.ToLower(strings.TrimSpace(mode)) {
+		case "1", "true", "yes", "on", "cell", "mouse":
+			return false
+		case "0", "false", "no", "off", "none", "disabled", "disable":
+			return true
+		}
+	}
+	return envNonEmpty(env, "SSH_TTY") || envNonEmpty(env, "SSH_CONNECTION") || envNonEmpty(env, "SSH_CLIENT")
+}
+
+func envNonEmpty(env []string, key string) bool {
+	value, ok := envValue(env, key)
+	return ok && strings.TrimSpace(value) != ""
+}
+
+func envValue(env []string, key string) (string, bool) {
+	prefix := key + "="
+	for _, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			return strings.TrimPrefix(item, prefix), true
+		}
+	}
+	return "", false
 }
 
 type moduTUISlashPrinter struct {
@@ -544,24 +632,30 @@ func messagesFromAgentEvent(ev types.Event) []modutui.Message {
 	case types.EventTypeToolExecutionStart:
 		input := toolInputFromArgs(ev.ToolName, ev.Args)
 		return []modutui.Message{{
-			Tool:      true,
-			ToolID:    ev.ToolCallID,
-			ToolName:  ev.ToolName,
-			Summary:   toolRunningSummary(ev.ToolName),
-			Detail:    input,
-			ToolInput: input,
+			Tool:           true,
+			ToolID:         ev.ToolCallID,
+			ToolName:       toolRenderName(ev.ToolName, nil),
+			Summary:        toolRunningSummary(ev.ToolName),
+			Detail:         input,
+			ToolInput:      input,
+			ToolOutput:     toolPreviewOutputFromArgs(ev.ToolName, ev.Args),
+			ToolCode:       toolCodeFromArgs(ev.ToolName, ev.Args),
+			ToolLanguage:   toolLanguageFromArgs(ev.ToolName, ev.Args),
+			ToolNoCollapse: isWriteLikeTool(ev.ToolName),
+			Expanded:       isWriteLikeTool(ev.ToolName),
 		}}
 	case types.EventTypeToolExecutionEnd:
 		output := toolOutputFromResult(ev.ToolName, ev.IsError, ev.Result)
 		return []modutui.Message{{
-			Tool:       true,
-			ToolID:     ev.ToolCallID,
-			ToolName:   ev.ToolName,
-			Summary:    toolDoneSummary(ev.ToolName, ev.IsError, output),
-			ToolOutput: output,
-			ToolError:  ev.IsError,
-			ToolDone:   true,
-			Expanded:   ev.IsError,
+			Tool:           true,
+			ToolID:         ev.ToolCallID,
+			ToolName:       toolRenderName(ev.ToolName, ev.Result),
+			Summary:        toolDoneSummary(ev.ToolName, ev.IsError, output),
+			ToolOutput:     toolDisplayOutput(ev.ToolName, ev.IsError, output),
+			ToolError:      ev.IsError,
+			ToolDone:       true,
+			ToolNoCollapse: isWriteLikeTool(ev.ToolName),
+			Expanded:       ev.IsError || isWriteLikeTool(ev.ToolName),
 		}}
 	default:
 		return nil
@@ -630,12 +724,17 @@ func messagesFromAssistantMessage(msg types.AssistantMessage) []modutui.Message 
 			if b != nil {
 				input := toolInputFromArgs(b.Name, b.Arguments)
 				out = append(out, modutui.Message{
-					Tool:      true,
-					ToolID:    b.ID,
-					ToolName:  b.Name,
-					Summary:   toolRunningSummary(b.Name),
-					Detail:    input,
-					ToolInput: input,
+					Tool:           true,
+					ToolID:         b.ID,
+					ToolName:       toolRenderName(b.Name, nil),
+					Summary:        toolRunningSummary(b.Name),
+					Detail:         input,
+					ToolInput:      input,
+					ToolOutput:     toolPreviewOutputFromArgs(b.Name, b.Arguments),
+					ToolCode:       toolCodeFromArgs(b.Name, b.Arguments),
+					ToolLanguage:   toolLanguageFromArgs(b.Name, b.Arguments),
+					ToolNoCollapse: isWriteLikeTool(b.Name),
+					Expanded:       isWriteLikeTool(b.Name),
 				})
 			}
 		}
@@ -656,14 +755,15 @@ func messagesFromAssistantMessage(msg types.AssistantMessage) []modutui.Message 
 func messageFromToolResult(msg types.ToolResultMessage) modutui.Message {
 	output := toolOutputFromContent(msg.ToolName, msg.IsError, msg.Content)
 	return modutui.Message{
-		Tool:       true,
-		ToolID:     msg.ToolCallID,
-		ToolName:   msg.ToolName,
-		Summary:    toolDoneSummary(msg.ToolName, msg.IsError, output),
-		ToolOutput: output,
-		ToolError:  msg.IsError,
-		ToolDone:   true,
-		Expanded:   msg.IsError,
+		Tool:           true,
+		ToolID:         msg.ToolCallID,
+		ToolName:       toolRenderName(msg.ToolName, nil),
+		Summary:        toolDoneSummary(msg.ToolName, msg.IsError, output),
+		ToolOutput:     toolDisplayOutput(msg.ToolName, msg.IsError, output),
+		ToolError:      msg.IsError,
+		ToolDone:       true,
+		ToolNoCollapse: isWriteLikeTool(msg.ToolName),
+		Expanded:       msg.IsError || isWriteLikeTool(msg.ToolName),
 	}
 }
 
@@ -701,6 +801,165 @@ func toolDoneSummary(toolName string, isError bool, output string) string {
 	return "Ran " + name
 }
 
+func isWriteLikeTool(toolName string) bool {
+	return strings.EqualFold(toolName, "write") || strings.EqualFold(toolName, "edit")
+}
+
+func toolRenderName(toolName string, result any) string {
+	if strings.EqualFold(toolName, "edit") {
+		return "update"
+	}
+	if strings.EqualFold(toolName, "write") {
+		if strings.EqualFold(toolResultStringDetail(result, "type"), "update") {
+			return "update"
+		}
+	}
+	return toolName
+}
+
+func toolDisplayOutput(toolName string, isError bool, output string) string {
+	if isWriteLikeTool(toolName) && !isError {
+		return ""
+	}
+	return output
+}
+
+func toolPreviewOutputFromArgs(toolName string, args any) string {
+	if strings.EqualFold(toolName, "edit") {
+		oldText, _ := firstStringValue(args, "old_text", "old_string")
+		newText, _ := firstStringValue(args, "new_text", "new_string")
+		removed := countContentLines(oldText)
+		added := countContentLines(newText)
+		return fmt.Sprintf("Added %d lines, removed %d lines", added, removed)
+	}
+	if strings.EqualFold(toolName, "write") {
+		content, ok := mapStringValue(args, "content")
+		if !ok {
+			return ""
+		}
+		lines := countContentLines(content)
+		bytes := len([]byte(content))
+		if lines == 1 {
+			return fmt.Sprintf("Wrote 1 line, %d bytes", bytes)
+		}
+		return fmt.Sprintf("Wrote %d lines, %d bytes", lines, bytes)
+	}
+	return ""
+}
+
+func toolCodeFromArgs(toolName string, args any) string {
+	if strings.EqualFold(toolName, "write") {
+		content, _ := mapStringValue(args, "content")
+		return content
+	}
+	if strings.EqualFold(toolName, "edit") {
+		oldText, _ := firstStringValue(args, "old_text", "old_string")
+		newText, _ := firstStringValue(args, "new_text", "new_string")
+		return simpleEditDiff(oldText, newText)
+	}
+	return ""
+}
+
+func toolLanguageFromArgs(toolName string, args any) string {
+	if strings.EqualFold(toolName, "edit") {
+		return "diff"
+	}
+	if strings.EqualFold(toolName, "write") {
+		path, _ := firstStringValue(args, "path", "file_path")
+		return languageFromPath(path)
+	}
+	return ""
+}
+
+func simpleEditDiff(oldText, newText string) string {
+	var lines []string
+	for _, line := range splitContentLines(oldText) {
+		lines = append(lines, "- "+line)
+	}
+	for _, line := range splitContentLines(newText) {
+		lines = append(lines, "+ "+line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func splitContentLines(text string) []string {
+	if text == "" {
+		return nil
+	}
+	return strings.Split(strings.TrimRight(text, "\n"), "\n")
+}
+
+func countContentLines(text string) int {
+	return len(splitContentLines(text))
+}
+
+func firstStringValue(v any, keys ...string) (string, bool) {
+	for _, key := range keys {
+		if value, ok := mapStringValue(v, key); ok {
+			return value, true
+		}
+	}
+	return "", false
+}
+
+func toolResultStringDetail(result any, key string) string {
+	details := toolResultDetails(result)
+	if details == nil {
+		return ""
+	}
+	if value, ok := details[key].(string); ok {
+		return value
+	}
+	return ""
+}
+
+func toolResultDetails(result any) map[string]any {
+	switch r := result.(type) {
+	case types.ToolResult:
+		if m, ok := r.Details.(map[string]any); ok {
+			return m
+		}
+	case *types.ToolResult:
+		if r != nil {
+			if m, ok := r.Details.(map[string]any); ok {
+				return m
+			}
+		}
+	}
+	return nil
+}
+
+func languageFromPath(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".go":
+		return "go"
+	case ".js", ".mjs", ".cjs":
+		return "javascript"
+	case ".ts", ".tsx":
+		return "typescript"
+	case ".jsx":
+		return "jsx"
+	case ".json":
+		return "json"
+	case ".md", ".markdown":
+		return "markdown"
+	case ".py":
+		return "python"
+	case ".sh", ".bash", ".zsh":
+		return "bash"
+	case ".yaml", ".yml":
+		return "yaml"
+	case ".html":
+		return "html"
+	case ".css":
+		return "css"
+	case ".sql":
+		return "sql"
+	default:
+		return ""
+	}
+}
+
 func toolInputFromArgs(toolName string, args any) string {
 	if strings.EqualFold(toolName, "bash") {
 		if command, ok := mapStringValue(args, "command"); ok {
@@ -709,6 +968,11 @@ func toolInputFromArgs(toolName string, args any) string {
 	}
 	if strings.EqualFold(toolName, "read") {
 		return readInputFromArgs(args)
+	}
+	if isWriteLikeTool(toolName) {
+		if path, ok := firstStringValue(args, "path", "file_path"); ok {
+			return path
+		}
 	}
 	return formatJSON(args)
 }

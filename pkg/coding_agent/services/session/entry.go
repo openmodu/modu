@@ -222,16 +222,18 @@ func (e *SessionEntry) UnmarshalJSON(data []byte) error {
 }
 
 func messagePayload(data any) any {
-	if msg, ok := data.(types.AgentMessage); ok {
+	switch msg := data.(type) {
+	case types.UserMessage, *types.UserMessage, types.AssistantMessage, *types.AssistantMessage, types.ToolResultMessage, *types.ToolResultMessage:
 		return msg
-	}
-	if data, ok := data.(MessageData); ok {
-		if msg, ok := data.Content.(types.AgentMessage); ok {
-			return msg
-		}
-		return map[string]any{
-			"role":    string(data.Role),
-			"content": data.Content,
+	case MessageData:
+		switch content := msg.Content.(type) {
+		case types.UserMessage, *types.UserMessage, types.AssistantMessage, *types.AssistantMessage, types.ToolResultMessage, *types.ToolResultMessage:
+			return content
+		default:
+			return map[string]any{
+				"role":    string(msg.Role),
+				"content": msg.Content,
+			}
 		}
 	}
 	return data

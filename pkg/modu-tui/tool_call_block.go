@@ -39,7 +39,8 @@ func (b ToolCallBlock) Render(ctx RenderContext) BlockRender {
 	}
 
 	out := BlockRender{}
-	if !b.Expanded {
+	expanded := b.Expanded || b.Call.NoCollapse
+	if !expanded {
 		out.Add(dimStyle.Render("  "+summary), 0)
 		return out
 	}
@@ -47,6 +48,9 @@ func (b ToolCallBlock) Render(ctx RenderContext) BlockRender {
 	out.Add(toolExpandedHeaderLine(ctx.ContentWidth, b.Call), 0)
 	for _, line := range toolDetailLines(b.Call) {
 		out.Add(toolExpandedLine(ctx.ContentWidth, "  "+line), 0)
+	}
+	for _, line := range toolCodeLines(ctx, b.Call) {
+		out.Add(toolExpandedLine(ctx.ContentWidth, line), 0)
 	}
 	return out
 }
@@ -85,6 +89,22 @@ func toolDetailLines(call ToolCall) []string {
 		lines = append(lines, strings.Split(output, "\n")...)
 	}
 	return lines
+}
+
+func toolCodeLines(ctx RenderContext, call ToolCall) []string {
+	code := strings.TrimRight(call.Code, "\n")
+	if code == "" {
+		return nil
+	}
+	lang := strings.TrimSpace(call.Language)
+	fence := "```" + lang + "\n" + code + "\n```"
+	body := fence
+	if ctx.Markdown != nil {
+		if out, err := ctx.Markdown.Render(fence); err == nil {
+			body = strings.Trim(out, "\n")
+		}
+	}
+	return strings.Split(body, "\n")
 }
 
 func toolDisplayName(name string) string {

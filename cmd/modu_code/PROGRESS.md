@@ -25,6 +25,8 @@ enough to implement, verify, and commit independently.
 - `modu_code` Read tool calls now render like Claude Code: expanded as
   `⏺ Read(path · lines x-y)` with a compact `Read N lines` result summary
   instead of dumping file contents into the tool block.
+- `modu_code` write/edit tool calls now render as explicit non-collapsible
+  blocks with a short write/diff summary and syntax-highlighted content or diff.
 - Expanded `pkg/modu-tui` tool blocks now render with a faint full-width
   background without nested ANSI styling, so command details read as one
   grouped block without dark reset artifacts.
@@ -60,6 +62,19 @@ enough to implement, verify, and commit independently.
   `--worktree`; the default startup path stays in the current checkout.
 - Default `modu_code` startup now creates a fresh session id; previous context
   is restored only when the caller passes `--resume <session-id>`.
+- Interactive TUI exit now prints the current session id plus a copyable
+  `modu_code --resume <session-id>` command, making the saved history path
+  explicit after Ctrl+C or `/quit`; empty sessions are flushed so printed ids
+  can be resumed immediately.
+- SSH sessions now default `pkg/modu-tui` mouse reporting off, with
+  `MODU_TUI_MOUSE=on` as an opt-in for desktop SSH, reducing JuiceSSH/mobile
+  touch-motion event floods that can make the interface appear frozen.
+- SSH mouse-disabled sessions also route empty-input Up/Down keys to transcript
+  scrolling, so mobile swipe gestures translated into arrow keys can reach
+  earlier conversation content instead of opening input history.
+- The `modu-tui` runner now restores per-agent-run elapsed summaries by
+  tracking `AgentStart`/`AgentEnd` events and appending `✓ Completed (...)`
+  after each finished conversation round.
 - Status line moved above the input separator, with animated running state,
   persisted completed state, and duration formatting that supports `min`.
 - Terminal resize handling keeps the user prompt visible and avoids duplicate

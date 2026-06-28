@@ -60,6 +60,42 @@ func TestSessionManagerFileIsNamedBySessionID(t *testing.T) {
 	}
 }
 
+func TestSessionManagerFlushPersistsEmptySessionHeader(t *testing.T) {
+	dir := t.TempDir()
+
+	mgr, err := NewFreshManager(dir, "/test/project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Flush(); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(mgr.FilePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("empty flushed session should contain only header, got %d lines:\n%s", len(lines), string(data))
+	}
+	var header Header
+	if err := json.Unmarshal([]byte(lines[0]), &header); err != nil {
+		t.Fatal(err)
+	}
+	if header.ID != mgr.SessionID() || header.Cwd != "/test/project" {
+		t.Fatalf("unexpected flushed header: %#v", header)
+	}
+
+	infos, err := List(dir, "/test/project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 1 || infos[0].ID != mgr.SessionID() {
+		t.Fatalf("expected flushed empty session to be listable, got %#v", infos)
+	}
+}
+
 func TestAppendSidecarDoesNotMoveLeaf(t *testing.T) {
 	dir := t.TempDir()
 

@@ -20,6 +20,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -38,6 +39,7 @@ import (
 )
 
 var runTUI = runModuTUI
+var interactiveExitOutput io.Writer = os.Stdout
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "config" {
@@ -113,7 +115,15 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	defer session.Close("prompt_input_exit")
+	sessionClosed := false
+	closeSession := func() {
+		if sessionClosed {
+			return
+		}
+		sessionClosed = true
+		session.Close("prompt_input_exit")
+	}
+	defer closeSession()
 	unsubModelPersist := session.SubscribeSession(func(ev coding_agent.SessionEvent) {
 		if ev.Type != coding_agent.SessionEventModelChange || ev.Provider == "" || ev.ModelID == "" {
 			return
@@ -181,6 +191,19 @@ func main() {
 		fmt.Fprintf(os.Stderr, "ui error: %v\n", err)
 		os.Exit(1)
 	}
+	closeSession()
+	printInteractiveExitSummary(interactiveExitOutput, session)
+}
+
+func printInteractiveExitSummary(out io.Writer, session *coding_agent.CodingSession) {
+	if out == nil || session == nil {
+		return
+	}
+	id := strings.TrimSpace(session.GetSessionID())
+	if id == "" {
+		return
+	}
+	fmt.Fprintf(out, "\nSession saved: %s\nResume with: modu_code --resume %s\n", id, id)
 }
 
 func enterStartupWorktree(session *coding_agent.CodingSession) error {

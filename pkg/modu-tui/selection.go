@@ -76,6 +76,7 @@ func (m *Model) onPress(x, y int) tea.Cmd {
 		m.selecting = true
 		m.follow = false
 		m.dragCol = max(0, x)
+		m.autoScrollTicks = 0
 		c := m.cellAt(m.yOffset+y, x)
 		m.selStart, m.selEnd = c, c
 		m.status = ""
@@ -87,6 +88,7 @@ func (m *Model) onDrag(x, y int) tea.Cmd {
 	h := m.vpHeight()
 	yy := clamp(y, 0, h-1)
 	m.dragCol = max(0, x)
+	m.autoScrollTicks = 0
 	m.selEnd = m.cellAt(m.yOffset+yy, x)
 	switch {
 	case y <= 0:

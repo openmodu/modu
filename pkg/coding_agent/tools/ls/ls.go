@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -25,7 +26,15 @@ func NewTool(cwd string) types.Tool {
 func (t *LsTool) Name() string  { return "ls" }
 func (t *LsTool) Label() string { return "List Directory" }
 func (t *LsTool) Description() string {
-	return `List the contents of a directory. Returns file and directory names, with directories suffixed with '/'. Sorted alphabetically (case-insensitive).`
+	return `List the contents of a directory.
+
+Usage:
+- Use this tool to inspect a directory you have not seen yet; prefer it over running ls through bash for ordinary directory exploration.
+- Use find when you need glob pattern matching across a tree.
+- Use ignore to hide shallow entries that match glob patterns such as "*.log", "build/", or "vendor/**"; pass either one pattern or an array of patterns.
+- Returns file and directory names, with directories suffixed with "/".
+- The path must be a directory; use read for known files.
+- Results are sorted alphabetically case-insensitively and capped by limit. Numeric strings such as "10" are accepted for limit.`
 }
 
 func (t *LsTool) Parameters() any {
@@ -37,8 +46,18 @@ func (t *LsTool) Parameters() any {
 				"description": "Directory path to list (default: cwd)",
 			},
 			"limit": map[string]any{
-				"type":        "integer",
+				"anyOf":       semanticLsIntegerSchema(),
 				"description": "Maximum number of entries to return (default 500)",
+			},
+			"ignore": map[string]any{
+				"anyOf": []map[string]any{
+					{"type": "string"},
+					{
+						"type":  "array",
+						"items": map[string]any{"type": "string"},
+					},
+				},
+				"description": "Optional shallow glob pattern or patterns to hide from the listing, such as \"*.log\", \"build/\", or \"vendor/**\".",
 			},
 		},
 	}
@@ -52,23 +71,35 @@ func (t *LsTool) Execute(ctx context.Context, toolCallID string, args map[string
 
 	limit := defaultLsLimit
 	if v, ok := args["limit"]; ok {
-		limit = common.ToInt(v)
+		limit, _ = common.ToSemanticInt(v)
 		if limit <= 0 {
 			limit = defaultLsLimit
 		}
 	}
 
-	entries, err := os.ReadDir(dirPath)
+	info, err := os.Stat(dirPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return common.ErrorResult(fmt.Sprintf("directory not found: %s", dirPath)), nil
 		}
+		return common.ErrorResult(fmt.Sprintf("failed to stat directory: %v", err)), nil
+	}
+	if !info.IsDir() {
+		return common.ErrorResult(fmt.Sprintf("path is not a directory: %s", dirPath)), nil
+	}
+
+	entries, err := os.ReadDir(dirPath)
+	if err != nil {
 		return common.ErrorResult(fmt.Sprintf("failed to read directory: %v", err)), nil
 	}
 
+	ignorePatterns := parseIgnorePatterns(args["ignore"])
 	var names []string
 	for _, entry := range entries {
 		name := entry.Name()
+		if isIgnoredEntry(name, entry.IsDir(), ignorePatterns) {
+			continue
+		}
 		if entry.IsDir() {
 			name += "/"
 		}
@@ -81,6 +112,7 @@ func (t *LsTool) Execute(ctx context.Context, toolCallID string, args map[string
 	})
 
 	truncated := false
+	totalNames := len(names)
 	if len(names) > limit {
 		names = names[:limit]
 		truncated = true
@@ -88,7 +120,7 @@ func (t *LsTool) Execute(ctx context.Context, toolCallID string, args map[string
 
 	text := strings.Join(names, "\n")
 	if truncated {
-		text += fmt.Sprintf("\n\n... (%d entries total, showing first %d)", len(entries), limit)
+		text += fmt.Sprintf("\n\n... (%d entries total, showing first %d)", totalNames, limit)
 	}
 
 	if text == "" {
@@ -103,4 +135,71 @@ func (t *LsTool) Execute(ctx context.Context, toolCallID string, args map[string
 			"path": dirPath,
 		},
 	}, nil
+}
+
+func semanticLsIntegerSchema() []map[string]any {
+	return []map[string]any{
+		{"type": "integer"},
+		{"type": "string", "pattern": `^-?\d+$`},
+	}
+}
+
+func parseIgnorePatterns(v any) []string {
+	switch patterns := v.(type) {
+	case []string:
+		return cleanIgnorePatterns(patterns)
+	case []any:
+		out := make([]string, 0, len(patterns))
+		for _, item := range patterns {
+			if pattern, ok := item.(string); ok {
+				out = append(out, pattern)
+			}
+		}
+		return cleanIgnorePatterns(out)
+	case string:
+		return cleanIgnorePatterns([]string{patterns})
+	default:
+		return nil
+	}
+}
+
+func cleanIgnorePatterns(patterns []string) []string {
+	out := make([]string, 0, len(patterns))
+	for _, pattern := range patterns {
+		pattern = strings.TrimSpace(filepath.ToSlash(pattern))
+		pattern = strings.TrimPrefix(pattern, "./")
+		if pattern != "" {
+			out = append(out, pattern)
+		}
+	}
+	return out
+}
+
+func isIgnoredEntry(name string, isDir bool, patterns []string) bool {
+	if len(patterns) == 0 {
+		return false
+	}
+
+	candidates := []string{filepath.ToSlash(name)}
+	if isDir {
+		candidates = append(candidates, filepath.ToSlash(name)+"/")
+	}
+
+	for _, pattern := range patterns {
+		for _, candidate := range candidates {
+			if pattern == candidate || strings.TrimSuffix(pattern, "/") == strings.TrimSuffix(candidate, "/") {
+				return true
+			}
+			if strings.HasSuffix(pattern, "/**") {
+				root := strings.TrimSuffix(pattern, "/**")
+				if root == strings.TrimSuffix(candidate, "/") {
+					return true
+				}
+			}
+			if matched, err := filepath.Match(filepath.FromSlash(pattern), filepath.FromSlash(candidate)); err == nil && matched {
+				return true
+			}
+		}
+	}
+	return false
 }

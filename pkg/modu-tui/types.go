@@ -13,22 +13,26 @@ const (
 )
 
 type Message struct {
-	Role         Role
-	Text         string
-	Thinking     bool
-	Tool         bool
-	ToolID       string
-	ToolName     string
-	Summary      string
-	Detail       string
-	ToolInput    string
-	ToolOutput   string
-	ToolError    bool
-	ToolDone     bool
-	Expanded     bool
-	Preformatted bool
-	Language     string
-	Code         string
+	Role           Role
+	Text           string
+	Thinking       bool
+	Tool           bool
+	ToolID         string
+	ToolName       string
+	Summary        string
+	Detail         string
+	ToolInput      string
+	ToolOutput     string
+	ToolCode       string
+	ToolLanguage   string
+	ToolError      bool
+	ToolDone       bool
+	ToolNoCollapse bool
+	Expanded       bool
+	Preformatted   bool
+	Plain          bool
+	Language       string
+	Code           string
 }
 
 type ToolPermissionState string
@@ -41,14 +45,17 @@ const (
 )
 
 type ToolCall struct {
-	ID      string
-	Name    string
-	Summary string
-	Detail  string
-	Input   string
-	Output  string
-	Error   bool
-	Done    bool
+	ID         string
+	Name       string
+	Summary    string
+	Detail     string
+	Input      string
+	Output     string
+	Code       string
+	Language   string
+	Error      bool
+	Done       bool
+	NoCollapse bool
 }
 
 type ToolApprovalDecision string
@@ -109,6 +116,8 @@ type Options struct {
 	StreamReply     string
 	StatusHint      string
 	InfoCardLines   []string
+	DisableMouse    bool
+	ArrowKeysScroll bool
 	Hooks           Hooks
 	BlockFactories  []MessageBlockFactory
 	BlockGap        int

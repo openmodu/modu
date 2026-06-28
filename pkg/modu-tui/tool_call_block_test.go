@@ -94,6 +94,55 @@ func TestToolCallBlockRendersClaudeStyleReadCall(t *testing.T) {
 	}
 }
 
+func TestToolCallBlockRendersNoCollapseCode(t *testing.T) {
+	ctx := RenderContext{ContentWidth: 80, Markdown: markdownRenderer(80)}
+	block := ToolCallBlock{
+		Call: ToolCall{
+			Name:       "update",
+			Input:      "main.go",
+			Output:     "Added 1 lines, removed 1 lines",
+			Code:       "- fmt.Println(\"old\")\n+ fmt.Println(\"new\")",
+			Language:   "diff",
+			NoCollapse: true,
+		},
+	}
+	got := strings.Join(renderedTexts(block.Render(ctx)), "\n")
+	for _, want := range []string{"Update(main.go)", "Added 1 lines, removed 1 lines", "fmt.Println(\"old\")", "fmt.Println(\"new\")"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expanded write block missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Ran update") {
+		t.Fatalf("no-collapse write block should not render collapsed summary:\n%s", got)
+	}
+}
+
+func TestPOC2NoCollapseToolBlockIsNotClickable(t *testing.T) {
+	m := NewModel(Options{
+		Width:  80,
+		Height: 12,
+		InitialMessages: []Message{{
+			Tool:           true,
+			ToolID:         "call-1",
+			ToolName:       "update",
+			ToolInput:      "main.go",
+			ToolOutput:     "Added 1 lines, removed 1 lines",
+			ToolCode:       "- old\n+ new",
+			ToolLanguage:   "diff",
+			ToolNoCollapse: true,
+			Expanded:       true,
+		}},
+	})
+	if len(m.headers) != 0 {
+		t.Fatalf("no-collapse tool should not register clickable headers: %#v", m.headers)
+	}
+	before := m.messages[0].Expanded
+	_ = m.onPress(1, 1)
+	if m.messages[0].Expanded != before {
+		t.Fatal("no-collapse tool should not toggle expanded state")
+	}
+}
+
 func TestToolPermissionHookIsUsedByToolBlock(t *testing.T) {
 	ctx := RenderContext{
 		ContentWidth: 60,

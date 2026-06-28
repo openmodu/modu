@@ -12,6 +12,7 @@ const (
 	GrepMaxLineLen    = 500
 	BashMaxLines      = 2000
 	ReadMaxLines      = 2000
+	ReadMaxBytes      = 256 * 1024
 )
 
 // TruncateOptions configures truncation behavior.

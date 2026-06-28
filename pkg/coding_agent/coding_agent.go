@@ -672,6 +672,9 @@ func (s *engine) Close(reason string) {
 		s.extensions.EmitEvent(types.Event{Type: types.EventType("session_shutdown")})
 	}
 	s.writeRuntimeState()
+	if s.sessionManager != nil {
+		_ = s.sessionManager.Flush()
+	}
 }
 
 // Steer injects a high-priority message during processing.

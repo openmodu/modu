@@ -143,6 +143,65 @@ func TestAgentLoopBasic(t *testing.T) {
 	}
 }
 
+func TestDefaultLLMEmitsMessageEndWhenStreamClosesAfterResolve(t *testing.T) {
+	model := &types.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
+	user := types.UserMessage{Role: types.RoleUser, Content: "Hello", Timestamp: time.Now().UnixMilli()}
+	events := types.NewAgentEventStream()
+	defer events.Close()
+
+	var seen []types.Event
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for event := range events.Events() {
+			seen = append(seen, event)
+		}
+	}()
+
+	streamFn := func(ctx context.Context, _ *types.Model, _ *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+		stream := types.NewEventStream()
+		go func() {
+			msg := &types.AssistantMessage{
+				Role:       types.RoleAssistant,
+				ProviderID: model.ProviderID,
+				Model:      model.ID,
+				StopReason: "stop",
+				Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "Hi"}},
+				Timestamp:  time.Now().UnixMilli(),
+			}
+			stream.Resolve(msg, nil)
+			stream.Close()
+		}()
+		return stream, nil
+	}
+
+	loop := NewLoop(DefaultLLM{}, DefaultTools{})
+	_, err := loop.Run(context.Background(), types.LoopInput{
+		Prompts: []types.AgentMessage{user},
+		Context: types.AgentContext{SystemPrompt: "", Messages: []types.AgentMessage{}},
+		Config:  types.Config{Model: model, StreamFn: streamFn},
+		Events:  events,
+	})
+	events.Close()
+	<-done
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var assistantEnds int
+	for _, event := range seen {
+		if event.Type != types.EventTypeMessageEnd {
+			continue
+		}
+		if msg, ok := event.Message.(types.AssistantMessage); ok && msg.Role == types.RoleAssistant {
+			assistantEnds++
+		}
+	}
+	if assistantEnds != 1 {
+		t.Fatalf("assistant message_end count = %d, want 1; events=%#v", assistantEnds, seen)
+	}
+}
+
 func TestAgentLoopToolCalls(t *testing.T) {
 	model := &types.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
 	tool := &fakeTool{}

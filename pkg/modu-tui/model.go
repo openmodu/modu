@@ -13,6 +13,9 @@ type streamTickMsg struct{}
 type autoScrollTickMsg struct{}
 
 const maxInputHistory = 100
+const bottomFixedRows = 4
+const minViewportRows = 1
+const maxAutoScrollTicksWithoutDrag = 80
 
 type pendingApproval struct {
 	request ToolApprovalRequest
@@ -45,9 +48,12 @@ type Model struct {
 	dragCol          int
 	autoScroll       int  // edge auto-scroll direction during drag: -1 up, +1 down, 0 none
 	autoScrolling    bool // a tick loop is currently live
+	autoScrollTicks  int
 	status           string
 	statusHint       string
 	infoCardLines    []string
+	disableMouse     bool
+	arrowKeysScroll  bool
 	hooks            Hooks
 	blockFactories   []MessageBlockFactory
 	blockGap         int
@@ -69,6 +75,8 @@ func NewModel(options ...Options) Model {
 		opts.InputHistory = append([]string(nil), options[0].InputHistory...)
 		opts.StreamReply = options[0].StreamReply
 		opts.InfoCardLines = append([]string(nil), options[0].InfoCardLines...)
+		opts.DisableMouse = options[0].DisableMouse
+		opts.ArrowKeysScroll = options[0].ArrowKeysScroll
 		opts.Hooks = options[0].Hooks
 		opts.BlockFactories = append([]MessageBlockFactory(nil), options[0].BlockFactories...)
 		opts.SlashCommands = append([]SlashCommand(nil), options[0].SlashCommands...)
@@ -80,19 +88,21 @@ func NewModel(options ...Options) Model {
 		}
 	}
 	m := Model{
-		width:          opts.Width,
-		height:         opts.Height,
-		follow:         true,
-		selStart:       cell{line: -1},
-		selEnd:         cell{line: -1},
-		streamReply:    opts.StreamReply,
-		statusHint:     opts.StatusHint,
-		infoCardLines:  cleanInfoCardLines(opts.InfoCardLines),
-		hooks:          opts.Hooks,
-		blockFactories: opts.BlockFactories,
-		blockGap:       opts.BlockGap,
-		slashCommands:  normalizeSlashCommands(opts.SlashCommands),
-		inputHistory:   normalizeInputHistory(opts.InputHistory),
+		width:           opts.Width,
+		height:          opts.Height,
+		follow:          true,
+		selStart:        cell{line: -1},
+		selEnd:          cell{line: -1},
+		streamReply:     opts.StreamReply,
+		statusHint:      opts.StatusHint,
+		infoCardLines:   cleanInfoCardLines(opts.InfoCardLines),
+		disableMouse:    opts.DisableMouse,
+		arrowKeysScroll: opts.ArrowKeysScroll,
+		hooks:           opts.Hooks,
+		blockFactories:  opts.BlockFactories,
+		blockGap:        opts.BlockGap,
+		slashCommands:   normalizeSlashCommands(opts.SlashCommands),
+		inputHistory:    normalizeInputHistory(opts.InputHistory),
 	}
 	m.historyIdx = len(m.inputHistory)
 	for _, msg := range opts.InitialMessages {
@@ -202,12 +212,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.Code == tea.KeyUp:
 			if len(m.slashMatches) > 0 {
 				m.slashIndex = (m.slashIndex - 1 + len(m.slashMatches)) % len(m.slashMatches)
+			} else if m.shouldArrowKeyScroll() {
+				m.scroll(-3)
 			} else {
 				m.navigateInputHistory(-1)
 			}
 		case msg.Code == tea.KeyDown:
 			if len(m.slashMatches) > 0 {
 				m.slashIndex = (m.slashIndex + 1) % len(m.slashMatches)
+			} else if m.shouldArrowKeyScroll() {
+				m.scroll(3)
 			} else {
 				m.navigateInputHistory(1)
 			}
@@ -244,11 +258,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.selecting {
 			m.selecting = false
 			m.autoScroll = 0
+			m.autoScrollTicks = 0
 			return m, m.copySelection()
 		}
 
 	case autoScrollTickMsg:
 		if m.selecting && m.autoScroll != 0 {
+			m.autoScrollTicks++
+			if m.autoScrollTicks > maxAutoScrollTicksWithoutDrag {
+				m.autoScroll = 0
+				m.autoScrolling = false
+				m.clearSelection()
+				return m, nil
+			}
 			m.scroll(m.autoScroll)
 			edge := m.yOffset
 			if m.autoScroll > 0 {
@@ -348,8 +370,15 @@ func mergeToolMessage(base, update Message) Message {
 	if update.ToolOutput != "" {
 		base.ToolOutput = update.ToolOutput
 	}
+	if update.ToolCode != "" {
+		base.ToolCode = update.ToolCode
+	}
+	if update.ToolLanguage != "" {
+		base.ToolLanguage = update.ToolLanguage
+	}
 	base.ToolError = base.ToolError || update.ToolError
 	base.ToolDone = base.ToolDone || update.ToolDone
+	base.ToolNoCollapse = base.ToolNoCollapse || update.ToolNoCollapse
 	base.Expanded = base.Expanded || update.Expanded
 	return base
 }
@@ -357,7 +386,11 @@ func mergeToolMessage(base, update Message) Message {
 func (m Model) View() tea.View {
 	v := tea.NewView(m.render())
 	v.AltScreen = true
-	v.MouseMode = tea.MouseModeCellMotion
+	if m.disableMouse {
+		v.MouseMode = tea.MouseModeNone
+	} else {
+		v.MouseMode = tea.MouseModeCellMotion
+	}
 	_, caretX := m.input.Render(m.inputRenderWidth())
 	if m.approval != nil {
 		caretX = 0
@@ -367,7 +400,7 @@ func (m Model) View() tea.View {
 }
 
 func (m *Model) vpHeight() int {
-	return max(1, m.height-4-m.approvalPanelHeight()-m.slashPanelHeight()-m.jumpPanelHeight())
+	return max(m.minViewportRows(), m.height-bottomFixedRows-m.approvalPanelHeight()-m.slashPanelHeight()-m.jumpPanelHeight())
 }
 func (m *Model) approvalPanelHeight() int {
 	return len(m.approvalPanelLines())
@@ -382,8 +415,18 @@ func (m *Model) jumpPanelHeight() int {
 	return 0
 }
 func (m *Model) showJumpPanel() bool {
-	heightWithoutJump := max(1, m.height-4-m.approvalPanelHeight()-m.slashPanelHeight())
+	heightWithoutJump := m.height - bottomFixedRows - m.approvalPanelHeight() - m.slashPanelHeight()
+	if heightWithoutJump <= m.minViewportRows() {
+		return false
+	}
 	return m.yOffset < max(0, len(m.lines)-heightWithoutJump)
+}
+
+func (m *Model) minViewportRows() int {
+	if m.height <= bottomFixedRows {
+		return 0
+	}
+	return minViewportRows
 }
 func (m *Model) maxOffset() int {
 	return max(0, len(m.lines)-m.vpHeight())
@@ -455,7 +498,7 @@ func (m *Model) buildTranscript() ([]string, []int, map[int]int) {
 		startLine := len(lines)
 		rendered := m.blockFromMessage(msg).Render(ctx).Lines
 		for offset, line := range rendered {
-			if (msg.Tool || msg.Thinking) && (offset == 0 || msg.Expanded) {
+			if (msg.Tool || msg.Thinking) && !msg.ToolNoCollapse && (offset == 0 || msg.Expanded) {
 				headers[startLine+offset] = idx
 			}
 			lines = append(lines, line.Text)
@@ -585,10 +628,25 @@ func (m *Model) slashPanelLines() []string {
 	if m.approval != nil || len(m.slashMatches) == 0 {
 		return nil
 	}
+	available := m.height - bottomFixedRows - m.minViewportRows() - m.approvalPanelHeight()
+	if available < 3 {
+		return nil
+	}
+	commands := m.slashMatches
+	selected := clamp(m.slashIndex, 0, len(commands)-1)
+	maxRows := max(1, available-2)
+	if len(commands) > maxRows {
+		if available == 3 {
+			commands = []SlashCommand{commands[selected]}
+			selected = 0
+		} else {
+			maxRows = max(1, available-3)
+		}
+	}
 	return SlashCommandBlock{
-		Commands: m.slashMatches,
-		Selected: m.slashIndex,
-		MaxRows:  8,
+		Commands: commands,
+		Selected: selected,
+		MaxRows:  min(8, maxRows),
 	}.RenderWidth(m.width)
 }
 
@@ -618,6 +676,10 @@ func (m *Model) completeSlashMatch() bool {
 	m.input.Cursor = m.input.Len()
 	m.clearSlashMatches()
 	return true
+}
+
+func (m *Model) shouldArrowKeyScroll() bool {
+	return m.arrowKeysScroll && strings.TrimSpace(m.input.ExpandedValue()) == ""
 }
 
 func (m *Model) appendInputHistory(line string) {
@@ -745,11 +807,48 @@ func (m *Model) approvalPanelLines() []string {
 			body[i] = line + dimStyle.Render(" · "+title)
 		}
 	}
-	return CardBlock{Lines: body, BorderStyle: approvalBorderStyle}.RenderWidth(width)
+	lines := CardBlock{Lines: body, BorderStyle: approvalBorderStyle}.RenderWidth(width)
+	budget := m.approvalPanelBudget()
+	if budget <= 0 {
+		return nil
+	}
+	if len(lines) <= budget {
+		return lines
+	}
+	return compactApprovalPanelLines(req, width, budget)
 }
 
 func (m *Model) maxApprovalDetailLines() int {
 	return max(1, min(4, m.height-7))
+}
+
+func (m *Model) approvalPanelBudget() int {
+	return m.height - bottomFixedRows - m.minViewportRows()
+}
+
+func compactApprovalPanelLines(req ToolApprovalRequest, width int, budget int) []string {
+	if budget < 3 {
+		return nil
+	}
+	bodyCap := max(1, budget-2)
+	body := []string{
+		botStyle.Render("Approval required") + " " + dimStyle.Render("for "+toolDisplayName(req.ToolName)),
+	}
+	actions := ApprovalBlock{Request: req}.ActionsLine()
+	detail := strings.TrimSpace(req.Detail)
+	if bodyCap >= 3 && detail != "" {
+		body = append(body, dimStyle.Render(ansi.Truncate(detail, max(1, width-4), "…")))
+	}
+	if bodyCap >= 4 {
+		body = append(body, "")
+	}
+	if bodyCap >= 2 {
+		body = append(body, actions)
+	}
+	for len(body) > bodyCap {
+		body = body[:len(body)-1]
+	}
+	return CardBlock{Lines: body, BorderStyle: approvalBorderStyle}.RenderWidth(width)
 }
 
 func limitedWrappedLines(text string, width int, limit int) []string {

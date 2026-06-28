@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,6 +23,7 @@ func TestMain(m *testing.M) {
 	oldArgs := os.Args
 	oldCommandLine := flag.CommandLine
 	oldRunTUI := runTUI
+	oldInteractiveExitOutput := interactiveExitOutput
 	oldwd, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "get cwd: %v\n", err)
@@ -33,6 +35,7 @@ func TestMain(m *testing.M) {
 	os.Args = oldArgs
 	flag.CommandLine = oldCommandLine
 	runTUI = oldRunTUI
+	interactiveExitOutput = oldInteractiveExitOutput
 	if err := os.Chdir(oldwd); err != nil && code == 0 {
 		fmt.Fprintf(os.Stderr, "restore cwd: %v\n", err)
 		code = 1
@@ -383,6 +386,61 @@ func TestMainTUISessionFlows(t *testing.T) {
 	}
 }
 
+func TestMainPrintsSessionResumeHintAfterInteractiveExit(t *testing.T) {
+	home := t.TempDir()
+	project := filepath.Join(t.TempDir(), "project")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	var initOut bytes.Buffer
+	if err := runConfigCommand([]string{"init"}, &initOut, nil); err != nil {
+		t.Fatalf("runConfigCommand init: %v", err)
+	}
+
+	setupMainTestInvocation(t, project, "modu_code")
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var exitOut bytes.Buffer
+	interactiveExitOutput = &exitOut
+
+	var sessionID string
+	runTUI = func(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool, opts RunOptions) error {
+		sessionID = session.GetSessionID()
+		return nil
+	}
+
+	main()
+	output := exitOut.String()
+	if sessionID == "" {
+		t.Fatal("expected session id from TUI runner")
+	}
+	for _, want := range []string{
+		"Session saved: " + sessionID,
+		"Resume with: modu_code --resume " + sessionID,
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("exit output missing %q:\n%s", want, output)
+		}
+	}
+
+	resumed, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:             cwd,
+		AgentDir:        filepath.Join(home, ".coding_agent"),
+		Model:           &types.Model{ID: "test-model", Name: "Test Model", ProviderID: "test-provider"},
+		GetAPIKey:       func(string) (string, error) { return "", nil },
+		ResumeSessionID: sessionID,
+	})
+	if err != nil {
+		t.Fatalf("printed session id should be resumable: %v\noutput:\n%s", err, output)
+	}
+	if got := resumed.GetSessionID(); got != sessionID {
+		t.Fatalf("resumed session id = %s, want %s", got, sessionID)
+	}
+}
+
 func TestMainResumeStartsRequestedSession(t *testing.T) {
 	home := t.TempDir()
 	project := filepath.Join(t.TempDir(), "project")
@@ -541,6 +599,7 @@ func setupMainTestInvocation(t *testing.T, cwd string, args ...string) {
 	oldArgs := os.Args
 	oldCommandLine := flag.CommandLine
 	oldRunTUI := runTUI
+	oldInteractiveExitOutput := interactiveExitOutput
 	oldwd, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -549,6 +608,7 @@ func setupMainTestInvocation(t *testing.T, cwd string, args ...string) {
 		os.Args = oldArgs
 		flag.CommandLine = oldCommandLine
 		runTUI = oldRunTUI
+		interactiveExitOutput = oldInteractiveExitOutput
 		if err := os.Chdir(oldwd); err != nil {
 			t.Fatalf("restore cwd: %v", err)
 		}
@@ -558,6 +618,7 @@ func setupMainTestInvocation(t *testing.T, cwd string, args ...string) {
 	}
 	os.Args = append([]string(nil), args...)
 	flag.CommandLine = flag.NewFlagSet("modu_code", flag.ContinueOnError)
+	interactiveExitOutput = io.Discard
 }
 
 func samePhysicalPath(a, b string) (bool, error) {
