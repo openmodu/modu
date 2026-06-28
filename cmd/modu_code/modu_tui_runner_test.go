@@ -209,6 +209,29 @@ func TestModuTUISlashCommandsIncludeBaseAndSessionCommands(t *testing.T) {
 	}
 }
 
+func TestModuTUIQueueCommandParsesSteerAndFollowUp(t *testing.T) {
+	tests := []struct {
+		line     string
+		wantKind modutui.SubmitKind
+		wantText string
+		wantOK   bool
+	}{
+		{line: "/steer change direction", wantKind: modutui.SubmitKindSteer, wantText: "change direction", wantOK: true},
+		{line: "/s quick", wantKind: modutui.SubmitKindSteer, wantText: "quick", wantOK: true},
+		{line: "/followup next", wantKind: modutui.SubmitKindFollowUp, wantText: "next", wantOK: true},
+		{line: "/f later", wantKind: modutui.SubmitKindFollowUp, wantText: "later", wantOK: true},
+		{line: "/model list", wantOK: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.line, func(t *testing.T) {
+			gotKind, gotText, gotOK := moduTUIQueueCommand(tt.line)
+			if gotOK != tt.wantOK || gotKind != tt.wantKind || gotText != tt.wantText {
+				t.Fatalf("moduTUIQueueCommand(%q) = %q, %q, %v; want %q, %q, %v", tt.line, gotKind, gotText, gotOK, tt.wantKind, tt.wantText, tt.wantOK)
+			}
+		})
+	}
+}
+
 func TestModuTUIInfoCardLinesIncludeStartupContext(t *testing.T) {
 	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
 		Cwd:       t.TempDir(),

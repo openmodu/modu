@@ -121,6 +121,9 @@ enough to implement, verify, and commit independently.
   a follow-up, Shift+Enter or `/steer <message>` interrupts and steers, and
   `/followup <message>` queues explicitly. `/s` and `/f` provide terminal-safe
   short aliases when Shift+Enter is not distinguishable from Enter.
+- `pkg/modu-tui` now reports bottom-input submit intent as prompt, follow-up,
+  or steer events so `cmd/modu_code` can route running-task input without
+  coupling the reusable UI package to coding-agent sessions.
 - Added `/queue` to inspect pending steer/follow-up messages, clear all or one
   queue type, and drop the last pending message after accidental input.
 - Telegram input now mirrors the TUI queue semantics: plain messages become

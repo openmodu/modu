@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -25,6 +26,11 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 	initial := messagesFromAgentMessages(session.GetMessages())
 	var program *tea.Program
 	var programMu sync.RWMutex
+	var promptMu sync.Mutex
+	var currentCancel context.CancelFunc
+	var currentPromptID int
+	var nextPromptID int
+	var continueQueuedAfterCancel bool
 	send := func(msg tea.Msg) {
 		programMu.RLock()
 		p := program
@@ -38,6 +44,108 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		session.SetPrompter(&moduTUIPrompter{ctx: ctx, send: send})
 	}
 
+	isPromptActive := func() bool {
+		promptMu.Lock()
+		defer promptMu.Unlock()
+		return currentCancel != nil
+	}
+	runAgentLoop := func(run func(context.Context) error) {
+		go func() {
+			send(modutui.SetBusyMsg{Busy: true})
+			send(modutui.SetStatusMsg{Status: "running"})
+			defer send(modutui.SetBusyMsg{Busy: false})
+
+			nextRun := run
+			for {
+				promptCtx, cancel := context.WithCancel(ctx)
+				promptMu.Lock()
+				nextPromptID++
+				promptID := nextPromptID
+				currentPromptID = promptID
+				currentCancel = cancel
+				promptMu.Unlock()
+				err := nextRun(promptCtx)
+
+				promptMu.Lock()
+				if currentPromptID == promptID {
+					currentCancel = nil
+					currentPromptID = 0
+				}
+				steeringCancel := errors.Is(err, context.Canceled) && continueQueuedAfterCancel
+				continueQueuedAfterCancel = false
+				promptMu.Unlock()
+				cancel()
+
+				ag := session.GetAgent()
+				shouldContinue := ag != nil && ag.HasQueuedMessages() && (err == nil || steeringCancel)
+				if shouldContinue {
+					send(modutui.SetStatusMsg{Status: "running queued message"})
+					nextRun = ag.Continue
+					continue
+				}
+
+				if err != nil && !errors.Is(err, context.Canceled) {
+					send(modutui.AppendMessageMsg{Message: modutui.Message{
+						Role: modutui.RoleAssistant,
+						Text: "error: " + err.Error(),
+					}})
+					send(modutui.SetStatusMsg{Status: "error"})
+				} else {
+					send(modutui.SetStatusMsg{Status: "idle"})
+				}
+				return
+			}
+		}()
+	}
+	runPrompt := func(text string) {
+		runAgentLoop(func(ctx context.Context) error {
+			return session.Prompt(ctx, text)
+		})
+	}
+	queueFollowUp := func(text string, requireActive bool) {
+		if requireActive && !isPromptActive() {
+			send(modutui.SetStatusMsg{Status: "no active task to followup"})
+			return
+		}
+		if !isPromptActive() {
+			runPrompt(text)
+			return
+		}
+		session.FollowUp(text)
+		send(modutui.SetStatusMsg{Status: "queued follow-up"})
+	}
+	queueSteer := func(text string, requireActive bool) {
+		if requireActive && !isPromptActive() {
+			send(modutui.SetStatusMsg{Status: "no active task to steer"})
+			return
+		}
+		if !isPromptActive() {
+			runPrompt(text)
+			return
+		}
+		session.Steer(text)
+		promptMu.Lock()
+		cancel := currentCancel
+		continueQueuedAfterCancel = true
+		promptMu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		session.Abort()
+		session.AbortBash()
+		send(modutui.SetStatusMsg{Status: "steering"})
+	}
+	submit := func(ev modutui.SubmitEvent) {
+		switch ev.Kind {
+		case modutui.SubmitKindFollowUp:
+			queueFollowUp(ev.Text, false)
+		case modutui.SubmitKindSteer:
+			queueSteer(ev.Text, false)
+		default:
+			runPrompt(ev.Text)
+		}
+	}
+
 	width, height := initialTerminalSize(int(os.Stdout.Fd()), 120, 35)
 	ui := modutui.NewModel(modutui.Options{
 		Width:           width,
@@ -47,23 +155,22 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		InfoCardLines:   moduTUIInfoCardLines(session, model),
 		SlashCommands:   moduTUISlashCommands(session),
 		Hooks: modutui.Hooks{
-			Submit: func(text string) {
-				go func() {
-					send(modutui.SetBusyMsg{Busy: true})
-					send(modutui.SetStatusMsg{Status: "running"})
-					if err := session.Prompt(ctx, text); err != nil && err != context.Canceled {
-						send(modutui.AppendMessageMsg{Message: modutui.Message{
-							Role: modutui.RoleAssistant,
-							Text: "error: " + err.Error(),
-						}})
-						send(modutui.SetStatusMsg{Status: "error"})
-					} else {
-						send(modutui.SetStatusMsg{Status: "idle"})
-					}
-					send(modutui.SetBusyMsg{Busy: false})
-				}()
+			SubmitMessage: func(ev modutui.SubmitEvent) {
+				submit(ev)
 			},
 			SlashCommand: func(line string) {
+				if kind, text, ok := moduTUIQueueCommand(line); ok {
+					if strings.TrimSpace(text) == "" {
+						send(modutui.SetStatusMsg{Status: "/" + string(kind) + " requires a message"})
+						return
+					}
+					if kind == modutui.SubmitKindSteer {
+						queueSteer(text, true)
+					} else {
+						queueFollowUp(text, true)
+					}
+					return
+				}
 				go runModuTUISlash(ctx, line, session, model, send)
 			},
 		},
@@ -222,6 +329,27 @@ func isSessionAgentSlash(session *coding_agent.CodingSession, line string) bool 
 	return false
 }
 
+func moduTUIQueueCommand(line string) (modutui.SubmitKind, string, bool) {
+	line = strings.TrimSpace(line)
+	for _, item := range []struct {
+		kind  modutui.SubmitKind
+		names []string
+	}{
+		{kind: modutui.SubmitKindSteer, names: []string{"/steer", "/s"}},
+		{kind: modutui.SubmitKindFollowUp, names: []string{"/followup", "/f"}},
+	} {
+		for _, name := range item.names {
+			if line == name {
+				return item.kind, "", true
+			}
+			if strings.HasPrefix(line, name+" ") {
+				return item.kind, strings.TrimSpace(strings.TrimPrefix(line, name)), true
+			}
+		}
+	}
+	return "", "", false
+}
+
 func moduTUISlashCommands(session *coding_agent.CodingSession) []modutui.SlashCommand {
 	seen := map[string]struct{}{}
 	add := func(out *[]modutui.SlashCommand, name, desc string) {
@@ -281,6 +409,10 @@ func baseModuTUISlashCommands() []modutui.SlashCommand {
 		{Name: "/tools", Description: "List active tools"},
 		{Name: "/skills", Description: "List available skills"},
 		{Name: "/prompts", Description: "List prompt templates"},
+		{Name: "/steer", Description: "Steer the active task"},
+		{Name: "/s", Description: "Alias for /steer"},
+		{Name: "/followup", Description: "Queue a follow-up message"},
+		{Name: "/f", Description: "Alias for /followup"},
 		{Name: "/plan", Description: "Show or update plan mode"},
 		{Name: "/worktree", Description: "Manage the current worktree"},
 		{Name: "/quit", Description: "Exit modu_code"},
