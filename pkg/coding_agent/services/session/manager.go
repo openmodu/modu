@@ -349,6 +349,29 @@ func (m *Manager) FilePath() string {
 	return m.filePath
 }
 
+// Flush ensures the session header exists on disk even when no entries have
+// been appended yet.
+func (m *Manager) Flush() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.flushed {
+		return nil
+	}
+	if err := os.MkdirAll(m.dir, 0o755); err != nil {
+		return fmt.Errorf("failed to create session directory: %w", err)
+	}
+	file, err := os.OpenFile(m.filePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("failed to open session file: %w", err)
+	}
+	defer file.Close()
+	if err := m.writeHeaderLocked(file); err != nil {
+		return err
+	}
+	m.flushed = true
+	return nil
+}
+
 // Clear removes the current session file and starts a fresh in-memory session.
 func (m *Manager) Clear() error {
 	m.mu.Lock()
@@ -479,11 +502,7 @@ func (m *Manager) appendToFileLocked(entry SessionEntry) error {
 	}
 	defer file.Close()
 	if !m.flushed {
-		header, err := json.Marshal(m.header)
-		if err != nil {
-			return err
-		}
-		if _, err := file.Write(append(header, '\n')); err != nil {
+		if err := m.writeHeaderLocked(file); err != nil {
 			return err
 		}
 		m.flushed = true
@@ -493,6 +512,15 @@ func (m *Manager) appendToFileLocked(entry SessionEntry) error {
 		return fmt.Errorf("failed to marshal entry: %w", err)
 	}
 	_, err = file.Write(append(data, '\n'))
+	return err
+}
+
+func (m *Manager) writeHeaderLocked(file *os.File) error {
+	header, err := json.Marshal(m.header)
+	if err != nil {
+		return err
+	}
+	_, err = file.Write(append(header, '\n'))
 	return err
 }
 
