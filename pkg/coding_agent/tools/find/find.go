@@ -13,7 +13,11 @@ import (
 	"github.com/openmodu/modu/pkg/types"
 )
 
-const defaultFindLimit = 1000
+const defaultFindLimit = 100
+
+const truncatedMessage = "(Results are truncated. Consider using a more specific path or pattern.)"
+
+var vcsDirectoriesToExclude = []string{".git", ".svn", ".hg", ".bzr", ".jj", ".sl"}
 
 // FindTool implements the file search tool using glob patterns.
 type FindTool struct {
@@ -32,9 +36,11 @@ func (t *FindTool) Description() string {
 Usage:
 - Use this tool when you need to locate files by name or path pattern; prefer it over running shell find or ls through bash.
 - Supports patterns such as "**/*.go", "src/*.ts", or "*_test.go".
+- Absolute patterns such as "/tmp/project/**/*.go" are accepted; the static directory prefix is used as the search root.
 - Uses fd when available and falls back to a built-in filesystem walk.
-- Respects .gitignore when using fd. The built-in fallback skips common generated or vendor directories.
-- Returns relative file paths. Narrow broad searches with path and pattern.`
+- Searches hidden files and ordinary files ignored by .gitignore while excluding VCS metadata directories such as .git and .hg.
+- The optional path must be a directory; use read for known files.
+- Returns file paths relative to the working directory, sorted by modification time and capped at 100 results by default. Numeric strings such as "10" are accepted for limit. Narrow broad searches with path and pattern.`
 }
 
 func (t *FindTool) Parameters() any {
@@ -50,8 +56,8 @@ func (t *FindTool) Parameters() any {
 				"description": "Directory to search in (default: cwd)",
 			},
 			"limit": map[string]any{
-				"type":        "integer",
-				"description": "Maximum number of results (default 1000)",
+				"anyOf":       semanticFindIntegerSchema(),
+				"description": "Maximum number of results (default 100)",
 			},
 		},
 		"required": []string{"pattern"},
@@ -68,10 +74,22 @@ func (t *FindTool) Execute(ctx context.Context, toolCallID string, args map[stri
 	if p, ok := args["path"].(string); ok && p != "" {
 		searchPath = common.ResolveToCwd(p, t.cwd)
 	}
+	pattern, searchPath = normalizeFindPatternAndPath(pattern, searchPath)
+
+	info, err := os.Stat(searchPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return common.ErrorResult(fmt.Sprintf("directory not found: %s", searchPath)), nil
+		}
+		return common.ErrorResult(fmt.Sprintf("failed to stat directory: %v", err)), nil
+	}
+	if !info.IsDir() {
+		return common.ErrorResult(fmt.Sprintf("path is not a directory: %s", searchPath)), nil
+	}
 
 	limit := defaultFindLimit
 	if v, ok := args["limit"]; ok {
-		limit = common.ToInt(v)
+		limit, _ = common.ToSemanticInt(v)
 		if limit <= 0 {
 			limit = defaultFindLimit
 		}
@@ -86,12 +104,55 @@ func (t *FindTool) Execute(ctx context.Context, toolCallID string, args map[stri
 	return t.executeBuiltin(ctx, pattern, searchPath, limit)
 }
 
+func semanticFindIntegerSchema() []map[string]any {
+	return []map[string]any{
+		{"type": "integer"},
+		{"type": "string", "pattern": `^-?\d+$`},
+	}
+}
+
+func normalizeFindPatternAndPath(pattern, searchPath string) (string, string) {
+	if !filepath.IsAbs(pattern) {
+		return pattern, searchPath
+	}
+
+	baseDir, relativePattern := extractFindBaseDirectory(pattern)
+	if baseDir == "" {
+		return pattern, searchPath
+	}
+	return relativePattern, baseDir
+}
+
+func extractFindBaseDirectory(pattern string) (string, string) {
+	globIndex := strings.IndexAny(pattern, "*?[{")
+	if globIndex == -1 {
+		return filepath.Dir(pattern), filepath.Base(pattern)
+	}
+
+	staticPrefix := pattern[:globIndex]
+	lastSepIndex := strings.LastIndex(staticPrefix, string(filepath.Separator))
+	if filepath.Separator != '/' {
+		lastSepIndex = max(lastSepIndex, strings.LastIndex(staticPrefix, "/"))
+	}
+	if lastSepIndex == -1 {
+		return "", pattern
+	}
+	if lastSepIndex == 0 {
+		return string(filepath.Separator), pattern[1:]
+	}
+	return staticPrefix[:lastSepIndex], pattern[lastSepIndex+1:]
+}
+
 func (t *FindTool) executeFd(ctx context.Context, fdPath, pattern, searchPath string, limit int) (types.ToolResult, error) {
 	args := []string{
 		"--type", "f",
 		"--color", "never",
-		"--max-results", fmt.Sprintf("%d", limit),
+		"--hidden",
+		"--no-ignore",
 		"--glob", pattern,
+	}
+	for _, dir := range vcsDirectoriesToExclude {
+		args = append(args, "--exclude", dir)
 	}
 
 	cmd := exec.CommandContext(ctx, fdPath, args...)
@@ -102,7 +163,7 @@ func (t *FindTool) executeFd(ctx context.Context, fdPath, pattern, searchPath st
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 			return types.ToolResult{
 				Content: []types.ContentBlock{
-					&types.TextContent{Type: "text", Text: "No files found."},
+					&types.TextContent{Type: "text", Text: "No files found"},
 				},
 			}, nil
 		}
@@ -114,50 +175,94 @@ func (t *FindTool) executeFd(ctx context.Context, fdPath, pattern, searchPath st
 	if result == "" {
 		return types.ToolResult{
 			Content: []types.ContentBlock{
-				&types.TextContent{Type: "text", Text: "No files found."},
+				&types.TextContent{Type: "text", Text: "No files found"},
 			},
 		}, nil
 	}
 
 	lines := strings.Split(result, "\n")
-	sort.Strings(lines)
-	if len(lines) >= limit {
-		result = strings.Join(lines, "\n") + fmt.Sprintf("\n\n... (limited to %d results)", limit)
-	} else {
-		result = strings.Join(lines, "\n")
-	}
-	matchedPaths := make([]string, 0, min(len(lines), 20))
+	matches := make([]fileMatch, 0, len(lines))
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		matchedPaths = append(matchedPaths, filepath.Join(searchPath, line))
-		if len(matchedPaths) >= 20 {
-			break
+		abs := filepath.Join(searchPath, line)
+		info, err := os.Stat(abs)
+		if err != nil || info.IsDir() {
+			continue
 		}
+		matches = append(matches, fileMatch{
+			rel:   displayFindPath(abs, t.cwd),
+			abs:   abs,
+			mtime: info.ModTime().UnixNano(),
+		})
+	}
+
+	return findResult(searchPath, matches, limit), nil
+}
+
+type fileMatch struct {
+	rel   string
+	abs   string
+	mtime int64
+}
+
+func findResult(searchPath string, matches []fileMatch, limit int) types.ToolResult {
+	if len(matches) == 0 {
+		return types.ToolResult{
+			Content: []types.ContentBlock{
+				&types.TextContent{Type: "text", Text: "No files found"},
+			},
+			Details: map[string]any{
+				"path":          searchPath,
+				"matched_paths": []string{},
+			},
+		}
+	}
+
+	// Newest first, matching grep's ordering, so that when results are capped at
+	// limit the most recently modified files are kept rather than dropped.
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].mtime == matches[j].mtime {
+			return matches[i].rel < matches[j].rel
+		}
+		return matches[i].mtime > matches[j].mtime
+	})
+
+	truncated := len(matches) > limit
+	if truncated {
+		matches = matches[:limit]
+	}
+
+	lines := make([]string, 0, len(matches))
+	matchedPaths := make([]string, 0, min(len(matches), 20))
+	for _, match := range matches {
+		lines = append(lines, match.rel)
+		if len(matchedPaths) < 20 {
+			matchedPaths = append(matchedPaths, match.abs)
+		}
+	}
+
+	text := strings.Join(lines, "\n")
+	if truncated {
+		text += "\n\n" + truncatedMessage
 	}
 
 	return types.ToolResult{
 		Content: []types.ContentBlock{
-			&types.TextContent{Type: "text", Text: result},
+			&types.TextContent{Type: "text", Text: text},
 		},
 		Details: map[string]any{
 			"path":          searchPath,
 			"matched_paths": matchedPaths,
 		},
-	}, nil
+	}
 }
 
 func (t *FindTool) executeBuiltin(ctx context.Context, pattern, searchPath string, limit int) (types.ToolResult, error) {
-	var results []string
-	skipDirs := map[string]bool{
-		".git":         true,
-		"node_modules": true,
-		".svn":         true,
-		"vendor":       true,
-		"__pycache__":  true,
-	}
+	var results []fileMatch
+	skipDirs := findVCSDirSet()
 
 	err := filepath.Walk(searchPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -165,9 +270,6 @@ func (t *FindTool) executeBuiltin(ctx context.Context, pattern, searchPath strin
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
-		}
-		if len(results) >= limit {
-			return filepath.SkipAll
 		}
 		if info.IsDir() {
 			if skipDirs[info.Name()] {
@@ -181,20 +283,12 @@ func (t *FindTool) executeBuiltin(ctx context.Context, pattern, searchPath strin
 			relPath = path
 		}
 
-		// Match against the pattern
-		matched, _ := filepath.Match(pattern, info.Name())
-		if !matched {
-			// Try matching full relative path with doublestar-like behavior
-			matched, _ = filepath.Match(pattern, relPath)
-		}
-		if !matched && strings.Contains(pattern, "**") {
-			// Simple ** support: replace ** with *
-			simplePattern := strings.ReplaceAll(pattern, "**/", "")
-			matched, _ = filepath.Match(simplePattern, info.Name())
-		}
-
-		if matched {
-			results = append(results, relPath)
+		if matchFindPattern(pattern, relPath, info.Name()) {
+			results = append(results, fileMatch{
+				rel:   displayFindPath(path, t.cwd),
+				abs:   path,
+				mtime: info.ModTime().UnixNano(),
+			})
 		}
 
 		return nil
@@ -207,35 +301,66 @@ func (t *FindTool) executeBuiltin(ctx context.Context, pattern, searchPath strin
 	if len(results) == 0 {
 		return types.ToolResult{
 			Content: []types.ContentBlock{
-				&types.TextContent{Type: "text", Text: "No files found."},
+				&types.TextContent{Type: "text", Text: "No files found"},
 			},
 		}, nil
 	}
 
-	sort.Strings(results)
-	text := strings.Join(results, "\n")
-	if len(results) >= limit {
-		text += fmt.Sprintf("\n\n... (limited to %d results)", limit)
-	}
-
-	return types.ToolResult{
-		Content: []types.ContentBlock{
-			&types.TextContent{Type: "text", Text: text},
-		},
-		Details: map[string]any{
-			"path":          searchPath,
-			"matched_paths": absolutePaths(searchPath, results, 20),
-		},
-	}, nil
+	return findResult(searchPath, results, limit), nil
 }
 
-func absolutePaths(base string, rels []string, limit int) []string {
-	out := make([]string, 0, min(len(rels), limit))
-	for _, rel := range rels {
-		out = append(out, filepath.Join(base, rel))
-		if len(out) >= limit {
-			break
+func displayFindPath(path, cwd string) string {
+	if rel, err := filepath.Rel(cwd, path); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+		return rel
+	}
+	return path
+}
+
+func findVCSDirSet() map[string]bool {
+	dirs := make(map[string]bool, len(vcsDirectoriesToExclude))
+	for _, dir := range vcsDirectoriesToExclude {
+		dirs[dir] = true
+	}
+	return dirs
+}
+
+func matchFindPattern(pattern, relPath, baseName string) bool {
+	pattern = filepath.ToSlash(strings.TrimSpace(pattern))
+	relPath = filepath.ToSlash(relPath)
+	if pattern == "" || relPath == "" {
+		return false
+	}
+
+	if !strings.Contains(pattern, "/") {
+		if matched, _ := filepath.Match(pattern, baseName); matched {
+			return true
 		}
 	}
-	return out
+	if matched, _ := filepath.Match(filepath.FromSlash(pattern), filepath.FromSlash(relPath)); matched {
+		return true
+	}
+	if !strings.Contains(pattern, "**") {
+		return false
+	}
+	return matchFindSegments(strings.Split(pattern, "/"), strings.Split(relPath, "/"))
+}
+
+func matchFindSegments(patternSegments, pathSegments []string) bool {
+	if len(patternSegments) == 0 {
+		return len(pathSegments) == 0
+	}
+	if patternSegments[0] == "**" {
+		if matchFindSegments(patternSegments[1:], pathSegments) {
+			return true
+		}
+		return len(pathSegments) > 0 && matchFindSegments(patternSegments, pathSegments[1:])
+	}
+	if len(pathSegments) == 0 {
+		return false
+	}
+	matched, err := filepath.Match(patternSegments[0], pathSegments[0])
+	if err != nil || !matched {
+		return false
+	}
+	return matchFindSegments(patternSegments[1:], pathSegments[1:])
 }
