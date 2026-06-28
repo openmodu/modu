@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -86,6 +87,51 @@ func TestMessagesFromAgentEventSkipsUserMessageEnd(t *testing.T) {
 	}
 }
 
+func TestModuTUIAgentDurationTrackerAppendsCompletedMessage(t *testing.T) {
+	now := time.Unix(100, 0)
+	tracker := newModuTUIAgentDurationTracker(func() time.Time {
+		return now
+	})
+
+	if _, ok := tracker.Handle(types.Event{Type: types.EventTypeAgentEnd}); ok {
+		t.Fatal("AgentEnd without AgentStart should not append a completion message")
+	}
+	if _, ok := tracker.Handle(types.Event{Type: types.EventTypeAgentStart}); ok {
+		t.Fatal("AgentStart should not append a completion message")
+	}
+
+	now = now.Add(65*time.Second + 400*time.Millisecond)
+	msg, ok := tracker.Handle(types.Event{Type: types.EventTypeAgentEnd})
+	if !ok {
+		t.Fatal("AgentEnd after AgentStart should append a completion message")
+	}
+	if msg.Role != modutui.RoleAssistant || !msg.Preformatted || !msg.Plain {
+		t.Fatalf("completion message should be assistant preformatted plain text: %#v", msg)
+	}
+	if got, want := msg.Text, "✓ Completed (1min 05s)"; got != want {
+		t.Fatalf("completion text = %q, want %q", got, want)
+	}
+
+	if _, ok := tracker.Handle(types.Event{Type: types.EventTypeAgentEnd}); ok {
+		t.Fatal("tracker should clear the start time after completion")
+	}
+}
+
+func TestFormatModuTUIActivityDuration(t *testing.T) {
+	tests := map[time.Duration]string{
+		-1 * time.Second:                      "0s",
+		400 * time.Millisecond:                "0s",
+		59*time.Second + 600*time.Millisecond: "1min",
+		60 * time.Second:                      "1min",
+		65 * time.Second:                      "1min 05s",
+	}
+	for input, want := range tests {
+		if got := formatModuTUIActivityDuration(input); got != want {
+			t.Fatalf("formatModuTUIActivityDuration(%s) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func TestMessageFromSessionEventIncludesPermissionDenied(t *testing.T) {
 	msg, ok := messageFromSessionEvent(coding_agent.SessionEvent{
 		Type:     coding_agent.SessionEventPermissionDeny,
@@ -161,6 +207,68 @@ func TestMessagesFromAgentEventFormatsReadToolLikeClaudeCode(t *testing.T) {
 	}
 	if got := end[0]; got.Summary != "Read 2 lines" || got.ToolOutput != "Read 2 lines" || !got.ToolDone {
 		t.Fatalf("unexpected read end message: %#v", got)
+	}
+}
+
+func TestMessagesFromAgentEventFormatsWriteToolAsExpandedCodeBlock(t *testing.T) {
+	start := messagesFromAgentEvent(types.Event{
+		Type:       types.EventTypeToolExecutionStart,
+		ToolCallID: "call-1",
+		ToolName:   "write",
+		Args: map[string]any{
+			"path":    "main.go",
+			"content": "package main\nfunc main() {}\n",
+		},
+	})
+	if len(start) != 1 {
+		t.Fatalf("start messages len = %d, want 1", len(start))
+	}
+	if got := start[0]; !got.ToolNoCollapse || !got.Expanded || got.ToolInput != "main.go" || got.ToolCode == "" || got.ToolLanguage != "go" {
+		t.Fatalf("unexpected write start message: %#v", got)
+	}
+	if !strings.Contains(start[0].ToolOutput, "Wrote 2 lines") {
+		t.Fatalf("write summary missing line count: %#v", start[0])
+	}
+
+	end := messagesFromAgentEvent(types.Event{
+		Type:       types.EventTypeToolExecutionEnd,
+		ToolCallID: "call-1",
+		ToolName:   "write",
+		Result: types.ToolResult{
+			Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "The file main.go has been updated successfully."}},
+			Details: map[string]any{"type": "update"},
+		},
+	})
+	if len(end) != 1 {
+		t.Fatalf("end messages len = %d, want 1", len(end))
+	}
+	if got := end[0]; got.ToolName != "update" || !got.ToolNoCollapse || !got.Expanded || got.ToolOutput != "" {
+		t.Fatalf("unexpected write end message: %#v", got)
+	}
+}
+
+func TestMessagesFromAgentEventFormatsEditToolAsExpandedDiffBlock(t *testing.T) {
+	start := messagesFromAgentEvent(types.Event{
+		Type:       types.EventTypeToolExecutionStart,
+		ToolCallID: "call-1",
+		ToolName:   "edit",
+		Args: map[string]any{
+			"path":     "main.go",
+			"old_text": "fmt.Println(\"old\")\n",
+			"new_text": "fmt.Println(\"new\")\n",
+		},
+	})
+	if len(start) != 1 {
+		t.Fatalf("start messages len = %d, want 1", len(start))
+	}
+	got := start[0]
+	if got.ToolName != "update" || !got.ToolNoCollapse || got.ToolLanguage != "diff" {
+		t.Fatalf("unexpected edit message: %#v", got)
+	}
+	for _, want := range []string{"Added 1 lines, removed 1 lines", "- fmt.Println(\"old\")", "+ fmt.Println(\"new\")"} {
+		if !strings.Contains(got.ToolOutput+"\n"+got.ToolCode, want) {
+			t.Fatalf("edit message missing %q: %#v", want, got)
+		}
 	}
 }
 
@@ -307,6 +415,24 @@ func TestModuTUIInfoCardLinesIncludeStartupContext(t *testing.T) {
 		if !strings.Contains(lines, want) {
 			t.Fatalf("info card lines missing %q:\n%s", want, lines)
 		}
+	}
+}
+
+func TestModuTUIMouseDisabledForSSHUnlessOverridden(t *testing.T) {
+	if !moduTUIMouseDisabledFromEnv([]string{"SSH_TTY=/dev/pts/1"}) {
+		t.Fatal("SSH_TTY should disable mouse reporting by default")
+	}
+	if !moduTUIMouseDisabledFromEnv([]string{"SSH_CONNECTION=1.1.1.1 22 2.2.2.2 33333"}) {
+		t.Fatal("SSH_CONNECTION should disable mouse reporting by default")
+	}
+	if moduTUIMouseDisabledFromEnv([]string{"SSH_TTY=/dev/pts/1", "MODU_TUI_MOUSE=on"}) {
+		t.Fatal("MODU_TUI_MOUSE=on should force mouse reporting on")
+	}
+	if !moduTUIMouseDisabledFromEnv([]string{"MODU_TUI_MOUSE=off"}) {
+		t.Fatal("MODU_TUI_MOUSE=off should force mouse reporting off")
+	}
+	if moduTUIMouseDisabledFromEnv([]string{"TERM=xterm-256color"}) {
+		t.Fatal("non-SSH terminal should keep mouse reporting by default")
 	}
 }
 
