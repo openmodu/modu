@@ -35,7 +35,15 @@ func NewTool(cwd string) types.Tool {
 func (t *ReadTool) Name() string  { return "read" }
 func (t *ReadTool) Label() string { return "Read File" }
 func (t *ReadTool) Description() string {
-	return `Read the contents of a file at the given path. The path must be an absolute path or relative to the working directory. By default reads up to 2000 lines from the beginning. Use offset and limit to read specific sections. Images are returned as base64-encoded content.`
+	return `Read a file from the local filesystem.
+
+Usage:
+- Use this tool to inspect known files; prefer it over bash commands such as cat, head, tail, or sed.
+- The path may be absolute or relative to the working directory.
+- By default it reads up to 2000 lines from the beginning. Use offset and limit when you only need a specific section of a large file.
+- Results are returned with 1-based line numbers in "line<TAB>content" format. Do not include the line-number prefix when later using edit old_text.
+- This tool reads files only, not directories. Use ls to inspect a directory.
+- Images are returned as base64-encoded image content.`
 }
 
 func (t *ReadTool) Parameters() any {

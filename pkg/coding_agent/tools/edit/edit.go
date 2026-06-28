@@ -23,7 +23,15 @@ func NewTool(cwd string) types.Tool {
 func (t *EditTool) Name() string  { return "edit" }
 func (t *EditTool) Label() string { return "Edit File" }
 func (t *EditTool) Description() string {
-	return `Perform exact string replacements in files. The old_text must match exactly (including whitespace and indentation). If exact match fails, it will attempt a fuzzy match by normalizing whitespace and Unicode characters. If old_text appears multiple times, the edit will be rejected as ambiguous. Use replace_all=true to replace all occurrences.`
+	return `Perform targeted string replacements in files.
+
+Usage:
+- Use this tool for modifying existing files; prefer it over write for targeted changes and over bash commands such as sed, awk, perl, or shell redirection.
+- Read the file first so old_text is based on the current contents and exact indentation.
+- old_text must match the file content, including whitespace and indentation, and must not include read line-number prefixes.
+- The edit is rejected when old_text appears multiple times unless replace_all=true is set. Add nearby context to make a single replacement unique.
+- Use replace_all only for intentional file-wide renames or repeated identical replacements.
+- If exact matching fails, the tool may attempt a fuzzy match by normalizing whitespace and Unicode characters, but you should still provide exact text whenever possible.`
 }
 
 func (t *EditTool) Parameters() any {

@@ -533,6 +533,77 @@ func TestDefaultProviderBuildsAndRebindsTools(t *testing.T) {
 	}
 }
 
+func TestCodingToolDescriptionsSteerDedicatedToolUse(t *testing.T) {
+	cwd := t.TempDir()
+	cases := []struct {
+		tool types.Tool
+		want []string
+	}{
+		{
+			tool: read.NewTool(cwd),
+			want: []string{
+				"prefer it over bash commands such as cat",
+				"Use offset and limit",
+				"Do not include the line-number prefix",
+			},
+		},
+		{
+			tool: edit.NewTool(cwd),
+			want: []string{
+				"prefer it over write",
+				"Read the file first",
+				"must not include read line-number prefixes",
+			},
+		},
+		{
+			tool: write.NewTool(cwd),
+			want: []string{
+				"create new files or to completely rewrite",
+				"Prefer edit for targeted changes",
+				"Do not create documentation files",
+			},
+		},
+		{
+			tool: bash.NewTool(cwd),
+			want: []string{
+				"Do not use bash for normal file reads",
+				"background=true",
+				"never run destructive commands",
+			},
+		},
+		{
+			tool: grep.NewTool(cwd),
+			want: []string{
+				"prefer it over running grep",
+				"Use literal=true",
+			},
+		},
+		{
+			tool: find.NewTool(cwd),
+			want: []string{
+				"prefer it over running shell find",
+				"**/*.go",
+			},
+		},
+		{
+			tool: ls.NewTool(cwd),
+			want: []string{
+				"prefer it over running ls through bash",
+				"Use find when you need glob pattern matching",
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		desc := tc.tool.Description()
+		for _, want := range tc.want {
+			if !strings.Contains(desc, want) {
+				t.Fatalf("%s description missing %q:\n%s", tc.tool.Name(), want, desc)
+			}
+		}
+	}
+}
+
 type fakeMemoryStore struct{}
 
 func (fakeMemoryStore) ReadLongTerm() string               { return "" }

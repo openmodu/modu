@@ -22,7 +22,14 @@ func NewTool(cwd string) types.Tool {
 func (t *WriteTool) Name() string  { return "write" }
 func (t *WriteTool) Label() string { return "Write File" }
 func (t *WriteTool) Description() string {
-	return `Write content to a file at the given path. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories as needed.`
+	return `Write complete content to a file.
+
+Usage:
+- Use this tool primarily to create new files or to completely rewrite a file when that is explicitly required.
+- Prefer edit for targeted changes to existing files because edit keeps the diff smaller and easier to review.
+- If overwriting an existing file, read it first and make sure a full rewrite is necessary.
+- Do not create documentation files, READMEs, examples, or broad scaffolding unless the user explicitly asks for them.
+- The path may be absolute or relative to the working directory. Parent directories are created automatically.`
 }
 
 func (t *WriteTool) Parameters() any {

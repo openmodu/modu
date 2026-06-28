@@ -72,11 +72,32 @@ func TestDefaultSystemPromptAllowsNonCodingTasks(t *testing.T) {
 		"you can also answer general questions and perform safe non-coding tasks",
 		"Do not refuse solely because the task is not about code",
 		"If the user asks for current facts such as weather",
-		"safe one-off commands, including read-only commands that answer non-coding requests",
+		"Use `bash` for builds, tests, linters, package managers, git inspection, and other terminal operations that genuinely require a shell",
 		"For coding or repository tasks, follow this sequence",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("expected default prompt to contain %q, got:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestDefaultSystemPromptGuidesNativeToolUse(t *testing.T) {
+	prompt := NewBuilder(t.TempDir()).Build()
+
+	for _, want := range []string{
+		"Do not use `bash` when a dedicated tool can do the job",
+		"Use `read` to inspect a specific file you already know about; do not use `cat`",
+		"Use `grep` to search file contents; do not run `grep` or `rg` through `bash`",
+		"Use `find` to locate files by name or path pattern; do not run shell `find`",
+		"Use `edit` for targeted changes to existing files",
+		"Use `write` only to create new files or completely rewrite a file",
+		"Read a file before editing or overwriting it",
+		"Do not create documentation files, READMEs, examples, or broad scaffolding unless the user explicitly asks",
+		"After changing code, run the narrowest relevant verification command you can",
+		"Never skip hooks (`--no-verify`, `--no-gpg-sign`, etc.) unless the user explicitly asks",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected native-tool guidance %q, got:\n%s", want, prompt)
 		}
 	}
 }

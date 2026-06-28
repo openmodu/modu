@@ -25,7 +25,13 @@ func NewTool(cwd string) types.Tool {
 func (t *LsTool) Name() string  { return "ls" }
 func (t *LsTool) Label() string { return "List Directory" }
 func (t *LsTool) Description() string {
-	return `List the contents of a directory. Returns file and directory names, with directories suffixed with '/'. Sorted alphabetically (case-insensitive).`
+	return `List the contents of a directory.
+
+Usage:
+- Use this tool to inspect a directory you have not seen yet; prefer it over running ls through bash for ordinary directory exploration.
+- Use find when you need glob pattern matching across a tree.
+- Returns file and directory names, with directories suffixed with "/".
+- Results are sorted alphabetically case-insensitively and capped by limit.`
 }
 
 func (t *LsTool) Parameters() any {

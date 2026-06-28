@@ -29,7 +29,14 @@ func NewTool(cwd string) types.Tool {
 func (t *GrepTool) Name() string  { return "grep" }
 func (t *GrepTool) Label() string { return "Search Content" }
 func (t *GrepTool) Description() string {
-	return `Search file contents using regex patterns. Uses ripgrep (rg) if available, falls back to built-in implementation. Respects .gitignore. Returns matching lines with file paths and line numbers.`
+	return `Search file contents using regex patterns.
+
+Usage:
+- Use this tool for content search; prefer it over running grep, rg, awk, or sed through bash.
+- Uses ripgrep (rg) when available and falls back to a built-in implementation.
+- Respects .gitignore when using ripgrep. The built-in fallback skips common generated or vendor directories.
+- Returns matching lines with file paths and line numbers. Use path and glob to narrow broad searches.
+- Use literal=true when searching for an exact string rather than a regex.`
 }
 
 func (t *GrepTool) Parameters() any {

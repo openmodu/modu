@@ -44,9 +44,16 @@ func NewTool(cwd string) types.Tool {
 func (t *BashTool) Name() string  { return "bash" }
 func (t *BashTool) Label() string { return "Bash Command" }
 func (t *BashTool) Description() string {
-	return `Execute a bash command and return its output. The command runs in the working directory.
+	return `Execute a bash command and return its output.
+
+Usage:
+- Use this tool for builds, tests, linters, package managers, git inspection, and terminal operations that genuinely require a shell.
+- Do not use bash for normal file reads, content search, file-pattern search, source edits, or file creation when read, grep, find, edit, write, or ls can do the job.
+- Prefer absolute paths or paths relative to the working directory, and quote paths that contain spaces.
+- Avoid changing directories unless the user asks; keep command effects scoped to the working directory.
 - Use timeout to set execution timeout in seconds (default 120, max 600).
-- Use background=true for long-running servers or daemons that should not block (e.g. starting a server process). The command will be started in a detached process group and the tool returns immediately with the PID.`
+- Use background=true for long-running servers or daemons that should not block. The command starts in a detached process group and returns immediately with the PID.
+- For git operations, inspect state first and never run destructive commands, skip hooks, commit, push, amend, reset, clean, or delete branches unless the user explicitly asks.`
 }
 
 func (t *BashTool) Parameters() any {
@@ -64,6 +71,10 @@ func (t *BashTool) Parameters() any {
 			"background": map[string]any{
 				"type":        "boolean",
 				"description": "Run the command in the background and return immediately with the PID. Use this for long-running servers or daemons.",
+			},
+			"description": map[string]any{
+				"type":        "string",
+				"description": "Optional short active-voice description of what this command does. Useful for complex commands and UI review.",
 			},
 		},
 		"required": []string{"command"},

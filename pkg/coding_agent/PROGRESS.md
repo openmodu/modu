@@ -16,6 +16,11 @@ High-priority gaps identified before this round:
 
 ## Completed In This Round
 
+- Started AI-native tool parity prompt work on `codex/feat/ai-native-tools-parity`:
+  strengthened the default coding prompt and core native tool descriptions so
+  models are steered toward `read`, `grep`, `find`, `ls`, `edit`, and `write`
+  before falling back to `bash`; added deterministic `modu_eval` coverage for
+  the prompt contract.
 - Managed session worktrees now use `<agentDir>/worktrees/<uuid>/<repo>` paths
   and a `modu-code/<repo>-<id>` branch so active editing can live in an
   isolated checkout instead of a detached temporary tree.

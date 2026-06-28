@@ -27,7 +27,14 @@ func NewTool(cwd string) types.Tool {
 func (t *FindTool) Name() string  { return "find" }
 func (t *FindTool) Label() string { return "Find Files" }
 func (t *FindTool) Description() string {
-	return `Search for files matching a glob pattern. Uses fd if available, falls back to built-in glob. Respects .gitignore. Returns relative file paths.`
+	return `Find files by glob pattern.
+
+Usage:
+- Use this tool when you need to locate files by name or path pattern; prefer it over running shell find or ls through bash.
+- Supports patterns such as "**/*.go", "src/*.ts", or "*_test.go".
+- Uses fd when available and falls back to a built-in filesystem walk.
+- Respects .gitignore when using fd. The built-in fallback skips common generated or vendor directories.
+- Returns relative file paths. Narrow broad searches with path and pattern.`
 }
 
 func (t *FindTool) Parameters() any {
