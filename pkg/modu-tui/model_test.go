@@ -329,6 +329,40 @@ func TestPOC2SubmitHookReceivesEnteredText(t *testing.T) {
 	}
 }
 
+func TestPOC2SubmitMessageReportsPromptFollowUpAndSteer(t *testing.T) {
+	tests := []struct {
+		name string
+		busy bool
+		key  tea.Key
+		want SubmitKind
+	}{
+		{name: "prompt", key: tea.Key{Code: tea.KeyEnter}, want: SubmitKindPrompt},
+		{name: "followup", busy: true, key: tea.Key{Code: tea.KeyEnter}, want: SubmitKindFollowUp},
+		{name: "steer", busy: true, key: tea.Key{Code: tea.KeyEnter, Mod: tea.ModShift}, want: SubmitKindSteer},
+		{name: "idle shift enter prompts", key: tea.Key{Code: tea.KeyEnter, Mod: tea.ModShift}, want: SubmitKindPrompt},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got SubmitEvent
+			var tm tea.Model = NewModel(Options{
+				Hooks: Hooks{SubmitMessage: func(ev SubmitEvent) {
+					got = ev
+				}},
+			})
+			if tt.busy {
+				tm, _ = tm.Update(SetBusyMsg{Busy: true})
+			}
+			tm, _ = tm.Update(tea.PasteMsg{Content: "next instruction"})
+			tm, _ = tm.Update(tea.KeyPressMsg(tt.key))
+
+			if got.Text != "next instruction" || got.Kind != tt.want {
+				t.Fatalf("submit event = %#v, want text %q kind %q", got, "next instruction", tt.want)
+			}
+		})
+	}
+}
+
 func TestPOC2SlashPickerCompletesCommandWithTab(t *testing.T) {
 	var tm tea.Model = NewModel(Options{
 		Width:         50,

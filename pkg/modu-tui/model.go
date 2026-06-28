@@ -26,6 +26,7 @@ type Model struct {
 	headers     map[int]int // tool-header line index -> Message index
 	yOffset     int         // top visible transcript line
 	follow      bool        // stick to the bottom
+	unseen      int         // messages appended while the user is away from bottom
 	input       InputBlock
 	streaming   bool
 	streamRunes []rune
@@ -99,6 +100,49 @@ func (m Model) Lines() []string {
 	return append([]string(nil), m.lines...)
 }
 
+func (m *Model) submitInput(steer bool) tea.Cmd {
+	v := strings.TrimSpace(m.input.ExpandedValue())
+	if v == "" {
+		return nil
+	}
+	if len(m.slashMatches) > 0 && !steer {
+		v = m.slashMatches[clamp(m.slashIndex, 0, len(m.slashMatches)-1)].Name
+	}
+
+	trimmed := strings.TrimSpace(v)
+	kind := SubmitKindPrompt
+	if m.streaming || m.busy {
+		if steer {
+			kind = SubmitKindSteer
+		} else {
+			kind = SubmitKindFollowUp
+		}
+	}
+
+	m.messages = append(m.messages, Message{Role: RoleUser, Text: v})
+	m.input.Reset()
+	m.clearSlashMatches()
+	m.clearSelection()
+	m.follow = true
+	m.unseen = 0
+	m.rebuild()
+	if strings.HasPrefix(trimmed, "/") && m.hooks.SlashCommand != nil {
+		m.hooks.SlashCommand(v)
+		return nil
+	}
+	if m.hooks.SubmitMessage != nil {
+		m.hooks.SubmitMessage(SubmitEvent{Text: v, Kind: kind})
+	} else if m.hooks.Submit != nil {
+		m.hooks.Submit(v)
+	}
+	if kind == SubmitKindPrompt && m.streamReply != "" {
+		m.startStream()
+		m.rebuild()
+		return m.tick()
+	}
+	return nil
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -118,27 +162,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scroll(-max(1, m.vpHeight()-1))
 		case msg.Code == tea.KeyPgDown:
 			m.scroll(max(1, m.vpHeight()-1))
+		case msg.String() == "shift+enter":
+			if cmd := m.submitInput(true); cmd != nil {
+				return m, cmd
+			}
 		case msg.Code == tea.KeyEnter:
-			if v := strings.TrimSpace(m.input.ExpandedValue()); v != "" && !m.streaming && !m.busy {
-				if len(m.slashMatches) > 0 {
-					v = m.slashMatches[clamp(m.slashIndex, 0, len(m.slashMatches)-1)].Name
-				}
-				m.messages = append(m.messages, Message{Role: RoleUser, Text: v})
-				m.input.Reset()
-				m.clearSlashMatches()
-				m.clearSelection()
-				m.follow = true
-				m.rebuild()
-				if strings.HasPrefix(strings.TrimSpace(v), "/") && m.hooks.SlashCommand != nil {
-					m.hooks.SlashCommand(v)
-				} else if m.hooks.Submit != nil {
-					m.hooks.Submit(v)
-				}
-				if m.streamReply != "" {
-					m.startStream()
-					m.rebuild()
-					return m, m.tick()
-				}
+			if cmd := m.submitInput(false); cmd != nil {
+				return m, cmd
 			}
 		case msg.Code == tea.KeyLeft, msg.String() == "ctrl+b":
 			m.input.MoveLeft()
@@ -224,9 +254,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case AppendMessageMsg:
+		wasAtBottom := m.atBottom()
 		m.appendMessage(msg.Message)
-		m.follow = true
 		m.rebuild()
+		if wasAtBottom || m.follow {
+			m.follow = true
+			m.unseen = 0
+			m.clampScroll()
+		} else {
+			m.follow = false
+			m.unseen++
+			m.clampScroll()
+		}
 
 	case SetStatusMsg:
 		m.status = msg.Status
@@ -238,12 +277,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.messages = nil
 		m.clearSelection()
 		m.follow = true
+		m.unseen = 0
 		m.rebuild()
 
 	case RequestToolApprovalMsg:
 		m.approval = &pendingApproval{request: msg.Request, respond: msg.Respond}
 		m.clearSlashMatches()
 		m.follow = true
+		m.unseen = 0
 		m.rebuild()
 
 	case CancelToolApprovalMsg:
@@ -330,12 +371,16 @@ func (m *Model) atBottom() bool { return m.yOffset >= m.maxOffset() }
 func (m *Model) scroll(n int) {
 	m.yOffset = clamp(m.yOffset+n, 0, m.maxOffset())
 	m.follow = m.atBottom()
+	if m.follow {
+		m.unseen = 0
+	}
 }
 
 func (m *Model) jumpToBottom() {
 	m.clearSelection()
 	m.follow = true
 	m.autoScroll = 0
+	m.unseen = 0
 	m.clampScroll()
 }
 
@@ -481,7 +526,7 @@ func (m *Model) jumpPanelLines() []string {
 	if !m.showJumpPanel() {
 		return nil
 	}
-	return []string{centeredLine(jumpHint(), m.width)}
+	return []string{centeredLine(m.jumpHint(), m.width)}
 }
 
 func (m *Model) slashPanelLines() []string {

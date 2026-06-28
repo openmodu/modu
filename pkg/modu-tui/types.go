@@ -71,11 +71,25 @@ type ToolApprovalResult struct {
 	Decision ToolApprovalDecision
 }
 
+type SubmitKind string
+
+const (
+	SubmitKindPrompt   SubmitKind = "prompt"
+	SubmitKindFollowUp SubmitKind = "followup"
+	SubmitKindSteer    SubmitKind = "steer"
+)
+
+type SubmitEvent struct {
+	Text string
+	Kind SubmitKind
+}
+
 type Hooks struct {
 	ToolPermission       func(ToolCall) ToolPermissionState
 	ToolApprovalDecision func(ToolApprovalResult)
 	SlashCommand         func(line string)
 	Submit               func(text string)
+	SubmitMessage        func(SubmitEvent)
 }
 
 type MessageBlockFactory func(Message) (Block, bool)
