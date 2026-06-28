@@ -239,6 +239,64 @@ func TestPOC2JumpHintStaysInFixedRowAboveInput(t *testing.T) {
 	}
 }
 
+func TestPOC2JumpHintShowsNewMessageCountWithCtrlEnd(t *testing.T) {
+	var tm tea.Model = NewModel(Options{Width: 72, Height: 8})
+	m := tm.(Model)
+	for i := 0; i < 20; i++ {
+		m.messages = append(m.messages, Message{Role: RoleAssistant, Text: "history"})
+	}
+	m.rebuild()
+	m.scroll(-2)
+
+	tm, _ = m.Update(AppendMessageMsg{Message: Message{Role: RoleAssistant, Text: "one"}})
+	m = tm.(Model)
+	rendered := ansi.Strip(m.render())
+	if !strings.Contains(rendered, "Have 1 new message (ctrl+End) ↓") {
+		t.Fatalf("new message hint should include count and ctrl+End:\n%s", rendered)
+	}
+
+	tm, _ = m.Update(AppendMessageMsg{Message: Message{Role: RoleAssistant, Text: "two"}})
+	m = tm.(Model)
+	rendered = ansi.Strip(m.render())
+	if !strings.Contains(rendered, "Have 2 new messages (ctrl+End) ↓") {
+		t.Fatalf("new message hint should increment for newly appended messages:\n%s", rendered)
+	}
+}
+
+func TestPOC2MergedToolUpdateDoesNotIncrementNewMessageCount(t *testing.T) {
+	var tm tea.Model = NewModel(Options{Width: 72, Height: 8})
+	m := tm.(Model)
+	for i := 0; i < 20; i++ {
+		m.messages = append(m.messages, Message{Role: RoleAssistant, Text: "history"})
+	}
+	m.messages = append(m.messages, Message{
+		Tool:      true,
+		ToolID:    "call-1",
+		ToolName:  "bash",
+		Summary:   "Running shell command",
+		ToolInput: "go test ./pkg/modu-tui",
+	})
+	m.rebuild()
+	m.scroll(-2)
+
+	tm, _ = m.Update(AppendMessageMsg{Message: Message{
+		Tool:       true,
+		ToolID:     "call-1",
+		ToolName:   "bash",
+		Summary:    "Ran 1 shell command",
+		ToolOutput: "ok",
+		ToolDone:   true,
+	}})
+	m = tm.(Model)
+	rendered := ansi.Strip(m.render())
+	if strings.Contains(rendered, "Have 1 new message") {
+		t.Fatalf("merged tool update should not count as a newly appended message:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, jumpHintText()) {
+		t.Fatalf("away-from-bottom hint should fall back to jump text after a merge-only update:\n%s", rendered)
+	}
+}
+
 func TestPOC2JumpRowClickScrollsToBottom(t *testing.T) {
 	m := NewModel(Options{Width: 72, Height: 8})
 	for i := 0; i < 20; i++ {

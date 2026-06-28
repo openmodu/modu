@@ -52,9 +52,9 @@ func jumpHint() string     { return jumpStyle.Render(jumpHintText()) }
 
 func newMessagesHintText(count int) string {
 	if count == 1 {
-		return "Have 1 new message"
+		return "Have 1 new message (ctrl+End) ↓"
 	}
-	return fmt.Sprintf("Have %d new messages", count)
+	return fmt.Sprintf("Have %d new messages (ctrl+End) ↓", count)
 }
 
 func (m *Model) jumpHint() string {

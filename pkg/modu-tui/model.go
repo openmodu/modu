@@ -274,7 +274,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case AppendMessageMsg:
 		wasAtBottom := m.atBottom()
-		m.appendMessage(msg.Message)
+		added := m.appendMessage(msg.Message)
 		m.rebuild()
 		if wasAtBottom || m.follow {
 			m.follow = true
@@ -282,7 +282,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.clampScroll()
 		} else {
 			m.follow = false
-			m.unseen++
+			if added {
+				m.unseen++
+			}
 			m.clampScroll()
 		}
 
@@ -316,16 +318,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) appendMessage(msg Message) {
+func (m *Model) appendMessage(msg Message) bool {
 	if msg.Tool && msg.ToolID != "" {
 		for i := range m.messages {
 			if m.messages[i].Tool && m.messages[i].ToolID == msg.ToolID {
 				m.messages[i] = mergeToolMessage(m.messages[i], msg)
-				return
+				return false
 			}
 		}
 	}
 	m.messages = append(m.messages, msg)
+	return true
 }
 
 func mergeToolMessage(base, update Message) Message {
