@@ -19,12 +19,12 @@ enough to implement, verify, and commit independently.
   input instead of as a viewport overlay, preserving tap-to-bottom behavior
   while avoiding duplicated jump hints during mobile terminal redraws.
 - `modu_code` tool calls now merge assistant call, execution start/end, and
-  tool result updates by `ToolID` into one `pkg/modu-tui` block. Bash renders
-  collapsed as `Ran 1 shell command` and expanded as a Claude Code-style
-  `⏺ Bash(...)` block with output below it.
-- `modu_code` Read tool calls now render like Claude Code: expanded as
-  `⏺ Read(path · lines x-y)` with a compact `Read N lines` result summary
-  instead of dumping file contents into the tool block.
+  tool result updates by `ToolID` into one `pkg/modu-tui` block. Collapsed
+  blocks render only a two-space indented summary, while expanded blocks render
+  `⏺ ToolName(input args)`, wrap long args with `  │ ` continuation lines, then
+  show a two-space `└ output` line and four-space continuation/code indentation.
+- `modu_code` Read tool calls now render with a compact `Read N lines` result
+  summary instead of dumping file contents into the tool block.
 - `modu_code` write/edit tool calls now render as explicit non-collapsible
   blocks with a short write/diff summary and syntax-highlighted content or
   diff. Existing-file `write` and `edit` previews include line numbers plus
@@ -35,7 +35,7 @@ enough to implement, verify, and commit independently.
   syntax highlighting applied only to the code portion of each line, and
   `toolDiffSourceLanguage` infers the highlighting language from the file
   extension in the diff header.
-- Collapsed `pkg/modu-tui` tool summaries are indented, while clicking any
+- Collapsed `pkg/modu-tui` tool summaries stay compact, while clicking any
   rendered line inside an expanded tool block collapses it.
 - Tool approval cards now use compact command previews instead of JSON args,
   with clearer grouped allow/deny shortcuts.
