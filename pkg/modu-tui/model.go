@@ -829,13 +829,14 @@ func agentStatusText(state, status string) string {
 
 func (m *Model) statusLine(inner string) string {
 	if m.showJumpPanel() {
-		jump := "  ·  " + jumpHintText()
-		if m.unseen > 0 {
-			jump = "  ·  " + m.jumpHint()
+		jump := m.jumpHint()
+		jumpWidth := ansi.StringWidth(jump)
+		if jumpWidth >= m.width {
+			return fitLine(jump, m.width)
 		}
-		innerWidth := max(1, m.width-ansi.StringWidth(jump)-2)
-		inner = ansi.Truncate(inner, innerWidth, "…")
-		return fitLine(dimStyle.Render(" "+inner+jump+" "), m.width)
+		jumpStart := max(0, (m.width-jumpWidth)/2)
+		left := ansi.Truncate(" "+inner+" ", jumpStart, "…")
+		return fitLine(fitLine(dimStyle.Render(left), jumpStart)+jump, m.width)
 	}
 	return fitLine(dimStyle.Render(" "+inner+" "), m.width)
 }

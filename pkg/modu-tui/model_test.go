@@ -567,6 +567,18 @@ func TestPOC2JumpHintSharesAgentStatusRow(t *testing.T) {
 	if !strings.Contains(lines[statusRow], "● running") || !strings.Contains(lines[statusRow], jumpHintText()) {
 		t.Fatalf("jump hint should share the agent status row, got %q in:\n%s", lines[statusRow], rendered)
 	}
+	idx := strings.Index(lines[statusRow], jumpHintText())
+	if idx < 0 {
+		t.Fatalf("status row missing jump text: %q", lines[statusRow])
+	}
+	gotCol := ansi.StringWidth(lines[statusRow][:idx])
+	wantTextCol := (m.width-ansi.StringWidth(" "+jumpHintText()+" "))/2 + 1
+	if gotCol != wantTextCol {
+		t.Fatalf("jump hint text column = %d, want centered block text at %d in row %q", gotCol, wantTextCol, lines[statusRow])
+	}
+	if raw := m.render(); !strings.Contains(raw, "48;5;63") {
+		t.Fatalf("jump hint should keep its background style, raw render missing background escape:\n%q", raw)
+	}
 }
 
 func TestPOC2JumpHintShowsNewMessageCountWithCtrlEnd(t *testing.T) {

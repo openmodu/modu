@@ -48,7 +48,11 @@ func cellSlice(plain string, from, to int) string {
 }
 
 func jumpHintText() string { return "Jump to bottom (ctrl+End) ↓" }
-func jumpHint() string     { return jumpStyle.Render(jumpHintText()) }
+func jumpHint() string     { return renderJumpHint(jumpHintText()) }
+
+func renderJumpHint(text string) string {
+	return "\x1b[48;5;63m\x1b[38;5;231m " + text + " \x1b[0m"
+}
 
 func newMessagesHintText(count int) string {
 	if count == 1 {
