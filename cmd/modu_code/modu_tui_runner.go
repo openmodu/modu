@@ -57,16 +57,23 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		return currentCancel != nil
 	}
 	interruptPrompt := func() {
-		promptMu.Lock()
-		cancel := currentCancel
-		continueQueuedAfterCancel = false
-		promptMu.Unlock()
-		if cancel != nil {
-			cancel()
-		}
-		session.Abort()
-		session.AbortBash()
-		send(modutui.SetStatusMsg{Status: "interrupting"})
+		// Invoked synchronously from the Model.Update loop. Calling send
+		// (program.Send) or session.Abort here on the event-loop goroutine can
+		// deadlock Bubble Tea: Send blocks when the message channel is full —
+		// which happens readily over SSH where queued mouse events fill it — and
+		// the loop is itself waiting for Update to return. Run it off-loop.
+		go func() {
+			promptMu.Lock()
+			cancel := currentCancel
+			continueQueuedAfterCancel = false
+			promptMu.Unlock()
+			if cancel != nil {
+				cancel()
+			}
+			session.Abort()
+			session.AbortBash()
+			send(modutui.SetStatusMsg{Status: "interrupting"})
+		}()
 	}
 	runAgentLoop := func(run func(context.Context) error) {
 		go func() {
