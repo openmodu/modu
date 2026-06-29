@@ -145,25 +145,33 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		send(modutui.SetStatusMsg{Status: "queued"})
 	}
 	queueSteer := func(text string, requireActive bool) {
-		if requireActive && !isPromptActive() {
-			send(modutui.SetStatusMsg{Status: "no active task to steer"})
-			return
-		}
-		if !isPromptActive() {
-			runPrompt(text)
-			return
-		}
-		session.Steer(text)
-		promptMu.Lock()
-		cancel := currentCancel
-		continueQueuedAfterCancel = true
-		promptMu.Unlock()
-		if cancel != nil {
-			cancel()
-		}
-		session.Abort()
-		session.AbortBash()
-		send(modutui.SetStatusMsg{Status: "steering"})
+		// Same hazard as interruptPrompt: this runs synchronously from the
+		// Model.Update loop (submit / slash hooks), and session.Abort plus send
+		// (program.Send) would block the event loop when the message channel is
+		// full — readily so over SSH. Run it off-loop. Ordering is preserved
+		// within the goroutine: Steer enqueues and continueQueuedAfterCancel is
+		// set before cancel(), all before runAgentLoop reads it post-cancel.
+		go func() {
+			if requireActive && !isPromptActive() {
+				send(modutui.SetStatusMsg{Status: "no active task to steer"})
+				return
+			}
+			if !isPromptActive() {
+				runPrompt(text)
+				return
+			}
+			session.Steer(text)
+			promptMu.Lock()
+			cancel := currentCancel
+			continueQueuedAfterCancel = true
+			promptMu.Unlock()
+			if cancel != nil {
+				cancel()
+			}
+			session.Abort()
+			session.AbortBash()
+			send(modutui.SetStatusMsg{Status: "steering"})
+		}()
 	}
 	submit := func(ev modutui.SubmitEvent) {
 		switch ev.Kind {
