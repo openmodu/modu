@@ -1,6 +1,28 @@
 package coding_agent
 
-import "github.com/openmodu/modu/pkg/types"
+import (
+	"context"
+
+	"github.com/openmodu/modu/pkg/types"
+)
+
+// SetBackgroundPromptDriver registers a host driver for hidden extension
+// prompts (e.g. goal continuations) that are injected while the agent is idle.
+// Without a driver these run in a detached background goroutine, so the host UI
+// can't show the agent as running or interrupt it. The driver receives a run
+// function it should execute on its own foreground turn loop and must return
+// true once it has taken ownership. Passing nil clears it.
+func (s *CodingSession) SetBackgroundPromptDriver(driver func(run func(context.Context) error) bool) {
+	s.bgPromptDriverMu.Lock()
+	s.bgPromptDriver = driver
+	s.bgPromptDriverMu.Unlock()
+}
+
+func (e *engine) backgroundPromptDriver() func(run func(context.Context) error) bool {
+	e.bgPromptDriverMu.RLock()
+	defer e.bgPromptDriverMu.RUnlock()
+	return e.bgPromptDriver
+}
 
 // Prompter is the unified host-interaction contract (L5). A host implements it
 // once and registers it with SetPrompter, instead of wiring the four separate

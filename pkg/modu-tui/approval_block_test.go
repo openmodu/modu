@@ -16,7 +16,7 @@ func TestApprovalBlockRendersPendingToolApproval(t *testing.T) {
 	}
 
 	got := strings.Join(renderedTexts(block.Render(RenderContext{ContentWidth: 80})), "\n")
-	for _, want := range []string{"approval required: bash", "permission pending", "go test ./..."} {
+	for _, want := range []string{"⏺ Bash({\"command\":\"go test ./...\"})", "no content data"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("approval block missing %q:\n%s", want, got)
 		}

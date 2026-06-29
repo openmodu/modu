@@ -88,33 +88,71 @@ func TestMessagesFromAgentEventSkipsUserMessageEnd(t *testing.T) {
 	}
 }
 
-func TestModuTUIAgentDurationTrackerAppendsCompletedMessage(t *testing.T) {
+type fakeDebounceTimer struct{}
+
+func (fakeDebounceTimer) Stop() bool { return true }
+
+func TestModuTUIAgentDurationTrackerEmitsSingleTotalAcrossRounds(t *testing.T) {
 	now := time.Unix(100, 0)
-	tracker := newModuTUIAgentDurationTracker(func() time.Time {
-		return now
-	})
+	var emitted []modutui.Message
+	tracker := newModuTUIAgentDurationTracker(
+		func() time.Time { return now },
+		func(msg modutui.Message) { emitted = append(emitted, msg) },
+	)
+	var pending func()
+	tracker.schedule = func(_ time.Duration, f func()) moduTUIDebounceTimer {
+		pending = f
+		return fakeDebounceTimer{}
+	}
 
-	if _, ok := tracker.Handle(types.Event{Type: types.EventTypeAgentEnd}); ok {
-		t.Fatal("AgentEnd without AgentStart should not append a completion message")
-	}
-	if _, ok := tracker.Handle(types.Event{Type: types.EventTypeAgentStart}); ok {
-		t.Fatal("AgentStart should not append a completion message")
+	// AgentEnd without an active task does nothing.
+	tracker.Handle(types.Event{Type: types.EventTypeAgentEnd})
+	if pending != nil || len(emitted) != 0 {
+		t.Fatal("AgentEnd without AgentStart should not arm a timer or emit")
 	}
 
-	now = now.Add(65*time.Second + 400*time.Millisecond)
-	msg, ok := tracker.Handle(types.Event{Type: types.EventTypeAgentEnd})
-	if !ok {
-		t.Fatal("AgentEnd after AgentStart should append a completion message")
+	// Round 1: the long "real work" round.
+	tracker.Handle(types.Event{Type: types.EventTypeAgentStart})
+	now = now.Add(60 * time.Second)
+	tracker.Handle(types.Event{Type: types.EventTypeAgentEnd})
+	if pending == nil {
+		t.Fatal("AgentEnd should arm the debounce finalize")
 	}
+	if len(emitted) != 0 {
+		t.Fatal("nothing should be emitted before the debounce fires")
+	}
+	stale := pending
+
+	// Round 2: the hidden goal continuation re-prompts before debounce fires,
+	// cancelling round 1's finalize and extending the same task.
+	now = now.Add(2 * time.Second)
+	tracker.Handle(types.Event{Type: types.EventTypeAgentStart})
+	now = now.Add(5*time.Second + 400*time.Millisecond)
+	tracker.Handle(types.Event{Type: types.EventTypeAgentEnd})
+
+	// The stale round-1 finalize must be a no-op (gen mismatch).
+	stale()
+	if len(emitted) != 0 {
+		t.Fatalf("cancelled finalize should not emit: %#v", emitted)
+	}
+
+	// The live finalize reports one total spanning both rounds: 100 -> 167.4s.
+	pending()
+	if len(emitted) != 1 {
+		t.Fatalf("want one completion message, got %d: %#v", len(emitted), emitted)
+	}
+	msg := emitted[0]
 	if msg.Role != modutui.RoleAssistant || !msg.Preformatted || !msg.Plain {
 		t.Fatalf("completion message should be assistant preformatted plain text: %#v", msg)
 	}
-	if got, want := msg.Text, "✓ Completed (1min 05s)"; got != want {
+	if got, want := msg.Text, "✓ Completed (1min 07s)"; got != want {
 		t.Fatalf("completion text = %q, want %q", got, want)
 	}
 
-	if _, ok := tracker.Handle(types.Event{Type: types.EventTypeAgentEnd}); ok {
-		t.Fatal("tracker should clear the start time after completion")
+	// After finalizing, a lone AgentEnd does not re-emit.
+	tracker.Handle(types.Event{Type: types.EventTypeAgentEnd})
+	if len(emitted) != 1 {
+		t.Fatalf("tracker should be idle after completion, got %d messages", len(emitted))
 	}
 }
 
@@ -466,6 +504,53 @@ func TestModuTUIPrompterApproveToolUsesModuTUIRequest(t *testing.T) {
 	}
 }
 
+func TestModuTUIPrompterSelectUsesHumanPromptCard(t *testing.T) {
+	requests := make(chan modutui.RequestHumanPromptMsg, 1)
+	prompter := &moduTUIPrompter{
+		ctx: context.Background(),
+		send: func(msg tea.Msg) {
+			req, ok := msg.(modutui.RequestHumanPromptMsg)
+			if !ok {
+				t.Fatalf("unexpected message type %T", msg)
+			}
+			requests <- req
+			req.Respond <- "2 commits"
+		},
+	}
+
+	got := prompter.Select("Choose commit shape", []string{"2 commits", "1 commit"})
+	if got != "2 commits" {
+		t.Fatalf("Select returned %q", got)
+	}
+	req := <-requests
+	if req.Request.Title != "Choose commit shape" || len(req.Request.Options) != 2 || req.Request.DefaultIndex != 0 {
+		t.Fatalf("unexpected human prompt request: %#v", req.Request)
+	}
+}
+
+func TestModuTUIPrompterConfirmUsesHumanPromptCard(t *testing.T) {
+	requests := make(chan modutui.RequestHumanPromptMsg, 1)
+	prompter := &moduTUIPrompter{
+		ctx: context.Background(),
+		send: func(msg tea.Msg) {
+			req, ok := msg.(modutui.RequestHumanPromptMsg)
+			if !ok {
+				t.Fatalf("unexpected message type %T", msg)
+			}
+			requests <- req
+			req.Respond <- "no"
+		},
+	}
+
+	if got := prompter.Confirm("Overwrite?", "file exists", true); got {
+		t.Fatal("Confirm should return false for no")
+	}
+	req := <-requests
+	if req.Request.DefaultIndex != 0 || len(req.Request.Options) != 2 || req.Request.Options[0].Value != "yes" || req.Request.Options[1].Value != "no" {
+		t.Fatalf("unexpected confirm prompt request: %#v", req.Request)
+	}
+}
+
 func TestModuTUISlashCommandsIncludeBaseAndSessionCommands(t *testing.T) {
 	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
 		Cwd:       t.TempDir(),
@@ -543,7 +628,7 @@ func TestModuTUIInfoCardLinesIncludeStartupContext(t *testing.T) {
 	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
 		Cwd:       t.TempDir(),
 		AgentDir:  t.TempDir(),
-		Model:     &types.Model{ID: "test-model", Name: "Test Model", ProviderID: "test-provider"},
+		Model:     &types.Model{ID: "test-model", Name: "Test Model", ProviderID: "test-provider", ContextWindow: 32768},
 		GetAPIKey: func(string) (string, error) { return "", nil },
 	})
 	if err != nil {
@@ -553,13 +638,52 @@ func TestModuTUIInfoCardLinesIncludeStartupContext(t *testing.T) {
 	lines := strings.Join(moduTUIInfoCardLines(session, session.GetModel()), "\n")
 	for _, want := range []string{
 		"modu_code",
-		"model: Test Model (test-provider / test-model)",
+		"model: Test Model",
 		"cwd: " + session.RuntimeState().Cwd,
 		"session: " + shortModuTUISessionID(session.GetSessionID()),
 		"commands: type /",
 	} {
 		if !strings.Contains(lines, want) {
 			t.Fatalf("info card lines missing %q:\n%s", want, lines)
+		}
+	}
+}
+
+func TestModuTUIFooterIncludesContextModelAndCwd(t *testing.T) {
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       t.TempDir(),
+		AgentDir:  t.TempDir(),
+		Model:     &types.Model{ID: "test-model", Name: "Test Model", ProviderID: "test-provider", ContextWindow: 32768},
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	footer := moduTUIFooter(session)
+	for _, want := range []string{
+		"ctx 0/33K",
+		"Test Model",
+		compactModuTUICwd(session.RuntimeState().Cwd),
+	} {
+		if !strings.Contains(footer, want) {
+			t.Fatalf("footer missing %q:\n%s", want, footer)
+		}
+	}
+}
+
+func TestFormatModuTUITokens(t *testing.T) {
+	tests := map[int]string{
+		0:       "0",
+		999:     "999",
+		1200:    "1.2K",
+		32768:   "33K",
+		262144:  "262K",
+		1000000: "1M",
+	}
+	for input, want := range tests {
+		if got := formatModuTUITokens(input); got != want {
+			t.Fatalf("formatModuTUITokens(%d) = %q, want %q", input, got, want)
 		}
 	}
 }
@@ -588,12 +712,12 @@ func TestModuTUITodosConvertsSessionTodos(t *testing.T) {
 	}
 }
 
-func TestModuTUIMouseDisabledForSSHUnlessOverridden(t *testing.T) {
-	if !moduTUIMouseDisabledFromEnv([]string{"SSH_TTY=/dev/pts/1"}) {
-		t.Fatal("SSH_TTY should disable mouse reporting by default")
+func TestModuTUIMouseEnabledForSSHUnlessDisabled(t *testing.T) {
+	if moduTUIMouseDisabledFromEnv([]string{"SSH_TTY=/dev/pts/1"}) {
+		t.Fatal("SSH_TTY should keep mouse reporting by default")
 	}
-	if !moduTUIMouseDisabledFromEnv([]string{"SSH_CONNECTION=1.1.1.1 22 2.2.2.2 33333"}) {
-		t.Fatal("SSH_CONNECTION should disable mouse reporting by default")
+	if moduTUIMouseDisabledFromEnv([]string{"SSH_CONNECTION=1.1.1.1 22 2.2.2.2 33333"}) {
+		t.Fatal("SSH_CONNECTION should keep mouse reporting by default")
 	}
 	if moduTUIMouseDisabledFromEnv([]string{"SSH_TTY=/dev/pts/1", "MODU_TUI_MOUSE=on"}) {
 		t.Fatal("MODU_TUI_MOUSE=on should force mouse reporting on")
@@ -603,6 +727,18 @@ func TestModuTUIMouseDisabledForSSHUnlessOverridden(t *testing.T) {
 	}
 	if moduTUIMouseDisabledFromEnv([]string{"TERM=xterm-256color"}) {
 		t.Fatal("non-SSH terminal should keep mouse reporting by default")
+	}
+}
+
+func TestModuTUIArrowKeysScrollForSSHAndMouseDisabled(t *testing.T) {
+	if !moduTUIArrowKeysScrollFromEnv([]string{"SSH_TTY=/dev/pts/1"}) {
+		t.Fatal("SSH sessions should keep empty-input arrow key transcript scrolling")
+	}
+	if !moduTUIArrowKeysScrollFromEnv([]string{"MODU_TUI_MOUSE=off"}) {
+		t.Fatal("mouse-disabled sessions should use arrow key transcript scrolling")
+	}
+	if moduTUIArrowKeysScrollFromEnv([]string{"TERM=xterm-256color"}) {
+		t.Fatal("plain local terminal should keep normal input history arrow behavior")
 	}
 }
 
@@ -638,7 +774,7 @@ func TestRunModuTUISlashSendsPreformattedHelpOutput(t *testing.T) {
 	var messages []tea.Msg
 	runModuTUISlash(context.Background(), "/help", session, session.GetModel(), func(msg tea.Msg) {
 		messages = append(messages, msg)
-	})
+	}, nil)
 
 	var got *modutui.Message
 	for _, msg := range messages {
@@ -657,6 +793,36 @@ func TestRunModuTUISlashSendsPreformattedHelpOutput(t *testing.T) {
 	for _, want := range []string{"Help", "/help, /h", "/quit, /exit", "tool approval"} {
 		if !strings.Contains(got.Text, want) {
 			t.Fatalf("help output missing %q:\n%s", want, got.Text)
+		}
+	}
+}
+
+func TestRunModuTUISlashDoesNotResetStatusWhenAgentRunStarted(t *testing.T) {
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       t.TempDir(),
+		AgentDir:  t.TempDir(),
+		Model:     &types.Model{ID: "test", Name: "Test", ProviderID: "test"},
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var messages []tea.Msg
+	runModuTUISlash(context.Background(), "/help", session, session.GetModel(), func(msg tea.Msg) {
+		messages = append(messages, msg)
+	}, func() bool { return true })
+
+	for _, msg := range messages {
+		switch msg := msg.(type) {
+		case modutui.SetBusyMsg:
+			if !msg.Busy {
+				t.Fatalf("slash cleanup should not clear busy while agent run is active: %#v", messages)
+			}
+		case modutui.SetStatusMsg:
+			if msg.Status == "idle" {
+				t.Fatalf("slash cleanup should not reset status to idle while agent run is active: %#v", messages)
+			}
 		}
 	}
 }

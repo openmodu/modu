@@ -44,21 +44,28 @@ func (t *TodoWriteTool) Parameters() any {
 		"type": "object",
 		"properties": map[string]any{
 			"todos": map[string]any{
-				"type": "array",
+				"type":        "array",
+				"description": "Required. Full replacement list of current todos.",
 				"items": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"content": map[string]any{"type": "string"},
+						"content": map[string]any{
+							"type":        "string",
+							"description": "Required. Concise task description.",
+						},
 						"status": map[string]any{
-							"type": "string",
-							"enum": []string{"pending", "in_progress", "completed"},
+							"type":        "string",
+							"enum":        []string{"pending", "in_progress", "completed"},
+							"description": "Required. Use exactly one in_progress item for the active task.",
 						},
 					},
-					"required": []string{"content", "status"},
+					"required":             []string{"content", "status"},
+					"additionalProperties": false,
 				},
 			},
 		},
-		"required": []string{"todos"},
+		"required":             []string{"todos"},
+		"additionalProperties": false,
 	}
 }
 

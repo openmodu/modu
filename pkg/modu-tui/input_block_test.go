@@ -26,6 +26,20 @@ func TestInputBlockEditsAtCursor(t *testing.T) {
 	}
 }
 
+func TestInputBlockReplaceBeforeCursor(t *testing.T) {
+	var input InputBlock
+	input.Insert("prefix zhege suffix")
+	input.Cursor = len([]rune("prefix zhege"))
+	input.ReplaceBeforeCursor(len([]rune("zhege")), "这个")
+
+	if got, want := input.Value, "prefix 这个 suffix"; got != want {
+		t.Fatalf("input value = %q, want %q", got, want)
+	}
+	if got, want := input.Cursor, len([]rune("prefix 这个")); got != want {
+		t.Fatalf("cursor = %d, want %d", got, want)
+	}
+}
+
 func TestInputBlockLargePasteRendersCollapsedAndExpandsForSubmit(t *testing.T) {
 	content := strings.Repeat("alpha ", 50)
 	var input InputBlock
@@ -39,8 +53,8 @@ func TestInputBlockLargePasteRendersCollapsedAndExpandsForSubmit(t *testing.T) {
 	if got := input.ExpandedValue(); got != "before "+content+" after" {
 		t.Fatalf("expanded value mismatch:\n%q", got)
 	}
-	line, _ := input.Render(80)
-	rendered := ansi.Strip(line)
+	lines, _, _ := input.Render(80, maxInputRows)
+	rendered := ansi.Strip(lines[0])
 	if !strings.Contains(rendered, "[Pasted text") || strings.Contains(rendered, content) {
 		t.Fatalf("rendered input should show the paste label only:\n%s", rendered)
 	}

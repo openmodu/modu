@@ -165,6 +165,32 @@ func TestToolMetadata(t *testing.T) {
 	}
 }
 
+func TestUpdateGoalSchemaUsesSimpleEnum(t *testing.T) {
+	tool := &updateGoalTool{store: NewStore()}
+	params, ok := tool.Parameters().(map[string]any)
+	if !ok {
+		t.Fatalf("parameters type = %T", tool.Parameters())
+	}
+	props, ok := params["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties type = %T", params["properties"])
+	}
+	status, ok := props["status"].(map[string]any)
+	if !ok {
+		t.Fatalf("status schema type = %T", props["status"])
+	}
+	if status["type"] != "string" {
+		t.Fatalf("status type = %#v, want string", status["type"])
+	}
+	enum, ok := status["enum"].([]string)
+	if !ok || len(enum) != 1 || enum[0] != "complete" {
+		t.Fatalf("status enum = %#v, want [complete]", status["enum"])
+	}
+	if _, ok := status["anyOf"]; ok {
+		t.Fatalf("status schema should not use anyOf: %#v", status)
+	}
+}
+
 func TestUpdateGoalDoubleCompleteIsIdempotent(t *testing.T) {
 	store := NewStore()
 	store.Start("once")

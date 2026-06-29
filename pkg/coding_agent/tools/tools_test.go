@@ -3197,6 +3197,34 @@ func TestTodoWriteToolRejectsMultipleInProgress(t *testing.T) {
 	}
 }
 
+func TestTodoWriteToolSchemaRejectsExtraFields(t *testing.T) {
+	tool := planning.NewTodoWriteTool(&testTodoStore{})
+	def := types.ToolDefinition{Name: tool.Name(), Parameters: tool.Parameters()}
+
+	if _, err := agent.ValidateToolArguments(def, types.ToolCallContent{
+		Name: "todo_write",
+		Arguments: map[string]any{
+			"todos": []any{
+				map[string]any{"content": "one", "status": "pending", "id": "unexpected"},
+			},
+		},
+	}); err == nil {
+		t.Fatal("expected extra todo item field to fail schema validation")
+	}
+
+	if _, err := agent.ValidateToolArguments(def, types.ToolCallContent{
+		Name: "todo_write",
+		Arguments: map[string]any{
+			"todos": []any{
+				map[string]any{"content": "one", "status": "pending"},
+			},
+			"extra": true,
+		},
+	}); err == nil {
+		t.Fatal("expected extra root field to fail schema validation")
+	}
+}
+
 func TestAllToolsCreation(t *testing.T) {
 	allTools := AllTools("/tmp")
 	if len(allTools) != 7 {

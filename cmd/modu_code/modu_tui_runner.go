@@ -21,6 +21,8 @@ import (
 	"github.com/openmodu/modu/pkg/types"
 )
 
+const moduTUITerminalStatusTTL = 10 * time.Second
+
 func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool, opts RunOptions) error {
 	if n, err := session.RestoreMessages(); err == nil && n > 0 {
 		_ = n
@@ -34,7 +36,8 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 	var currentPromptID int
 	var nextPromptID int
 	var continueQueuedAfterCancel bool
-	durationTracker := newModuTUIAgentDurationTracker(time.Now)
+	var foregroundMu sync.Mutex
+	var foregroundRuns int
 	send := func(msg tea.Msg) {
 		programMu.RLock()
 		p := program
@@ -43,6 +46,30 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 			p.Send(msg)
 		}
 	}
+	markForegroundRunStart := func() {
+		foregroundMu.Lock()
+		foregroundRuns++
+		foregroundMu.Unlock()
+	}
+	markForegroundRunDone := func() bool {
+		foregroundMu.Lock()
+		if foregroundRuns > 0 {
+			foregroundRuns--
+		}
+		idle := foregroundRuns == 0
+		foregroundMu.Unlock()
+		return idle
+	}
+	isForegroundRunActive := func() bool {
+		foregroundMu.Lock()
+		active := foregroundRuns > 0
+		foregroundMu.Unlock()
+		return active
+	}
+	durationTracker := newModuTUIAgentDurationTracker(time.Now, func(msg modutui.Message) {
+		send(modutui.AppendMessageMsg{Message: msg})
+	})
+	sendFooter := func() {}
 
 	if !noApprove {
 		session.SetPrompter(&moduTUIPrompter{ctx: ctx, send: send})
@@ -55,15 +82,40 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		defer promptMu.Unlock()
 		return currentCancel != nil
 	}
+	interruptPrompt := func() {
+		// Invoked synchronously from the Model.Update loop. Calling send
+		// (program.Send) or session.Abort here on the event-loop goroutine can
+		// deadlock Bubble Tea: Send blocks when the message channel is full —
+		// which happens readily over SSH where queued mouse events fill it — and
+		// the loop is itself waiting for Update to return. Run it off-loop.
+		go func() {
+			promptMu.Lock()
+			cancel := currentCancel
+			continueQueuedAfterCancel = false
+			promptMu.Unlock()
+			if cancel != nil {
+				cancel()
+			}
+			session.Abort()
+			session.AbortBash()
+			send(modutui.SetStatusMsg{Status: "interrupting"})
+		}()
+	}
 	runAgentLoop := func(run func(context.Context) error) {
+		markForegroundRunStart()
 		go func() {
 			send(modutui.SetBusyMsg{Busy: true})
 			send(modutui.SetStatusMsg{Status: "running"})
-			defer send(modutui.SetBusyMsg{Busy: false})
+			defer func() {
+				if markForegroundRunDone() {
+					send(modutui.SetBusyMsg{Busy: false})
+				}
+			}()
 
 			nextRun := run
 			for {
 				promptCtx, cancel := context.WithCancel(ctx)
+				started := time.Now()
 				promptMu.Lock()
 				nextPromptID++
 				promptID := nextPromptID
@@ -85,7 +137,7 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 				ag := session.GetAgent()
 				shouldContinue := ag != nil && ag.HasQueuedMessages() && (err == nil || steeringCancel)
 				if shouldContinue {
-					send(modutui.SetStatusMsg{Status: "running queued message"})
+					send(modutui.SetStatusMsg{Status: "running"})
 					nextRun = ag.Continue
 					continue
 				}
@@ -95,10 +147,16 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 						Role: modutui.RoleAssistant,
 						Text: "error: " + err.Error(),
 					}})
-					send(modutui.SetStatusMsg{Status: "error"})
+					send(modutui.SetStatusMsg{Status: "error", TransientFor: moduTUITerminalStatusTTL})
+				} else if errors.Is(err, context.Canceled) {
+					send(modutui.SetStatusMsg{Status: "interrupted", TransientFor: moduTUITerminalStatusTTL})
 				} else {
-					send(modutui.SetStatusMsg{Status: "idle"})
+					send(modutui.SetStatusMsg{
+						Status:       "✓ Completed " + formatModuTUIActivityDuration(time.Since(started)),
+						TransientFor: moduTUITerminalStatusTTL,
+					})
 				}
+				sendFooter()
 				return
 			}
 		}()
@@ -108,38 +166,59 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 			return session.Prompt(ctx, text)
 		})
 	}
+	// Drive hidden extension turns (goal continuations injected while idle)
+	// through the foreground loop instead of a detached background goroutine, so
+	// the status line reflects the running agent and ESC can interrupt it.
+	session.SetBackgroundPromptDriver(func(run func(context.Context) error) bool {
+		runAgentLoop(run)
+		return true
+	})
 	queueFollowUp := func(text string, requireActive bool) {
-		if requireActive && !isPromptActive() {
-			send(modutui.SetStatusMsg{Status: "no active task to followup"})
-			return
-		}
-		if !isPromptActive() {
-			runPrompt(text)
-			return
-		}
-		session.FollowUp(text)
-		send(modutui.SetStatusMsg{Status: "queued follow-up"})
+		// Same hazard as interruptPrompt/queueSteer: invoked synchronously from
+		// the Model.Update loop (submit / slash hooks), where send (program.Send)
+		// blocks the event loop when the message channel is full — readily so
+		// over SSH. Run it off-loop.
+		go func() {
+			if requireActive && !isPromptActive() {
+				send(modutui.SetStatusMsg{Status: "no active task to followup"})
+				return
+			}
+			if !isPromptActive() {
+				runPrompt(text)
+				return
+			}
+			session.FollowUp(text)
+			send(modutui.SetStatusMsg{Status: "queued"})
+		}()
 	}
 	queueSteer := func(text string, requireActive bool) {
-		if requireActive && !isPromptActive() {
-			send(modutui.SetStatusMsg{Status: "no active task to steer"})
-			return
-		}
-		if !isPromptActive() {
-			runPrompt(text)
-			return
-		}
-		session.Steer(text)
-		promptMu.Lock()
-		cancel := currentCancel
-		continueQueuedAfterCancel = true
-		promptMu.Unlock()
-		if cancel != nil {
-			cancel()
-		}
-		session.Abort()
-		session.AbortBash()
-		send(modutui.SetStatusMsg{Status: "steering"})
+		// Same hazard as interruptPrompt: this runs synchronously from the
+		// Model.Update loop (submit / slash hooks), and session.Abort plus send
+		// (program.Send) would block the event loop when the message channel is
+		// full — readily so over SSH. Run it off-loop. Ordering is preserved
+		// within the goroutine: Steer enqueues and continueQueuedAfterCancel is
+		// set before cancel(), all before runAgentLoop reads it post-cancel.
+		go func() {
+			if requireActive && !isPromptActive() {
+				send(modutui.SetStatusMsg{Status: "no active task to steer"})
+				return
+			}
+			if !isPromptActive() {
+				runPrompt(text)
+				return
+			}
+			session.Steer(text)
+			promptMu.Lock()
+			cancel := currentCancel
+			continueQueuedAfterCancel = true
+			promptMu.Unlock()
+			if cancel != nil {
+				cancel()
+			}
+			session.Abort()
+			session.AbortBash()
+			send(modutui.SetStatusMsg{Status: "steering"})
+		}()
 	}
 	submit := func(ev modutui.SubmitEvent) {
 		switch ev.Kind {
@@ -153,18 +232,20 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 	}
 
 	width, height := initialTerminalSize(int(os.Stdout.Fd()), 120, 35)
-	mouseDisabled := moduTUIMouseDisabledFromEnv(os.Environ())
+	env := os.Environ()
+	mouseDisabled := moduTUIMouseDisabledFromEnv(env)
+	arrowKeysScroll := moduTUIArrowKeysScrollFromEnv(env)
 	ui := modutui.NewModel(modutui.Options{
 		Width:           width,
 		Height:          height,
 		InitialMessages: initial,
 		InputHistory:    inputHistory,
 		Todos:           moduTUITodos(session),
-		StatusHint:      "Enter 发送 · Ctrl+C 退出 · 当前为 modu-tui runner",
+		Footer:          moduTUIFooter(session),
 		InfoCardLines:   moduTUIInfoCardLines(session, model),
 		SlashCommands:   moduTUISlashCommands(session),
 		DisableMouse:    mouseDisabled,
-		ArrowKeysScroll: mouseDisabled,
+		ArrowKeysScroll: arrowKeysScroll,
 		Hooks: modutui.Hooks{
 			InputHistoryChanged: func(history []string) {
 				_ = saveModuTUIInputHistory(historyFile, history)
@@ -185,20 +266,25 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 					}
 					return
 				}
-				go runModuTUISlash(ctx, line, session, model, send)
+				go runModuTUISlash(ctx, line, session, model, send, isForegroundRunActive)
 			},
+			Interrupt: interruptPrompt,
 		},
 	})
+	sendFooter = func() {
+		send(modutui.SetFooterMsg{Footer: moduTUIFooter(session)})
+	}
 
 	unsubAgent := session.Subscribe(func(ev types.Event) {
-		if msg, ok := durationTracker.Handle(ev); ok {
-			send(modutui.AppendMessageMsg{Message: msg})
-		}
+		durationTracker.Handle(ev)
 		for _, msg := range messagesFromAgentEventWithCwd(ev, session.Cwd()) {
 			send(modutui.AppendMessageMsg{Message: msg})
 		}
 		if ev.Type == types.EventTypeToolExecutionEnd {
 			send(modutui.SetTodosMsg{Todos: moduTUITodos(session)})
+		}
+		if ev.Type == types.EventTypeMessageEnd {
+			sendFooter()
 		}
 	})
 	defer unsubAgent()
@@ -207,6 +293,7 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		if msg, ok := messageFromSessionEvent(ev); ok {
 			send(modutui.AppendMessageMsg{Message: msg})
 		}
+		sendFooter()
 	})
 	defer unsubSession()
 
@@ -214,45 +301,104 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 	programMu.Lock()
 	program = prog
 	programMu.Unlock()
+	go func() {
+		session.EmitStartupEvent()
+		session.EmitExtensionEvent("ui_ready")
+	}()
 	_, err := prog.Run()
 	return err
 }
 
+// moduTUIDurationDebounce is how long the tracker waits after an agent_end
+// before declaring a task finished. A goal/extension task spans several
+// back-to-back agent rounds (the hidden continuation re-prompts the agent the
+// instant a round ends), so without debouncing each round would print its own
+// "✓ Completed" line. The window only needs to bridge that near-zero gap.
+const moduTUIDurationDebounce = 750 * time.Millisecond
+
+type moduTUIDebounceTimer interface{ Stop() bool }
+
+// moduTUIAgentDurationTracker collapses a multi-round agent task into a single
+// completion message reporting the total wall time from the first agent_start
+// to the last agent_end. Each agent_end (re)arms a debounce timer; a fresh
+// agent_start within the window means the task is still going and cancels it.
 type moduTUIAgentDurationTracker struct {
-	mu      sync.Mutex
-	now     func() time.Time
+	mu       sync.Mutex
+	now      func() time.Time
+	emit     func(modutui.Message)
+	debounce time.Duration
+	schedule func(time.Duration, func()) moduTUIDebounceTimer
+
 	started time.Time
+	lastEnd time.Time
+	active  bool
+	gen     int
+	timer   moduTUIDebounceTimer
 }
 
-func newModuTUIAgentDurationTracker(now func() time.Time) *moduTUIAgentDurationTracker {
+func newModuTUIAgentDurationTracker(now func() time.Time, emit func(modutui.Message)) *moduTUIAgentDurationTracker {
 	if now == nil {
 		now = time.Now
 	}
-	return &moduTUIAgentDurationTracker{now: now}
+	t := &moduTUIAgentDurationTracker{now: now, emit: emit, debounce: moduTUIDurationDebounce}
+	t.schedule = func(d time.Duration, f func()) moduTUIDebounceTimer {
+		return time.AfterFunc(d, f)
+	}
+	return t
 }
 
-func (t *moduTUIAgentDurationTracker) Handle(ev types.Event) (modutui.Message, bool) {
+func (t *moduTUIAgentDurationTracker) Handle(ev types.Event) {
 	switch ev.Type {
 	case types.EventTypeAgentStart:
 		t.mu.Lock()
-		t.started = t.now()
+		t.gen++ // invalidate any pending finalize: the task is still running
+		if t.timer != nil {
+			t.timer.Stop()
+			t.timer = nil
+		}
+		if !t.active {
+			t.started = t.now()
+			t.active = true
+		}
 		t.mu.Unlock()
 	case types.EventTypeAgentEnd:
 		t.mu.Lock()
-		started := t.started
-		t.started = time.Time{}
-		t.mu.Unlock()
-		if started.IsZero() {
-			break
+		if !t.active {
+			t.mu.Unlock()
+			return
 		}
-		return modutui.Message{
-			Role:         modutui.RoleAssistant,
-			Text:         "✓ Completed (" + formatModuTUIActivityDuration(t.now().Sub(started)) + ")",
-			Preformatted: true,
-			Plain:        true,
-		}, true
+		t.lastEnd = t.now()
+		gen := t.gen
+		if t.timer != nil {
+			t.timer.Stop()
+		}
+		t.timer = t.schedule(t.debounce, func() { t.finalize(gen) })
+		t.mu.Unlock()
 	}
-	return modutui.Message{}, false
+}
+
+func (t *moduTUIAgentDurationTracker) finalize(gen int) {
+	t.mu.Lock()
+	if !t.active || gen != t.gen {
+		t.mu.Unlock()
+		return
+	}
+	t.gen++
+	total := t.lastEnd.Sub(t.started)
+	t.active = false
+	t.started = time.Time{}
+	t.timer = nil
+	emit := t.emit
+	t.mu.Unlock()
+	if emit == nil {
+		return
+	}
+	emit(modutui.Message{
+		Role:         modutui.RoleAssistant,
+		Text:         "✓ Completed (" + formatModuTUIActivityDuration(total) + ")",
+		Preformatted: true,
+		Plain:        true,
+	})
 }
 
 func formatModuTUIActivityDuration(d time.Duration) string {
@@ -280,6 +426,14 @@ func moduTUIMouseDisabledFromEnv(env []string) bool {
 			return true
 		}
 	}
+	return false
+}
+
+func moduTUIArrowKeysScrollFromEnv(env []string) bool {
+	return moduTUIMouseDisabledFromEnv(env) || moduTUISSHSessionFromEnv(env)
+}
+
+func moduTUISSHSessionFromEnv(env []string) bool {
 	return envNonEmpty(env, "SSH_TTY") || envNonEmpty(env, "SSH_CONNECTION") || envNonEmpty(env, "SSH_CLIENT")
 }
 
@@ -328,11 +482,14 @@ func (p *moduTUISlashPrinter) Text() string {
 	return strings.TrimSpace(strings.Join(p.lines, "\n"))
 }
 
-func runModuTUISlash(ctx context.Context, line string, session *coding_agent.CodingSession, model *types.Model, send func(tea.Msg)) {
+func runModuTUISlash(ctx context.Context, line string, session *coding_agent.CodingSession, model *types.Model, send func(tea.Msg), keepAgentBusy func() bool) {
 	send(modutui.SetBusyMsg{Busy: true})
 	send(modutui.SetStatusMsg{Status: "running slash command"})
 	defer func() {
 		send(modutui.SetTodosMsg{Todos: moduTUITodos(session)})
+		if keepAgentBusy != nil && keepAgentBusy() {
+			return
+		}
 		send(modutui.SetBusyMsg{Busy: false})
 		send(modutui.SetStatusMsg{Status: "idle"})
 	}()
@@ -364,22 +521,7 @@ func runModuTUISlash(ctx context.Context, line string, session *coding_agent.Cod
 func moduTUIInfoCardLines(session *coding_agent.CodingSession, model *types.Model) []string {
 	lines := []string{"modu_code"}
 	if model != nil {
-		label := strings.TrimSpace(model.Name)
-		if label == "" {
-			label = model.ID
-		}
-		var parts []string
-		if strings.TrimSpace(model.ProviderID) != "" {
-			parts = append(parts, strings.TrimSpace(model.ProviderID))
-		}
-		if strings.TrimSpace(model.ID) != "" {
-			parts = append(parts, strings.TrimSpace(model.ID))
-		}
-		detail := strings.Join(parts, " / ")
-		if detail != "" && detail != label {
-			label += " (" + detail + ")"
-		}
-		if label != "" {
+		if label := moduTUIModelLabel(model); label != "" {
 			lines = append(lines, "model: "+label)
 		}
 	}
@@ -393,6 +535,93 @@ func moduTUIInfoCardLines(session *coding_agent.CodingSession, model *types.Mode
 	}
 	lines = append(lines, "commands: type /  send: Enter  quit: Ctrl+C")
 	return lines
+}
+
+func moduTUIFooter(session *coding_agent.CodingSession) string {
+	if session == nil {
+		return "ctx - · - · -"
+	}
+	model := session.GetModel()
+	parts := []string{moduTUIContextUsage(session, model)}
+	if label := moduTUIModelLabel(model); label != "" {
+		parts = append(parts, label)
+	} else {
+		parts = append(parts, "-")
+	}
+	cwd := strings.TrimSpace(session.RuntimeState().Cwd)
+	if cwd == "" {
+		cwd = session.Cwd()
+	}
+	if cwd == "" {
+		cwd = "-"
+	}
+	parts = append(parts, compactModuTUICwd(cwd))
+	return strings.Join(parts, " · ")
+}
+
+func moduTUIContextUsage(session *coding_agent.CodingSession, model *types.Model) string {
+	used := 0
+	if session != nil {
+		used = session.GetSessionStats().TotalTokens
+	}
+	limit := 0
+	if model != nil {
+		limit = model.ContextWindow
+	}
+	if limit <= 0 {
+		return "ctx " + formatModuTUITokens(used)
+	}
+	return fmt.Sprintf("ctx %s/%s", formatModuTUITokens(used), formatModuTUITokens(limit))
+}
+
+func moduTUIModelLabel(model *types.Model) string {
+	if model == nil {
+		return ""
+	}
+	label := strings.TrimSpace(model.Name)
+	if label == "" {
+		label = strings.TrimSpace(model.ID)
+	}
+	return label
+}
+
+func compactModuTUICwd(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" || path == "-" {
+		return "-"
+	}
+	clean := filepath.Clean(path)
+	volume := filepath.VolumeName(clean)
+	rest := strings.TrimPrefix(clean, volume)
+	sep := string(os.PathSeparator)
+	parts := strings.FieldsFunc(rest, func(r rune) bool {
+		return r == '/' || r == '\\'
+	})
+	if len(parts) <= 2 {
+		if volume != "" {
+			return volume + strings.Join(parts, sep)
+		}
+		return strings.Join(parts, sep)
+	}
+	return "…" + sep + filepath.Join(parts[len(parts)-2:]...)
+}
+
+func formatModuTUITokens(tokens int) string {
+	if tokens < 0 {
+		tokens = 0
+	}
+	if tokens < 1000 {
+		return strconv.Itoa(tokens)
+	}
+	if tokens < 1_000_000 {
+		value := float64(tokens) / 1000
+		if tokens < 10_000 {
+			return strings.TrimSuffix(strings.TrimSuffix(fmt.Sprintf("%.1f", value), "0"), ".") + "K"
+		}
+		return fmt.Sprintf("%.0fK", value)
+	}
+	value := float64(tokens) / 1_000_000
+	return strings.TrimSuffix(strings.TrimSuffix(fmt.Sprintf("%.1f", value), "0"), ".") + "M"
 }
 
 func moduTUITodos(session *coding_agent.CodingSession) []modutui.TodoItem {
@@ -584,16 +813,42 @@ type moduTUIPrompter struct {
 }
 
 func (p *moduTUIPrompter) Confirm(title, body string, defaultYes bool) bool {
-	p.notify(title, body)
-	return defaultYes
+	defaultIndex := 1
+	if defaultYes {
+		defaultIndex = 0
+	}
+	choice := p.requestHumanPrompt(modutui.HumanPromptRequest{
+		Title: title,
+		Body:  body,
+		Options: []modutui.HumanPromptOption{
+			{Label: "Yes", Value: "yes"},
+			{Label: "No", Value: "no"},
+		},
+		DefaultIndex: defaultIndex,
+	})
+	if choice == "" {
+		return defaultYes
+	}
+	return choice == "yes"
 }
 
 func (p *moduTUIPrompter) Select(title string, options []string) string {
-	p.notify(title, "selection prompt is not available in modu-tui runner yet")
 	if len(options) == 0 {
 		return ""
 	}
-	return options[0]
+	promptOptions := make([]modutui.HumanPromptOption, 0, len(options))
+	for _, option := range options {
+		promptOptions = append(promptOptions, modutui.HumanPromptOption{Label: option, Value: option})
+	}
+	choice := p.requestHumanPrompt(modutui.HumanPromptRequest{
+		Title:        title,
+		Options:      promptOptions,
+		DefaultIndex: 0,
+	})
+	if choice == "" {
+		return options[0]
+	}
+	return choice
 }
 
 func (p *moduTUIPrompter) ApprovePlan(plan string, steps []string) string {
@@ -601,8 +856,22 @@ func (p *moduTUIPrompter) ApprovePlan(plan string, steps []string) string {
 	if len(steps) > 0 {
 		body += "\n\n" + strings.Join(steps, "\n")
 	}
-	p.notify("plan approval required", body)
-	return "reject: approval UI is not available in modu-tui runner yet"
+	choice := p.requestHumanPrompt(modutui.HumanPromptRequest{
+		Title: "Plan approval required",
+		Body:  body,
+		Options: []modutui.HumanPromptOption{
+			{Label: "Approve", Value: "approve"},
+			{Label: "Approve + auto", Value: "approve_auto"},
+			{Label: "Reject", Value: "reject"},
+		},
+		DefaultIndex: 2,
+	})
+	switch choice {
+	case "approve", "approve_auto":
+		return choice
+	default:
+		return "reject: rejected in modu-tui"
+	}
 }
 
 func (p *moduTUIPrompter) ApproveTool(toolName, toolCallID string, args map[string]any) (types.ToolApprovalDecision, error) {
@@ -638,6 +907,27 @@ func (p *moduTUIPrompter) notify(summary, detail string) {
 		Detail:   detail,
 		Expanded: true,
 	}})
+}
+
+func (p *moduTUIPrompter) requestHumanPrompt(req modutui.HumanPromptRequest) string {
+	if p == nil || p.send == nil {
+		return ""
+	}
+	ctx := p.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ch := make(chan string, 1)
+	p.send(modutui.RequestHumanPromptMsg{
+		Request: req,
+		Respond: ch,
+	})
+	select {
+	case choice := <-ch:
+		return choice
+	case <-ctx.Done():
+		return ""
+	}
 }
 
 func messagesFromAgentEvent(ev types.Event) []modutui.Message {

@@ -24,7 +24,7 @@ func (b ToolCallBlock) Render(ctx RenderContext) BlockRender {
 	if permission == ToolPermissionUnknown && ctx.Hooks.ToolPermission != nil {
 		permission = ctx.Hooks.ToolPermission(b.Call)
 	}
-	if b.Call.Input == "" && b.Call.Output == "" {
+	if strings.TrimSpace(b.Call.Name) == "" && b.Call.Input == "" && b.Call.Output == "" && b.Call.Code == "" {
 		block := b.CollapsibleBlock
 		if permission != ToolPermissionUnknown {
 			block.Summary += " · permission " + string(permission)
@@ -32,13 +32,7 @@ func (b ToolCallBlock) Render(ctx RenderContext) BlockRender {
 		return block.Render(ctx)
 	}
 
-	summary := strings.TrimSpace(b.Summary)
-	if summary == "" {
-		summary = b.Call.Summary
-	}
-	if summary == "" {
-		summary = "Ran " + toolDisplayName(b.Call.Name)
-	}
+	summary := toolBlockSummary(b.Summary, b.Call)
 	if permission != ToolPermissionUnknown {
 		summary += " · permission " + string(permission)
 	}
@@ -46,34 +40,50 @@ func (b ToolCallBlock) Render(ctx RenderContext) BlockRender {
 	out := BlockRender{}
 	expanded := b.Expanded || b.Call.NoCollapse
 	if !expanded {
-		out.Add(dimStyle.Render("  "+summary), 0)
+		out.Add(toolExpandedLine(ctx.ContentWidth, "  "+summary), 0)
 		return out
 	}
 
-	out.Add(toolExpandedHeaderLine(ctx.ContentWidth, b.Call), 0)
-	for _, line := range toolDetailLines(b.Call) {
-		out.Add(toolExpandedLine(ctx.ContentWidth, toolDetailLinePrefix(b.Call)+line), 0)
+	for _, line := range toolExpandedHeaderLines(ctx.ContentWidth, b.Call) {
+		out.Add(line, 0)
 	}
-	for _, line := range toolCodeLines(ctx, b.Call) {
-		out.Add(toolCodeLine(ctx.ContentWidth, line), 0)
+	for _, line := range toolOutputLines(ctx, b.Call) {
+		out.Add(toolExpandedLine(ctx.ContentWidth, line), 0)
 	}
 	return out
 }
 
-func toolDetailLinePrefix(call ToolCall) string {
-	if call.NoCollapse {
-		return "  └ "
+func toolBlockSummary(summary string, call ToolCall) string {
+	summary = strings.TrimSpace(summary)
+	if summary != "" {
+		return summary
 	}
-	return "  "
+	if summary = strings.TrimSpace(call.Summary); summary != "" {
+		return summary
+	}
+	if call.NoCollapse {
+		return toolDisplayName(call.Name)
+	}
+	return "Ran " + toolDisplayName(call.Name)
 }
 
-func toolExpandedHeaderLine(width int, call ToolCall) string {
+func toolExpandedHeaderLines(width int, call ToolCall) []string {
 	width = max(1, width)
 	markerText := "⏺ "
 	markerWidth := max(0, lipgloss.Width(markerText))
+	continuation := toolHeaderContinuationPrefix()
+	continuationWidth := lipgloss.Width(continuation)
+	chunks := wrapToolHeader(toolInvocationLine(call), max(1, width-markerWidth), max(1, width-continuationWidth))
+	if len(chunks) == 0 {
+		chunks = []string{""}
+	}
+	lines := make([]string, 0, len(chunks))
 	marker := toolExpandedMarkerStyle.Render(markerText)
-	rest := fitLine(dimStyle.Render(toolInvocationLine(call)), max(1, width-markerWidth))
-	return marker + rest
+	lines = append(lines, marker+fitLine(dimStyle.Render(chunks[0]), max(1, width-markerWidth)))
+	for _, chunk := range chunks[1:] {
+		lines = append(lines, toolExpandedLine(width, continuation+chunk))
+	}
+	return lines
 }
 
 func toolExpandedLine(width int, text string) string {
@@ -99,13 +109,78 @@ func toolInvocationLine(call ToolCall) string {
 	return name + "(" + input + ")"
 }
 
-func toolDetailLines(call ToolCall) []string {
-	var lines []string
+func toolOutputLines(ctx RenderContext, call ToolCall) []string {
 	output := strings.TrimRight(call.Output, "\n")
-	if output != "" {
-		lines = append(lines, strings.Split(output, "\n")...)
+	var lines []string
+	if strings.TrimSpace(output) == "" {
+		lines = append(lines, toolOutputBranchPrefix()+"no content data")
+	} else {
+		parts := strings.Split(output, "\n")
+		lines = append(lines, toolOutputBranchPrefix()+parts[0])
+		for _, line := range parts[1:] {
+			lines = append(lines, toolOutputIndent()+line)
+		}
 	}
+
+	codeCtx := ctx
+	codeCtx.ContentWidth = max(1, ctx.ContentWidth-toolOutputIndentWidth())
+	for _, line := range toolCodeLines(codeCtx, call) {
+		lines = append(lines, toolOutputIndent()+toolCodeLine(codeCtx.ContentWidth, line))
+	}
+
 	return lines
+}
+
+func toolOutputBranchPrefix() string { return "  └ " }
+
+func toolOutputIndent() string { return "    " }
+
+func toolOutputIndentWidth() int { return lipgloss.Width(toolOutputIndent()) }
+
+func toolHeaderContinuationPrefix() string { return "  │ " }
+
+func wrapToolHeader(text string, firstWidth, continuationWidth int) []string {
+	firstWidth = max(1, firstWidth)
+	continuationWidth = max(1, continuationWidth)
+	var out []string
+	width := firstWidth
+	for _, raw := range strings.Split(text, "\n") {
+		if raw == "" {
+			out = append(out, "")
+			width = continuationWidth
+			continue
+		}
+		remaining := raw
+		for remaining != "" {
+			var chunk string
+			chunk, remaining = takeDisplayPrefix(remaining, width)
+			out = append(out, chunk)
+			width = continuationWidth
+		}
+	}
+	return out
+}
+
+func takeDisplayPrefix(text string, width int) (string, string) {
+	width = max(1, width)
+	var b strings.Builder
+	used := 0
+	for i, r := range text {
+		rw := ansi.StringWidth(string(r))
+		if b.Len() > 0 && used+rw > width {
+			return b.String(), text[i:]
+		}
+		b.WriteRune(r)
+		used += rw
+		if used >= width {
+			next := i + utf8.RuneLen(r)
+			if next < len(text) {
+				return b.String(), text[next:]
+			}
+			return b.String(), ""
+		}
+	}
+	return b.String(), ""
 }
 
 func toolCodeLines(ctx RenderContext, call ToolCall) []string {
@@ -133,22 +208,10 @@ func toolDiffCodeLines(width int, code, input string) []string {
 	rawLines := strings.Split(strings.TrimRight(code, "\n"), "\n")
 	out := make([]string, 0, len(rawLines))
 	for _, line := range rawLines {
-		out = append(out, indentToolDiffLine(width, renderToolDiffLine(max(1, width-toolDiffIndentWidth()), line, lang)))
+		out = append(out, renderToolDiffLine(width, line, lang))
 	}
 	return out
 }
-
-func indentToolDiffLine(width int, line string) string {
-	indent := toolDiffIndent()
-	if width <= lipgloss.Width(indent) {
-		return fitLine(indent, width)
-	}
-	return indent + line
-}
-
-func toolDiffIndent() string { return "    " }
-
-func toolDiffIndentWidth() int { return lipgloss.Width(toolDiffIndent()) }
 
 func renderToolDiffLine(width int, line, lang string) string {
 	switch {

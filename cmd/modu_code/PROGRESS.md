@@ -19,12 +19,12 @@ enough to implement, verify, and commit independently.
   input instead of as a viewport overlay, preserving tap-to-bottom behavior
   while avoiding duplicated jump hints during mobile terminal redraws.
 - `modu_code` tool calls now merge assistant call, execution start/end, and
-  tool result updates by `ToolID` into one `pkg/modu-tui` block. Bash renders
-  collapsed as `Ran 1 shell command` and expanded as a Claude Code-style
-  `⏺ Bash(...)` block with output below it.
-- `modu_code` Read tool calls now render like Claude Code: expanded as
-  `⏺ Read(path · lines x-y)` with a compact `Read N lines` result summary
-  instead of dumping file contents into the tool block.
+  tool result updates by `ToolID` into one `pkg/modu-tui` block. Collapsed
+  blocks render only a two-space indented summary, while expanded blocks render
+  `⏺ ToolName(input args)`, wrap long args with `  │ ` continuation lines, then
+  show a two-space `└ output` line and four-space continuation/code indentation.
+- `modu_code` Read tool calls now render with a compact `Read N lines` result
+  summary instead of dumping file contents into the tool block.
 - `modu_code` write/edit tool calls now render as explicit non-collapsible
   blocks with a short write/diff summary and syntax-highlighted content or
   diff. Existing-file `write` and `edit` previews include line numbers plus
@@ -35,7 +35,7 @@ enough to implement, verify, and commit independently.
   syntax highlighting applied only to the code portion of each line, and
   `toolDiffSourceLanguage` infers the highlighting language from the file
   extension in the diff header.
-- Collapsed `pkg/modu-tui` tool summaries are indented, while clicking any
+- Collapsed `pkg/modu-tui` tool summaries stay compact, while clicking any
   rendered line inside an expanded tool block collapses it.
 - Tool approval cards now use compact command previews instead of JSON args,
   with clearer grouped allow/deny shortcuts.
@@ -77,17 +77,20 @@ enough to implement, verify, and commit independently.
   `modu_code --resume <session-id>` command, making the saved history path
   explicit after Ctrl+C or `/quit`; empty sessions are flushed so printed ids
   can be resumed immediately.
-- SSH sessions now default `pkg/modu-tui` mouse reporting off, with
-  `MODU_TUI_MOUSE=on` as an opt-in for desktop SSH, reducing JuiceSSH/mobile
-  touch-motion event floods that can make the interface appear frozen.
-- SSH mouse-disabled sessions also route empty-input Up/Down keys to transcript
-  scrolling, so mobile swipe gestures translated into arrow keys can reach
-  earlier conversation content instead of opening input history.
+- SSH sessions keep `pkg/modu-tui` mouse reporting on by default again, with
+  `MODU_TUI_MOUSE=off` as an opt-out for JuiceSSH/mobile clients that flood
+  touch-motion events and make the interface appear frozen.
+- SSH sessions and explicit mouse-disabled sessions route empty-input Up/Down
+  keys to transcript scrolling only when no input history is available, so
+  prompt history remains usable while mobile swipe gestures translated into
+  arrow keys can still reach earlier conversation content.
 - The `modu-tui` runner now restores per-agent-run elapsed summaries by
   tracking `AgentStart`/`AgentEnd` events and appending `✓ Completed (...)`
   after each finished conversation round.
-- Status line moved above the input separator, with animated running state,
-  persisted completed state, and duration formatting that supports `min`.
+- Status line moved above the input separator for compact agent running state
+  and recent completion duration; the bottom footer now shows short
+  context/window, model, and cwd, and `Esc` interrupts the active prompt plus
+  running bash process.
 - Terminal resize handling keeps the user prompt visible and avoids duplicate
   completed-status lines.
 - Model configuration moved into `~/.coding_agent/config.json` with support for

@@ -11,7 +11,8 @@ It owns only the reusable UI shell:
   clear content left by previous scroll frames
 - `Jump to bottom` is shown once in a fixed row above the input when scrolled
   away from the bottom, avoiding repeated viewport overlays on mobile terminals
-- drag selection with local clipboard plus OSC52 copy
+- drag selection with local clipboard plus OSC52 copy; SSH/tmux/screen sessions
+  emit passthrough OSC52 so the local terminal can update the user's clipboard
 - independent input, text, markdown, collapsible, tool-call, and code blocks
 - bottom input history supports Up/Down navigation, keeps a temporary draft,
   and caps retained entries at 100 with a `History n/total` hint on the top
@@ -28,7 +29,8 @@ It owns only the reusable UI shell:
 - `Options.DisableMouse` disables terminal mouse reporting for SSH/mobile
   clients that can flood the event loop with touch-motion sequences
 - `Options.ArrowKeysScroll` lets Up/Down scroll the transcript when the input is
-  empty, matching mobile SSH clients that translate swipe gestures into arrows
+  empty and there is no input history to navigate, matching mobile SSH clients
+  that translate swipe gestures into arrows without breaking prompt history
 - selection auto-scroll has a missing-release guard so mobile SSH clients that
   drop mouse release events cannot leave a permanent 30ms redraw loop running
 - slash commands can be supplied through `Options.SlashCommands`; typing `/`
@@ -36,16 +38,19 @@ It owns only the reusable UI shell:
   `Enter` dispatches through `Hooks.SlashCommand`
 - tool-call messages with the same `ToolID` are merged into a single block so
   call/start/result updates do not scatter through the transcript
-- Read-style tool calls can render as compact `Read(path · lines x-y)` blocks
-  with a `Read N lines` result summary instead of dumping file content inline
+- Read-style tool calls render with a compact `Read N lines` result summary
+  instead of dumping file content inline
 - expanded tool-call blocks use a green leading tool marker without a container
-  background; code and diff lines keep their own syntax-highlighted styling
-- collapsed tool-call summaries are indented, while every rendered line of an
-  expanded tool-call block can be clicked to collapse it
+  background and render as `ToolName(input args)` followed by a two-space
+  indented `└ output` line; empty output renders as `no content data`, and
+  long input args wrap onto `  │ ` continuation lines before the output branch;
+  continuation/code/diff lines use four-space indentation
+- collapsed tool-call summaries render as two-space indented summary text only,
+  while every rendered line of an expanded tool-call block can be clicked to collapse it
 - tool-call messages can set `ToolNoCollapse`, `ToolCode`, and `ToolLanguage`
   to render a permanently expanded syntax-highlighted code/diff block; callers
   can include line numbers and nearby context in `ToolCode`; diff blocks render
-  under a `└` summary line, indent their body by two levels, use
+  after the `└ output` line, indent their body by four spaces, use
   red/green/gray per-line backgrounds with syntax highlighting applied to the
   code portion of each line, and infer the highlighting language from the tool
   input file extension
@@ -58,6 +63,11 @@ It owns only the reusable UI shell:
 - assistant thinking messages render through `ThinkingBlock` as one collapsed
   block that can be expanded independently from the final assistant reply
 - optional simulated streaming reply for demos and integration experiments
+- the fixed bottom area separates agent status above the input from a caller
+  supplied `Options.Footer` below the input for context/model/cwd metadata, with
+  a blank row separating transcript/panels from the agent status line
+- the away-from-bottom jump hint renders in the agent status row, and the input
+  area grows up to five rows as long text soft-wraps or hard newlines are typed
 
 Call `NewModel(Options{...})` to create a Bubble Tea v2 model. The directory is
 named `modu-tui` for the import path; the Go package name is `modutui`.
@@ -65,7 +75,8 @@ named `modu-tui` for the import path; the Go package name is `modutui`.
 Component layout:
 
 - `block.go` defines the common `Block` interface and render result types.
-- `InputBlock` owns text editing, caret positioning, and collapsed paste tokens.
+- `InputBlock` owns text editing, caret positioning, collapsed paste tokens, and
+  cursor-local replacement used by mobile SSH IME preedit coalescing.
 - `Block` is the extension interface: every block is a struct with
   `Render(RenderContext) BlockRender`.
 - `text_block.go` and `markdown_block.go` render user/assistant transcript content;
@@ -93,6 +104,12 @@ Component layout:
   mapping before the default mapping runs.
 - `Options.InfoCardLines` lets callers provide a non-message startup card for
   model/session/context information on a fresh screen.
+- `Options.Footer` and `SetFooterMsg` render a fixed bottom metadata row below
+  the input, separate from the agent status shown above the input.
+- `Hooks.Interrupt` lets callers handle `Esc` while the model is busy or
+  streaming; approval panels keep their own `Esc` deny behavior.
+- `Esc` and `Ctrl+C` are matched by normalized key code and raw control text so
+  SSH/mobile clients can interrupt or quit even when their key names differ.
 - `Hooks.SubmitMessage` lets host applications receive typed submissions with
   prompt, follow-up, or steer intent. `Hooks.Submit` remains as a simple text
   fallback for callers that do not need submit kinds.
@@ -104,9 +121,13 @@ Component layout:
 - `Hooks.SlashCommand` lets host applications route selected or typed slash
   commands without sending them as normal prompts.
 - `Hooks.ToolApprovalDecision` lets host applications observe approval decisions.
-- `AppendMessageMsg`, `SetStatusMsg`, and `SetBusyMsg` let host applications
-  feed external session events into the model without coupling this package to
-  a specific agent runtime.
+- `AppendMessageMsg`, `SetStatusMsg`, `SetFooterMsg`, and `SetBusyMsg` let host
+  applications feed external session events into the model without coupling
+  this package to a specific agent runtime. `SetStatusMsg.TransientFor` can be
+  set for completion/error notices that should disappear automatically.
+- `RequestHumanPromptMsg` renders a blocking human-in-the-loop choice card for
+  host prompts such as confirm/select/plan approval; numeric keys choose
+  options and Enter/Esc use the configured default.
 - `Model` owns spacing between transcript blocks; individual blocks do not add
   their own trailing blank lines. The default block gap is one blank line.
 

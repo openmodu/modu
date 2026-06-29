@@ -3,6 +3,8 @@
 // tool blocks, and optional simulated streaming.
 package modutui
 
+import "time"
+
 const DefaultStatusHint = "拖拽选择→复制 · 点 ▸ 折叠 · Enter 发送 · 滚轮滚动 · ctrl+End 到底 · Ctrl+C 退出"
 
 type Role int
@@ -84,6 +86,19 @@ type ToolApprovalResult struct {
 	Decision ToolApprovalDecision
 }
 
+type HumanPromptOption struct {
+	Label string
+	Value string
+}
+
+type HumanPromptRequest struct {
+	ID           string
+	Title        string
+	Body         string
+	Options      []HumanPromptOption
+	DefaultIndex int
+}
+
 type SubmitKind string
 
 const (
@@ -102,6 +117,7 @@ type Hooks struct {
 	ToolApprovalDecision func(ToolApprovalResult)
 	InputHistoryChanged  func([]string)
 	SlashCommand         func(line string)
+	Interrupt            func()
 	Submit               func(text string)
 	SubmitMessage        func(SubmitEvent)
 }
@@ -121,6 +137,7 @@ type Options struct {
 	Todos           []TodoItem
 	StreamReply     string
 	StatusHint      string
+	Footer          string
 	InfoCardLines   []string
 	DisableMouse    bool
 	ArrowKeysScroll bool
@@ -135,7 +152,12 @@ type AppendMessageMsg struct {
 }
 
 type SetStatusMsg struct {
-	Status string
+	Status       string
+	TransientFor time.Duration
+}
+
+type SetFooterMsg struct {
+	Footer string
 }
 
 type SetBusyMsg struct {
@@ -154,5 +176,14 @@ type RequestToolApprovalMsg struct {
 }
 
 type CancelToolApprovalMsg struct {
+	ID string
+}
+
+type RequestHumanPromptMsg struct {
+	Request HumanPromptRequest
+	Respond chan<- string
+}
+
+type CancelHumanPromptMsg struct {
 	ID string
 }

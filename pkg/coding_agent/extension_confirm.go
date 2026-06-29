@@ -89,3 +89,18 @@ func (s *engine) EmitExtensionEvent(eventType string) {
 	}
 	s.extensions.EmitEvent(types.Event{Type: types.EventType(eventType)})
 }
+
+// EmitStartupEvent dispatches a deferred startup lifecycle event exactly once.
+// It is a no-op for sessions that did not opt into DeferStartupEvent.
+func (s *engine) EmitStartupEvent() {
+	if s == nil || s.extensions == nil {
+		return
+	}
+	s.startupEventOnce.Do(func() {
+		if !s.startupEventDeferred {
+			return
+		}
+		s.startupEventDeferred = false
+		s.extensions.EmitEvent(types.Event{Type: types.EventType("session_start"), Reason: "startup"})
+	})
+}

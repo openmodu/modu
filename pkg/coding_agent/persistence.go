@@ -149,7 +149,7 @@ func unmarshalSingleAgentMessage(raw json.RawMessage) (types.AgentMessage, error
 		}
 	case "assistant":
 		return unmarshalAssistantMessage(raw)
-	case "tool":
+	case "tool", types.RoleToolResult:
 		return unmarshalToolResultMessage(raw)
 	}
 	return nil, fmt.Errorf("unknown role: %s", peek.Role)

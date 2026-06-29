@@ -18,13 +18,17 @@ go run ./cmd/modu_code --resume <session-id>
 
 交互 TUI 正常退出后会打印当前 session id 和可复制的 `modu_code --resume <session-id>` 命令；即使还没有发送任何消息，退出时也会落盘一个可恢复的空 session。下次用这个 id 启动会恢复该 session 已保存的历史对话。
 
-SSH 环境默认关闭终端 mouse reporting，避免 JuiceSSH 等移动端客户端在触摸滚动或键盘尺寸变化时产生大量 mouse-motion 事件导致界面卡住。桌面 SSH 需要鼠标拖选时可显式开启：
+SSH 环境默认保留终端 mouse reporting，滚轮和拖拽选择可以直接使用。若 JuiceSSH 等移动端客户端在触摸滚动或键盘尺寸变化时产生大量 mouse 事件导致界面卡住，可显式关闭：
 
 ```bash
-MODU_TUI_MOUSE=on modu_code
+MODU_TUI_MOUSE=off modu_code
 ```
 
-在 SSH 兼容模式下，输入框为空时 Up/Down 会滚动对话内容，适配 JuiceSSH 把滑动手势转成方向键的行为；输入框已有文字时 Up/Down 仍用于历史输入。
+SSH 下拖选复制会发 OSC52；在 tmux/screen 中会使用 passthrough，让本地终端更新本机剪贴板。
+
+在 SSH 兼容模式下，输入框为空且没有输入历史可选时，Up/Down 会滚动对话内容，适配移动端 SSH 把滑动手势转成方向键的行为；有输入历史时 Up/Down 优先切换历史输入。
+
+TUI 底部固定区域分两层：输入框上方只显示简短 agent 运行状态和最近完成耗时，输入框下方显示简短的上下文使用量/窗口、模型和工作区路径。运行中按 `Esc` 会中断当前请求和正在运行的 bash。
 
 默认启动会使用当前 checkout。需要隔离修改时，可以显式创建并切入 managed worktree，路径形如
 `~/.coding_agent/worktrees/<uuid>/<repo>`，分支名形如 `modu-code/<repo>-<id>`：
@@ -187,13 +191,13 @@ Bubble Tea 的全屏 TUI 保留为实验路径；默认交互路径使用 Bubble
 
 ## 状态说明
 
-运行状态显示在聊天输入框上方：当前轮次显示动画和中断提示；轮次结束保留最近一轮完成/中断的耗时摘要；AI Agent 思考耗时独立追踪并显示 Agent 启动到结束的耗时。输入框下方保留快捷键、错误和临时状态提示。任务进行中时，输入框上方还会显示来自 session 的活跃 todo 卡片（已完成或空列表隐藏）。
+运行状态显示在聊天输入框上方：当前轮次只显示简短状态；轮次结束保留最近一轮完成耗时。输入框下方保留简短上下文用量、模型和工作区路径。任务进行中时，输入框上方还会显示来自 session 的活跃 todo 卡片（已完成或空列表隐藏）。
 
 | 区域 | 内容 |
 |------|------|
-| 输入框上方 | 当前运行状态或最近一轮完成/中断耗时，耗时超过 60 秒时显示 `min` |
+| 输入框上方 | 当前运行状态或最近一轮完成耗时，耗时超过 60 秒时显示 `min` |
 | 输入框与状态之间 | 活跃 todo 卡片（有未完成任务时渲染） |
-| 输入框下方 | 快捷键提示、错误提示和临时状态消息；连续相同错误会折叠计数，并提示 `/retry`、切换模型和运行 `/doctor` |
+| 输入框下方 | `ctx used/window · model · …/workspace` |
 
 ## 工具渲染
 

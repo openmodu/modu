@@ -11,9 +11,70 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+func TestPOC2MultilineInputAltEnterAndAutoHeight(t *testing.T) {
+	var tm tea.Model = NewModel(Options{Width: 40, Height: 20})
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: 'a', Text: "a"}))
+	// Alt+Enter inserts a hard newline rather than submitting.
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter, Mod: tea.ModAlt}))
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: 'b', Text: "b"}))
+	m := tm.(Model)
+
+	if got := m.input.ExpandedValue(); got != "a\nb" {
+		t.Fatalf("input value = %q, want %q", got, "a\nb")
+	}
+	if got := m.inputRows(); got != 2 {
+		t.Fatalf("inputRows = %d, want 2", got)
+	}
+	if got, want := m.bottomFixedRows(), bottomFixedRowsBase+2; got != want {
+		t.Fatalf("bottomFixedRows = %d, want %d", got, want)
+	}
+	lines, cursorRow, _ := m.input.Render(m.inputRenderWidth(), maxInputRows)
+	if len(lines) != 2 {
+		t.Fatalf("rendered input lines = %d, want 2", len(lines))
+	}
+	if cursorRow != 1 {
+		t.Fatalf("cursorRow = %d, want 1 (caret on second line)", cursorRow)
+	}
+	if !strings.Contains(ansi.Strip(lines[0]), "❯") {
+		t.Fatalf("first line should carry the ❯ prefix: %q", ansi.Strip(lines[0]))
+	}
+
+	// Input height is capped at maxInputRows even with more logical lines.
+	for range maxInputRows + 3 {
+		m.input.InsertNewline()
+	}
+	if got := m.inputRows(); got != maxInputRows {
+		t.Fatalf("inputRows = %d, want capped at %d", got, maxInputRows)
+	}
+	capped, _, _ := m.input.Render(m.inputRenderWidth(), maxInputRows)
+	if len(capped) != maxInputRows {
+		t.Fatalf("rendered input lines = %d, want capped at %d", len(capped), maxInputRows)
+	}
+}
+
+func TestPOC2LongInputSoftWrapsAndIncreasesHeight(t *testing.T) {
+	m := NewModel(Options{Width: 18, Height: 12})
+	m.input.Insert(strings.Repeat("a", 50))
+	if got := m.inputRows(); got <= 1 {
+		t.Fatalf("inputRows = %d, want soft-wrapped long input to use more than one row", got)
+	}
+	lines, cursorRow, _ := m.input.Render(m.inputRenderWidth(), maxInputRows)
+	if len(lines) != m.inputRows() {
+		t.Fatalf("rendered input lines = %d, want %d", len(lines), m.inputRows())
+	}
+	if cursorRow != len(lines)-1 {
+		t.Fatalf("cursorRow = %d, want last rendered line %d", cursorRow, len(lines)-1)
+	}
+	for _, line := range lines {
+		if ansi.StringWidth(line) > m.inputRenderWidth() {
+			t.Fatalf("wrapped input line exceeds width %d: %q", m.inputRenderWidth(), line)
+		}
+	}
+}
+
 func TestPOC2PageKeysScrollViewport(t *testing.T) {
 	var tm tea.Model = NewModel()
-	tm, _ = tm.Update(tea.WindowSizeMsg{Width: 80, Height: 8})
+	tm, _ = tm.Update(tea.WindowSizeMsg{Width: 80, Height: 12})
 
 	m := tm.(Model)
 	for range 60 {
@@ -74,6 +135,77 @@ func TestPOC2ResizeClampsSelection(t *testing.T) {
 	}
 }
 
+func TestPOC2CopySelectionUsesOSC52OverSSH(t *testing.T) {
+	t.Setenv("SSH_TTY", "/dev/pts/1")
+	// Isolate multiplexer env so the sequence is plain OSC52, not screen/tmux
+	// DCS-wrapped, regardless of the ambient TERM/TMUX (e.g. running over SSH
+	// inside screen).
+	t.Setenv("TMUX", "")
+	t.Setenv("TERM", "xterm-256color")
+	oldWrite := writeLocalClipboard
+	writeLocalClipboard = func(string) error { return nil }
+	t.Cleanup(func() { writeLocalClipboard = oldWrite })
+
+	m := NewModel(Options{
+		Width:           40,
+		Height:          8,
+		InitialMessages: []Message{{Role: RoleAssistant, Text: "copy me"}},
+	})
+	m.selStart = cell{line: 0, col: 2}
+	m.selEnd = cell{line: 0, col: 9}
+
+	cmd := m.copySelection()
+	if cmd == nil {
+		t.Fatal("copySelection should return an OSC52 command over SSH")
+	}
+	raw, hasSetClipboard := copyCommandMessages(cmd)
+	if !strings.Contains(raw, "\x1b]52;c;") || !strings.HasSuffix(raw, "\x07") {
+		t.Fatalf("raw clipboard sequence should be OSC52, got %q", raw)
+	}
+	if !hasSetClipboard {
+		t.Fatal("copySelection should also send Bubble Tea SetClipboard for SSH compatibility")
+	}
+	if !strings.Contains(m.status, "local+OSC52") {
+		t.Fatalf("copy status should report OSC52 path, got %q", m.status)
+	}
+}
+
+func TestPOC2CopySelectionUsesTmuxPassthrough(t *testing.T) {
+	t.Setenv("SSH_TTY", "/dev/pts/1")
+	t.Setenv("TMUX", "/tmp/tmux")
+
+	seq := clipboardSequence("hi")
+	if !strings.Contains(seq, "\x1bPtmux;") || !strings.Contains(seq, "52;c;") {
+		t.Fatalf("tmux clipboard sequence missing passthrough wrapper: %q", seq)
+	}
+}
+
+func TestPOC2CopySelectionUsesLocalClipboardWithoutOSC52WhenLocalSucceeds(t *testing.T) {
+	// This case asserts the non-remote path, so clear any inherited SSH env
+	// (e.g. when the test itself runs over SSH).
+	t.Setenv("SSH_TTY", "")
+	t.Setenv("SSH_CONNECTION", "")
+	t.Setenv("SSH_CLIENT", "")
+	oldWrite := writeLocalClipboard
+	writeLocalClipboard = func(string) error { return nil }
+	t.Cleanup(func() { writeLocalClipboard = oldWrite })
+
+	m := NewModel(Options{
+		Width:           40,
+		Height:          8,
+		InitialMessages: []Message{{Role: RoleAssistant, Text: "copy me"}},
+	})
+	m.selStart = cell{line: 0, col: 2}
+	m.selEnd = cell{line: 0, col: 9}
+
+	if cmd := m.copySelection(); cmd != nil {
+		t.Fatalf("local successful clipboard copy should not emit OSC52 command, got %#v", cmd())
+	}
+	if !strings.Contains(m.status, "(clipboard)") {
+		t.Fatalf("copy status should report local clipboard path, got %q", m.status)
+	}
+}
+
 func TestPOC2RenderConstrainsLineWidths(t *testing.T) {
 	m := NewModel()
 	m.width, m.height = 24, 8
@@ -105,7 +237,7 @@ func TestPOC2RenderPadsEveryLineToTerminalWidth(t *testing.T) {
 	if got, want := len(lines), m.height; got != want {
 		t.Fatalf("rendered line count = %d, want %d", got, want)
 	}
-	inputRow := m.vpHeight() + 1
+	inputRow := m.vpHeight() + 3
 	for i, line := range lines {
 		stripped := ansi.Strip(strings.TrimSuffix(line, "\x1b[K"))
 		want := m.width
@@ -118,11 +250,157 @@ func TestPOC2RenderPadsEveryLineToTerminalWidth(t *testing.T) {
 	}
 }
 
+func TestPOC2RenderPlacesAgentStatusAboveInputAndFooterAtBottom(t *testing.T) {
+	m := NewModel(Options{
+		Width:  56,
+		Height: 8,
+		Footer: "ctx 1K/10K · test · …/repo",
+	})
+	m.busy = true
+	rendered := ansi.Strip(m.render())
+	lines := strings.Split(rendered, "\n")
+	if len(lines) != m.height {
+		t.Fatalf("rendered lines = %d, want %d:\n%s", len(lines), m.height, rendered)
+	}
+	gapRow := lines[len(lines)-6]
+	statusRow := lines[len(lines)-5]
+	inputRow := lines[len(lines)-3]
+	footerRow := lines[len(lines)-1]
+	if strings.TrimSpace(gapRow) != "" {
+		t.Fatalf("agent status should have a blank row above it, got %q in:\n%s", gapRow, rendered)
+	}
+	if !strings.Contains(statusRow, "● running") {
+		t.Fatalf("agent status should render above input, got %q in:\n%s", statusRow, rendered)
+	}
+	if !strings.Contains(inputRow, "❯") {
+		t.Fatalf("input row should remain between rules, got %q in:\n%s", inputRow, rendered)
+	}
+	if !strings.Contains(footerRow, "ctx 1K/10K") || !strings.Contains(footerRow, "test") {
+		t.Fatalf("footer should render at bottom, got %q in:\n%s", footerRow, rendered)
+	}
+}
+
+func TestPOC2EscInterruptsRunningAgent(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		key  tea.Key
+	}{
+		{name: "key code", key: tea.Key{Code: tea.KeyEsc}},
+		{name: "legacy ctrl bracket", key: tea.Key{Code: '[', Mod: tea.ModCtrl}},
+		{name: "raw text", key: tea.Key{Text: "\x1b"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			interrupted := false
+			var tm tea.Model = NewModel(Options{
+				Width:  40,
+				Height: 8,
+				Hooks: Hooks{Interrupt: func() {
+					interrupted = true
+				}},
+			})
+			m := tm.(Model)
+			m.busy = true
+
+			tm, _ = m.Update(tea.KeyPressMsg(tc.key))
+			m = tm.(Model)
+			if !interrupted {
+				t.Fatal("esc should call interrupt hook while busy")
+			}
+			if got, want := m.status, "interrupting"; got != want {
+				t.Fatalf("status = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestPOC2CtrlCQuitsWithSSHKeyShapes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		key  tea.Key
+	}{
+		{name: "ctrl modifier", key: tea.Key{Code: 'c', Mod: tea.ModCtrl}},
+		{name: "raw text", key: tea.Key{Text: "\x03"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var tm tea.Model = NewModel(Options{Width: 40, Height: 8})
+			_, cmd := tm.Update(tea.KeyPressMsg(tc.key))
+			requireQuitCmd(t, cmd)
+		})
+	}
+}
+
+func TestPOC2ApprovalEscDeniesWithSSHKeyShape(t *testing.T) {
+	decisions := make(chan ToolApprovalDecision, 1)
+	var tm tea.Model = NewModel(Options{Width: 40, Height: 8})
+	tm, _ = tm.Update(RequestToolApprovalMsg{
+		Request: ToolApprovalRequest{ID: "call-1", ToolName: "bash"},
+		Respond: decisions,
+	})
+
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: '[', Mod: tea.ModCtrl}))
+	if tm.(Model).approval != nil {
+		t.Fatal("approval should clear after esc")
+	}
+	select {
+	case got := <-decisions:
+		if got != ToolApprovalDeny {
+			t.Fatalf("decision = %q, want %q", got, ToolApprovalDeny)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected approval decision")
+	}
+}
+
+func TestPOC2CompletionStatusDoesNotShowIdlePrefix(t *testing.T) {
+	m := NewModel(Options{Width: 40, Height: 8})
+	m.status = "✓ Completed 2s"
+	rendered := ansi.Strip(m.render())
+	lines := strings.Split(rendered, "\n")
+	statusRow := lines[len(lines)-5]
+	if !strings.Contains(statusRow, "✓ Completed 2s") || strings.Contains(statusRow, "idle") {
+		t.Fatalf("completion status should be compact, got %q in:\n%s", statusRow, rendered)
+	}
+}
+
+func requireQuitCmd(t *testing.T, cmd tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("expected quit command, got nil")
+	}
+	msg := cmd()
+	if _, ok := msg.(tea.QuitMsg); !ok {
+		t.Fatalf("expected quit command, got %T", msg)
+	}
+}
+
+func copyCommandMessages(cmd tea.Cmd) (raw string, hasSetClipboard bool) {
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		if rawMsg, ok := msg.(tea.RawMsg); ok {
+			return fmt.Sprint(rawMsg.Msg), false
+		}
+		return "", fmt.Sprintf("%T", msg) == "tea.setClipboardMsg"
+	}
+	for _, child := range batch {
+		childMsg := child()
+		switch msg := childMsg.(type) {
+		case tea.RawMsg:
+			raw += fmt.Sprint(msg.Msg)
+		default:
+			if fmt.Sprintf("%T", childMsg) == "tea.setClipboardMsg" {
+				hasSetClipboard = true
+			}
+		}
+	}
+	return raw, hasSetClipboard
+}
+
 func TestPOC2InfoCardStaysAtTopAfterFirstMessage(t *testing.T) {
 	var submitted string
 	var tm tea.Model = NewModel(Options{
 		Width:         48,
-		Height:        10,
+		Height:        12,
 		InfoCardLines: []string{"modu_code", "model: Test", "commands: type /"},
 		Hooks: Hooks{Submit: func(text string) {
 			submitted = text
@@ -151,6 +429,54 @@ func TestPOC2InfoCardStaysAtTopAfterFirstMessage(t *testing.T) {
 	}
 	if !strings.Contains(afterSubmit, "❯ hi") {
 		t.Fatalf("submitted message should render below the info card:\n%s", afterSubmit)
+	}
+}
+
+func TestPOC2InputCoalescesMobileSSHChineseIMEPreedit(t *testing.T) {
+	var tm tea.Model = NewModel(Options{Width: 48, Height: 10})
+	for _, text := range []string{"z", "zh", "zhe", "zheg", "zhege", "这个", "这"} {
+		tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: text}))
+	}
+
+	m := tm.(Model)
+	if got, want := m.input.Value, "这个"; got != want {
+		t.Fatalf("input value = %q, want %q", got, want)
+	}
+}
+
+func TestPOC2InputKeepsNormalASCIIKeyPresses(t *testing.T) {
+	var tm tea.Model = NewModel(Options{Width: 48, Height: 10})
+	for _, text := range []string{"z", "h", "e", "g", "e"} {
+		tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: text, Code: []rune(text)[0]}))
+	}
+
+	m := tm.(Model)
+	if got, want := m.input.Value, "zhege"; got != want {
+		t.Fatalf("input value = %q, want %q", got, want)
+	}
+}
+
+func TestPOC2InputDoesNotReplaceSingleASCIIBeforeChinese(t *testing.T) {
+	var tm tea.Model = NewModel(Options{Width: 48, Height: 10})
+	for _, text := range []string{"a", "你"} {
+		tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: text}))
+	}
+
+	m := tm.(Model)
+	if got, want := m.input.Value, "a你"; got != want {
+		t.Fatalf("input value = %q, want %q", got, want)
+	}
+}
+
+func TestPOC2InputCoalescesConsecutiveChineseIMEWords(t *testing.T) {
+	var tm tea.Model = NewModel(Options{Width: 48, Height: 10})
+	for _, text := range []string{"z", "zh", "zhe", "zhege", "这个", "n", "ni", "你"} {
+		tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: text}))
+	}
+
+	m := tm.(Model)
+	if got, want := m.input.Value, "这个你"; got != want {
+		t.Fatalf("input value = %q, want %q", got, want)
 	}
 }
 
@@ -223,8 +549,9 @@ func TestPOC2StreamingAssistantMarkerBlinks(t *testing.T) {
 	}
 }
 
-func TestPOC2JumpHintStaysInFixedRowAboveInput(t *testing.T) {
+func TestPOC2JumpHintSharesAgentStatusRow(t *testing.T) {
 	m := NewModel(Options{Width: 72, Height: 8})
+	m.busy = true
 	for i := 0; i < 20; i++ {
 		m.messages = append(m.messages, Message{Role: RoleAssistant, Text: "history"})
 	}
@@ -236,12 +563,21 @@ func TestPOC2JumpHintStaysInFixedRowAboveInput(t *testing.T) {
 		t.Fatalf("jump hint count = %d, want 1:\n%s", got, rendered)
 	}
 	lines := strings.Split(rendered, "\n")
-	jumpRow := m.vpHeight() + m.approvalPanelHeight()
-	if !strings.Contains(lines[jumpRow], jumpHintText()) {
-		t.Fatalf("jump hint should render in the fixed row above input:\n%s", rendered)
+	statusRow := m.vpHeight() + m.approvalPanelHeight() + m.humanPromptPanelHeight() + m.slashPanelHeight() + m.todoPanelHeight() + 1
+	if !strings.Contains(lines[statusRow], "● running") || !strings.Contains(lines[statusRow], jumpHintText()) {
+		t.Fatalf("jump hint should share the agent status row, got %q in:\n%s", lines[statusRow], rendered)
 	}
-	if strings.Contains(lines[len(lines)-1], jumpHintText()) {
-		t.Fatalf("jump hint should not render in status line:\n%s", rendered)
+	idx := strings.Index(lines[statusRow], jumpHintText())
+	if idx < 0 {
+		t.Fatalf("status row missing jump text: %q", lines[statusRow])
+	}
+	gotCol := ansi.StringWidth(lines[statusRow][:idx])
+	wantTextCol := (m.width-ansi.StringWidth(" "+jumpHintText()+" "))/2 + 1
+	if gotCol != wantTextCol {
+		t.Fatalf("jump hint text column = %d, want centered block text at %d in row %q", gotCol, wantTextCol, lines[statusRow])
+	}
+	if raw := m.render(); !strings.Contains(raw, "48;5;63") {
+		t.Fatalf("jump hint should keep its background style, raw render missing background escape:\n%q", raw)
 	}
 }
 
@@ -314,7 +650,8 @@ func TestPOC2JumpRowClickScrollsToBottom(t *testing.T) {
 		t.Fatal("setup should be scrolled away from bottom")
 	}
 
-	_ = m.onPress(1, m.vpHeight()+m.approvalPanelHeight())
+	statusRow := m.vpHeight() + m.approvalPanelHeight() + m.humanPromptPanelHeight() + m.slashPanelHeight() + m.todoPanelHeight() + 1
+	_ = m.onPress(1, statusRow)
 	if !m.atBottom() {
 		t.Fatalf("jump row click should scroll to bottom, offset=%d max=%d", m.yOffset, m.maxOffset())
 	}
@@ -326,8 +663,8 @@ func TestPOC2InputHasTopAndBottomRules(t *testing.T) {
 	if got, want := len(lines), m.height; got != want {
 		t.Fatalf("rendered line count = %d, want %d", got, want)
 	}
-	topRule := ansi.Strip(lines[m.vpHeight()])
-	bottomRule := ansi.Strip(lines[m.vpHeight()+2])
+	topRule := ansi.Strip(lines[m.vpHeight()+2])
+	bottomRule := ansi.Strip(lines[m.vpHeight()+4])
 	wantRule := strings.Repeat("─", m.width)
 	if topRule != wantRule {
 		t.Fatalf("top input rule = %q, want %q", topRule, wantRule)
@@ -346,8 +683,8 @@ func TestPOC2HistoryHintRendersOnTopInputRule(t *testing.T) {
 	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
 	m := tm.(Model)
 	lines := strings.Split(ansi.Strip(m.render()), "\n")
-	topRule := lines[m.vpHeight()]
-	inputLine := lines[m.vpHeight()+1]
+	topRule := lines[m.vpHeight()+2]
+	inputLine := lines[m.vpHeight()+3]
 	if !strings.Contains(topRule, "History 2/2") {
 		t.Fatalf("history hint should render on top rule, got %q in:\n%s", topRule, strings.Join(lines, "\n"))
 	}
@@ -364,7 +701,7 @@ func TestPOC2InputLineLeavesLastColumnForMobileTerminals(t *testing.T) {
 	m.input.Insert(strings.Repeat("j", 120))
 	rendered := m.render()
 	lines := strings.Split(rendered, "\n")
-	inputLine := lines[m.vpHeight()+1]
+	inputLine := lines[len(lines)-3]
 	if strings.Contains(inputLine, "\x1b[?7l") || strings.Contains(inputLine, "\x1b[?7h") {
 		t.Fatalf("input line should not toggle terminal autowrap, got %q", inputLine)
 	}
@@ -557,7 +894,6 @@ func TestPOC2ArrowKeysScrollWhenConfiguredAndInputEmpty(t *testing.T) {
 	var tm tea.Model = NewModel(Options{
 		Width:           40,
 		Height:          8,
-		InputHistory:    []string{"previous prompt"},
 		ArrowKeysScroll: true,
 	})
 	m := tm.(Model)
@@ -577,6 +913,30 @@ func TestPOC2ArrowKeysScrollWhenConfiguredAndInputEmpty(t *testing.T) {
 	}
 	if got := m.input.Value; got != "" {
 		t.Fatalf("up arrow should not enter input history when input is empty in arrow-scroll mode, got %q", got)
+	}
+}
+
+func TestPOC2ArrowKeysPreferHistoryWhenConfiguredAndHistoryExists(t *testing.T) {
+	var tm tea.Model = NewModel(Options{
+		Width:           40,
+		Height:          8,
+		InputHistory:    []string{"previous prompt"},
+		ArrowKeysScroll: true,
+	})
+	m := tm.(Model)
+	for i := 0; i < 30; i++ {
+		m.messages = append(m.messages, Message{Role: RoleAssistant, Text: "history line"})
+	}
+	m.rebuild()
+	before := m.yOffset
+
+	tm, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+	m = tm.(Model)
+	if got, want := m.input.Value, "previous prompt"; got != want {
+		t.Fatalf("up arrow should navigate input history before scrolling, got %q want %q", got, want)
+	}
+	if got := m.yOffset; got != before {
+		t.Fatalf("up arrow should not scroll when history exists: %d -> %d", before, got)
 	}
 }
 
@@ -804,8 +1164,8 @@ func TestPOC2AcceptsExternalMessagesAndBusyState(t *testing.T) {
 	if got := strings.Join(m.Lines(), "\n"); !strings.Contains(ansi.Strip(got), "external reply") {
 		t.Fatalf("external message missing:\n%s", got)
 	}
-	if got := ansi.Strip(m.render()); !strings.Contains(got, "busy") {
-		t.Fatalf("busy state missing:\n%s", got)
+	if got := ansi.Strip(m.render()); !strings.Contains(got, "running") {
+		t.Fatalf("running state missing:\n%s", got)
 	}
 }
 
@@ -883,7 +1243,7 @@ func TestPOC2ToolApprovalResolvesFromKeyboard(t *testing.T) {
 	decisions := make(chan ToolApprovalDecision, 1)
 	var tm tea.Model = NewModel(Options{
 		Width:  80,
-		Height: 10,
+		Height: 12,
 		Hooks: Hooks{ToolApprovalDecision: func(result ToolApprovalResult) {
 			results <- result
 		}},
@@ -932,6 +1292,48 @@ func TestPOC2ToolApprovalResolvesFromKeyboard(t *testing.T) {
 	}
 }
 
+func TestPOC2HumanPromptResolvesFromKeyboard(t *testing.T) {
+	responses := make(chan string, 1)
+	var tm tea.Model = NewModel(Options{Width: 80, Height: 12})
+	tm, _ = tm.Update(RequestHumanPromptMsg{
+		Request: HumanPromptRequest{
+			Title: "Choose commit shape",
+			Body:  "Split into 2 commits, or merge into 1?",
+			Options: []HumanPromptOption{
+				{Label: "2 commits", Value: "two"},
+				{Label: "1 commit", Value: "one"},
+			},
+			DefaultIndex: 0,
+		},
+		Respond: responses,
+	})
+
+	pending := tm.(Model)
+	if pending.humanPrompt == nil {
+		t.Fatal("expected pending human prompt")
+	}
+	rendered := ansi.Strip(pending.render())
+	for _, want := range []string{"Human input required", "Choose commit shape", "[enter/1] 2 commits", "[2] 1 commit", "human input pending"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("human prompt missing %q:\n%s", want, rendered)
+		}
+	}
+
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: "2", Code: '2'}))
+	resolved := tm.(Model)
+	if resolved.humanPrompt != nil {
+		t.Fatal("human prompt should clear after response")
+	}
+	select {
+	case got := <-responses:
+		if got != "one" {
+			t.Fatalf("response = %q, want one", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected human prompt response")
+	}
+}
+
 func TestPOC2ToolApprovalPanelIsFixedAboveInput(t *testing.T) {
 	var tm tea.Model = NewModel(Options{
 		Width:  50,
@@ -962,16 +1364,16 @@ func TestPOC2ToolApprovalPanelIsFixedAboveInput(t *testing.T) {
 	if got, want := approvalBorderStyle.GetForeground(), lipgloss.Color("248"); got != want {
 		t.Fatalf("approval border color = %#v, want %#v", got, want)
 	}
-	inputRule := m.vpHeight() + m.approvalPanelHeight()
+	inputRule := m.vpHeight() + m.approvalPanelHeight() + 2
 	if got, want := rendered[inputRule], strings.Repeat("─", m.width); got != want {
 		t.Fatalf("input top rule line = %q, want %q", got, want)
 	}
-	if !strings.Contains(strings.Join(rendered[panelTop:inputRule], "\n"), "[y] allow") {
-		t.Fatalf("approval panel should include actions:\n%s", strings.Join(rendered[panelTop:inputRule], "\n"))
+	panelEnd := panelTop + m.approvalPanelHeight()
+	if !strings.Contains(strings.Join(rendered[panelTop:panelEnd], "\n"), "[y] allow") {
+		t.Fatalf("approval panel should include actions:\n%s", strings.Join(rendered[panelTop:panelEnd], "\n"))
 	}
-	if !strings.Contains(strings.Join(rendered[panelTop:inputRule], "\n"), "Bash command:") ||
-		!strings.Contains(strings.Join(rendered[panelTop:inputRule], "\n"), "go test ./...") {
-		t.Fatalf("approval panel should include command preview:\n%s", strings.Join(rendered[panelTop:inputRule], "\n"))
+	if !strings.Contains(strings.Join(rendered[panelTop:panelEnd], "\n"), "go test ./...") {
+		t.Fatalf("approval panel should include command preview:\n%s", strings.Join(rendered[panelTop:panelEnd], "\n"))
 	}
 }
 
@@ -993,7 +1395,7 @@ func TestPOC2TodoPanelRendersAboveInput(t *testing.T) {
 		t.Fatalf("rendered lines = %d, want %d:\n%s", got, want, strings.Join(rendered, "\n"))
 	}
 	panelTop := m.vpHeight()
-	inputRule := m.vpHeight() + m.todoPanelHeight()
+	inputRule := m.vpHeight() + m.todoPanelHeight() + 2
 	if !strings.HasPrefix(rendered[panelTop], "┏") {
 		t.Fatalf("todo panel should start immediately below viewport at line %d:\n%s", panelTop, strings.Join(rendered, "\n"))
 	}
@@ -1020,6 +1422,36 @@ func TestPOC2SetTodosMsgUpdatesTodoPanel(t *testing.T) {
 	m = tm.(Model)
 	if got := ansi.Strip(m.render()); strings.Contains(got, "new task") || strings.Contains(got, "Todos") {
 		t.Fatalf("completed-only todos should hide panel:\n%s", got)
+	}
+}
+
+func TestPOC2TransientStatusExpiresWithoutClearingNewStatus(t *testing.T) {
+	var tm tea.Model = NewModel()
+	var cmd tea.Cmd
+	tm, cmd = tm.Update(SetStatusMsg{Status: "✓ Completed 1s", TransientFor: time.Second})
+	if cmd == nil {
+		t.Fatal("transient status should schedule an expiry command")
+	}
+	m := tm.(Model)
+	if got := m.status; got != "✓ Completed 1s" {
+		t.Fatalf("status = %q", got)
+	}
+
+	tm, _ = tm.Update(SetStatusMsg{Status: "running"})
+	tm, _ = tm.Update(statusExpireMsg{status: "✓ Completed 1s"})
+	m = tm.(Model)
+	if got := m.status; got != "running" {
+		t.Fatalf("old transient expiry should not clear new status, got %q", got)
+	}
+
+	tm, _ = tm.Update(SetStatusMsg{Status: "done", TransientFor: time.Second})
+	m = tm.(Model)
+	m.statusExpiresAt = time.Now().Add(-time.Millisecond)
+	tm = m
+	tm, _ = tm.Update(statusExpireMsg{status: "done"})
+	m = tm.(Model)
+	if got := m.status; got != "" {
+		t.Fatalf("expired transient status should clear, got %q", got)
 	}
 }
 
