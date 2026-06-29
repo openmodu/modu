@@ -504,6 +504,53 @@ func TestModuTUIPrompterApproveToolUsesModuTUIRequest(t *testing.T) {
 	}
 }
 
+func TestModuTUIPrompterSelectUsesHumanPromptCard(t *testing.T) {
+	requests := make(chan modutui.RequestHumanPromptMsg, 1)
+	prompter := &moduTUIPrompter{
+		ctx: context.Background(),
+		send: func(msg tea.Msg) {
+			req, ok := msg.(modutui.RequestHumanPromptMsg)
+			if !ok {
+				t.Fatalf("unexpected message type %T", msg)
+			}
+			requests <- req
+			req.Respond <- "2 commits"
+		},
+	}
+
+	got := prompter.Select("Choose commit shape", []string{"2 commits", "1 commit"})
+	if got != "2 commits" {
+		t.Fatalf("Select returned %q", got)
+	}
+	req := <-requests
+	if req.Request.Title != "Choose commit shape" || len(req.Request.Options) != 2 || req.Request.DefaultIndex != 0 {
+		t.Fatalf("unexpected human prompt request: %#v", req.Request)
+	}
+}
+
+func TestModuTUIPrompterConfirmUsesHumanPromptCard(t *testing.T) {
+	requests := make(chan modutui.RequestHumanPromptMsg, 1)
+	prompter := &moduTUIPrompter{
+		ctx: context.Background(),
+		send: func(msg tea.Msg) {
+			req, ok := msg.(modutui.RequestHumanPromptMsg)
+			if !ok {
+				t.Fatalf("unexpected message type %T", msg)
+			}
+			requests <- req
+			req.Respond <- "no"
+		},
+	}
+
+	if got := prompter.Confirm("Overwrite?", "file exists", true); got {
+		t.Fatal("Confirm should return false for no")
+	}
+	req := <-requests
+	if req.Request.DefaultIndex != 0 || len(req.Request.Options) != 2 || req.Request.Options[0].Value != "yes" || req.Request.Options[1].Value != "no" {
+		t.Fatalf("unexpected confirm prompt request: %#v", req.Request)
+	}
+}
+
 func TestModuTUISlashCommandsIncludeBaseAndSessionCommands(t *testing.T) {
 	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
 		Cwd:       t.TempDir(),
@@ -727,7 +774,7 @@ func TestRunModuTUISlashSendsPreformattedHelpOutput(t *testing.T) {
 	var messages []tea.Msg
 	runModuTUISlash(context.Background(), "/help", session, session.GetModel(), func(msg tea.Msg) {
 		messages = append(messages, msg)
-	})
+	}, nil)
 
 	var got *modutui.Message
 	for _, msg := range messages {
@@ -746,6 +793,36 @@ func TestRunModuTUISlashSendsPreformattedHelpOutput(t *testing.T) {
 	for _, want := range []string{"Help", "/help, /h", "/quit, /exit", "tool approval"} {
 		if !strings.Contains(got.Text, want) {
 			t.Fatalf("help output missing %q:\n%s", want, got.Text)
+		}
+	}
+}
+
+func TestRunModuTUISlashDoesNotResetStatusWhenAgentRunStarted(t *testing.T) {
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       t.TempDir(),
+		AgentDir:  t.TempDir(),
+		Model:     &types.Model{ID: "test", Name: "Test", ProviderID: "test"},
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var messages []tea.Msg
+	runModuTUISlash(context.Background(), "/help", session, session.GetModel(), func(msg tea.Msg) {
+		messages = append(messages, msg)
+	}, func() bool { return true })
+
+	for _, msg := range messages {
+		switch msg := msg.(type) {
+		case modutui.SetBusyMsg:
+			if !msg.Busy {
+				t.Fatalf("slash cleanup should not clear busy while agent run is active: %#v", messages)
+			}
+		case modutui.SetStatusMsg:
+			if msg.Status == "idle" {
+				t.Fatalf("slash cleanup should not reset status to idle while agent run is active: %#v", messages)
+			}
 		}
 	}
 }

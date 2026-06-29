@@ -36,6 +36,8 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 	var currentPromptID int
 	var nextPromptID int
 	var continueQueuedAfterCancel bool
+	var foregroundMu sync.Mutex
+	var foregroundRuns int
 	send := func(msg tea.Msg) {
 		programMu.RLock()
 		p := program
@@ -43,6 +45,26 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		if p != nil {
 			p.Send(msg)
 		}
+	}
+	markForegroundRunStart := func() {
+		foregroundMu.Lock()
+		foregroundRuns++
+		foregroundMu.Unlock()
+	}
+	markForegroundRunDone := func() bool {
+		foregroundMu.Lock()
+		if foregroundRuns > 0 {
+			foregroundRuns--
+		}
+		idle := foregroundRuns == 0
+		foregroundMu.Unlock()
+		return idle
+	}
+	isForegroundRunActive := func() bool {
+		foregroundMu.Lock()
+		active := foregroundRuns > 0
+		foregroundMu.Unlock()
+		return active
 	}
 	durationTracker := newModuTUIAgentDurationTracker(time.Now, func(msg modutui.Message) {
 		send(modutui.AppendMessageMsg{Message: msg})
@@ -80,10 +102,15 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		}()
 	}
 	runAgentLoop := func(run func(context.Context) error) {
+		markForegroundRunStart()
 		go func() {
 			send(modutui.SetBusyMsg{Busy: true})
 			send(modutui.SetStatusMsg{Status: "running"})
-			defer send(modutui.SetBusyMsg{Busy: false})
+			defer func() {
+				if markForegroundRunDone() {
+					send(modutui.SetBusyMsg{Busy: false})
+				}
+			}()
 
 			nextRun := run
 			for {
@@ -239,7 +266,7 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 					}
 					return
 				}
-				go runModuTUISlash(ctx, line, session, model, send)
+				go runModuTUISlash(ctx, line, session, model, send, isForegroundRunActive)
 			},
 			Interrupt: interruptPrompt,
 		},
@@ -455,11 +482,14 @@ func (p *moduTUISlashPrinter) Text() string {
 	return strings.TrimSpace(strings.Join(p.lines, "\n"))
 }
 
-func runModuTUISlash(ctx context.Context, line string, session *coding_agent.CodingSession, model *types.Model, send func(tea.Msg)) {
+func runModuTUISlash(ctx context.Context, line string, session *coding_agent.CodingSession, model *types.Model, send func(tea.Msg), keepAgentBusy func() bool) {
 	send(modutui.SetBusyMsg{Busy: true})
 	send(modutui.SetStatusMsg{Status: "running slash command"})
 	defer func() {
 		send(modutui.SetTodosMsg{Todos: moduTUITodos(session)})
+		if keepAgentBusy != nil && keepAgentBusy() {
+			return
+		}
 		send(modutui.SetBusyMsg{Busy: false})
 		send(modutui.SetStatusMsg{Status: "idle"})
 	}()
@@ -783,16 +813,42 @@ type moduTUIPrompter struct {
 }
 
 func (p *moduTUIPrompter) Confirm(title, body string, defaultYes bool) bool {
-	p.notify(title, body)
-	return defaultYes
+	defaultIndex := 1
+	if defaultYes {
+		defaultIndex = 0
+	}
+	choice := p.requestHumanPrompt(modutui.HumanPromptRequest{
+		Title: title,
+		Body:  body,
+		Options: []modutui.HumanPromptOption{
+			{Label: "Yes", Value: "yes"},
+			{Label: "No", Value: "no"},
+		},
+		DefaultIndex: defaultIndex,
+	})
+	if choice == "" {
+		return defaultYes
+	}
+	return choice == "yes"
 }
 
 func (p *moduTUIPrompter) Select(title string, options []string) string {
-	p.notify(title, "selection prompt is not available in modu-tui runner yet")
 	if len(options) == 0 {
 		return ""
 	}
-	return options[0]
+	promptOptions := make([]modutui.HumanPromptOption, 0, len(options))
+	for _, option := range options {
+		promptOptions = append(promptOptions, modutui.HumanPromptOption{Label: option, Value: option})
+	}
+	choice := p.requestHumanPrompt(modutui.HumanPromptRequest{
+		Title:        title,
+		Options:      promptOptions,
+		DefaultIndex: 0,
+	})
+	if choice == "" {
+		return options[0]
+	}
+	return choice
 }
 
 func (p *moduTUIPrompter) ApprovePlan(plan string, steps []string) string {
@@ -800,8 +856,22 @@ func (p *moduTUIPrompter) ApprovePlan(plan string, steps []string) string {
 	if len(steps) > 0 {
 		body += "\n\n" + strings.Join(steps, "\n")
 	}
-	p.notify("plan approval required", body)
-	return "reject: approval UI is not available in modu-tui runner yet"
+	choice := p.requestHumanPrompt(modutui.HumanPromptRequest{
+		Title: "Plan approval required",
+		Body:  body,
+		Options: []modutui.HumanPromptOption{
+			{Label: "Approve", Value: "approve"},
+			{Label: "Approve + auto", Value: "approve_auto"},
+			{Label: "Reject", Value: "reject"},
+		},
+		DefaultIndex: 2,
+	})
+	switch choice {
+	case "approve", "approve_auto":
+		return choice
+	default:
+		return "reject: rejected in modu-tui"
+	}
 }
 
 func (p *moduTUIPrompter) ApproveTool(toolName, toolCallID string, args map[string]any) (types.ToolApprovalDecision, error) {
@@ -837,6 +907,27 @@ func (p *moduTUIPrompter) notify(summary, detail string) {
 		Detail:   detail,
 		Expanded: true,
 	}})
+}
+
+func (p *moduTUIPrompter) requestHumanPrompt(req modutui.HumanPromptRequest) string {
+	if p == nil || p.send == nil {
+		return ""
+	}
+	ctx := p.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ch := make(chan string, 1)
+	p.send(modutui.RequestHumanPromptMsg{
+		Request: req,
+		Respond: ch,
+	})
+	select {
+	case choice := <-ch:
+		return choice
+	case <-ctx.Done():
+		return ""
+	}
 }
 
 func messagesFromAgentEvent(ev types.Event) []modutui.Message {
