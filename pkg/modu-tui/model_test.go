@@ -182,12 +182,11 @@ func TestPOC2RenderPadsEveryLineToTerminalWidth(t *testing.T) {
 
 func TestPOC2RenderPlacesAgentStatusAboveInputAndFooterAtBottom(t *testing.T) {
 	m := NewModel(Options{
-		Width:      56,
-		Height:     8,
-		StatusHint: "ready",
-		Footer:     "ctx 1K/10K 10% · model test · cwd /repo",
+		Width:  56,
+		Height: 8,
+		Footer: "ctx 1K/10K · test · …/repo",
 	})
-	m.status = "running"
+	m.busy = true
 	rendered := ansi.Strip(m.render())
 	lines := strings.Split(rendered, "\n")
 	if len(lines) != m.height {
@@ -196,13 +195,13 @@ func TestPOC2RenderPlacesAgentStatusAboveInputAndFooterAtBottom(t *testing.T) {
 	statusRow := lines[len(lines)-5]
 	inputRow := lines[len(lines)-3]
 	footerRow := lines[len(lines)-1]
-	if !strings.Contains(statusRow, "○ idle · running") {
+	if !strings.Contains(statusRow, "● running") {
 		t.Fatalf("agent status should render above input, got %q in:\n%s", statusRow, rendered)
 	}
 	if !strings.Contains(inputRow, "❯") {
 		t.Fatalf("input row should remain between rules, got %q in:\n%s", inputRow, rendered)
 	}
-	if !strings.Contains(footerRow, "ctx 1K/10K 10%") || !strings.Contains(footerRow, "model test") {
+	if !strings.Contains(footerRow, "ctx 1K/10K") || !strings.Contains(footerRow, "test") {
 		t.Fatalf("footer should render at bottom, got %q in:\n%s", footerRow, rendered)
 	}
 }
@@ -226,6 +225,17 @@ func TestPOC2EscInterruptsRunningAgent(t *testing.T) {
 	}
 	if got, want := m.status, "interrupting"; got != want {
 		t.Fatalf("status = %q, want %q", got, want)
+	}
+}
+
+func TestPOC2CompletionStatusDoesNotShowIdlePrefix(t *testing.T) {
+	m := NewModel(Options{Width: 40, Height: 8})
+	m.status = "✓ Completed 2s"
+	rendered := ansi.Strip(m.render())
+	lines := strings.Split(rendered, "\n")
+	statusRow := lines[len(lines)-5]
+	if !strings.Contains(statusRow, "✓ Completed 2s") || strings.Contains(statusRow, "idle") {
+		t.Fatalf("completion status should be compact, got %q in:\n%s", statusRow, rendered)
 	}
 }
 
@@ -986,8 +996,8 @@ func TestPOC2AcceptsExternalMessagesAndBusyState(t *testing.T) {
 	if got := strings.Join(m.Lines(), "\n"); !strings.Contains(ansi.Strip(got), "external reply") {
 		t.Fatalf("external message missing:\n%s", got)
 	}
-	if got := ansi.Strip(m.render()); !strings.Contains(got, "busy") {
-		t.Fatalf("busy state missing:\n%s", got)
+	if got := ansi.Strip(m.render()); !strings.Contains(got, "running") {
+		t.Fatalf("running state missing:\n%s", got)
 	}
 }
 

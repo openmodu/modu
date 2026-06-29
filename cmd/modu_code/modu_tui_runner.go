@@ -77,6 +77,7 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 			nextRun := run
 			for {
 				promptCtx, cancel := context.WithCancel(ctx)
+				started := time.Now()
 				promptMu.Lock()
 				nextPromptID++
 				promptID := nextPromptID
@@ -98,7 +99,7 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 				ag := session.GetAgent()
 				shouldContinue := ag != nil && ag.HasQueuedMessages() && (err == nil || steeringCancel)
 				if shouldContinue {
-					send(modutui.SetStatusMsg{Status: "running queued message"})
+					send(modutui.SetStatusMsg{Status: "running"})
 					nextRun = ag.Continue
 					continue
 				}
@@ -109,8 +110,10 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 						Text: "error: " + err.Error(),
 					}})
 					send(modutui.SetStatusMsg{Status: "error"})
+				} else if errors.Is(err, context.Canceled) {
+					send(modutui.SetStatusMsg{Status: "interrupted"})
 				} else {
-					send(modutui.SetStatusMsg{Status: "idle"})
+					send(modutui.SetStatusMsg{Status: "✓ Completed " + formatModuTUIActivityDuration(time.Since(started))})
 				}
 				sendFooter()
 				return
@@ -132,7 +135,7 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 			return
 		}
 		session.FollowUp(text)
-		send(modutui.SetStatusMsg{Status: "queued follow-up"})
+		send(modutui.SetStatusMsg{Status: "queued"})
 	}
 	queueSteer := func(text string, requireActive bool) {
 		if requireActive && !isPromptActive() {
@@ -176,7 +179,6 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		InitialMessages: initial,
 		InputHistory:    inputHistory,
 		Todos:           moduTUITodos(session),
-		StatusHint:      "Enter 发送 · Ctrl+C 退出 · 当前为 modu-tui runner",
 		Footer:          moduTUIFooter(session),
 		InfoCardLines:   moduTUIInfoCardLines(session, model),
 		SlashCommands:   moduTUISlashCommands(session),
@@ -415,14 +417,14 @@ func moduTUIInfoCardLines(session *coding_agent.CodingSession, model *types.Mode
 
 func moduTUIFooter(session *coding_agent.CodingSession) string {
 	if session == nil {
-		return "ctx - · model - · cwd -"
+		return "ctx - · - · -"
 	}
 	model := session.GetModel()
 	parts := []string{moduTUIContextUsage(session, model)}
 	if label := moduTUIModelLabel(model); label != "" {
-		parts = append(parts, "model "+label)
+		parts = append(parts, label)
 	} else {
-		parts = append(parts, "model -")
+		parts = append(parts, "-")
 	}
 	cwd := strings.TrimSpace(session.RuntimeState().Cwd)
 	if cwd == "" {
@@ -431,7 +433,7 @@ func moduTUIFooter(session *coding_agent.CodingSession) string {
 	if cwd == "" {
 		cwd = "-"
 	}
-	parts = append(parts, "cwd "+cwd)
+	parts = append(parts, compactModuTUICwd(cwd))
 	return strings.Join(parts, " · ")
 }
 
@@ -447,11 +449,7 @@ func moduTUIContextUsage(session *coding_agent.CodingSession, model *types.Model
 	if limit <= 0 {
 		return "ctx " + formatModuTUITokens(used)
 	}
-	percent := 0
-	if used > 0 {
-		percent = int((int64(used)*100 + int64(limit)/2) / int64(limit))
-	}
-	return fmt.Sprintf("ctx %s/%s %d%%", formatModuTUITokens(used), formatModuTUITokens(limit), percent)
+	return fmt.Sprintf("ctx %s/%s", formatModuTUITokens(used), formatModuTUITokens(limit))
 }
 
 func moduTUIModelLabel(model *types.Model) string {
@@ -462,18 +460,28 @@ func moduTUIModelLabel(model *types.Model) string {
 	if label == "" {
 		label = strings.TrimSpace(model.ID)
 	}
-	var parts []string
-	if strings.TrimSpace(model.ProviderID) != "" {
-		parts = append(parts, strings.TrimSpace(model.ProviderID))
-	}
-	if strings.TrimSpace(model.ID) != "" {
-		parts = append(parts, strings.TrimSpace(model.ID))
-	}
-	detail := strings.Join(parts, " / ")
-	if detail != "" && detail != label {
-		label += " (" + detail + ")"
-	}
 	return label
+}
+
+func compactModuTUICwd(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" || path == "-" {
+		return "-"
+	}
+	clean := filepath.Clean(path)
+	volume := filepath.VolumeName(clean)
+	rest := strings.TrimPrefix(clean, volume)
+	sep := string(os.PathSeparator)
+	parts := strings.FieldsFunc(rest, func(r rune) bool {
+		return r == '/' || r == '\\'
+	})
+	if len(parts) <= 2 {
+		if volume != "" {
+			return volume + strings.Join(parts, sep)
+		}
+		return strings.Join(parts, sep)
+	}
+	return "…" + sep + filepath.Join(parts[len(parts)-2:]...)
 }
 
 func formatModuTUITokens(tokens int) string {

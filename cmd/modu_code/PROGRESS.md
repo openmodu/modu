@@ -87,9 +87,10 @@ enough to implement, verify, and commit independently.
 - The `modu-tui` runner now restores per-agent-run elapsed summaries by
   tracking `AgentStart`/`AgentEnd` events and appending `✓ Completed (...)`
   after each finished conversation round.
-- Status line moved above the input separator for agent running state; the
-  bottom footer now shows context usage/window, active model, and cwd, and `Esc`
-  interrupts the active prompt plus running bash process.
+- Status line moved above the input separator for compact agent running state
+  and recent completion duration; the bottom footer now shows short
+  context/window, model, and cwd, and `Esc` interrupts the active prompt plus
+  running bash process.
 - Terminal resize handling keeps the user prompt visible and avoids duplicate
   completed-status lines.
 - Model configuration moved into `~/.coding_agent/config.json` with support for

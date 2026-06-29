@@ -553,7 +553,7 @@ func TestModuTUIInfoCardLinesIncludeStartupContext(t *testing.T) {
 	lines := strings.Join(moduTUIInfoCardLines(session, session.GetModel()), "\n")
 	for _, want := range []string{
 		"modu_code",
-		"model: Test Model (test-provider / test-model)",
+		"model: Test Model",
 		"cwd: " + session.RuntimeState().Cwd,
 		"session: " + shortModuTUISessionID(session.GetSessionID()),
 		"commands: type /",
@@ -577,9 +577,9 @@ func TestModuTUIFooterIncludesContextModelAndCwd(t *testing.T) {
 
 	footer := moduTUIFooter(session)
 	for _, want := range []string{
-		"ctx 0/33K 0%",
-		"model Test Model (test-provider / test-model)",
-		"cwd " + session.RuntimeState().Cwd,
+		"ctx 0/33K",
+		"Test Model",
+		compactModuTUICwd(session.RuntimeState().Cwd),
 	} {
 		if !strings.Contains(footer, want) {
 			t.Fatalf("footer missing %q:\n%s", want, footer)

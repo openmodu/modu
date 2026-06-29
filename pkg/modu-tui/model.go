@@ -682,13 +682,10 @@ func (m *Model) render() string {
 	} else if m.approval != nil {
 		state = "● approval"
 	} else if m.busy {
-		state = "● busy"
+		state = "● running"
 	}
-	hint := m.status
-	if hint == "" {
-		hint = m.statusHint
-	}
-	status := fitLine(dimStyle.Render(fmt.Sprintf(" %s · %s ", state, hint)), m.width)
+	statusText := " " + agentStatusText(state, m.status) + " "
+	status := fitLine(dimStyle.Render(statusText), m.width)
 	footer := fitLine(dimStyle.Render(" "+m.footer+" "), m.width)
 
 	parts := []string{view}
@@ -712,6 +709,18 @@ func (m *Model) render() string {
 		footer,
 	)
 	return strings.Join(parts, "\n")
+}
+
+func agentStatusText(state, status string) string {
+	status = strings.TrimSpace(status)
+	switch {
+	case status == "", status == "idle", status == "running":
+		return state
+	case strings.HasPrefix(status, "✓"):
+		return status
+	default:
+		return state + " · " + status
+	}
 }
 
 func (m *Model) inputRenderWidth() int {
