@@ -32,8 +32,8 @@ func TestToolCallBlockRendersClaudeStyleBashCall(t *testing.T) {
 			Done:   true,
 		},
 	}
-	if first := renderedTexts(collapsed.Render(ctx))[0]; !strings.HasPrefix(first, "  Ran 1 shell command") {
-		t.Fatalf("collapsed bash call should indent summary: %q", first)
+	if first := renderedTexts(collapsed.Render(ctx))[0]; !strings.HasPrefix(first, "  Ran 1 shell command") || strings.Contains(first, "└") {
+		t.Fatalf("collapsed bash call should render only summary, got %q", first)
 	}
 
 	block := ToolCallBlock{
@@ -49,6 +49,9 @@ func TestToolCallBlockRendersClaudeStyleBashCall(t *testing.T) {
 	if !strings.Contains(got, "⏺ Bash(go test ./pkg/modu-tui)") {
 		t.Fatalf("expanded bash call missing Claude-style header:\n%s", got)
 	}
+	if !strings.Contains(got, "  └ ok github.com/openmodu/modu/pkg/modu-tui") {
+		t.Fatalf("expanded bash call missing output line:\n%s", got)
+	}
 	first := renderedTexts(block.Render(ctx))[0]
 	if strings.HasPrefix(first, "▾") || strings.HasPrefix(first, "▸") {
 		t.Fatalf("expanded bash call should not render an arrow prefix: %q", first)
@@ -58,9 +61,6 @@ func TestToolCallBlockRendersClaudeStyleBashCall(t *testing.T) {
 	}
 	if got, want := toolExpandedMarkerStyle.GetForeground(), lipgloss.Color("2"); got != want {
 		t.Fatalf("expanded tool marker foreground = %#v, want %#v", got, want)
-	}
-	if !strings.Contains(got, "ok github.com/openmodu/modu/pkg/modu-tui") {
-		t.Fatalf("expanded bash call missing output:\n%s", got)
 	}
 	if got, blocked := toolExpandedStyle.GetBackground(), lipgloss.Color("235"); got == blocked {
 		t.Fatalf("expanded tool background should not use dark container color %#v", got)
@@ -75,7 +75,7 @@ func TestToolCallBlockRendersClaudeStyleBashCall(t *testing.T) {
 
 func TestToolCallBlockRendersClaudeStyleReadCall(t *testing.T) {
 	ctx := RenderContext{ContentWidth: 100, Markdown: markdownRenderer(100)}
-	path := "/Users/ityike/Code/go/src/github.com/openmodu/modu/cmd/tuipoc2/main.go"
+	path := "cmd/tuipoc2/main.go"
 	block := ToolCallBlock{
 		CollapsibleBlock: CollapsibleBlock{Summary: "Read 14 lines", Expanded: true},
 		Call: ToolCall{
@@ -90,7 +90,7 @@ func TestToolCallBlockRendersClaudeStyleReadCall(t *testing.T) {
 	if !strings.Contains(got, "⏺ Read("+path+" · lines 205-218)") {
 		t.Fatalf("expanded read call missing Claude-style header:\n%s", got)
 	}
-	if !strings.Contains(got, "Read 14 lines") {
+	if !strings.Contains(got, "  └ Read 14 lines") {
 		t.Fatalf("expanded read call missing summary output:\n%s", got)
 	}
 }
@@ -108,7 +108,7 @@ func TestToolCallBlockRendersNoCollapseCode(t *testing.T) {
 		},
 	}
 	got := strings.Join(renderedTexts(block.Render(ctx)), "\n")
-	for _, want := range []string{"Update(main.go)", "└ Added 1 lines, removed 1 lines", "fmt.Println(\"old\")", "fmt.Println(\"new\")"} {
+	for _, want := range []string{"⏺ Update(main.go)", "  └ Added 1 lines, removed 1 lines", "fmt.Println(\"old\")", "fmt.Println(\"new\")"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expanded write block missing %q:\n%s", want, got)
 		}
@@ -152,7 +152,7 @@ func TestToolCallBlockRendersDiffWithLineNumbersAndBackground(t *testing.T) {
 	raw := strings.Join(rawLines, "\n")
 	stripped := ansi.Strip(raw)
 
-	for _, want := range []string{"Update(/tmp/main.go)", "└ Added 1 lines, removed 1 lines", "    - 12  if oldValue {", "    + 12  if newValue {", "      11  func main() {"} {
+	for _, want := range []string{"⏺ Update(/tmp/main.go)", "  └ Added 1 lines, removed 1 lines", "    - 12  if oldValue {", "    + 12  if newValue {", "      11  func main() {"} {
 		if !strings.Contains(stripped, want) {
 			t.Fatalf("rendered diff missing %q:\n%s", want, stripped)
 		}
@@ -214,5 +214,78 @@ func TestToolPermissionHookIsUsedByToolBlock(t *testing.T) {
 	got := strings.Join(renderedTexts(block.Render(ctx)), "\n")
 	if !strings.Contains(got, "permission pending") {
 		t.Fatalf("tool block missing permission status:\n%s", got)
+	}
+}
+
+func TestToolCallBlockRendersMultilineOutputWithIndentedContinuation(t *testing.T) {
+	ctx := RenderContext{ContentWidth: 72, Markdown: markdownRenderer(72)}
+	block := ToolCallBlock{
+		CollapsibleBlock: CollapsibleBlock{Summary: "Ran custom", Expanded: true},
+		Call: ToolCall{
+			Name:   "custom_tool",
+			Input:  "first arg",
+			Output: "line one\nline two",
+			Done:   true,
+		},
+	}
+
+	got := strings.Join(renderedTexts(block.Render(ctx)), "\n")
+	for _, want := range []string{
+		"⏺ Custom_tool(first arg)",
+		"  └ line one",
+		"    line two",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expanded custom tool missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestToolCallBlockRendersNoContentDataForEmptyOutput(t *testing.T) {
+	ctx := RenderContext{ContentWidth: 72, Markdown: markdownRenderer(72)}
+	block := ToolCallBlock{
+		CollapsibleBlock: CollapsibleBlock{Summary: "Ran custom", Expanded: true},
+		Call: ToolCall{
+			Name:  "custom_tool",
+			Input: "first arg",
+			Done:  true,
+		},
+	}
+
+	got := strings.Join(renderedTexts(block.Render(ctx)), "\n")
+	if !strings.Contains(got, "  └ no content data") {
+		t.Fatalf("expanded custom tool missing no-content output:\n%s", got)
+	}
+}
+
+func TestToolCallBlockWrapsLongInputWithVerticalConnector(t *testing.T) {
+	ctx := RenderContext{ContentWidth: 36, Markdown: markdownRenderer(36)}
+	block := ToolCallBlock{
+		CollapsibleBlock: CollapsibleBlock{Summary: "Ran custom", Expanded: true},
+		Call: ToolCall{
+			Name:   "custom_tool",
+			Input:  "alpha beta gamma delta epsilon zeta eta theta",
+			Output: "done",
+			Done:   true,
+		},
+	}
+
+	lines := renderedTexts(block.Render(ctx))
+	if len(lines) < 3 {
+		t.Fatalf("expected wrapped header and output, got %#v", lines)
+	}
+	if !strings.HasPrefix(lines[0], "⏺ Custom_tool(") {
+		t.Fatalf("first header line = %q", lines[0])
+	}
+	if !strings.HasPrefix(lines[1], "  │ ") {
+		t.Fatalf("wrapped header continuation should use vertical connector, got %q", lines[1])
+	}
+	if !strings.HasPrefix(lines[len(lines)-1], "  └ done") {
+		t.Fatalf("output should align under connector, got %#v", lines)
+	}
+	for i, line := range lines {
+		if got := lipgloss.Width(line); got != ctx.ContentWidth {
+			t.Fatalf("line %d width = %d, want %d: %q", i, got, ctx.ContentWidth, line)
+		}
 	}
 }

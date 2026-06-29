@@ -38,16 +38,19 @@ It owns only the reusable UI shell:
   `Enter` dispatches through `Hooks.SlashCommand`
 - tool-call messages with the same `ToolID` are merged into a single block so
   call/start/result updates do not scatter through the transcript
-- Read-style tool calls can render as compact `Read(path · lines x-y)` blocks
-  with a `Read N lines` result summary instead of dumping file content inline
+- Read-style tool calls render with a compact `Read N lines` result summary
+  instead of dumping file content inline
 - expanded tool-call blocks use a green leading tool marker without a container
-  background; code and diff lines keep their own syntax-highlighted styling
-- collapsed tool-call summaries are indented, while every rendered line of an
-  expanded tool-call block can be clicked to collapse it
+  background and render as `ToolName(input args)` followed by a two-space
+  indented `└ output` line; empty output renders as `no content data`, and
+  long input args wrap onto `  │ ` continuation lines before the output branch;
+  continuation/code/diff lines use four-space indentation
+- collapsed tool-call summaries render as two-space indented summary text only,
+  while every rendered line of an expanded tool-call block can be clicked to collapse it
 - tool-call messages can set `ToolNoCollapse`, `ToolCode`, and `ToolLanguage`
   to render a permanently expanded syntax-highlighted code/diff block; callers
   can include line numbers and nearby context in `ToolCode`; diff blocks render
-  under a `└` summary line, indent their body by two levels, use
+  after the `└ output` line, indent their body by four spaces, use
   red/green/gray per-line backgrounds with syntax highlighting applied to the
   code portion of each line, and infer the highlighting language from the tool
   input file extension
