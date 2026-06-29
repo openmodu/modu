@@ -34,7 +34,6 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 	var currentPromptID int
 	var nextPromptID int
 	var continueQueuedAfterCancel bool
-	durationTracker := newModuTUIAgentDurationTracker(time.Now)
 	send := func(msg tea.Msg) {
 		programMu.RLock()
 		p := program
@@ -43,6 +42,9 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 			p.Send(msg)
 		}
 	}
+	durationTracker := newModuTUIAgentDurationTracker(time.Now, func(msg modutui.Message) {
+		send(modutui.AppendMessageMsg{Message: msg})
+	})
 	sendFooter := func() {}
 
 	if !noApprove {
@@ -132,6 +134,13 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 			return session.Prompt(ctx, text)
 		})
 	}
+	// Drive hidden extension turns (goal continuations injected while idle)
+	// through the foreground loop instead of a detached background goroutine, so
+	// the status line reflects the running agent and ESC can interrupt it.
+	session.SetBackgroundPromptDriver(func(run func(context.Context) error) bool {
+		runAgentLoop(run)
+		return true
+	})
 	queueFollowUp := func(text string, requireActive bool) {
 		// Same hazard as interruptPrompt/queueSteer: invoked synchronously from
 		// the Model.Update loop (submit / slash hooks), where send (program.Send)
@@ -235,9 +244,7 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 	}
 
 	unsubAgent := session.Subscribe(func(ev types.Event) {
-		if msg, ok := durationTracker.Handle(ev); ok {
-			send(modutui.AppendMessageMsg{Message: msg})
-		}
+		durationTracker.Handle(ev)
 		for _, msg := range messagesFromAgentEventWithCwd(ev, session.Cwd()) {
 			send(modutui.AppendMessageMsg{Message: msg})
 		}
@@ -266,41 +273,96 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 	return err
 }
 
+// moduTUIDurationDebounce is how long the tracker waits after an agent_end
+// before declaring a task finished. A goal/extension task spans several
+// back-to-back agent rounds (the hidden continuation re-prompts the agent the
+// instant a round ends), so without debouncing each round would print its own
+// "✓ Completed" line. The window only needs to bridge that near-zero gap.
+const moduTUIDurationDebounce = 750 * time.Millisecond
+
+type moduTUIDebounceTimer interface{ Stop() bool }
+
+// moduTUIAgentDurationTracker collapses a multi-round agent task into a single
+// completion message reporting the total wall time from the first agent_start
+// to the last agent_end. Each agent_end (re)arms a debounce timer; a fresh
+// agent_start within the window means the task is still going and cancels it.
 type moduTUIAgentDurationTracker struct {
-	mu      sync.Mutex
-	now     func() time.Time
+	mu       sync.Mutex
+	now      func() time.Time
+	emit     func(modutui.Message)
+	debounce time.Duration
+	schedule func(time.Duration, func()) moduTUIDebounceTimer
+
 	started time.Time
+	lastEnd time.Time
+	active  bool
+	gen     int
+	timer   moduTUIDebounceTimer
 }
 
-func newModuTUIAgentDurationTracker(now func() time.Time) *moduTUIAgentDurationTracker {
+func newModuTUIAgentDurationTracker(now func() time.Time, emit func(modutui.Message)) *moduTUIAgentDurationTracker {
 	if now == nil {
 		now = time.Now
 	}
-	return &moduTUIAgentDurationTracker{now: now}
+	t := &moduTUIAgentDurationTracker{now: now, emit: emit, debounce: moduTUIDurationDebounce}
+	t.schedule = func(d time.Duration, f func()) moduTUIDebounceTimer {
+		return time.AfterFunc(d, f)
+	}
+	return t
 }
 
-func (t *moduTUIAgentDurationTracker) Handle(ev types.Event) (modutui.Message, bool) {
+func (t *moduTUIAgentDurationTracker) Handle(ev types.Event) {
 	switch ev.Type {
 	case types.EventTypeAgentStart:
 		t.mu.Lock()
-		t.started = t.now()
+		t.gen++ // invalidate any pending finalize: the task is still running
+		if t.timer != nil {
+			t.timer.Stop()
+			t.timer = nil
+		}
+		if !t.active {
+			t.started = t.now()
+			t.active = true
+		}
 		t.mu.Unlock()
 	case types.EventTypeAgentEnd:
 		t.mu.Lock()
-		started := t.started
-		t.started = time.Time{}
-		t.mu.Unlock()
-		if started.IsZero() {
-			break
+		if !t.active {
+			t.mu.Unlock()
+			return
 		}
-		return modutui.Message{
-			Role:         modutui.RoleAssistant,
-			Text:         "✓ Completed (" + formatModuTUIActivityDuration(t.now().Sub(started)) + ")",
-			Preformatted: true,
-			Plain:        true,
-		}, true
+		t.lastEnd = t.now()
+		gen := t.gen
+		if t.timer != nil {
+			t.timer.Stop()
+		}
+		t.timer = t.schedule(t.debounce, func() { t.finalize(gen) })
+		t.mu.Unlock()
 	}
-	return modutui.Message{}, false
+}
+
+func (t *moduTUIAgentDurationTracker) finalize(gen int) {
+	t.mu.Lock()
+	if !t.active || gen != t.gen {
+		t.mu.Unlock()
+		return
+	}
+	t.gen++
+	total := t.lastEnd.Sub(t.started)
+	t.active = false
+	t.started = time.Time{}
+	t.timer = nil
+	emit := t.emit
+	t.mu.Unlock()
+	if emit == nil {
+		return
+	}
+	emit(modutui.Message{
+		Role:         modutui.RoleAssistant,
+		Text:         "✓ Completed (" + formatModuTUIActivityDuration(total) + ")",
+		Preformatted: true,
+		Plain:        true,
+	})
 }
 
 func formatModuTUIActivityDuration(d time.Duration) string {

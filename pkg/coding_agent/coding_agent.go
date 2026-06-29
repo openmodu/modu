@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/openmodu/modu/pkg/agent"
@@ -112,6 +113,15 @@ type engine struct {
 	plan        *plan.Controller     // plan mode
 	worktree    *worktree.Controller // isolated git worktree
 	extPrompts  extensionPrompts     // host confirm/select callbacks
+
+	// bgPromptDriver lets a host (e.g. the TUI) take over hidden extension
+	// prompts (goal continuations) that would otherwise run in a detached
+	// background goroutine. When it returns true the host now drives the turn,
+	// so its UI shows the agent as running and ESC can interrupt it; a nil
+	// driver or a false return falls back to the background goroutine used by
+	// headless hosts.
+	bgPromptDriver   func(run func(context.Context) error) bool
+	bgPromptDriverMu sync.RWMutex
 
 	// approvalManager handles tool execution approval.
 	approvalManager *approval.Manager
@@ -399,19 +409,26 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 				}
 				return nil
 			}
-			go func() {
+			runTurn := func(ctx context.Context) error {
 				deadline := time.Now().Add(time.Second)
 				for {
-					err := ag.Prompt(context.Background(), llmMsg)
+					err := ag.Prompt(ctx, llmMsg)
 					if err == nil {
-						return
+						return nil
 					}
 					if !strings.Contains(err.Error(), "already processing") || time.Now().After(deadline) {
-						return
+						return err
 					}
 					time.Sleep(10 * time.Millisecond)
 				}
-			}()
+			}
+			// Prefer a host driver (the TUI) so the injected turn runs in the
+			// foreground loop — status shows running and ESC can interrupt it.
+			// Headless hosts register no driver and fall back to a detached run.
+			if driver := cs.backgroundPromptDriver(); driver != nil && driver(runTurn) {
+				return nil
+			}
+			go func() { _ = runTurn(context.Background()) }()
 			// Wait briefly for the new turn to enter streaming so a caller's
 			// WaitForIdle doesn't race past it.
 			deadline := time.Now().Add(200 * time.Millisecond)

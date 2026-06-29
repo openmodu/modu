@@ -3840,3 +3840,72 @@ func TestExplicitSkillMessageResidentButNotPersisted(t *testing.T) {
 		t.Fatalf("expected explicit_skill not to be persisted, got:\n%s", string(data))
 	}
 }
+
+// extensionAPIProbe captures the ExtensionAPI so a test can inject hidden
+// follow-up prompts the way the goal extension does.
+type extensionAPIProbe struct{ api extension.ExtensionAPI }
+
+func (e *extensionAPIProbe) Name() string                          { return "api-probe" }
+func (e *extensionAPIProbe) Init(api extension.ExtensionAPI) error { e.api = api; return nil }
+
+func TestBackgroundPromptDriverRoutesIdleHiddenPromptToForeground(t *testing.T) {
+	dir := t.TempDir()
+	model := newTestModel()
+	streamFn := func(_ context.Context, _ *types.Model, _ *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+		stream := types.NewEventStream()
+		go func() {
+			msg := &types.AssistantMessage{
+				Role:       "assistant",
+				ProviderID: model.ProviderID,
+				Model:      model.ID,
+				StopReason: "stop",
+				Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "ok"}},
+				Timestamp:  time.Now().UnixMilli(),
+			}
+			stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+			stream.Resolve(msg, nil)
+			stream.Close()
+		}()
+		return stream, nil
+	}
+
+	probe := &extensionAPIProbe{}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:        dir,
+		AgentDir:   filepath.Join(dir, ".coding_agent"),
+		Model:      model,
+		GetAPIKey:  func(string) (string, error) { return "", nil },
+		StreamFn:   streamFn,
+		Extensions: []extension.Extension{probe},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if probe.api == nil {
+		t.Fatal("extension API was not captured during Init")
+	}
+
+	runs := make(chan func(context.Context) error, 1)
+	session.SetBackgroundPromptDriver(func(run func(context.Context) error) bool {
+		runs <- run
+		return true
+	})
+
+	// Idle hidden prompt (mirrors a goal continuation) must be handed to the
+	// driver instead of a detached background goroutine.
+	if err := probe.api.SendMessageWithOptions("hidden", extension.MessageOptions{DeliverAs: "followUp"}); err != nil {
+		t.Fatalf("SendMessageWithOptions returned error: %v", err)
+	}
+
+	select {
+	case run := <-runs:
+		if run == nil {
+			t.Fatal("driver received a nil run function")
+		}
+		if err := run(context.Background()); err != nil {
+			t.Fatalf("driver run function errored: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("driver was not invoked for the idle hidden prompt")
+	}
+}

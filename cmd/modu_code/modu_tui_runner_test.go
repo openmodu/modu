@@ -88,33 +88,71 @@ func TestMessagesFromAgentEventSkipsUserMessageEnd(t *testing.T) {
 	}
 }
 
-func TestModuTUIAgentDurationTrackerAppendsCompletedMessage(t *testing.T) {
+type fakeDebounceTimer struct{}
+
+func (fakeDebounceTimer) Stop() bool { return true }
+
+func TestModuTUIAgentDurationTrackerEmitsSingleTotalAcrossRounds(t *testing.T) {
 	now := time.Unix(100, 0)
-	tracker := newModuTUIAgentDurationTracker(func() time.Time {
-		return now
-	})
+	var emitted []modutui.Message
+	tracker := newModuTUIAgentDurationTracker(
+		func() time.Time { return now },
+		func(msg modutui.Message) { emitted = append(emitted, msg) },
+	)
+	var pending func()
+	tracker.schedule = func(_ time.Duration, f func()) moduTUIDebounceTimer {
+		pending = f
+		return fakeDebounceTimer{}
+	}
 
-	if _, ok := tracker.Handle(types.Event{Type: types.EventTypeAgentEnd}); ok {
-		t.Fatal("AgentEnd without AgentStart should not append a completion message")
-	}
-	if _, ok := tracker.Handle(types.Event{Type: types.EventTypeAgentStart}); ok {
-		t.Fatal("AgentStart should not append a completion message")
+	// AgentEnd without an active task does nothing.
+	tracker.Handle(types.Event{Type: types.EventTypeAgentEnd})
+	if pending != nil || len(emitted) != 0 {
+		t.Fatal("AgentEnd without AgentStart should not arm a timer or emit")
 	}
 
-	now = now.Add(65*time.Second + 400*time.Millisecond)
-	msg, ok := tracker.Handle(types.Event{Type: types.EventTypeAgentEnd})
-	if !ok {
-		t.Fatal("AgentEnd after AgentStart should append a completion message")
+	// Round 1: the long "real work" round.
+	tracker.Handle(types.Event{Type: types.EventTypeAgentStart})
+	now = now.Add(60 * time.Second)
+	tracker.Handle(types.Event{Type: types.EventTypeAgentEnd})
+	if pending == nil {
+		t.Fatal("AgentEnd should arm the debounce finalize")
 	}
+	if len(emitted) != 0 {
+		t.Fatal("nothing should be emitted before the debounce fires")
+	}
+	stale := pending
+
+	// Round 2: the hidden goal continuation re-prompts before debounce fires,
+	// cancelling round 1's finalize and extending the same task.
+	now = now.Add(2 * time.Second)
+	tracker.Handle(types.Event{Type: types.EventTypeAgentStart})
+	now = now.Add(5*time.Second + 400*time.Millisecond)
+	tracker.Handle(types.Event{Type: types.EventTypeAgentEnd})
+
+	// The stale round-1 finalize must be a no-op (gen mismatch).
+	stale()
+	if len(emitted) != 0 {
+		t.Fatalf("cancelled finalize should not emit: %#v", emitted)
+	}
+
+	// The live finalize reports one total spanning both rounds: 100 -> 167.4s.
+	pending()
+	if len(emitted) != 1 {
+		t.Fatalf("want one completion message, got %d: %#v", len(emitted), emitted)
+	}
+	msg := emitted[0]
 	if msg.Role != modutui.RoleAssistant || !msg.Preformatted || !msg.Plain {
 		t.Fatalf("completion message should be assistant preformatted plain text: %#v", msg)
 	}
-	if got, want := msg.Text, "✓ Completed (1min 05s)"; got != want {
+	if got, want := msg.Text, "✓ Completed (1min 07s)"; got != want {
 		t.Fatalf("completion text = %q, want %q", got, want)
 	}
 
-	if _, ok := tracker.Handle(types.Event{Type: types.EventTypeAgentEnd}); ok {
-		t.Fatal("tracker should clear the start time after completion")
+	// After finalizing, a lone AgentEnd does not re-emit.
+	tracker.Handle(types.Event{Type: types.EventTypeAgentEnd})
+	if len(emitted) != 1 {
+		t.Fatalf("tracker should be idle after completion, got %d messages", len(emitted))
 	}
 }
 
