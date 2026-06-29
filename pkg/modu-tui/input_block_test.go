@@ -53,8 +53,8 @@ func TestInputBlockLargePasteRendersCollapsedAndExpandsForSubmit(t *testing.T) {
 	if got := input.ExpandedValue(); got != "before "+content+" after" {
 		t.Fatalf("expanded value mismatch:\n%q", got)
 	}
-	line, _ := input.Render(80)
-	rendered := ansi.Strip(line)
+	lines, _, _ := input.Render(80, maxInputRows)
+	rendered := ansi.Strip(lines[0])
 	if !strings.Contains(rendered, "[Pasted text") || strings.Contains(rendered, content) {
 		t.Fatalf("rendered input should show the paste label only:\n%s", rendered)
 	}

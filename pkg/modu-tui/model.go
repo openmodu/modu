@@ -15,7 +15,12 @@ type streamTickMsg struct{}
 type autoScrollTickMsg struct{}
 
 const maxInputHistory = 100
-const bottomFixedRows = 6
+
+// bottomFixedRowsBase counts the always-present rows below the viewport: a gap,
+// the agent status line, the input top rule, the input bottom rule, and the
+// footer. The input area itself adds inputRows() on top (1..maxInputRows).
+const bottomFixedRowsBase = 5
+const maxInputRows = 5
 const minViewportRows = 1
 const maxAutoScrollTicksWithoutDrag = 80
 
@@ -206,6 +211,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.Code == tea.KeyPgDown:
 			m.resetIMEState()
 			m.scroll(max(1, m.vpHeight()-1))
+		case msg.Code == tea.KeyEnter && msg.Mod.Contains(tea.ModAlt):
+			m.resetIMEState()
+			m.input.InsertNewline()
+			m.clearHistorySelection()
+			m.updateSlashMatches()
 		case msg.String() == "shift+enter":
 			m.resetIMEState()
 			if cmd := m.submitInput(true); cmd != nil {
@@ -509,16 +519,30 @@ func (m Model) View() tea.View {
 	} else {
 		v.MouseMode = tea.MouseModeCellMotion
 	}
-	_, caretX := m.input.Render(m.inputRenderWidth())
+	_, cursorRow, caretX := m.input.Render(m.inputRenderWidth(), m.inputRows())
 	if m.approval != nil {
-		caretX = 0
+		caretX, cursorRow = 0, 0
 	}
-	v.Cursor = tea.NewCursor(caretX, m.vpHeight()+m.approvalPanelHeight()+m.slashPanelHeight()+m.todoPanelHeight()+m.jumpPanelHeight()+3)
+	v.Cursor = tea.NewCursor(caretX, m.vpHeight()+m.approvalPanelHeight()+m.slashPanelHeight()+m.todoPanelHeight()+m.jumpPanelHeight()+3+cursorRow)
 	return v
 }
 
+// inputRows is the number of rows the input area currently occupies: the
+// logical line count clamped to [1, maxInputRows]. Approval mode is a single
+// placeholder line.
+func (m *Model) inputRows() int {
+	if m.approval != nil {
+		return 1
+	}
+	return clamp(m.input.LineCount(), 1, maxInputRows)
+}
+
+func (m *Model) bottomFixedRows() int {
+	return bottomFixedRowsBase + m.inputRows()
+}
+
 func (m *Model) vpHeight() int {
-	return max(m.minViewportRows(), m.height-bottomFixedRows-m.approvalPanelHeight()-m.slashPanelHeight()-m.todoPanelHeight()-m.jumpPanelHeight())
+	return max(m.minViewportRows(), m.height-m.bottomFixedRows()-m.approvalPanelHeight()-m.slashPanelHeight()-m.todoPanelHeight()-m.jumpPanelHeight())
 }
 func (m *Model) approvalPanelHeight() int {
 	return len(m.approvalPanelLines())
@@ -536,7 +560,7 @@ func (m *Model) jumpPanelHeight() int {
 	return 0
 }
 func (m *Model) showJumpPanel() bool {
-	heightWithoutJump := m.height - bottomFixedRows - m.approvalPanelHeight() - m.slashPanelHeight() - m.todoPanelHeight()
+	heightWithoutJump := m.height - m.bottomFixedRows() - m.approvalPanelHeight() - m.slashPanelHeight() - m.todoPanelHeight()
 	if heightWithoutJump <= m.minViewportRows() {
 		return false
 	}
@@ -544,7 +568,7 @@ func (m *Model) showJumpPanel() bool {
 }
 
 func (m *Model) minViewportRows() int {
-	if m.height <= bottomFixedRows {
+	if m.height <= m.bottomFixedRows() {
 		return 0
 	}
 	return minViewportRows
@@ -676,11 +700,13 @@ func (m *Model) render() string {
 	}
 	view := strings.Join(window, "\n")
 
-	input, _ := m.input.Render(m.inputRenderWidth())
+	inputLines, _, _ := m.input.Render(m.inputRenderWidth(), m.inputRows())
 	if m.approval != nil {
-		input = fitLine(dimStyle.Render(" approval pending "), m.inputRenderWidth())
+		inputLines = []string{fitLine(dimStyle.Render(" approval pending "), m.inputRenderWidth())}
 	}
-	input = clearToEndOfLine(input)
+	for i := range inputLines {
+		inputLines[i] = clearToEndOfLine(inputLines[i])
+	}
 	state := "○ idle"
 	if m.streaming {
 		state = "● streaming"
@@ -689,7 +715,11 @@ func (m *Model) render() string {
 	} else if m.busy {
 		state = "● running"
 	}
-	statusText := " " + agentStatusText(state, m.status) + " "
+	inner := agentStatusText(state, m.status)
+	if (m.busy || m.streaming) && m.approval == nil && runStatusAllowsHint(m.status) {
+		inner += "  ·  " + steerFollowupHint
+	}
+	statusText := " " + inner + " "
 	status := fitLine(dimStyle.Render(statusText), m.width)
 	footer := fitLine(dimStyle.Render(" "+m.footer+" "), m.width)
 
@@ -710,11 +740,29 @@ func (m *Model) render() string {
 		fitLine("", m.width),
 		status,
 		m.inputTopRuleLine(),
-		input,
+	)
+	parts = append(parts, inputLines...)
+	parts = append(parts,
 		ruleStyle.Render(strings.Repeat("─", max(0, m.width))),
 		footer,
 	)
 	return strings.Join(parts, "\n")
+}
+
+// steerFollowupHint is shown in the agent status line while a task is running
+// so the operator knows how a typed message will be delivered.
+const steerFollowupHint = "Enter follow-up · ⇧Enter steer"
+
+// runStatusAllowsHint reports whether the running-state hint should be appended,
+// i.e. only during the plain running state, not while a transient status
+// (interrupting / steering / queued / completed) is being shown.
+func runStatusAllowsHint(status string) bool {
+	switch strings.TrimSpace(status) {
+	case "", "running", "idle":
+		return true
+	default:
+		return false
+	}
 }
 
 func agentStatusText(state, status string) string {
@@ -769,7 +817,7 @@ func (m *Model) slashPanelLines() []string {
 	if m.approval != nil || len(m.slashMatches) == 0 {
 		return nil
 	}
-	available := m.height - bottomFixedRows - m.minViewportRows() - m.approvalPanelHeight()
+	available := m.height - m.bottomFixedRows() - m.minViewportRows() - m.approvalPanelHeight()
 	if available < 3 {
 		return nil
 	}
@@ -795,7 +843,7 @@ func (m *Model) todoPanelLines() []string {
 	if m.approval != nil {
 		return nil
 	}
-	budget := m.height - bottomFixedRows - m.minViewportRows() - m.approvalPanelHeight() - m.slashPanelHeight()
+	budget := m.height - m.bottomFixedRows() - m.minViewportRows() - m.approvalPanelHeight() - m.slashPanelHeight()
 	if budget < 3 {
 		return nil
 	}
@@ -976,7 +1024,7 @@ func (m *Model) maxApprovalDetailLines() int {
 }
 
 func (m *Model) approvalPanelBudget() int {
-	return m.height - bottomFixedRows - m.minViewportRows()
+	return m.height - m.bottomFixedRows() - m.minViewportRows()
 }
 
 func compactApprovalPanelLines(req ToolApprovalRequest, width int, budget int) []string {

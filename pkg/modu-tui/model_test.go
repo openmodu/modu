@@ -11,6 +11,47 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+func TestPOC2MultilineInputAltEnterAndAutoHeight(t *testing.T) {
+	var tm tea.Model = NewModel(Options{Width: 40, Height: 20})
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: 'a', Text: "a"}))
+	// Alt+Enter inserts a hard newline rather than submitting.
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter, Mod: tea.ModAlt}))
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: 'b', Text: "b"}))
+	m := tm.(Model)
+
+	if got := m.input.ExpandedValue(); got != "a\nb" {
+		t.Fatalf("input value = %q, want %q", got, "a\nb")
+	}
+	if got := m.inputRows(); got != 2 {
+		t.Fatalf("inputRows = %d, want 2", got)
+	}
+	if got, want := m.bottomFixedRows(), bottomFixedRowsBase+2; got != want {
+		t.Fatalf("bottomFixedRows = %d, want %d", got, want)
+	}
+	lines, cursorRow, _ := m.input.Render(m.inputRenderWidth(), maxInputRows)
+	if len(lines) != 2 {
+		t.Fatalf("rendered input lines = %d, want 2", len(lines))
+	}
+	if cursorRow != 1 {
+		t.Fatalf("cursorRow = %d, want 1 (caret on second line)", cursorRow)
+	}
+	if !strings.Contains(ansi.Strip(lines[0]), "❯") {
+		t.Fatalf("first line should carry the ❯ prefix: %q", ansi.Strip(lines[0]))
+	}
+
+	// Input height is capped at maxInputRows even with more logical lines.
+	for range maxInputRows + 3 {
+		m.input.InsertNewline()
+	}
+	if got := m.inputRows(); got != maxInputRows {
+		t.Fatalf("inputRows = %d, want capped at %d", got, maxInputRows)
+	}
+	capped, _, _ := m.input.Render(m.inputRenderWidth(), maxInputRows)
+	if len(capped) != maxInputRows {
+		t.Fatalf("rendered input lines = %d, want capped at %d", len(capped), maxInputRows)
+	}
+}
+
 func TestPOC2PageKeysScrollViewport(t *testing.T) {
 	var tm tea.Model = NewModel()
 	tm, _ = tm.Update(tea.WindowSizeMsg{Width: 80, Height: 12})
@@ -76,6 +117,11 @@ func TestPOC2ResizeClampsSelection(t *testing.T) {
 
 func TestPOC2CopySelectionUsesOSC52OverSSH(t *testing.T) {
 	t.Setenv("SSH_TTY", "/dev/pts/1")
+	// Isolate multiplexer env so the sequence is plain OSC52, not screen/tmux
+	// DCS-wrapped, regardless of the ambient TERM/TMUX (e.g. running over SSH
+	// inside screen).
+	t.Setenv("TMUX", "")
+	t.Setenv("TERM", "xterm-256color")
 	oldWrite := writeLocalClipboard
 	writeLocalClipboard = func(string) error { return nil }
 	t.Cleanup(func() { writeLocalClipboard = oldWrite })
@@ -115,6 +161,11 @@ func TestPOC2CopySelectionUsesTmuxPassthrough(t *testing.T) {
 }
 
 func TestPOC2CopySelectionUsesLocalClipboardWithoutOSC52WhenLocalSucceeds(t *testing.T) {
+	// This case asserts the non-remote path, so clear any inherited SSH env
+	// (e.g. when the test itself runs over SSH).
+	t.Setenv("SSH_TTY", "")
+	t.Setenv("SSH_CONNECTION", "")
+	t.Setenv("SSH_CLIENT", "")
 	oldWrite := writeLocalClipboard
 	writeLocalClipboard = func(string) error { return nil }
 	t.Cleanup(func() { writeLocalClipboard = oldWrite })
