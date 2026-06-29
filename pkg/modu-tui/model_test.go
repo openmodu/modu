@@ -1041,6 +1041,32 @@ func TestPOC2SlashPickerCompletesCommandWithTab(t *testing.T) {
 	}
 }
 
+func TestPOC2SlashPickerDoesNotShowJumpHintAtBottom(t *testing.T) {
+	var tm tea.Model = NewModel(Options{
+		Width:         72,
+		Height:        10,
+		SlashCommands: []SlashCommand{{Name: "/goal", Description: "Set a goal"}},
+	})
+	m := tm.(Model)
+	for i := 0; i < 20; i++ {
+		m.messages = append(m.messages, Message{Role: RoleAssistant, Text: "history"})
+	}
+	m.rebuild()
+	if !m.atBottom() {
+		t.Fatal("setup should be at bottom")
+	}
+
+	tm, _ = m.Update(tea.KeyPressMsg(tea.Key{Text: "/", Code: '/'}))
+	m = tm.(Model)
+	rendered := ansi.Strip(m.render())
+	if !strings.Contains(rendered, "/goal") {
+		t.Fatalf("slash picker should be visible:\n%s", rendered)
+	}
+	if strings.Contains(rendered, jumpHintText()) {
+		t.Fatalf("slash picker should not trigger jump hint at bottom:\n%s", rendered)
+	}
+}
+
 func TestPOC2ResizeKeepsInputAndCursorAlignedWithSlashPanel(t *testing.T) {
 	var tm tea.Model = NewModel(Options{
 		Width:  50,
