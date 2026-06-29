@@ -18,13 +18,13 @@ go run ./cmd/modu_code --resume <session-id>
 
 交互 TUI 正常退出后会打印当前 session id 和可复制的 `modu_code --resume <session-id>` 命令；即使还没有发送任何消息，退出时也会落盘一个可恢复的空 session。下次用这个 id 启动会恢复该 session 已保存的历史对话。
 
-SSH 环境默认关闭终端 mouse reporting，避免 JuiceSSH 等移动端客户端在触摸滚动或键盘尺寸变化时产生大量 mouse-motion 事件导致界面卡住。桌面 SSH 需要鼠标拖选时可显式开启：
+SSH 环境默认保留终端 mouse reporting，滚轮和拖拽选择可以直接使用。若 JuiceSSH 等移动端客户端在触摸滚动或键盘尺寸变化时产生大量 mouse 事件导致界面卡住，可显式关闭：
 
 ```bash
-MODU_TUI_MOUSE=on modu_code
+MODU_TUI_MOUSE=off modu_code
 ```
 
-在 SSH 兼容模式下，输入框为空时 Up/Down 会滚动对话内容，适配 JuiceSSH 把滑动手势转成方向键的行为；输入框已有文字时 Up/Down 仍用于历史输入。
+在 SSH 兼容模式下，输入框为空时 Up/Down 会滚动对话内容，适配移动端 SSH 把滑动手势转成方向键的行为；输入框已有文字时 Up/Down 仍用于历史输入。
 
 默认启动会使用当前 checkout。需要隔离修改时，可以显式创建并切入 managed worktree，路径形如
 `~/.coding_agent/worktrees/<uuid>/<repo>`，分支名形如 `modu-code/<repo>-<id>`：

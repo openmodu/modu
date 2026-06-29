@@ -588,12 +588,12 @@ func TestModuTUITodosConvertsSessionTodos(t *testing.T) {
 	}
 }
 
-func TestModuTUIMouseDisabledForSSHUnlessOverridden(t *testing.T) {
-	if !moduTUIMouseDisabledFromEnv([]string{"SSH_TTY=/dev/pts/1"}) {
-		t.Fatal("SSH_TTY should disable mouse reporting by default")
+func TestModuTUIMouseEnabledForSSHUnlessDisabled(t *testing.T) {
+	if moduTUIMouseDisabledFromEnv([]string{"SSH_TTY=/dev/pts/1"}) {
+		t.Fatal("SSH_TTY should keep mouse reporting by default")
 	}
-	if !moduTUIMouseDisabledFromEnv([]string{"SSH_CONNECTION=1.1.1.1 22 2.2.2.2 33333"}) {
-		t.Fatal("SSH_CONNECTION should disable mouse reporting by default")
+	if moduTUIMouseDisabledFromEnv([]string{"SSH_CONNECTION=1.1.1.1 22 2.2.2.2 33333"}) {
+		t.Fatal("SSH_CONNECTION should keep mouse reporting by default")
 	}
 	if moduTUIMouseDisabledFromEnv([]string{"SSH_TTY=/dev/pts/1", "MODU_TUI_MOUSE=on"}) {
 		t.Fatal("MODU_TUI_MOUSE=on should force mouse reporting on")
@@ -603,6 +603,18 @@ func TestModuTUIMouseDisabledForSSHUnlessOverridden(t *testing.T) {
 	}
 	if moduTUIMouseDisabledFromEnv([]string{"TERM=xterm-256color"}) {
 		t.Fatal("non-SSH terminal should keep mouse reporting by default")
+	}
+}
+
+func TestModuTUIArrowKeysScrollForSSHAndMouseDisabled(t *testing.T) {
+	if !moduTUIArrowKeysScrollFromEnv([]string{"SSH_TTY=/dev/pts/1"}) {
+		t.Fatal("SSH sessions should keep empty-input arrow key transcript scrolling")
+	}
+	if !moduTUIArrowKeysScrollFromEnv([]string{"MODU_TUI_MOUSE=off"}) {
+		t.Fatal("mouse-disabled sessions should use arrow key transcript scrolling")
+	}
+	if moduTUIArrowKeysScrollFromEnv([]string{"TERM=xterm-256color"}) {
+		t.Fatal("plain local terminal should keep normal input history arrow behavior")
 	}
 }
 

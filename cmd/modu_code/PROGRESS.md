@@ -77,12 +77,12 @@ enough to implement, verify, and commit independently.
   `modu_code --resume <session-id>` command, making the saved history path
   explicit after Ctrl+C or `/quit`; empty sessions are flushed so printed ids
   can be resumed immediately.
-- SSH sessions now default `pkg/modu-tui` mouse reporting off, with
-  `MODU_TUI_MOUSE=on` as an opt-in for desktop SSH, reducing JuiceSSH/mobile
-  touch-motion event floods that can make the interface appear frozen.
-- SSH mouse-disabled sessions also route empty-input Up/Down keys to transcript
-  scrolling, so mobile swipe gestures translated into arrow keys can reach
-  earlier conversation content instead of opening input history.
+- SSH sessions keep `pkg/modu-tui` mouse reporting on by default again, with
+  `MODU_TUI_MOUSE=off` as an opt-out for JuiceSSH/mobile clients that flood
+  touch-motion events and make the interface appear frozen.
+- SSH sessions and explicit mouse-disabled sessions route empty-input Up/Down
+  keys to transcript scrolling, so mobile swipe gestures translated into arrow
+  keys can reach earlier conversation content instead of opening input history.
 - The `modu-tui` runner now restores per-agent-run elapsed summaries by
   tracking `AgentStart`/`AgentEnd` events and appending `✓ Completed (...)`
   after each finished conversation round.

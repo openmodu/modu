@@ -153,7 +153,9 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 	}
 
 	width, height := initialTerminalSize(int(os.Stdout.Fd()), 120, 35)
-	mouseDisabled := moduTUIMouseDisabledFromEnv(os.Environ())
+	env := os.Environ()
+	mouseDisabled := moduTUIMouseDisabledFromEnv(env)
+	arrowKeysScroll := moduTUIArrowKeysScrollFromEnv(env)
 	ui := modutui.NewModel(modutui.Options{
 		Width:           width,
 		Height:          height,
@@ -164,7 +166,7 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		InfoCardLines:   moduTUIInfoCardLines(session, model),
 		SlashCommands:   moduTUISlashCommands(session),
 		DisableMouse:    mouseDisabled,
-		ArrowKeysScroll: mouseDisabled,
+		ArrowKeysScroll: arrowKeysScroll,
 		Hooks: modutui.Hooks{
 			InputHistoryChanged: func(history []string) {
 				_ = saveModuTUIInputHistory(historyFile, history)
@@ -280,6 +282,14 @@ func moduTUIMouseDisabledFromEnv(env []string) bool {
 			return true
 		}
 	}
+	return false
+}
+
+func moduTUIArrowKeysScrollFromEnv(env []string) bool {
+	return moduTUIMouseDisabledFromEnv(env) || moduTUISSHSessionFromEnv(env)
+}
+
+func moduTUISSHSessionFromEnv(env []string) bool {
 	return envNonEmpty(env, "SSH_TTY") || envNonEmpty(env, "SSH_CONNECTION") || envNonEmpty(env, "SSH_CLIENT")
 }
 
