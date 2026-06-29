@@ -119,8 +119,9 @@ Component layout:
   fallback for callers that do not need submit kinds.
 - `Options.InputHistory` seeds input history and `Hooks.InputHistoryChanged`
   lets hosts persist the trimmed history list after each submission.
-- `Options.Todos` seeds the fixed todo card; completed-only or empty todo lists
-  are hidden, and `SetTodosMsg` refreshes the card after host state changes;
+- `Options.Todos` seeds the internal todo snapshot; the fixed todo card is only
+  shown while the model is busy/streaming after a current-run `SetTodosMsg`.
+  Completed-only, empty, idle, or previous-run todo lists are hidden;
   `normalizeTodos` validates and normalizes the provided items before use.
 - `Hooks.SlashCommand` lets host applications route selected or typed slash
   commands without sending them as normal prompts.

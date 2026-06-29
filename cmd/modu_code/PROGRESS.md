@@ -5,6 +5,10 @@ enough to implement, verify, and commit independently.
 
 ## Done
 
+- 2026-06-30: limited the `modu-tui` todo card to current active runs. A todo
+  snapshot restored from the session or left uncompleted after a finished goal
+  no longer appears in the fixed bottom area; the card only renders while the
+  model is busy/streaming after a current-run `SetTodosMsg`.
 - Started the `pkg/modu-tui` backed `modu_code` runner on branch
   `codex/modu-code-modu-tui`: the default interactive entry no longer imports
   `pkg/tui`, core session events are converted into `modu-tui` messages, and
