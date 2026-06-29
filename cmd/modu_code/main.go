@@ -203,7 +203,7 @@ func printInteractiveExitSummary(out io.Writer, session *coding_agent.CodingSess
 	if id == "" {
 		return
 	}
-	fmt.Fprintf(out, "\nSession saved: %s\nResume with: modu_code --resume %s\n", id, id)
+	fmt.Fprintf(out, "Session saved: %s\nResume with: modu_code --resume %s\n", id, id)
 }
 
 func printMissingProviderHint(w io.Writer) {

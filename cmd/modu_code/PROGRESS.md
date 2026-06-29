@@ -22,7 +22,8 @@ enough to implement, verify, and commit independently.
   tool result updates by `ToolID` into one `pkg/modu-tui` block. Collapsed
   blocks render only a two-space indented summary, while expanded blocks render
   `⏺ ToolName(input args)`, wrap long args with `  │ ` continuation lines, then
-  show a two-space `└ output` line and four-space continuation/code indentation.
+  show a two-space `└ output` line; long output and code continue with
+  four-space indentation instead of truncating.
 - `modu_code` Read tool calls now render with a compact `Read N lines` result
   summary instead of dumping file contents into the tool block.
 - `modu_code` write/edit tool calls now render as explicit non-collapsible

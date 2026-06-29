@@ -115,11 +115,7 @@ func toolOutputLines(ctx RenderContext, call ToolCall) []string {
 	if strings.TrimSpace(output) == "" {
 		lines = append(lines, toolOutputBranchPrefix()+"no content data")
 	} else {
-		parts := strings.Split(output, "\n")
-		lines = append(lines, toolOutputBranchPrefix()+parts[0])
-		for _, line := range parts[1:] {
-			lines = append(lines, toolOutputIndent()+line)
-		}
+		lines = append(lines, wrappedToolOutputLines(ctx.ContentWidth, output)...)
 	}
 
 	codeCtx := ctx
@@ -139,6 +135,38 @@ func toolOutputIndentWidth() int { return lipgloss.Width(toolOutputIndent()) }
 
 func toolHeaderContinuationPrefix() string { return "  │ " }
 
+func wrappedToolOutputLines(width int, output string) []string {
+	width = max(1, width)
+	branch := toolOutputBranchPrefix()
+	indent := toolOutputIndent()
+	branchWidth := lipgloss.Width(branch)
+	indentWidth := lipgloss.Width(indent)
+	branchContentWidth := max(1, width-branchWidth)
+	indentContentWidth := max(1, width-indentWidth)
+
+	var lines []string
+	first := true
+	for _, raw := range strings.Split(output, "\n") {
+		contentWidth := indentContentWidth
+		if first {
+			contentWidth = branchContentWidth
+		}
+		chunks := wrapDisplayText(raw, contentWidth)
+		if len(chunks) == 0 {
+			chunks = []string{""}
+		}
+		for i, chunk := range chunks {
+			prefix := indent
+			if first && i == 0 {
+				prefix = branch
+			}
+			lines = append(lines, prefix+chunk)
+		}
+		first = false
+	}
+	return lines
+}
+
 func wrapToolHeader(text string, firstWidth, continuationWidth int) []string {
 	firstWidth = max(1, firstWidth)
 	continuationWidth = max(1, continuationWidth)
@@ -157,6 +185,18 @@ func wrapToolHeader(text string, firstWidth, continuationWidth int) []string {
 			out = append(out, chunk)
 			width = continuationWidth
 		}
+	}
+	return out
+}
+
+func wrapDisplayText(text string, width int) []string {
+	width = max(1, width)
+	var out []string
+	remaining := text
+	for remaining != "" {
+		var chunk string
+		chunk, remaining = takeDisplayPrefix(remaining, width)
+		out = append(out, chunk)
 	}
 	return out
 }

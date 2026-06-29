@@ -44,7 +44,8 @@ It owns only the reusable UI shell:
   background and render as `ToolName(input args)` followed by a two-space
   indented `└ output` line; empty output renders as `no content data`, and
   long input args wrap onto `  │ ` continuation lines before the output branch;
-  continuation/code/diff lines use four-space indentation
+  wrapped output/code/diff lines use four-space indentation instead of
+  truncating long content
 - collapsed tool-call summaries render as two-space indented summary text only,
   while every rendered line of an expanded tool-call block can be clicked to collapse it
 - tool-call messages can set `ToolNoCollapse`, `ToolCode`, and `ToolLanguage`

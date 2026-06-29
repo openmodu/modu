@@ -258,6 +258,34 @@ func TestToolCallBlockRendersNoContentDataForEmptyOutput(t *testing.T) {
 	}
 }
 
+func TestToolCallBlockWrapsLongOutputWithoutTruncation(t *testing.T) {
+	ctx := RenderContext{ContentWidth: 42, Markdown: markdownRenderer(42)}
+	output := `{"baseRefName":"main","body":"## Changes\n\n### Fixes\n- modu-code: Run agent interrupt, steer, and follow-up offline path"}`
+	block := ToolCallBlock{
+		CollapsibleBlock: CollapsibleBlock{Summary: "Ran command", Expanded: true},
+		Call: ToolCall{
+			Name:   "bash",
+			Input:  "gh pr view 62 --json title,body,state,headRefName,baseRefName",
+			Output: output,
+			Done:   true,
+		},
+	}
+
+	lines := renderedTexts(block.Render(ctx))
+	got := strings.Join(lines, "\n")
+	if !strings.Contains(got, "  └ {\"baseRefName\":\"main\"") {
+		t.Fatalf("long output should start under branch prefix:\n%s", got)
+	}
+	if !strings.Contains(got, "    es\\n\\n### Fixes") || !strings.Contains(got, "    ine path\"}") {
+		t.Fatalf("long output should wrap with four-space continuation and keep tail:\n%s", got)
+	}
+	for _, line := range lines {
+		if strings.Contains(line, "offline path") && !strings.HasPrefix(line, "    ") {
+			t.Fatalf("wrapped output tail should use four-space indentation: %q", line)
+		}
+	}
+}
+
 func TestToolCallBlockWrapsLongInputWithVerticalConnector(t *testing.T) {
 	ctx := RenderContext{ContentWidth: 36, Markdown: markdownRenderer(36)}
 	block := ToolCallBlock{
