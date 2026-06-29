@@ -133,16 +133,22 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		})
 	}
 	queueFollowUp := func(text string, requireActive bool) {
-		if requireActive && !isPromptActive() {
-			send(modutui.SetStatusMsg{Status: "no active task to followup"})
-			return
-		}
-		if !isPromptActive() {
-			runPrompt(text)
-			return
-		}
-		session.FollowUp(text)
-		send(modutui.SetStatusMsg{Status: "queued"})
+		// Same hazard as interruptPrompt/queueSteer: invoked synchronously from
+		// the Model.Update loop (submit / slash hooks), where send (program.Send)
+		// blocks the event loop when the message channel is full — readily so
+		// over SSH. Run it off-loop.
+		go func() {
+			if requireActive && !isPromptActive() {
+				send(modutui.SetStatusMsg{Status: "no active task to followup"})
+				return
+			}
+			if !isPromptActive() {
+				runPrompt(text)
+				return
+			}
+			session.FollowUp(text)
+			send(modutui.SetStatusMsg{Status: "queued"})
+		}()
 	}
 	queueSteer := func(text string, requireActive bool) {
 		// Same hazard as interruptPrompt: this runs synchronously from the
