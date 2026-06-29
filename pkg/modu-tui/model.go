@@ -15,7 +15,7 @@ type streamTickMsg struct{}
 type autoScrollTickMsg struct{}
 
 const maxInputHistory = 100
-const bottomFixedRows = 5
+const bottomFixedRows = 6
 const minViewportRows = 1
 const maxAutoScrollTicksWithoutDrag = 80
 
@@ -513,7 +513,7 @@ func (m Model) View() tea.View {
 	if m.approval != nil {
 		caretX = 0
 	}
-	v.Cursor = tea.NewCursor(caretX, m.vpHeight()+m.approvalPanelHeight()+m.slashPanelHeight()+m.todoPanelHeight()+m.jumpPanelHeight()+2)
+	v.Cursor = tea.NewCursor(caretX, m.vpHeight()+m.approvalPanelHeight()+m.slashPanelHeight()+m.todoPanelHeight()+m.jumpPanelHeight()+3)
 	return v
 }
 
@@ -555,8 +555,13 @@ func (m *Model) maxOffset() int {
 func (m *Model) atBottom() bool { return m.yOffset >= m.maxOffset() }
 
 func (m *Model) scroll(n int) {
+	before := m.yOffset
 	m.yOffset = clamp(m.yOffset+n, 0, m.maxOffset())
-	m.follow = m.atBottom()
+	if m.yOffset < before {
+		m.follow = false
+	} else {
+		m.follow = m.atBottom()
+	}
 	if m.follow {
 		m.unseen = 0
 	}
@@ -702,6 +707,7 @@ func (m *Model) render() string {
 		parts = append(parts, panel...)
 	}
 	parts = append(parts,
+		fitLine("", m.width),
 		status,
 		m.inputTopRuleLine(),
 		input,

@@ -13,7 +13,7 @@ import (
 
 func TestPOC2PageKeysScrollViewport(t *testing.T) {
 	var tm tea.Model = NewModel()
-	tm, _ = tm.Update(tea.WindowSizeMsg{Width: 80, Height: 8})
+	tm, _ = tm.Update(tea.WindowSizeMsg{Width: 80, Height: 12})
 
 	m := tm.(Model)
 	for range 60 {
@@ -92,13 +92,12 @@ func TestPOC2CopySelectionUsesOSC52OverSSH(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("copySelection should return an OSC52 command over SSH")
 	}
-	msg, ok := cmd().(tea.RawMsg)
-	if !ok {
-		t.Fatalf("copySelection command message = %T, want tea.RawMsg", cmd())
-	}
-	raw := fmt.Sprint(msg.Msg)
+	raw, hasSetClipboard := copyCommandMessages(cmd)
 	if !strings.Contains(raw, "\x1b]52;c;") || !strings.HasSuffix(raw, "\x07") {
 		t.Fatalf("raw clipboard sequence should be OSC52, got %q", raw)
+	}
+	if !hasSetClipboard {
+		t.Fatal("copySelection should also send Bubble Tea SetClipboard for SSH compatibility")
 	}
 	if !strings.Contains(m.status, "local+OSC52") {
 		t.Fatalf("copy status should report OSC52 path, got %q", m.status)
@@ -167,7 +166,7 @@ func TestPOC2RenderPadsEveryLineToTerminalWidth(t *testing.T) {
 	if got, want := len(lines), m.height; got != want {
 		t.Fatalf("rendered line count = %d, want %d", got, want)
 	}
-	inputRow := m.vpHeight() + 2
+	inputRow := m.vpHeight() + 3
 	for i, line := range lines {
 		stripped := ansi.Strip(strings.TrimSuffix(line, "\x1b[K"))
 		want := m.width
@@ -192,9 +191,13 @@ func TestPOC2RenderPlacesAgentStatusAboveInputAndFooterAtBottom(t *testing.T) {
 	if len(lines) != m.height {
 		t.Fatalf("rendered lines = %d, want %d:\n%s", len(lines), m.height, rendered)
 	}
+	gapRow := lines[len(lines)-6]
 	statusRow := lines[len(lines)-5]
 	inputRow := lines[len(lines)-3]
 	footerRow := lines[len(lines)-1]
+	if strings.TrimSpace(gapRow) != "" {
+		t.Fatalf("agent status should have a blank row above it, got %q in:\n%s", gapRow, rendered)
+	}
 	if !strings.Contains(statusRow, "● running") {
 		t.Fatalf("agent status should render above input, got %q in:\n%s", statusRow, rendered)
 	}
@@ -239,11 +242,34 @@ func TestPOC2CompletionStatusDoesNotShowIdlePrefix(t *testing.T) {
 	}
 }
 
+func copyCommandMessages(cmd tea.Cmd) (raw string, hasSetClipboard bool) {
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		if rawMsg, ok := msg.(tea.RawMsg); ok {
+			return fmt.Sprint(rawMsg.Msg), false
+		}
+		return "", fmt.Sprintf("%T", msg) == "tea.setClipboardMsg"
+	}
+	for _, child := range batch {
+		childMsg := child()
+		switch msg := childMsg.(type) {
+		case tea.RawMsg:
+			raw += fmt.Sprint(msg.Msg)
+		default:
+			if fmt.Sprintf("%T", childMsg) == "tea.setClipboardMsg" {
+				hasSetClipboard = true
+			}
+		}
+	}
+	return raw, hasSetClipboard
+}
+
 func TestPOC2InfoCardStaysAtTopAfterFirstMessage(t *testing.T) {
 	var submitted string
 	var tm tea.Model = NewModel(Options{
 		Width:         48,
-		Height:        10,
+		Height:        12,
 		InfoCardLines: []string{"modu_code", "model: Test", "commands: type /"},
 		Hooks: Hooks{Submit: func(text string) {
 			submitted = text
@@ -495,8 +521,8 @@ func TestPOC2InputHasTopAndBottomRules(t *testing.T) {
 	if got, want := len(lines), m.height; got != want {
 		t.Fatalf("rendered line count = %d, want %d", got, want)
 	}
-	topRule := ansi.Strip(lines[m.vpHeight()+1])
-	bottomRule := ansi.Strip(lines[m.vpHeight()+3])
+	topRule := ansi.Strip(lines[m.vpHeight()+2])
+	bottomRule := ansi.Strip(lines[m.vpHeight()+4])
 	wantRule := strings.Repeat("─", m.width)
 	if topRule != wantRule {
 		t.Fatalf("top input rule = %q, want %q", topRule, wantRule)
@@ -515,8 +541,8 @@ func TestPOC2HistoryHintRendersOnTopInputRule(t *testing.T) {
 	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
 	m := tm.(Model)
 	lines := strings.Split(ansi.Strip(m.render()), "\n")
-	topRule := lines[m.vpHeight()+1]
-	inputLine := lines[m.vpHeight()+2]
+	topRule := lines[m.vpHeight()+2]
+	inputLine := lines[m.vpHeight()+3]
 	if !strings.Contains(topRule, "History 2/2") {
 		t.Fatalf("history hint should render on top rule, got %q in:\n%s", topRule, strings.Join(lines, "\n"))
 	}
@@ -533,7 +559,7 @@ func TestPOC2InputLineLeavesLastColumnForMobileTerminals(t *testing.T) {
 	m.input.Insert(strings.Repeat("j", 120))
 	rendered := m.render()
 	lines := strings.Split(rendered, "\n")
-	inputLine := lines[m.vpHeight()+2]
+	inputLine := lines[m.vpHeight()+3]
 	if strings.Contains(inputLine, "\x1b[?7l") || strings.Contains(inputLine, "\x1b[?7h") {
 		t.Fatalf("input line should not toggle terminal autowrap, got %q", inputLine)
 	}
@@ -1075,7 +1101,7 @@ func TestPOC2ToolApprovalResolvesFromKeyboard(t *testing.T) {
 	decisions := make(chan ToolApprovalDecision, 1)
 	var tm tea.Model = NewModel(Options{
 		Width:  80,
-		Height: 10,
+		Height: 12,
 		Hooks: Hooks{ToolApprovalDecision: func(result ToolApprovalResult) {
 			results <- result
 		}},
@@ -1154,7 +1180,7 @@ func TestPOC2ToolApprovalPanelIsFixedAboveInput(t *testing.T) {
 	if got, want := approvalBorderStyle.GetForeground(), lipgloss.Color("248"); got != want {
 		t.Fatalf("approval border color = %#v, want %#v", got, want)
 	}
-	inputRule := m.vpHeight() + m.approvalPanelHeight() + 1
+	inputRule := m.vpHeight() + m.approvalPanelHeight() + 2
 	if got, want := rendered[inputRule], strings.Repeat("─", m.width); got != want {
 		t.Fatalf("input top rule line = %q, want %q", got, want)
 	}
@@ -1185,7 +1211,7 @@ func TestPOC2TodoPanelRendersAboveInput(t *testing.T) {
 		t.Fatalf("rendered lines = %d, want %d:\n%s", got, want, strings.Join(rendered, "\n"))
 	}
 	panelTop := m.vpHeight()
-	inputRule := m.vpHeight() + m.todoPanelHeight() + 1
+	inputRule := m.vpHeight() + m.todoPanelHeight() + 2
 	if !strings.HasPrefix(rendered[panelTop], "┏") {
 		t.Fatalf("todo panel should start immediately below viewport at line %d:\n%s", panelTop, strings.Join(rendered, "\n"))
 	}

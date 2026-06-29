@@ -132,7 +132,7 @@ func (m *Model) copySelection() tea.Cmd {
 	}
 	m.status = fmt.Sprintf("✓ copied %d chars (%s)", len([]rune(text)), how)
 	if needsOSC52 {
-		return tea.Raw(clipboardSequence(text))
+		return tea.Batch(tea.SetClipboard(text), tea.Raw(clipboardSequence(text)))
 	}
 	return nil
 }

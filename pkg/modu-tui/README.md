@@ -61,7 +61,8 @@ It owns only the reusable UI shell:
   block that can be expanded independently from the final assistant reply
 - optional simulated streaming reply for demos and integration experiments
 - the fixed bottom area separates agent status above the input from a caller
-  supplied `Options.Footer` below the input for context/model/cwd metadata
+  supplied `Options.Footer` below the input for context/model/cwd metadata, with
+  a blank row separating transcript/panels from the agent status line
 
 Call `NewModel(Options{...})` to create a Bubble Tea v2 model. The directory is
 named `modu-tui` for the import path; the Go package name is `modutui`.
