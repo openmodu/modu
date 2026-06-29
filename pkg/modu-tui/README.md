@@ -65,7 +65,8 @@ named `modu-tui` for the import path; the Go package name is `modutui`.
 Component layout:
 
 - `block.go` defines the common `Block` interface and render result types.
-- `InputBlock` owns text editing, caret positioning, and collapsed paste tokens.
+- `InputBlock` owns text editing, caret positioning, collapsed paste tokens, and
+  cursor-local replacement used by mobile SSH IME preedit coalescing.
 - `Block` is the extension interface: every block is a struct with
   `Render(RenderContext) BlockRender`.
 - `text_block.go` and `markdown_block.go` render user/assistant transcript content;

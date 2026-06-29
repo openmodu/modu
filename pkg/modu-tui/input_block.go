@@ -31,7 +31,7 @@ func (b *InputBlock) Reset() {
 }
 
 func (b *InputBlock) Insert(s string) {
-	s = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(s)
+	s = normalizeInputText(s)
 	r, ins := []rune(b.Value), []rune(s)
 	b.Cursor = clamp(b.Cursor, 0, len(r))
 	out := make([]rune, 0, len(r)+len(ins))
@@ -39,6 +39,22 @@ func (b *InputBlock) Insert(s string) {
 	out = append(out, ins...)
 	out = append(out, r[b.Cursor:]...)
 	b.Value, b.Cursor = string(out), b.Cursor+len(ins)
+}
+
+func (b *InputBlock) ReplaceBeforeCursor(removeRunes int, s string) {
+	s = normalizeInputText(s)
+	r, ins := []rune(b.Value), []rune(s)
+	b.Cursor = clamp(b.Cursor, 0, len(r))
+	start := clamp(b.Cursor-removeRunes, 0, b.Cursor)
+	out := make([]rune, 0, len(r)-(b.Cursor-start)+len(ins))
+	out = append(out, r[:start]...)
+	out = append(out, ins...)
+	out = append(out, r[b.Cursor:]...)
+	b.Value, b.Cursor = string(out), start+len(ins)
+}
+
+func normalizeInputText(s string) string {
+	return strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(s)
 }
 
 func (b *InputBlock) InsertPaste(content string) {

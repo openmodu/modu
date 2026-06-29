@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -36,6 +38,8 @@ type Model struct {
 	inputHistory []string
 	historyIdx   int
 	historyHold  string
+	imeTail      string
+	imeActive    bool
 	streaming    bool
 	streamRunes  []rune
 	streamIdx    int
@@ -181,38 +185,51 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case msg.String() == "ctrl+c":
 			return m, tea.Quit
 		case msg.String() == "ctrl+end":
+			m.resetIMEState()
 			m.jumpToBottom()
 		case msg.Code == tea.KeyPgUp:
+			m.resetIMEState()
 			m.scroll(-max(1, m.vpHeight()-1))
 		case msg.Code == tea.KeyPgDown:
+			m.resetIMEState()
 			m.scroll(max(1, m.vpHeight()-1))
 		case msg.String() == "shift+enter":
+			m.resetIMEState()
 			if cmd := m.submitInput(true); cmd != nil {
 				return m, cmd
 			}
 		case msg.Code == tea.KeyEnter:
+			m.resetIMEState()
 			if cmd := m.submitInput(false); cmd != nil {
 				return m, cmd
 			}
 		case msg.Code == tea.KeyLeft, msg.String() == "ctrl+b":
+			m.resetIMEState()
 			m.input.MoveLeft()
 		case msg.Code == tea.KeyRight, msg.String() == "ctrl+f":
+			m.resetIMEState()
 			m.input.MoveRight()
 		case msg.Code == tea.KeyHome, msg.String() == "ctrl+a":
+			m.resetIMEState()
 			m.input.MoveHome()
 		case msg.Code == tea.KeyEnd, msg.String() == "ctrl+e":
+			m.resetIMEState()
 			m.input.MoveEnd()
 		case msg.Code == tea.KeyBackspace, msg.String() == "ctrl+h":
+			m.resetIMEState()
 			m.input.Backspace()
 			m.clearHistorySelection()
 			m.updateSlashMatches()
 		case msg.Code == tea.KeyDelete:
+			m.resetIMEState()
 			m.input.DeleteForward()
 			m.clearHistorySelection()
 			m.updateSlashMatches()
 		case msg.Code == tea.KeyTab:
+			m.resetIMEState()
 			m.completeSlashMatch()
 		case msg.Code == tea.KeyUp:
+			m.resetIMEState()
 			if len(m.slashMatches) > 0 {
 				m.slashIndex = (m.slashIndex - 1 + len(m.slashMatches)) % len(m.slashMatches)
 			} else if m.shouldArrowKeyScroll() {
@@ -221,6 +238,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.navigateInputHistory(-1)
 			}
 		case msg.Code == tea.KeyDown:
+			m.resetIMEState()
 			if len(m.slashMatches) > 0 {
 				m.slashIndex = (m.slashIndex + 1) % len(m.slashMatches)
 			} else if m.shouldArrowKeyScroll() {
@@ -229,12 +247,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.navigateInputHistory(1)
 			}
 		case msg.Text != "":
-			m.input.Insert(msg.Text)
+			m.insertKeyText(msg.Text)
 			m.clearHistorySelection()
 			m.updateSlashMatches()
 		}
 
 	case tea.PasteMsg:
+		m.resetIMEState()
 		m.input.InsertPaste(msg.Content)
 		m.clearHistorySelection()
 		m.updateSlashMatches()
@@ -345,6 +364,82 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m *Model) insertKeyText(text string) {
+	text = normalizeInputText(text)
+	if text == "" {
+		return
+	}
+	if m.coalesceIMEText(text) {
+		return
+	}
+
+	m.input.Insert(text)
+	if isASCIICompositionText(text) {
+		m.imeTail = text
+		m.imeActive = utf8.RuneCountInString(text) > 1
+		return
+	}
+	m.resetIMEState()
+}
+
+func (m *Model) coalesceIMEText(text string) bool {
+	if m.imeTail == "" || m.input.Cursor != m.input.Len() || !strings.HasSuffix(m.input.Value, m.imeTail) {
+		m.resetIMEState()
+		return false
+	}
+
+	tail := m.imeTail
+	switch {
+	case isASCIICompositionText(tail) && isASCIICompositionText(text) && hasPrefixEither(text, tail):
+		m.input.ReplaceBeforeCursor(utf8.RuneCountInString(tail), text)
+	case isASCIICompositionText(tail) && containsHan(text) && (m.imeActive || utf8.RuneCountInString(tail) > 1):
+		m.input.ReplaceBeforeCursor(utf8.RuneCountInString(tail), text)
+	case m.imeActive && containsHan(tail) && containsHan(text):
+		if strings.HasPrefix(tail, text) {
+			return true
+		}
+		m.input.ReplaceBeforeCursor(utf8.RuneCountInString(tail), text)
+	default:
+		m.resetIMEState()
+		return false
+	}
+
+	m.imeTail = text
+	m.imeActive = true
+	return true
+}
+
+func (m *Model) resetIMEState() {
+	m.imeTail = ""
+	m.imeActive = false
+}
+
+func hasPrefixEither(a, b string) bool {
+	return strings.HasPrefix(a, b) || strings.HasPrefix(b, a)
+}
+
+func isASCIICompositionText(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r == '\'' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func containsHan(s string) bool {
+	for _, r := range s {
+		if unicode.Is(unicode.Han, r) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Model) appendMessage(msg Message) bool {

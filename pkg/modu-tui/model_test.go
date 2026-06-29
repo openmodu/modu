@@ -154,6 +154,54 @@ func TestPOC2InfoCardStaysAtTopAfterFirstMessage(t *testing.T) {
 	}
 }
 
+func TestPOC2InputCoalescesMobileSSHChineseIMEPreedit(t *testing.T) {
+	var tm tea.Model = NewModel(Options{Width: 48, Height: 10})
+	for _, text := range []string{"z", "zh", "zhe", "zheg", "zhege", "这个", "这"} {
+		tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: text}))
+	}
+
+	m := tm.(Model)
+	if got, want := m.input.Value, "这个"; got != want {
+		t.Fatalf("input value = %q, want %q", got, want)
+	}
+}
+
+func TestPOC2InputKeepsNormalASCIIKeyPresses(t *testing.T) {
+	var tm tea.Model = NewModel(Options{Width: 48, Height: 10})
+	for _, text := range []string{"z", "h", "e", "g", "e"} {
+		tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: text, Code: []rune(text)[0]}))
+	}
+
+	m := tm.(Model)
+	if got, want := m.input.Value, "zhege"; got != want {
+		t.Fatalf("input value = %q, want %q", got, want)
+	}
+}
+
+func TestPOC2InputDoesNotReplaceSingleASCIIBeforeChinese(t *testing.T) {
+	var tm tea.Model = NewModel(Options{Width: 48, Height: 10})
+	for _, text := range []string{"a", "你"} {
+		tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: text}))
+	}
+
+	m := tm.(Model)
+	if got, want := m.input.Value, "a你"; got != want {
+		t.Fatalf("input value = %q, want %q", got, want)
+	}
+}
+
+func TestPOC2InputCoalescesConsecutiveChineseIMEWords(t *testing.T) {
+	var tm tea.Model = NewModel(Options{Width: 48, Height: 10})
+	for _, text := range []string{"z", "zh", "zhe", "zhege", "这个", "n", "ni", "你"} {
+		tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: text}))
+	}
+
+	m := tm.(Model)
+	if got, want := m.input.Value, "这个你"; got != want {
+		t.Fatalf("input value = %q, want %q", got, want)
+	}
+}
+
 func TestPOC2PreformattedAssistantMessagePreservesSlashHelpLines(t *testing.T) {
 	m := NewModel(Options{
 		Width:  72,
