@@ -70,8 +70,7 @@ func main() {
 
 	model, getAPIKey := provider.Resolve()
 	if model == nil {
-		fmt.Fprintln(os.Stderr, "no provider configured")
-		fmt.Fprintf(os.Stderr, "configure models in %s or set one of: ANTHROPIC_API_KEY, OPENAI_API_KEY, DEEPSEEK_API_KEY, OLLAMA_HOST+OLLAMA_MODEL\n", provider.ConfigPath())
+		printMissingProviderHint(os.Stderr)
 		os.Exit(1)
 	}
 
@@ -204,6 +203,31 @@ func printInteractiveExitSummary(out io.Writer, session *coding_agent.CodingSess
 		return
 	}
 	fmt.Fprintf(out, "\nSession saved: %s\nResume with: modu_code --resume %s\n", id, id)
+}
+
+func printMissingProviderHint(w io.Writer) {
+	if w == nil {
+		return
+	}
+	configPath := provider.ConfigPath()
+	fmt.Fprintln(w, "No model provider is configured yet.")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Quick start:")
+	fmt.Fprintln(w, "  1. Create an example config:")
+	fmt.Fprintln(w, "     modu_code config init")
+	fmt.Fprintln(w, "  2. Edit the config with your provider, model, and API key:")
+	fmt.Fprintf(w, "     %s\n", configPath)
+	fmt.Fprintln(w, "  3. Check it:")
+	fmt.Fprintln(w, "     modu_code config validate")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "For a local OpenAI-compatible server, you can also add a model directly:")
+	fmt.Fprintln(w, `  modu_code config add local-qwen lmstudio qwen http://127.0.0.1:1234/v1 lm-studio --description "local coding model"`)
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Environment alternatives:")
+	fmt.Fprintln(w, "  OPENAI_API_KEY                      uses OPENAI_MODEL or gpt-4o")
+	fmt.Fprintln(w, "  DEEPSEEK_API_KEY                    uses DEEPSEEK_MODEL or deepseek-chat")
+	fmt.Fprintln(w, "  ANTHROPIC_API_KEY + ANTHROPIC_MODEL")
+	fmt.Fprintln(w, "  OLLAMA_HOST + OLLAMA_MODEL")
 }
 
 func enterStartupWorktree(session *coding_agent.CodingSession) error {

@@ -89,6 +89,28 @@ func TestRunConfigCommandShowReportsInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestPrintMissingProviderHintGivesFirstRunGuidance(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	var out bytes.Buffer
+	printMissingProviderHint(&out)
+	got := out.String()
+	for _, want := range []string{
+		"No model provider is configured yet.",
+		"modu_code config init",
+		filepath.Join(home, ".coding_agent", "config.json"),
+		"modu_code config validate",
+		"modu_code config add local-qwen",
+		"OPENAI_API_KEY",
+		"OLLAMA_HOST + OLLAMA_MODEL",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected %q in hint:\n%s", want, got)
+		}
+	}
+}
+
 func TestRunConfigCommandInitAndValidate(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
