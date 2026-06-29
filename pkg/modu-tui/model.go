@@ -258,6 +258,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.input.Backspace()
 			m.clearHistorySelection()
 			m.updateSlashMatches()
+		case isCtrlWKey(msg):
+			m.resetIMEState()
+			m.input.DeleteWordBackward()
+			m.clearHistorySelection()
+			m.updateSlashMatches()
 		case msg.Code == tea.KeyDelete:
 			m.resetIMEState()
 			m.input.DeleteForward()
@@ -1292,6 +1297,11 @@ func (m Model) defaultHumanPromptValue() string {
 func isCtrlCKey(msg tea.KeyPressMsg) bool {
 	key := msg.Key()
 	return msg.String() == "ctrl+c" || key.Text == "\x03" || (key.Code == 'c' && key.Mod.Contains(tea.ModCtrl))
+}
+
+func isCtrlWKey(msg tea.KeyPressMsg) bool {
+	key := msg.Key()
+	return msg.String() == "ctrl+w" || key.Text == "\x17" || (key.Code == 'w' && key.Mod.Contains(tea.ModCtrl))
 }
 
 func isEscKey(msg tea.KeyPressMsg) bool {

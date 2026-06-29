@@ -456,6 +456,19 @@ func TestPOC2InputKeepsNormalASCIIKeyPresses(t *testing.T) {
 	}
 }
 
+func TestPOC2CtrlWDeletesWordBeforeCursor(t *testing.T) {
+	var tm tea.Model = NewModel(Options{Width: 48, Height: 10})
+	for _, text := range []string{"hello", " ", "world"} {
+		tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: text}))
+	}
+
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: 'w', Mod: tea.ModCtrl}))
+	m := tm.(Model)
+	if got, want := m.input.Value, "hello "; got != want {
+		t.Fatalf("input value after ctrl+w = %q, want %q", got, want)
+	}
+}
+
 func TestPOC2InputDoesNotReplaceSingleASCIIBeforeChinese(t *testing.T) {
 	var tm tea.Model = NewModel(Options{Width: 48, Height: 10})
 	for _, text := range []string{"a", "你"} {

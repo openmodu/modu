@@ -3,6 +3,7 @@ package modutui
 import (
 	"fmt"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
@@ -94,6 +95,23 @@ func (b *InputBlock) Backspace() {
 	r := []rune(b.Value)
 	b.Value = string(append(r[:b.Cursor-1], r[b.Cursor:]...))
 	b.Cursor--
+}
+
+func (b *InputBlock) DeleteWordBackward() {
+	if b.Cursor == 0 {
+		return
+	}
+	r := []rune(b.Value)
+	b.Cursor = clamp(b.Cursor, 0, len(r))
+	start := b.Cursor
+	for start > 0 && unicode.IsSpace(r[start-1]) {
+		start--
+	}
+	for start > 0 && !unicode.IsSpace(r[start-1]) {
+		start--
+	}
+	b.Value = string(append(r[:start], r[b.Cursor:]...))
+	b.Cursor = start
 }
 
 func (b *InputBlock) DeleteForward() {

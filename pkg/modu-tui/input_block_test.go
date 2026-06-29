@@ -40,6 +40,30 @@ func TestInputBlockReplaceBeforeCursor(t *testing.T) {
 	}
 }
 
+func TestInputBlockDeleteWordBackward(t *testing.T) {
+	tests := []struct {
+		name       string
+		value      string
+		cursor     int
+		wantValue  string
+		wantCursor int
+	}{
+		{name: "end of word", value: "hello world", cursor: len([]rune("hello world")), wantValue: "hello ", wantCursor: len([]rune("hello "))},
+		{name: "trailing spaces", value: "hello world   ", cursor: len([]rune("hello world   ")), wantValue: "hello ", wantCursor: len([]rune("hello "))},
+		{name: "middle of word", value: "hello world", cursor: len([]rune("hello wor")), wantValue: "hello ld", wantCursor: len([]rune("hello "))},
+		{name: "unicode word", value: "prefix 你好", cursor: len([]rune("prefix 你好")), wantValue: "prefix ", wantCursor: len([]rune("prefix "))},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := InputBlock{Value: tt.value, Cursor: tt.cursor}
+			input.DeleteWordBackward()
+			if input.Value != tt.wantValue || input.Cursor != tt.wantCursor {
+				t.Fatalf("after DeleteWordBackward value=%q cursor=%d, want value=%q cursor=%d", input.Value, input.Cursor, tt.wantValue, tt.wantCursor)
+			}
+		})
+	}
+}
+
 func TestInputBlockLargePasteRendersCollapsedAndExpandsForSubmit(t *testing.T) {
 	content := strings.Repeat("alpha ", 50)
 	var input InputBlock
