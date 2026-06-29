@@ -608,14 +608,10 @@ func (m *Model) todoPanelHeight() int {
 	return len(m.todoPanelLines())
 }
 func (m *Model) showJumpPanel() bool {
-	if len(m.slashMatches) > 0 {
+	if m.vpHeight() <= m.minViewportRows() {
 		return false
 	}
-	heightWithoutJump := m.height - m.bottomFixedRows() - m.approvalPanelHeight() - m.humanPromptPanelHeight() - m.slashPanelHeight() - m.todoPanelHeight()
-	if heightWithoutJump <= m.minViewportRows() {
-		return false
-	}
-	return m.yOffset < max(0, len(m.lines)-heightWithoutJump)
+	return !m.atBottom()
 }
 
 func (m *Model) minViewportRows() int {
@@ -920,12 +916,14 @@ func (m *Model) updateSlashMatches() {
 	matches := matchSlashCommands(m.input.Value, m.slashCommands)
 	if len(matches) == 0 {
 		m.clearSlashMatches()
+		m.clampScroll()
 		return
 	}
 	if m.slashIndex >= len(matches) {
 		m.slashIndex = len(matches) - 1
 	}
 	m.slashMatches = matches
+	m.clampScroll()
 }
 
 func (m *Model) clearSlashMatches() {

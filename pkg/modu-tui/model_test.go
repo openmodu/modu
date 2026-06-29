@@ -1044,7 +1044,7 @@ func TestPOC2SlashPickerCompletesCommandWithTab(t *testing.T) {
 func TestPOC2SlashPickerDoesNotShowJumpHintAtBottom(t *testing.T) {
 	var tm tea.Model = NewModel(Options{
 		Width:         72,
-		Height:        10,
+		Height:        14,
 		SlashCommands: []SlashCommand{{Name: "/goal", Description: "Set a goal"}},
 	})
 	m := tm.(Model)
@@ -1064,6 +1064,33 @@ func TestPOC2SlashPickerDoesNotShowJumpHintAtBottom(t *testing.T) {
 	}
 	if strings.Contains(rendered, jumpHintText()) {
 		t.Fatalf("slash picker should not trigger jump hint at bottom:\n%s", rendered)
+	}
+}
+
+func TestPOC2SlashPickerKeepsJumpHintWhenAwayFromBottom(t *testing.T) {
+	var tm tea.Model = NewModel(Options{
+		Width:         72,
+		Height:        14,
+		SlashCommands: []SlashCommand{{Name: "/goal", Description: "Set a goal"}},
+	})
+	m := tm.(Model)
+	for i := 0; i < 20; i++ {
+		m.messages = append(m.messages, Message{Role: RoleAssistant, Text: "history"})
+	}
+	m.rebuild()
+	m.scroll(-2)
+	if m.atBottom() {
+		t.Fatal("setup should be away from bottom")
+	}
+
+	tm, _ = m.Update(tea.KeyPressMsg(tea.Key{Text: "/", Code: '/'}))
+	m = tm.(Model)
+	rendered := ansi.Strip(m.render())
+	if !strings.Contains(rendered, "/goal") {
+		t.Fatalf("slash picker should be visible:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, jumpHintText()) {
+		t.Fatalf("slash picker should keep jump hint when away from bottom:\n%s", rendered)
 	}
 }
 

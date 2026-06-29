@@ -36,7 +36,9 @@ It owns only the reusable UI shell:
 - slash commands can be supplied through `Options.SlashCommands`; typing `/`
   opens a bottom card with filtered command matches, `Tab` completes, and
   `Enter` dispatches through `Hooks.SlashCommand`; the leading slash command
-  token in the input is highlighted separately from its arguments
+  token in the input is highlighted separately from its arguments, and the
+  slash picker does not trigger the away-from-bottom jump hint unless the user
+  was already scrolled away from the bottom
 - tool-call messages with the same `ToolID` are merged into a single block so
   call/start/result updates do not scatter through the transcript
 - Read-style tool calls render with a compact `Read N lines` result summary
