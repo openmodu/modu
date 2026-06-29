@@ -43,6 +43,7 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 			p.Send(msg)
 		}
 	}
+	sendFooter := func() {}
 
 	if !noApprove {
 		session.SetPrompter(&moduTUIPrompter{ctx: ctx, send: send})
@@ -54,6 +55,18 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		promptMu.Lock()
 		defer promptMu.Unlock()
 		return currentCancel != nil
+	}
+	interruptPrompt := func() {
+		promptMu.Lock()
+		cancel := currentCancel
+		continueQueuedAfterCancel = false
+		promptMu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		session.Abort()
+		session.AbortBash()
+		send(modutui.SetStatusMsg{Status: "interrupting"})
 	}
 	runAgentLoop := func(run func(context.Context) error) {
 		go func() {
@@ -99,6 +112,7 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 				} else {
 					send(modutui.SetStatusMsg{Status: "idle"})
 				}
+				sendFooter()
 				return
 			}
 		}()
@@ -163,6 +177,7 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		InputHistory:    inputHistory,
 		Todos:           moduTUITodos(session),
 		StatusHint:      "Enter 发送 · Ctrl+C 退出 · 当前为 modu-tui runner",
+		Footer:          moduTUIFooter(session),
 		InfoCardLines:   moduTUIInfoCardLines(session, model),
 		SlashCommands:   moduTUISlashCommands(session),
 		DisableMouse:    mouseDisabled,
@@ -189,8 +204,12 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 				}
 				go runModuTUISlash(ctx, line, session, model, send)
 			},
+			Interrupt: interruptPrompt,
 		},
 	})
+	sendFooter = func() {
+		send(modutui.SetFooterMsg{Footer: moduTUIFooter(session)})
+	}
 
 	unsubAgent := session.Subscribe(func(ev types.Event) {
 		if msg, ok := durationTracker.Handle(ev); ok {
@@ -202,6 +221,9 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		if ev.Type == types.EventTypeToolExecutionEnd {
 			send(modutui.SetTodosMsg{Todos: moduTUITodos(session)})
 		}
+		if ev.Type == types.EventTypeMessageEnd {
+			sendFooter()
+		}
 	})
 	defer unsubAgent()
 
@@ -209,6 +231,7 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		if msg, ok := messageFromSessionEvent(ev); ok {
 			send(modutui.AppendMessageMsg{Message: msg})
 		}
+		sendFooter()
 	})
 	defer unsubSession()
 
@@ -374,22 +397,7 @@ func runModuTUISlash(ctx context.Context, line string, session *coding_agent.Cod
 func moduTUIInfoCardLines(session *coding_agent.CodingSession, model *types.Model) []string {
 	lines := []string{"modu_code"}
 	if model != nil {
-		label := strings.TrimSpace(model.Name)
-		if label == "" {
-			label = model.ID
-		}
-		var parts []string
-		if strings.TrimSpace(model.ProviderID) != "" {
-			parts = append(parts, strings.TrimSpace(model.ProviderID))
-		}
-		if strings.TrimSpace(model.ID) != "" {
-			parts = append(parts, strings.TrimSpace(model.ID))
-		}
-		detail := strings.Join(parts, " / ")
-		if detail != "" && detail != label {
-			label += " (" + detail + ")"
-		}
-		if label != "" {
+		if label := moduTUIModelLabel(model); label != "" {
 			lines = append(lines, "model: "+label)
 		}
 	}
@@ -403,6 +411,87 @@ func moduTUIInfoCardLines(session *coding_agent.CodingSession, model *types.Mode
 	}
 	lines = append(lines, "commands: type /  send: Enter  quit: Ctrl+C")
 	return lines
+}
+
+func moduTUIFooter(session *coding_agent.CodingSession) string {
+	if session == nil {
+		return "ctx - · model - · cwd -"
+	}
+	model := session.GetModel()
+	parts := []string{moduTUIContextUsage(session, model)}
+	if label := moduTUIModelLabel(model); label != "" {
+		parts = append(parts, "model "+label)
+	} else {
+		parts = append(parts, "model -")
+	}
+	cwd := strings.TrimSpace(session.RuntimeState().Cwd)
+	if cwd == "" {
+		cwd = session.Cwd()
+	}
+	if cwd == "" {
+		cwd = "-"
+	}
+	parts = append(parts, "cwd "+cwd)
+	return strings.Join(parts, " · ")
+}
+
+func moduTUIContextUsage(session *coding_agent.CodingSession, model *types.Model) string {
+	used := 0
+	if session != nil {
+		used = session.GetSessionStats().TotalTokens
+	}
+	limit := 0
+	if model != nil {
+		limit = model.ContextWindow
+	}
+	if limit <= 0 {
+		return "ctx " + formatModuTUITokens(used)
+	}
+	percent := 0
+	if used > 0 {
+		percent = int((int64(used)*100 + int64(limit)/2) / int64(limit))
+	}
+	return fmt.Sprintf("ctx %s/%s %d%%", formatModuTUITokens(used), formatModuTUITokens(limit), percent)
+}
+
+func moduTUIModelLabel(model *types.Model) string {
+	if model == nil {
+		return ""
+	}
+	label := strings.TrimSpace(model.Name)
+	if label == "" {
+		label = strings.TrimSpace(model.ID)
+	}
+	var parts []string
+	if strings.TrimSpace(model.ProviderID) != "" {
+		parts = append(parts, strings.TrimSpace(model.ProviderID))
+	}
+	if strings.TrimSpace(model.ID) != "" {
+		parts = append(parts, strings.TrimSpace(model.ID))
+	}
+	detail := strings.Join(parts, " / ")
+	if detail != "" && detail != label {
+		label += " (" + detail + ")"
+	}
+	return label
+}
+
+func formatModuTUITokens(tokens int) string {
+	if tokens < 0 {
+		tokens = 0
+	}
+	if tokens < 1000 {
+		return strconv.Itoa(tokens)
+	}
+	if tokens < 1_000_000 {
+		value := float64(tokens) / 1000
+		if tokens < 10_000 {
+			return strings.TrimSuffix(strings.TrimSuffix(fmt.Sprintf("%.1f", value), "0"), ".") + "K"
+		}
+		return fmt.Sprintf("%.0fK", value)
+	}
+	value := float64(tokens) / 1_000_000
+	return strings.TrimSuffix(strings.TrimSuffix(fmt.Sprintf("%.1f", value), "0"), ".") + "M"
 }
 
 func moduTUITodos(session *coding_agent.CodingSession) []modutui.TodoItem {

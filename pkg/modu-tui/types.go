@@ -102,6 +102,7 @@ type Hooks struct {
 	ToolApprovalDecision func(ToolApprovalResult)
 	InputHistoryChanged  func([]string)
 	SlashCommand         func(line string)
+	Interrupt            func()
 	Submit               func(text string)
 	SubmitMessage        func(SubmitEvent)
 }
@@ -121,6 +122,7 @@ type Options struct {
 	Todos           []TodoItem
 	StreamReply     string
 	StatusHint      string
+	Footer          string
 	InfoCardLines   []string
 	DisableMouse    bool
 	ArrowKeysScroll bool
@@ -136,6 +138,10 @@ type AppendMessageMsg struct {
 
 type SetStatusMsg struct {
 	Status string
+}
+
+type SetFooterMsg struct {
+	Footer string
 }
 
 type SetBusyMsg struct {

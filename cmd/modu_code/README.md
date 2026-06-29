@@ -24,7 +24,9 @@ SSH 环境默认保留终端 mouse reporting，滚轮和拖拽选择可以直接
 MODU_TUI_MOUSE=off modu_code
 ```
 
-在 SSH 兼容模式下，输入框为空时 Up/Down 会滚动对话内容，适配移动端 SSH 把滑动手势转成方向键的行为；输入框已有文字时 Up/Down 仍用于历史输入。
+在 SSH 兼容模式下，输入框为空且没有输入历史可选时，Up/Down 会滚动对话内容，适配移动端 SSH 把滑动手势转成方向键的行为；有输入历史时 Up/Down 优先切换历史输入。
+
+TUI 底部固定区域分两层：输入框上方显示 agent 运行状态，输入框下方显示当前上下文使用量/窗口、模型和工作目录。运行中按 `Esc` 会中断当前请求和正在运行的 bash。
 
 默认启动会使用当前 checkout。需要隔离修改时，可以显式创建并切入 managed worktree，路径形如
 `~/.coding_agent/worktrees/<uuid>/<repo>`，分支名形如 `modu-code/<repo>-<id>`：

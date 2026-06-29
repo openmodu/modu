@@ -15,7 +15,7 @@ type streamTickMsg struct{}
 type autoScrollTickMsg struct{}
 
 const maxInputHistory = 100
-const bottomFixedRows = 4
+const bottomFixedRows = 5
 const minViewportRows = 1
 const maxAutoScrollTicksWithoutDrag = 80
 
@@ -56,6 +56,7 @@ type Model struct {
 	autoScrollTicks  int
 	status           string
 	statusHint       string
+	footer           string
 	infoCardLines    []string
 	disableMouse     bool
 	arrowKeysScroll  bool
@@ -80,6 +81,7 @@ func NewModel(options ...Options) Model {
 		opts.InputHistory = append([]string(nil), options[0].InputHistory...)
 		opts.Todos = append([]TodoItem(nil), options[0].Todos...)
 		opts.StreamReply = options[0].StreamReply
+		opts.Footer = options[0].Footer
 		opts.InfoCardLines = append([]string(nil), options[0].InfoCardLines...)
 		opts.DisableMouse = options[0].DisableMouse
 		opts.ArrowKeysScroll = options[0].ArrowKeysScroll
@@ -101,6 +103,7 @@ func NewModel(options ...Options) Model {
 		selEnd:          cell{line: -1},
 		streamReply:     opts.StreamReply,
 		statusHint:      opts.StatusHint,
+		footer:          opts.Footer,
 		infoCardLines:   cleanInfoCardLines(opts.InfoCardLines),
 		todos:           normalizeTodos(opts.Todos),
 		disableMouse:    opts.DisableMouse,
@@ -184,6 +187,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch {
 		case msg.String() == "ctrl+c":
 			return m, tea.Quit
+		case msg.String() == "esc":
+			m.resetIMEState()
+			if len(m.slashMatches) > 0 {
+				m.clearSlashMatches()
+			} else if m.streaming || m.busy {
+				m.status = "interrupting"
+				if m.hooks.Interrupt != nil {
+					m.hooks.Interrupt()
+				}
+			}
 		case msg.String() == "ctrl+end":
 			m.resetIMEState()
 			m.jumpToBottom()
@@ -334,6 +347,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case SetStatusMsg:
 		m.status = msg.Status
+
+	case SetFooterMsg:
+		m.footer = msg.Footer
 
 	case SetBusyMsg:
 		m.busy = msg.Busy
@@ -497,7 +513,7 @@ func (m Model) View() tea.View {
 	if m.approval != nil {
 		caretX = 0
 	}
-	v.Cursor = tea.NewCursor(caretX, m.vpHeight()+m.approvalPanelHeight()+m.slashPanelHeight()+m.todoPanelHeight()+m.jumpPanelHeight()+1)
+	v.Cursor = tea.NewCursor(caretX, m.vpHeight()+m.approvalPanelHeight()+m.slashPanelHeight()+m.todoPanelHeight()+m.jumpPanelHeight()+2)
 	return v
 }
 
@@ -673,6 +689,7 @@ func (m *Model) render() string {
 		hint = m.statusHint
 	}
 	status := fitLine(dimStyle.Render(fmt.Sprintf(" %s · %s ", state, hint)), m.width)
+	footer := fitLine(dimStyle.Render(" "+m.footer+" "), m.width)
 
 	parts := []string{view}
 	if panel := m.approvalPanelLines(); len(panel) > 0 {
@@ -688,10 +705,11 @@ func (m *Model) render() string {
 		parts = append(parts, panel...)
 	}
 	parts = append(parts,
+		status,
 		m.inputTopRuleLine(),
 		input,
 		ruleStyle.Render(strings.Repeat("─", max(0, m.width))),
-		status,
+		footer,
 	)
 	return strings.Join(parts, "\n")
 }
@@ -799,7 +817,7 @@ func (m *Model) completeSlashMatch() bool {
 }
 
 func (m *Model) shouldArrowKeyScroll() bool {
-	return m.arrowKeysScroll && strings.TrimSpace(m.input.ExpandedValue()) == ""
+	return m.arrowKeysScroll && strings.TrimSpace(m.input.ExpandedValue()) == "" && len(m.inputHistory) == 0
 }
 
 func (m *Model) appendInputHistory(line string) {

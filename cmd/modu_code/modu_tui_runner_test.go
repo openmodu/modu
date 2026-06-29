@@ -543,7 +543,7 @@ func TestModuTUIInfoCardLinesIncludeStartupContext(t *testing.T) {
 	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
 		Cwd:       t.TempDir(),
 		AgentDir:  t.TempDir(),
-		Model:     &types.Model{ID: "test-model", Name: "Test Model", ProviderID: "test-provider"},
+		Model:     &types.Model{ID: "test-model", Name: "Test Model", ProviderID: "test-provider", ContextWindow: 32768},
 		GetAPIKey: func(string) (string, error) { return "", nil },
 	})
 	if err != nil {
@@ -560,6 +560,45 @@ func TestModuTUIInfoCardLinesIncludeStartupContext(t *testing.T) {
 	} {
 		if !strings.Contains(lines, want) {
 			t.Fatalf("info card lines missing %q:\n%s", want, lines)
+		}
+	}
+}
+
+func TestModuTUIFooterIncludesContextModelAndCwd(t *testing.T) {
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       t.TempDir(),
+		AgentDir:  t.TempDir(),
+		Model:     &types.Model{ID: "test-model", Name: "Test Model", ProviderID: "test-provider", ContextWindow: 32768},
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	footer := moduTUIFooter(session)
+	for _, want := range []string{
+		"ctx 0/33K 0%",
+		"model Test Model (test-provider / test-model)",
+		"cwd " + session.RuntimeState().Cwd,
+	} {
+		if !strings.Contains(footer, want) {
+			t.Fatalf("footer missing %q:\n%s", want, footer)
+		}
+	}
+}
+
+func TestFormatModuTUITokens(t *testing.T) {
+	tests := map[int]string{
+		0:       "0",
+		999:     "999",
+		1200:    "1.2K",
+		32768:   "33K",
+		262144:  "262K",
+		1000000: "1M",
+	}
+	for input, want := range tests {
+		if got := formatModuTUITokens(input); got != want {
+			t.Fatalf("formatModuTUITokens(%d) = %q, want %q", input, got, want)
 		}
 	}
 }

@@ -28,7 +28,8 @@ It owns only the reusable UI shell:
 - `Options.DisableMouse` disables terminal mouse reporting for SSH/mobile
   clients that can flood the event loop with touch-motion sequences
 - `Options.ArrowKeysScroll` lets Up/Down scroll the transcript when the input is
-  empty, matching mobile SSH clients that translate swipe gestures into arrows
+  empty and there is no input history to navigate, matching mobile SSH clients
+  that translate swipe gestures into arrows without breaking prompt history
 - selection auto-scroll has a missing-release guard so mobile SSH clients that
   drop mouse release events cannot leave a permanent 30ms redraw loop running
 - slash commands can be supplied through `Options.SlashCommands`; typing `/`
@@ -58,6 +59,8 @@ It owns only the reusable UI shell:
 - assistant thinking messages render through `ThinkingBlock` as one collapsed
   block that can be expanded independently from the final assistant reply
 - optional simulated streaming reply for demos and integration experiments
+- the fixed bottom area separates agent status above the input from a caller
+  supplied `Options.Footer` below the input for context/model/cwd metadata
 
 Call `NewModel(Options{...})` to create a Bubble Tea v2 model. The directory is
 named `modu-tui` for the import path; the Go package name is `modutui`.
@@ -94,6 +97,10 @@ Component layout:
   mapping before the default mapping runs.
 - `Options.InfoCardLines` lets callers provide a non-message startup card for
   model/session/context information on a fresh screen.
+- `Options.Footer` and `SetFooterMsg` render a fixed bottom metadata row below
+  the input, separate from the agent status shown above the input.
+- `Hooks.Interrupt` lets callers handle `Esc` while the model is busy or
+  streaming; approval panels keep their own `Esc` deny behavior.
 - `Hooks.SubmitMessage` lets host applications receive typed submissions with
   prompt, follow-up, or steer intent. `Hooks.Submit` remains as a simple text
   fallback for callers that do not need submit kinds.
@@ -105,9 +112,9 @@ Component layout:
 - `Hooks.SlashCommand` lets host applications route selected or typed slash
   commands without sending them as normal prompts.
 - `Hooks.ToolApprovalDecision` lets host applications observe approval decisions.
-- `AppendMessageMsg`, `SetStatusMsg`, and `SetBusyMsg` let host applications
-  feed external session events into the model without coupling this package to
-  a specific agent runtime.
+- `AppendMessageMsg`, `SetStatusMsg`, `SetFooterMsg`, and `SetBusyMsg` let host
+  applications feed external session events into the model without coupling
+  this package to a specific agent runtime.
 - `Model` owns spacing between transcript blocks; individual blocks do not add
   their own trailing blank lines. The default block gap is one blank line.
 

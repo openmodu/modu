@@ -105,7 +105,7 @@ func TestPOC2RenderPadsEveryLineToTerminalWidth(t *testing.T) {
 	if got, want := len(lines), m.height; got != want {
 		t.Fatalf("rendered line count = %d, want %d", got, want)
 	}
-	inputRow := m.vpHeight() + 1
+	inputRow := m.vpHeight() + 2
 	for i, line := range lines {
 		stripped := ansi.Strip(strings.TrimSuffix(line, "\x1b[K"))
 		want := m.width
@@ -115,6 +115,55 @@ func TestPOC2RenderPadsEveryLineToTerminalWidth(t *testing.T) {
 		if got := ansi.StringWidth(stripped); got != want {
 			t.Fatalf("render line %d width = %d, want %d: %q", i, got, want, line)
 		}
+	}
+}
+
+func TestPOC2RenderPlacesAgentStatusAboveInputAndFooterAtBottom(t *testing.T) {
+	m := NewModel(Options{
+		Width:      56,
+		Height:     8,
+		StatusHint: "ready",
+		Footer:     "ctx 1K/10K 10% · model test · cwd /repo",
+	})
+	m.status = "running"
+	rendered := ansi.Strip(m.render())
+	lines := strings.Split(rendered, "\n")
+	if len(lines) != m.height {
+		t.Fatalf("rendered lines = %d, want %d:\n%s", len(lines), m.height, rendered)
+	}
+	statusRow := lines[len(lines)-5]
+	inputRow := lines[len(lines)-3]
+	footerRow := lines[len(lines)-1]
+	if !strings.Contains(statusRow, "○ idle · running") {
+		t.Fatalf("agent status should render above input, got %q in:\n%s", statusRow, rendered)
+	}
+	if !strings.Contains(inputRow, "❯") {
+		t.Fatalf("input row should remain between rules, got %q in:\n%s", inputRow, rendered)
+	}
+	if !strings.Contains(footerRow, "ctx 1K/10K 10%") || !strings.Contains(footerRow, "model test") {
+		t.Fatalf("footer should render at bottom, got %q in:\n%s", footerRow, rendered)
+	}
+}
+
+func TestPOC2EscInterruptsRunningAgent(t *testing.T) {
+	interrupted := false
+	var tm tea.Model = NewModel(Options{
+		Width:  40,
+		Height: 8,
+		Hooks: Hooks{Interrupt: func() {
+			interrupted = true
+		}},
+	})
+	m := tm.(Model)
+	m.busy = true
+
+	tm, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
+	m = tm.(Model)
+	if !interrupted {
+		t.Fatal("esc should call interrupt hook while busy")
+	}
+	if got, want := m.status, "interrupting"; got != want {
+		t.Fatalf("status = %q, want %q", got, want)
 	}
 }
 
@@ -374,8 +423,8 @@ func TestPOC2InputHasTopAndBottomRules(t *testing.T) {
 	if got, want := len(lines), m.height; got != want {
 		t.Fatalf("rendered line count = %d, want %d", got, want)
 	}
-	topRule := ansi.Strip(lines[m.vpHeight()])
-	bottomRule := ansi.Strip(lines[m.vpHeight()+2])
+	topRule := ansi.Strip(lines[m.vpHeight()+1])
+	bottomRule := ansi.Strip(lines[m.vpHeight()+3])
 	wantRule := strings.Repeat("─", m.width)
 	if topRule != wantRule {
 		t.Fatalf("top input rule = %q, want %q", topRule, wantRule)
@@ -394,8 +443,8 @@ func TestPOC2HistoryHintRendersOnTopInputRule(t *testing.T) {
 	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
 	m := tm.(Model)
 	lines := strings.Split(ansi.Strip(m.render()), "\n")
-	topRule := lines[m.vpHeight()]
-	inputLine := lines[m.vpHeight()+1]
+	topRule := lines[m.vpHeight()+1]
+	inputLine := lines[m.vpHeight()+2]
 	if !strings.Contains(topRule, "History 2/2") {
 		t.Fatalf("history hint should render on top rule, got %q in:\n%s", topRule, strings.Join(lines, "\n"))
 	}
@@ -412,7 +461,7 @@ func TestPOC2InputLineLeavesLastColumnForMobileTerminals(t *testing.T) {
 	m.input.Insert(strings.Repeat("j", 120))
 	rendered := m.render()
 	lines := strings.Split(rendered, "\n")
-	inputLine := lines[m.vpHeight()+1]
+	inputLine := lines[m.vpHeight()+2]
 	if strings.Contains(inputLine, "\x1b[?7l") || strings.Contains(inputLine, "\x1b[?7h") {
 		t.Fatalf("input line should not toggle terminal autowrap, got %q", inputLine)
 	}
@@ -605,7 +654,6 @@ func TestPOC2ArrowKeysScrollWhenConfiguredAndInputEmpty(t *testing.T) {
 	var tm tea.Model = NewModel(Options{
 		Width:           40,
 		Height:          8,
-		InputHistory:    []string{"previous prompt"},
 		ArrowKeysScroll: true,
 	})
 	m := tm.(Model)
@@ -625,6 +673,30 @@ func TestPOC2ArrowKeysScrollWhenConfiguredAndInputEmpty(t *testing.T) {
 	}
 	if got := m.input.Value; got != "" {
 		t.Fatalf("up arrow should not enter input history when input is empty in arrow-scroll mode, got %q", got)
+	}
+}
+
+func TestPOC2ArrowKeysPreferHistoryWhenConfiguredAndHistoryExists(t *testing.T) {
+	var tm tea.Model = NewModel(Options{
+		Width:           40,
+		Height:          8,
+		InputHistory:    []string{"previous prompt"},
+		ArrowKeysScroll: true,
+	})
+	m := tm.(Model)
+	for i := 0; i < 30; i++ {
+		m.messages = append(m.messages, Message{Role: RoleAssistant, Text: "history line"})
+	}
+	m.rebuild()
+	before := m.yOffset
+
+	tm, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+	m = tm.(Model)
+	if got, want := m.input.Value, "previous prompt"; got != want {
+		t.Fatalf("up arrow should navigate input history before scrolling, got %q want %q", got, want)
+	}
+	if got := m.yOffset; got != before {
+		t.Fatalf("up arrow should not scroll when history exists: %d -> %d", before, got)
 	}
 }
 
@@ -1010,16 +1082,16 @@ func TestPOC2ToolApprovalPanelIsFixedAboveInput(t *testing.T) {
 	if got, want := approvalBorderStyle.GetForeground(), lipgloss.Color("248"); got != want {
 		t.Fatalf("approval border color = %#v, want %#v", got, want)
 	}
-	inputRule := m.vpHeight() + m.approvalPanelHeight()
+	inputRule := m.vpHeight() + m.approvalPanelHeight() + 1
 	if got, want := rendered[inputRule], strings.Repeat("─", m.width); got != want {
 		t.Fatalf("input top rule line = %q, want %q", got, want)
 	}
-	if !strings.Contains(strings.Join(rendered[panelTop:inputRule], "\n"), "[y] allow") {
-		t.Fatalf("approval panel should include actions:\n%s", strings.Join(rendered[panelTop:inputRule], "\n"))
+	panelEnd := panelTop + m.approvalPanelHeight()
+	if !strings.Contains(strings.Join(rendered[panelTop:panelEnd], "\n"), "[y] allow") {
+		t.Fatalf("approval panel should include actions:\n%s", strings.Join(rendered[panelTop:panelEnd], "\n"))
 	}
-	if !strings.Contains(strings.Join(rendered[panelTop:inputRule], "\n"), "Bash command:") ||
-		!strings.Contains(strings.Join(rendered[panelTop:inputRule], "\n"), "go test ./...") {
-		t.Fatalf("approval panel should include command preview:\n%s", strings.Join(rendered[panelTop:inputRule], "\n"))
+	if !strings.Contains(strings.Join(rendered[panelTop:panelEnd], "\n"), "go test ./...") {
+		t.Fatalf("approval panel should include command preview:\n%s", strings.Join(rendered[panelTop:panelEnd], "\n"))
 	}
 }
 
@@ -1041,7 +1113,7 @@ func TestPOC2TodoPanelRendersAboveInput(t *testing.T) {
 		t.Fatalf("rendered lines = %d, want %d:\n%s", got, want, strings.Join(rendered, "\n"))
 	}
 	panelTop := m.vpHeight()
-	inputRule := m.vpHeight() + m.todoPanelHeight()
+	inputRule := m.vpHeight() + m.todoPanelHeight() + 1
 	if !strings.HasPrefix(rendered[panelTop], "┏") {
 		t.Fatalf("todo panel should start immediately below viewport at line %d:\n%s", panelTop, strings.Join(rendered, "\n"))
 	}

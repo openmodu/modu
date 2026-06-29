@@ -81,13 +81,15 @@ enough to implement, verify, and commit independently.
   `MODU_TUI_MOUSE=off` as an opt-out for JuiceSSH/mobile clients that flood
   touch-motion events and make the interface appear frozen.
 - SSH sessions and explicit mouse-disabled sessions route empty-input Up/Down
-  keys to transcript scrolling, so mobile swipe gestures translated into arrow
-  keys can reach earlier conversation content instead of opening input history.
+  keys to transcript scrolling only when no input history is available, so
+  prompt history remains usable while mobile swipe gestures translated into
+  arrow keys can still reach earlier conversation content.
 - The `modu-tui` runner now restores per-agent-run elapsed summaries by
   tracking `AgentStart`/`AgentEnd` events and appending `✓ Completed (...)`
   after each finished conversation round.
-- Status line moved above the input separator, with animated running state,
-  persisted completed state, and duration formatting that supports `min`.
+- Status line moved above the input separator for agent running state; the
+  bottom footer now shows context usage/window, active model, and cwd, and `Esc`
+  interrupts the active prompt plus running bash process.
 - Terminal resize handling keeps the user prompt visible and avoids duplicate
   completed-status lines.
 - Model configuration moved into `~/.coding_agent/config.json` with support for
