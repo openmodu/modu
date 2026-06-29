@@ -3,6 +3,8 @@
 // tool blocks, and optional simulated streaming.
 package modutui
 
+import "time"
+
 const DefaultStatusHint = "拖拽选择→复制 · 点 ▸ 折叠 · Enter 发送 · 滚轮滚动 · ctrl+End 到底 · Ctrl+C 退出"
 
 type Role int
@@ -137,7 +139,8 @@ type AppendMessageMsg struct {
 }
 
 type SetStatusMsg struct {
-	Status string
+	Status       string
+	TransientFor time.Duration
 }
 
 type SetFooterMsg struct {

@@ -118,7 +118,8 @@ Component layout:
 - `Hooks.ToolApprovalDecision` lets host applications observe approval decisions.
 - `AppendMessageMsg`, `SetStatusMsg`, `SetFooterMsg`, and `SetBusyMsg` let host
   applications feed external session events into the model without coupling
-  this package to a specific agent runtime.
+  this package to a specific agent runtime. `SetStatusMsg.TransientFor` can be
+  set for completion/error notices that should disappear automatically.
 - `Model` owns spacing between transcript blocks; individual blocks do not add
   their own trailing blank lines. The default block gap is one blank line.
 

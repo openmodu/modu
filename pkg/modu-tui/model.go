@@ -13,6 +13,9 @@ import (
 
 type streamTickMsg struct{}
 type autoScrollTickMsg struct{}
+type statusExpireMsg struct {
+	status string
+}
 
 const maxInputHistory = 100
 
@@ -53,24 +56,26 @@ type Model struct {
 	approval     *pendingApproval
 	todos        []TodoItem
 
-	selecting        bool
-	selStart, selEnd cell
-	dragCol          int
-	autoScroll       int  // edge auto-scroll direction during drag: -1 up, +1 down, 0 none
-	autoScrolling    bool // a tick loop is currently live
-	autoScrollTicks  int
-	status           string
-	statusHint       string
-	footer           string
-	infoCardLines    []string
-	disableMouse     bool
-	arrowKeysScroll  bool
-	hooks            Hooks
-	blockFactories   []MessageBlockFactory
-	blockGap         int
-	slashCommands    []SlashCommand
-	slashMatches     []SlashCommand
-	slashIndex       int
+	selecting         bool
+	selStart, selEnd  cell
+	dragCol           int
+	autoScroll        int  // edge auto-scroll direction during drag: -1 up, +1 down, 0 none
+	autoScrolling     bool // a tick loop is currently live
+	autoScrollTicks   int
+	status            string
+	statusExpiresAt   time.Time
+	statusExpiresText string
+	statusHint        string
+	footer            string
+	infoCardLines     []string
+	disableMouse      bool
+	arrowKeysScroll   bool
+	hooks             Hooks
+	blockFactories    []MessageBlockFactory
+	blockGap          int
+	slashCommands     []SlashCommand
+	slashMatches      []SlashCommand
+	slashIndex        int
 }
 
 func NewModel(options ...Options) Model {
@@ -357,6 +362,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case SetStatusMsg:
 		m.status = msg.Status
+		m.statusExpiresAt = time.Time{}
+		m.statusExpiresText = ""
+		if msg.Status != "" && msg.TransientFor > 0 {
+			m.statusExpiresAt = time.Now().Add(msg.TransientFor)
+			m.statusExpiresText = msg.Status
+			return m, tea.Tick(msg.TransientFor, func(time.Time) tea.Msg {
+				return statusExpireMsg{status: msg.Status}
+			})
+		}
+
+	case statusExpireMsg:
+		if m.status == msg.status && m.status == m.statusExpiresText && !m.statusExpiresAt.IsZero() && !time.Now().Before(m.statusExpiresAt) {
+			m.status = ""
+			m.statusExpiresAt = time.Time{}
+			m.statusExpiresText = ""
+		}
 
 	case SetFooterMsg:
 		m.footer = msg.Footer

@@ -21,6 +21,8 @@ import (
 	"github.com/openmodu/modu/pkg/types"
 )
 
+const moduTUITerminalStatusTTL = 10 * time.Second
+
 func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool, opts RunOptions) error {
 	if n, err := session.RestoreMessages(); err == nil && n > 0 {
 		_ = n
@@ -118,11 +120,14 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 						Role: modutui.RoleAssistant,
 						Text: "error: " + err.Error(),
 					}})
-					send(modutui.SetStatusMsg{Status: "error"})
+					send(modutui.SetStatusMsg{Status: "error", TransientFor: moduTUITerminalStatusTTL})
 				} else if errors.Is(err, context.Canceled) {
-					send(modutui.SetStatusMsg{Status: "interrupted"})
+					send(modutui.SetStatusMsg{Status: "interrupted", TransientFor: moduTUITerminalStatusTTL})
 				} else {
-					send(modutui.SetStatusMsg{Status: "✓ Completed " + formatModuTUIActivityDuration(time.Since(started))})
+					send(modutui.SetStatusMsg{
+						Status:       "✓ Completed " + formatModuTUIActivityDuration(time.Since(started)),
+						TransientFor: moduTUITerminalStatusTTL,
+					})
 				}
 				sendFooter()
 				return

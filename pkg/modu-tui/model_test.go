@@ -1352,6 +1352,36 @@ func TestPOC2SetTodosMsgUpdatesTodoPanel(t *testing.T) {
 	}
 }
 
+func TestPOC2TransientStatusExpiresWithoutClearingNewStatus(t *testing.T) {
+	var tm tea.Model = NewModel()
+	var cmd tea.Cmd
+	tm, cmd = tm.Update(SetStatusMsg{Status: "✓ Completed 1s", TransientFor: time.Second})
+	if cmd == nil {
+		t.Fatal("transient status should schedule an expiry command")
+	}
+	m := tm.(Model)
+	if got := m.status; got != "✓ Completed 1s" {
+		t.Fatalf("status = %q", got)
+	}
+
+	tm, _ = tm.Update(SetStatusMsg{Status: "running"})
+	tm, _ = tm.Update(statusExpireMsg{status: "✓ Completed 1s"})
+	m = tm.(Model)
+	if got := m.status; got != "running" {
+		t.Fatalf("old transient expiry should not clear new status, got %q", got)
+	}
+
+	tm, _ = tm.Update(SetStatusMsg{Status: "done", TransientFor: time.Second})
+	m = tm.(Model)
+	m.statusExpiresAt = time.Now().Add(-time.Millisecond)
+	tm = m
+	tm, _ = tm.Update(statusExpireMsg{status: "done"})
+	m = tm.(Model)
+	if got := m.status; got != "" {
+		t.Fatalf("expired transient status should clear, got %q", got)
+	}
+}
+
 func TestPOC2ToolApprovalBlocksInputEditing(t *testing.T) {
 	var tm tea.Model = NewModel()
 	tm, _ = tm.Update(RequestToolApprovalMsg{
