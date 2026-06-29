@@ -103,6 +103,8 @@ Component layout:
   the input, separate from the agent status shown above the input.
 - `Hooks.Interrupt` lets callers handle `Esc` while the model is busy or
   streaming; approval panels keep their own `Esc` deny behavior.
+- `Esc` and `Ctrl+C` are matched by normalized key code and raw control text so
+  SSH/mobile clients can interrupt or quit even when their key names differ.
 - `Hooks.SubmitMessage` lets host applications receive typed submissions with
   prompt, follow-up, or steer intent. `Hooks.Submit` remains as a simple text
   fallback for callers that do not need submit kinds.

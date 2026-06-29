@@ -210,24 +210,73 @@ func TestPOC2RenderPlacesAgentStatusAboveInputAndFooterAtBottom(t *testing.T) {
 }
 
 func TestPOC2EscInterruptsRunningAgent(t *testing.T) {
-	interrupted := false
-	var tm tea.Model = NewModel(Options{
-		Width:  40,
-		Height: 8,
-		Hooks: Hooks{Interrupt: func() {
-			interrupted = true
-		}},
-	})
-	m := tm.(Model)
-	m.busy = true
+	for _, tc := range []struct {
+		name string
+		key  tea.Key
+	}{
+		{name: "key code", key: tea.Key{Code: tea.KeyEsc}},
+		{name: "legacy ctrl bracket", key: tea.Key{Code: '[', Mod: tea.ModCtrl}},
+		{name: "raw text", key: tea.Key{Text: "\x1b"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			interrupted := false
+			var tm tea.Model = NewModel(Options{
+				Width:  40,
+				Height: 8,
+				Hooks: Hooks{Interrupt: func() {
+					interrupted = true
+				}},
+			})
+			m := tm.(Model)
+			m.busy = true
 
-	tm, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEsc}))
-	m = tm.(Model)
-	if !interrupted {
-		t.Fatal("esc should call interrupt hook while busy")
+			tm, _ = m.Update(tea.KeyPressMsg(tc.key))
+			m = tm.(Model)
+			if !interrupted {
+				t.Fatal("esc should call interrupt hook while busy")
+			}
+			if got, want := m.status, "interrupting"; got != want {
+				t.Fatalf("status = %q, want %q", got, want)
+			}
+		})
 	}
-	if got, want := m.status, "interrupting"; got != want {
-		t.Fatalf("status = %q, want %q", got, want)
+}
+
+func TestPOC2CtrlCQuitsWithSSHKeyShapes(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		key  tea.Key
+	}{
+		{name: "ctrl modifier", key: tea.Key{Code: 'c', Mod: tea.ModCtrl}},
+		{name: "raw text", key: tea.Key{Text: "\x03"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var tm tea.Model = NewModel(Options{Width: 40, Height: 8})
+			_, cmd := tm.Update(tea.KeyPressMsg(tc.key))
+			requireQuitCmd(t, cmd)
+		})
+	}
+}
+
+func TestPOC2ApprovalEscDeniesWithSSHKeyShape(t *testing.T) {
+	decisions := make(chan ToolApprovalDecision, 1)
+	var tm tea.Model = NewModel(Options{Width: 40, Height: 8})
+	tm, _ = tm.Update(RequestToolApprovalMsg{
+		Request: ToolApprovalRequest{ID: "call-1", ToolName: "bash"},
+		Respond: decisions,
+	})
+
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: '[', Mod: tea.ModCtrl}))
+	if tm.(Model).approval != nil {
+		t.Fatal("approval should clear after esc")
+	}
+	select {
+	case got := <-decisions:
+		if got != ToolApprovalDeny {
+			t.Fatalf("decision = %q, want %q", got, ToolApprovalDeny)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected approval decision")
 	}
 }
 
@@ -239,6 +288,17 @@ func TestPOC2CompletionStatusDoesNotShowIdlePrefix(t *testing.T) {
 	statusRow := lines[len(lines)-5]
 	if !strings.Contains(statusRow, "✓ Completed 2s") || strings.Contains(statusRow, "idle") {
 		t.Fatalf("completion status should be compact, got %q in:\n%s", statusRow, rendered)
+	}
+}
+
+func requireQuitCmd(t *testing.T, cmd tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("expected quit command, got nil")
+	}
+	msg := cmd()
+	if _, ok := msg.(tea.QuitMsg); !ok {
+		t.Fatalf("expected quit command, got %T", msg)
 	}
 }
 

@@ -185,9 +185,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleApprovalKey(msg)
 		}
 		switch {
-		case msg.String() == "ctrl+c":
+		case isCtrlCKey(msg):
 			return m, tea.Quit
-		case msg.String() == "esc":
+		case isEscKey(msg):
 			m.resetIMEState()
 			if len(m.slashMatches) > 0 {
 				m.clearSlashMatches()
@@ -1033,9 +1033,13 @@ func approvalDetailLines(text string, width int, limit int) []string {
 }
 
 func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "ctrl+c":
+	if isCtrlCKey(msg) {
 		return m, tea.Quit
+	}
+	if isEscKey(msg) {
+		return m.resolveApproval(ToolApprovalDeny), nil
+	}
+	switch msg.String() {
 	case "y", "Y":
 		return m.resolveApproval(ToolApprovalAllow), nil
 	case "a", "A":
@@ -1044,10 +1048,18 @@ func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.resolveApproval(ToolApprovalDeny), nil
 	case "d", "D":
 		return m.resolveApproval(ToolApprovalDenyAlways), nil
-	case "esc":
-		return m.resolveApproval(ToolApprovalDeny), nil
 	}
 	return m, nil
+}
+
+func isCtrlCKey(msg tea.KeyPressMsg) bool {
+	key := msg.Key()
+	return msg.String() == "ctrl+c" || key.Text == "\x03" || (key.Code == 'c' && key.Mod.Contains(tea.ModCtrl))
+}
+
+func isEscKey(msg tea.KeyPressMsg) bool {
+	key := msg.Key()
+	return msg.String() == "esc" || key.Text == "\x1b" || key.Code == tea.KeyEsc || key.Code == tea.KeyEscape || (key.Code == '[' && key.Mod.Contains(tea.ModCtrl))
 }
 
 func (m Model) resolveApproval(decision ToolApprovalDecision) Model {
