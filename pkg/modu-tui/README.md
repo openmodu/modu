@@ -63,6 +63,8 @@ It owns only the reusable UI shell:
 - the fixed bottom area separates agent status above the input from a caller
   supplied `Options.Footer` below the input for context/model/cwd metadata, with
   a blank row separating transcript/panels from the agent status line
+- the away-from-bottom jump hint renders in the agent status row, and the input
+  area grows up to five rows as long text soft-wraps or hard newlines are typed
 
 Call `NewModel(Options{...})` to create a Bubble Tea v2 model. The directory is
 named `modu-tui` for the import path; the Go package name is `modutui`.
@@ -120,6 +122,9 @@ Component layout:
   applications feed external session events into the model without coupling
   this package to a specific agent runtime. `SetStatusMsg.TransientFor` can be
   set for completion/error notices that should disappear automatically.
+- `RequestHumanPromptMsg` renders a blocking human-in-the-loop choice card for
+  host prompts such as confirm/select/plan approval; numeric keys choose
+  options and Enter/Esc use the configured default.
 - `Model` owns spacing between transcript blocks; individual blocks do not add
   their own trailing blank lines. The default block gap is one blank line.
 

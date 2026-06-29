@@ -86,6 +86,19 @@ type ToolApprovalResult struct {
 	Decision ToolApprovalDecision
 }
 
+type HumanPromptOption struct {
+	Label string
+	Value string
+}
+
+type HumanPromptRequest struct {
+	ID           string
+	Title        string
+	Body         string
+	Options      []HumanPromptOption
+	DefaultIndex int
+}
+
 type SubmitKind string
 
 const (
@@ -163,5 +176,14 @@ type RequestToolApprovalMsg struct {
 }
 
 type CancelToolApprovalMsg struct {
+	ID string
+}
+
+type RequestHumanPromptMsg struct {
+	Request HumanPromptRequest
+	Respond chan<- string
+}
+
+type CancelHumanPromptMsg struct {
 	ID string
 }

@@ -2,6 +2,7 @@ package modutui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -32,6 +33,11 @@ type pendingApproval struct {
 	respond chan<- ToolApprovalDecision
 }
 
+type pendingHumanPrompt struct {
+	request HumanPromptRequest
+	respond chan<- string
+}
+
 type Model struct {
 	width, height int
 
@@ -54,6 +60,7 @@ type Model struct {
 	streamReply  string
 	busy         bool
 	approval     *pendingApproval
+	humanPrompt  *pendingHumanPrompt
 	todos        []TodoItem
 
 	selecting         bool
@@ -193,6 +200,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		if m.approval != nil {
 			return m.handleApprovalKey(msg)
+		}
+		if m.humanPrompt != nil {
+			return m.handleHumanPromptKey(msg)
 		}
 		switch {
 		case isCtrlCKey(msg):
@@ -398,6 +408,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case RequestToolApprovalMsg:
 		m.approval = &pendingApproval{request: msg.Request, respond: msg.Respond}
+		m.humanPrompt = nil
 		m.clearSlashMatches()
 		m.follow = true
 		m.unseen = 0
@@ -406,6 +417,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case CancelToolApprovalMsg:
 		if m.approval != nil && (msg.ID == "" || msg.ID == m.approval.request.ID) {
 			m.approval = nil
+			m.rebuild()
+		}
+
+	case RequestHumanPromptMsg:
+		m.humanPrompt = &pendingHumanPrompt{request: normalizeHumanPromptRequest(msg.Request), respond: msg.Respond}
+		m.approval = nil
+		m.clearSlashMatches()
+		m.follow = true
+		m.unseen = 0
+		m.rebuild()
+
+	case CancelHumanPromptMsg:
+		if m.humanPrompt != nil && (msg.ID == "" || msg.ID == m.humanPrompt.request.ID) {
+			m.humanPrompt = nil
 			m.rebuild()
 		}
 	}
@@ -439,7 +464,7 @@ func (m *Model) coalesceIMEText(text string) bool {
 
 	tail := m.imeTail
 	switch {
-	case isASCIICompositionText(tail) && isASCIICompositionText(text) && hasPrefixEither(text, tail):
+	case isASCIICompositionText(tail) && isASCIICompositionText(text) && text != tail && hasPrefixEither(text, tail):
 		m.input.ReplaceBeforeCursor(utf8.RuneCountInString(tail), text)
 	case isASCIICompositionText(tail) && containsHan(text) && (m.imeActive || utf8.RuneCountInString(tail) > 1):
 		m.input.ReplaceBeforeCursor(utf8.RuneCountInString(tail), text)
@@ -541,21 +566,21 @@ func (m Model) View() tea.View {
 		v.MouseMode = tea.MouseModeCellMotion
 	}
 	_, cursorRow, caretX := m.input.Render(m.inputRenderWidth(), m.inputRows())
-	if m.approval != nil {
+	if m.hasBlockingPrompt() {
 		caretX, cursorRow = 0, 0
 	}
-	v.Cursor = tea.NewCursor(caretX, m.vpHeight()+m.approvalPanelHeight()+m.slashPanelHeight()+m.todoPanelHeight()+m.jumpPanelHeight()+3+cursorRow)
+	v.Cursor = tea.NewCursor(caretX, m.vpHeight()+m.approvalPanelHeight()+m.humanPromptPanelHeight()+m.slashPanelHeight()+m.todoPanelHeight()+3+cursorRow)
 	return v
 }
 
-// inputRows is the number of rows the input area currently occupies: the
-// logical line count clamped to [1, maxInputRows]. Approval mode is a single
-// placeholder line.
+// inputRows is the number of rows the input area currently occupies: the visual
+// wrapped line count clamped to [1, maxInputRows]. Blocking prompt modes use a
+// single placeholder line.
 func (m *Model) inputRows() int {
-	if m.approval != nil {
+	if m.hasBlockingPrompt() {
 		return 1
 	}
-	return clamp(m.input.LineCount(), 1, maxInputRows)
+	return clamp(m.input.VisualLineCount(m.inputRenderWidth()), 1, maxInputRows)
 }
 
 func (m *Model) bottomFixedRows() int {
@@ -563,10 +588,13 @@ func (m *Model) bottomFixedRows() int {
 }
 
 func (m *Model) vpHeight() int {
-	return max(m.minViewportRows(), m.height-m.bottomFixedRows()-m.approvalPanelHeight()-m.slashPanelHeight()-m.todoPanelHeight()-m.jumpPanelHeight())
+	return max(m.minViewportRows(), m.height-m.bottomFixedRows()-m.approvalPanelHeight()-m.humanPromptPanelHeight()-m.slashPanelHeight()-m.todoPanelHeight())
 }
 func (m *Model) approvalPanelHeight() int {
 	return len(m.approvalPanelLines())
+}
+func (m *Model) humanPromptPanelHeight() int {
+	return len(m.humanPromptPanelLines())
 }
 func (m *Model) slashPanelHeight() int {
 	return len(m.slashPanelLines())
@@ -574,14 +602,8 @@ func (m *Model) slashPanelHeight() int {
 func (m *Model) todoPanelHeight() int {
 	return len(m.todoPanelLines())
 }
-func (m *Model) jumpPanelHeight() int {
-	if m.showJumpPanel() {
-		return 1
-	}
-	return 0
-}
 func (m *Model) showJumpPanel() bool {
-	heightWithoutJump := m.height - m.bottomFixedRows() - m.approvalPanelHeight() - m.slashPanelHeight() - m.todoPanelHeight()
+	heightWithoutJump := m.height - m.bottomFixedRows() - m.approvalPanelHeight() - m.humanPromptPanelHeight() - m.slashPanelHeight() - m.todoPanelHeight()
 	if heightWithoutJump <= m.minViewportRows() {
 		return false
 	}
@@ -593,6 +615,10 @@ func (m *Model) minViewportRows() int {
 		return 0
 	}
 	return minViewportRows
+}
+
+func (m *Model) hasBlockingPrompt() bool {
+	return m.approval != nil || m.humanPrompt != nil
 }
 func (m *Model) maxOffset() int {
 	return max(0, len(m.lines)-m.vpHeight())
@@ -724,6 +750,8 @@ func (m *Model) render() string {
 	inputLines, _, _ := m.input.Render(m.inputRenderWidth(), m.inputRows())
 	if m.approval != nil {
 		inputLines = []string{fitLine(dimStyle.Render(" approval pending "), m.inputRenderWidth())}
+	} else if m.humanPrompt != nil {
+		inputLines = []string{fitLine(dimStyle.Render(" human input pending "), m.inputRenderWidth())}
 	}
 	for i := range inputLines {
 		inputLines[i] = clearToEndOfLine(inputLines[i])
@@ -733,28 +761,29 @@ func (m *Model) render() string {
 		state = "● streaming"
 	} else if m.approval != nil {
 		state = "● approval"
+	} else if m.humanPrompt != nil {
+		state = "● input"
 	} else if m.busy {
 		state = "● running"
 	}
 	inner := agentStatusText(state, m.status)
-	if (m.busy || m.streaming) && m.approval == nil && runStatusAllowsHint(m.status) {
+	if (m.busy || m.streaming) && !m.hasBlockingPrompt() && !m.showJumpPanel() && runStatusAllowsHint(m.status) {
 		inner += "  ·  " + steerFollowupHint
 	}
-	statusText := " " + inner + " "
-	status := fitLine(dimStyle.Render(statusText), m.width)
+	status := m.statusLine(inner)
 	footer := fitLine(dimStyle.Render(" "+m.footer+" "), m.width)
 
 	parts := []string{view}
 	if panel := m.approvalPanelLines(); len(panel) > 0 {
 		parts = append(parts, panel...)
 	}
+	if panel := m.humanPromptPanelLines(); len(panel) > 0 {
+		parts = append(parts, panel...)
+	}
 	if panel := m.slashPanelLines(); len(panel) > 0 {
 		parts = append(parts, panel...)
 	}
 	if panel := m.todoPanelLines(); len(panel) > 0 {
-		parts = append(parts, panel...)
-	}
-	if panel := m.jumpPanelLines(); len(panel) > 0 {
 		parts = append(parts, panel...)
 	}
 	parts = append(parts,
@@ -798,6 +827,19 @@ func agentStatusText(state, status string) string {
 	}
 }
 
+func (m *Model) statusLine(inner string) string {
+	if m.showJumpPanel() {
+		jump := "  ·  " + jumpHintText()
+		if m.unseen > 0 {
+			jump = "  ·  " + m.jumpHint()
+		}
+		innerWidth := max(1, m.width-ansi.StringWidth(jump)-2)
+		inner = ansi.Truncate(inner, innerWidth, "…")
+		return fitLine(dimStyle.Render(" "+inner+jump+" "), m.width)
+	}
+	return fitLine(dimStyle.Render(" "+inner+" "), m.width)
+}
+
 func (m *Model) inputRenderWidth() int {
 	if m.width <= 1 {
 		return max(1, m.width)
@@ -827,18 +869,11 @@ func (m *Model) inputTopRuleLine() string {
 		ruleStyle.Render(strings.Repeat("─", rightWidth))
 }
 
-func (m *Model) jumpPanelLines() []string {
-	if !m.showJumpPanel() {
-		return nil
-	}
-	return []string{centeredLine(m.jumpHint(), m.width)}
-}
-
 func (m *Model) slashPanelLines() []string {
-	if m.approval != nil || len(m.slashMatches) == 0 {
+	if m.hasBlockingPrompt() || len(m.slashMatches) == 0 {
 		return nil
 	}
-	available := m.height - m.bottomFixedRows() - m.minViewportRows() - m.approvalPanelHeight()
+	available := m.height - m.bottomFixedRows() - m.minViewportRows() - m.approvalPanelHeight() - m.humanPromptPanelHeight()
 	if available < 3 {
 		return nil
 	}
@@ -861,10 +896,10 @@ func (m *Model) slashPanelLines() []string {
 }
 
 func (m *Model) todoPanelLines() []string {
-	if m.approval != nil {
+	if m.hasBlockingPrompt() {
 		return nil
 	}
-	budget := m.height - m.bottomFixedRows() - m.minViewportRows() - m.approvalPanelHeight() - m.slashPanelHeight()
+	budget := m.height - m.bottomFixedRows() - m.minViewportRows() - m.approvalPanelHeight() - m.humanPromptPanelHeight() - m.slashPanelHeight()
 	if budget < 3 {
 		return nil
 	}
@@ -1040,6 +1075,97 @@ func (m *Model) approvalPanelLines() []string {
 	return compactApprovalPanelLines(req, width, budget)
 }
 
+func (m *Model) humanPromptPanelLines() []string {
+	if m.humanPrompt == nil {
+		return nil
+	}
+	width := max(1, m.width)
+	innerWidth := max(1, width-4)
+	req := m.humanPrompt.request
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		title = "Input required"
+	}
+	var body []string
+	body = append(body, botStyle.Render("Human input required")+" "+dimStyle.Render(title))
+	if text := strings.TrimSpace(req.Body); text != "" {
+		body = append(body, limitedWrappedLines(text, innerWidth, m.maxApprovalDetailLines())...)
+	}
+	if len(req.Options) > 0 {
+		body = append(body, "")
+		body = append(body, humanPromptActionsLine(req))
+	}
+	lines := CardBlock{Lines: body, BorderStyle: approvalBorderStyle}.RenderWidth(width)
+	budget := m.humanPromptPanelBudget()
+	if budget <= 0 {
+		return nil
+	}
+	if len(lines) <= budget {
+		return lines
+	}
+	if budget < 3 {
+		return nil
+	}
+	bodyCap := max(1, budget-2)
+	compact := []string{botStyle.Render("Human input required") + " " + dimStyle.Render(ansi.Truncate(title, max(1, innerWidth), "…"))}
+	if len(req.Options) > 0 && bodyCap >= 2 {
+		compact = append(compact, humanPromptActionsLine(req))
+	}
+	for len(compact) > bodyCap {
+		compact = compact[:len(compact)-1]
+	}
+	return CardBlock{Lines: compact, BorderStyle: approvalBorderStyle}.RenderWidth(width)
+}
+
+func (m *Model) humanPromptPanelBudget() int {
+	return m.height - m.bottomFixedRows() - m.minViewportRows() - m.approvalPanelHeight()
+}
+
+func humanPromptActionsLine(req HumanPromptRequest) string {
+	if len(req.Options) == 0 {
+		return dimStyle.Render("[enter] continue  [esc] cancel")
+	}
+	parts := make([]string, 0, len(req.Options)+1)
+	for i, option := range req.Options {
+		if i >= 9 {
+			break
+		}
+		label := strings.TrimSpace(option.Label)
+		if label == "" {
+			label = strings.TrimSpace(option.Value)
+		}
+		if label == "" {
+			label = fmt.Sprintf("Option %d", i+1)
+		}
+		marker := fmt.Sprintf("[%d]", i+1)
+		if i == req.DefaultIndex {
+			marker = "[enter/" + strconv.Itoa(i+1) + "]"
+		}
+		parts = append(parts, marker+" "+label)
+	}
+	if req.DefaultIndex < 0 || req.DefaultIndex >= len(req.Options) {
+		parts = append(parts, "[esc] cancel")
+	}
+	return dimStyle.Render(strings.Join(parts, "  "))
+}
+
+func normalizeHumanPromptRequest(req HumanPromptRequest) HumanPromptRequest {
+	if req.DefaultIndex < 0 || req.DefaultIndex >= len(req.Options) {
+		req.DefaultIndex = -1
+	}
+	for i := range req.Options {
+		req.Options[i].Label = strings.TrimSpace(req.Options[i].Label)
+		req.Options[i].Value = strings.TrimSpace(req.Options[i].Value)
+		if req.Options[i].Value == "" {
+			req.Options[i].Value = req.Options[i].Label
+		}
+		if req.Options[i].Label == "" {
+			req.Options[i].Label = req.Options[i].Value
+		}
+	}
+	return req
+}
+
 func (m *Model) maxApprovalDetailLines() int {
 	return max(1, min(4, m.height-7))
 }
@@ -1121,6 +1247,47 @@ func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) handleHumanPromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if isCtrlCKey(msg) {
+		return m, tea.Quit
+	}
+	if isEscKey(msg) {
+		return m.resolveHumanPrompt(m.defaultHumanPromptValue()), nil
+	}
+	if msg.Code == tea.KeyEnter {
+		return m.resolveHumanPrompt(m.defaultHumanPromptValue()), nil
+	}
+	if idx, ok := humanPromptOptionIndex(msg); ok && m.humanPrompt != nil {
+		options := m.humanPrompt.request.Options
+		if idx >= 0 && idx < len(options) {
+			return m.resolveHumanPrompt(options[idx].Value), nil
+		}
+	}
+	return m, nil
+}
+
+func humanPromptOptionIndex(msg tea.KeyPressMsg) (int, bool) {
+	text := strings.TrimSpace(msg.Text)
+	if text == "" {
+		text = strings.TrimSpace(msg.String())
+	}
+	if len(text) != 1 || text[0] < '1' || text[0] > '9' {
+		return 0, false
+	}
+	return int(text[0] - '1'), true
+}
+
+func (m Model) defaultHumanPromptValue() string {
+	if m.humanPrompt == nil {
+		return ""
+	}
+	req := m.humanPrompt.request
+	if req.DefaultIndex >= 0 && req.DefaultIndex < len(req.Options) {
+		return req.Options[req.DefaultIndex].Value
+	}
+	return ""
+}
+
 func isCtrlCKey(msg tea.KeyPressMsg) bool {
 	key := msg.Key()
 	return msg.String() == "ctrl+c" || key.Text == "\x03" || (key.Code == 'c' && key.Mod.Contains(tea.ModCtrl))
@@ -1146,6 +1313,26 @@ func (m Model) resolveApproval(decision ToolApprovalDecision) Model {
 	}
 	m.status = "approval: " + string(decision)
 	m.approval = nil
+	m.rebuild()
+	return m
+}
+
+func (m Model) resolveHumanPrompt(value string) Model {
+	if m.humanPrompt == nil {
+		return m
+	}
+	prompt := m.humanPrompt
+	if prompt.respond != nil {
+		go func() {
+			prompt.respond <- value
+		}()
+	}
+	if value == "" {
+		m.status = "input cancelled"
+	} else {
+		m.status = "input received"
+	}
+	m.humanPrompt = nil
 	m.rebuild()
 	return m
 }

@@ -52,6 +52,26 @@ func TestPOC2MultilineInputAltEnterAndAutoHeight(t *testing.T) {
 	}
 }
 
+func TestPOC2LongInputSoftWrapsAndIncreasesHeight(t *testing.T) {
+	m := NewModel(Options{Width: 18, Height: 12})
+	m.input.Insert(strings.Repeat("a", 50))
+	if got := m.inputRows(); got <= 1 {
+		t.Fatalf("inputRows = %d, want soft-wrapped long input to use more than one row", got)
+	}
+	lines, cursorRow, _ := m.input.Render(m.inputRenderWidth(), maxInputRows)
+	if len(lines) != m.inputRows() {
+		t.Fatalf("rendered input lines = %d, want %d", len(lines), m.inputRows())
+	}
+	if cursorRow != len(lines)-1 {
+		t.Fatalf("cursorRow = %d, want last rendered line %d", cursorRow, len(lines)-1)
+	}
+	for _, line := range lines {
+		if ansi.StringWidth(line) > m.inputRenderWidth() {
+			t.Fatalf("wrapped input line exceeds width %d: %q", m.inputRenderWidth(), line)
+		}
+	}
+}
+
 func TestPOC2PageKeysScrollViewport(t *testing.T) {
 	var tm tea.Model = NewModel()
 	tm, _ = tm.Update(tea.WindowSizeMsg{Width: 80, Height: 12})
@@ -529,8 +549,9 @@ func TestPOC2StreamingAssistantMarkerBlinks(t *testing.T) {
 	}
 }
 
-func TestPOC2JumpHintStaysInFixedRowAboveInput(t *testing.T) {
+func TestPOC2JumpHintSharesAgentStatusRow(t *testing.T) {
 	m := NewModel(Options{Width: 72, Height: 8})
+	m.busy = true
 	for i := 0; i < 20; i++ {
 		m.messages = append(m.messages, Message{Role: RoleAssistant, Text: "history"})
 	}
@@ -542,12 +563,9 @@ func TestPOC2JumpHintStaysInFixedRowAboveInput(t *testing.T) {
 		t.Fatalf("jump hint count = %d, want 1:\n%s", got, rendered)
 	}
 	lines := strings.Split(rendered, "\n")
-	jumpRow := m.vpHeight() + m.approvalPanelHeight()
-	if !strings.Contains(lines[jumpRow], jumpHintText()) {
-		t.Fatalf("jump hint should render in the fixed row above input:\n%s", rendered)
-	}
-	if strings.Contains(lines[len(lines)-1], jumpHintText()) {
-		t.Fatalf("jump hint should not render in status line:\n%s", rendered)
+	statusRow := m.vpHeight() + m.approvalPanelHeight() + m.humanPromptPanelHeight() + m.slashPanelHeight() + m.todoPanelHeight() + 1
+	if !strings.Contains(lines[statusRow], "● running") || !strings.Contains(lines[statusRow], jumpHintText()) {
+		t.Fatalf("jump hint should share the agent status row, got %q in:\n%s", lines[statusRow], rendered)
 	}
 }
 
@@ -620,7 +638,8 @@ func TestPOC2JumpRowClickScrollsToBottom(t *testing.T) {
 		t.Fatal("setup should be scrolled away from bottom")
 	}
 
-	_ = m.onPress(1, m.vpHeight()+m.approvalPanelHeight())
+	statusRow := m.vpHeight() + m.approvalPanelHeight() + m.humanPromptPanelHeight() + m.slashPanelHeight() + m.todoPanelHeight() + 1
+	_ = m.onPress(1, statusRow)
 	if !m.atBottom() {
 		t.Fatalf("jump row click should scroll to bottom, offset=%d max=%d", m.yOffset, m.maxOffset())
 	}
@@ -670,7 +689,7 @@ func TestPOC2InputLineLeavesLastColumnForMobileTerminals(t *testing.T) {
 	m.input.Insert(strings.Repeat("j", 120))
 	rendered := m.render()
 	lines := strings.Split(rendered, "\n")
-	inputLine := lines[m.vpHeight()+3]
+	inputLine := lines[len(lines)-3]
 	if strings.Contains(inputLine, "\x1b[?7l") || strings.Contains(inputLine, "\x1b[?7h") {
 		t.Fatalf("input line should not toggle terminal autowrap, got %q", inputLine)
 	}
@@ -1258,6 +1277,48 @@ func TestPOC2ToolApprovalResolvesFromKeyboard(t *testing.T) {
 		}
 	default:
 		t.Fatal("expected approval hook result")
+	}
+}
+
+func TestPOC2HumanPromptResolvesFromKeyboard(t *testing.T) {
+	responses := make(chan string, 1)
+	var tm tea.Model = NewModel(Options{Width: 80, Height: 12})
+	tm, _ = tm.Update(RequestHumanPromptMsg{
+		Request: HumanPromptRequest{
+			Title: "Choose commit shape",
+			Body:  "Split into 2 commits, or merge into 1?",
+			Options: []HumanPromptOption{
+				{Label: "2 commits", Value: "two"},
+				{Label: "1 commit", Value: "one"},
+			},
+			DefaultIndex: 0,
+		},
+		Respond: responses,
+	})
+
+	pending := tm.(Model)
+	if pending.humanPrompt == nil {
+		t.Fatal("expected pending human prompt")
+	}
+	rendered := ansi.Strip(pending.render())
+	for _, want := range []string{"Human input required", "Choose commit shape", "[enter/1] 2 commits", "[2] 1 commit", "human input pending"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("human prompt missing %q:\n%s", want, rendered)
+		}
+	}
+
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: "2", Code: '2'}))
+	resolved := tm.(Model)
+	if resolved.humanPrompt != nil {
+		t.Fatal("human prompt should clear after response")
+	}
+	select {
+	case got := <-responses:
+		if got != "one" {
+			t.Fatalf("response = %q, want one", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected human prompt response")
 	}
 }
 

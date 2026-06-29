@@ -87,17 +87,6 @@ func (b *InputBlock) MoveEnd()   { b.Cursor = b.Len() }
 // hard line break (ordinary text input strips newlines via normalizeInputText).
 func (b *InputBlock) InsertNewline() { b.insertRune('\n') }
 
-// LineCount reports the number of logical lines in the current value.
-func (b InputBlock) LineCount() int {
-	n := 1
-	for _, r := range b.Value {
-		if r == '\n' {
-			n++
-		}
-	}
-	return n
-}
-
 func (b *InputBlock) Backspace() {
 	if b.Cursor == 0 {
 		return
@@ -119,10 +108,67 @@ func (b InputBlock) ExpandedValue() string {
 	return b.expandTokens(b.Value)
 }
 
-// Render lays the input out across up to maxRows visible lines, wrapping only
-// on hard newlines. The first logical line is prefixed with "❯ "; continuations
-// are indented to align under it. It returns the rendered lines plus the cursor
-// position as a (row, column) within those lines.
+type inputVisualLine struct {
+	start int
+	end   int
+}
+
+func (b InputBlock) VisualLineCount(width int) int {
+	return len(b.visualLines(width))
+}
+
+func (b InputBlock) visualLines(width int) []inputVisualLine {
+	prefix := youStyle.Render("❯ ")
+	prefixWidth := lipgloss.Width(prefix)
+	contentWidth := max(1, width-prefixWidth-1)
+	runes := []rune(b.Value)
+	var lines []inputVisualLine
+
+	appendWrapped := func(start, end int) {
+		if start >= end {
+			lines = append(lines, inputVisualLine{start: start, end: end})
+			return
+		}
+		for segStart := start; segStart < end; {
+			segEnd := segStart
+			segWidth := 0
+			for segEnd < end {
+				label := b.expandLabels(string(runes[segEnd : segEnd+1]))
+				w := ansi.StringWidth(label)
+				if segWidth > 0 && segWidth+w > contentWidth {
+					break
+				}
+				segWidth += w
+				segEnd++
+				if segWidth >= contentWidth {
+					break
+				}
+			}
+			if segEnd == segStart {
+				segEnd++
+			}
+			lines = append(lines, inputVisualLine{start: segStart, end: segEnd})
+			segStart = segEnd
+		}
+	}
+
+	lineStart := 0
+	for i := 0; i <= len(runes); i++ {
+		if i == len(runes) || runes[i] == '\n' {
+			appendWrapped(lineStart, i)
+			lineStart = i + 1
+		}
+	}
+	if len(lines) == 0 {
+		lines = append(lines, inputVisualLine{})
+	}
+	return lines
+}
+
+// Render lays the input out across up to maxRows visible rows, wrapping on both
+// hard newlines and terminal width. The first visual line is prefixed with "❯ ";
+// continuations are indented to align under it. It returns the rendered lines
+// plus the cursor position as a (row, column) within those lines.
 func (b InputBlock) Render(width, maxRows int) (lines []string, cursorRow, cursorX int) {
 	if maxRows < 1 {
 		maxRows = 1
@@ -134,28 +180,18 @@ func (b InputBlock) Render(width, maxRows int) (lines []string, cursorRow, curso
 
 	runes := []rune(b.Value)
 	caret := clamp(b.Cursor, 0, len(runes))
+	visual := b.visualLines(width)
 
-	// Split into logical lines by '\n', tracking rune ranges [start,end).
-	type logLine struct{ start, end int }
-	var logical []logLine
-	lineStart := 0
-	for i := 0; i <= len(runes); i++ {
-		if i == len(runes) || runes[i] == '\n' {
-			logical = append(logical, logLine{lineStart, i})
-			lineStart = i + 1
-		}
-	}
-
-	caretRow := 0
-	for idx, ll := range logical {
-		if caret >= ll.start && caret <= ll.end {
+	caretRow := len(visual) - 1
+	for idx, vl := range visual {
+		if caret >= vl.start && caret <= vl.end {
 			caretRow = idx
 			break
 		}
 	}
 
-	// Window of up to maxRows logical lines, scrolled to keep the caret visible.
-	total := len(logical)
+	// Window of up to maxRows visual lines, scrolled to keep the caret visible.
+	total := len(visual)
 	start := 0
 	if total > maxRows {
 		start = clamp(caretRow-(maxRows-1), 0, total-maxRows)
@@ -166,14 +202,14 @@ func (b InputBlock) Render(width, maxRows int) (lines []string, cursorRow, curso
 	cursorX = prefixWidth
 
 	for row := start; row < end; row++ {
-		ll := logical[row]
-		lineRunes := runes[ll.start:ll.end]
+		vl := visual[row]
+		lineRunes := runes[vl.start:vl.end]
 		pre := cont
 		if row == 0 {
 			pre = prefix
 		}
 		if row == caretRow {
-			off := clamp(caret-ll.start, 0, len(lineRunes))
+			off := clamp(caret-vl.start, 0, len(lineRunes))
 			before := b.expandLabels(string(lineRunes[:off]))
 			after := b.expandLabels(string(lineRunes[off:]))
 			beforeWidth := ansi.StringWidth(before)
