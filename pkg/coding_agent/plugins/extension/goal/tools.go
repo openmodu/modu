@@ -76,9 +76,8 @@ func (t *updateGoalTool) Parameters() any {
 		"type": "object",
 		"properties": map[string]any{
 			"status": map[string]any{
-				"anyOf": []map[string]any{
-					{"type": "string", "const": "complete"},
-				},
+				"type":        "string",
+				"enum":        []string{"complete"},
 				"description": "Required. Set to complete only when the objective is achieved and no required work remains.",
 			},
 		},

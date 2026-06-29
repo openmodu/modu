@@ -2916,6 +2916,29 @@ func TestPromptPersistsAssistantAndToolMessages(t *testing.T) {
 	}
 }
 
+func TestRestoreRecognizesPersistedToolResultRole(t *testing.T) {
+	raw := json.RawMessage(`{
+		"role":"toolResult",
+		"toolCallId":"call-1",
+		"toolName":"todo_write",
+		"content":[{"type":"text","text":"updated todo list"}],
+		"isError":false,
+		"timestamp":123
+	}`)
+
+	msg, err := unmarshalSingleAgentMessage(raw)
+	if err != nil {
+		t.Fatalf("unmarshalSingleAgentMessage returned error: %v", err)
+	}
+	toolResult, ok := msg.(types.ToolResultMessage)
+	if !ok {
+		t.Fatalf("message type = %T, want ToolResultMessage", msg)
+	}
+	if toolResult.Role != types.RoleToolResult || toolResult.ToolName != "todo_write" {
+		t.Fatalf("unexpected tool result: %#v", toolResult)
+	}
+}
+
 func TestPromptPersistsAndResumesAssistantWhenStreamClosesAfterResolve(t *testing.T) {
 	dir := t.TempDir()
 	agentDir := filepath.Join(dir, ".coding_agent")
