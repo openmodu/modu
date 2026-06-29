@@ -3848,6 +3848,16 @@ type extensionAPIProbe struct{ api extension.ExtensionAPI }
 func (e *extensionAPIProbe) Name() string                          { return "api-probe" }
 func (e *extensionAPIProbe) Init(api extension.ExtensionAPI) error { e.api = api; return nil }
 
+type startupPromptExtension struct{}
+
+func (e *startupPromptExtension) Name() string { return "startup-prompt" }
+func (e *startupPromptExtension) Init(api extension.ExtensionAPI) error {
+	api.On("session_start", func(types.Event) {
+		_ = api.SendMessageWithOptions("hidden", extension.MessageOptions{DeliverAs: "followUp"})
+	})
+	return nil
+}
+
 func TestBackgroundPromptDriverRoutesIdleHiddenPromptToForeground(t *testing.T) {
 	dir := t.TempDir()
 	model := newTestModel()
@@ -3907,5 +3917,66 @@ func TestBackgroundPromptDriverRoutesIdleHiddenPromptToForeground(t *testing.T) 
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("driver was not invoked for the idle hidden prompt")
+	}
+}
+
+func TestDeferredStartupEventRoutesGoalLikePromptToForegroundDriver(t *testing.T) {
+	dir := t.TempDir()
+	model := newTestModel()
+	streamFn := func(_ context.Context, _ *types.Model, _ *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+		stream := types.NewEventStream()
+		go func() {
+			msg := &types.AssistantMessage{
+				Role:       "assistant",
+				ProviderID: model.ProviderID,
+				Model:      model.ID,
+				StopReason: "stop",
+				Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "ok"}},
+				Timestamp:  time.Now().UnixMilli(),
+			}
+			stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+			stream.Resolve(msg, nil)
+			stream.Close()
+		}()
+		return stream, nil
+	}
+
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:               dir,
+		AgentDir:          filepath.Join(dir, ".coding_agent"),
+		Model:             model,
+		GetAPIKey:         func(string) (string, error) { return "", nil },
+		StreamFn:          streamFn,
+		Extensions:        []extension.Extension{&startupPromptExtension{}},
+		DeferStartupEvent: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runs := make(chan func(context.Context) error, 1)
+	session.SetBackgroundPromptDriver(func(run func(context.Context) error) bool {
+		runs <- run
+		return true
+	})
+
+	select {
+	case <-runs:
+		t.Fatal("startup prompt ran before EmitStartupEvent")
+	default:
+	}
+
+	session.EmitStartupEvent()
+
+	select {
+	case run := <-runs:
+		if run == nil {
+			t.Fatal("driver received a nil run function")
+		}
+		if err := run(context.Background()); err != nil {
+			t.Fatalf("driver run function errored: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("driver was not invoked for deferred startup prompt")
 	}
 }

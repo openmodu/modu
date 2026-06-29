@@ -274,6 +274,10 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 	programMu.Lock()
 	program = prog
 	programMu.Unlock()
+	go func() {
+		session.EmitStartupEvent()
+		session.EmitExtensionEvent("ui_ready")
+	}()
 	_, err := prog.Run()
 	return err
 }

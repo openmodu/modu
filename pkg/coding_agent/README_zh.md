@@ -170,7 +170,7 @@ type ToolHook struct {
 
 目标状态持久化在当前 session 目录的 `extensions/pi-goal/<session-id>.json`，包含 `active`、`paused`、`budgetLimited`、`complete` 状态，以及 token/time accounting。目标文本最多 4000 个字符，更长的说明应放进文件再用 `/goal follow docs/goal.md` 引用。启动时会校验 goal store schema，坏文件不会被带病加载。达到显式 token budget 后会进入 `budgetLimited`，并注入收尾提示而不是继续做实质工作。Session shutdown 会 flush 最后一段未结算耗时，完成输出采用 pi-goal 的 `Completed at` ISO 时间格式。
 
-Goal 状态也会暴露到 `RuntimeState().Extensions["goal"]`，TUI 底部状态行会显示 `Pursuing goal (...)`、`Goal paused (/goal resume)`、`Goal unmet (...)`、`Goal abandoned` 或 `Goal achieved (...)`。`/goal` 命令输出通过 extension notify 进入 TUI scrollback，print mode 仍会把同样文本写到 stderr。只有 session resume 后发现 paused goal 才会询问是否恢复；普通 startup 和 headless 模式保持 paused，避免无交互自动恢复。
+Goal 状态也会暴露到 `RuntimeState().Extensions["goal"]`，TUI 底部状态行会显示 `Pursuing goal (...)`、`Goal paused (/goal resume)`、`Goal unmet (...)`、`Goal abandoned` 或 `Goal achieved (...)`。`/goal` 命令输出通过 extension notify 进入 TUI scrollback，print mode 仍会把同样文本写到 stderr。只有 session resume 后发现 paused goal 才会询问是否恢复；普通 startup 和 headless 模式保持 paused，避免无交互自动恢复。交互宿主可设置 `CodingSessionOptions.DeferStartupEvent`，完成 background prompt driver 和 UI wiring 后调用 `EmitStartupEvent()` 与 `EmitExtensionEvent("ui_ready")`，这样启动时的隐藏 goal follow-up 会进入前台 run loop，状态栏能显示 running 并支持中断。
 
 ### Subagent 扩展
 

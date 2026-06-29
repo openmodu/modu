@@ -93,15 +93,16 @@ func main() {
 	}
 
 	sessionOpts := coding_agent.CodingSessionOptions{
-		Cwd:             cwd,
-		AgentDir:        agentDir,
-		Model:           model,
-		ThinkingLevel:   thinkingLevel,
-		GetAPIKey:       getAPIKey,
-		ScopedModels:    provider.ConfiguredModelIDs(),
-		ModelConfigPath: provider.ConfigPath(),
-		ResumeSessionID: *resumeID,
-		Extensions:      exts,
+		Cwd:               cwd,
+		AgentDir:          agentDir,
+		Model:             model,
+		ThinkingLevel:     thinkingLevel,
+		GetAPIKey:         getAPIKey,
+		ScopedModels:      provider.ConfiguredModelIDs(),
+		ModelConfigPath:   provider.ConfigPath(),
+		ResumeSessionID:   *resumeID,
+		Extensions:        exts,
+		DeferStartupEvent: *printPrompt == "" && !*rpcMode && !*acpMode,
 	}
 	session, err := coding_agent.NewCodingSession(sessionOpts)
 	if err != nil {

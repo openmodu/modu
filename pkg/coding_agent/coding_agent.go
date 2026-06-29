@@ -66,6 +66,11 @@ type CodingSessionOptions struct {
 	// ResumeSessionID resumes a persisted session by full id or unique prefix.
 	// When empty, NewCodingSession starts a fresh session.
 	ResumeSessionID string
+	// DeferStartupEvent suppresses the "startup" session_start event during
+	// construction so the host can finish wiring (subscriptions, background
+	// prompt driver) before extensions react to it — notably an active goal
+	// auto-continuing. The host must call EmitStartupEvent once it is ready.
+	DeferStartupEvent bool
 }
 
 // engine is the L1 kernel: it owns all session state, runs agent turns, wires
@@ -122,6 +127,11 @@ type engine struct {
 	// headless hosts.
 	bgPromptDriver   func(run func(context.Context) error) bool
 	bgPromptDriverMu sync.RWMutex
+
+	// startupEventDeferred records that the constructor skipped the startup
+	// session_start event (DeferStartupEvent); EmitStartupEvent emits it once.
+	startupEventDeferred bool
+	startupEventOnce     sync.Once
 
 	// approvalManager handles tool execution approval.
 	approvalManager *approval.Manager
@@ -563,7 +573,11 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 				},
 			}
 		}
-		extRunner.EmitEvent(types.Event{Type: types.EventType("session_start"), Reason: "startup"})
+		if !opts.DeferStartupEvent {
+			extRunner.EmitEvent(types.Event{Type: types.EventType("session_start"), Reason: "startup"})
+		} else {
+			cs.startupEventDeferred = true
+		}
 	}
 
 	cs.installHarnessLayer()
