@@ -193,6 +193,9 @@ func TestMessagesFromAgentEventFormatsReadToolLikeClaudeCode(t *testing.T) {
 	if got, want := start[0].ToolInput, path+" · lines 205-218"; got != want {
 		t.Fatalf("read input = %q, want %q", got, want)
 	}
+	if got, want := start[0].Summary, "Read 1 file"; got != want {
+		t.Fatalf("read start summary = %q, want %q", got, want)
+	}
 
 	end := messagesFromAgentEvent(types.Event{
 		Type:       types.EventTypeToolExecutionEnd,
@@ -208,6 +211,63 @@ func TestMessagesFromAgentEventFormatsReadToolLikeClaudeCode(t *testing.T) {
 	}
 	if got := end[0]; got.Summary != "Read 2 lines" || got.ToolOutput != "Read 2 lines" || !got.ToolDone {
 		t.Fatalf("unexpected read end message: %#v", got)
+	}
+}
+
+func TestToolRunningSummaryCountsReadFiles(t *testing.T) {
+	tests := []struct {
+		name string
+		args any
+		want string
+	}{
+		{name: "path", args: map[string]any{"path": "a.go"}, want: "Read 1 file"},
+		{name: "file_path", args: map[string]any{"file_path": "a.go"}, want: "Read 1 file"},
+		{name: "paths", args: map[string]any{"paths": []any{"a.go", "b.go"}}, want: "Read 2 files"},
+		{name: "file_paths", args: map[string][]string{"file_paths": []string{"a.go", "b.go", "c.go"}}, want: "Read 3 files"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := toolRunningSummaryFromArgs("read", tt.args); got != tt.want {
+				t.Fatalf("summary = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestToolSummariesForReadSearchAndListTools(t *testing.T) {
+	running := map[string]string{
+		"read": "Read 1 file",
+		"grep": "Search files",
+		"find": "Find files",
+		"ls":   "List directory",
+	}
+	for tool, want := range running {
+		if got := toolRunningSummaryFromArgs(tool, map[string]any{"path": "main.go"}); got != want {
+			t.Fatalf("%s running summary = %q, want %q", tool, got, want)
+		}
+	}
+
+	done := []struct {
+		name   string
+		tool   string
+		output string
+		want   string
+	}{
+		{name: "grep files", tool: "grep", output: "Found 2 file(s)\na.go\nb.go", want: "Found 2 files"},
+		{name: "grep count", tool: "grep", output: "a.go:2\nb.go:3\n\nFound 5 total occurrence(s) across 2 file(s).", want: "Found 5 matches"},
+		{name: "grep content", tool: "grep", output: "a.go:10:needle\nb.go:20:needle", want: "Found 2 matches"},
+		{name: "grep empty", tool: "grep", output: "No matches found.", want: "Found 0 matches"},
+		{name: "find files", tool: "find", output: "a.go\nb.go\n\n(Results are truncated. Consider using a more specific path or pattern.)", want: "Found 2 files"},
+		{name: "find empty", tool: "find", output: "No files found", want: "Found 0 files"},
+		{name: "ls entries", tool: "ls", output: "cmd/\ngo.mod\n\n... (20 entries total, showing first 2)", want: "Listed 2 entries"},
+		{name: "ls empty", tool: "ls", output: "(empty directory)", want: "Listed 0 entries"},
+	}
+	for _, tt := range done {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := toolDoneSummary(tt.tool, false, tt.output); got != tt.want {
+				t.Fatalf("done summary = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
