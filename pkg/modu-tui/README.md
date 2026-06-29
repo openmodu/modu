@@ -35,7 +35,8 @@ It owns only the reusable UI shell:
   drop mouse release events cannot leave a permanent 30ms redraw loop running
 - slash commands can be supplied through `Options.SlashCommands`; typing `/`
   opens a bottom card with filtered command matches, `Tab` completes, and
-  `Enter` dispatches through `Hooks.SlashCommand`
+  `Enter` dispatches through `Hooks.SlashCommand`; the leading slash command
+  token in the input is highlighted separately from its arguments
 - tool-call messages with the same `ToolID` are merged into a single block so
   call/start/result updates do not scatter through the transcript
 - Read-style tool calls render with a compact `Read N lines` result summary

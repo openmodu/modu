@@ -484,7 +484,7 @@ func (p *moduTUISlashPrinter) Text() string {
 
 func runModuTUISlash(ctx context.Context, line string, session *coding_agent.CodingSession, model *types.Model, send func(tea.Msg), keepAgentBusy func() bool) {
 	send(modutui.SetBusyMsg{Busy: true})
-	send(modutui.SetStatusMsg{Status: "running slash command"})
+	send(modutui.SetStatusMsg{Status: moduTUISlashRunningStatus(line)})
 	defer func() {
 		send(modutui.SetTodosMsg{Todos: moduTUITodos(session)})
 		if keepAgentBusy != nil && keepAgentBusy() {
@@ -516,6 +516,14 @@ func runModuTUISlash(ctx context.Context, line string, session *coding_agent.Cod
 		return
 	}
 	send(modutui.AppendMessageMsg{Message: modutui.Message{Role: modutui.RoleAssistant, Text: "unknown command: " + line}})
+}
+
+func moduTUISlashRunningStatus(line string) string {
+	fields := strings.Fields(strings.TrimSpace(line))
+	if len(fields) == 0 || !strings.HasPrefix(fields[0], "/") {
+		return "running slash command"
+	}
+	return "running " + fields[0]
 }
 
 func moduTUIInfoCardLines(session *coding_agent.CodingSession, model *types.Model) []string {
