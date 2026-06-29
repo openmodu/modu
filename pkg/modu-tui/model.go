@@ -608,6 +608,9 @@ func (m *Model) todoPanelHeight() int {
 	return len(m.todoPanelLines())
 }
 func (m *Model) showJumpPanel() bool {
+	if len(m.slashMatches) > 0 {
+		return false
+	}
 	heightWithoutJump := m.height - m.bottomFixedRows() - m.approvalPanelHeight() - m.humanPromptPanelHeight() - m.slashPanelHeight() - m.todoPanelHeight()
 	if heightWithoutJump <= m.minViewportRows() {
 		return false
