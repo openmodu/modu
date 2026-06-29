@@ -2,13 +2,17 @@ package modutui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
+	osc52 "github.com/aymanbagabas/go-osc52/v2"
 	"github.com/charmbracelet/x/ansi"
 )
+
+var writeLocalClipboard = clipboard.WriteAll
 
 func (m *Model) lineWidth(li int) int {
 	if li < 0 || li >= len(m.lines) {
@@ -117,12 +121,35 @@ func (m *Model) copySelection() tea.Cmd {
 	if text == "" {
 		return nil
 	}
-	how := "OSC52"
-	if err := clipboard.WriteAll(text); err == nil {
-		how = "local+OSC52"
+	localOK := writeLocalClipboard(text) == nil
+	needsOSC52 := isRemoteSession() || !localOK
+	how := "clipboard"
+	if needsOSC52 {
+		how = "OSC52"
+		if localOK {
+			how = "local+OSC52"
+		}
 	}
 	m.status = fmt.Sprintf("✓ copied %d chars (%s)", len([]rune(text)), how)
-	return tea.SetClipboard(text)
+	if needsOSC52 {
+		return tea.Raw(clipboardSequence(text))
+	}
+	return nil
+}
+
+func isRemoteSession() bool {
+	return os.Getenv("SSH_TTY") != "" || os.Getenv("SSH_CONNECTION") != "" || os.Getenv("SSH_CLIENT") != ""
+}
+
+func clipboardSequence(text string) string {
+	seq := osc52.New(text)
+	switch {
+	case os.Getenv("TMUX") != "":
+		seq = seq.Tmux()
+	case strings.HasPrefix(os.Getenv("TERM"), "screen"):
+		seq = seq.Screen()
+	}
+	return seq.String()
 }
 
 func (m *Model) cellAt(line, x int) cell {

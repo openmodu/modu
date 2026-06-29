@@ -24,6 +24,8 @@ SSH 环境默认保留终端 mouse reporting，滚轮和拖拽选择可以直接
 MODU_TUI_MOUSE=off modu_code
 ```
 
+SSH 下拖选复制会发 OSC52；在 tmux/screen 中会使用 passthrough，让本地终端更新本机剪贴板。
+
 在 SSH 兼容模式下，输入框为空且没有输入历史可选时，Up/Down 会滚动对话内容，适配移动端 SSH 把滑动手势转成方向键的行为；有输入历史时 Up/Down 优先切换历史输入。
 
 TUI 底部固定区域分两层：输入框上方显示 agent 运行状态，输入框下方显示当前上下文使用量/窗口、模型和工作目录。运行中按 `Esc` 会中断当前请求和正在运行的 bash。

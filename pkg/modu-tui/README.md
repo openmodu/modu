@@ -11,7 +11,8 @@ It owns only the reusable UI shell:
   clear content left by previous scroll frames
 - `Jump to bottom` is shown once in a fixed row above the input when scrolled
   away from the bottom, avoiding repeated viewport overlays on mobile terminals
-- drag selection with local clipboard plus OSC52 copy
+- drag selection with local clipboard plus OSC52 copy; SSH/tmux/screen sessions
+  emit passthrough OSC52 so the local terminal can update the user's clipboard
 - independent input, text, markdown, collapsible, tool-call, and code blocks
 - bottom input history supports Up/Down navigation, keeps a temporary draft,
   and caps retained entries at 100 with a `History n/total` hint on the top

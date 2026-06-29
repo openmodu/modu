@@ -74,6 +74,68 @@ func TestPOC2ResizeClampsSelection(t *testing.T) {
 	}
 }
 
+func TestPOC2CopySelectionUsesOSC52OverSSH(t *testing.T) {
+	t.Setenv("SSH_TTY", "/dev/pts/1")
+	oldWrite := writeLocalClipboard
+	writeLocalClipboard = func(string) error { return nil }
+	t.Cleanup(func() { writeLocalClipboard = oldWrite })
+
+	m := NewModel(Options{
+		Width:           40,
+		Height:          8,
+		InitialMessages: []Message{{Role: RoleAssistant, Text: "copy me"}},
+	})
+	m.selStart = cell{line: 0, col: 2}
+	m.selEnd = cell{line: 0, col: 9}
+
+	cmd := m.copySelection()
+	if cmd == nil {
+		t.Fatal("copySelection should return an OSC52 command over SSH")
+	}
+	msg, ok := cmd().(tea.RawMsg)
+	if !ok {
+		t.Fatalf("copySelection command message = %T, want tea.RawMsg", cmd())
+	}
+	raw := fmt.Sprint(msg.Msg)
+	if !strings.Contains(raw, "\x1b]52;c;") || !strings.HasSuffix(raw, "\x07") {
+		t.Fatalf("raw clipboard sequence should be OSC52, got %q", raw)
+	}
+	if !strings.Contains(m.status, "local+OSC52") {
+		t.Fatalf("copy status should report OSC52 path, got %q", m.status)
+	}
+}
+
+func TestPOC2CopySelectionUsesTmuxPassthrough(t *testing.T) {
+	t.Setenv("SSH_TTY", "/dev/pts/1")
+	t.Setenv("TMUX", "/tmp/tmux")
+
+	seq := clipboardSequence("hi")
+	if !strings.Contains(seq, "\x1bPtmux;") || !strings.Contains(seq, "52;c;") {
+		t.Fatalf("tmux clipboard sequence missing passthrough wrapper: %q", seq)
+	}
+}
+
+func TestPOC2CopySelectionUsesLocalClipboardWithoutOSC52WhenLocalSucceeds(t *testing.T) {
+	oldWrite := writeLocalClipboard
+	writeLocalClipboard = func(string) error { return nil }
+	t.Cleanup(func() { writeLocalClipboard = oldWrite })
+
+	m := NewModel(Options{
+		Width:           40,
+		Height:          8,
+		InitialMessages: []Message{{Role: RoleAssistant, Text: "copy me"}},
+	})
+	m.selStart = cell{line: 0, col: 2}
+	m.selEnd = cell{line: 0, col: 9}
+
+	if cmd := m.copySelection(); cmd != nil {
+		t.Fatalf("local successful clipboard copy should not emit OSC52 command, got %#v", cmd())
+	}
+	if !strings.Contains(m.status, "(clipboard)") {
+		t.Fatalf("copy status should report local clipboard path, got %q", m.status)
+	}
+}
+
 func TestPOC2RenderConstrainsLineWidths(t *testing.T) {
 	m := NewModel()
 	m.width, m.height = 24, 8
