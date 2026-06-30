@@ -995,3 +995,41 @@ enough to implement, verify, and commit independently.
   expose `Resume` and `Restart`; completed/failed workflows expose `Restart`,
   with each row routed through the existing `/workflows` control commands and
   returning to the refreshed run detail panel.
+- 2026-06-30: made workflow panels live-refresh while they are open. The
+  `modu_code` runner now tracks the current workflow cockpit/detail/agent/result
+  panel, polls the workflow runtime-state fingerprint, and sends
+  `RefreshPanelMsg` when the state changes. `pkg/modu-tui` preserves the
+  selected row and scroll offset on same-panel refreshes, and `Hooks.PanelClosed`
+  stops refreshing when the user closes the panel.
+- 2026-06-30: added phase-level workflow drill-down. `Workflow Run` panels now
+  expose each orchestration phase as a selectable row before the global
+  Agents/Result/Script actions; selecting a phase opens a live-refreshing
+  `Workflow Phase` panel showing only that stage's progress, agent rows,
+  prompt/result/error previews, and tool summaries, with navigation back to the
+  run detail, all agents, or cockpit.
+- 2026-06-30: routed read-only workflow slash subcommands into the new panel
+  surface. `/workflows list` opens the cockpit, `/workflows show <run|latest>`
+  opens the run detail panel, and `/workflows agent|transcript <run|latest>
+  <agent-id>` opens the corresponding agent/transcript panel. Control commands
+  such as pause/stop/resume/restart still execute through the workflow slash
+  command path.
+- 2026-07-01: added per-agent workflow controls to the `Workflow Agent` panel.
+  Running agents now expose `Stop agent` and `Restart agent` rows that route to
+  the existing `/workflows agent-stop` and `/workflows agent-restart` commands,
+  then return to the refreshed agent detail panel. Completed agents keep the
+  read-only Transcript/Back navigation.
+- 2026-07-01: routed workflow lifecycle notifications into the panel surface.
+  Workflow extension `Run:`/`New run:` start messages now open the matching
+  `Workflow Run` detail panel, completion messages open the latest run detail,
+  and control/error notifications update the status line instead of appending a
+  large workflow block to the transcript.
+- 2026-07-01: routed workflow tool results into the panel surface. Async
+  `workflow` tool results with `Details.runID` now open the matching run detail
+  panel, synchronous completion results open the latest run detail, and the
+  transcript tool block keeps only a compact "Opened workflow run panel" summary
+  instead of rendering the full workflow report inline.
+- 2026-07-01: workflow tool starts now open the `Workflow Cockpit` immediately.
+  This gives synchronous workflow runs a live panel surface before a run id is
+  returned; the existing runtime-state refresh loop then keeps the cockpit
+  updated while the workflow registry receives progress snapshots, and final
+  tool results still switch to the run detail panel.

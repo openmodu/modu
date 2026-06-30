@@ -1532,6 +1532,63 @@ func TestPOC2PanelRowsSelectAndEmitAction(t *testing.T) {
 	}
 }
 
+func TestPOC2PanelRefreshPreservesSelectionAndCloseHook(t *testing.T) {
+	closed := make(chan string, 1)
+	var tm tea.Model = NewModel(Options{
+		Width:  72,
+		Height: 12,
+		Hooks: Hooks{
+			PanelClosed: func(panelID string) {
+				closed <- panelID
+			},
+		},
+	})
+	tm, _ = tm.Update(SetPanelMsg{Panel: Panel{
+		ID:    "workflow",
+		Title: "Workflow Cockpit",
+		Rows: []PanelRow{
+			{Label: "run one", Value: "run-one"},
+			{Label: "run two", Value: "run-two"},
+		},
+	}})
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	selected := tm.(Model)
+	if selected.panelSelected != 1 {
+		t.Fatalf("panelSelected before refresh = %d, want 1", selected.panelSelected)
+	}
+
+	tm, _ = tm.Update(RefreshPanelMsg{Panel: Panel{
+		ID:    "workflow",
+		Title: "Workflow Cockpit",
+		Rows: []PanelRow{
+			{Label: "run one [done]", Value: "run-one"},
+			{Label: "run two [running]", Value: "run-two"},
+			{Label: "run three [queued]", Value: "run-three"},
+		},
+	}})
+	refreshed := tm.(Model)
+	if refreshed.panelSelected != 1 {
+		t.Fatalf("panelSelected after refresh = %d, want 1", refreshed.panelSelected)
+	}
+	rendered := ansi.Strip(refreshed.render())
+	if !strings.Contains(rendered, "run two [running]") {
+		t.Fatalf("refreshed panel content missing updated row:\n%s", rendered)
+	}
+
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: "q"}))
+	if tm.(Model).panel != nil {
+		t.Fatal("panel should close after q")
+	}
+	select {
+	case panelID := <-closed:
+		if panelID != "workflow" {
+			t.Fatalf("closed panel id = %q, want workflow", panelID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected panel close hook")
+	}
+}
+
 func TestPOC2PanelSelectionStaysVisible(t *testing.T) {
 	rows := make([]PanelRow, 0, 16)
 	for i := 0; i < 16; i++ {

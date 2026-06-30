@@ -127,6 +127,7 @@ type Hooks struct {
 	ToolApprovalDecision func(ToolApprovalResult)
 	InputHistoryChanged  func([]string)
 	PanelAction          func(PanelAction)
+	PanelClosed          func(panelID string)
 	SlashCommand         func(line string)
 	Interrupt            func()
 	Submit               func(text string)
@@ -206,6 +207,10 @@ type SetTodosMsg struct {
 type ClearMessagesMsg struct{}
 
 type SetPanelMsg struct {
+	Panel Panel
+}
+
+type RefreshPanelMsg struct {
 	Panel Panel
 }
 

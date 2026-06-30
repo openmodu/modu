@@ -460,6 +460,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ensurePanelSelectionVisible()
 		m.rebuild()
 
+	case RefreshPanelMsg:
+		panel := normalizePanel(msg.Panel)
+		if m.panel == nil || m.panel.ID != panel.ID {
+			m.panel = &panel
+			m.panelOffset = 0
+			m.panelSelected = clamp(panel.Selected, 0, max(0, len(panel.Rows)-1))
+		} else {
+			selected := m.panelSelected
+			offset := m.panelOffset
+			m.panel = &panel
+			m.panelSelected = clamp(selected, 0, max(0, len(panel.Rows)-1))
+			m.panelOffset = offset
+		}
+		m.clearSlashMatches()
+		m.clearSelection()
+		m.rebuild()
+		m.ensurePanelSelectionVisible()
+		m.rebuild()
+
 	case ClearPanelMsg:
 		if m.panel != nil && (msg.ID == "" || msg.ID == m.panel.ID) {
 			m.panel = nil
@@ -1566,8 +1585,15 @@ func normalizePanel(panel Panel) Panel {
 
 func (m Model) handlePanelKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if isCtrlCKey(msg) || isEscKey(msg) || strings.EqualFold(strings.TrimSpace(msg.Text), "q") {
+		panelID := ""
+		if m.panel != nil {
+			panelID = m.panel.ID
+		}
 		m.closePanel()
 		m.rebuild()
+		if panelID != "" && m.hooks.PanelClosed != nil {
+			m.hooks.PanelClosed(panelID)
+		}
 		return m, nil
 	}
 	if m.panel != nil && len(m.panel.Rows) > 0 {
