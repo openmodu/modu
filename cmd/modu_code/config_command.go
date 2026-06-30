@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -243,7 +242,7 @@ func runConfigCommand(args []string, stdout, stderr io.Writer) error {
 		if len(args) != 1 {
 			return fmt.Errorf("usage: modu_code config example")
 		}
-		_, err := fmt.Fprint(stdout, provider.ExampleConfigJSON())
+		_, err := fmt.Fprint(stdout, provider.ExampleConfigTOML())
 		return err
 	case "init":
 		force := len(args) > 1 && args[1] == "--force"
@@ -322,13 +321,7 @@ func printConfigShow(stdout io.Writer) error {
 	cfg, exists, err := provider.LoadConfigFile()
 	fmt.Fprintf(stdout, "config: %s\n", provider.ConfigPath())
 	if err != nil {
-		var syntaxErr *json.SyntaxError
-		var typeErr *json.UnmarshalTypeError
-		if errors.As(err, &syntaxErr) || errors.As(err, &typeErr) {
-			fmt.Fprintf(stdout, "status: invalid JSON: %v\n", err)
-		} else {
-			fmt.Fprintf(stdout, "status: unreadable: %v\n", err)
-		}
+		fmt.Fprintf(stdout, "status: invalid TOML: %v\n", err)
 	} else if !exists {
 		fmt.Fprintln(stdout, "status: missing")
 	} else if len(cfg.Models) == 0 {
@@ -353,7 +346,7 @@ func printConfigList(stdout io.Writer) error {
 	cfg, exists, err := provider.LoadConfigFile()
 	fmt.Fprintf(stdout, "config: %s\n", provider.ConfigPath())
 	if err != nil {
-		return fmt.Errorf("invalid JSON: %w", err)
+		return fmt.Errorf("invalid TOML: %w", err)
 	}
 	if !exists || len(cfg.Models) == 0 {
 		fmt.Fprintln(stdout, "models: none")

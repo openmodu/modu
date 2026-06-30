@@ -36,7 +36,7 @@ import (
 type CodingSessionOptions struct {
 	// Cwd is the working directory.
 	Cwd string
-	// AgentDir is the configuration directory (default: ~/.coding_agent/).
+	// AgentDir is the configuration directory (default: ~/.modu/).
 	AgentDir string
 	// Model is the LLM model to use.
 	Model *types.Model
@@ -181,7 +181,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		cfg.ThinkingLevel = opts.ThinkingLevel
 	}
 
-	// Initialize memory store (global ~/.coding_agent/memory + project <cwd>/memory)
+	// Initialize memory store (global ~/.modu/memory + project <cwd>/memory)
 	memoryStore := memory.New(agentDir, opts.Cwd)
 	contextRemaining := &contextRemainingProxy{}
 

@@ -5,6 +5,11 @@ enough to implement, verify, and commit independently.
 
 ## Done
 
+- 2026-06-30: moved the default `modu_code` runtime/config root from
+  `~/.coding_agent` to `~/.modu`, and changed the main model config from
+  `config.json` JSON to `config.toml` TOML across config init/show/list/validate
+  and save paths. Telegram bot config under `channels/telegram/` now uses
+  `config.toml` as well.
 - 2026-06-30: limited the `modu-tui` todo card to current active runs. A todo
   snapshot restored from the session or left uncompleted after a finished goal
   no longer appears in the fixed bottom area; the card only renders while the

@@ -16,6 +16,9 @@ High-priority gaps identified before this round:
 
 ## Completed In This Round
 
+- Moved the default coding-agent runtime directory from `~/.coding_agent` to
+  `~/.modu`, so sessions, worktrees, runtime state, global memory, global
+  skills, prompts, agents, packages, and settings now share the new Modu root.
 - Persisted compaction replacement history in session JSONL and taught resume
   to install that compacted history before replaying later messages, so
   `--resume` after `/compact` keeps the summary plus preserved tail instead of

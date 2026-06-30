@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/providers/openai"
@@ -18,49 +19,48 @@ import (
 )
 
 type Config struct {
-	Version      int                       `json:"version,omitempty"`
-	Active       string                    `json:"active,omitempty"`
-	Roles        map[string]string         `json:"roles,omitempty"`
-	ScopedModels []string                  `json:"scopedModels,omitempty"`
-	Reasoning    ReasoningConfig           `json:"reasoning,omitempty"`
-	Providers    map[string]ProviderConfig `json:"providers,omitempty"`
-	Models       []ModelConfig             `json:"models,omitempty"`
+	Version      int                       `json:"version,omitempty" toml:"version,omitempty"`
+	Active       string                    `json:"active,omitempty" toml:"active,omitempty"`
+	Roles        map[string]string         `json:"roles,omitempty" toml:"roles,omitempty"`
+	ScopedModels []string                  `json:"scopedModels,omitempty" toml:"scopedModels,omitempty"`
+	Reasoning    ReasoningConfig           `json:"reasoning,omitempty" toml:"reasoning,omitempty"`
+	Providers    map[string]ProviderConfig `json:"providers,omitempty" toml:"providers,omitempty"`
+	Models       []ModelConfig             `json:"models,omitempty" toml:"models,omitempty"`
 
-	// Legacy single-model fields. Kept so existing ~/.coding_agent/config.json
-	// files continue to work.
-	Provider string            `json:"provider,omitempty"`
-	Model    string            `json:"model,omitempty"`
-	BaseURL  string            `json:"baseUrl,omitempty"`
-	APIKey   string            `json:"apiKey,omitempty"`
-	Headers  map[string]string `json:"headers,omitempty"`
+	// Legacy single-model fields. Kept so existing config files continue to work.
+	Provider string            `json:"provider,omitempty" toml:"provider,omitempty"`
+	Model    string            `json:"model,omitempty" toml:"model,omitempty"`
+	BaseURL  string            `json:"baseUrl,omitempty" toml:"baseUrl,omitempty"`
+	APIKey   string            `json:"apiKey,omitempty" toml:"apiKey,omitempty"`
+	Headers  map[string]string `json:"headers,omitempty" toml:"headers,omitempty"`
 }
 
 type ProviderConfig struct {
-	Type      string            `json:"type,omitempty"`
-	BaseURL   string            `json:"baseUrl,omitempty"`
-	APIKey    string            `json:"apiKey,omitempty"`
-	APIKeyEnv string            `json:"apiKeyEnv,omitempty"`
-	Headers   map[string]string `json:"headers,omitempty"`
+	Type      string            `json:"type,omitempty" toml:"type,omitempty"`
+	BaseURL   string            `json:"baseUrl,omitempty" toml:"baseUrl,omitempty"`
+	APIKey    string            `json:"apiKey,omitempty" toml:"apiKey,omitempty"`
+	APIKeyEnv string            `json:"apiKeyEnv,omitempty" toml:"apiKeyEnv,omitempty"`
+	Headers   map[string]string `json:"headers,omitempty" toml:"headers,omitempty"`
 }
 
 type ModelConfig struct {
-	Name         string   `json:"name,omitempty"`
-	Description  string   `json:"description,omitempty"`
-	Provider     string   `json:"provider"`
-	Model        string   `json:"model"`
-	Capabilities []string `json:"capabilities,omitempty"`
+	Name         string   `json:"name,omitempty" toml:"name,omitempty"`
+	Description  string   `json:"description,omitempty" toml:"description,omitempty"`
+	Provider     string   `json:"provider" toml:"provider"`
+	Model        string   `json:"model" toml:"model"`
+	Capabilities []string `json:"capabilities,omitempty" toml:"capabilities,omitempty"`
 	// ContextWindow overrides the assumed token context window for this model.
 	// When 0, the agent falls back to its built-in default.
-	ContextWindow int `json:"contextWindow,omitempty"`
+	ContextWindow int `json:"contextWindow,omitempty" toml:"contextWindow,omitempty,omitzero"`
 	// Legacy per-model connection fields. New config files keep these values in
 	// Config.Providers, but these remain readable for existing files.
-	BaseURL string            `json:"baseUrl,omitempty"`
-	APIKey  string            `json:"apiKey,omitempty"`
-	Headers map[string]string `json:"headers,omitempty"`
+	BaseURL string            `json:"baseUrl,omitempty" toml:"baseUrl,omitempty"`
+	APIKey  string            `json:"apiKey,omitempty" toml:"apiKey,omitempty"`
+	Headers map[string]string `json:"headers,omitempty" toml:"headers,omitempty"`
 }
 
 type ReasoningConfig struct {
-	Level string `json:"level,omitempty"`
+	Level string `json:"level,omitempty" toml:"level,omitempty"`
 }
 
 type ConfigValidation struct {
@@ -80,51 +80,43 @@ type ModelDiscovery struct {
 
 var modelDiscoveryHTTPClient = &http.Client{Timeout: 15 * time.Second}
 
-const exampleConfigJSON = `{
-  "version": 2,
-  "active": "local-qwen",
-  "roles": {
-    "summary": "local-qwen",
-    "dispatcher": "deepseek"
-  },
-  "scopedModels": [
-    "local-qwen",
-    "deepseek"
-  ],
-  "reasoning": {
-    "level": "off"
-  },
-  "providers": {
-    "lmstudio": {
-      "type": "openai-compatible",
-      "baseUrl": "http://127.0.0.1:1234/v1",
-      "apiKey": "lm-studio"
-    },
-    "deepseek": {
-      "type": "openai-compatible",
-      "baseUrl": "https://api.deepseek.com/v1",
-      "apiKeyEnv": "DEEPSEEK_API_KEY"
-    }
-  },
-  "models": [
-    {
-      "name": "local-qwen",
-      "description": "local coding model",
-      "provider": "lmstudio",
-      "model": "qwen/qwen3.6-35b-a3b",
-      "capabilities": ["tools"],
-      "contextWindow": 262144
-    },
-    {
-      "name": "deepseek",
-      "description": "remote fallback model",
-      "provider": "deepseek",
-      "model": "deepseek-chat",
-      "capabilities": ["tools"],
-      "contextWindow": 1000000
-    }
-  ]
-}`
+const exampleConfigTOML = `version = 2
+active = "local-qwen"
+scopedModels = ["local-qwen", "deepseek"]
+
+[roles]
+summary = "local-qwen"
+dispatcher = "deepseek"
+
+[reasoning]
+level = "off"
+
+[providers.lmstudio]
+type = "openai-compatible"
+baseUrl = "http://127.0.0.1:1234/v1"
+apiKey = "lm-studio"
+
+[providers.deepseek]
+type = "openai-compatible"
+baseUrl = "https://api.deepseek.com/v1"
+apiKeyEnv = "DEEPSEEK_API_KEY"
+
+[[models]]
+name = "local-qwen"
+description = "local coding model"
+provider = "lmstudio"
+model = "qwen/qwen3.6-35b-a3b"
+capabilities = ["tools"]
+contextWindow = 262144
+
+[[models]]
+name = "deepseek"
+description = "remote fallback model"
+provider = "deepseek"
+model = "deepseek-chat"
+capabilities = ["tools"]
+contextWindow = 1000000
+`
 
 // Resolve returns the model and GetAPIKey function based on env vars.
 // Priority: config file > ANTHROPIC_API_KEY > OPENAI_API_KEY > DEEPSEEK_API_KEY > OLLAMA_HOST > LMSTUDIO.
@@ -271,11 +263,11 @@ func ResolveThinkingLevel() types.ThinkingLevel {
 }
 
 func ConfigPath() string {
-	return filepath.Join(coding_agent.DefaultAgentDir(), "config.json")
+	return filepath.Join(coding_agent.DefaultAgentDir(), "config.toml")
 }
 
-func ExampleConfigJSON() string {
-	return exampleConfigJSON + "\n"
+func ExampleConfigTOML() string {
+	return exampleConfigTOML
 }
 
 func InitConfig(force bool) (string, error) {
@@ -288,7 +280,7 @@ func InitConfig(force bool) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return path, err
 	}
-	return path, os.WriteFile(path, []byte(ExampleConfigJSON()), 0o600)
+	return path, os.WriteFile(path, []byte(ExampleConfigTOML()), 0o600)
 }
 
 func LoadConfigFile() (Config, bool, error) {
@@ -301,7 +293,7 @@ func LoadConfigFile() (Config, bool, error) {
 		return Config{}, false, err
 	}
 	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	if err := toml.Unmarshal(data, &cfg); err != nil {
 		return Config{}, true, err
 	}
 	normalizeConfig(&cfg)
@@ -314,14 +306,17 @@ func SaveConfig(cfg Config) error {
 	migrateLegacyConfig(&cfg)
 	stripLegacyFields(&cfg)
 	cfg.Version = 2
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	var b strings.Builder
+	enc := toml.NewEncoder(&b)
+	enc.Indent = ""
+	err := enc.Encode(cfg)
 	if err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(ConfigPath()), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(ConfigPath(), append(data, '\n'), 0o600)
+	return os.WriteFile(ConfigPath(), []byte(b.String()), 0o600)
 }
 
 func stripLegacyFields(cfg *Config) {
@@ -342,7 +337,7 @@ func ValidateConfig() ConfigValidation {
 	result := ConfigValidation{Path: path}
 	cfg, exists, err := LoadConfigFile()
 	if err != nil {
-		result.Problems = append(result.Problems, "invalid JSON: "+err.Error())
+		result.Problems = append(result.Problems, "invalid TOML: "+err.Error())
 		return result
 	}
 	if !exists {
