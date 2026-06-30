@@ -1230,3 +1230,50 @@ enough to implement, verify, and commit independently.
   snapshot updates now resolve their run from `runID`, `runDir`,
   `snapshotPath`, or `scriptPath`, so active workflow progress can refresh the
   dynamic panel instead of disappearing until final completion.
+- 2026-07-01: added a `Plan` card to workflow run cards. The Cockpit preview
+  and Feed now show the numbered phase route, current orchestration point, next
+  blocked/queued stage, and compact per-stage labels before lower-level metrics
+  and logs, making the workflow arrangement visible without reading a serialized
+  transcript.
+- 2026-07-01: made workflow tool/session updates refresh the current workflow
+  panel in place when possible. If the user is looking at Cockpit, Map, Phase,
+  Agent, Result, Script, or Feed for the same run, incoming live updates now
+  send `RefreshPanelMsg` for that view instead of forcing the UI back to Feed.
+- 2026-07-01: added a topology section to `Workflow Map`. The map now starts
+  with numbered phase nodes, phase-to-phase path edges, and compact per-phase
+  agent lanes before the detailed tree, so users can read the workflow
+  arrangement before drilling into each agent's output.
+- 2026-07-01: removed duplicate phase rows from `Workflow Map` navigation. The
+  current phase remains the first focused row, while the full phase list skips
+  commands already present in that focus area, making map navigation less
+  repetitive without changing Feed or Run Detail quick rows.
+- 2026-07-01: added phase position context to `Workflow Phase`. A phase drill
+  down now shows its stage number, previous/current/next path, and neighboring
+  phase names before the agent list, so users keep the orchestration context
+  after opening one stage from the Map or Feed.
+- 2026-07-01: added orchestration context to `Workflow Agent`. Agent detail now
+  shows the parent phase position, phase path, agent index inside that phase,
+  and compact peer lanes before result/tool details, keeping agent drill-downs
+  tied to the workflow plan.
+- 2026-07-01: added run context to `Workflow Result` and `Workflow Script`.
+  Artifact panels now show workflow name, run id, status, progress, current
+  phase, and the phase plan route before the payload or script body, so final
+  outputs remain tied to the dynamic workflow execution view.
+- 2026-07-01: refreshed `Workflow Guide` copy to match the dynamic TUI surface.
+  The guide now describes Feed Plan/Metrics cards, Map topology, Phase/Agent
+  context, artifact run context, and return paths between artifact views and the
+  execution surfaces.
+- 2026-07-01: added a panel-derived run-id fallback for workflow refresh events.
+  Completion notifications that do not carry `runID` details can now reuse the
+  run id embedded in the returned Feed/Result/Script panel, so current workflow
+  subviews can refresh in place instead of being replaced unnecessarily.
+- 2026-07-01: added phase lanes to `Workflow Agents`. The all-agent view now
+  starts with phase-grouped agent lanes before the selectable flat list, so
+  users can compare worker distribution across stages without opening the Map.
+- 2026-07-01: exposed Result/Script shortcuts from `Workflow Guide`. The guide
+  footer now includes `[o] Result` and `[s] Script`, matching its updated
+  description of artifact views as first-class workflow surfaces.
+- 2026-07-01: added parent-phase navigation to `Workflow Agent` and
+  `Workflow Transcript`. Agent drill-downs now offer a direct return to the
+  orchestration stage they belong to, preserving the Phase -> Agent ->
+  Transcript hierarchy during inspection.
