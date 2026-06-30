@@ -698,6 +698,20 @@ func (s *engine) Prompt(ctx context.Context, text string) error {
 	return nil
 }
 
+// Continue resumes queued steering/follow-up work and applies the same
+// post-turn maintenance as Prompt.
+func (s *engine) Continue(ctx context.Context) error {
+	if s == nil || s.agent == nil {
+		return fmt.Errorf("session is not initialized")
+	}
+	err := s.agent.Continue(ctx)
+	if err != nil {
+		return err
+	}
+	s.ctxMgr.MaybeAutoCompact(ctx)
+	return nil
+}
+
 func (s *engine) Close(reason string) {
 	if s.extensions != nil {
 		s.extensions.EmitEvent(types.Event{Type: types.EventType("session_shutdown")})

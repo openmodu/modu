@@ -5,6 +5,20 @@ enough to implement, verify, and commit independently.
 
 ## Done
 
+- 2026-06-30: limited the `modu-tui` todo card to current active runs. A todo
+  snapshot restored from the session or left uncompleted after a finished goal
+  no longer appears in the fixed bottom area; the card only renders while the
+  model is busy/streaming after a current-run `SetTodosMsg`.
+- 2026-06-30: restored session token usage after `--resume` by rebuilding
+  context-manager usage from persisted assistant message usage, so the fixed
+  footer ctx counter and `/session` stats no longer reset to zero on restart.
+- 2026-06-30: routed queued continuation turns through `CodingSession.Continue`
+  in the TUI/Telegram hosts, so follow-up, steer, and goal continuation rounds
+  run the same post-turn auto-compaction check as normal prompts.
+- 2026-06-30: `modu-tui` now writes a persistent
+  `------------- context compact ------------------` transcript divider when
+  context compaction completes, and restores the divider from saved compaction
+  entries when resuming a session.
 - Started the `pkg/modu-tui` backed `modu_code` runner on branch
   `codex/modu-code-modu-tui`: the default interactive entry no longer imports
   `pkg/tui`, core session events are converted into `modu-tui` messages, and

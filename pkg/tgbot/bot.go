@@ -338,7 +338,7 @@ func runTelegramPromptTurns(parent context.Context, session *coding_agent.Coding
 	}
 	for parent.Err() == nil && session.GetAgent() != nil && session.GetAgent().HasQueuedMessages() {
 		err = runTelegramTurn(parent, active, func(ctx context.Context) error {
-			return session.GetAgent().Continue(ctx)
+			return session.Continue(ctx)
 		})
 		if err != nil && !shouldContinueTelegramQueue(parent, session, err) {
 			return err

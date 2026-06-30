@@ -22,13 +22,14 @@ import (
 )
 
 const moduTUITerminalStatusTTL = 10 * time.Second
+const moduTUIContextCompactDivider = "------------- context compact ------------------"
 
 func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool, opts RunOptions) error {
 	if n, err := session.RestoreMessages(); err == nil && n > 0 {
 		_ = n
 	}
 
-	initial := messagesFromAgentMessagesWithCwd(session.GetMessages(), session.Cwd())
+	initial := messagesFromSessionTranscript(session)
 	var program *tea.Program
 	var programMu sync.RWMutex
 	var promptMu sync.Mutex
@@ -138,7 +139,7 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 				shouldContinue := ag != nil && ag.HasQueuedMessages() && (err == nil || steeringCancel)
 				if shouldContinue {
 					send(modutui.SetStatusMsg{Status: "running"})
-					nextRun = ag.Continue
+					nextRun = session.Continue
 					continue
 				}
 
@@ -989,6 +990,39 @@ func messagesFromAgentMessages(messages []types.AgentMessage) []modutui.Message 
 	return messagesFromAgentMessagesWithCwd(messages, "")
 }
 
+func messagesFromSessionTranscript(session *coding_agent.CodingSession) []modutui.Message {
+	if session == nil {
+		return nil
+	}
+	agentMessages := session.GetMessages()
+	nodes := session.GetSessionTreeNodes()
+	if len(nodes) == 0 {
+		return messagesFromAgentMessagesWithCwd(agentMessages, session.Cwd())
+	}
+	out := make([]modutui.Message, 0, len(agentMessages))
+	messageIndex := 0
+	for _, node := range nodes {
+		if !node.InCurrentPath {
+			continue
+		}
+		switch node.Type {
+		case "message":
+			if messageIndex >= len(agentMessages) {
+				continue
+			}
+			out = append(out, messagesFromAgentMessageWithCwd(agentMessages[messageIndex], session.Cwd())...)
+			messageIndex++
+		case "compaction":
+			out = append(out, contextCompactMessage())
+		}
+	}
+	for messageIndex < len(agentMessages) {
+		out = append(out, messagesFromAgentMessageWithCwd(agentMessages[messageIndex], session.Cwd())...)
+		messageIndex++
+	}
+	return out
+}
+
 func messagesFromAgentMessagesWithCwd(messages []types.AgentMessage, cwd string) []modutui.Message {
 	out := make([]modutui.Message, 0, len(messages))
 	for _, msg := range messages {
@@ -1815,6 +1849,8 @@ func messageFromSessionEvent(ev coding_agent.SessionEvent) (modutui.Message, boo
 	switch ev.Type {
 	case coding_agent.SessionEventModelChange:
 		return infoMessage("model: " + ev.Provider + "/" + ev.ModelID), true
+	case coding_agent.SessionEventCompactionDone:
+		return contextCompactMessage(), true
 	case coding_agent.SessionEventThinkingChange:
 		return infoMessage("thinking: " + ev.Level), true
 	case coding_agent.SessionEventCwdChanged:
@@ -1850,6 +1886,15 @@ func messageFromSessionEvent(ev coding_agent.SessionEvent) (modutui.Message, boo
 		return infoMessage(text), true
 	default:
 		return modutui.Message{}, false
+	}
+}
+
+func contextCompactMessage() modutui.Message {
+	return modutui.Message{
+		Role:         modutui.RoleAssistant,
+		Text:         moduTUIContextCompactDivider,
+		Preformatted: true,
+		Plain:        true,
 	}
 }
 

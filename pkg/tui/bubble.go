@@ -886,7 +886,7 @@ func (b *bubbleTUI) continueQueuedPrompt() tea.Cmd {
 	}
 	b.markNextQueuedUserBlockRunning()
 	return b.runPromptOperation("", func(ctx context.Context) error {
-		return ag.Continue(ctx)
+		return b.session.Continue(ctx)
 	})
 }
 
