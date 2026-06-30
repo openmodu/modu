@@ -63,6 +63,7 @@ func (e *Extension) RuntimeState() any {
 			entry["doneCount"] = run.Snapshot.DoneCount
 			entry["runningAgentCount"] = run.Snapshot.RunningCount
 			entry["errorCount"] = run.Snapshot.ErrorCount
+			entry["cost"] = run.Snapshot.Cost
 			entry["durationMs"] = run.Snapshot.DurationMs
 			entry["currentPhase"] = run.Snapshot.CurrentPhase
 			if logs := workflowRuntimeLogs(run.Snapshot.Logs); len(logs) > 0 {

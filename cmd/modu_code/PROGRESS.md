@@ -1188,3 +1188,45 @@ enough to implement, verify, and commit independently.
 - 2026-07-01: updated `/workflows list` terminal guidance to match the TUI entry
   model. The list footer now starts with `Open /workflows for the cockpit`
   before listing feed/guide/map/show command fallbacks.
+- 2026-07-01: added a `Metrics` card to the `Workflow Feed`. The live feed now
+  surfaces run-level agent totals, phase state counts, aggregated estimated
+  tokens, and elapsed duration directly in the card stack, so the dynamic TUI
+  gives a quick execution health read before users drill into phases or agents.
+- 2026-07-01: added a `Path` card to the `Workflow Feed`. The feed card stack
+  now shows the phase route, current node, and next queued phase before the
+  agent-specific cards, making the workflow orchestration visible without
+  forcing users to read the serialized timeline or open the map panel first.
+- 2026-07-01: added an `Outcome` card to terminal `Workflow Feed` views. When a
+  run completes, fails, or stops, the feed now surfaces final artifact entry
+  points, snapshot/script paths, and Result/Script rows plus `[o]` and `[s]`
+  shortcuts, so final data is reachable as structured TUI artifacts instead of
+  being buried at the end of serialized workflow output.
+- 2026-07-01: wired observed workflow cost into the Feed `Metrics` card. The TUI
+  now reads run/phase/agent cost from workflow runtime state and renders the
+  real observed total when available, alongside agent totals, phase counts,
+  estimated tokens, and elapsed duration.
+- 2026-07-01: added a latest-run preview to the `Workflow Cockpit` panel. The
+  `/workflows` entry view now embeds the same Status, Metrics, Path, and
+  terminal Outcome cards used by the Feed, and terminal latest runs expose
+  `[o] Result` and `[s] Script` shortcuts directly from the cockpit.
+- 2026-07-01: added a `recent runs` board to the `Workflow Cockpit` panel. The
+  `/workflows` entry view now shows the latest run cards plus a compact list of
+  recent workflow runs with status, progress, phase, duration, and error counts,
+  so users can see both the active workflow and nearby run history before
+  selecting a row.
+- 2026-07-01: changed `Workflow Cockpit` run rows to open the Feed for every
+  run status. Running rows still enter the live surface, while completed,
+  failed, or stopped rows now land on the Feed Outcome cards and can use `[d]`
+  for metadata detail instead of bypassing the dynamic workflow view.
+- 2026-07-01: made terminal `Workflow Feed` panels select the `Result` row by
+  default. Completed, failed, or stopped runs now land on the Outcome cards with
+  Enter ready to open the final artifact, while non-terminal feeds still select
+  the current phase or attention/active agent first.
+- 2026-07-01: routed workflow completion notifications and workflow tool
+  completion events back to the Feed instead of the metadata detail panel. The
+  dynamic TUI now keeps lifecycle follow-up on the same live surface and lets
+  terminal feeds expose Outcome/Result/Script as the primary completion path.
+- 2026-07-01: routed workflow tool update events back to the Feed. Runtime
+  snapshot updates now resolve their run from `runID`, `runDir`,
+  `snapshotPath`, or `scriptPath`, so active workflow progress can refresh the
+  dynamic panel instead of disappearing until final completion.

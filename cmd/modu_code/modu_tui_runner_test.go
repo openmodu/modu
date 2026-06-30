@@ -1054,7 +1054,7 @@ func TestModuTUIWorkflowCockpitShowsOrchestrationMap(t *testing.T) {
 	}
 }
 
-func TestModuTUIWorkflowCockpitRowsOpenFeedForRunningRuns(t *testing.T) {
+func TestModuTUIWorkflowCockpitRowsOpenFeedForRuns(t *testing.T) {
 	rows := moduTUIWorkflowCockpitRowsFromStates(map[string]any{
 		"workflow": map[string]any{
 			"runs": []map[string]any{{
@@ -1079,8 +1079,8 @@ func TestModuTUIWorkflowCockpitRowsOpenFeedForRunningRuns(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("rows = %#v", rows)
 	}
-	if rows[0].Value != "run-2" || rows[0].Command != moduTUIWorkflowPanelDetailPrefix+"run-2" {
-		t.Fatalf("first row should open run-2 details: %#v", rows[0])
+	if rows[0].Value != "run-2" || rows[0].Command != moduTUIWorkflowPanelFeedPrefix+"run-2" {
+		t.Fatalf("completed row should open run-2 feed: %#v", rows[0])
 	}
 	if rows[1].Value != "run-1" || rows[1].Command != moduTUIWorkflowPanelFeedPrefix+"run-1" {
 		t.Fatalf("running row should open run-1 feed: %#v", rows[1])
@@ -1099,10 +1099,24 @@ func TestModuTUIWorkflowCockpitPanelSelectsLatestRunningRun(t *testing.T) {
 	panel := moduTUIWorkflowCockpitPanelFromStates(map[string]any{
 		"workflow": map[string]any{
 			"runs": []map[string]any{{
-				"id":        "latest-complete",
-				"name":      "latest_complete",
-				"status":    "completed",
-				"updatedAt": 30,
+				"id":           "latest-complete",
+				"name":         "latest_complete",
+				"status":       "completed",
+				"updatedAt":    30,
+				"agentCount":   2,
+				"doneCount":    2,
+				"currentPhase": "Report",
+				"snapshotPath": "/tmp/workflow/latest/snapshot.json",
+				"scriptPath":   "/tmp/workflow/latest/script.js",
+				"phases": []map[string]any{{
+					"title":      "Research",
+					"agentCount": 1,
+					"doneCount":  1,
+				}, {
+					"title":      "Report",
+					"agentCount": 1,
+					"doneCount":  1,
+				}},
 			}, {
 				"id":        "active-run",
 				"name":      "active",
@@ -1123,13 +1137,36 @@ func TestModuTUIWorkflowCockpitPanelSelectsLatestRunningRun(t *testing.T) {
 	if panel.Rows[panel.Selected].Value != "active-run" {
 		t.Fatalf("cockpit selected row = %#v, want active-run", panel.Rows[panel.Selected])
 	}
+	text := strings.Join(panel.Lines, "\n")
+	for _, want := range []string{
+		"latest run preview",
+		"+-- Status",
+		"latest_complete [completed]",
+		"+-- Path",
+		"path: Research:done -> Report:done",
+		"+-- Outcome",
+		"result: open Result view",
+		"script: open Script view",
+		"recent runs",
+		"1. latest_complete [completed] | 2/2 | @Report",
+		"2. active [running]",
+		"3. old [failed]",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("cockpit preview missing %q:\n%s", want, text)
+		}
+	}
 	if !moduTUIWorkflowPanelHasShortcut(panel, "?", moduTUIWorkflowPanelGuidePrefix+"latest-complete") ||
 		!moduTUIWorkflowPanelHasShortcut(panel, "f", moduTUIWorkflowPanelFeedPrefix+"latest-complete") ||
 		!moduTUIWorkflowPanelHasShortcut(panel, "m", moduTUIWorkflowPanelMapPrefix+"latest-complete") ||
-		!moduTUIWorkflowPanelHasShortcut(panel, "d", moduTUIWorkflowPanelDetailPrefix+"latest-complete") {
+		!moduTUIWorkflowPanelHasShortcut(panel, "d", moduTUIWorkflowPanelDetailPrefix+"latest-complete") ||
+		!moduTUIWorkflowPanelHasShortcut(panel, "o", moduTUIWorkflowPanelResultPrefix+"latest-complete") ||
+		!moduTUIWorkflowPanelHasShortcut(panel, "s", moduTUIWorkflowPanelScriptPrefix+"latest-complete") {
 		t.Fatalf("cockpit shortcuts should target latest run: %#v", panel.Shortcuts)
 	}
-	if !strings.Contains(panel.Footer, "[?] Guide") || !strings.Contains(panel.Footer, "[f] Feed") || strings.Contains(panel.Footer, "details") {
+	if !strings.Contains(panel.Footer, "[?] Guide") || !strings.Contains(panel.Footer, "[f] Feed") ||
+		!strings.Contains(panel.Footer, "[o] Result") || !strings.Contains(panel.Footer, "[s] Script") ||
+		strings.Contains(panel.Footer, "details") {
 		t.Fatalf("cockpit footer should expose latest shortcuts and generic open copy: %q", panel.Footer)
 	}
 	next, ok := moduTUIWorkflowPanelAction(nil, modutui.PanelAction{
@@ -1153,6 +1190,20 @@ func TestModuTUIWorkflowCockpitPanelSelectsLatestRunningRun(t *testing.T) {
 	})
 	if !ok || next.ID != moduTUIWorkflowMapPanelID {
 		t.Fatalf("cockpit map shortcut should open map, got ok=%v panel=%#v", ok, next)
+	}
+	next, ok = moduTUIWorkflowPanelAction(nil, modutui.PanelAction{
+		PanelID: moduTUIWorkflowCockpitPanelID,
+		Command: moduTUIWorkflowPanelResultPrefix + "latest-complete",
+	})
+	if !ok || next.ID != moduTUIWorkflowResultPanelID {
+		t.Fatalf("cockpit result shortcut should open result panel, got ok=%v panel=%#v", ok, next)
+	}
+	next, ok = moduTUIWorkflowPanelAction(nil, modutui.PanelAction{
+		PanelID: moduTUIWorkflowCockpitPanelID,
+		Command: moduTUIWorkflowPanelScriptPrefix + "latest-complete",
+	})
+	if !ok || next.ID != moduTUIWorkflowScriptPanelID {
+		t.Fatalf("cockpit script shortcut should open script panel, got ok=%v panel=%#v", ok, next)
 	}
 }
 
@@ -1398,6 +1449,15 @@ func moduTUIWorkflowPanelHasShortcut(panel modutui.Panel, key, command string) b
 	return false
 }
 
+func moduTUIWorkflowPanelHasRowCommand(panel modutui.Panel, command string) bool {
+	for _, row := range panel.Rows {
+		if row.Command == command {
+			return true
+		}
+	}
+	return false
+}
+
 func TestModuTUIWorkflowRunDetailPanelShowsLiveFlowSummary(t *testing.T) {
 	states := map[string]any{
 		"workflow": map[string]any{
@@ -1410,6 +1470,8 @@ func TestModuTUIWorkflowRunDetailPanelShowsLiveFlowSummary(t *testing.T) {
 				"runningAgentCount": 1,
 				"errorCount":        1,
 				"currentPhase":      "Research",
+				"durationMs":        65000,
+				"cost":              0.012345,
 				"logs": []string{
 					"old update",
 					"scoped market domain",
@@ -1533,6 +1595,17 @@ func TestModuTUIWorkflowRunDetailPanelShowsLiveFlowSummary(t *testing.T) {
 		"market_watch [running]",
 		"progress: 1/4 done | 1 running | 1 error",
 		"current: Research",
+		"duration: 1min 05s",
+		"+-- Metrics",
+		"agents: 4 total | 1 done | 1 running | 1 error",
+		"phases: 3 total | 1 done | 1 attention | 1 waiting",
+		"estimated tokens: 500",
+		"cost: 0.012345",
+		"elapsed: 1min 05s",
+		"+-- Path",
+		"path: Scope:done -> Research:error -> Report:wait",
+		"now: Research 1/2 errors=1",
+		"next: Report",
 		"+-- Attention",
 		"#4 risk [failed] @Research",
 		"error: source unavailable",
@@ -1594,6 +1667,97 @@ func TestModuTUIWorkflowRunDetailPanelShowsLiveFlowSummary(t *testing.T) {
 	})
 	if !ok || next.ID != moduTUIWorkflowAgentPanelID {
 		t.Fatalf("feed attention shortcut action should open agent panel, got ok=%v panel=%#v", ok, next)
+	}
+}
+
+func TestModuTUIWorkflowFeedPanelShowsOutcomeForCompletedRun(t *testing.T) {
+	snapshotPath := filepath.Join(t.TempDir(), "snapshot.json")
+	scriptPath := filepath.Join(t.TempDir(), "script.js")
+	states := map[string]any{
+		"workflow": map[string]any{
+			"runs": []map[string]any{{
+				"id":           "run-done",
+				"name":         "market_watch",
+				"status":       "completed",
+				"scriptPath":   scriptPath,
+				"snapshotPath": snapshotPath,
+				"agentCount":   2,
+				"doneCount":    2,
+				"currentPhase": "Report",
+				"cost":         0.0042,
+				"phases": []map[string]any{{
+					"title":      "Research",
+					"agentCount": 1,
+					"doneCount":  1,
+					"cost":       0.0012,
+				}, {
+					"title":      "Report",
+					"agentCount": 1,
+					"doneCount":  1,
+					"cost":       0.0030,
+				}},
+				"agents": []map[string]any{{
+					"id":            1,
+					"label":         "collect",
+					"phase":         "Research",
+					"status":        "done",
+					"resultPreview": "market data ok",
+				}, {
+					"id":            2,
+					"label":         "write",
+					"phase":         "Report",
+					"status":        "done",
+					"resultPreview": "report ok",
+				}},
+			}},
+		},
+	}
+
+	panel := moduTUIWorkflowFeedPanelFromStates(states, "run-done")
+	text := strings.Join(panel.Lines, "\n")
+	for _, want := range []string{
+		"+-- Metrics",
+		"cost: 0.004200",
+		"+-- Path",
+		"path: Research:done -> Report:done",
+		"+-- Outcome",
+		"status: completed",
+		"result: open Result view",
+		"snapshot: " + snapshotPath,
+		"script: open Script view",
+		"next: Result, Script, or Restart",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("completed feed missing %q:\n%s", want, text)
+		}
+	}
+	if !moduTUIWorkflowPanelHasRowCommand(panel, moduTUIWorkflowPanelResultPrefix+"run-done") ||
+		!moduTUIWorkflowPanelHasRowCommand(panel, moduTUIWorkflowPanelScriptPrefix+"run-done") {
+		t.Fatalf("completed feed should expose result and script rows: %#v", panel.Rows)
+	}
+	if panel.Selected < 0 || panel.Selected >= len(panel.Rows) ||
+		panel.Rows[panel.Selected].Command != moduTUIWorkflowPanelResultPrefix+"run-done" {
+		t.Fatalf("completed feed should select result row by default, selected=%d rows=%#v", panel.Selected, panel.Rows)
+	}
+	if !moduTUIWorkflowPanelHasShortcut(panel, "o", moduTUIWorkflowPanelResultPrefix+"run-done") ||
+		!moduTUIWorkflowPanelHasShortcut(panel, "s", moduTUIWorkflowPanelScriptPrefix+"run-done") ||
+		!strings.Contains(panel.Footer, "[o] Result") ||
+		!strings.Contains(panel.Footer, "[s] Script") {
+		t.Fatalf("completed feed should expose artifact shortcuts/footer: shortcuts=%#v footer=%q", panel.Shortcuts, panel.Footer)
+	}
+	next, ok := moduTUIWorkflowPanelAction(nil, modutui.PanelAction{
+		PanelID: moduTUIWorkflowFeedPanelID,
+		Command: moduTUIWorkflowPanelResultPrefix + "run-done",
+	})
+	if !ok || next.ID != moduTUIWorkflowResultPanelID {
+		t.Fatalf("feed result action should open result panel, got ok=%v panel=%#v", ok, next)
+	}
+	next, ok = moduTUIWorkflowPanelAction(nil, modutui.PanelAction{
+		PanelID: moduTUIWorkflowFeedPanelID,
+		Command: moduTUIWorkflowPanelScriptPrefix + "run-done",
+	})
+	if !ok || next.ID != moduTUIWorkflowScriptPanelID {
+		t.Fatalf("feed script action should open script panel, got ok=%v panel=%#v", ok, next)
 	}
 }
 
@@ -2487,12 +2651,14 @@ func TestModuTUIWorkflowPanelFromNotifyRoutesLifecycleMessages(t *testing.T) {
 				"doneCount":  0,
 				"updatedAt":  20,
 			}, {
-				"id":         "run-old",
-				"name":       "old",
-				"status":     "completed",
-				"agentCount": 1,
-				"doneCount":  1,
-				"updatedAt":  10,
+				"id":           "run-old",
+				"name":         "old",
+				"status":       "completed",
+				"agentCount":   1,
+				"doneCount":    1,
+				"snapshotPath": "/tmp/workflow/run-old/snapshot.json",
+				"scriptPath":   "/tmp/workflow/run-old/script.js",
+				"updatedAt":    10,
 			}},
 		},
 	}
@@ -2515,13 +2681,31 @@ func TestModuTUIWorkflowPanelFromNotifyRoutesLifecycleMessages(t *testing.T) {
 		t.Fatalf("restart notify = ok=%v status=%q panel=%#v", ok, status, panel)
 	}
 
-	panel, status, ok = moduTUIWorkflowPanelFromNotifyStates(states, coding_agent.SessionEvent{
+	completionStates := map[string]any{
+		"workflow": map[string]any{
+			"runs": []map[string]any{{
+				"id":           "run-started",
+				"name":         "started",
+				"status":       "completed",
+				"agentCount":   2,
+				"doneCount":    2,
+				"snapshotPath": "/tmp/workflow/run-started/snapshot.json",
+				"scriptPath":   "/tmp/workflow/run-started/script.js",
+				"updatedAt":    30,
+			}},
+		},
+	}
+	panel, status, ok = moduTUIWorkflowPanelFromNotifyStates(completionStates, coding_agent.SessionEvent{
 		Type:          coding_agent.SessionEventExtensionNotify,
 		ExtensionName: "workflow",
 		Message:       "Workflow started completed with 2 agent(s).\n\n## Execution flow\n...",
 	})
-	if !ok || panel.ID != moduTUIWorkflowRunDetailPanelID || !strings.Contains(panel.Subtitle, "started") || !strings.Contains(status, "completed") {
+	if !ok || panel.ID != moduTUIWorkflowFeedPanelID || !strings.Contains(panel.Subtitle, "started") || !strings.Contains(status, "completed") {
 		t.Fatalf("completion notify = ok=%v status=%q panel=%#v", ok, status, panel)
+	}
+	if panel.Selected < 0 || panel.Selected >= len(panel.Rows) ||
+		panel.Rows[panel.Selected].Command != moduTUIWorkflowPanelResultPrefix+"run-started" {
+		t.Fatalf("completion notify feed should select result row: selected=%d rows=%#v", panel.Selected, panel.Rows)
 	}
 
 	panel, status, ok = moduTUIWorkflowPanelFromNotifyStates(states, coding_agent.SessionEvent{
@@ -2543,6 +2727,10 @@ func TestModuTUIWorkflowPanelFromNotifyRoutesLifecycleMessages(t *testing.T) {
 }
 
 func TestModuTUIWorkflowPanelFromToolEventRoutesWorkflowResults(t *testing.T) {
+	type snapshotDetails struct {
+		RunDir string `json:"runDir,omitempty"`
+	}
+
 	states := map[string]any{
 		"workflow": map[string]any{
 			"runs": []map[string]any{{
@@ -2553,12 +2741,14 @@ func TestModuTUIWorkflowPanelFromToolEventRoutesWorkflowResults(t *testing.T) {
 				"doneCount":  0,
 				"updatedAt":  30,
 			}, {
-				"id":         "run-complete",
-				"name":       "complete_workflow",
-				"status":     "completed",
-				"agentCount": 2,
-				"doneCount":  2,
-				"updatedAt":  40,
+				"id":           "run-complete",
+				"name":         "complete_workflow",
+				"status":       "completed",
+				"agentCount":   2,
+				"doneCount":    2,
+				"snapshotPath": "/tmp/workflow/run-complete/snapshot.json",
+				"scriptPath":   "/tmp/workflow/run-complete/script.js",
+				"updatedAt":    40,
 			}},
 		},
 	}
@@ -2586,14 +2776,29 @@ func TestModuTUIWorkflowPanelFromToolEventRoutesWorkflowResults(t *testing.T) {
 	}
 
 	panel, status, ok = moduTUIWorkflowPanelFromToolEventStates(states, types.Event{
+		Type:     types.EventTypeToolExecutionUpdate,
+		ToolName: "workflow",
+		Result: types.ToolResult{
+			Details: snapshotDetails{RunDir: "/tmp/workflow/runs/run-tool"},
+		},
+	})
+	if !ok || panel.ID != moduTUIWorkflowFeedPanelID || !strings.Contains(panel.Subtitle, "tool_workflow") || status != "workflow updated: run-tool" {
+		t.Fatalf("workflow tool update event = ok=%v status=%q panel=%#v", ok, status, panel)
+	}
+
+	panel, status, ok = moduTUIWorkflowPanelFromToolEventStates(states, types.Event{
 		Type:     types.EventTypeToolExecutionEnd,
 		ToolName: "workflow",
 		Result: types.ToolResult{
 			Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "Workflow complete_workflow completed with 2 agent(s).\n\n## Execution flow\n...\n\n## Final result\nlarge"}},
 		},
 	})
-	if !ok || panel.ID != moduTUIWorkflowRunDetailPanelID || !strings.Contains(panel.Subtitle, "complete_workflow") || !strings.Contains(status, "completed") {
+	if !ok || panel.ID != moduTUIWorkflowFeedPanelID || !strings.Contains(panel.Subtitle, "complete_workflow") || !strings.Contains(status, "completed") {
 		t.Fatalf("workflow tool completion event = ok=%v status=%q panel=%#v", ok, status, panel)
+	}
+	if panel.Selected < 0 || panel.Selected >= len(panel.Rows) ||
+		panel.Rows[panel.Selected].Command != moduTUIWorkflowPanelResultPrefix+"run-complete" {
+		t.Fatalf("workflow tool completion feed should select result row: selected=%d rows=%#v", panel.Selected, panel.Rows)
 	}
 
 	if _, _, ok := moduTUIWorkflowPanelFromToolEventStates(states, types.Event{

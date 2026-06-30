@@ -2275,6 +2275,7 @@ func TestWorkflowRuntimeStateTracksRunningRuns(t *testing.T) {
 		DoneCount:    1,
 		RunningCount: 2,
 		ErrorCount:   0,
+		Cost:         0.0123,
 		CurrentPhase: "Review",
 		Logs: []string{
 			"old setup log",
@@ -2342,7 +2343,7 @@ func TestWorkflowRuntimeStateTracksRunningRuns(t *testing.T) {
 	if !ok || len(runs) != 1 {
 		t.Fatalf("runs = %#v", state["runs"])
 	}
-	if runs[0]["id"] != "run-1" || runs[0]["status"] != "running" || runs[0]["name"] != "review" || runs[0]["currentPhase"] != "Review" {
+	if runs[0]["id"] != "run-1" || runs[0]["status"] != "running" || runs[0]["name"] != "review" || runs[0]["currentPhase"] != "Review" || runs[0]["cost"] != 0.0123 {
 		t.Fatalf("run state = %+v", runs[0])
 	}
 	phases, ok := runs[0]["phases"].([]map[string]any)
