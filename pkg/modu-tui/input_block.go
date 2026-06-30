@@ -107,11 +107,27 @@ func (b *InputBlock) DeleteWordBackward() {
 	for start > 0 && unicode.IsSpace(r[start-1]) {
 		start--
 	}
-	for start > 0 && !unicode.IsSpace(r[start-1]) {
+	if start > 0 && isInputWordRune(r[start-1]) {
+		for start > 0 && isInputWordRune(r[start-1]) {
+			start--
+		}
+	} else {
+		for start > 0 && !unicode.IsSpace(r[start-1]) && !isInputWordRune(r[start-1]) {
+			start--
+		}
+		for start > 0 && isInputWordRune(r[start-1]) {
+			start--
+		}
+	}
+	if start == b.Cursor {
 		start--
 	}
 	b.Value = string(append(r[:start], r[b.Cursor:]...))
 	b.Cursor = start
+}
+
+func isInputWordRune(r rune) bool {
+	return r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r)
 }
 
 func (b *InputBlock) DeleteForward() {
@@ -231,7 +247,7 @@ func (b InputBlock) Render(width, maxRows int) (lines []string, cursorRow, curso
 			before := b.expandLabels(string(lineRunes[:off]))
 			after := b.expandLabels(string(lineRunes[off:]))
 			beforeWidth := ansi.StringWidth(before)
-			visible := b.expandLabels(string(lineRunes))
+			visible := b.renderSegment(runes, vl.start, vl.end)
 			cx := prefixWidth + beforeWidth
 			if beforeWidth+ansi.StringWidth(after) > contentWidth {
 				if beforeWidth >= contentWidth {
@@ -246,7 +262,7 @@ func (b InputBlock) Render(width, maxRows int) (lines []string, cursorRow, curso
 			lines = append(lines, fitLine(pre+visible, width))
 			continue
 		}
-		visible := b.expandLabels(string(lineRunes))
+		visible := b.renderSegment(runes, vl.start, vl.end)
 		if ansi.StringWidth(visible) > contentWidth {
 			visible = ansi.Truncate(visible, contentWidth, "")
 		}
@@ -256,6 +272,41 @@ func (b InputBlock) Render(width, maxRows int) (lines []string, cursorRow, curso
 		lines = append(lines, fitLine(prefix, width))
 	}
 	return lines, cursorRow, cursorX
+}
+
+func (b InputBlock) renderSegment(all []rune, start, end int) string {
+	start = clamp(start, 0, len(all))
+	end = clamp(end, start, len(all))
+	cmdEnd := inputSlashCommandEnd(all)
+	if cmdEnd <= start || cmdEnd <= 0 || start >= end {
+		return b.expandLabels(string(all[start:end]))
+	}
+	highlightStart := max(start, 0)
+	highlightEnd := min(end, cmdEnd)
+	if highlightStart >= highlightEnd {
+		return b.expandLabels(string(all[start:end]))
+	}
+	var out strings.Builder
+	if start < highlightStart {
+		out.WriteString(b.expandLabels(string(all[start:highlightStart])))
+	}
+	out.WriteString(slashInputStyle.Render(b.expandLabels(string(all[highlightStart:highlightEnd]))))
+	if highlightEnd < end {
+		out.WriteString(b.expandLabels(string(all[highlightEnd:end])))
+	}
+	return out.String()
+}
+
+func inputSlashCommandEnd(runes []rune) int {
+	if len(runes) == 0 || runes[0] != '/' {
+		return 0
+	}
+	for i, r := range runes {
+		if unicode.IsSpace(r) || r == '\n' || r == '\r' || r == '\t' {
+			return i
+		}
+	}
+	return len(runes)
 }
 
 func (b InputBlock) expandLabels(value string) string {

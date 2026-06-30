@@ -35,7 +35,10 @@ It owns only the reusable UI shell:
   drop mouse release events cannot leave a permanent 30ms redraw loop running
 - slash commands can be supplied through `Options.SlashCommands`; typing `/`
   opens a bottom card with filtered command matches, `Tab` completes, and
-  `Enter` dispatches through `Hooks.SlashCommand`
+  `Enter` dispatches through `Hooks.SlashCommand`; the leading slash command
+  token in the input is highlighted separately from its arguments, and the
+  slash picker does not trigger the away-from-bottom jump hint unless the user
+  was already scrolled away from the bottom
 - tool-call messages with the same `ToolID` are merged into a single block so
   call/start/result updates do not scatter through the transcript
 - Read-style tool calls render with a compact `Read N lines` result summary
@@ -116,8 +119,9 @@ Component layout:
   fallback for callers that do not need submit kinds.
 - `Options.InputHistory` seeds input history and `Hooks.InputHistoryChanged`
   lets hosts persist the trimmed history list after each submission.
-- `Options.Todos` seeds the fixed todo card; completed-only or empty todo lists
-  are hidden, and `SetTodosMsg` refreshes the card after host state changes;
+- `Options.Todos` seeds the internal todo snapshot; the fixed todo card is only
+  shown while the model is busy/streaming after a current-run `SetTodosMsg`.
+  Completed-only, empty, idle, or previous-run todo lists are hidden;
   `normalizeTodos` validates and normalizes the provided items before use.
 - `Hooks.SlashCommand` lets host applications route selected or typed slash
   commands without sending them as normal prompts.

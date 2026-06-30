@@ -173,6 +173,22 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	// SSH/terminal hang-up (SIGHUP) isn't handled by bubbletea, whose signal
+	// handler only watches SIGINT/SIGTERM. Without this, a dropped SSH session
+	// kills the process before bubbletea can restore the terminal, leaving mouse
+	// tracking enabled so the local shell floods with raw SGR reports
+	// (65;25;32M...). Cancel the program context on SIGHUP so bubbletea shuts
+	// down cleanly and emits the mouse-disable / alt-screen-exit sequences.
+	hangup := make(chan os.Signal, 1)
+	signal.Notify(hangup, syscall.SIGHUP)
+	defer signal.Stop(hangup)
+	go func() {
+		select {
+		case <-hangup:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 	if err := runTUI(ctx, session, model, *noApprove, RunOptions{CommandHooks: CommandHooks{
 		Config: func(args string) (string, error) {
 			return runConfigHook(args, session)

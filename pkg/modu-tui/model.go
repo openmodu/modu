@@ -62,6 +62,7 @@ type Model struct {
 	approval     *pendingApproval
 	humanPrompt  *pendingHumanPrompt
 	todos        []TodoItem
+	todosCurrent bool
 
 	selecting         bool
 	selStart, selEnd  cell
@@ -206,6 +207,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch {
 		case isCtrlCKey(msg):
+			if strings.TrimSpace(m.input.ExpandedValue()) != "" {
+				m.resetIMEState()
+				m.input.Reset()
+				m.clearHistorySelection()
+				m.clearSlashMatches()
+				m.rebuild()
+				return m, nil
+			}
 			return m, tea.Quit
 		case isEscKey(msg):
 			m.resetIMEState()
@@ -398,10 +407,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.footer = msg.Footer
 
 	case SetBusyMsg:
+		if msg.Busy != m.busy {
+			m.todosCurrent = false
+		}
 		m.busy = msg.Busy
+		m.clampScroll()
 
 	case SetTodosMsg:
 		m.todos = normalizeTodos(msg.Todos)
+		m.todosCurrent = (m.busy || m.streaming) && hasOutstandingTodos(m.todos)
 		m.clampScroll()
 
 	case ClearMessagesMsg:
@@ -608,11 +622,10 @@ func (m *Model) todoPanelHeight() int {
 	return len(m.todoPanelLines())
 }
 func (m *Model) showJumpPanel() bool {
-	heightWithoutJump := m.height - m.bottomFixedRows() - m.approvalPanelHeight() - m.humanPromptPanelHeight() - m.slashPanelHeight() - m.todoPanelHeight()
-	if heightWithoutJump <= m.minViewportRows() {
+	if m.vpHeight() <= m.minViewportRows() {
 		return false
 	}
-	return m.yOffset < max(0, len(m.lines)-heightWithoutJump)
+	return !m.atBottom()
 }
 
 func (m *Model) minViewportRows() int {
@@ -902,7 +915,7 @@ func (m *Model) slashPanelLines() []string {
 }
 
 func (m *Model) todoPanelLines() []string {
-	if m.hasBlockingPrompt() {
+	if m.hasBlockingPrompt() || (!m.busy && !m.streaming) || !m.todosCurrent {
 		return nil
 	}
 	budget := m.height - m.bottomFixedRows() - m.minViewportRows() - m.approvalPanelHeight() - m.humanPromptPanelHeight() - m.slashPanelHeight()
@@ -917,12 +930,14 @@ func (m *Model) updateSlashMatches() {
 	matches := matchSlashCommands(m.input.Value, m.slashCommands)
 	if len(matches) == 0 {
 		m.clearSlashMatches()
+		m.clampScroll()
 		return
 	}
 	if m.slashIndex >= len(matches) {
 		m.slashIndex = len(matches) - 1
 	}
 	m.slashMatches = matches
+	m.clampScroll()
 }
 
 func (m *Model) clearSlashMatches() {
@@ -1356,6 +1371,7 @@ func (m *Model) startStream() {
 
 func (m *Model) finishStream() {
 	m.streaming = false
+	m.todosCurrent = false
 	m.messages = append(m.messages, Message{Role: RoleAssistant, Text: m.streamReply})
 	m.streamRunes, m.streamIdx = nil, 0
 }

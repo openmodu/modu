@@ -8,6 +8,7 @@ var (
 	assistantMarkerStyle          = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("231"))
 	streamingAssistantMarkerStyle = lipgloss.NewStyle().Bold(true).Blink(true).Foreground(lipgloss.Color("231"))
 	thinkingMarkerStyle           = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("5"))
+	slashInputStyle               = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
 	toolExpandedMarkerStyle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("2"))
 	dimStyle                      = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 	ruleStyle                     = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
