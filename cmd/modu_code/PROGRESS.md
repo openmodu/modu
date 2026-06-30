@@ -1118,3 +1118,45 @@ enough to implement, verify, and commit independently.
   map panel now includes current/attention/active quick rows, phase rows, and
   feed/detail/agents navigation rows, and its panel actions can drill directly
   into phase and agent panels.
+- 2026-07-01: added lightweight cards to the top of `Workflow Feed`. The feed
+  now starts with stable `Status`, `Attention`, `Active`, and `Next` cards when
+  the runtime snapshot has matching data, giving active workflow runs a more
+  scannable Claude-style status surface before the board, lanes, updates, and
+  timeline sections.
+- 2026-07-01: changed the `/workflows` cockpit entry action for running runs to
+  open `Workflow Feed` instead of run detail. Completed, failed, and stopped
+  rows still open detail, but active runs now follow the dynamic status surface
+  by default when selected from the cockpit.
+- 2026-07-01: added a run-scoped `Workflow Guide` panel behind the `[?] Guide`
+  shortcut from Feed, Detail, and Map. The guide shows how Feed, Map, Phase,
+  Agent, and Transcript views fit together for the current run, plus direct rows
+  back into the live feed, structure map, detail panel, current phase, active
+  agent, and attention agent when those snapshots exist.
+- 2026-07-01: added the TUI slash route `/workflows guide <run-id|latest>` so
+  users can open the run-scoped guide directly from the prompt, not only through
+  `[?] Guide` inside an existing workflow panel.
+- 2026-07-01: slimmed the `/workflows` cockpit so it no longer embeds the full
+  orchestration map for the latest run. The cockpit now stays as a dashboard
+  with board/flow/updates/timeline plus explicit Guide, Feed, Map, and Detail
+  next actions; the complete tree remains in `Workflow Map`.
+- 2026-07-01: promoted `Workflow Guide` to a selectable row in run detail,
+  feed, and map panels, not only a `[?] Guide` shortcut. The quick current
+  phase/attention/active rows stay first, then the navigation group starts with
+  Guide so users can discover the view map without memorizing shortcuts.
+- 2026-07-01: added run-level navigation to `Workflow Phase` panels. A phase now
+  keeps its agent rows first, then exposes Guide, Feed, Map, Detail, Agents, and
+  Back rows plus `[?]`, `[f]`, `[m]`, `[d]`, and `[a]` shortcuts, so drilling
+  into one orchestration stage does not strand the user away from the live feed
+  or structure map.
+- 2026-07-01: added the same run-level navigation to `Workflow Agent` detail
+  panels. Transcript and running-agent control rows keep priority, then Guide,
+  Feed, Map, Agents, and Detail let users jump back to the run-level dynamic
+  views after inspecting an active or attention agent.
+- 2026-07-01: added run-level navigation to `Workflow Agents` list panels. The
+  agent rows still stay first for quick selection, followed by Guide, Feed, Map,
+  Detail, and Back rows plus `[?]`, `[f]`, `[m]`, and `[d]` shortcuts, so the
+  all-agents list also connects back to the live workflow surfaces.
+- 2026-07-01: added run-level navigation to `Workflow Transcript` panels. The
+  transcript keeps `Back to agent` first, then exposes Guide, Feed, Map, Agents,
+  and Detail rows plus matching shortcuts, so a deep transcript drill-down can
+  return directly to the dynamic workflow surfaces.
