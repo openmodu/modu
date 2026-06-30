@@ -267,11 +267,13 @@ func (r *RpcMode) handleCommand(ctx context.Context, cmd RpcCommand) RpcResponse
 		resp.Data = map[string]string{"level": string(level)}
 
 	case RpcCmdCompact:
-		if err := r.session.Compact(ctx); err != nil {
+		changed, err := r.session.CompactIfNeeded(ctx)
+		if err != nil {
 			resp.Error = err.Error()
 			return resp
 		}
 		resp.Success = true
+		resp.Data = map[string]bool{"changed": changed}
 
 	case RpcCmdSetAutoCompaction:
 		var data SetBoolData

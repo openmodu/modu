@@ -91,6 +91,16 @@ func (e SessionEntry) MarshalJSON() ([]byte, error) {
 			base["tokensBefore"] = data.TokensBefore
 			base["originalCount"] = data.OriginalCount
 			base["newCount"] = data.NewCount
+			base["preservedUserMessages"] = data.PreservedUserMessages
+			if len(data.ReadFiles) > 0 {
+				base["readFiles"] = data.ReadFiles
+			}
+			if len(data.ModifiedFiles) > 0 {
+				base["modifiedFiles"] = data.ModifiedFiles
+			}
+			if len(data.ReplacementMessages) > 0 {
+				base["replacementMessages"] = messagePayloads(data.ReplacementMessages)
+			}
 		} else {
 			base["data"] = e.Data
 		}
@@ -187,6 +197,10 @@ func (e *SessionEntry) UnmarshalJSON(data []byte) error {
 		_ = json.Unmarshal(raw["tokensBefore"], &d.TokensBefore)
 		_ = json.Unmarshal(raw["originalCount"], &d.OriginalCount)
 		_ = json.Unmarshal(raw["newCount"], &d.NewCount)
+		_ = json.Unmarshal(raw["preservedUserMessages"], &d.PreservedUserMessages)
+		_ = json.Unmarshal(raw["readFiles"], &d.ReadFiles)
+		_ = json.Unmarshal(raw["modifiedFiles"], &d.ModifiedFiles)
+		_ = json.Unmarshal(raw["replacementMessages"], &d.ReplacementMessageRaws)
 		e.Data = d
 	case EntryTypeBranchSummary:
 		var d BranchSummaryData
@@ -239,6 +253,14 @@ func messagePayload(data any) any {
 	return data
 }
 
+func messagePayloads(messages []types.AgentMessage) []any {
+	payloads := make([]any, 0, len(messages))
+	for _, msg := range messages {
+		payloads = append(payloads, messagePayload(msg))
+	}
+	return payloads
+}
+
 func parseTimestamp(raw json.RawMessage) int64 {
 	var str string
 	if err := json.Unmarshal(raw, &str); err == nil && str != "" {
@@ -270,11 +292,16 @@ type ThinkingChangeData struct {
 
 // CompactionData holds compaction entry data.
 type CompactionData struct {
-	Summary          string `json:"summary"`
-	FirstKeptEntryID string `json:"firstKeptEntryId,omitempty"`
-	TokensBefore     int    `json:"tokensBefore,omitempty"`
-	OriginalCount    int    `json:"originalCount"`
-	NewCount         int    `json:"newCount"`
+	Summary                string               `json:"summary"`
+	FirstKeptEntryID       string               `json:"firstKeptEntryId,omitempty"`
+	TokensBefore           int                  `json:"tokensBefore,omitempty"`
+	OriginalCount          int                  `json:"originalCount"`
+	NewCount               int                  `json:"newCount"`
+	PreservedUserMessages  int                  `json:"preservedUserMessages,omitempty"`
+	ReadFiles              []string             `json:"readFiles,omitempty"`
+	ModifiedFiles          []string             `json:"modifiedFiles,omitempty"`
+	ReplacementMessages    []types.AgentMessage `json:"-"`
+	ReplacementMessageRaws []json.RawMessage    `json:"-"`
 }
 
 // BranchSummaryData holds branch summary data.

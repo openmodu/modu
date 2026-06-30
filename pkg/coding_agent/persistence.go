@@ -43,6 +43,12 @@ func (s *engine) RestoreMessages() (int, error) {
 			}
 			continue
 		}
+		if entry.Type == session.EntryTypeCompaction {
+			if replacement, ok := compactionReplacementMessages(entry.Data); ok {
+				msgs = replacement
+			}
+			continue
+		}
 		if entry.Type != session.EntryTypeMessage {
 			continue
 		}
@@ -180,10 +186,7 @@ func unmarshalSingleAgentMessage(raw json.RawMessage) (types.AgentMessage, error
 	}
 	switch peek.Role {
 	case "user":
-		var m types.UserMessage
-		if err := json.Unmarshal(raw, &m); err == nil {
-			return m, nil
-		}
+		return unmarshalUserMessage(raw)
 	case "assistant":
 		return unmarshalAssistantMessage(raw)
 	case "tool", types.RoleToolResult:
@@ -229,6 +232,70 @@ func agentMessageFromSessionData(data any) (types.AgentMessage, bool) {
 	return nil, false
 }
 
+func unmarshalUserMessage(raw json.RawMessage) (types.UserMessage, error) {
+	var wire struct {
+		Role      string          `json:"role"`
+		Content   json.RawMessage `json:"content"`
+		Timestamp int64           `json:"timestamp"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return types.UserMessage{}, err
+	}
+
+	var text string
+	if err := json.Unmarshal(wire.Content, &text); err == nil {
+		return types.UserMessage{Role: wire.Role, Content: text, Timestamp: wire.Timestamp}, nil
+	}
+
+	var contentRaws []json.RawMessage
+	if err := json.Unmarshal(wire.Content, &contentRaws); err == nil {
+		blocks, err := unmarshalContentBlocks(contentRaws)
+		if err != nil {
+			return types.UserMessage{}, err
+		}
+		return types.UserMessage{Role: wire.Role, Content: blocks, Timestamp: wire.Timestamp}, nil
+	}
+
+	var content any
+	if err := json.Unmarshal(wire.Content, &content); err != nil {
+		return types.UserMessage{}, err
+	}
+	return types.UserMessage{Role: wire.Role, Content: content, Timestamp: wire.Timestamp}, nil
+}
+
+func compactionReplacementMessages(data any) ([]types.AgentMessage, bool) {
+	switch value := data.(type) {
+	case session.CompactionData:
+		if len(value.ReplacementMessages) > 0 {
+			return cloneMessages(value.ReplacementMessages), true
+		}
+		if len(value.ReplacementMessageRaws) > 0 {
+			return unmarshalAgentMessageRaws(value.ReplacementMessageRaws), true
+		}
+	case map[string]any:
+		raw, ok := value["replacementMessages"]
+		if !ok {
+			return nil, false
+		}
+		data, err := json.Marshal(raw)
+		if err != nil {
+			return nil, false
+		}
+		var raws []json.RawMessage
+		if err := json.Unmarshal(data, &raws); err != nil {
+			return nil, false
+		}
+		return unmarshalAgentMessageRaws(raws), true
+	}
+	return nil, false
+}
+
+func cloneMessages(messages []types.AgentMessage) []types.AgentMessage {
+	cloned := make([]types.AgentMessage, len(messages))
+	copy(cloned, messages)
+	return cloned
+}
+
 // unmarshalAgentMessages deserializes messages previously produced by old json array format.
 func unmarshalAgentMessages(data []byte) ([]types.AgentMessage, error) {
 	var raws []json.RawMessage
@@ -236,6 +303,10 @@ func unmarshalAgentMessages(data []byte) ([]types.AgentMessage, error) {
 		return nil, err
 	}
 
+	return unmarshalAgentMessageRaws(raws), nil
+}
+
+func unmarshalAgentMessageRaws(raws []json.RawMessage) []types.AgentMessage {
 	msgs := make([]types.AgentMessage, 0, len(raws))
 	for _, raw := range raws {
 		msg, err := unmarshalSingleAgentMessage(raw)
@@ -243,7 +314,7 @@ func unmarshalAgentMessages(data []byte) ([]types.AgentMessage, error) {
 			msgs = append(msgs, msg)
 		}
 	}
-	return msgs, nil
+	return msgs
 }
 
 // unmarshalAssistantMessage reconstructs an AssistantMessage from raw JSON,

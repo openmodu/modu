@@ -21,8 +21,20 @@ func (s *engine) refreshDynamicSystemPrompt() {
 	if s.agent != nil {
 		s.promptBuilder.SetTools(s.agent.GetState().Tools)
 	}
+	s.applyMemoryProvider()
 	s.promptBuilder.SetModeBlocks(s.currentModeBlocks())
 	s.agent.SetSystemPrompt(s.promptBuilder.Build())
+}
+
+func (s *engine) applyMemoryProvider() {
+	if s.promptBuilder == nil {
+		return
+	}
+	if memoryFeatureEnabled(s.config) && s.memoryStore != nil {
+		s.promptBuilder.SetMemoryProvider(s.memoryStore)
+		return
+	}
+	s.promptBuilder.SetMemoryProvider(nil)
 }
 
 // currentModeBlocks returns the active-mode prompt blocks for the current

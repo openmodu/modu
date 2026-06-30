@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/openmodu/modu/pkg/agent"
+	memsvc "github.com/openmodu/modu/pkg/coding_agent/services/memory"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/bash"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/common"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/edit"
@@ -3289,7 +3290,7 @@ func TestDefaultProviderBuildsAndRebindsTools(t *testing.T) {
 		},
 	})
 	names := toolNames(tools)
-	for _, name := range []string{"read", "grep", "find", "ls", "memo"} {
+	for _, name := range []string{"read", "grep", "find", "ls", "memo", "get_context_remaining"} {
 		if !containsName(names, name) {
 			t.Fatalf("expected %s in provider tools, got %v", name, names)
 		}
@@ -3305,6 +3306,51 @@ func TestDefaultProviderBuildsAndRebindsTools(t *testing.T) {
 	_, ok = provider.Rebind(testUnknownTool{}, types.ToolContext{Cwd: "/tmp/b"})
 	if ok {
 		t.Fatal("expected unknown tool not to rebind")
+	}
+}
+
+func TestContextRemainingToolReportsTokensLeft(t *testing.T) {
+	provider := NewProvider(ToolSetReadOnly)
+	builtTools := provider.Tools(types.ToolContext{
+		Cwd: "/tmp/a",
+		Values: map[string]any{
+			ValueContext: fakeContextRemaining{remaining: 42, ok: true},
+		},
+	})
+	tool := findToolByName(t, builtTools, "get_context_remaining")
+	result, err := tool.Execute(context.Background(), "context-1", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := extractText(result.Content); !strings.Contains(text, "42") {
+		t.Fatalf("expected text result to include remaining tokens, got %q", text)
+	}
+	details, ok := result.Details.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map details, got %T", result.Details)
+	}
+	if details["tokens_left"] != 42 {
+		t.Fatalf("expected tokens_left detail 42, got %#v", details["tokens_left"])
+	}
+}
+
+func TestContextRemainingToolReportsUnknown(t *testing.T) {
+	provider := NewProvider(ToolSetReadOnly)
+	builtTools := provider.Tools(types.ToolContext{Cwd: "/tmp/a"})
+	tool := findToolByName(t, builtTools, "get_context_remaining")
+	result, err := tool.Execute(context.Background(), "context-1", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := extractText(result.Content); !strings.Contains(text, "unknown") {
+		t.Fatalf("expected unknown text result, got %q", text)
+	}
+	details, ok := result.Details.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map details, got %T", result.Details)
+	}
+	if details["tokens_left"] != nil {
+		t.Fatalf("expected nil tokens_left detail, got %#v", details["tokens_left"])
 	}
 }
 
@@ -3668,7 +3714,27 @@ func (fakeMemoryStore) ReadGlobalLongTerm() string         { return "" }
 func (fakeMemoryStore) WriteGlobalLongTerm(content string) error {
 	return nil
 }
-func (fakeMemoryStore) AppendToday(content string) error { return nil }
+func (fakeMemoryStore) WriteProjectSummary(content string) error { return nil }
+func (fakeMemoryStore) WriteGlobalSummary(content string) error  { return nil }
+func (fakeMemoryStore) AppendToday(content string) error         { return nil }
+func (fakeMemoryStore) List(scope, path string, maxResults int) ([]memsvc.Entry, bool, error) {
+	return nil, false, nil
+}
+func (fakeMemoryStore) Read(scope, path string, lineOffset, maxLines int) (string, bool, error) {
+	return "", false, nil
+}
+func (fakeMemoryStore) Search(scope, query, path string, contextLines, maxResults int) ([]memsvc.SearchMatch, bool, error) {
+	return nil, false, nil
+}
+
+type fakeContextRemaining struct {
+	remaining int
+	ok        bool
+}
+
+func (f fakeContextRemaining) TokensUntilCompaction() (int, bool) {
+	return f.remaining, f.ok
+}
 
 type testUnknownTool struct{}
 

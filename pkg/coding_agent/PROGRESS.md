@@ -16,6 +16,70 @@ High-priority gaps identified before this round:
 
 ## Completed In This Round
 
+- Persisted compaction replacement history in session JSONL and taught resume
+  to install that compacted history before replaying later messages, so
+  `--resume` after `/compact` keeps the summary plus preserved tail instead of
+  resurrecting pre-compaction messages.
+- Added a summary-first memory read path: `memory_summary.md` now bounds prompt
+  injection when present, while the `memo` tool can list, read, and search
+  scoped memory files for details on demand.
+- Added budgeted user-message anchors during compaction so recent real user
+  requirements from the compacted range survive alongside the generated
+  summary and preserved tail.
+- Added a Codex-style `get_context_remaining` tool backed by `contextmgr`, so
+  the model can inspect remaining tokens before auto-compaction.
+- Pruned transient steering messages before compaction so manual `/compact`
+  does not summarize temporary nested context or hidden follow-up injections.
+- Exposed the compaction user-anchor budget as
+  `compactionSettings.preserveUserMessagesTokens`, with `-1` disabling anchor
+  preservation for sessions that need the older summary-plus-tail shape.
+- Added `memo` `write_summary` so agents can maintain bounded
+  `memory_summary.md` files through the tool instead of requiring manual file
+  edits.
+- Aligned the memory feature gate so `features.memoryTool: false` suppresses
+  both the `memo` tool and persistent-memory prompt injection.
+- Added structured `memo` details for list/read/search results, including
+  scope, path, entries, matches, and truncation metadata for future citation
+  and observability work.
+- Extended the memory feature gate to subagent/workflow memory-scope prompt
+  augmentation, so disabling `memoryTool` suppresses all persistent-memory
+  prompt injection paths.
+- Centralized memory feature-gate checks so nil/default config consistently
+  keeps persistent memory enabled during prompt refresh, context inspection,
+  and subagent preparation.
+- Exposed `ContextInfo.MemoryEnabled` so `/context` consumers can distinguish
+  disabled memory from enabled-but-empty memory; `/context` now renders disabled
+  memory explicitly instead of showing it as empty.
+- Persisted `tokensBefore` on compaction session entries, preserving the token
+  pressure that triggered or preceded each compaction for later inspection.
+- Surfaced compaction metadata in session entry previews, showing message-count
+  shrinkage and pre-compaction token pressure when that data is available.
+- Added remaining-token-before-compaction fields to `ContextInfo` and surfaced
+  them in `/context`, sharing the same source as `get_context_remaining`.
+- Recorded preserved user-anchor counts in compaction results and session
+  entries, and surfaced the count in session previews when available.
+- Persisted structured read/modified file lists on compaction session entries
+  and surfaced their counts in session previews for compaction auditability.
+- Exposed memory summary-first mode through `ContextInfo` and `/context`, so
+  operators can tell when prompt memory is bounded by `memory_summary.md`.
+- Moved compaction-start emission into the shared `contextmgr.Compact` path so
+  manual and automatic compaction produce the same start/done lifecycle events.
+- Aligned subagent/workflow scoped memory injection with summary-first memory:
+  `memory_scope: user` and `memory_scope: project` now prefer the matching
+  `memory_summary.md` before falling back to long-term memory.
+- Moved scoped memory summary formatting into the memory service so main and
+  subagent prompt paths share the same summary-first wording and fallback
+  behaviour.
+- Avoided no-op compaction side effects: when the message window is too small
+  to shrink, compaction now skips lifecycle events, token reset, and empty
+  session entries.
+- Added a status-returning compaction path so `/compact` can report
+  "context unchanged" instead of claiming success when compaction is a no-op.
+- Wired RPC compaction through the same status-returning path, returning
+  `changed` in the compact response while preserving legacy success semantics.
+- Added `RpcClient.CompactIfNeeded()` so typed RPC clients can consume the
+  compact `changed` flag while the legacy `Compact()` helper remains
+  compatible.
 - Started AI-native tool parity prompt work on `codex/feat/ai-native-tools-parity`:
   strengthened the default coding prompt and core native tool descriptions so
   models are steered toward `read`, `grep`, `find`, `ls`, `edit`, and `write`

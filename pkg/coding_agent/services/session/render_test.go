@@ -80,9 +80,11 @@ func TestEntryPreview(t *testing.T) {
 		}}}, "a b"},
 		{"branch summary", SessionEntry{Type: EntryTypeBranchSummary, Data: BranchSummaryData{Summary: "sum"}}, "sum"},
 		{"compaction", SessionEntry{Type: EntryTypeCompaction, Data: CompactionData{Summary: "compact"}}, "compact"},
+		{"compaction metadata", SessionEntry{Type: EntryTypeCompaction, Data: CompactionData{Summary: "compact", OriginalCount: 10, NewCount: 4, TokensBefore: 9000, PreservedUserMessages: 2, ReadFiles: []string{"a.go", "b.go"}, ModifiedFiles: []string{"c.go"}}}, "compact (messages 10->4, tokens before 9000, user anchors 2, read files 2, modified files 1)"},
 		{"model change", SessionEntry{Type: EntryTypeModelChange, Data: ModelChangeData{Provider: "p", ModelID: "m"}}, "p/m"},
 		{"map content", SessionEntry{Type: EntryTypeMessage, Data: map[string]any{"content": "mc"}}, "mc"},
 		{"map summary", SessionEntry{Type: EntryTypeBranchSummary, Data: map[string]any{"summary": "ms"}}, "ms"},
+		{"map compaction metadata", SessionEntry{Type: EntryTypeCompaction, Data: map[string]any{"summary": "mc", "originalCount": float64(8), "newCount": float64(3), "tokensBefore": float64(1200), "preservedUserMessages": float64(1), "readFiles": []any{"a.go"}, "modifiedFiles": []any{"b.go", "c.go"}}}, "mc (messages 8->3, tokens before 1200, user anchors 1, read files 1, modified files 2)"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

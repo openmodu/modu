@@ -12,6 +12,15 @@ func (s *engine) Compact(ctx context.Context) error {
 	return s.ctxMgr.Compact(ctx)
 }
 
+// CompactIfNeeded triggers context compaction and reports whether it changed
+// the live message history.
+func (s *CodingSession) CompactIfNeeded(ctx context.Context) (bool, error) {
+	if s == nil || s.engine == nil || s.ctxMgr == nil {
+		return false, nil
+	}
+	return s.ctxMgr.CompactIfNeeded(ctx)
+}
+
 // CodingSession implements contextmgr.Host, supplying the session-specific
 // behaviour the context manager reaches for: compaction lifecycle events and
 // the transient-message envelope/identification convention.
@@ -40,8 +49,9 @@ func (s *engine) IsTransient(msg types.AgentMessage) bool {
 // context manager.
 func (s *engine) compactionPolicy() contextmgr.Policy {
 	return contextmgr.Policy{
-		AutoCompaction: s.config.AutoCompaction,
-		PreserveRecent: s.config.CompactionSettings.PreserveRecentMessages,
-		Threshold:      s.config.CompactionSettings.MaxContextPercentage,
+		AutoCompaction:             s.config.AutoCompaction,
+		PreserveRecent:             s.config.CompactionSettings.PreserveRecentMessages,
+		PreserveUserMessagesTokens: s.config.CompactionSettings.PreserveUserMessagesTokens,
+		Threshold:                  s.config.CompactionSettings.MaxContextPercentage,
 	}
 }
