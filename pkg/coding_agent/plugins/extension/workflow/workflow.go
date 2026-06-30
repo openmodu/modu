@@ -54,7 +54,7 @@ func (e *Extension) Init(api extension.ExtensionAPI) error {
 		return nil
 	}
 	api.RegisterTool(newTool(e))
-	api.RegisterCommand("workflows", "List, show, inspect, control, resume, restart, or save workflow runs: /workflows [list|show <run-id|latest>|agent <run-id|latest> <agent-id>|transcript <run-id|latest> <agent-id>|agent-stop <run-id|latest> <agent-id>|agent-restart <run-id|latest> <agent-id>|pause <run-id>|stop <run-id>|resume <run-id|latest>]", e.cmdWorkflows)
+	api.RegisterCommand("workflows", "List, show, feed, map, inspect, control, resume, restart, or save workflow runs: /workflows [list|show <run-id|latest>|feed <run-id|latest>|map <run-id|latest>|agent <run-id|latest> <agent-id>|transcript <run-id|latest> <agent-id>|agent-stop <run-id|latest> <agent-id>|agent-restart <run-id|latest> <agent-id>|pause <run-id>|stop <run-id>|resume <run-id|latest>]", e.cmdWorkflows)
 	api.RegisterCommand("deep-research", "Run the bundled deep research workflow: /deep-research <question>", e.cmdDeepResearch)
 	api.On("subagent_child_event", e.onChildEvent)
 	api.On("subagent_child_usage", e.onChildUsage)

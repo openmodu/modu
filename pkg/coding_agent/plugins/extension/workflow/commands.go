@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const workflowsUsage = "Usage: /workflows [list|show <run-id|latest>|agent <run-id|latest> <agent-id>|transcript <run-id|latest> <agent-id>|agent-stop <run-id|latest> <agent-id>|agent-restart <run-id|latest> <agent-id>|pause <run-id>|stop <run-id>|resume <run-id|latest>|restart <run-id|latest>|save <run-id|latest> <name> [project|user]]"
+const workflowsUsage = "Usage: /workflows [list|show <run-id|latest>|feed <run-id|latest>|map <run-id|latest>|agent <run-id|latest> <agent-id>|transcript <run-id|latest> <agent-id>|agent-stop <run-id|latest> <agent-id>|agent-restart <run-id|latest> <agent-id>|pause <run-id>|stop <run-id>|resume <run-id|latest>|restart <run-id|latest>|save <run-id|latest> <name> [project|user]]"
 
 type workflowRunSummary struct {
 	ID           string
@@ -36,6 +36,20 @@ func (e *Extension) cmdWorkflows(args string) error {
 			return nil
 		}
 		return e.cmdWorkflowsShow(fields[1])
+	}
+	if fields[0] == "feed" {
+		if len(fields) != 2 {
+			e.tell(workflowsUsage)
+			return nil
+		}
+		return e.cmdWorkflowsFeed(fields[1])
+	}
+	if fields[0] == "map" {
+		if len(fields) != 2 {
+			e.tell(workflowsUsage)
+			return nil
+		}
+		return e.cmdWorkflowsMap(fields[1])
 	}
 	if fields[0] == "agent" {
 		if len(fields) != 3 {
@@ -137,7 +151,7 @@ func (e *Extension) cmdWorkflowsList() error {
 		}
 		fmt.Fprintf(&b, "\n  %s\n", run.ScriptPath)
 	}
-	b.WriteString("\nUse /workflows show <run-id|latest> to inspect script and metadata, /workflows agent <run-id|latest> <agent-id> to inspect one agent, /workflows agent-stop <run-id|latest> <agent-id> to stop one running agent, /workflows agent-restart <run-id|latest> <agent-id> to restart one running agent, /workflows pause <run-id> to pause a running workflow, /workflows stop <run-id> to stop a running workflow, /workflows resume <run-id|latest> to resume a stopped run in this session, /workflows restart <run-id|latest> to relaunch a script, or /workflows save <run-id|latest> <name> [project|user] to save it for reuse.")
+	b.WriteString("\nUse /workflows show <run-id|latest> to inspect script and metadata, /workflows feed <run-id|latest> to watch the live execution feed, /workflows map <run-id|latest> to inspect the phase/agent tree, /workflows agent <run-id|latest> <agent-id> to inspect one agent, /workflows agent-stop <run-id|latest> <agent-id> to stop one running agent, /workflows agent-restart <run-id|latest> <agent-id> to restart one running agent, /workflows pause <run-id> to pause a running workflow, /workflows stop <run-id> to stop a running workflow, /workflows resume <run-id|latest> to resume a stopped run in this session, /workflows restart <run-id|latest> to relaunch a script, or /workflows save <run-id|latest> <name> [project|user] to save it for reuse.")
 	e.tell(b.String())
 	return nil
 }
@@ -211,6 +225,300 @@ func (e *Extension) cmdWorkflowsShow(selector string) error {
 	}
 	e.tell(b.String())
 	return nil
+}
+
+func (e *Extension) cmdWorkflowsFeed(selector string) error {
+	runs, _, err := e.workflowRuns()
+	if err != nil {
+		return err
+	}
+	run, ok, err := selectWorkflowRun(runs, selector)
+	if err != nil {
+		e.tell(err.Error())
+		return nil
+	}
+	if !ok {
+		e.tell("Workflow run not found: " + selector)
+		return nil
+	}
+	if run.Snapshot == nil {
+		e.tell("Workflow run has no live feed metadata: " + run.ID)
+		return nil
+	}
+	e.tell(formatWorkflowFeed(run))
+	return nil
+}
+
+func formatWorkflowFeed(run workflowRunSummary) string {
+	var b strings.Builder
+	status := run.Status
+	if status == "" {
+		status = workflowStatusCompleted
+	}
+	fmt.Fprintf(&b, "Workflow feed %s\nWorkflow: %s\nStatus: %s\n", run.ID, snapshotName(run.Snapshot), status)
+	fmt.Fprintf(&b, "Progress: %d/%d done, %d running, %d errors\n", run.Snapshot.DoneCount, run.Snapshot.AgentCount, run.Snapshot.RunningCount, run.Snapshot.ErrorCount)
+	if strings.TrimSpace(run.Snapshot.CurrentPhase) != "" {
+		fmt.Fprintf(&b, "Current phase: %s\n", run.Snapshot.CurrentPhase)
+	}
+	if len(run.Snapshot.Logs) > 0 {
+		b.WriteString("\nUpdates:\n")
+		start := 0
+		if len(run.Snapshot.Logs) > 5 {
+			start = len(run.Snapshot.Logs) - 5
+		}
+		for _, log := range run.Snapshot.Logs[start:] {
+			log = strings.TrimSpace(log)
+			if log != "" {
+				fmt.Fprintf(&b, "- %s\n", preview(log, 240))
+			}
+		}
+	}
+	if lanes := formatWorkflowFeedLanes(run.Snapshot.PhaseSummaries, run.Snapshot.Agents); len(lanes) > 0 {
+		b.WriteString("\nLanes:\n")
+		for _, line := range lanes {
+			fmt.Fprintf(&b, "- %s\n", line)
+		}
+		b.WriteString("Legend: run active | done complete | err attention | wait queued\n")
+	}
+	active, attention := workflowFeedAgents(run.Snapshot.Agents)
+	if len(active) > 0 {
+		b.WriteString("\nActive:\n")
+		for i, agent := range active {
+			if i >= 3 {
+				fmt.Fprintf(&b, "- ... %d more active agent(s)\n", len(active)-i)
+				break
+			}
+			fmt.Fprintf(&b, "- Agent %d [%s] %s", agent.ID, agent.Status, agent.Label)
+			if strings.TrimSpace(agent.Phase) != "" {
+				fmt.Fprintf(&b, " @%s", agent.Phase)
+			}
+			if len(agent.RecentToolCalls) > 0 {
+				fmt.Fprintf(&b, " tools=%d failed=%d", len(agent.RecentToolCalls), agent.FailedToolCalls)
+			}
+			b.WriteString("\n")
+		}
+	}
+	if len(attention) > 0 {
+		b.WriteString("\nAttention:\n")
+		for i, agent := range attention {
+			if i >= 3 {
+				fmt.Fprintf(&b, "- ... %d more attention agent(s)\n", len(attention)-i)
+				break
+			}
+			fmt.Fprintf(&b, "- Agent %d [%s] %s", agent.ID, agent.Status, agent.Label)
+			if strings.TrimSpace(agent.Phase) != "" {
+				fmt.Fprintf(&b, " @%s", agent.Phase)
+			}
+			if strings.TrimSpace(agent.Error) != "" {
+				fmt.Fprintf(&b, ": %s", preview(agent.Error, 240))
+			}
+			b.WriteString("\n")
+		}
+	}
+	phases := run.Snapshot.PhaseSummaries
+	if len(phases) == 0 {
+		phases = deriveWorkflowMapPhases(run.Snapshot.Agents)
+	}
+	if len(phases) > 0 {
+		b.WriteString("\nTimeline:\n")
+		for _, phase := range phases {
+			fmt.Fprintf(&b, "- %s: %d/%d done, %d running, %d errors\n",
+				workflowMapPhaseTitle(phase.Title), phase.DoneCount, phase.AgentCount, phase.RunningCount, phase.ErrorCount)
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func formatWorkflowFeedLanes(phases []phaseSummary, agents []agentSnapshot) []string {
+	if len(agents) == 0 {
+		return nil
+	}
+	if len(phases) == 0 {
+		phases = deriveWorkflowMapPhases(agents)
+	}
+	lines := make([]string, 0, len(phases))
+	for i, phase := range phases {
+		if i >= 8 {
+			lines = append(lines, fmt.Sprintf("... +%d more phase(s)", len(phases)-i))
+			break
+		}
+		var parts []string
+		for _, agent := range agents {
+			if agent.Phase != phase.Title {
+				continue
+			}
+			if len(parts) >= 4 {
+				parts = append(parts, fmt.Sprintf("+%d more", len(workflowAgentsForPhase(agents, phase.Title))-len(parts)))
+				break
+			}
+			parts = append(parts, formatWorkflowFeedLaneAgent(agent))
+		}
+		title := workflowMapPhaseTitle(phase.Title)
+		if len(parts) == 0 {
+			lines = append(lines, title+": no agent snapshot")
+			continue
+		}
+		lines = append(lines, title+": "+strings.Join(parts, " | "))
+	}
+	return lines
+}
+
+func formatWorkflowFeedLaneAgent(agent agentSnapshot) string {
+	label := strings.TrimSpace(agent.Label)
+	if label == "" {
+		label = fmt.Sprintf("agent-%d", agent.ID)
+	}
+	parts := []string{workflowFeedLaneStatus(agent), fmt.Sprintf("#%d", agent.ID), label}
+	if len(agent.RecentToolCalls) > 0 {
+		parts = append(parts, fmt.Sprintf("%d tools", len(agent.RecentToolCalls)))
+	}
+	if agent.FailedToolCalls > 0 {
+		parts = append(parts, fmt.Sprintf("%d failed", agent.FailedToolCalls))
+	}
+	return strings.Join(parts, " ")
+}
+
+func workflowFeedLaneStatus(agent agentSnapshot) string {
+	if strings.TrimSpace(agent.Error) != "" {
+		return "err"
+	}
+	switch agent.Status {
+	case statusDone:
+		return "done"
+	case statusRunning:
+		return "run"
+	case statusError:
+		return "err"
+	case statusQueued:
+		return "wait"
+	default:
+		if strings.TrimSpace(string(agent.Status)) == "" {
+			return "wait"
+		}
+		return strings.ToLower(strings.TrimSpace(string(agent.Status)))
+	}
+}
+
+func workflowAgentsForPhase(agents []agentSnapshot, phase string) []agentSnapshot {
+	var out []agentSnapshot
+	for _, agent := range agents {
+		if agent.Phase == phase {
+			out = append(out, agent)
+		}
+	}
+	return out
+}
+
+func workflowFeedAgents(agents []agentSnapshot) (active []agentSnapshot, attention []agentSnapshot) {
+	for _, agent := range agents {
+		switch agent.Status {
+		case statusRunning:
+			active = append(active, agent)
+		case statusError:
+			attention = append(attention, agent)
+		default:
+			if strings.TrimSpace(agent.Error) != "" {
+				attention = append(attention, agent)
+			}
+		}
+	}
+	return active, attention
+}
+
+func (e *Extension) cmdWorkflowsMap(selector string) error {
+	runs, _, err := e.workflowRuns()
+	if err != nil {
+		return err
+	}
+	run, ok, err := selectWorkflowRun(runs, selector)
+	if err != nil {
+		e.tell(err.Error())
+		return nil
+	}
+	if !ok {
+		e.tell("Workflow run not found: " + selector)
+		return nil
+	}
+	if run.Snapshot == nil {
+		e.tell("Workflow run has no orchestration metadata: " + run.ID)
+		return nil
+	}
+	e.tell(formatWorkflowMap(run))
+	return nil
+}
+
+func formatWorkflowMap(run workflowRunSummary) string {
+	var b strings.Builder
+	status := run.Status
+	if status == "" {
+		status = workflowStatusCompleted
+	}
+	fmt.Fprintf(&b, "Workflow map %s\nWorkflow: %s\nStatus: %s\n", run.ID, snapshotName(run.Snapshot), status)
+	phases := run.Snapshot.PhaseSummaries
+	if len(phases) == 0 {
+		phases = deriveWorkflowMapPhases(run.Snapshot.Agents)
+	}
+	if len(phases) == 0 {
+		b.WriteString("No phase or agent metadata captured.")
+		return b.String()
+	}
+	for _, phase := range phases {
+		title := workflowMapPhaseTitle(phase.Title)
+		fmt.Fprintf(&b, "- %s: %d/%d done, %d running, %d errors, estimatedTokens=%d, durationMs=%d\n",
+			title, phase.DoneCount, phase.AgentCount, phase.RunningCount, phase.ErrorCount, phase.EstimatedTokens, phase.DurationMs)
+		for _, agent := range run.Snapshot.Agents {
+			if agent.Phase != phase.Title {
+				continue
+			}
+			cached := ""
+			if agent.Cached {
+				cached = " cached"
+			}
+			fmt.Fprintf(&b, "  - Agent %d [%s%s] %s estimatedTokens=%d durationMs=%d\n",
+				agent.ID, agent.Status, cached, agent.Label, agent.EstimatedTokens, agent.DurationMs)
+			if strings.TrimSpace(agent.Error) != "" {
+				fmt.Fprintf(&b, "    Error: %s\n", agent.Error)
+			} else if strings.TrimSpace(agent.ResultPreview) != "" {
+				fmt.Fprintf(&b, "    ResultPreview: %s\n", agent.ResultPreview)
+			}
+			if len(agent.RecentToolCalls) > 0 {
+				fmt.Fprintf(&b, "    Tools: %d recent, %d failed\n", len(agent.RecentToolCalls), agent.FailedToolCalls)
+			}
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func deriveWorkflowMapPhases(agents []agentSnapshot) []phaseSummary {
+	index := map[string]int{}
+	var phases []phaseSummary
+	for _, agent := range agents {
+		title := agent.Phase
+		if _, ok := index[title]; !ok {
+			index[title] = len(phases)
+			phases = append(phases, phaseSummary{Title: title})
+		}
+		phase := &phases[index[title]]
+		phase.AgentCount++
+		phase.EstimatedTokens += agent.EstimatedTokens
+		phase.DurationMs += agent.DurationMs
+		switch agent.Status {
+		case statusDone:
+			phase.DoneCount++
+		case statusRunning:
+			phase.RunningCount++
+		case statusError:
+			phase.ErrorCount++
+		}
+	}
+	return phases
+}
+
+func workflowMapPhaseTitle(title string) string {
+	if strings.TrimSpace(title) == "" {
+		return "(no phase)"
+	}
+	return title
 }
 
 func formatWorkflowShowValue(value any) string {
