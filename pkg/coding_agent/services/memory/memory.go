@@ -12,13 +12,13 @@ import (
 
 // Store manages persistent memory for the coding agent at two scopes:
 //
-//   - Global (~/.coding_agent/memory/): shared across all projects.
+//   - Global (~/.modu/memory/): shared across all projects.
 //   - Project (<cwd>/memory/):          specific to the current project.
 //
 // Both scopes store a MEMORY.md for long-term facts and
 // daily notes under YYYYMM/YYYYMMDD.md.
 type Store struct {
-	globalDir  string // e.g. ~/.coding_agent/memory
+	globalDir  string // e.g. ~/.modu/memory
 	projectDir string // e.g. <cwd>/memory
 }
 
@@ -37,7 +37,7 @@ type SearchMatch struct {
 }
 
 // New creates a Store backed by two directories.
-// agentDir is the global config dir (e.g. ~/.coding_agent/);
+// agentDir is the global config dir (e.g. ~/.modu/);
 // cwd is the current project directory.
 func New(agentDir, cwd string) *Store {
 	globalDir := filepath.Join(agentDir, "memory")
@@ -66,7 +66,7 @@ func (ms *Store) ReadProjectLongTerm() string {
 	return string(data)
 }
 
-// ReadGlobalLongTerm reads ~/.coding_agent/memory/MEMORY.md.
+// ReadGlobalLongTerm reads ~/.modu/memory/MEMORY.md.
 func (ms *Store) ReadGlobalLongTerm() string {
 	data, err := os.ReadFile(filepath.Join(ms.globalDir, "MEMORY.md"))
 	if err != nil {
@@ -95,7 +95,7 @@ func (ms *Store) WriteProjectLongTerm(content string) error {
 	return os.WriteFile(filepath.Join(ms.projectDir, "MEMORY.md"), []byte(content), 0o600)
 }
 
-// WriteGlobalLongTerm overwrites ~/.coding_agent/memory/MEMORY.md.
+// WriteGlobalLongTerm overwrites ~/.modu/memory/MEMORY.md.
 func (ms *Store) WriteGlobalLongTerm(content string) error {
 	return os.WriteFile(filepath.Join(ms.globalDir, "MEMORY.md"), []byte(content), 0o600)
 }

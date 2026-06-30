@@ -199,11 +199,11 @@ func (l *Loader) EnsureAgentDir() error {
 	return os.MkdirAll(l.agentDir, 0o755)
 }
 
-// DefaultAgentDir returns the default agent directory path (~/.coding_agent/).
+// DefaultAgentDir returns the default agent directory path (~/.modu/).
 func DefaultAgentDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ".coding_agent"
+		return ".modu"
 	}
-	return filepath.Join(home, ".coding_agent")
+	return filepath.Join(home, ".modu")
 }

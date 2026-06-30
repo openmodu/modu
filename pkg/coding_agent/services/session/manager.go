@@ -42,7 +42,7 @@ type SessionInfo struct {
 }
 
 // NewManager creates or continues the most recent session for projectPath.
-// agentDir is typically ~/.coding_agent/.
+// agentDir is typically ~/.modu/.
 func NewManager(agentDir, projectPath string) (*Manager, error) {
 	dir := DefaultSessionDir(agentDir, projectPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {

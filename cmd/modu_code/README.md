@@ -31,7 +31,7 @@ SSH 下拖选复制会发 OSC52；在 tmux/screen 中会使用 passthrough，让
 TUI 底部固定区域分两层：输入框上方只显示简短 agent 运行状态和最近完成耗时，输入框下方显示简短的上下文使用量/窗口、模型和工作区路径。运行中按 `Esc` 会中断当前请求和正在运行的 bash。
 
 默认启动会使用当前 checkout。需要隔离修改时，可以显式创建并切入 managed worktree，路径形如
-`~/.coding_agent/worktrees/<uuid>/<repo>`，分支名形如 `modu-code/<repo>-<id>`：
+`~/.modu/worktrees/<uuid>/<repo>`，分支名形如 `modu-code/<repo>-<id>`：
 
 ```bash
 go run ./cmd/modu_code --worktree
@@ -41,51 +41,45 @@ go run ./cmd/modu_code --worktree
 
 ## 模型配置
 
-`modu_code` 优先读取 `~/.coding_agent/config.json` 中的模型配置。支持配置多个模型，并通过 `active` 指定默认使用的模型：
+`modu_code` 优先读取 `~/.modu/config.toml` 中的模型配置。支持配置多个模型，并通过 `active` 指定默认使用的模型：
 
-```json
-{
-  "version": 2,
-  "active": "local-qwen",
-  "roles": {
-    "summary": "local-qwen",
-    "dispatcher": "deepseek"
-  },
-  "scopedModels": ["local-qwen", "deepseek"],
-  "reasoning": {
-    "level": "off"
-  },
-  "providers": {
-    "lmstudio": {
-      "type": "openai-compatible",
-      "baseUrl": "http://127.0.0.1:1234/v1",
-      "apiKey": "lm-studio"
-    },
-    "deepseek": {
-      "type": "openai-compatible",
-      "baseUrl": "https://api.deepseek.com/v1",
-      "apiKeyEnv": "DEEPSEEK_API_KEY"
-    }
-  },
-  "models": [
-    {
-      "name": "local-qwen",
-      "description": "local coding model",
-      "provider": "lmstudio",
-      "model": "qwen/qwen3.6-35b-a3b",
-      "capabilities": ["tools"],
-      "contextWindow": 262144
-    },
-    {
-      "name": "deepseek",
-      "description": "remote fallback model",
-      "provider": "deepseek",
-      "model": "deepseek-chat",
-      "capabilities": ["tools"],
-      "contextWindow": 1000000
-    }
-  ]
-}
+```toml
+version = 2
+active = "local-qwen"
+scopedModels = ["local-qwen", "deepseek"]
+
+[roles]
+summary = "local-qwen"
+dispatcher = "deepseek"
+
+[reasoning]
+level = "off"
+
+[providers.lmstudio]
+type = "openai-compatible"
+baseUrl = "http://127.0.0.1:1234/v1"
+apiKey = "lm-studio"
+
+[providers.deepseek]
+type = "openai-compatible"
+baseUrl = "https://api.deepseek.com/v1"
+apiKeyEnv = "DEEPSEEK_API_KEY"
+
+[[models]]
+name = "local-qwen"
+description = "local coding model"
+provider = "lmstudio"
+model = "qwen/qwen3.6-35b-a3b"
+capabilities = ["tools"]
+contextWindow = 262144
+
+[[models]]
+name = "deepseek"
+description = "remote fallback model"
+provider = "deepseek"
+model = "deepseek-chat"
+capabilities = ["tools"]
+contextWindow = 1000000
 ```
 
 `providers` 只描述连接方式，`models` 只描述可选模型；`active` 是默认模型，`scopedModels` 是模型循环范围，`roles` 预留给 summary/dispatcher 等专用模型。`contextWindow` 可显式覆盖模型上下文窗口；未配置时，内置厂商会按当前厂商最大窗口补默认值。
@@ -141,7 +135,7 @@ Bubble Tea 的全屏 TUI 保留为实验路径；默认交互路径使用 Bubble
 
 ## Telegram
 
-配置 `MOMS_TG_TOKEN` 或 `~/.coding_agent/channels/telegram/config.json` 后，`modu_code` 会启动共享当前 session 的 Telegram bot。Telegram 和 TUI 共用同一个 steer / follow-up 队列：
+配置 `MOMS_TG_TOKEN` 或 `~/.modu/channels/telegram/config.toml` 后，`modu_code` 会启动共享当前 session 的 Telegram bot。Telegram 和 TUI 共用同一个 steer / follow-up 队列：
 
 | Telegram 输入 | 任务空闲时 | 任务运行中 |
 |------|------|------|

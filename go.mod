@@ -4,6 +4,7 @@ go 1.26.2
 
 require (
 	charm.land/bubbletea/v2 v2.0.7
+	github.com/BurntSushi/toml v1.6.0
 	github.com/alecthomas/chroma/v2 v2.23.1
 	github.com/atotto/clipboard v0.1.4
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1

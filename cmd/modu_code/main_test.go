@@ -48,7 +48,7 @@ func TestRunConfigCommandExample(t *testing.T) {
 	if err := runConfigCommand([]string{"example"}, &out, nil); err != nil {
 		t.Fatalf("runConfigCommand example: %v", err)
 	}
-	if !strings.Contains(out.String(), `"models"`) || !strings.Contains(out.String(), `"description": "local coding model"`) {
+	if !strings.Contains(out.String(), "[[models]]") || !strings.Contains(out.String(), `description = "local coding model"`) {
 		t.Fatalf("unexpected example output:\n%s", out.String())
 	}
 }
@@ -69,14 +69,14 @@ func TestRunConfigCommandShowWhenMissing(t *testing.T) {
 	}
 }
 
-func TestRunConfigCommandShowReportsInvalidJSON(t *testing.T) {
+func TestRunConfigCommandShowReportsInvalidTOML(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	dir := filepath.Join(home, ".coding_agent")
+	dir := filepath.Join(home, ".modu")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"models":`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(`models = [`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -84,8 +84,8 @@ func TestRunConfigCommandShowReportsInvalidJSON(t *testing.T) {
 	if err := runConfigCommand(nil, &out, nil); err != nil {
 		t.Fatalf("runConfigCommand show: %v", err)
 	}
-	if got := out.String(); !strings.Contains(got, "status: invalid JSON") {
-		t.Fatalf("expected invalid JSON status, got:\n%s", got)
+	if got := out.String(); !strings.Contains(got, "status: invalid TOML") {
+		t.Fatalf("expected invalid TOML status, got:\n%s", got)
 	}
 }
 
@@ -99,7 +99,7 @@ func TestPrintMissingProviderHintGivesFirstRunGuidance(t *testing.T) {
 	for _, want := range []string{
 		"No model provider is configured yet.",
 		"modu_code config init",
-		filepath.Join(home, ".coding_agent", "config.json"),
+		filepath.Join(home, ".modu", "config.toml"),
 		"modu_code config validate",
 		"modu_code config add local-qwen",
 		"OPENAI_API_KEY",
@@ -119,7 +119,7 @@ func TestRunConfigCommandInitAndValidate(t *testing.T) {
 	if err := runConfigCommand([]string{"init"}, &initOut, nil); err != nil {
 		t.Fatalf("runConfigCommand init: %v", err)
 	}
-	path := filepath.Join(home, ".coding_agent", "config.json")
+	path := filepath.Join(home, ".modu", "config.toml")
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("expected config file: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestConfigToggleWorkflowsWritesSettings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("configToggleWorkflows disable: %v", err)
 	}
-	path := filepath.Join(home, ".coding_agent", "settings.json")
+	path := filepath.Join(home, ".modu", "settings.json")
 	if !strings.Contains(out, "dynamic workflows: disabled") || !strings.Contains(out, path) {
 		t.Fatalf("unexpected disable output:\n%s", out)
 	}
@@ -223,22 +223,25 @@ func TestRunConfigCommandAddWritesV2ProviderSchema(t *testing.T) {
 	}, &out, nil); err != nil {
 		t.Fatalf("runConfigCommand add: %v", err)
 	}
-	data, err := os.ReadFile(filepath.Join(home, ".coding_agent", "config.json"))
+	data, err := os.ReadFile(filepath.Join(home, ".modu", "config.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := string(data)
-	for _, want := range []string{`"version": 2`, `"providers"`, `"baseUrl": "127.0.0.1:1234/v1"`, `"apiKey": "local-key"`} {
+	for _, want := range []string{`version = 2`, `[providers.lmstudio]`, `baseUrl = "127.0.0.1:1234/v1"`, `apiKey = "local-key"`} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected %q in config:\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, `"models": [
-    {
-      "name": "local-qwen",
-      "provider": "lmstudio",
-      "model": "qwen",
-      "baseUrl"`) {
+	if strings.Contains(got, `contextWindow = 0`) {
+		t.Fatalf("expected zero contextWindow to be omitted:\n%s", got)
+	}
+	if strings.Contains(got, `[[models]]
+  name = "local-qwen"
+  provider = "lmstudio"
+  model = "qwen"
+  baseUrl`) || strings.Contains(got, `baseUrl = "127.0.0.1:1234/v1"
+[[models]]`) {
 		t.Fatalf("expected model entry not to own baseUrl:\n%s", got)
 	}
 }
@@ -305,11 +308,15 @@ func TestSplitConfigArgsEdgeCases(t *testing.T) {
 func TestRunConfigCommandValidateFailsInvalidConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	dir := filepath.Join(home, ".coding_agent")
+	dir := filepath.Join(home, ".modu")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"models":[{"provider":"","model":"","baseUrl":""}]}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(`[[models]]
+provider = ""
+model = ""
+baseUrl = ""
+`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -450,7 +457,7 @@ func TestMainPrintsSessionResumeHintAfterInteractiveExit(t *testing.T) {
 
 	resumed, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
 		Cwd:             cwd,
-		AgentDir:        filepath.Join(home, ".coding_agent"),
+		AgentDir:        filepath.Join(home, ".modu"),
 		Model:           &types.Model{ID: "test-model", Name: "Test Model", ProviderID: "test-provider"},
 		GetAPIKey:       func(string) (string, error) { return "", nil },
 		ResumeSessionID: sessionID,
@@ -474,7 +481,7 @@ func TestMainResumeStartsRequestedSession(t *testing.T) {
 	if err := runConfigCommand([]string{"init"}, &initOut, nil); err != nil {
 		t.Fatalf("runConfigCommand init: %v", err)
 	}
-	agentDir := filepath.Join(home, ".coding_agent")
+	agentDir := filepath.Join(home, ".modu")
 
 	setupMainTestInvocation(t, project, "modu_code")
 	cwd, err := os.Getwd()
@@ -577,7 +584,7 @@ func TestMainStartsInWorktreeWhenRequestedForGitRepo(t *testing.T) {
 		if samePath, err := samePhysicalPath(status.OriginalCwd, project); err != nil || !samePath {
 			t.Fatalf("expected original cwd %s, got %#v", project, status)
 		}
-		wantBase := filepath.Join(home, ".coding_agent", "worktrees")
+		wantBase := filepath.Join(home, ".modu", "worktrees")
 		if !strings.HasPrefix(status.Path, wantBase+string(os.PathSeparator)) {
 			t.Fatalf("expected managed worktree under %s, got %s", wantBase, status.Path)
 		}

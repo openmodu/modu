@@ -31,25 +31,22 @@ func TestResolveUsesMultiModelConfigBeforeEnv(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("OPENAI_API_KEY", "env-key")
 	t.Setenv("OPENAI_MODEL", "env-model")
-	writeConfig(t, home, `{
-  "active": "local-qwen",
-  "models": [
-    {
-      "name": "local-qwen",
-      "provider": "lmstudio",
-      "model": "qwen/qwen3.6-35b-a3b",
-      "baseUrl": "http://127.0.0.1:1234/v1",
-      "apiKey": "local-key"
-    },
-    {
-      "name": "deepseek",
-      "provider": "deepseek",
-      "model": "deepseek-chat",
-      "baseUrl": "https://api.deepseek.com/v1",
-      "apiKey": "deepseek-key"
-    }
-  ]
-}`)
+	writeConfig(t, home, `active = "local-qwen"
+
+[[models]]
+name = "local-qwen"
+provider = "lmstudio"
+model = "qwen/qwen3.6-35b-a3b"
+baseUrl = "http://127.0.0.1:1234/v1"
+apiKey = "local-key"
+
+[[models]]
+name = "deepseek"
+provider = "deepseek"
+model = "deepseek-chat"
+baseUrl = "https://api.deepseek.com/v1"
+apiKey = "deepseek-key"
+`)
 
 	model, getAPIKey := Resolve()
 	if model == nil {
@@ -67,18 +64,15 @@ func TestResolveUsesMultiModelConfigBeforeEnv(t *testing.T) {
 func TestResolveAppliesConfiguredContextWindow(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	writeConfig(t, home, `{
-  "active": "local-qwen",
-  "models": [
-    {
-      "name": "local-qwen",
-      "provider": "lmstudio",
-      "model": "qwen/qwen3.6-35b-a3b",
-      "baseUrl": "http://127.0.0.1:1234/v1",
-      "contextWindow": 32768
-    }
-  ]
-}`)
+	writeConfig(t, home, `active = "local-qwen"
+
+[[models]]
+name = "local-qwen"
+provider = "lmstudio"
+model = "qwen/qwen3.6-35b-a3b"
+baseUrl = "http://127.0.0.1:1234/v1"
+contextWindow = 32768
+`)
 
 	model, _ := Resolve()
 	if model == nil {
@@ -92,17 +86,14 @@ func TestResolveAppliesConfiguredContextWindow(t *testing.T) {
 func TestResolveAppliesProviderDefaultContextWindow(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	writeConfig(t, home, `{
-  "active": "deepseek",
-  "models": [
-    {
-      "name": "deepseek",
-      "provider": "deepseek",
-      "model": "deepseek-chat",
-      "baseUrl": "https://api.deepseek.com/v1"
-    }
-  ]
-}`)
+	writeConfig(t, home, `active = "deepseek"
+
+[[models]]
+name = "deepseek"
+provider = "deepseek"
+model = "deepseek-chat"
+baseUrl = "https://api.deepseek.com/v1"
+`)
 
 	model, _ := Resolve()
 	if model == nil {
@@ -116,22 +107,17 @@ func TestResolveAppliesProviderDefaultContextWindow(t *testing.T) {
 func TestResolveAppliesXiaomiMimoDefaultContextWindow(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	writeConfig(t, home, `{
-  "active": "mimo-v2.5-pro",
-  "providers": {
-    "xiaomi-mimo": {
-      "type": "openai-compatible",
-      "baseUrl": "https://token-plan-cn.xiaomimimo.com/v1"
-    }
-  },
-  "models": [
-    {
-      "name": "mimo-v2.5-pro",
-      "provider": "xiaomi-mimo",
-      "model": "mimo-v2.5-pro"
-    }
-  ]
-}`)
+	writeConfig(t, home, `active = "mimo-v2.5-pro"
+
+[providers.xiaomi-mimo]
+type = "openai-compatible"
+baseUrl = "https://token-plan-cn.xiaomimimo.com/v1"
+
+[[models]]
+name = "mimo-v2.5-pro"
+provider = "xiaomi-mimo"
+model = "mimo-v2.5-pro"
+`)
 
 	model, _ := Resolve()
 	if model == nil {
@@ -161,20 +147,21 @@ func TestResolveUsesV2ProviderConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("DEEPSEEK_API_KEY", "env-deepseek-key")
-	writeConfig(t, home, `{
-  "version": 2,
-  "active": "deepseek",
-  "providers": {
-    "deepseek": {
-      "type": "openai-compatible",
-      "baseUrl": "https://api.deepseek.com/v1",
-      "apiKeyEnv": "DEEPSEEK_API_KEY"
-    }
-  },
-  "models": [
-    {"name": "deepseek", "description": "remote", "provider": "deepseek", "model": "deepseek-chat", "capabilities": ["tools"]}
-  ]
-}`)
+	writeConfig(t, home, `version = 2
+active = "deepseek"
+
+[providers.deepseek]
+type = "openai-compatible"
+baseUrl = "https://api.deepseek.com/v1"
+apiKeyEnv = "DEEPSEEK_API_KEY"
+
+[[models]]
+name = "deepseek"
+description = "remote"
+provider = "deepseek"
+model = "deepseek-chat"
+capabilities = ["tools"]
+`)
 
 	model, getAPIKey := Resolve()
 	if model == nil {
@@ -193,17 +180,14 @@ func TestResolveRejectsConfigWithUnknownActiveModel(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("OPENAI_API_KEY", "env-key")
-	writeConfig(t, home, `{
-  "active": "missing-model",
-  "models": [
-    {
-      "name": "local-qwen",
-      "provider": "lmstudio",
-      "model": "qwen",
-      "baseUrl": "http://127.0.0.1:1234/v1"
-    }
-  ]
-}`)
+	writeConfig(t, home, `active = "missing-model"
+
+[[models]]
+name = "local-qwen"
+provider = "lmstudio"
+model = "qwen"
+baseUrl = "http://127.0.0.1:1234/v1"
+`)
 
 	model, getAPIKey := Resolve()
 	if model != nil || getAPIKey != nil {
@@ -214,13 +198,20 @@ func TestResolveRejectsConfigWithUnknownActiveModel(t *testing.T) {
 func TestSaveActiveModelUpdatesConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	writeConfig(t, home, `{
-  "active": "local-qwen",
-  "models": [
-    {"name": "local-qwen", "provider": "lmstudio", "model": "qwen", "baseUrl": "127.0.0.1:1234/v1"},
-    {"name": "remote-deepseek", "provider": "deepseek", "model": "deepseek-chat", "baseUrl": "https://api.deepseek.com/v1"}
-  ]
-}`)
+	writeConfig(t, home, `active = "local-qwen"
+
+[[models]]
+name = "local-qwen"
+provider = "lmstudio"
+model = "qwen"
+baseUrl = "127.0.0.1:1234/v1"
+
+[[models]]
+name = "remote-deepseek"
+provider = "deepseek"
+model = "deepseek-chat"
+baseUrl = "https://api.deepseek.com/v1"
+`)
 
 	if err := SaveActiveModel("deepseek", "deepseek-chat"); err != nil {
 		t.Fatalf("SaveActiveModel: %v", err)
@@ -262,7 +253,7 @@ func TestInitAndValidateConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InitConfig: %v", err)
 	}
-	if path != filepath.Join(home, ".coding_agent", "config.json") {
+	if path != filepath.Join(home, ".modu", "config.toml") {
 		t.Fatalf("unexpected path: %s", path)
 	}
 	result := ValidateConfig()
@@ -456,13 +447,20 @@ func TestUpsertProviderConfigPreservesExistingSecret(t *testing.T) {
 func TestValidateConfigReportsProblems(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	writeConfig(t, home, `{
-  "active": "missing",
-  "models": [
-    {"name": "broken", "provider": "", "model": "qwen", "baseUrl": "127.0.0.1:1234/v1"},
-    {"name": "broken", "provider": "deepseek", "model": "", "baseUrl": ""}
-  ]
-}`)
+	writeConfig(t, home, `active = "missing"
+
+[[models]]
+name = "broken"
+provider = ""
+model = "qwen"
+baseUrl = "127.0.0.1:1234/v1"
+
+[[models]]
+name = "broken"
+provider = "deepseek"
+model = ""
+baseUrl = ""
+`)
 
 	result := ValidateConfig()
 	for _, want := range []string{
@@ -481,11 +479,11 @@ func TestValidateConfigReportsProblems(t *testing.T) {
 
 func writeConfig(t *testing.T, home, content string) {
 	t.Helper()
-	dir := filepath.Join(home, ".coding_agent")
+	dir := filepath.Join(home, ".modu")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(content), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
