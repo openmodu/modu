@@ -144,6 +144,35 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		}
 		rawSend(modutui.RefreshPanelMsg{Panel: panel})
 	}
+	refreshWorkflowPanelForRun := func(runID string) bool {
+		workflowPanelMu.Lock()
+		if !workflowPanelActive {
+			workflowPanelMu.Unlock()
+			return false
+		}
+		ref := workflowPanelRef
+		workflowPanelMu.Unlock()
+		if !ref.MatchesRun(runID) {
+			return false
+		}
+		panel, ok := ref.Panel(session)
+		if !ok {
+			return false
+		}
+		fingerprint := workflowFingerprint()
+		workflowPanelMu.Lock()
+		shouldSend := false
+		if workflowPanelActive && workflowPanelRef == ref && ref.MatchesRun(runID) {
+			workflowPanelFingerprint = fingerprint
+			shouldSend = true
+		}
+		workflowPanelMu.Unlock()
+		if !shouldSend {
+			return false
+		}
+		rawSend(modutui.RefreshPanelMsg{Panel: panel})
+		return true
+	}
 	reportAsyncPanic := func(name string, recovered any) {
 		send(modutui.AppendMessageMsg{Message: modutui.Message{
 			Role:         modutui.RoleAssistant,
@@ -462,7 +491,13 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 				send(modutui.SetStatusMsg{Status: status, TransientFor: moduTUITerminalStatusTTL})
 			}
 			if panel.ID != "" {
-				send(modutui.SetPanelMsg{Panel: panel})
+				runID := moduTUIWorkflowRunIDFromToolResult(ev.Result)
+				if runID == "" {
+					runID = moduTUIWorkflowRunIDFromPanel(panel)
+				}
+				if runID == "" || !refreshWorkflowPanelForRun(runID) {
+					send(modutui.SetPanelMsg{Panel: panel})
+				}
 			}
 		}
 		for _, msg := range messagesFromAgentEventWithCwd(ev, session.Cwd()) {
@@ -483,7 +518,13 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 				send(modutui.SetStatusMsg{Status: status, TransientFor: moduTUITerminalStatusTTL})
 			}
 			if panel.ID != "" {
-				send(modutui.SetPanelMsg{Panel: panel})
+				runID := moduTUIWorkflowRunIDFromNotify(ev.Message)
+				if runID == "" {
+					runID = moduTUIWorkflowRunIDFromPanel(panel)
+				}
+				if runID == "" || !refreshWorkflowPanelForRun(runID) {
+					send(modutui.SetPanelMsg{Panel: panel})
+				}
 			}
 			sendFooter()
 			return
@@ -1108,6 +1149,14 @@ type moduTUIWorkflowPanelRef struct {
 	AgentID int
 }
 
+func (ref moduTUIWorkflowPanelRef) MatchesRun(runID string) bool {
+	runID = strings.TrimSpace(runID)
+	if strings.TrimSpace(ref.PanelID) == moduTUIWorkflowCockpitPanelID {
+		return true
+	}
+	return runID != "" && strings.TrimSpace(ref.RunID) == runID
+}
+
 func (ref moduTUIWorkflowPanelRef) Panel(session *coding_agent.CodingSession) (modutui.Panel, bool) {
 	switch ref.PanelID {
 	case moduTUIWorkflowCockpitPanelID:
@@ -1216,6 +1265,14 @@ func moduTUIWorkflowPanelRefFromPanel(panel modutui.Panel) (moduTUIWorkflowPanel
 		}
 	}
 	return moduTUIWorkflowPanelRef{}, false
+}
+
+func moduTUIWorkflowRunIDFromPanel(panel modutui.Panel) string {
+	ref, ok := moduTUIWorkflowPanelRefFromPanel(panel)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(ref.RunID)
 }
 
 func moduTUIWorkflowRunIDFromPanelRows(rows []modutui.PanelRow) string {
@@ -1591,6 +1648,12 @@ func moduTUIWorkflowPanelAction(session *coding_agent.CodingSession, action modu
 		}
 	case moduTUIWorkflowTranscriptPanelID:
 		command := strings.TrimSpace(action.Command)
+		if rest, ok := strings.CutPrefix(command, moduTUIWorkflowPanelPhasePrefix); ok {
+			runID, phase, hasPhase := strings.Cut(rest, ":")
+			if hasPhase {
+				return moduTUIWorkflowPhasePanel(session, runID, phase), true
+			}
+		}
 		if rest, ok := strings.CutPrefix(command, moduTUIWorkflowPanelAgentPrefix); ok {
 			runID, agentIDText, ok := strings.Cut(rest, ":")
 			if ok {
@@ -1957,17 +2020,19 @@ func moduTUIWorkflowGuidePanelFromStates(states map[string]any, runID string) mo
 	}
 	lines := []string{
 		"workflow guide",
-		"  Feed: live cards, board, lanes, updates, timeline",
-		"  Map: full phase and agent tree",
-		"  Phase: one orchestration stage",
-		"  Agent: status, tools, result/error, transcript",
-		"  Result: final workflow output",
-		"  Script: generated or resumed workflow script",
+		"  Feed: live Status/Plan/Metrics cards, board, lanes, updates, timeline",
+		"  Map: topology, phase path edges, agent lanes, detailed tree",
+		"  Phase: one orchestration stage with position and neighbors",
+		"  Agent: phase context, peer lanes, status, tools, result/error, transcript",
+		"  Result: final workflow output with run and plan context",
+		"  Script: generated or resumed workflow script with run context",
 		"",
 		"current route",
 		"  /workflows -> running run -> Feed",
+		"  Feed cards -> current phase, attention agent, active agent",
 		"  Feed -> Phase/Agent for active work",
-		"  Map -> Phase/Agent for structure",
+		"  Map topology -> Phase/Agent for structure",
+		"  Result/Script -> Feed/Map to return to execution context",
 	}
 	if phase, ok := moduTUIWorkflowCurrentOrRunningPhase(run); ok {
 		lines = append(lines, "", "current phase")
@@ -2024,7 +2089,7 @@ func moduTUIWorkflowGuidePanelFromStates(states map[string]any, runID string) mo
 	})
 	shortcuts := moduTUIWorkflowAppendShortcuts(
 		moduTUIWorkflowAttentionShortcut(run),
-		moduTUIWorkflowNavigationShortcuts(run.ID, "feed", "map", "detail", "agents"),
+		moduTUIWorkflowNavigationShortcuts(run.ID, "feed", "map", "detail", "agents", "result", "script"),
 	)
 	return modutui.Panel{
 		ID:        moduTUIWorkflowGuidePanelID,
@@ -2068,6 +2133,7 @@ func moduTUIWorkflowRunCardLines(run moduTUIWorkflowRun) []string {
 	}
 	lines := []string{"cards"}
 	lines = append(lines, moduTUIWorkflowCardLines("Status", statusLines)...)
+	lines = append(lines, moduTUIWorkflowCardLines("Plan", moduTUIWorkflowRunPlanLines(run))...)
 	lines = append(lines, moduTUIWorkflowCardLines("Metrics", moduTUIWorkflowRunMetricLines(run))...)
 	lines = append(lines, moduTUIWorkflowCardLines("Path", moduTUIWorkflowRunPathLines(run))...)
 	if outcome := moduTUIWorkflowRunOutcomeLines(run); len(outcome) > 0 {
@@ -2137,6 +2203,144 @@ func moduTUIWorkflowRunPathLines(run moduTUIWorkflowRun) []string {
 		lines = append(lines, next)
 	}
 	return lines
+}
+
+func moduTUIWorkflowRunPlanLines(run moduTUIWorkflowRun) []string {
+	phases := run.Phases
+	if len(phases) == 0 {
+		phases = moduTUIWorkflowDerivedPhases(run.Agents)
+	}
+	if len(phases) == 0 {
+		return []string{"waiting for phase plan"}
+	}
+	lines := []string{"route: " + moduTUIWorkflowPhasePlanRoute(phases)}
+	currentIndex := moduTUIWorkflowCurrentPhaseIndex(run, phases)
+	if strings.EqualFold(strings.TrimSpace(run.Status), "completed") {
+		currentIndex = -1
+	}
+	nextIndex := moduTUIWorkflowNextPhaseIndex(phases)
+	if currentIndex >= 0 {
+		lines = append(lines, fmt.Sprintf("now: %d/%d %s %s",
+			currentIndex+1,
+			len(phases),
+			moduTUIWorkflowPhaseTitle(phases[currentIndex].Title),
+			moduTUIWorkflowPlanPhaseDetail(phases[currentIndex]),
+		))
+	} else {
+		status := strings.TrimSpace(run.Status)
+		if status == "" {
+			status = "unknown"
+		}
+		lines = append(lines, "now: workflow "+status)
+	}
+	if nextIndex >= 0 {
+		lines = append(lines, fmt.Sprintf("next: %d/%d %s %s",
+			nextIndex+1,
+			len(phases),
+			moduTUIWorkflowPhaseTitle(phases[nextIndex].Title),
+			moduTUIWorkflowBoardPhaseSummary(phases, nextIndex),
+		))
+	} else if moduTUIWorkflowStatusIsTerminal(run.Status) {
+		lines = append(lines, "next: inspect outcome")
+	}
+	for i, phase := range phases {
+		if i >= 4 {
+			lines = append(lines, fmt.Sprintf("stage: +%d more phase(s)", len(phases)-i))
+			break
+		}
+		label := moduTUIWorkflowPlanPhaseLabel(i, currentIndex, nextIndex, phase)
+		lines = append(lines, fmt.Sprintf("stage %d: %s %s %d/%d",
+			i+1,
+			label,
+			moduTUIWorkflowPhaseTitle(phase.Title),
+			phase.DoneCount,
+			phase.AgentCount,
+		))
+	}
+	return lines
+}
+
+func moduTUIWorkflowPhasePlanRoute(phases []moduTUIWorkflowPhase) string {
+	parts := make([]string, 0, min(len(phases), 6))
+	for i, phase := range phases {
+		if i >= 6 {
+			parts = append(parts, fmt.Sprintf("+%d", len(phases)-i))
+			break
+		}
+		parts = append(parts, fmt.Sprintf("%d %s", i+1, moduTUIWorkflowPhaseTitle(phase.Title)))
+	}
+	return strings.Join(parts, " -> ")
+}
+
+func moduTUIWorkflowCurrentPhaseIndex(run moduTUIWorkflowRun, phases []moduTUIWorkflowPhase) int {
+	current := strings.TrimSpace(run.CurrentPhase)
+	if current != "" {
+		for i, phase := range phases {
+			if strings.TrimSpace(phase.Title) == current {
+				return i
+			}
+		}
+	}
+	for i, phase := range phases {
+		if phase.RunningCount > 0 || phase.ErrorCount > 0 {
+			return i
+		}
+	}
+	for i, phase := range phases {
+		if phase.DoneCount > 0 && !moduTUIWorkflowPhaseIsComplete(phase) {
+			return i
+		}
+	}
+	return -1
+}
+
+func moduTUIWorkflowNextPhaseIndex(phases []moduTUIWorkflowPhase) int {
+	for i, phase := range phases {
+		if phase.AgentCount == 0 || phase.DoneCount < phase.AgentCount {
+			if phase.RunningCount > 0 || phase.ErrorCount > 0 {
+				continue
+			}
+			return i
+		}
+	}
+	return -1
+}
+
+func moduTUIWorkflowPlanPhaseDetail(phase moduTUIWorkflowPhase) string {
+	parts := []string{fmt.Sprintf("%d/%d", phase.DoneCount, phase.AgentCount)}
+	if phase.RunningCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d running", phase.RunningCount))
+	}
+	if phase.ErrorCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d error", phase.ErrorCount))
+	}
+	if phase.ErrorCount > 0 {
+		parts = append(parts, "needs attention")
+	} else if moduTUIWorkflowPhaseIsComplete(phase) {
+		parts = append(parts, "complete")
+	} else if phase.RunningCount > 0 {
+		parts = append(parts, "running now")
+	}
+	return strings.Join(parts, " | ")
+}
+
+func moduTUIWorkflowPlanPhaseLabel(index, currentIndex, nextIndex int, phase moduTUIWorkflowPhase) string {
+	switch {
+	case index == currentIndex && phase.ErrorCount > 0:
+		return "attention"
+	case index == currentIndex:
+		return "now"
+	case index == nextIndex:
+		return "next"
+	case moduTUIWorkflowPhaseIsComplete(phase):
+		return "done"
+	case phase.ErrorCount > 0:
+		return "attention"
+	case phase.RunningCount > 0:
+		return "running"
+	default:
+		return "wait"
+	}
 }
 
 func moduTUIWorkflowRunMetricLines(run moduTUIWorkflowRun) []string {
@@ -2287,9 +2491,15 @@ func moduTUIWorkflowMapPanelFromStates(states map[string]any, runID string) modu
 		name = run.ID
 	}
 	lines := []string{"orchestration map"}
+	if topology := moduTUIWorkflowTopologyLines(run); len(topology) > 0 {
+		lines = append(lines, "topology")
+		lines = append(lines, topology...)
+		lines = append(lines, "")
+	}
+	lines = append(lines, "tree")
 	lines = append(lines, moduTUIWorkflowOrchestrationLines(run)...)
 	rows := moduTUIWorkflowRunFocusRows(run)
-	rows = append(rows, moduTUIWorkflowPhaseRows(run)...)
+	rows = moduTUIWorkflowAppendRowsUnique(rows, moduTUIWorkflowPhaseRows(run)...)
 	rows = append(rows, moduTUIWorkflowGuideRow(run.ID), modutui.PanelRow{
 		Label:   "Back to run detail",
 		Detail:  run.ID,
@@ -2362,6 +2572,20 @@ func moduTUIWorkflowGuideRow(runID string) modutui.PanelRow {
 		Detail:  "view map and navigation",
 		Command: moduTUIWorkflowPanelGuidePrefix + strings.TrimSpace(runID),
 	}
+}
+
+func moduTUIWorkflowParentPhaseRow(runID, phase string) (modutui.PanelRow, bool) {
+	runID = strings.TrimSpace(runID)
+	phase = strings.TrimSpace(phase)
+	if runID == "" || phase == "" {
+		return modutui.PanelRow{}, false
+	}
+	return modutui.PanelRow{
+		Label:   "Parent phase: " + moduTUIWorkflowPhaseTitle(phase),
+		Detail:  "return to orchestration stage",
+		Value:   phase,
+		Command: moduTUIWorkflowPanelPhasePrefix + runID + ":" + phase,
+	}, true
 }
 
 func moduTUIWorkflowArtifactNavigationRows(run moduTUIWorkflowRun) []modutui.PanelRow {
@@ -2484,6 +2708,27 @@ func moduTUIWorkflowAppendShortcuts(groups ...[]modutui.PanelShortcut) []modutui
 		out = append(out, group...)
 	}
 	return out
+}
+
+func moduTUIWorkflowAppendRowsUnique(rows []modutui.PanelRow, additions ...modutui.PanelRow) []modutui.PanelRow {
+	seen := make(map[string]struct{}, len(rows)+len(additions))
+	for _, row := range rows {
+		command := strings.TrimSpace(row.Command)
+		if command != "" {
+			seen[command] = struct{}{}
+		}
+	}
+	for _, row := range additions {
+		command := strings.TrimSpace(row.Command)
+		if command != "" {
+			if _, ok := seen[command]; ok {
+				continue
+			}
+			seen[command] = struct{}{}
+		}
+		rows = append(rows, row)
+	}
+	return rows
 }
 
 func moduTUIWorkflowPanelFooter(base string, shortcuts []modutui.PanelShortcut) string {
@@ -3274,6 +3519,10 @@ func moduTUIWorkflowPhasePanelFromStates(states map[string]any, runID, phaseTitl
 	if phase.DurationMs > 0 {
 		lines = append(lines, "  duration: "+formatModuTUIActivityDuration(time.Duration(phase.DurationMs)*time.Millisecond))
 	}
+	if position := moduTUIWorkflowPhasePositionLines(run, phase.Title); len(position) > 0 {
+		lines = append(lines, "", "position")
+		lines = append(lines, position...)
+	}
 	lines = append(lines, "", "agents")
 	if len(agents) == 0 {
 		lines = append(lines, "  no agent snapshot available for this phase")
@@ -3368,6 +3617,10 @@ func moduTUIWorkflowAgentsPanelFromStates(states map[string]any, runID string) m
 	lines := []string{"agents"}
 	if len(run.Agents) == 0 {
 		lines = append(lines, "  no agent snapshot available")
+	} else if lanes := moduTUIWorkflowRunLaneLines(run); len(lanes) > 0 {
+		lines = append(lines, "phase lanes")
+		lines = append(lines, lanes...)
+		lines = append(lines, "", "agent list")
 	}
 	rows := make([]modutui.PanelRow, 0, len(run.Agents)+5)
 	for _, agent := range run.Agents {
@@ -3478,6 +3731,10 @@ func moduTUIWorkflowAgentPanelFromStates(states map[string]any, runID string, ag
 	if agent.FailedToolCalls > 0 {
 		lines = append(lines, fmt.Sprintf("  failed tools: %d", agent.FailedToolCalls))
 	}
+	if contextLines := moduTUIWorkflowAgentContextLines(run, agent); len(contextLines) > 0 {
+		lines = append(lines, "", "context")
+		lines = append(lines, contextLines...)
+	}
 	if agent.Error != "" {
 		lines = append(lines, "", "error")
 		lines = append(lines, moduTUIWorkflowTextLines(agent.Error)...)
@@ -3516,7 +3773,11 @@ func moduTUIWorkflowAgentPanelFromStates(states map[string]any, runID string, ag
 		Label:   "Transcript",
 		Detail:  "full child transcript",
 		Command: fmt.Sprintf("%s%s:%d", moduTUIWorkflowPanelTranscriptPrefix, run.ID, agent.ID),
-	}, moduTUIWorkflowGuideRow(run.ID), modutui.PanelRow{
+	})
+	if row, ok := moduTUIWorkflowParentPhaseRow(run.ID, agent.Phase); ok {
+		rows = append(rows, row)
+	}
+	rows = append(rows, moduTUIWorkflowGuideRow(run.ID), modutui.PanelRow{
 		Label:   "Execution feed",
 		Detail:  "live status surface",
 		Command: moduTUIWorkflowPanelFeedPrefix + run.ID,
@@ -3612,23 +3873,27 @@ func moduTUIWorkflowTranscriptPanelFromStates(states map[string]any, runID strin
 		Label:   "Back to agent",
 		Detail:  fmt.Sprintf("#%d", agentID),
 		Command: fmt.Sprintf("%s%s:%d", moduTUIWorkflowPanelAgentPrefix, run.ID, agentID),
-	}, moduTUIWorkflowGuideRow(run.ID), {
+	}}
+	if row, ok := moduTUIWorkflowParentPhaseRow(run.ID, agent.Phase); ok {
+		rows = append(rows, row)
+	}
+	rows = append(rows, moduTUIWorkflowGuideRow(run.ID), modutui.PanelRow{
 		Label:   "Execution feed",
 		Detail:  "live status surface",
 		Command: moduTUIWorkflowPanelFeedPrefix + run.ID,
-	}, {
+	}, modutui.PanelRow{
 		Label:   "Map",
 		Detail:  "phase and agent tree",
 		Command: moduTUIWorkflowPanelMapPrefix + run.ID,
-	}, {
+	}, modutui.PanelRow{
 		Label:   "Back to agents",
 		Detail:  run.ID,
 		Command: moduTUIWorkflowPanelAgentsPrefix + run.ID,
-	}, {
+	}, modutui.PanelRow{
 		Label:   "Back to run detail",
 		Detail:  run.ID,
 		Command: moduTUIWorkflowPanelDetailPrefix + run.ID,
-	}}
+	})
 	shortcuts := moduTUIWorkflowAppendShortcuts(
 		moduTUIWorkflowGuideShortcut(run.ID),
 		moduTUIWorkflowNavigationShortcuts(run.ID, "feed", "map", "detail", "agents"),
@@ -3746,6 +4011,11 @@ func moduTUIWorkflowResultPanelFromStates(states map[string]any, runID string) m
 		name = run.ID
 	}
 	lines := []string{"result"}
+	if context := moduTUIWorkflowArtifactContextLines(run); len(context) > 0 {
+		lines = append(lines, "context")
+		lines = append(lines, context...)
+		lines = append(lines, "")
+	}
 	if run.SnapshotPath != "" {
 		lines = append(lines, "  snapshot: "+run.SnapshotPath)
 	}
@@ -3787,6 +4057,11 @@ func moduTUIWorkflowScriptPanelFromStates(states map[string]any, runID string) m
 		name = run.ID
 	}
 	lines := []string{"script"}
+	if context := moduTUIWorkflowArtifactContextLines(run); len(context) > 0 {
+		lines = append(lines, "context")
+		lines = append(lines, context...)
+		lines = append(lines, "")
+	}
 	if run.ScriptPath != "" {
 		lines = append(lines, "  path: "+run.ScriptPath)
 	}
@@ -3809,6 +4084,40 @@ func moduTUIWorkflowScriptPanelFromStates(states map[string]any, runID string) m
 		Shortcuts: shortcuts,
 		Footer:    moduTUIWorkflowPanelFooter("[↑/↓] select  [enter] open  [esc/q] close", shortcuts),
 	}
+}
+
+func moduTUIWorkflowArtifactContextLines(run moduTUIWorkflowRun) []string {
+	name := strings.TrimSpace(run.Name)
+	if name == "" {
+		name = strings.TrimSpace(run.ID)
+	}
+	if name == "" {
+		name = "workflow"
+	}
+	status := strings.TrimSpace(run.Status)
+	if status == "" {
+		status = "unknown"
+	}
+	lines := []string{
+		"  workflow: " + name,
+		"  run: " + strings.TrimSpace(run.ID),
+		"  status: " + status,
+	}
+	if run.AgentCount > 0 {
+		lines = append(lines, fmt.Sprintf("  progress: %d/%d done, %d running, %d errors",
+			run.DoneCount, run.AgentCount, run.RunningAgentCount, run.ErrorCount))
+	}
+	if current := strings.TrimSpace(run.CurrentPhase); current != "" {
+		lines = append(lines, "  current phase: "+current)
+	}
+	phases := run.Phases
+	if len(phases) == 0 {
+		phases = moduTUIWorkflowDerivedPhases(run.Agents)
+	}
+	if len(phases) > 0 {
+		lines = append(lines, "  plan: "+moduTUIWorkflowPhasePlanRoute(phases))
+	}
+	return lines
 }
 
 func moduTUIWorkflowMissingRunPanel(id, title, runID string) modutui.Panel {
@@ -4197,6 +4506,122 @@ func moduTUIWorkflowOrchestrationLines(run moduTUIWorkflowRun) []string {
 				lines = append(lines, "      tools: "+moduTUIWorkflowToolSummary(agent.ToolCalls))
 			}
 		}
+	}
+	return lines
+}
+
+func moduTUIWorkflowTopologyLines(run moduTUIWorkflowRun) []string {
+	phases := run.Phases
+	if len(phases) == 0 {
+		phases = moduTUIWorkflowDerivedPhases(run.Agents)
+	}
+	if len(phases) == 0 {
+		return nil
+	}
+	lines := make([]string, 0, len(phases)*3)
+	for i, phase := range phases {
+		if i >= 8 {
+			lines = append(lines, fmt.Sprintf("  ... +%d more phase(s)", len(phases)-i))
+			break
+		}
+		title := moduTUIWorkflowPhaseTitle(phase.Title)
+		lines = append(lines, fmt.Sprintf("  %02d %s [%s] %d/%d",
+			i+1,
+			title,
+			moduTUIWorkflowTimelinePhaseStatus(phase),
+			phase.DoneCount,
+			phase.AgentCount,
+		))
+		lines = append(lines, "     path: "+moduTUIWorkflowTopologyPath(phases, i))
+		if agents := moduTUIWorkflowTopologyAgentLine(run.Agents, phase.Title); agents != "" {
+			lines = append(lines, "     agents: "+agents)
+		}
+	}
+	return lines
+}
+
+func moduTUIWorkflowTopologyPath(phases []moduTUIWorkflowPhase, index int) string {
+	current := "phase"
+	if index >= 0 && index < len(phases) {
+		current = moduTUIWorkflowPhaseTitle(phases[index].Title)
+	}
+	prev := "start"
+	if index > 0 && index-1 < len(phases) {
+		prev = moduTUIWorkflowPhaseTitle(phases[index-1].Title)
+	}
+	next := "finish"
+	if index >= 0 && index+1 < len(phases) {
+		next = moduTUIWorkflowPhaseTitle(phases[index+1].Title)
+	}
+	return prev + " -> " + current + " -> " + next
+}
+
+func moduTUIWorkflowTopologyAgentLine(agents []moduTUIWorkflowAgent, phase string) string {
+	phaseAgents := moduTUIWorkflowAgentsForPhase(agents, phase)
+	if len(phaseAgents) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, min(len(phaseAgents), 4))
+	for i, agent := range phaseAgents {
+		if i >= 4 {
+			parts = append(parts, fmt.Sprintf("+%d more", len(phaseAgents)-i))
+			break
+		}
+		parts = append(parts, moduTUIWorkflowLaneAgent(agent))
+	}
+	return strings.Join(parts, " | ")
+}
+
+func moduTUIWorkflowPhasePositionLines(run moduTUIWorkflowRun, phaseTitle string) []string {
+	phases := run.Phases
+	if len(phases) == 0 {
+		phases = moduTUIWorkflowDerivedPhases(run.Agents)
+	}
+	if len(phases) == 0 {
+		return nil
+	}
+	index := -1
+	phaseTitle = strings.TrimSpace(phaseTitle)
+	for i, phase := range phases {
+		if strings.TrimSpace(phase.Title) == phaseTitle {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return nil
+	}
+	lines := []string{
+		fmt.Sprintf("  stage: %d/%d", index+1, len(phases)),
+		"  path: " + moduTUIWorkflowTopologyPath(phases, index),
+	}
+	if index > 0 {
+		lines = append(lines, "  previous: "+moduTUIWorkflowPhaseTitle(phases[index-1].Title))
+	}
+	if index+1 < len(phases) {
+		lines = append(lines, "  next: "+moduTUIWorkflowPhaseTitle(phases[index+1].Title))
+	}
+	return lines
+}
+
+func moduTUIWorkflowAgentContextLines(run moduTUIWorkflowRun, agent moduTUIWorkflowAgent) []string {
+	phase := strings.TrimSpace(agent.Phase)
+	if phase == "" {
+		return nil
+	}
+	lines := moduTUIWorkflowPhasePositionLines(run, phase)
+	phaseAgents := moduTUIWorkflowAgentsForPhase(run.Agents, phase)
+	if len(phaseAgents) == 0 {
+		return lines
+	}
+	for i, peer := range phaseAgents {
+		if peer.ID == agent.ID {
+			lines = append(lines, fmt.Sprintf("  agent: %d/%d in %s", i+1, len(phaseAgents), moduTUIWorkflowPhaseTitle(phase)))
+			break
+		}
+	}
+	if peers := moduTUIWorkflowTopologyAgentLine(run.Agents, phase); peers != "" {
+		lines = append(lines, "  peers: "+peers)
 	}
 	return lines
 }
