@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1121,6 +1123,15 @@ func TestModuTUIWorkflowCockpitPanelSelectsLatestRunningRun(t *testing.T) {
 	if panel.Rows[panel.Selected].Value != "active-run" {
 		t.Fatalf("cockpit selected row = %#v, want active-run", panel.Rows[panel.Selected])
 	}
+	if !moduTUIWorkflowPanelHasShortcut(panel, "?", moduTUIWorkflowPanelGuidePrefix+"latest-complete") ||
+		!moduTUIWorkflowPanelHasShortcut(panel, "f", moduTUIWorkflowPanelFeedPrefix+"latest-complete") ||
+		!moduTUIWorkflowPanelHasShortcut(panel, "m", moduTUIWorkflowPanelMapPrefix+"latest-complete") ||
+		!moduTUIWorkflowPanelHasShortcut(panel, "d", moduTUIWorkflowPanelDetailPrefix+"latest-complete") {
+		t.Fatalf("cockpit shortcuts should target latest run: %#v", panel.Shortcuts)
+	}
+	if !strings.Contains(panel.Footer, "[?] Guide") || !strings.Contains(panel.Footer, "[f] Feed") || strings.Contains(panel.Footer, "details") {
+		t.Fatalf("cockpit footer should expose latest shortcuts and generic open copy: %q", panel.Footer)
+	}
 	next, ok := moduTUIWorkflowPanelAction(nil, modutui.PanelAction{
 		PanelID: moduTUIWorkflowCockpitPanelID,
 		Command: panel.Rows[panel.Selected].Command,
@@ -1128,6 +1139,20 @@ func TestModuTUIWorkflowCockpitPanelSelectsLatestRunningRun(t *testing.T) {
 	})
 	if !ok || next.ID != moduTUIWorkflowFeedPanelID {
 		t.Fatalf("cockpit selected running row should open feed, got ok=%v panel=%#v", ok, next)
+	}
+	next, ok = moduTUIWorkflowPanelAction(nil, modutui.PanelAction{
+		PanelID: moduTUIWorkflowCockpitPanelID,
+		Command: moduTUIWorkflowPanelGuidePrefix + "latest-complete",
+	})
+	if !ok || next.ID != moduTUIWorkflowGuidePanelID {
+		t.Fatalf("cockpit guide shortcut should open guide, got ok=%v panel=%#v", ok, next)
+	}
+	next, ok = moduTUIWorkflowPanelAction(nil, modutui.PanelAction{
+		PanelID: moduTUIWorkflowCockpitPanelID,
+		Command: moduTUIWorkflowPanelMapPrefix + "latest-complete",
+	})
+	if !ok || next.ID != moduTUIWorkflowMapPanelID {
+		t.Fatalf("cockpit map shortcut should open map, got ok=%v panel=%#v", ok, next)
 	}
 }
 
@@ -1261,6 +1286,20 @@ func TestModuTUIWorkflowRunDetailPanelShowsRunInPanel(t *testing.T) {
 		!moduTUIWorkflowPanelHasShortcut(mapPanel, "a", moduTUIWorkflowPanelAgentsPrefix+"run-detail") {
 		t.Fatalf("map panel should expose view navigation shortcuts: %#v", mapPanel.Shortcuts)
 	}
+	next, ok := moduTUIWorkflowPanelAction(nil, modutui.PanelAction{
+		PanelID: moduTUIWorkflowRunDetailPanelID,
+		Command: moduTUIWorkflowPanelResultPrefix + "run-detail",
+	})
+	if !ok || next.ID != moduTUIWorkflowResultPanelID {
+		t.Fatalf("detail result action should open result panel, got ok=%v panel=%#v", ok, next)
+	}
+	next, ok = moduTUIWorkflowPanelAction(nil, modutui.PanelAction{
+		PanelID: moduTUIWorkflowRunDetailPanelID,
+		Command: moduTUIWorkflowPanelScriptPrefix + "run-detail",
+	})
+	if !ok || next.ID != moduTUIWorkflowScriptPanelID {
+		t.Fatalf("detail script action should open script panel, got ok=%v panel=%#v", ok, next)
+	}
 	guidePanel := moduTUIWorkflowGuidePanelFromStates(map[string]any{
 		"workflow": map[string]any{
 			"runs": []map[string]any{{
@@ -1287,6 +1326,8 @@ func TestModuTUIWorkflowRunDetailPanelShowsRunInPanel(t *testing.T) {
 		"workflow guide",
 		"Feed: live cards, board, lanes, updates, timeline",
 		"Map: full phase and agent tree",
+		"Result: final workflow output",
+		"Script: generated or resumed workflow script",
 		"current route",
 		"/workflows -> running run -> Feed",
 		"current phase",
@@ -1299,10 +1340,12 @@ func TestModuTUIWorkflowRunDetailPanelShowsRunInPanel(t *testing.T) {
 	if guidePanel.Rows[0].Command != moduTUIWorkflowPanelPhasePrefix+"run-detail:Research" ||
 		guidePanel.Rows[1].Command != moduTUIWorkflowPanelFeedPrefix+"run-detail" ||
 		guidePanel.Rows[2].Command != moduTUIWorkflowPanelMapPrefix+"run-detail" ||
-		guidePanel.Rows[3].Command != moduTUIWorkflowPanelDetailPrefix+"run-detail" {
+		guidePanel.Rows[3].Command != moduTUIWorkflowPanelDetailPrefix+"run-detail" ||
+		guidePanel.Rows[4].Command != moduTUIWorkflowPanelResultPrefix+"run-detail" ||
+		guidePanel.Rows[5].Command != moduTUIWorkflowPanelScriptPrefix+"run-detail" {
 		t.Fatalf("guide panel rows = %#v", guidePanel.Rows)
 	}
-	next, ok := moduTUIWorkflowPanelAction(nil, modutui.PanelAction{
+	next, ok = moduTUIWorkflowPanelAction(nil, modutui.PanelAction{
 		PanelID: moduTUIWorkflowMapPanelID,
 		Command: moduTUIWorkflowPanelFeedPrefix + "run-detail",
 	})
@@ -1329,6 +1372,20 @@ func TestModuTUIWorkflowRunDetailPanelShowsRunInPanel(t *testing.T) {
 	})
 	if !ok || next.ID != moduTUIWorkflowMapPanelID {
 		t.Fatalf("guide map action should open map panel, got ok=%v panel=%#v", ok, next)
+	}
+	next, ok = moduTUIWorkflowPanelAction(nil, modutui.PanelAction{
+		PanelID: moduTUIWorkflowGuidePanelID,
+		Command: moduTUIWorkflowPanelResultPrefix + "run-detail",
+	})
+	if !ok || next.ID != moduTUIWorkflowResultPanelID {
+		t.Fatalf("guide result action should open result panel, got ok=%v panel=%#v", ok, next)
+	}
+	next, ok = moduTUIWorkflowPanelAction(nil, modutui.PanelAction{
+		PanelID: moduTUIWorkflowGuidePanelID,
+		Command: moduTUIWorkflowPanelScriptPrefix + "run-detail",
+	})
+	if !ok || next.ID != moduTUIWorkflowScriptPanelID {
+		t.Fatalf("guide script action should open script panel, got ok=%v panel=%#v", ok, next)
 	}
 }
 
@@ -2203,13 +2260,33 @@ func TestModuTUIWorkflowResultAndScriptPanelsReadArtifacts(t *testing.T) {
 		t.Fatalf("unexpected result panel: %#v", resultPanel)
 	}
 	resultText := strings.Join(resultPanel.Lines, "\n")
-	for _, want := range []string{`"report": "full final result"`, `"items": [`} {
+	for _, want := range []string{"snapshot: " + snapshotPath, `"report": "full final result"`, `"items": [`} {
 		if !strings.Contains(resultText, want) {
 			t.Fatalf("result panel missing %q:\n%s", want, resultText)
 		}
 	}
-	if len(resultPanel.Rows) != 2 || resultPanel.Rows[0].Command != moduTUIWorkflowPanelDetailPrefix+"run-artifact" {
+	if len(resultPanel.Rows) != 6 ||
+		resultPanel.Rows[0].Command != moduTUIWorkflowPanelGuidePrefix+"run-artifact" ||
+		resultPanel.Rows[1].Command != moduTUIWorkflowPanelFeedPrefix+"run-artifact" ||
+		resultPanel.Rows[2].Command != moduTUIWorkflowPanelMapPrefix+"run-artifact" ||
+		resultPanel.Rows[3].Command != moduTUIWorkflowPanelAgentsPrefix+"run-artifact" ||
+		resultPanel.Rows[4].Command != moduTUIWorkflowPanelDetailPrefix+"run-artifact" ||
+		resultPanel.Rows[5].Command != moduTUIWorkflowPanelBackCommand {
 		t.Fatalf("result panel rows = %#v", resultPanel.Rows)
+	}
+	if !moduTUIWorkflowPanelHasShortcut(resultPanel, "?", moduTUIWorkflowPanelGuidePrefix+"run-artifact") ||
+		!moduTUIWorkflowPanelHasShortcut(resultPanel, "f", moduTUIWorkflowPanelFeedPrefix+"run-artifact") ||
+		!moduTUIWorkflowPanelHasShortcut(resultPanel, "m", moduTUIWorkflowPanelMapPrefix+"run-artifact") ||
+		!moduTUIWorkflowPanelHasShortcut(resultPanel, "d", moduTUIWorkflowPanelDetailPrefix+"run-artifact") ||
+		!moduTUIWorkflowPanelHasShortcut(resultPanel, "a", moduTUIWorkflowPanelAgentsPrefix+"run-artifact") {
+		t.Fatalf("result panel shortcuts = %#v", resultPanel.Shortcuts)
+	}
+	next, ok := moduTUIWorkflowPanelAction(nil, modutui.PanelAction{
+		PanelID: moduTUIWorkflowResultPanelID,
+		Command: moduTUIWorkflowPanelGuidePrefix + "run-artifact",
+	})
+	if !ok || next.ID != moduTUIWorkflowGuidePanelID {
+		t.Fatalf("result guide action should open guide panel, got ok=%v panel=%#v", ok, next)
 	}
 
 	scriptPanel := moduTUIWorkflowScriptPanelFromStates(states, "run-artifact")
@@ -2217,13 +2294,78 @@ func TestModuTUIWorkflowResultAndScriptPanelsReadArtifacts(t *testing.T) {
 		t.Fatalf("unexpected script panel: %#v", scriptPanel)
 	}
 	scriptText := strings.Join(scriptPanel.Lines, "\n")
-	for _, want := range []string{"meta({ name: \"market_watch\" })", "return \"ok\""} {
+	for _, want := range []string{"path: " + scriptPath, "meta({ name: \"market_watch\" })", "return \"ok\""} {
 		if !strings.Contains(scriptText, want) {
 			t.Fatalf("script panel missing %q:\n%s", want, scriptText)
 		}
 	}
-	if len(scriptPanel.Rows) != 2 || scriptPanel.Rows[0].Command != moduTUIWorkflowPanelDetailPrefix+"run-artifact" {
+	if len(scriptPanel.Rows) != 6 ||
+		scriptPanel.Rows[0].Command != moduTUIWorkflowPanelGuidePrefix+"run-artifact" ||
+		scriptPanel.Rows[1].Command != moduTUIWorkflowPanelFeedPrefix+"run-artifact" ||
+		scriptPanel.Rows[2].Command != moduTUIWorkflowPanelMapPrefix+"run-artifact" ||
+		scriptPanel.Rows[3].Command != moduTUIWorkflowPanelAgentsPrefix+"run-artifact" ||
+		scriptPanel.Rows[4].Command != moduTUIWorkflowPanelDetailPrefix+"run-artifact" ||
+		scriptPanel.Rows[5].Command != moduTUIWorkflowPanelBackCommand {
 		t.Fatalf("script panel rows = %#v", scriptPanel.Rows)
+	}
+	if !moduTUIWorkflowPanelHasShortcut(scriptPanel, "?", moduTUIWorkflowPanelGuidePrefix+"run-artifact") ||
+		!moduTUIWorkflowPanelHasShortcut(scriptPanel, "f", moduTUIWorkflowPanelFeedPrefix+"run-artifact") ||
+		!moduTUIWorkflowPanelHasShortcut(scriptPanel, "m", moduTUIWorkflowPanelMapPrefix+"run-artifact") ||
+		!moduTUIWorkflowPanelHasShortcut(scriptPanel, "d", moduTUIWorkflowPanelDetailPrefix+"run-artifact") ||
+		!moduTUIWorkflowPanelHasShortcut(scriptPanel, "a", moduTUIWorkflowPanelAgentsPrefix+"run-artifact") {
+		t.Fatalf("script panel shortcuts = %#v", scriptPanel.Shortcuts)
+	}
+	next, ok = moduTUIWorkflowPanelAction(nil, modutui.PanelAction{
+		PanelID: moduTUIWorkflowScriptPanelID,
+		Command: moduTUIWorkflowPanelGuidePrefix + "run-artifact",
+	})
+	if !ok || next.ID != moduTUIWorkflowGuidePanelID {
+		t.Fatalf("script guide action should open guide panel, got ok=%v panel=%#v", ok, next)
+	}
+}
+
+func TestModuTUIWorkflowArtifactPanelsCapLongContent(t *testing.T) {
+	dir := t.TempDir()
+	snapshotPath := filepath.Join(dir, "snapshot.json")
+	scriptPath := filepath.Join(dir, "script.js")
+	resultLines := make([]string, 0, moduTUIWorkflowArtifactLineLimit+5)
+	scriptLines := make([]string, 0, moduTUIWorkflowArtifactLineLimit+5)
+	for i := 0; i < moduTUIWorkflowArtifactLineLimit+5; i++ {
+		resultLines = append(resultLines, fmt.Sprintf("result line %03d", i+1))
+		scriptLines = append(scriptLines, fmt.Sprintf("// script line %03d", i+1))
+	}
+	resultJSON, err := json.Marshal(map[string]any{"result": strings.Join(resultLines, "\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(snapshotPath, resultJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(scriptPath, []byte(strings.Join(scriptLines, "\n")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	states := map[string]any{
+		"workflow": map[string]any{
+			"runs": []map[string]any{{
+				"id":           "run-long-artifact",
+				"name":         "long_artifact",
+				"status":       "completed",
+				"scriptPath":   scriptPath,
+				"snapshotPath": snapshotPath,
+				"updatedAt":    1,
+			}},
+		},
+	}
+
+	resultPanel := moduTUIWorkflowResultPanelFromStates(states, "run-long-artifact")
+	resultText := strings.Join(resultPanel.Lines, "\n")
+	if !strings.Contains(resultText, "result line 200") || strings.Contains(resultText, "result line 201") || !strings.Contains(resultText, "full artifact: "+snapshotPath) {
+		t.Fatalf("result artifact preview should be capped with path:\n%s", resultText)
+	}
+	scriptPanel := moduTUIWorkflowScriptPanelFromStates(states, "run-long-artifact")
+	scriptText := strings.Join(scriptPanel.Lines, "\n")
+	if !strings.Contains(scriptText, "// script line 200") || strings.Contains(scriptText, "// script line 201") || !strings.Contains(scriptText, "full artifact: "+scriptPath) {
+		t.Fatalf("script artifact preview should be capped with path:\n%s", scriptText)
 	}
 }
 

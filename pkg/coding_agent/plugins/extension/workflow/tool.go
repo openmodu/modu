@@ -42,7 +42,7 @@ func (t *workflowTool) Description() string {
 		"",
 		"Rules for reliable runs: always `await` agent/parallel/pipeline; end the script with `return <result>`; default to pipeline() and only use parallel() when you truly need all results at once; pass data between stages via the prompt string (use JSON.stringify for structured context); set opts.phase inside parallel/pipeline stages so agents are grouped correctly.",
 		"",
-		"This tool only starts workflow runs; do not pass action, status, id, run_id, or agent_id. Inspect or control runs with /workflows feed <run-id>, /workflows guide <run-id>, /workflows show <run-id>, /workflows map <run-id>, /workflows agent <run-id> <agent-id>, /workflows stop <run-id>, or the /workflows TUI panel.",
+		"This tool only starts workflow runs; do not pass action, status, id, run_id, or agent_id. Inspect or control runs from the /workflows TUI cockpit first, or use /workflows feed <run-id>, /workflows guide <run-id>, /workflows map <run-id>, /workflows show <run-id>, /workflows agent <run-id> <agent-id>, or /workflows stop <run-id>. Use Result/Script rows in the TUI for full artifacts.",
 	}, "\n")
 }
 
@@ -77,7 +77,7 @@ func (t *workflowTool) Parameters() any {
 			},
 			"async": map[string]any{
 				"type":        "boolean",
-				"description": "Run the workflow in the background and return immediately with a run id. Use /workflows feed <run-id>, /workflows guide <run-id>, /workflows show <run-id>, /workflows map <run-id>, /workflows agent <run-id> <agent-id>, /workflows stop <run-id>, or the /workflows TUI panel to inspect or control it. Do not call this tool with action/status/id fields.",
+				"description": "Run the workflow in the background and return immediately with a run id. Use the /workflows TUI cockpit first, or /workflows feed <run-id>, /workflows guide <run-id>, /workflows map <run-id>, /workflows show <run-id>, /workflows agent <run-id> <agent-id>, or /workflows stop <run-id> to inspect or control it. Do not call this tool with action/status/id fields.",
 			},
 		},
 		"additionalProperties": false,
@@ -102,7 +102,7 @@ func (t *workflowTool) Execute(ctx context.Context, _ string, args map[string]an
 		if exec.ScriptPath != "" {
 			text += "\nScript: " + exec.ScriptPath
 		}
-		text += fmt.Sprintf("\nUse /workflows feed %s to watch progress, /workflows guide %s to understand the run views, /workflows show %s to inspect metadata, or /workflows stop %s to stop it.", runID, runID, runID, runID)
+		text += "\n" + workflowStartGuidance(runID)
 		return textResult(text, false, map[string]any{
 			"runID":      runID,
 			"scriptPath": exec.ScriptPath,
@@ -116,6 +116,14 @@ func (t *workflowTool) Execute(ctx context.Context, _ string, args map[string]an
 	}
 	text := formatWorkflowCompletion(result)
 	return textResult(text, false, result.Snapshot), nil
+}
+
+func workflowStartGuidance(runID string) string {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return "Open /workflows for the workflow cockpit."
+	}
+	return fmt.Sprintf("Open /workflows for the cockpit, or use /workflows feed %s, /workflows guide %s, /workflows show %s, or /workflows stop %s.", runID, runID, runID, runID)
 }
 
 type workflowExecution struct {
@@ -244,7 +252,7 @@ func (e *Extension) runBackgroundWorkflow(runID string, ctx context.Context, exe
 		e.tell(fmt.Sprintf("Workflow %s %s: %v", runID, status, err))
 		return
 	}
-	e.tell(formatWorkflowCompletion(result))
+	e.tell(formatWorkflowCompletionNotify(runID, result))
 }
 
 func formatWorkflowCompletion(result runResult) string {
@@ -259,6 +267,28 @@ func formatWorkflowCompletion(result runResult) string {
 	text += "\n\n## Final result\n\n" + body
 	if result.Snapshot.ScriptPath != "" {
 		text += "\n\nScript: " + result.Snapshot.ScriptPath
+	}
+	return text
+}
+
+func formatWorkflowCompletionNotify(runID string, result runResult) string {
+	text := fmt.Sprintf("Workflow %s completed with %d agent(s).", result.Meta.Name, result.Snapshot.AgentCount)
+	if flow := workflowExecutionFlowText(result.Snapshot); flow != "" {
+		text += "\n\n## Execution flow\n\n" + flow
+	}
+	if preview := preview(result.Result, 600); preview != "" {
+		text += "\n\nResultPreview: " + preview
+	}
+	if result.Snapshot.ScriptPath != "" {
+		text += "\n\nScript: " + result.Snapshot.ScriptPath
+	}
+	runID = strings.TrimSpace(runID)
+	if runID != "" {
+		text += "\n\nNext:\n"
+		text += "- /workflows guide " + runID + "\n"
+		text += "- /workflows feed " + runID + "\n"
+		text += "- /workflows show " + runID + "\n"
+		text += "- TUI /workflows -> Result or Script rows for full artifacts"
 	}
 	return text
 }

@@ -158,7 +158,7 @@ func (e *Extension) cmdWorkflowsList() error {
 		}
 		fmt.Fprintf(&b, "\n  %s\n", run.ScriptPath)
 	}
-	b.WriteString("\nUse /workflows show <run-id|latest> to inspect script and metadata, /workflows feed <run-id|latest> to watch the live execution feed, /workflows guide <run-id|latest> to see how feed/map/phase/agent views fit together, /workflows map <run-id|latest> to inspect the phase/agent tree, /workflows agent <run-id|latest> <agent-id> to inspect one agent, /workflows agent-stop <run-id|latest> <agent-id> to stop one running agent, /workflows agent-restart <run-id|latest> <agent-id> to restart one running agent, /workflows pause <run-id> to pause a running workflow, /workflows stop <run-id> to stop a running workflow, /workflows resume <run-id|latest> to resume a stopped run in this session, /workflows restart <run-id|latest> to relaunch a script, or /workflows save <run-id|latest> <name> [project|user] to save it for reuse.")
+	b.WriteString("\nOpen /workflows for the cockpit. Use /workflows feed <run-id|latest> to watch the live execution feed, /workflows guide <run-id|latest> to see how feed/map/phase/agent views fit together, /workflows map <run-id|latest> to inspect the phase/agent tree, /workflows show <run-id|latest> to inspect metadata, artifact paths, and previews, /workflows agent <run-id|latest> <agent-id> to inspect one agent, /workflows agent-stop <run-id|latest> <agent-id> to stop one running agent, /workflows agent-restart <run-id|latest> <agent-id> to restart one running agent, /workflows pause <run-id> to pause a running workflow, /workflows stop <run-id> to stop a running workflow, /workflows resume <run-id|latest> to resume a stopped run in this session, /workflows restart <run-id|latest> to relaunch a script, or /workflows save <run-id|latest> <name> [project|user] to save it for reuse.")
 	e.tell(b.String())
 	return nil
 }
@@ -182,7 +182,7 @@ func (e *Extension) cmdWorkflowsShow(selector string) error {
 	if status == "" {
 		status = workflowStatusCompleted
 	}
-	fmt.Fprintf(&b, "Workflow run %s\nStatus: %s\nScript: %s\nUpdated: %s\n", run.ID, status, run.ScriptPath, run.UpdatedAt.Format(time.RFC3339))
+	fmt.Fprintf(&b, "Workflow run %s\nStatus: %s\nUpdated: %s\n", run.ID, status, run.UpdatedAt.Format(time.RFC3339))
 	if run.Snapshot != nil {
 		fmt.Fprintf(&b, "Workflow: %s\nAgents: %d done, %d running, %d errors\nDurationMs: %d\n",
 			run.Snapshot.Name, run.Snapshot.DoneCount, run.Snapshot.RunningCount, run.Snapshot.ErrorCount, run.Snapshot.DurationMs)
@@ -216,20 +216,28 @@ func (e *Extension) cmdWorkflowsShow(selector string) error {
 			fmt.Fprintf(&b, "- Agent %d [%s%s] %s estimatedTokens=%d%s durationMs=%d\n", agent.ID, agent.Status, cached, agent.Label, agent.EstimatedTokens, cost, agent.DurationMs)
 		}
 		if run.Snapshot.Result != nil {
-			fmt.Fprintf(&b, "Result:\n%s\n", formatWorkflowShowValue(run.Snapshot.Result))
+			resultPreview := preview(run.Snapshot.Result, 600)
+			if resultPreview != "" {
+				fmt.Fprintf(&b, "ResultPreview: %s\n", resultPreview)
+			}
 		}
 	}
 	if run.Error != "" {
 		fmt.Fprintf(&b, "Error: %s\n", run.Error)
 	}
-	if run.ScriptPath != "" {
-		data, err := os.ReadFile(run.ScriptPath)
-		if err != nil {
-			return fmt.Errorf("read workflow script %s: %w", run.ScriptPath, err)
-		}
-		script := strings.TrimSpace(string(data))
-		fmt.Fprintf(&b, "\n```js\n%s\n```", script)
+	b.WriteString("Artifacts:\n")
+	if run.SnapshotPath != "" {
+		fmt.Fprintf(&b, "- Snapshot: %s\n", run.SnapshotPath)
 	}
+	if run.ScriptPath != "" {
+		fmt.Fprintf(&b, "- Script: %s\n", run.ScriptPath)
+	}
+	b.WriteString("Next:\n")
+	b.WriteString("- /workflows guide " + run.ID + "\n")
+	b.WriteString("- /workflows feed " + run.ID + "\n")
+	b.WriteString("- /workflows map " + run.ID + "\n")
+	b.WriteString("- /workflows agent " + run.ID + " <agent-id>\n")
+	b.WriteString("- TUI /workflows -> Result or Script rows for full artifacts")
 	e.tell(b.String())
 	return nil
 }
@@ -370,6 +378,7 @@ func formatWorkflowGuide(run workflowRunSummary) string {
 	b.WriteString("- Map: full phase and agent tree without final result/script expansion\n")
 	b.WriteString("- Phase: one orchestration stage and its agents\n")
 	b.WriteString("- Agent: status, tools, prompt, result/error, transcript\n")
+	b.WriteString("- Result/Script: final workflow artifact views after the dynamic run\n")
 	b.WriteString("\nRoute:\n")
 	b.WriteString("- /workflows -> running run -> Feed\n")
 	b.WriteString("- /workflows feed " + run.ID + " -> Phase/Agent rows for active work\n")
@@ -404,6 +413,7 @@ func formatWorkflowGuide(run workflowRunSummary) string {
 	b.WriteString("- /workflows feed " + run.ID + "\n")
 	b.WriteString("- /workflows map " + run.ID + "\n")
 	b.WriteString("- /workflows show " + run.ID + "\n")
+	b.WriteString("- TUI Result and Script rows from /workflows show/detail panels\n")
 	b.WriteString("- /workflows agent " + run.ID + " <agent-id>\n")
 	b.WriteString("- /workflows transcript " + run.ID + " <agent-id>")
 	return strings.TrimSpace(b.String())
@@ -599,21 +609,6 @@ func workflowMapPhaseTitle(title string) string {
 		return "(no phase)"
 	}
 	return title
-}
-
-func formatWorkflowShowValue(value any) string {
-	switch v := value.(type) {
-	case nil:
-		return ""
-	case string:
-		return strings.TrimSpace(v)
-	default:
-		data, err := json.MarshalIndent(v, "", "  ")
-		if err != nil {
-			return strings.TrimSpace(fmt.Sprint(v))
-		}
-		return strings.TrimSpace(string(data))
-	}
 }
 
 func (e *Extension) cmdWorkflowsAgent(selector, agentIDText string) error {
@@ -958,6 +953,7 @@ func (e *Extension) cmdWorkflowsRestart(selector string) error {
 	if scriptPath != "" {
 		text += "\nScript: " + scriptPath
 	}
+	text += "\n" + workflowStartGuidance(runID)
 	e.tell(text)
 	return nil
 }

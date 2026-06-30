@@ -1043,6 +1043,7 @@ const (
 	moduTUIWorkflowPanelTranscriptPrefix   = "workflow-panel:transcript:"
 	moduTUIWorkflowPanelControlPrefix      = "workflow-panel:control:"
 	moduTUIWorkflowPanelAgentControlPrefix = "workflow-panel:agent-control:"
+	moduTUIWorkflowArtifactLineLimit       = 200
 )
 
 type moduTUIWorkflowPanelRef struct {
@@ -1342,8 +1343,14 @@ func moduTUIWorkflowPanelAction(session *coding_agent.CodingSession, action modu
 	switch action.PanelID {
 	case moduTUIWorkflowCockpitPanelID:
 		command := strings.TrimSpace(action.Command)
+		if runID, ok := strings.CutPrefix(command, moduTUIWorkflowPanelGuidePrefix); ok {
+			return moduTUIWorkflowGuidePanel(session, runID), true
+		}
 		if runID, ok := strings.CutPrefix(command, moduTUIWorkflowPanelFeedPrefix); ok {
 			return moduTUIWorkflowFeedPanel(session, runID), true
+		}
+		if runID, ok := strings.CutPrefix(command, moduTUIWorkflowPanelMapPrefix); ok {
+			return moduTUIWorkflowMapPanel(session, runID), true
 		}
 		if runID, ok := strings.CutPrefix(command, moduTUIWorkflowPanelDetailPrefix); ok {
 			return moduTUIWorkflowRunDetailPanel(session, runID), true
@@ -1503,6 +1510,12 @@ func moduTUIWorkflowPanelAction(session *coding_agent.CodingSession, action modu
 		if runID, ok := strings.CutPrefix(command, moduTUIWorkflowPanelMapPrefix); ok {
 			return moduTUIWorkflowMapPanel(session, runID), true
 		}
+		if runID, ok := strings.CutPrefix(command, moduTUIWorkflowPanelResultPrefix); ok {
+			return moduTUIWorkflowResultPanel(session, runID), true
+		}
+		if runID, ok := strings.CutPrefix(command, moduTUIWorkflowPanelScriptPrefix); ok {
+			return moduTUIWorkflowScriptPanel(session, runID), true
+		}
 		if runID, ok := strings.CutPrefix(command, moduTUIWorkflowPanelAgentsPrefix); ok {
 			return moduTUIWorkflowAgentsPanel(session, runID), true
 		}
@@ -1561,14 +1574,16 @@ func moduTUIWorkflowCockpitPanelFromStatesWithText(states map[string]any, text s
 	}
 	subtitle := moduTUIWorkflowCockpitSubtitleFromStates(states)
 	rows := moduTUIWorkflowCockpitRowsFromStates(states)
+	shortcuts := moduTUIWorkflowCockpitShortcutsFromStates(states)
 	return modutui.Panel{
-		ID:       moduTUIWorkflowCockpitPanelID,
-		Title:    title,
-		Subtitle: subtitle,
-		Lines:    lines,
-		Rows:     rows,
-		Selected: moduTUIWorkflowCockpitSelectedRow(states, rows),
-		Footer:   "[↑/↓] select run  [enter] details  [esc/q] close",
+		ID:        moduTUIWorkflowCockpitPanelID,
+		Title:     title,
+		Subtitle:  subtitle,
+		Lines:     lines,
+		Rows:      rows,
+		Shortcuts: shortcuts,
+		Selected:  moduTUIWorkflowCockpitSelectedRow(states, rows),
+		Footer:    moduTUIWorkflowPanelFooter("[↑/↓] select run  [enter] open  [esc/q] close", shortcuts),
 	}
 }
 
@@ -1795,6 +1810,8 @@ func moduTUIWorkflowGuidePanelFromStates(states map[string]any, runID string) mo
 		"  Map: full phase and agent tree",
 		"  Phase: one orchestration stage",
 		"  Agent: status, tools, result/error, transcript",
+		"  Result: final workflow output",
+		"  Script: generated or resumed workflow script",
 		"",
 		"current route",
 		"  /workflows -> running run -> Feed",
@@ -1837,6 +1854,14 @@ func moduTUIWorkflowGuidePanelFromStates(states map[string]any, runID string) mo
 		Label:   "Run detail",
 		Detail:  "metadata, result, script",
 		Command: moduTUIWorkflowPanelDetailPrefix + run.ID,
+	}, modutui.PanelRow{
+		Label:   "Result",
+		Detail:  "final workflow output",
+		Command: moduTUIWorkflowPanelResultPrefix + run.ID,
+	}, modutui.PanelRow{
+		Label:   "Script",
+		Detail:  "generated workflow script",
+		Command: moduTUIWorkflowPanelScriptPrefix + run.ID,
 	}, modutui.PanelRow{
 		Label:   "All agents",
 		Detail:  fmt.Sprintf("%d agent(s)", len(run.Agents)),
@@ -2033,6 +2058,37 @@ func moduTUIWorkflowGuideRow(runID string) modutui.PanelRow {
 		Label:   "Guide",
 		Detail:  "view map and navigation",
 		Command: moduTUIWorkflowPanelGuidePrefix + strings.TrimSpace(runID),
+	}
+}
+
+func moduTUIWorkflowArtifactNavigationRows(run moduTUIWorkflowRun) []modutui.PanelRow {
+	return []modutui.PanelRow{
+		moduTUIWorkflowGuideRow(run.ID),
+		{
+			Label:   "Execution feed",
+			Detail:  "flow, updates, timeline",
+			Command: moduTUIWorkflowPanelFeedPrefix + run.ID,
+		},
+		{
+			Label:   "Map",
+			Detail:  "phase and agent tree",
+			Command: moduTUIWorkflowPanelMapPrefix + run.ID,
+		},
+		{
+			Label:   "All agents",
+			Detail:  fmt.Sprintf("%d agent(s)", len(run.Agents)),
+			Command: moduTUIWorkflowPanelAgentsPrefix + run.ID,
+		},
+		{
+			Label:   "Back to run detail",
+			Detail:  run.ID,
+			Command: moduTUIWorkflowPanelDetailPrefix + run.ID,
+		},
+		{
+			Label:   "Back to workflow runs",
+			Detail:  "return",
+			Command: moduTUIWorkflowPanelBackCommand,
+		},
 	}
 }
 
@@ -3357,28 +3413,28 @@ func moduTUIWorkflowResultPanelFromStates(states map[string]any, runID string) m
 	if name == "" {
 		name = run.ID
 	}
-	result, err := moduTUIWorkflowResultLines(run.SnapshotPath)
 	lines := []string{"result"}
+	if run.SnapshotPath != "" {
+		lines = append(lines, "  snapshot: "+run.SnapshotPath)
+	}
+	result, err := moduTUIWorkflowResultLines(run.SnapshotPath)
 	if err != nil {
 		lines = append(lines, "  error: "+err.Error())
 	} else {
-		lines = append(lines, result...)
+		lines = append(lines, moduTUIWorkflowArtifactPreviewLines(result, run.SnapshotPath)...)
 	}
+	shortcuts := moduTUIWorkflowAppendShortcuts(
+		moduTUIWorkflowGuideShortcut(run.ID),
+		moduTUIWorkflowNavigationShortcuts(run.ID, "feed", "map", "detail", "agents"),
+	)
 	return modutui.Panel{
-		ID:       moduTUIWorkflowResultPanelID,
-		Title:    "Workflow Result",
-		Subtitle: name + " [" + run.Status + "]",
-		Lines:    lines,
-		Rows: []modutui.PanelRow{{
-			Label:   "Back to run detail",
-			Detail:  run.ID,
-			Command: moduTUIWorkflowPanelDetailPrefix + run.ID,
-		}, {
-			Label:   "Back to workflow runs",
-			Detail:  "return",
-			Command: moduTUIWorkflowPanelBackCommand,
-		}},
-		Footer: "[enter] back  [esc/q] close",
+		ID:        moduTUIWorkflowResultPanelID,
+		Title:     "Workflow Result",
+		Subtitle:  name + " [" + run.Status + "]",
+		Lines:     lines,
+		Rows:      moduTUIWorkflowArtifactNavigationRows(run),
+		Shortcuts: shortcuts,
+		Footer:    moduTUIWorkflowPanelFooter("[↑/↓] select  [enter] open  [esc/q] close", shortcuts),
 	}
 }
 
@@ -3399,27 +3455,27 @@ func moduTUIWorkflowScriptPanelFromStates(states map[string]any, runID string) m
 		name = run.ID
 	}
 	lines := []string{"script"}
+	if run.ScriptPath != "" {
+		lines = append(lines, "  path: "+run.ScriptPath)
+	}
 	script, err := moduTUIWorkflowFileLines(run.ScriptPath)
 	if err != nil {
 		lines = append(lines, "  error: "+err.Error())
 	} else {
-		lines = append(lines, script...)
+		lines = append(lines, moduTUIWorkflowArtifactPreviewLines(script, run.ScriptPath)...)
 	}
+	shortcuts := moduTUIWorkflowAppendShortcuts(
+		moduTUIWorkflowGuideShortcut(run.ID),
+		moduTUIWorkflowNavigationShortcuts(run.ID, "feed", "map", "detail", "agents"),
+	)
 	return modutui.Panel{
-		ID:       moduTUIWorkflowScriptPanelID,
-		Title:    "Workflow Script",
-		Subtitle: name + " [" + run.Status + "]",
-		Lines:    lines,
-		Rows: []modutui.PanelRow{{
-			Label:   "Back to run detail",
-			Detail:  run.ID,
-			Command: moduTUIWorkflowPanelDetailPrefix + run.ID,
-		}, {
-			Label:   "Back to workflow runs",
-			Detail:  "return",
-			Command: moduTUIWorkflowPanelBackCommand,
-		}},
-		Footer: "[enter] back  [esc/q] close",
+		ID:        moduTUIWorkflowScriptPanelID,
+		Title:     "Workflow Script",
+		Subtitle:  name + " [" + run.Status + "]",
+		Lines:     lines,
+		Rows:      moduTUIWorkflowArtifactNavigationRows(run),
+		Shortcuts: shortcuts,
+		Footer:    moduTUIWorkflowPanelFooter("[↑/↓] select  [enter] open  [esc/q] close", shortcuts),
 	}
 }
 
@@ -3493,6 +3549,20 @@ func moduTUIWorkflowFileLines(path string) ([]string, error) {
 		return nil, fmt.Errorf("read file: %w", err)
 	}
 	return moduTUIWorkflowTextLines(string(data)), nil
+}
+
+func moduTUIWorkflowArtifactPreviewLines(lines []string, path string) []string {
+	if len(lines) <= moduTUIWorkflowArtifactLineLimit {
+		return lines
+	}
+	preview := append([]string{}, lines[:moduTUIWorkflowArtifactLineLimit]...)
+	hidden := len(lines) - moduTUIWorkflowArtifactLineLimit
+	truncated := fmt.Sprintf("  ... +%d more line(s) truncated", hidden)
+	if strings.TrimSpace(path) != "" {
+		truncated += "; full artifact: " + strings.TrimSpace(path)
+	}
+	preview = append(preview, truncated)
+	return preview
 }
 
 func moduTUIWorkflowValueLines(value any) []string {
@@ -3612,6 +3682,21 @@ func moduTUIWorkflowCockpitRowsFromStates(states map[string]any) []modutui.Panel
 		})
 	}
 	return rows
+}
+
+func moduTUIWorkflowCockpitShortcutsFromStates(states map[string]any) []modutui.PanelShortcut {
+	state, ok := moduTUIWorkflowState(states)
+	if !ok {
+		return nil
+	}
+	runs := moduTUIWorkflowRuns(state["runs"])
+	if len(runs) == 0 {
+		return nil
+	}
+	return moduTUIWorkflowAppendShortcuts(
+		moduTUIWorkflowGuideShortcut(runs[0].ID),
+		moduTUIWorkflowNavigationShortcuts(runs[0].ID, "feed", "map", "detail"),
+	)
 }
 
 func moduTUIWorkflowCockpitRunCommand(run moduTUIWorkflowRun) string {
