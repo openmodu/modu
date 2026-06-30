@@ -248,22 +248,42 @@ func toolDiffCodeLines(width int, code, input string) []string {
 	rawLines := strings.Split(strings.TrimRight(code, "\n"), "\n")
 	out := make([]string, 0, len(rawLines))
 	for _, line := range rawLines {
-		out = append(out, renderToolDiffLine(width, line, lang))
+		out = append(out, renderToolDiffLine(width, line, lang)...)
 	}
 	return out
 }
 
-func renderToolDiffLine(width int, line, lang string) string {
+func renderToolDiffLine(width int, line, lang string) []string {
 	switch {
 	case strings.HasPrefix(line, "- ") && !strings.HasPrefix(line, "--- "):
-		return ansiBackground(fitLine(highlightDiffCodeLine(line, lang), width), "52")
+		return wrapDiffSegments(highlightDiffCodeLine(line, lang), width, "52")
 	case strings.HasPrefix(line, "+ ") && !strings.HasPrefix(line, "+++ "):
-		return ansiBackground(fitLine(highlightDiffCodeLine(line, lang), width), "22")
+		return wrapDiffSegments(highlightDiffCodeLine(line, lang), width, "22")
 	case strings.HasPrefix(line, "  "):
-		return ansiBackground(fitLine(highlightDiffCodeLine(line, lang), width), "235")
+		return wrapDiffSegments(highlightDiffCodeLine(line, lang), width, "235")
 	default:
-		return fitLine(dimStyle.Render(line), width)
+		return wrapDiffSegments(dimStyle.Render(line), width, "")
 	}
+}
+
+// wrapDiffSegments hard-wraps a single (possibly syntax-highlighted) diff line
+// to width so long code wraps instead of being truncated, then pads each visual
+// segment to the full width and paints the row background so wrapped
+// continuations keep the same colored band. ansi.Hardwrap is ANSI- and
+// wide-rune-aware, so it splits without corrupting the highlight escapes. An
+// empty color skips the background (default/non-hunk lines).
+func wrapDiffSegments(rendered string, width int, color string) []string {
+	width = max(1, width)
+	segments := strings.Split(ansi.Hardwrap(rendered, width, false), "\n")
+	out := make([]string, 0, len(segments))
+	for _, seg := range segments {
+		fitted := fitLine(seg, width)
+		if color != "" {
+			fitted = ansiBackground(fitted, color)
+		}
+		out = append(out, fitted)
+	}
+	return out
 }
 
 func ansiBackground(line, color string) string {

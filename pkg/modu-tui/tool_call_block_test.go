@@ -168,6 +168,47 @@ func TestToolCallBlockRendersDiffWithLineNumbersAndBackground(t *testing.T) {
 	}
 }
 
+func TestToolCallBlockWrapsLongDiffLineWithoutTruncation(t *testing.T) {
+	ctx := RenderContext{ContentWidth: 40, Markdown: markdownRenderer(40)}
+	longCode := strings.Repeat("a", 50) + "END_MARKER"
+	block := ToolCallBlock{
+		Call: ToolCall{
+			Name:       "update",
+			Input:      "/tmp/main.go",
+			Output:     "Added 1 lines, removed 0 lines",
+			Code:       "@@ -12,0 +12,1 @@\n+ 12  " + longCode + "\n",
+			Language:   "diff",
+			NoCollapse: true,
+		},
+	}
+	rendered := block.Render(ctx)
+	var rawLines []string
+	for _, line := range rendered.Lines {
+		rawLines = append(rawLines, line.Text)
+		if got := lipgloss.Width(line.Text); got != ctx.ContentWidth {
+			t.Fatalf("line %q width = %d, want %d", ansi.Strip(line.Text), got, ctx.ContentWidth)
+		}
+	}
+	stripped := ansi.Strip(strings.Join(rawLines, "\n"))
+	// The line tail only survives if the long line wrapped rather than being
+	// truncated to the viewport width.
+	if !strings.Contains(stripped, "END_MARKER") {
+		t.Fatalf("long diff line was truncated (END_MARKER missing):\n%s", stripped)
+	}
+	// The wrapped continuation holding the tail must keep the inserted-line
+	// green background band.
+	var continuation string
+	for _, line := range rawLines {
+		if strings.Contains(ansi.Strip(line), "END_MARKER") {
+			continuation = line
+			break
+		}
+	}
+	if !strings.Contains(continuation, "\x1b[48;5;22m") {
+		t.Fatalf("wrapped diff continuation lost its background band:\n%q", continuation)
+	}
+}
+
 func TestPOC2NoCollapseToolBlockIsNotClickable(t *testing.T) {
 	m := NewModel(Options{
 		Width:  80,
