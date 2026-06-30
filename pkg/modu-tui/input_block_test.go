@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -23,6 +24,21 @@ func TestInputBlockEditsAtCursor(t *testing.T) {
 	input.DeleteForward()
 	if got, want := input.Value, "bc"; got != want {
 		t.Fatalf("after delete = %q, want %q", got, want)
+	}
+}
+
+func TestInputBlockHighlightsSlashCommandToken(t *testing.T) {
+	var input InputBlock
+	input.Insert("/goal fix the failing test")
+
+	lines, _, _ := input.Render(80, maxInputRows)
+	raw := lines[0]
+	stripped := ansi.Strip(raw)
+	if !strings.Contains(stripped, "❯ /goal fix the failing test") {
+		t.Fatalf("rendered slash input stripped text mismatch:\n%s", stripped)
+	}
+	if got, want := slashInputStyle.GetForeground(), lipgloss.Color("6"); got != want {
+		t.Fatalf("slash command token should have a highlight color, got %#v", got)
 	}
 }
 
@@ -52,6 +68,9 @@ func TestInputBlockDeleteWordBackward(t *testing.T) {
 		{name: "trailing spaces", value: "hello world   ", cursor: len([]rune("hello world   ")), wantValue: "hello ", wantCursor: len([]rune("hello "))},
 		{name: "middle of word", value: "hello world", cursor: len([]rune("hello wor")), wantValue: "hello ld", wantCursor: len([]rune("hello "))},
 		{name: "unicode word", value: "prefix 你好", cursor: len([]rune("prefix 你好")), wantValue: "prefix ", wantCursor: len([]rune("prefix "))},
+		{name: "path segment", value: "cat ./pkg/modu-tui", cursor: len([]rune("cat ./pkg/modu-tui")), wantValue: "cat ./pkg/modu-", wantCursor: len([]rune("cat ./pkg/modu-"))},
+		{name: "after separator", value: "cat ./pkg/modu-", cursor: len([]rune("cat ./pkg/modu-")), wantValue: "cat ./pkg/", wantCursor: len([]rune("cat ./pkg/"))},
+		{name: "comma separated json arg", value: "title,body,state", cursor: len([]rune("title,body,state")), wantValue: "title,body,", wantCursor: len([]rune("title,body,"))},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -61,6 +80,23 @@ func TestInputBlockDeleteWordBackward(t *testing.T) {
 				t.Fatalf("after DeleteWordBackward value=%q cursor=%d, want value=%q cursor=%d", input.Value, input.Cursor, tt.wantValue, tt.wantCursor)
 			}
 		})
+	}
+}
+
+func TestInputBlockDeleteWordBackwardRepeated(t *testing.T) {
+	input := InputBlock{Value: "cat ./pkg/modu-tui", Cursor: len([]rune("cat ./pkg/modu-tui"))}
+
+	input.DeleteWordBackward()
+	if got, want := input.Value, "cat ./pkg/modu-"; got != want {
+		t.Fatalf("after first DeleteWordBackward = %q, want %q", got, want)
+	}
+	input.DeleteWordBackward()
+	if got, want := input.Value, "cat ./pkg/"; got != want {
+		t.Fatalf("after second DeleteWordBackward = %q, want %q", got, want)
+	}
+	input.DeleteWordBackward()
+	if got, want := input.Value, "cat ./"; got != want {
+		t.Fatalf("after third DeleteWordBackward = %q, want %q", got, want)
 	}
 }
 

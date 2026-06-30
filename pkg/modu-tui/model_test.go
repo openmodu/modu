@@ -329,6 +329,31 @@ func TestPOC2CtrlCQuitsWithSSHKeyShapes(t *testing.T) {
 	}
 }
 
+func TestPOC2CtrlCClearsNonEmptyInputBeforeQuit(t *testing.T) {
+	var tm tea.Model = NewModel(Options{
+		Width:         40,
+		Height:        8,
+		SlashCommands: []SlashCommand{{Name: "/goal", Description: "Set a goal"}},
+	})
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: "/go"}))
+	m := tm.(Model)
+	if m.input.Value == "" || len(m.slashMatches) == 0 {
+		t.Fatalf("setup should have input and slash matches: input=%q matches=%#v", m.input.Value, m.slashMatches)
+	}
+
+	tm, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl}))
+	if cmd != nil {
+		t.Fatalf("ctrl+c with input should clear input, not quit: %#v", cmd)
+	}
+	m = tm.(Model)
+	if m.input.Value != "" || len(m.slashMatches) != 0 {
+		t.Fatalf("ctrl+c should clear input and slash matches, input=%q matches=%#v", m.input.Value, m.slashMatches)
+	}
+
+	_, cmd = m.Update(tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl}))
+	requireQuitCmd(t, cmd)
+}
+
 func TestPOC2ApprovalEscDeniesWithSSHKeyShape(t *testing.T) {
 	decisions := make(chan ToolApprovalDecision, 1)
 	var tm tea.Model = NewModel(Options{Width: 40, Height: 8})
@@ -1041,6 +1066,59 @@ func TestPOC2SlashPickerCompletesCommandWithTab(t *testing.T) {
 	}
 }
 
+func TestPOC2SlashPickerDoesNotShowJumpHintAtBottom(t *testing.T) {
+	var tm tea.Model = NewModel(Options{
+		Width:         72,
+		Height:        14,
+		SlashCommands: []SlashCommand{{Name: "/goal", Description: "Set a goal"}},
+	})
+	m := tm.(Model)
+	for i := 0; i < 20; i++ {
+		m.messages = append(m.messages, Message{Role: RoleAssistant, Text: "history"})
+	}
+	m.rebuild()
+	if !m.atBottom() {
+		t.Fatal("setup should be at bottom")
+	}
+
+	tm, _ = m.Update(tea.KeyPressMsg(tea.Key{Text: "/", Code: '/'}))
+	m = tm.(Model)
+	rendered := ansi.Strip(m.render())
+	if !strings.Contains(rendered, "/goal") {
+		t.Fatalf("slash picker should be visible:\n%s", rendered)
+	}
+	if strings.Contains(rendered, jumpHintText()) {
+		t.Fatalf("slash picker should not trigger jump hint at bottom:\n%s", rendered)
+	}
+}
+
+func TestPOC2SlashPickerKeepsJumpHintWhenAwayFromBottom(t *testing.T) {
+	var tm tea.Model = NewModel(Options{
+		Width:         72,
+		Height:        14,
+		SlashCommands: []SlashCommand{{Name: "/goal", Description: "Set a goal"}},
+	})
+	m := tm.(Model)
+	for i := 0; i < 20; i++ {
+		m.messages = append(m.messages, Message{Role: RoleAssistant, Text: "history"})
+	}
+	m.rebuild()
+	m.scroll(-2)
+	if m.atBottom() {
+		t.Fatal("setup should be away from bottom")
+	}
+
+	tm, _ = m.Update(tea.KeyPressMsg(tea.Key{Text: "/", Code: '/'}))
+	m = tm.(Model)
+	rendered := ansi.Strip(m.render())
+	if !strings.Contains(rendered, "/goal") {
+		t.Fatalf("slash picker should be visible:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, jumpHintText()) {
+		t.Fatalf("slash picker should keep jump hint when away from bottom:\n%s", rendered)
+	}
+}
+
 func TestPOC2ResizeKeepsInputAndCursorAlignedWithSlashPanel(t *testing.T) {
 	var tm tea.Model = NewModel(Options{
 		Width:  50,
@@ -1391,7 +1469,7 @@ func TestPOC2ToolApprovalPanelIsFixedAboveInput(t *testing.T) {
 }
 
 func TestPOC2TodoPanelRendersAboveInput(t *testing.T) {
-	m := NewModel(Options{
+	var tm tea.Model = NewModel(Options{
 		Width:  50,
 		Height: 12,
 		InitialMessages: []Message{
@@ -1402,6 +1480,12 @@ func TestPOC2TodoPanelRendersAboveInput(t *testing.T) {
 			{Content: "second step", Status: "pending"},
 		},
 	})
+	tm, _ = tm.Update(SetBusyMsg{Busy: true})
+	tm, _ = tm.Update(SetTodosMsg{Todos: []TodoItem{
+		{Content: "first step", Status: "in_progress"},
+		{Content: "second step", Status: "pending"},
+	}})
+	m := tm.(Model)
 
 	rendered := strings.Split(ansi.Strip(m.render()), "\n")
 	if got, want := len(rendered), m.height; got != want {
@@ -1423,8 +1507,41 @@ func TestPOC2TodoPanelRendersAboveInput(t *testing.T) {
 	}
 }
 
+func TestPOC2TodoPanelHiddenWhileIdle(t *testing.T) {
+	m := NewModel(Options{
+		Width:  50,
+		Height: 10,
+		Todos:  []TodoItem{{Content: "stale task", Status: "pending"}},
+	})
+
+	if got := ansi.Strip(m.render()); strings.Contains(got, "Todos") || strings.Contains(got, "stale task") {
+		t.Fatalf("idle model should hide todo panel:\n%s", got)
+	}
+}
+
+func TestPOC2TodoPanelIgnoresStaleTodosOnNewRun(t *testing.T) {
+	var tm tea.Model = NewModel(Options{
+		Width:  50,
+		Height: 10,
+		Todos:  []TodoItem{{Content: "old task", Status: "pending"}},
+	})
+	tm, _ = tm.Update(SetBusyMsg{Busy: true})
+
+	m := tm.(Model)
+	if got := ansi.Strip(m.render()); strings.Contains(got, "Todos") || strings.Contains(got, "old task") {
+		t.Fatalf("new run should not show stale todos before current SetTodosMsg:\n%s", got)
+	}
+
+	tm, _ = tm.Update(SetTodosMsg{Todos: []TodoItem{{Content: "current task", Status: "pending"}}})
+	m = tm.(Model)
+	if got := ansi.Strip(m.render()); !strings.Contains(got, "current task") {
+		t.Fatalf("current-run todo update should show panel:\n%s", got)
+	}
+}
+
 func TestPOC2SetTodosMsgUpdatesTodoPanel(t *testing.T) {
 	var tm tea.Model = NewModel(Options{Width: 50, Height: 10})
+	tm, _ = tm.Update(SetBusyMsg{Busy: true})
 	tm, _ = tm.Update(SetTodosMsg{Todos: []TodoItem{{Content: "new task", Status: "pending"}}})
 	m := tm.(Model)
 	if got := ansi.Strip(m.render()); !strings.Contains(got, "new task") {

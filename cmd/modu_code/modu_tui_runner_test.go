@@ -878,3 +878,19 @@ func TestRunModuTUISlashDoesNotResetStatusWhenAgentRunStarted(t *testing.T) {
 		}
 	}
 }
+
+func TestModuTUISlashRunningStatusUsesCommandName(t *testing.T) {
+	tests := []struct {
+		line string
+		want string
+	}{
+		{line: "/goal fix the failing test", want: "running /goal"},
+		{line: "/help", want: "running /help"},
+		{line: "", want: "running slash command"},
+	}
+	for _, tt := range tests {
+		if got := moduTUISlashRunningStatus(tt.line); got != tt.want {
+			t.Fatalf("moduTUISlashRunningStatus(%q) = %q, want %q", tt.line, got, tt.want)
+		}
+	}
+}

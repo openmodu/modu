@@ -75,6 +75,8 @@ enough to implement, verify, and commit independently.
   opens a fixed bottom card, `Tab` completes the selected command, and `Enter`
   routes slash commands through `pkg/slash` or the session slash/prompt/skill
   path instead of sending them to the model as plain text.
+- Slash command input highlights the leading command token, and the running
+  status now names the command being executed, such as `running /goal`.
 - Slash command output in the `modu-tui` runner is now marked preformatted, so
   multiline outputs such as `/help` keep line breaks and column alignment
   instead of being reflowed as a Markdown paragraph.
