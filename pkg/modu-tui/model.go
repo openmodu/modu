@@ -48,29 +48,34 @@ type pendingHumanText struct {
 type Model struct {
 	width, height int
 
-	messages     []Message
-	lines        []string    // rendered transcript lines (the viewport's content)
-	gutters      []int       // per-line leading decoration width to skip on select/copy
-	headers      map[int]int // tool-header line index -> Message index
-	yOffset      int         // top visible transcript line
-	follow       bool        // stick to the bottom
-	unseen       int         // messages appended while the user is away from bottom
-	input        InputBlock
-	inputHistory []string
-	historyIdx   int
-	historyHold  string
-	imeTail      string
-	imeActive    bool
-	streaming    bool
-	streamRunes  []rune
-	streamIdx    int
-	streamReply  string
-	busy         bool
-	approval     *pendingApproval
-	humanPrompt  *pendingHumanPrompt
-	humanText    *pendingHumanText
-	todos        []TodoItem
-	todosCurrent bool
+	messages      []Message
+	lines         []string    // rendered transcript lines (the viewport's content)
+	gutters       []int       // per-line leading decoration width to skip on select/copy
+	headers       map[int]int // tool-header line index -> Message index
+	yOffset       int         // top visible transcript line
+	panel         *Panel
+	panelLines    []string
+	panelRowLines []int
+	panelOffset   int
+	panelSelected int
+	follow        bool // stick to the bottom
+	unseen        int  // messages appended while the user is away from bottom
+	input         InputBlock
+	inputHistory  []string
+	historyIdx    int
+	historyHold   string
+	imeTail       string
+	imeActive     bool
+	streaming     bool
+	streamRunes   []rune
+	streamIdx     int
+	streamReply   string
+	busy          bool
+	approval      *pendingApproval
+	humanPrompt   *pendingHumanPrompt
+	humanText     *pendingHumanText
+	todos         []TodoItem
+	todosCurrent  bool
 
 	selecting         bool
 	selStart, selEnd  cell
@@ -215,6 +220,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.humanText != nil {
 			return m.handleHumanTextKey(msg)
+		}
+		if m.panel != nil {
+			return m.handlePanelKey(msg)
 		}
 		switch {
 		case isCtrlCKey(msg):
@@ -441,8 +449,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.unseen = 0
 		m.rebuild()
 
+	case SetPanelMsg:
+		panel := normalizePanel(msg.Panel)
+		m.panel = &panel
+		m.panelOffset = 0
+		m.panelSelected = clamp(panel.Selected, 0, max(0, len(panel.Rows)-1))
+		m.clearSlashMatches()
+		m.clearSelection()
+		m.rebuild()
+		m.ensurePanelSelectionVisible()
+		m.rebuild()
+
+	case ClearPanelMsg:
+		if m.panel != nil && (msg.ID == "" || msg.ID == m.panel.ID) {
+			m.panel = nil
+			m.panelLines = nil
+			m.panelRowLines = nil
+			m.panelOffset = 0
+			m.panelSelected = 0
+			m.rebuild()
+		}
+
 	case RequestToolApprovalMsg:
 		m.approval = &pendingApproval{request: msg.Request, respond: msg.Respond}
+		m.panel = nil
+		m.panelLines = nil
+		m.panelRowLines = nil
+		m.panelOffset = 0
+		m.panelSelected = 0
 		m.humanPrompt = nil
 		m.humanText = nil
 		m.clearSlashMatches()
@@ -464,6 +498,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.humanPrompt = &pendingHumanPrompt{request: req, respond: msg.Respond, selected: selected}
 		m.approval = nil
+		m.panel = nil
+		m.panelLines = nil
+		m.panelRowLines = nil
+		m.panelOffset = 0
+		m.panelSelected = 0
 		m.humanText = nil
 		m.clearSlashMatches()
 		m.follow = true
@@ -485,6 +524,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.humanText = &pendingHumanText{request: req, respond: msg.Respond, input: input}
 		m.approval = nil
 		m.humanPrompt = nil
+		m.panel = nil
+		m.panelLines = nil
+		m.panelRowLines = nil
+		m.panelOffset = 0
+		m.panelSelected = 0
 		m.clearSlashMatches()
 		m.follow = true
 		m.unseen = 0
@@ -639,7 +683,7 @@ func (m Model) View() tea.View {
 // wrapped line count clamped to [1, maxInputRows]. Blocking prompt modes use a
 // single placeholder line.
 func (m *Model) inputRows() int {
-	if m.hasBlockingPrompt() {
+	if m.hasBlockingPrompt() || m.panel != nil {
 		return 1
 	}
 	return clamp(m.input.VisualLineCount(m.inputRenderWidth()), 1, maxInputRows)
@@ -665,6 +709,9 @@ func (m *Model) todoPanelHeight() int {
 	return len(m.todoPanelLines())
 }
 func (m *Model) showJumpPanel() bool {
+	if m.panel != nil {
+		return false
+	}
 	if m.vpHeight() <= m.minViewportRows() {
 		return false
 	}
@@ -682,11 +729,24 @@ func (m *Model) hasBlockingPrompt() bool {
 	return m.approval != nil || m.humanPrompt != nil || m.humanText != nil
 }
 func (m *Model) maxOffset() int {
+	if m.panel != nil {
+		return max(0, len(m.panelLines)-m.vpHeight())
+	}
 	return max(0, len(m.lines)-m.vpHeight())
 }
-func (m *Model) atBottom() bool { return m.yOffset >= m.maxOffset() }
+func (m *Model) viewOffset() int {
+	if m.panel != nil {
+		return m.panelOffset
+	}
+	return m.yOffset
+}
+func (m *Model) atBottom() bool { return m.viewOffset() >= m.maxOffset() }
 
 func (m *Model) scroll(n int) {
+	if m.panel != nil {
+		m.panelOffset = clamp(m.panelOffset+n, 0, m.maxOffset())
+		return
+	}
 	before := m.yOffset
 	m.yOffset = clamp(m.yOffset+n, 0, m.maxOffset())
 	if m.yOffset < before {
@@ -709,6 +769,7 @@ func (m *Model) jumpToBottom() {
 
 func (m *Model) rebuild() {
 	m.lines, m.gutters, m.headers = m.buildTranscript()
+	m.panelLines = m.buildPanelLines()
 	m.clampSelection()
 	m.clampScroll()
 }
@@ -721,6 +782,10 @@ func (m *Model) gutterAt(li int) int {
 }
 
 func (m *Model) clampScroll() {
+	if m.panel != nil {
+		m.panelOffset = clamp(m.panelOffset, 0, m.maxOffset())
+		return
+	}
 	if m.follow && !m.selecting {
 		m.yOffset = m.maxOffset()
 	} else {
@@ -786,6 +851,82 @@ func (m *Model) buildTranscript() ([]string, []int, map[int]int) {
 	return lines, gutters, headers
 }
 
+func (m *Model) buildPanelLines() []string {
+	if m.panel == nil {
+		m.panelRowLines = nil
+		return nil
+	}
+	m.panelRowLines = nil
+	width := max(1, m.width)
+	innerWidth := max(1, width-4)
+	panel := *m.panel
+	var body []string
+	title := strings.TrimSpace(panel.Title)
+	if title == "" {
+		title = "Panel"
+	}
+	body = append(body, botStyle.Render(title))
+	if subtitle := strings.TrimSpace(panel.Subtitle); subtitle != "" {
+		body = append(body, dimStyle.Render(ansi.Truncate(subtitle, innerWidth, "…")))
+	}
+	if len(panel.Lines) > 0 {
+		body = append(body, "")
+	}
+	for _, raw := range panel.Lines {
+		if strings.TrimSpace(raw) == "" {
+			body = append(body, "")
+			continue
+		}
+		wrapped := ansi.Wrap(raw, innerWidth, "")
+		for _, line := range strings.Split(strings.TrimSuffix(wrapped, "\n"), "\n") {
+			body = append(body, line)
+		}
+	}
+	if len(panel.Rows) > 0 {
+		if len(panel.Lines) > 0 {
+			body = append(body, "")
+		}
+		for i, row := range panel.Rows {
+			m.panelRowLines = append(m.panelRowLines, len(body)+1)
+			body = append(body, panelRowLine(row, i, m.panelSelected, innerWidth))
+		}
+	}
+	footer := strings.TrimSpace(panel.Footer)
+	if footer == "" {
+		if len(panel.Rows) > 0 {
+			footer = "[↑/↓] select  [enter] open  [esc/q] close"
+		} else {
+			footer = "[esc/q] close  [↑/↓] scroll"
+		}
+	}
+	body = append(body, "", dimStyle.Render(footer))
+	return CardBlock{Lines: body}.RenderWidth(width)
+}
+
+func panelRowLine(row PanelRow, idx, selected, width int) string {
+	label := strings.TrimSpace(row.Label)
+	if label == "" {
+		label = strings.TrimSpace(row.Value)
+	}
+	if label == "" {
+		label = fmt.Sprintf("item %d", idx+1)
+	}
+	prefix := "  "
+	if idx == selected {
+		prefix = "› "
+	}
+	line := prefix + label
+	if detail := strings.TrimSpace(row.Detail); detail != "" {
+		space := max(1, width-ansi.StringWidth(ansi.Strip(line))-ansi.StringWidth(detail))
+		line += strings.Repeat(" ", space) + detail
+	}
+	line = ansi.Truncate(line, max(1, width), "…")
+	if idx == selected {
+		return selStyle.Render(fitLine(line, width))
+	}
+	return line
+}
+
 func (m *Model) blockFromMessage(msg Message) Block {
 	for _, factory := range m.blockFactories {
 		if block, ok := factory(msg); ok {
@@ -797,11 +938,21 @@ func (m *Model) blockFromMessage(msg Message) Block {
 
 func (m *Model) render() string {
 	h := m.vpHeight()
+	sourceLines := m.lines
+	offset := m.yOffset
+	if m.panel != nil {
+		sourceLines = m.panelLines
+		offset = m.panelOffset
+	}
 	window := make([]string, 0, h)
 	for i := range h {
-		li := m.yOffset + i
-		if li < len(m.lines) {
-			window = append(window, fitLine(m.highlightLine(li), m.width))
+		li := offset + i
+		if li < len(sourceLines) {
+			line := sourceLines[li]
+			if m.panel == nil {
+				line = m.highlightLine(li)
+			}
+			window = append(window, fitLine(line, m.width))
 		} else {
 			window = append(window, fitLine("", m.width))
 		}
@@ -811,6 +962,8 @@ func (m *Model) render() string {
 	inputLines, _, _ := m.input.Render(m.inputRenderWidth(), m.inputRows())
 	if m.approval != nil {
 		inputLines = []string{fitLine(dimStyle.Render(" approval pending "), m.inputRenderWidth())}
+	} else if m.panel != nil {
+		inputLines = []string{fitLine(dimStyle.Render(" panel open "), m.inputRenderWidth())}
 	} else if m.humanPrompt != nil || m.humanText != nil {
 		inputLines = []string{fitLine(dimStyle.Render(" human input pending "), m.inputRenderWidth())}
 	}
@@ -822,13 +975,17 @@ func (m *Model) render() string {
 		state = "● streaming"
 	} else if m.approval != nil {
 		state = "● approval"
+	} else if m.panel != nil {
+		state = "● panel"
 	} else if m.humanPrompt != nil || m.humanText != nil {
 		state = "● input"
 	} else if m.busy {
 		state = "● running"
 	}
 	inner := agentStatusText(state, m.status)
-	if (m.busy || m.streaming) && !m.hasBlockingPrompt() && !m.showJumpPanel() && runStatusAllowsHint(m.status) {
+	if m.panel != nil {
+		inner = agentStatusText(state, panelStatusText(m.panel, m.panelOffset, m.maxOffset()))
+	} else if (m.busy || m.streaming) && !m.hasBlockingPrompt() && !m.showJumpPanel() && runStatusAllowsHint(m.status) {
 		inner += "  ·  " + steerFollowupHint
 	}
 	status := m.statusLine(inner)
@@ -886,6 +1043,20 @@ func agentStatusText(state, status string) string {
 	default:
 		return state + " · " + status
 	}
+}
+
+func panelStatusText(panel *Panel, offset, maxOffset int) string {
+	if panel == nil {
+		return ""
+	}
+	title := strings.TrimSpace(panel.Title)
+	if title == "" {
+		title = "panel"
+	}
+	if maxOffset > 0 {
+		return fmt.Sprintf("%s · %d/%d · esc closes", title, offset+1, maxOffset+1)
+	}
+	return title + " · esc closes"
 }
 
 func (m *Model) statusLine(inner string) string {
@@ -1374,6 +1545,99 @@ func fallbackString(value, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func normalizePanel(panel Panel) Panel {
+	panel.ID = strings.TrimSpace(panel.ID)
+	panel.Title = strings.TrimSpace(panel.Title)
+	panel.Subtitle = strings.TrimSpace(panel.Subtitle)
+	panel.Footer = strings.TrimSpace(panel.Footer)
+	panel.Lines = append([]string(nil), panel.Lines...)
+	panel.Rows = append([]PanelRow(nil), panel.Rows...)
+	for i := range panel.Rows {
+		panel.Rows[i].Label = strings.TrimSpace(panel.Rows[i].Label)
+		panel.Rows[i].Detail = strings.TrimSpace(panel.Rows[i].Detail)
+		panel.Rows[i].Value = strings.TrimSpace(panel.Rows[i].Value)
+		panel.Rows[i].Command = strings.TrimSpace(panel.Rows[i].Command)
+	}
+	panel.Selected = clamp(panel.Selected, 0, max(0, len(panel.Rows)-1))
+	return panel
+}
+
+func (m Model) handlePanelKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if isCtrlCKey(msg) || isEscKey(msg) || strings.EqualFold(strings.TrimSpace(msg.Text), "q") {
+		m.closePanel()
+		m.rebuild()
+		return m, nil
+	}
+	if m.panel != nil && len(m.panel.Rows) > 0 {
+		switch {
+		case msg.Code == tea.KeyUp || strings.TrimSpace(msg.Text) == "k":
+			m.panelSelected = (m.panelSelected - 1 + len(m.panel.Rows)) % len(m.panel.Rows)
+			m.ensurePanelSelectionVisible()
+			m.rebuild()
+			return m, nil
+		case msg.Code == tea.KeyDown || strings.TrimSpace(msg.Text) == "j":
+			m.panelSelected = (m.panelSelected + 1) % len(m.panel.Rows)
+			m.ensurePanelSelectionVisible()
+			m.rebuild()
+			return m, nil
+		case msg.Code == tea.KeyEnter:
+			row := m.panel.Rows[clamp(m.panelSelected, 0, len(m.panel.Rows)-1)]
+			action := PanelAction{
+				PanelID: m.panel.ID,
+				Index:   m.panelSelected,
+				Row:     row,
+				Command: strings.TrimSpace(row.Command),
+			}
+			m.closePanel()
+			m.rebuild()
+			if m.hooks.PanelAction != nil {
+				m.hooks.PanelAction(action)
+			}
+			return m, nil
+		}
+	}
+	switch {
+	case msg.Code == tea.KeyUp || strings.TrimSpace(msg.Text) == "k":
+		m.scroll(-1)
+	case msg.Code == tea.KeyDown || strings.TrimSpace(msg.Text) == "j":
+		m.scroll(1)
+	case msg.Code == tea.KeyPgUp:
+		m.scroll(-max(1, m.vpHeight()-1))
+	case msg.Code == tea.KeyPgDown:
+		m.scroll(max(1, m.vpHeight()-1))
+	case msg.Code == tea.KeyHome:
+		m.panelOffset = 0
+	case msg.Code == tea.KeyEnd || msg.String() == "ctrl+end":
+		m.panelOffset = m.maxOffset()
+	}
+	m.rebuild()
+	return m, nil
+}
+
+func (m *Model) closePanel() {
+	m.panel = nil
+	m.panelLines = nil
+	m.panelRowLines = nil
+	m.panelOffset = 0
+	m.panelSelected = 0
+}
+
+func (m *Model) ensurePanelSelectionVisible() {
+	if m.panel == nil || len(m.panelRowLines) == 0 || m.panelSelected < 0 || m.panelSelected >= len(m.panelRowLines) {
+		return
+	}
+	line := m.panelRowLines[m.panelSelected]
+	if line < m.panelOffset {
+		m.panelOffset = line
+		return
+	}
+	bottom := m.panelOffset + max(1, m.vpHeight()) - 1
+	if line > bottom {
+		m.panelOffset = line - max(1, m.vpHeight()) + 1
+	}
+	m.panelOffset = clamp(m.panelOffset, 0, m.maxOffset())
 }
 
 func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {

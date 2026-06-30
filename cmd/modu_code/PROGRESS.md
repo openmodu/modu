@@ -959,3 +959,39 @@ enough to implement, verify, and commit independently.
   characters. Structured results render as indented JSON, plain text results
   keep their original text, and the persisted-run coverage now asserts long
   result/script tails are present.
+- 2026-06-30: started the Claude-Code-style dynamic workflow TUI surface for the
+  newer `modu-tui` runner. `pkg/modu-tui` now has a host-owned scrollable
+  `SetPanelMsg`/`ClearPanelMsg` main-view panel, exact `/workflows` opens the
+  workflow cockpit in that panel instead of appending transcript text, and
+  workflow `RuntimeState()` now merges persisted runs with live registry state
+  so the cockpit and `/workflows list` no longer disagree after a restart.
+- 2026-06-30: made the `modu-tui` panel selectable. Panels can now render
+  host-owned rows, use ↑/↓ to move selection, and emit `Hooks.PanelAction` on
+  Enter. The `/workflows` cockpit uses this to list recent workflow runs as
+  selectable rows; pressing Enter closes the panel and opens
+  `/workflows show <run-id>` for the selected run.
+- 2026-06-30: moved `/workflows` run selection one step further into the TUI.
+  Selecting a run in the workflow cockpit now opens a `Workflow Run` detail
+  panel instead of dumping `/workflows show` output into the transcript. The
+  detail panel shows summary metadata, phase/agent orchestration, agent result
+  previews, and a selectable Back row that returns to the cockpit.
+- 2026-06-30: added workflow detail subviews inside the newer `modu-tui` panel.
+  The `Workflow Run` panel now exposes selectable `Result` and `Script` rows;
+  choosing them opens `Workflow Result` or `Workflow Script` panels in-place,
+  reading full result data from `snapshot.json` and full workflow source from
+  `script.js`, with Back rows returning to the run detail or cockpit.
+- 2026-06-30: added workflow agent subviews to the newer `modu-tui` panel. The
+  `Workflow Run` detail panel now has an `Agents` row, which opens a selectable
+  `Workflow Agents` list. Selecting an agent opens a `Workflow Agent` panel with
+  summary metadata, prompt/result/error previews, and recent tool-call previews,
+  plus Back rows to the agent list or run detail.
+- 2026-06-30: added full workflow agent transcript browsing inside the
+  `modu-tui` panel. `Workflow Agent` now exposes a `Transcript` row, which reads
+  the selected agent's full child transcript from `snapshot.json` and renders
+  user/assistant/tool entries, tool calls, and usage in a `Workflow Transcript`
+  panel with Back rows to the agent or agent list.
+- 2026-06-30: added workflow control actions to the newer `modu-tui` workflow
+  detail panel. Running workflows expose `Pause` and `Stop`; stopped workflows
+  expose `Resume` and `Restart`; completed/failed workflows expose `Restart`,
+  with each row routed through the existing `/workflows` control commands and
+  returning to the refreshed run detail panel.

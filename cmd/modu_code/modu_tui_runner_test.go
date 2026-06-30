@@ -1032,6 +1032,347 @@ func TestModuTUIWorkflowCockpitShowsOrchestrationMap(t *testing.T) {
 	}
 }
 
+func TestModuTUIWorkflowCockpitRowsOpenWorkflowDetails(t *testing.T) {
+	rows := moduTUIWorkflowCockpitRowsFromStates(map[string]any{
+		"workflow": map[string]any{
+			"runs": []map[string]any{{
+				"id":           "run-2",
+				"name":         "market_watch",
+				"status":       "completed",
+				"agentCount":   5,
+				"doneCount":    5,
+				"durationMs":   65000,
+				"currentPhase": "Report",
+				"updatedAt":    200,
+			}, {
+				"id":         "run-1",
+				"status":     "running",
+				"agentCount": 3,
+				"doneCount":  1,
+				"updatedAt":  100,
+			}},
+		},
+	})
+
+	if len(rows) != 2 {
+		t.Fatalf("rows = %#v", rows)
+	}
+	if rows[0].Value != "run-2" || rows[0].Command != moduTUIWorkflowPanelDetailPrefix+"run-2" {
+		t.Fatalf("first row should open run-2 details: %#v", rows[0])
+	}
+	for _, want := range []string{"market_watch", "completed", "5/5"} {
+		if !strings.Contains(rows[0].Label, want) {
+			t.Fatalf("row label missing %q: %#v", want, rows[0])
+		}
+	}
+	if !strings.Contains(rows[0].Detail, "Report") || !strings.Contains(rows[0].Detail, "1min 05s") {
+		t.Fatalf("row detail should include phase and duration: %#v", rows[0])
+	}
+}
+
+func TestModuTUIWorkflowRunDetailPanelShowsRunInPanel(t *testing.T) {
+	panel := moduTUIWorkflowRunDetailPanelFromStates(map[string]any{
+		"workflow": map[string]any{
+			"runs": []map[string]any{{
+				"id":                "run-detail",
+				"name":              "market_watch",
+				"status":            "completed",
+				"agentCount":        2,
+				"doneCount":         2,
+				"runningAgentCount": 0,
+				"durationMs":        65000,
+				"currentPhase":      "Report",
+				"phases": []map[string]any{{
+					"title":      "Research",
+					"agentCount": 1,
+					"doneCount":  1,
+				}, {
+					"title":      "Report",
+					"agentCount": 1,
+					"doneCount":  1,
+				}},
+				"agents": []map[string]any{{
+					"id":            1,
+					"label":         "collect",
+					"phase":         "Research",
+					"status":        "done",
+					"resultPreview": "market data ok",
+				}, {
+					"id":            2,
+					"label":         "write report",
+					"phase":         "Report",
+					"status":        "done",
+					"resultPreview": "report ok",
+				}},
+			}},
+		},
+	}, "run-detail")
+
+	if panel.ID != moduTUIWorkflowRunDetailPanelID || panel.Title != "Workflow Run" {
+		t.Fatalf("unexpected detail panel header: %#v", panel)
+	}
+	text := strings.Join(panel.Lines, "\n")
+	for _, want := range []string{
+		"summary",
+		"id: run-detail",
+		"progress: 2/2 done, 0 running, 0 errors",
+		"duration: 1min 05s",
+		"orchestration",
+		"[Research] 1/1 done",
+		"#1 [done] collect",
+		"result: market data ok",
+		"[Report] 1/1 done",
+		"#2 [done] write report",
+		"/workflows agent run-detail <agent-id>",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("detail panel missing %q:\n%s", want, text)
+		}
+	}
+	if len(panel.Rows) != 5 || panel.Rows[0].Command != moduTUIWorkflowPanelControlPrefix+"restart:run-detail" || panel.Rows[1].Command != moduTUIWorkflowPanelAgentsPrefix+"run-detail" || panel.Rows[2].Command != moduTUIWorkflowPanelResultPrefix+"run-detail" || panel.Rows[3].Command != moduTUIWorkflowPanelScriptPrefix+"run-detail" || panel.Rows[4].Command != moduTUIWorkflowPanelBackCommand {
+		t.Fatalf("detail panel should expose control, agents, result, script, and back rows: %#v", panel.Rows)
+	}
+}
+
+func TestModuTUIWorkflowRunDetailPanelShowsRunningControls(t *testing.T) {
+	panel := moduTUIWorkflowRunDetailPanelFromStates(map[string]any{
+		"workflow": map[string]any{
+			"runs": []map[string]any{{
+				"id":                "run-running",
+				"name":              "market_watch",
+				"status":            "running",
+				"agentCount":        3,
+				"doneCount":         1,
+				"runningAgentCount": 2,
+			}},
+		},
+	}, "run-running")
+
+	if len(panel.Rows) < 3 {
+		t.Fatalf("detail panel rows = %#v", panel.Rows)
+	}
+	if panel.Rows[0].Label != "Pause" || panel.Rows[0].Command != moduTUIWorkflowPanelControlPrefix+"pause:run-running" {
+		t.Fatalf("expected first row to pause running workflow: %#v", panel.Rows[0])
+	}
+	if panel.Rows[1].Label != "Stop" || panel.Rows[1].Command != moduTUIWorkflowPanelControlPrefix+"stop:run-running" {
+		t.Fatalf("expected second row to stop running workflow: %#v", panel.Rows[1])
+	}
+	text := strings.Join(panel.Lines, "\n")
+	if !strings.Contains(text, "Pause, Stop") {
+		t.Fatalf("detail panel should list running controls:\n%s", text)
+	}
+}
+
+func TestModuTUIWorkflowControlActionBuildsSlashCommand(t *testing.T) {
+	command, runID, status, ok := moduTUIWorkflowControlAction(modutui.PanelAction{
+		PanelID: moduTUIWorkflowRunDetailPanelID,
+		Command: moduTUIWorkflowPanelControlPrefix + "pause:run-123",
+	})
+	if !ok {
+		t.Fatal("expected workflow control action")
+	}
+	if command != "/workflows pause run-123" || runID != "run-123" || status != "workflow pause requested" {
+		t.Fatalf("unexpected control action: command=%q runID=%q status=%q", command, runID, status)
+	}
+
+	if _, _, _, ok := moduTUIWorkflowControlAction(modutui.PanelAction{Command: moduTUIWorkflowPanelControlPrefix + "delete:run-123"}); ok {
+		t.Fatal("unsupported control verb should not be accepted")
+	}
+}
+
+func TestModuTUIWorkflowAgentsAndAgentPanels(t *testing.T) {
+	states := map[string]any{
+		"workflow": map[string]any{
+			"runs": []map[string]any{{
+				"id":     "run-agents",
+				"name":   "market_watch",
+				"status": "completed",
+				"agents": []map[string]any{{
+					"id":              1,
+					"label":           "collect",
+					"phase":           "Research",
+					"status":          "done",
+					"turnTokens":      1200,
+					"recentToolCalls": 1,
+					"resultPreview":   "market data ok",
+					"promptPreview":   "collect market data",
+					"recentToolCallPreviews": []map[string]any{{
+						"toolName":      "web_search",
+						"argsPreview":   `{"q":"A股"}`,
+						"resultPreview": "search result ok",
+					}},
+				}, {
+					"id":              2,
+					"label":           "write report",
+					"phase":           "Report",
+					"status":          "done",
+					"estimatedTokens": 800,
+				}},
+			}},
+		},
+	}
+
+	agentsPanel := moduTUIWorkflowAgentsPanelFromStates(states, "run-agents")
+	if agentsPanel.ID != moduTUIWorkflowAgentsPanelID || agentsPanel.Title != "Workflow Agents" {
+		t.Fatalf("unexpected agents panel: %#v", agentsPanel)
+	}
+	if len(agentsPanel.Rows) != 4 {
+		t.Fatalf("agents panel rows = %#v", agentsPanel.Rows)
+	}
+	if agentsPanel.Rows[0].Command != moduTUIWorkflowPanelAgentPrefix+"run-agents:1" || !strings.Contains(agentsPanel.Rows[0].Label, "#1 [done] collect") || !strings.Contains(agentsPanel.Rows[0].Detail, "Research") || !strings.Contains(agentsPanel.Rows[0].Detail, "1200 tokens") || !strings.Contains(agentsPanel.Rows[0].Detail, "1 tools") {
+		t.Fatalf("first agent row = %#v", agentsPanel.Rows[0])
+	}
+	if agentsPanel.Rows[2].Command != moduTUIWorkflowPanelDetailPrefix+"run-agents" || agentsPanel.Rows[3].Command != moduTUIWorkflowPanelBackCommand {
+		t.Fatalf("agents panel should expose detail and cockpit back rows: %#v", agentsPanel.Rows)
+	}
+
+	agentPanel := moduTUIWorkflowAgentPanelFromStates(states, "run-agents", 1)
+	if agentPanel.ID != moduTUIWorkflowAgentPanelID || agentPanel.Title != "Workflow Agent" {
+		t.Fatalf("unexpected agent panel: %#v", agentPanel)
+	}
+	text := strings.Join(agentPanel.Lines, "\n")
+	for _, want := range []string{
+		"id: 1",
+		"label: collect",
+		"status: done",
+		"phase: Research",
+		"tokens: 1200",
+		"result preview",
+		"market data ok",
+		"prompt preview",
+		"collect market data",
+		"recent tool calls",
+		"- web_search [ok]",
+		`args: {"q":"A股"}`,
+		"result: search result ok",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("agent panel missing %q:\n%s", want, text)
+		}
+	}
+	if len(agentPanel.Rows) != 3 || agentPanel.Rows[0].Command != moduTUIWorkflowPanelTranscriptPrefix+"run-agents:1" || agentPanel.Rows[1].Command != moduTUIWorkflowPanelAgentsPrefix+"run-agents" || agentPanel.Rows[2].Command != moduTUIWorkflowPanelDetailPrefix+"run-agents" {
+		t.Fatalf("agent panel back rows = %#v", agentPanel.Rows)
+	}
+}
+
+func TestModuTUIWorkflowTranscriptPanelReadsSnapshotTranscript(t *testing.T) {
+	dir := t.TempDir()
+	snapshotPath := filepath.Join(dir, "snapshot.json")
+	if err := os.WriteFile(snapshotPath, []byte(`{
+	  "agents": [{
+	    "id": 1,
+	    "label": "collect",
+	    "transcript": [{
+	      "role": "user",
+	      "text": "collect market data"
+	    }, {
+	      "role": "assistant",
+	      "text": "calling search",
+	      "toolCalls": [{"id":"call-1","name":"web_search","args":"{\"q\":\"A股\"}"}],
+	      "usage": {"input": 10, "output": 20, "totalTokens": 30}
+	    }, {
+	      "role": "tool",
+	      "toolName": "web_search",
+	      "text": "search result ok"
+	    }]
+	  }]
+	}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	states := map[string]any{
+		"workflow": map[string]any{
+			"runs": []map[string]any{{
+				"id":           "run-transcript",
+				"name":         "market_watch",
+				"status":       "completed",
+				"snapshotPath": snapshotPath,
+				"agents": []map[string]any{{
+					"id":     1,
+					"label":  "collect",
+					"status": "done",
+				}},
+				"updatedAt": 1,
+			}},
+		},
+	}
+
+	panel := moduTUIWorkflowTranscriptPanelFromStates(states, "run-transcript", 1)
+	if panel.ID != moduTUIWorkflowTranscriptPanelID || panel.Title != "Workflow Transcript" {
+		t.Fatalf("unexpected transcript panel: %#v", panel)
+	}
+	text := strings.Join(panel.Lines, "\n")
+	for _, want := range []string{
+		"## 1. USER",
+		"collect market data",
+		"## 2. ASSISTANT",
+		"calling search",
+		"ToolCall: web_search (call-1)",
+		`Args: {"q":"A股"}`,
+		"Usage: input=10 output=20 total=30",
+		"## 3. TOOL web_search",
+		"search result ok",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("transcript panel missing %q:\n%s", want, text)
+		}
+	}
+	if len(panel.Rows) != 2 || panel.Rows[0].Command != moduTUIWorkflowPanelAgentPrefix+"run-transcript:1" || panel.Rows[1].Command != moduTUIWorkflowPanelAgentsPrefix+"run-transcript" {
+		t.Fatalf("transcript panel rows = %#v", panel.Rows)
+	}
+}
+
+func TestModuTUIWorkflowResultAndScriptPanelsReadArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	snapshotPath := filepath.Join(dir, "snapshot.json")
+	scriptPath := filepath.Join(dir, "script.js")
+	if err := os.WriteFile(snapshotPath, []byte(`{"result":{"report":"full final result","items":[1,2]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(scriptPath, []byte("meta({ name: \"market_watch\" })\nreturn \"ok\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	states := map[string]any{
+		"workflow": map[string]any{
+			"runs": []map[string]any{{
+				"id":           "run-artifact",
+				"name":         "market_watch",
+				"status":       "completed",
+				"scriptPath":   scriptPath,
+				"snapshotPath": snapshotPath,
+				"updatedAt":    1,
+			}},
+		},
+	}
+
+	resultPanel := moduTUIWorkflowResultPanelFromStates(states, "run-artifact")
+	if resultPanel.ID != moduTUIWorkflowResultPanelID || resultPanel.Title != "Workflow Result" {
+		t.Fatalf("unexpected result panel: %#v", resultPanel)
+	}
+	resultText := strings.Join(resultPanel.Lines, "\n")
+	for _, want := range []string{`"report": "full final result"`, `"items": [`} {
+		if !strings.Contains(resultText, want) {
+			t.Fatalf("result panel missing %q:\n%s", want, resultText)
+		}
+	}
+	if len(resultPanel.Rows) != 2 || resultPanel.Rows[0].Command != moduTUIWorkflowPanelDetailPrefix+"run-artifact" {
+		t.Fatalf("result panel rows = %#v", resultPanel.Rows)
+	}
+
+	scriptPanel := moduTUIWorkflowScriptPanelFromStates(states, "run-artifact")
+	if scriptPanel.ID != moduTUIWorkflowScriptPanelID || scriptPanel.Title != "Workflow Script" {
+		t.Fatalf("unexpected script panel: %#v", scriptPanel)
+	}
+	scriptText := strings.Join(scriptPanel.Lines, "\n")
+	for _, want := range []string{"meta({ name: \"market_watch\" })", "return \"ok\""} {
+		if !strings.Contains(scriptText, want) {
+			t.Fatalf("script panel missing %q:\n%s", want, scriptText)
+		}
+	}
+	if len(scriptPanel.Rows) != 2 || scriptPanel.Rows[0].Command != moduTUIWorkflowPanelDetailPrefix+"run-artifact" {
+		t.Fatalf("script panel rows = %#v", scriptPanel.Rows)
+	}
+}
+
 func TestRunModuTUISlashExactWorkflowsShowsCockpit(t *testing.T) {
 	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
 		Cwd:       t.TempDir(),
@@ -1048,22 +1389,22 @@ func TestRunModuTUISlashExactWorkflowsShowsCockpit(t *testing.T) {
 		messages = append(messages, msg)
 	}, nil, nil, nil)
 
-	var got *modutui.Message
+	var got *modutui.Panel
 	for _, msg := range messages {
-		if appendMsg, ok := msg.(modutui.AppendMessageMsg); ok {
-			next := appendMsg.Message
+		if panelMsg, ok := msg.(modutui.SetPanelMsg); ok {
+			next := panelMsg.Panel
 			got = &next
 			break
 		}
 	}
 	if got == nil {
-		t.Fatalf("expected AppendMessageMsg in %#v", messages)
+		t.Fatalf("expected SetPanelMsg in %#v", messages)
 	}
-	if !got.Preformatted || !strings.Contains(got.Text, "Workflow Cockpit") {
+	if got.Title != "Workflow Cockpit" || !strings.Contains(strings.Join(got.Lines, "\n"), "overview") {
 		t.Fatalf("unexpected workflows cockpit output: %#v", got)
 	}
-	if strings.Contains(got.Text, "unknown command") {
-		t.Fatalf("/workflows should not fall through to unknown command: %q", got.Text)
+	if strings.Contains(strings.Join(got.Lines, "\n"), "unknown command") {
+		t.Fatalf("/workflows should not fall through to unknown command: %#v", got)
 	}
 }
 

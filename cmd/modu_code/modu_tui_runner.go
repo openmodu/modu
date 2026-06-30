@@ -301,6 +301,37 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 			SubmitMessage: func(ev modutui.SubmitEvent) {
 				submit(ev)
 			},
+			PanelAction: func(action modutui.PanelAction) {
+				if command, runID, status, ok := moduTUIWorkflowControlAction(action); ok {
+					safeGo("workflow control action", func() {
+						send(modutui.SetStatusMsg{Status: status, TransientFor: moduTUITerminalStatusTTL})
+						runModuTUISlash(ctx, command, session, model, opts.CommandHooks, send, isForegroundRunActive, func() {
+							configWizard.Start(ctx)
+						}, func() {
+							runModuTUIModelSelect(ctx, session, send)
+						})
+						send(modutui.SetPanelMsg{Panel: moduTUIWorkflowRunDetailPanel(session, runID)})
+					})
+					return
+				}
+				if panel, ok := moduTUIWorkflowPanelAction(session, action); ok {
+					safeGo("workflow panel action", func() {
+						send(modutui.SetPanelMsg{Panel: panel})
+					})
+					return
+				}
+				command := strings.TrimSpace(action.Command)
+				if command == "" {
+					return
+				}
+				safeGo("panel action", func() {
+					runModuTUISlash(ctx, command, session, model, opts.CommandHooks, send, isForegroundRunActive, func() {
+						configWizard.Start(ctx)
+					}, func() {
+						runModuTUIModelSelect(ctx, session, send)
+					})
+				})
+			},
 			SlashCommand: func(line string) {
 				if kind, text, ok := moduTUIQueueCommand(line); ok {
 					if strings.TrimSpace(text) == "" {
@@ -591,11 +622,7 @@ func runModuTUISlash(ctx context.Context, line string, session *coding_agent.Cod
 		return
 	}
 	if args, ok := moduTUIWorkflowArgs(line); ok && strings.TrimSpace(args) == "" {
-		send(modutui.AppendMessageMsg{Message: modutui.Message{
-			Role:         modutui.RoleAssistant,
-			Text:         moduTUIWorkflowCockpitText(session),
-			Preformatted: true,
-		}})
+		send(modutui.SetPanelMsg{Panel: moduTUIWorkflowCockpitPanel(session)})
 		return
 	}
 
@@ -661,6 +688,800 @@ func moduTUIWorkflowCockpitText(session *coding_agent.CodingSession) string {
 		return moduTUIWorkflowCockpitTextFromStates(nil)
 	}
 	return moduTUIWorkflowCockpitTextFromStates(session.ExtensionRuntimeStates())
+}
+
+const (
+	moduTUIWorkflowCockpitPanelID        = "workflow-cockpit"
+	moduTUIWorkflowRunDetailPanelID      = "workflow-run-detail"
+	moduTUIWorkflowResultPanelID         = "workflow-result"
+	moduTUIWorkflowScriptPanelID         = "workflow-script"
+	moduTUIWorkflowAgentsPanelID         = "workflow-agents"
+	moduTUIWorkflowAgentPanelID          = "workflow-agent"
+	moduTUIWorkflowTranscriptPanelID     = "workflow-transcript"
+	moduTUIWorkflowPanelBackCommand      = "workflow-panel:back"
+	moduTUIWorkflowPanelDetailPrefix     = "workflow-panel:detail:"
+	moduTUIWorkflowPanelResultPrefix     = "workflow-panel:result:"
+	moduTUIWorkflowPanelScriptPrefix     = "workflow-panel:script:"
+	moduTUIWorkflowPanelAgentsPrefix     = "workflow-panel:agents:"
+	moduTUIWorkflowPanelAgentPrefix      = "workflow-panel:agent:"
+	moduTUIWorkflowPanelTranscriptPrefix = "workflow-panel:transcript:"
+	moduTUIWorkflowPanelControlPrefix    = "workflow-panel:control:"
+)
+
+func moduTUIWorkflowControlAction(action modutui.PanelAction) (command, runID, status string, ok bool) {
+	rest, ok := strings.CutPrefix(strings.TrimSpace(action.Command), moduTUIWorkflowPanelControlPrefix)
+	if !ok {
+		return "", "", "", false
+	}
+	verb, runID, ok := strings.Cut(rest, ":")
+	if !ok {
+		return "", "", "", false
+	}
+	verb = strings.TrimSpace(verb)
+	runID = strings.TrimSpace(runID)
+	if verb == "" || runID == "" {
+		return "", "", "", false
+	}
+	switch verb {
+	case "pause", "stop", "resume", "restart":
+		return "/workflows " + verb + " " + runID, runID, "workflow " + verb + " requested", true
+	default:
+		return "", "", "", false
+	}
+}
+
+func moduTUIWorkflowPanelAction(session *coding_agent.CodingSession, action modutui.PanelAction) (modutui.Panel, bool) {
+	switch action.PanelID {
+	case moduTUIWorkflowCockpitPanelID:
+		runID := strings.TrimSpace(action.Row.Value)
+		if runID == "" {
+			return modutui.Panel{}, false
+		}
+		return moduTUIWorkflowRunDetailPanel(session, runID), true
+	case moduTUIWorkflowRunDetailPanelID:
+		if strings.TrimSpace(action.Command) == moduTUIWorkflowPanelBackCommand {
+			return moduTUIWorkflowCockpitPanel(session), true
+		}
+		command := strings.TrimSpace(action.Command)
+		if runID, ok := strings.CutPrefix(command, moduTUIWorkflowPanelResultPrefix); ok {
+			return moduTUIWorkflowResultPanel(session, runID), true
+		}
+		if runID, ok := strings.CutPrefix(command, moduTUIWorkflowPanelScriptPrefix); ok {
+			return moduTUIWorkflowScriptPanel(session, runID), true
+		}
+		if runID, ok := strings.CutPrefix(command, moduTUIWorkflowPanelAgentsPrefix); ok {
+			return moduTUIWorkflowAgentsPanel(session, runID), true
+		}
+	case moduTUIWorkflowAgentsPanelID:
+		command := strings.TrimSpace(action.Command)
+		if rest, ok := strings.CutPrefix(command, moduTUIWorkflowPanelAgentPrefix); ok {
+			runID, agentIDText, ok := strings.Cut(rest, ":")
+			if ok {
+				agentID, _ := strconv.Atoi(agentIDText)
+				return moduTUIWorkflowAgentPanel(session, runID, agentID), true
+			}
+		}
+		if runID, ok := strings.CutPrefix(command, moduTUIWorkflowPanelDetailPrefix); ok {
+			return moduTUIWorkflowRunDetailPanel(session, runID), true
+		}
+		if command == moduTUIWorkflowPanelBackCommand {
+			return moduTUIWorkflowCockpitPanel(session), true
+		}
+	case moduTUIWorkflowResultPanelID, moduTUIWorkflowScriptPanelID, moduTUIWorkflowAgentPanelID:
+		command := strings.TrimSpace(action.Command)
+		if rest, ok := strings.CutPrefix(command, moduTUIWorkflowPanelTranscriptPrefix); ok {
+			runID, agentIDText, ok := strings.Cut(rest, ":")
+			if ok {
+				agentID, _ := strconv.Atoi(agentIDText)
+				return moduTUIWorkflowTranscriptPanel(session, runID, agentID), true
+			}
+		}
+		if runID, ok := strings.CutPrefix(command, moduTUIWorkflowPanelDetailPrefix); ok {
+			return moduTUIWorkflowRunDetailPanel(session, runID), true
+		}
+		if command == moduTUIWorkflowPanelBackCommand {
+			return moduTUIWorkflowCockpitPanel(session), true
+		}
+	case moduTUIWorkflowTranscriptPanelID:
+		command := strings.TrimSpace(action.Command)
+		if rest, ok := strings.CutPrefix(command, moduTUIWorkflowPanelAgentPrefix); ok {
+			runID, agentIDText, ok := strings.Cut(rest, ":")
+			if ok {
+				agentID, _ := strconv.Atoi(agentIDText)
+				return moduTUIWorkflowAgentPanel(session, runID, agentID), true
+			}
+		}
+		if runID, ok := strings.CutPrefix(command, moduTUIWorkflowPanelAgentsPrefix); ok {
+			return moduTUIWorkflowAgentsPanel(session, runID), true
+		}
+	}
+	return modutui.Panel{}, false
+}
+
+func moduTUIWorkflowCockpitPanel(session *coding_agent.CodingSession) modutui.Panel {
+	text := moduTUIWorkflowCockpitText(session)
+	lines := strings.Split(text, "\n")
+	title := "Workflow Cockpit"
+	if len(lines) > 0 && strings.TrimSpace(lines[0]) == title {
+		lines = lines[1:]
+	}
+	for len(lines) > 0 && strings.TrimSpace(lines[0]) == "" {
+		lines = lines[1:]
+	}
+	subtitle := moduTUIWorkflowCockpitSubtitle(session)
+	return modutui.Panel{
+		ID:       moduTUIWorkflowCockpitPanelID,
+		Title:    title,
+		Subtitle: subtitle,
+		Lines:    lines,
+		Rows:     moduTUIWorkflowCockpitRows(session),
+		Footer:   "[↑/↓] select run  [enter] details  [esc/q] close",
+	}
+}
+
+func moduTUIWorkflowRunDetailPanel(session *coding_agent.CodingSession, runID string) modutui.Panel {
+	if session == nil {
+		return moduTUIWorkflowRunDetailPanelFromStates(nil, runID)
+	}
+	return moduTUIWorkflowRunDetailPanelFromStates(session.ExtensionRuntimeStates(), runID)
+}
+
+func moduTUIWorkflowRunDetailPanelFromStates(states map[string]any, runID string) modutui.Panel {
+	run, ok := moduTUIWorkflowRunByIDFromStates(states, runID)
+	if !ok {
+		return modutui.Panel{
+			ID:       moduTUIWorkflowRunDetailPanelID,
+			Title:    "Workflow Run",
+			Subtitle: "run not found: " + strings.TrimSpace(runID),
+			Lines: []string{
+				"Run not found in workflow runtime state.",
+				"Use /workflows list to refresh persisted runs.",
+			},
+			Rows: []modutui.PanelRow{{
+				Label:   "Back to workflow runs",
+				Command: moduTUIWorkflowPanelBackCommand,
+			}},
+			Footer: "[enter] back  [esc/q] close",
+		}
+	}
+	name := run.Name
+	if name == "" {
+		name = run.ID
+	}
+	progress := "no agent progress"
+	if run.AgentCount > 0 {
+		progress = fmt.Sprintf("%d/%d done, %d running, %d errors", run.DoneCount, run.AgentCount, run.RunningAgentCount, run.ErrorCount)
+	}
+	var lines []string
+	lines = append(lines, "summary")
+	lines = append(lines, "  id: "+run.ID)
+	lines = append(lines, "  status: "+run.Status)
+	lines = append(lines, "  progress: "+progress)
+	if run.CurrentPhase != "" {
+		lines = append(lines, "  current phase: "+run.CurrentPhase)
+	}
+	if run.DurationMs > 0 {
+		lines = append(lines, "  duration: "+formatModuTUIActivityDuration(time.Duration(run.DurationMs)*time.Millisecond))
+	}
+	if run.ErrorCount > 0 {
+		lines = append(lines, fmt.Sprintf("  errors: %d", run.ErrorCount))
+	}
+	lines = append(lines, "", "orchestration")
+	lines = append(lines, moduTUIWorkflowOrchestrationLines(run)...)
+	lines = append(lines, "", "actions")
+	if controlRows := moduTUIWorkflowControlRows(run); len(controlRows) > 0 {
+		controlLabels := make([]string, 0, len(controlRows))
+		for _, row := range controlRows {
+			controlLabels = append(controlLabels, row.Label)
+		}
+		lines = append(lines, "  "+strings.Join(controlLabels, ", "))
+	}
+	lines = append(lines, "  Enter Agents to inspect per-agent work")
+	lines = append(lines, "  Enter Result to inspect final output")
+	lines = append(lines, "  Enter Script to inspect workflow definition")
+	lines = append(lines, "  Enter Back to workflow runs")
+	lines = append(lines, "  /workflows agent "+run.ID+" <agent-id>")
+	lines = append(lines, "  /workflows transcript "+run.ID+" <agent-id>")
+
+	rows := moduTUIWorkflowControlRows(run)
+	rows = append(rows, modutui.PanelRow{
+		Label:   "Agents",
+		Detail:  fmt.Sprintf("%d agent(s)", len(run.Agents)),
+		Command: moduTUIWorkflowPanelAgentsPrefix + run.ID,
+	}, modutui.PanelRow{
+		Label:   "Result",
+		Detail:  "final output",
+		Command: moduTUIWorkflowPanelResultPrefix + run.ID,
+	}, modutui.PanelRow{
+		Label:   "Script",
+		Detail:  "workflow definition",
+		Command: moduTUIWorkflowPanelScriptPrefix + run.ID,
+	}, modutui.PanelRow{
+		Label:   "Back to workflow runs",
+		Detail:  "return",
+		Command: moduTUIWorkflowPanelBackCommand,
+	})
+	return modutui.Panel{
+		ID:       moduTUIWorkflowRunDetailPanelID,
+		Title:    "Workflow Run",
+		Subtitle: fmt.Sprintf("%s [%s] %s", name, run.Status, progress),
+		Lines:    lines,
+		Rows:     rows,
+		Footer:   "[↑/↓] select  [enter] open  [esc/q] close",
+	}
+}
+
+func moduTUIWorkflowControlRows(run moduTUIWorkflowRun) []modutui.PanelRow {
+	runID := strings.TrimSpace(run.ID)
+	if runID == "" {
+		return nil
+	}
+	control := func(label, detail, verb string) modutui.PanelRow {
+		return modutui.PanelRow{
+			Label:   label,
+			Detail:  detail,
+			Command: moduTUIWorkflowPanelControlPrefix + verb + ":" + runID,
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(run.Status)) {
+	case "running":
+		return []modutui.PanelRow{
+			control("Pause", "request cooperative pause", "pause"),
+			control("Stop", "request stop", "stop"),
+		}
+	case "stopped", "paused":
+		return []modutui.PanelRow{
+			control("Resume", "continue run", "resume"),
+			control("Restart", "start from script", "restart"),
+		}
+	case "completed", "failed", "error", "cancelled", "canceled":
+		return []modutui.PanelRow{
+			control("Restart", "start from script", "restart"),
+		}
+	default:
+		return nil
+	}
+}
+
+func moduTUIWorkflowAgentsPanel(session *coding_agent.CodingSession, runID string) modutui.Panel {
+	if session == nil {
+		return moduTUIWorkflowAgentsPanelFromStates(nil, runID)
+	}
+	return moduTUIWorkflowAgentsPanelFromStates(session.ExtensionRuntimeStates(), runID)
+}
+
+func moduTUIWorkflowAgentsPanelFromStates(states map[string]any, runID string) modutui.Panel {
+	run, ok := moduTUIWorkflowRunByIDFromStates(states, runID)
+	if !ok {
+		return moduTUIWorkflowMissingRunPanel(moduTUIWorkflowAgentsPanelID, "Workflow Agents", runID)
+	}
+	name := run.Name
+	if name == "" {
+		name = run.ID
+	}
+	lines := []string{"agents"}
+	if len(run.Agents) == 0 {
+		lines = append(lines, "  no agent snapshot available")
+	}
+	rows := make([]modutui.PanelRow, 0, len(run.Agents)+2)
+	for _, agent := range run.Agents {
+		label := agent.Label
+		if label == "" {
+			label = fmt.Sprintf("agent-%d", agent.ID)
+		}
+		label = fmt.Sprintf("#%d [%s] %s", agent.ID, agent.Status, label)
+		detailParts := []string{}
+		if agent.Phase != "" {
+			detailParts = append(detailParts, agent.Phase)
+		}
+		if agent.TurnTokens > 0 {
+			detailParts = append(detailParts, fmt.Sprintf("%d tokens", agent.TurnTokens))
+		} else if agent.EstimatedTokens > 0 {
+			detailParts = append(detailParts, fmt.Sprintf("est %d", agent.EstimatedTokens))
+		}
+		if agent.RecentToolCalls > 0 {
+			detailParts = append(detailParts, fmt.Sprintf("%d tools", agent.RecentToolCalls))
+		}
+		if agent.FailedToolCalls > 0 {
+			detailParts = append(detailParts, fmt.Sprintf("%d failed", agent.FailedToolCalls))
+		}
+		rows = append(rows, modutui.PanelRow{
+			Label:   label,
+			Detail:  strings.Join(detailParts, " · "),
+			Value:   strconv.Itoa(agent.ID),
+			Command: fmt.Sprintf("%s%s:%d", moduTUIWorkflowPanelAgentPrefix, run.ID, agent.ID),
+		})
+	}
+	rows = append(rows, modutui.PanelRow{
+		Label:   "Back to run detail",
+		Detail:  run.ID,
+		Command: moduTUIWorkflowPanelDetailPrefix + run.ID,
+	}, modutui.PanelRow{
+		Label:   "Back to workflow runs",
+		Detail:  "return",
+		Command: moduTUIWorkflowPanelBackCommand,
+	})
+	return modutui.Panel{
+		ID:       moduTUIWorkflowAgentsPanelID,
+		Title:    "Workflow Agents",
+		Subtitle: fmt.Sprintf("%s [%s] %d agent(s)", name, run.Status, len(run.Agents)),
+		Lines:    lines,
+		Rows:     rows,
+		Footer:   "[↑/↓] select agent  [enter] detail  [esc/q] close",
+	}
+}
+
+func moduTUIWorkflowAgentPanel(session *coding_agent.CodingSession, runID string, agentID int) modutui.Panel {
+	if session == nil {
+		return moduTUIWorkflowAgentPanelFromStates(nil, runID, agentID)
+	}
+	return moduTUIWorkflowAgentPanelFromStates(session.ExtensionRuntimeStates(), runID, agentID)
+}
+
+func moduTUIWorkflowAgentPanelFromStates(states map[string]any, runID string, agentID int) modutui.Panel {
+	run, ok := moduTUIWorkflowRunByIDFromStates(states, runID)
+	if !ok {
+		return moduTUIWorkflowMissingRunPanel(moduTUIWorkflowAgentPanelID, "Workflow Agent", runID)
+	}
+	agent, ok := moduTUIWorkflowAgentByID(run.Agents, agentID)
+	if !ok {
+		return modutui.Panel{
+			ID:       moduTUIWorkflowAgentPanelID,
+			Title:    "Workflow Agent",
+			Subtitle: fmt.Sprintf("agent %d not found in %s", agentID, run.ID),
+			Lines:    []string{"Agent not found in workflow runtime state."},
+			Rows: []modutui.PanelRow{{
+				Label:   "Back to agents",
+				Detail:  run.ID,
+				Command: moduTUIWorkflowPanelAgentsPrefix + run.ID,
+			}},
+			Footer: "[enter] back  [esc/q] close",
+		}
+	}
+	label := agent.Label
+	if label == "" {
+		label = fmt.Sprintf("agent-%d", agent.ID)
+	}
+	var lines []string
+	lines = append(lines, "summary")
+	lines = append(lines, fmt.Sprintf("  id: %d", agent.ID))
+	lines = append(lines, "  label: "+label)
+	lines = append(lines, "  status: "+agent.Status)
+	if agent.Phase != "" {
+		lines = append(lines, "  phase: "+agent.Phase)
+	}
+	if agent.TurnTokens > 0 {
+		lines = append(lines, fmt.Sprintf("  tokens: %d", agent.TurnTokens))
+	} else if agent.EstimatedTokens > 0 {
+		lines = append(lines, fmt.Sprintf("  estimated tokens: %d", agent.EstimatedTokens))
+	}
+	if agent.FailedToolCalls > 0 {
+		lines = append(lines, fmt.Sprintf("  failed tools: %d", agent.FailedToolCalls))
+	}
+	if agent.Error != "" {
+		lines = append(lines, "", "error")
+		lines = append(lines, moduTUIWorkflowTextLines(agent.Error)...)
+	}
+	if agent.ResultPreview != "" {
+		lines = append(lines, "", "result preview")
+		lines = append(lines, moduTUIWorkflowTextLines(agent.ResultPreview)...)
+	}
+	if agent.PromptPreview != "" {
+		lines = append(lines, "", "prompt preview")
+		lines = append(lines, moduTUIWorkflowTextLines(agent.PromptPreview)...)
+	}
+	if len(agent.ToolCalls) > 0 {
+		lines = append(lines, "", "recent tool calls")
+		for _, call := range agent.ToolCalls {
+			name := call.ToolName
+			if name == "" {
+				name = "tool"
+			}
+			status := "ok"
+			if call.IsError {
+				status = "error"
+			}
+			lines = append(lines, fmt.Sprintf("  - %s [%s]", name, status))
+			if call.ArgsPreview != "" {
+				lines = append(lines, "    args: "+moduTUITruncate(call.ArgsPreview, 160))
+			}
+			if call.ResultPreview != "" {
+				lines = append(lines, "    result: "+moduTUITruncate(call.ResultPreview, 160))
+			}
+		}
+	}
+	return modutui.Panel{
+		ID:       moduTUIWorkflowAgentPanelID,
+		Title:    "Workflow Agent",
+		Subtitle: fmt.Sprintf("%s #%d [%s]", run.ID, agent.ID, agent.Status),
+		Lines:    lines,
+		Rows: []modutui.PanelRow{{
+			Label:   "Transcript",
+			Detail:  "full child transcript",
+			Command: fmt.Sprintf("%s%s:%d", moduTUIWorkflowPanelTranscriptPrefix, run.ID, agent.ID),
+		}, {
+			Label:   "Back to agents",
+			Detail:  run.ID,
+			Command: moduTUIWorkflowPanelAgentsPrefix + run.ID,
+		}, {
+			Label:   "Back to run detail",
+			Detail:  run.ID,
+			Command: moduTUIWorkflowPanelDetailPrefix + run.ID,
+		}},
+		Footer: "[enter] back  [esc/q] close  /workflows transcript for full transcript",
+	}
+}
+
+func moduTUIWorkflowTranscriptPanel(session *coding_agent.CodingSession, runID string, agentID int) modutui.Panel {
+	if session == nil {
+		return moduTUIWorkflowTranscriptPanelFromStates(nil, runID, agentID)
+	}
+	return moduTUIWorkflowTranscriptPanelFromStates(session.ExtensionRuntimeStates(), runID, agentID)
+}
+
+func moduTUIWorkflowTranscriptPanelFromStates(states map[string]any, runID string, agentID int) modutui.Panel {
+	run, ok := moduTUIWorkflowRunByIDFromStates(states, runID)
+	if !ok {
+		return moduTUIWorkflowMissingRunPanel(moduTUIWorkflowTranscriptPanelID, "Workflow Transcript", runID)
+	}
+	agent, _ := moduTUIWorkflowAgentByID(run.Agents, agentID)
+	lines, err := moduTUIWorkflowTranscriptLines(run.SnapshotPath, agentID)
+	if err != nil {
+		lines = []string{"transcript", "  error: " + err.Error()}
+	}
+	label := agent.Label
+	if label == "" {
+		label = fmt.Sprintf("agent-%d", agentID)
+	}
+	return modutui.Panel{
+		ID:       moduTUIWorkflowTranscriptPanelID,
+		Title:    "Workflow Transcript",
+		Subtitle: fmt.Sprintf("%s #%d %s", run.ID, agentID, label),
+		Lines:    lines,
+		Rows: []modutui.PanelRow{{
+			Label:   "Back to agent",
+			Detail:  fmt.Sprintf("#%d", agentID),
+			Command: fmt.Sprintf("%s%s:%d", moduTUIWorkflowPanelAgentPrefix, run.ID, agentID),
+		}, {
+			Label:   "Back to agents",
+			Detail:  run.ID,
+			Command: moduTUIWorkflowPanelAgentsPrefix + run.ID,
+		}},
+		Footer: "[enter] back  [esc/q] close",
+	}
+}
+
+func moduTUIWorkflowTranscriptLines(snapshotPath string, agentID int) ([]string, error) {
+	snapshotPath = strings.TrimSpace(snapshotPath)
+	if snapshotPath == "" {
+		return []string{"transcript", "  no snapshot path available"}, nil
+	}
+	data, err := os.ReadFile(snapshotPath)
+	if err != nil {
+		return nil, fmt.Errorf("read snapshot: %w", err)
+	}
+	var snapshot map[string]any
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		return nil, fmt.Errorf("decode snapshot: %w", err)
+	}
+	agent, ok := moduTUIWorkflowSnapshotAgent(snapshot, agentID)
+	if !ok {
+		return []string{"transcript", fmt.Sprintf("  agent %d not found in snapshot", agentID)}, nil
+	}
+	transcript := moduTUIRuntimeStateMaps(agent["transcript"])
+	if len(transcript) == 0 {
+		return []string{"transcript", "  no child transcript captured for this agent"}, nil
+	}
+	lines := []string{"transcript"}
+	for i, entry := range transcript {
+		if i > 0 {
+			lines = append(lines, "")
+		}
+		role := strings.ToUpper(moduTUIRuntimeStateString(entry["role"]))
+		if role == "" {
+			role = "UNKNOWN"
+		}
+		header := fmt.Sprintf("## %d. %s", i+1, role)
+		if toolName := moduTUIRuntimeStateString(entry["toolName"]); toolName != "" {
+			header += " " + toolName
+		}
+		if moduTUIRuntimeStateBool(entry["isError"]) {
+			header += " [error]"
+		}
+		lines = append(lines, header)
+		if text := moduTUIRuntimeStateString(entry["text"]); text != "" {
+			lines = append(lines, moduTUIWorkflowTextLines(text)...)
+		}
+		for _, call := range moduTUIRuntimeStateMaps(entry["toolCalls"]) {
+			name := moduTUIRuntimeStateString(call["name"])
+			if name == "" {
+				name = "tool"
+			}
+			callLine := "  ToolCall: " + name
+			if id := moduTUIRuntimeStateString(call["id"]); id != "" {
+				callLine += " (" + id + ")"
+			}
+			lines = append(lines, callLine)
+			if args := moduTUIRuntimeStateString(call["args"]); args != "" {
+				lines = append(lines, "  Args: "+args)
+			}
+		}
+		if usage, ok := entry["usage"].(map[string]any); ok {
+			input := moduTUIRuntimeStateNumber(usage["input"])
+			output := moduTUIRuntimeStateNumber(usage["output"])
+			total := moduTUIRuntimeStateNumber(usage["totalTokens"])
+			if input > 0 || output > 0 || total > 0 {
+				lines = append(lines, fmt.Sprintf("  Usage: input=%d output=%d total=%d", input, output, total))
+			}
+		}
+	}
+	return lines, nil
+}
+
+func moduTUIWorkflowSnapshotAgent(snapshot map[string]any, agentID int) (map[string]any, bool) {
+	for _, agent := range moduTUIRuntimeStateMaps(snapshot["agents"]) {
+		if moduTUIRuntimeStateNumber(agent["id"]) == agentID {
+			return agent, true
+		}
+	}
+	return nil, false
+}
+
+func moduTUIWorkflowAgentByID(agents []moduTUIWorkflowAgent, agentID int) (moduTUIWorkflowAgent, bool) {
+	for _, agent := range agents {
+		if agent.ID == agentID {
+			return agent, true
+		}
+	}
+	return moduTUIWorkflowAgent{}, false
+}
+
+func moduTUIWorkflowResultPanel(session *coding_agent.CodingSession, runID string) modutui.Panel {
+	if session == nil {
+		return moduTUIWorkflowResultPanelFromStates(nil, runID)
+	}
+	return moduTUIWorkflowResultPanelFromStates(session.ExtensionRuntimeStates(), runID)
+}
+
+func moduTUIWorkflowResultPanelFromStates(states map[string]any, runID string) modutui.Panel {
+	run, ok := moduTUIWorkflowRunByIDFromStates(states, runID)
+	if !ok {
+		return moduTUIWorkflowMissingRunPanel(moduTUIWorkflowResultPanelID, "Workflow Result", runID)
+	}
+	name := run.Name
+	if name == "" {
+		name = run.ID
+	}
+	result, err := moduTUIWorkflowResultLines(run.SnapshotPath)
+	lines := []string{"result"}
+	if err != nil {
+		lines = append(lines, "  error: "+err.Error())
+	} else {
+		lines = append(lines, result...)
+	}
+	return modutui.Panel{
+		ID:       moduTUIWorkflowResultPanelID,
+		Title:    "Workflow Result",
+		Subtitle: name + " [" + run.Status + "]",
+		Lines:    lines,
+		Rows: []modutui.PanelRow{{
+			Label:   "Back to run detail",
+			Detail:  run.ID,
+			Command: moduTUIWorkflowPanelDetailPrefix + run.ID,
+		}, {
+			Label:   "Back to workflow runs",
+			Detail:  "return",
+			Command: moduTUIWorkflowPanelBackCommand,
+		}},
+		Footer: "[enter] back  [esc/q] close",
+	}
+}
+
+func moduTUIWorkflowScriptPanel(session *coding_agent.CodingSession, runID string) modutui.Panel {
+	if session == nil {
+		return moduTUIWorkflowScriptPanelFromStates(nil, runID)
+	}
+	return moduTUIWorkflowScriptPanelFromStates(session.ExtensionRuntimeStates(), runID)
+}
+
+func moduTUIWorkflowScriptPanelFromStates(states map[string]any, runID string) modutui.Panel {
+	run, ok := moduTUIWorkflowRunByIDFromStates(states, runID)
+	if !ok {
+		return moduTUIWorkflowMissingRunPanel(moduTUIWorkflowScriptPanelID, "Workflow Script", runID)
+	}
+	name := run.Name
+	if name == "" {
+		name = run.ID
+	}
+	lines := []string{"script"}
+	script, err := moduTUIWorkflowFileLines(run.ScriptPath)
+	if err != nil {
+		lines = append(lines, "  error: "+err.Error())
+	} else {
+		lines = append(lines, script...)
+	}
+	return modutui.Panel{
+		ID:       moduTUIWorkflowScriptPanelID,
+		Title:    "Workflow Script",
+		Subtitle: name + " [" + run.Status + "]",
+		Lines:    lines,
+		Rows: []modutui.PanelRow{{
+			Label:   "Back to run detail",
+			Detail:  run.ID,
+			Command: moduTUIWorkflowPanelDetailPrefix + run.ID,
+		}, {
+			Label:   "Back to workflow runs",
+			Detail:  "return",
+			Command: moduTUIWorkflowPanelBackCommand,
+		}},
+		Footer: "[enter] back  [esc/q] close",
+	}
+}
+
+func moduTUIWorkflowMissingRunPanel(id, title, runID string) modutui.Panel {
+	return modutui.Panel{
+		ID:       id,
+		Title:    title,
+		Subtitle: "run not found: " + strings.TrimSpace(runID),
+		Lines: []string{
+			"Run not found in workflow runtime state.",
+			"Use /workflows list to refresh persisted runs.",
+		},
+		Rows: []modutui.PanelRow{{
+			Label:   "Back to workflow runs",
+			Command: moduTUIWorkflowPanelBackCommand,
+		}},
+		Footer: "[enter] back  [esc/q] close",
+	}
+}
+
+func moduTUIWorkflowResultLines(snapshotPath string) ([]string, error) {
+	snapshotPath = strings.TrimSpace(snapshotPath)
+	if snapshotPath == "" {
+		return []string{"  no snapshot path available"}, nil
+	}
+	data, err := os.ReadFile(snapshotPath)
+	if err != nil {
+		return nil, fmt.Errorf("read snapshot: %w", err)
+	}
+	var snapshot map[string]any
+	if err := json.Unmarshal(data, &snapshot); err != nil {
+		return nil, fmt.Errorf("decode snapshot: %w", err)
+	}
+	result, ok := snapshot["result"]
+	if !ok || result == nil {
+		return []string{"  no result in snapshot"}, nil
+	}
+	return moduTUIWorkflowValueLines(result), nil
+}
+
+func moduTUIWorkflowFileLines(path string) ([]string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return []string{"  no file path available"}, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read file: %w", err)
+	}
+	return moduTUIWorkflowTextLines(string(data)), nil
+}
+
+func moduTUIWorkflowValueLines(value any) []string {
+	if text, ok := value.(string); ok {
+		return moduTUIWorkflowTextLines(text)
+	}
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return moduTUIWorkflowTextLines(fmt.Sprint(value))
+	}
+	return moduTUIWorkflowTextLines(string(data))
+}
+
+func moduTUIWorkflowTextLines(text string) []string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return []string{"  (empty)"}
+	}
+	lines := strings.Split(text, "\n")
+	for i := range lines {
+		lines[i] = "  " + lines[i]
+	}
+	return lines
+}
+
+func moduTUIWorkflowRunByID(session *coding_agent.CodingSession, runID string) (moduTUIWorkflowRun, bool) {
+	if session == nil {
+		return moduTUIWorkflowRun{}, false
+	}
+	return moduTUIWorkflowRunByIDFromStates(session.ExtensionRuntimeStates(), runID)
+}
+
+func moduTUIWorkflowRunByIDFromStates(states map[string]any, runID string) (moduTUIWorkflowRun, bool) {
+	state, ok := moduTUIWorkflowState(states)
+	if !ok {
+		return moduTUIWorkflowRun{}, false
+	}
+	runID = strings.TrimSpace(runID)
+	for _, run := range moduTUIWorkflowRuns(state["runs"]) {
+		if run.ID == runID {
+			return run, true
+		}
+	}
+	return moduTUIWorkflowRun{}, false
+}
+
+func moduTUIWorkflowCockpitRows(session *coding_agent.CodingSession) []modutui.PanelRow {
+	if session == nil {
+		return nil
+	}
+	return moduTUIWorkflowCockpitRowsFromStates(session.ExtensionRuntimeStates())
+}
+
+func moduTUIWorkflowCockpitRowsFromStates(states map[string]any) []modutui.PanelRow {
+	state, ok := moduTUIWorkflowState(states)
+	if !ok {
+		return nil
+	}
+	runs := moduTUIWorkflowRuns(state["runs"])
+	rows := make([]modutui.PanelRow, 0, min(len(runs), 12))
+	for i, run := range runs {
+		if i >= 12 {
+			break
+		}
+		name := run.Name
+		if name == "" {
+			name = run.ID
+		}
+		progress := ""
+		if run.AgentCount > 0 {
+			progress = fmt.Sprintf(" %d/%d", run.DoneCount, run.AgentCount)
+		}
+		label := fmt.Sprintf("%s [%s]%s", name, run.Status, progress)
+		detailParts := []string{}
+		if run.CurrentPhase != "" {
+			detailParts = append(detailParts, run.CurrentPhase)
+		}
+		if run.DurationMs > 0 {
+			detailParts = append(detailParts, formatModuTUIActivityDuration(time.Duration(run.DurationMs)*time.Millisecond))
+		}
+		if run.ErrorCount > 0 {
+			detailParts = append(detailParts, fmt.Sprintf("%d errors", run.ErrorCount))
+		}
+		rows = append(rows, modutui.PanelRow{
+			Label:   label,
+			Detail:  strings.Join(detailParts, " · "),
+			Value:   run.ID,
+			Command: moduTUIWorkflowPanelDetailPrefix + run.ID,
+		})
+	}
+	return rows
+}
+
+func moduTUIWorkflowCockpitSubtitle(session *coding_agent.CodingSession) string {
+	if session == nil {
+		return "workflow runtime state unavailable"
+	}
+	state, ok := moduTUIWorkflowState(session.ExtensionRuntimeStates())
+	if !ok {
+		return "workflow runtime state unavailable"
+	}
+	runs := moduTUIWorkflowRuns(state["runs"])
+	latest := "no runs"
+	if len(runs) > 0 {
+		name := runs[0].Name
+		if name == "" {
+			name = runs[0].ID
+		}
+		latest = fmt.Sprintf("latest %s [%s]", name, runs[0].Status)
+	}
+	return fmt.Sprintf("running %d  stopped %d  completed %d  failed %d  %s",
+		moduTUIRuntimeStateNumber(state["runningCount"]),
+		moduTUIRuntimeStateNumber(state["stoppedCount"]),
+		moduTUIRuntimeStateNumber(state["completedCount"]),
+		moduTUIRuntimeStateNumber(state["failedCount"]),
+		latest,
+	)
 }
 
 func moduTUIWorkflowCockpitTextFromStates(states map[string]any) string {
@@ -892,12 +1713,15 @@ type moduTUIWorkflowRun struct {
 	ID                string
 	Name              string
 	Status            string
+	ScriptPath        string
+	SnapshotPath      string
 	AgentCount        int
 	DoneCount         int
 	RunningAgentCount int
 	ErrorCount        int
 	CurrentPhase      string
 	UpdatedAt         int64
+	DurationMs        int64
 	Phases            []moduTUIWorkflowPhase
 	Agents            []moduTUIWorkflowAgent
 }
@@ -953,12 +1777,15 @@ func moduTUIWorkflowRuns(value any) []moduTUIWorkflowRun {
 			ID:                moduTUIRuntimeStateString(item["id"]),
 			Name:              moduTUIRuntimeStateString(item["name"]),
 			Status:            moduTUIRuntimeStateString(item["status"]),
+			ScriptPath:        moduTUIRuntimeStateString(item["scriptPath"]),
+			SnapshotPath:      moduTUIRuntimeStateString(item["snapshotPath"]),
 			AgentCount:        moduTUIRuntimeStateNumber(item["agentCount"]),
 			DoneCount:         moduTUIRuntimeStateNumber(item["doneCount"]),
 			RunningAgentCount: moduTUIRuntimeStateNumber(item["runningAgentCount"]),
 			ErrorCount:        moduTUIRuntimeStateNumber(item["errorCount"]),
 			CurrentPhase:      moduTUIRuntimeStateString(item["currentPhase"]),
 			UpdatedAt:         int64(moduTUIRuntimeStateNumber(item["updatedAt"])),
+			DurationMs:        int64(moduTUIRuntimeStateNumber(item["durationMs"])),
 			Phases:            moduTUIWorkflowPhases(item["phases"]),
 			Agents:            moduTUIWorkflowAgents(item["agents"]),
 		}
