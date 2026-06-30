@@ -159,6 +159,7 @@ func (e *Extension) cmdSavedWorkflow(name, path, argsText, source string) error 
 	if scriptPath != "" {
 		text += "\nScript: " + scriptPath
 	}
+	text += "\n" + workflowStartGuidance(runID)
 	e.tell(text)
 	return nil
 }

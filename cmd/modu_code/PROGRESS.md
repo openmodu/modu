@@ -1160,3 +1160,31 @@ enough to implement, verify, and commit independently.
   transcript keeps `Back to agent` first, then exposes Guide, Feed, Map, Agents,
   and Detail rows plus matching shortcuts, so a deep transcript drill-down can
   return directly to the dynamic workflow surfaces.
+- 2026-07-01: added run-level navigation to `Workflow Result` and `Workflow
+  Script` panels. Final artifact views now expose Guide, Feed, Map, Agents,
+  Detail, and Back rows plus `[?]`, `[f]`, `[m]`, `[d]`, and `[a]` shortcuts, so
+  reading the result or generated script no longer traps the user away from the
+  live workflow surfaces.
+- 2026-07-01: added `Result` and `Script` to `Workflow Guide` as first-class
+  artifact views. The guide now explains where final output and generated
+  scripts fit in the run map, and its rows can jump directly into those panels
+  without returning through run detail first.
+- 2026-07-01: added latest-run shortcuts to the `Workflow Cockpit`. The cockpit
+  footer now exposes `[?] Guide`, `[f] Feed`, `[m] Map`, and `[d] Detail` for
+  the latest run, and its copy says `open` instead of `details` because running
+  rows intentionally enter the live Feed.
+- 2026-07-01: capped `Workflow Result` and `Workflow Script` panel previews at
+  a fixed line budget and added snapshot/script path headers. Oversized
+  artifacts now show a truncation line with the full artifact path, keeping the
+  dynamic TUI responsive while preserving a clear route to the complete data.
+- 2026-07-01: aligned workflow guidance copy with the dynamic TUI design. Tool
+  descriptions and README text now direct users to the `/workflows` cockpit,
+  Feed, Guide, Map, and artifact panels first instead of treating
+  `/workflows show` as the primary inspection surface.
+- 2026-07-01: unified async workflow start notifications around the same
+  cockpit-first guidance. The workflow tool, `/deep-research`, saved workflow
+  commands, and `/workflows restart` now tell users to open `/workflows` for the
+  cockpit before listing direct feed/guide/show/stop command fallbacks.
+- 2026-07-01: updated `/workflows list` terminal guidance to match the TUI entry
+  model. The list footer now starts with `Open /workflows for the cockpit`
+  before listing feed/guide/map/show command fallbacks.

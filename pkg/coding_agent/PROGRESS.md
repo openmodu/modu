@@ -653,9 +653,26 @@ High-priority gaps identified before this round:
   the modu TUI feed semantics: `run`, `done`, `err`, and `wait` markers plus a
   legend, so non-TUI output also shows agent distribution by phase.
 - Added `/workflows guide <run-id|latest>` as a compact navigation guide for a
-  workflow run. It explains the Feed, Map, Phase, Agent, and Transcript views,
-  points to the current phase plus first active/attention agents, and avoids
-  expanding the full result or script.
+  workflow run. It explains the Feed, Map, Phase, Agent, Transcript,
+  Result/Script views, points to the current phase plus first active/attention
+  agents, and avoids expanding the full result or script.
+- Changed `/workflows show <run-id|latest>` to stay summary-first. It now shows
+  metadata, phase/agent summaries, artifact paths, result preview, and next
+  navigation commands instead of expanding the full result payload or script
+  body into the terminal output.
+- Changed background workflow completion notifications to stay summary-first.
+  They now show execution flow, result preview, script path, and next navigation
+  commands while leaving full result/script inspection to the TUI Result/Script
+  artifact panels.
+- Updated workflow tool and README guidance to point users at the `/workflows`
+  TUI cockpit first, then Feed/Guide/Map/Detail drill-downs, instead of
+  presenting `/workflows show` as the primary inspection surface.
+- Unified async workflow start notifications across the workflow tool,
+  `/deep-research`, saved workflow commands, and `/workflows restart` so they
+  all point users to the `/workflows` cockpit first while still listing direct
+  feed/guide/show/stop commands for scriptable access.
+- Updated the `/workflows list` footer to use the same cockpit-first entry
+  point before listing feed/guide/map/show command fallbacks.
 
 ## Still Missing
 
