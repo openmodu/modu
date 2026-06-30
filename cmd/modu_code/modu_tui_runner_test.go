@@ -1031,25 +1031,28 @@ func TestModuTUIWorkflowCockpitShowsOrchestrationMap(t *testing.T) {
 		"timeline",
 		"[done] Scope 1/1",
 		"[running] Research 1/2 · 1 running · est 1200 · 42s",
-		"orchestration map",
-		"[Scope] 1/1 done",
-		"#1 [done] scope",
-		"result: DOMAIN finance/markets; angles selected",
-		"[Research] 1/2 running=1",
-		"#2 [done] primary sources tokens=1200 tools=2",
-		"tools: web_search -> market close data",
-		"#3 [running] watch tomorrow",
-		"prompt: Find tomorrow's catalysts",
 		"latest run",
-		"/workflows agent latest <agent-id>",
+		"/workflows guide latest",
+		"/workflows feed latest",
+		"/workflows map latest",
+		"/workflows show latest",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("workflow cockpit missing %q:\n%s", want, text)
 		}
 	}
+	for _, unwanted := range []string{
+		"orchestration map",
+		"result: DOMAIN finance/markets; angles selected",
+		"tools: web_search -> market close data",
+	} {
+		if strings.Contains(text, unwanted) {
+			t.Fatalf("workflow cockpit should keep full map out of overview, found %q:\n%s", unwanted, text)
+		}
+	}
 }
 
-func TestModuTUIWorkflowCockpitRowsOpenWorkflowDetails(t *testing.T) {
+func TestModuTUIWorkflowCockpitRowsOpenFeedForRunningRuns(t *testing.T) {
 	rows := moduTUIWorkflowCockpitRowsFromStates(map[string]any{
 		"workflow": map[string]any{
 			"runs": []map[string]any{{
@@ -1076,6 +1079,9 @@ func TestModuTUIWorkflowCockpitRowsOpenWorkflowDetails(t *testing.T) {
 	}
 	if rows[0].Value != "run-2" || rows[0].Command != moduTUIWorkflowPanelDetailPrefix+"run-2" {
 		t.Fatalf("first row should open run-2 details: %#v", rows[0])
+	}
+	if rows[1].Value != "run-1" || rows[1].Command != moduTUIWorkflowPanelFeedPrefix+"run-1" {
+		t.Fatalf("running row should open run-1 feed: %#v", rows[1])
 	}
 	for _, want := range []string{"market_watch", "completed", "5/5"} {
 		if !strings.Contains(rows[0].Label, want) {
@@ -1114,6 +1120,14 @@ func TestModuTUIWorkflowCockpitPanelSelectsLatestRunningRun(t *testing.T) {
 	}
 	if panel.Rows[panel.Selected].Value != "active-run" {
 		t.Fatalf("cockpit selected row = %#v, want active-run", panel.Rows[panel.Selected])
+	}
+	next, ok := moduTUIWorkflowPanelAction(nil, modutui.PanelAction{
+		PanelID: moduTUIWorkflowCockpitPanelID,
+		Command: panel.Rows[panel.Selected].Command,
+		Row:     panel.Rows[panel.Selected],
+	})
+	if !ok || next.ID != moduTUIWorkflowFeedPanelID {
+		t.Fatalf("cockpit selected running row should open feed, got ok=%v panel=%#v", ok, next)
 	}
 }
 
@@ -1175,28 +1189,30 @@ func TestModuTUIWorkflowRunDetailPanelShowsRunInPanel(t *testing.T) {
 	if strings.Contains(text, "[Research] 1/1 done") || strings.Contains(text, "result: market data ok") {
 		t.Fatalf("detail panel should keep full orchestration in the map panel:\n%s", text)
 	}
-	if len(panel.Rows) != 10 ||
+	if len(panel.Rows) != 11 ||
 		panel.Rows[0].Command != moduTUIWorkflowPanelFeedPrefix+"run-detail" ||
 		panel.Rows[1].Command != moduTUIWorkflowPanelPhasePrefix+"run-detail:Report" ||
 		panel.Rows[2].Command != moduTUIWorkflowPanelControlPrefix+"restart:run-detail" ||
 		panel.Rows[3].Command != moduTUIWorkflowPanelPhasePrefix+"run-detail:Research" ||
 		panel.Rows[4].Command != moduTUIWorkflowPanelPhasePrefix+"run-detail:Report" ||
-		panel.Rows[5].Command != moduTUIWorkflowPanelMapPrefix+"run-detail" ||
-		panel.Rows[6].Command != moduTUIWorkflowPanelAgentsPrefix+"run-detail" ||
-		panel.Rows[7].Command != moduTUIWorkflowPanelResultPrefix+"run-detail" ||
-		panel.Rows[8].Command != moduTUIWorkflowPanelScriptPrefix+"run-detail" ||
-		panel.Rows[9].Command != moduTUIWorkflowPanelBackCommand {
-		t.Fatalf("detail panel should expose control, phase, agents, result, script, and back rows: %#v", panel.Rows)
+		panel.Rows[5].Command != moduTUIWorkflowPanelGuidePrefix+"run-detail" ||
+		panel.Rows[6].Command != moduTUIWorkflowPanelMapPrefix+"run-detail" ||
+		panel.Rows[7].Command != moduTUIWorkflowPanelAgentsPrefix+"run-detail" ||
+		panel.Rows[8].Command != moduTUIWorkflowPanelResultPrefix+"run-detail" ||
+		panel.Rows[9].Command != moduTUIWorkflowPanelScriptPrefix+"run-detail" ||
+		panel.Rows[10].Command != moduTUIWorkflowPanelBackCommand {
+		t.Fatalf("detail panel should expose control, phase, guide, agents, result, script, and back rows: %#v", panel.Rows)
 	}
 	if panel.Selected != 1 {
 		t.Fatalf("detail panel selected row = %d, want current phase quick row 1: %#v", panel.Selected, panel.Rows)
 	}
 	if !moduTUIWorkflowPanelHasShortcut(panel, "f", moduTUIWorkflowPanelFeedPrefix+"run-detail") ||
+		!moduTUIWorkflowPanelHasShortcut(panel, "?", moduTUIWorkflowPanelGuidePrefix+"run-detail") ||
 		!moduTUIWorkflowPanelHasShortcut(panel, "m", moduTUIWorkflowPanelMapPrefix+"run-detail") ||
 		!moduTUIWorkflowPanelHasShortcut(panel, "a", moduTUIWorkflowPanelAgentsPrefix+"run-detail") {
 		t.Fatalf("detail panel should expose view navigation shortcuts: %#v", panel.Shortcuts)
 	}
-	if !strings.Contains(panel.Footer, "[f] Feed") || !strings.Contains(panel.Footer, "[m] Map") || !strings.Contains(panel.Footer, "[a] Agents") {
+	if !strings.Contains(panel.Footer, "[?] Guide") || !strings.Contains(panel.Footer, "[f] Feed") || !strings.Contains(panel.Footer, "[m] Map") || !strings.Contains(panel.Footer, "[a] Agents") {
 		t.Fatalf("detail footer should expose view navigation shortcuts: %q", panel.Footer)
 	}
 
@@ -1226,22 +1242,65 @@ func TestModuTUIWorkflowRunDetailPanelShowsRunInPanel(t *testing.T) {
 	if mapPanel.ID != moduTUIWorkflowMapPanelID || !strings.Contains(mapText, "orchestration map") || !strings.Contains(mapText, "result: market data ok") {
 		t.Fatalf("map panel should contain full orchestration tree: %#v\n%s", mapPanel, mapText)
 	}
-	if len(mapPanel.Rows) != 6 ||
+	if len(mapPanel.Rows) != 7 ||
 		mapPanel.Rows[0].Command != moduTUIWorkflowPanelPhasePrefix+"run-detail:Research" ||
 		mapPanel.Rows[1].Command != moduTUIWorkflowPanelPhasePrefix+"run-detail:Research" ||
-		mapPanel.Rows[2].Command != moduTUIWorkflowPanelDetailPrefix+"run-detail" ||
-		mapPanel.Rows[3].Command != moduTUIWorkflowPanelFeedPrefix+"run-detail" ||
-		mapPanel.Rows[4].Command != moduTUIWorkflowPanelAgentsPrefix+"run-detail" ||
-		mapPanel.Rows[5].Command != moduTUIWorkflowPanelBackCommand {
+		mapPanel.Rows[2].Command != moduTUIWorkflowPanelGuidePrefix+"run-detail" ||
+		mapPanel.Rows[3].Command != moduTUIWorkflowPanelDetailPrefix+"run-detail" ||
+		mapPanel.Rows[4].Command != moduTUIWorkflowPanelFeedPrefix+"run-detail" ||
+		mapPanel.Rows[5].Command != moduTUIWorkflowPanelAgentsPrefix+"run-detail" ||
+		mapPanel.Rows[6].Command != moduTUIWorkflowPanelBackCommand {
 		t.Fatalf("map panel rows = %#v", mapPanel.Rows)
 	}
 	if mapPanel.Selected != 0 {
 		t.Fatalf("map panel selected row = %d, want current phase row 0: %#v", mapPanel.Selected, mapPanel.Rows)
 	}
 	if !moduTUIWorkflowPanelHasShortcut(mapPanel, "f", moduTUIWorkflowPanelFeedPrefix+"run-detail") ||
+		!moduTUIWorkflowPanelHasShortcut(mapPanel, "?", moduTUIWorkflowPanelGuidePrefix+"run-detail") ||
 		!moduTUIWorkflowPanelHasShortcut(mapPanel, "d", moduTUIWorkflowPanelDetailPrefix+"run-detail") ||
 		!moduTUIWorkflowPanelHasShortcut(mapPanel, "a", moduTUIWorkflowPanelAgentsPrefix+"run-detail") {
 		t.Fatalf("map panel should expose view navigation shortcuts: %#v", mapPanel.Shortcuts)
+	}
+	guidePanel := moduTUIWorkflowGuidePanelFromStates(map[string]any{
+		"workflow": map[string]any{
+			"runs": []map[string]any{{
+				"id":           "run-detail",
+				"name":         "market_watch",
+				"status":       "completed",
+				"currentPhase": "Research",
+				"phases": []map[string]any{{
+					"title":      "Research",
+					"agentCount": 1,
+					"doneCount":  1,
+				}},
+				"agents": []map[string]any{{
+					"id":     1,
+					"label":  "collect",
+					"phase":  "Research",
+					"status": "done",
+				}},
+			}},
+		},
+	}, "run-detail")
+	guideText := strings.Join(guidePanel.Lines, "\n")
+	for _, want := range []string{
+		"workflow guide",
+		"Feed: live cards, board, lanes, updates, timeline",
+		"Map: full phase and agent tree",
+		"current route",
+		"/workflows -> running run -> Feed",
+		"current phase",
+		"Research 1/1 done",
+	} {
+		if !strings.Contains(guideText, want) {
+			t.Fatalf("guide panel missing %q:\n%s", want, guideText)
+		}
+	}
+	if guidePanel.Rows[0].Command != moduTUIWorkflowPanelPhasePrefix+"run-detail:Research" ||
+		guidePanel.Rows[1].Command != moduTUIWorkflowPanelFeedPrefix+"run-detail" ||
+		guidePanel.Rows[2].Command != moduTUIWorkflowPanelMapPrefix+"run-detail" ||
+		guidePanel.Rows[3].Command != moduTUIWorkflowPanelDetailPrefix+"run-detail" {
+		t.Fatalf("guide panel rows = %#v", guidePanel.Rows)
 	}
 	next, ok := moduTUIWorkflowPanelAction(nil, modutui.PanelAction{
 		PanelID: moduTUIWorkflowMapPanelID,
@@ -1256,6 +1315,20 @@ func TestModuTUIWorkflowRunDetailPanelShowsRunInPanel(t *testing.T) {
 	})
 	if !ok || next.ID != moduTUIWorkflowPhasePanelID {
 		t.Fatalf("map phase action should open phase panel, got ok=%v panel=%#v", ok, next)
+	}
+	next, ok = moduTUIWorkflowPanelAction(nil, modutui.PanelAction{
+		PanelID: moduTUIWorkflowMapPanelID,
+		Command: moduTUIWorkflowPanelGuidePrefix + "run-detail",
+	})
+	if !ok || next.ID != moduTUIWorkflowGuidePanelID {
+		t.Fatalf("map guide shortcut action should open guide panel, got ok=%v panel=%#v", ok, next)
+	}
+	next, ok = moduTUIWorkflowPanelAction(nil, modutui.PanelAction{
+		PanelID: moduTUIWorkflowGuidePanelID,
+		Command: moduTUIWorkflowPanelMapPrefix + "run-detail",
+	})
+	if !ok || next.ID != moduTUIWorkflowMapPanelID {
+		t.Fatalf("guide map action should open map panel, got ok=%v panel=%#v", ok, next)
 	}
 }
 
@@ -1398,6 +1471,19 @@ func TestModuTUIWorkflowRunDetailPanelShowsLiveFlowSummary(t *testing.T) {
 	}
 	feedText := strings.Join(feed.Lines, "\n")
 	for _, want := range []string{
+		"cards",
+		"+-- Status",
+		"market_watch [running]",
+		"progress: 1/4 done | 1 running | 1 error",
+		"current: Research",
+		"+-- Attention",
+		"#4 risk [failed] @Research",
+		"error: source unavailable",
+		"+-- Active",
+		"#3 verify [running] @Research 2 tools",
+		"prompt: cross-check catalysts",
+		"+-- Next",
+		"phase: Report",
 		"board",
 		"2. [error] Research 1/2 needs attention",
 		"lanes",
@@ -1416,14 +1502,15 @@ func TestModuTUIWorkflowRunDetailPanelShowsLiveFlowSummary(t *testing.T) {
 			t.Fatalf("feed panel missing %q:\n%s", want, feedText)
 		}
 	}
-	if len(feed.Rows) < 7 ||
+	if len(feed.Rows) < 8 ||
 		feed.Rows[0].Command != moduTUIWorkflowPanelPhasePrefix+"run-flow:Research" ||
 		feed.Rows[1].Command != moduTUIWorkflowPanelAgentPrefix+"run-flow:4" ||
 		feed.Rows[2].Command != moduTUIWorkflowPanelAgentPrefix+"run-flow:3" ||
-		feed.Rows[3].Command != moduTUIWorkflowPanelDetailPrefix+"run-flow" ||
-		feed.Rows[4].Command != moduTUIWorkflowPanelMapPrefix+"run-flow" ||
-		feed.Rows[5].Command != moduTUIWorkflowPanelAgentsPrefix+"run-flow" ||
-		feed.Rows[6].Command != moduTUIWorkflowPanelBackCommand {
+		feed.Rows[3].Command != moduTUIWorkflowPanelGuidePrefix+"run-flow" ||
+		feed.Rows[4].Command != moduTUIWorkflowPanelDetailPrefix+"run-flow" ||
+		feed.Rows[5].Command != moduTUIWorkflowPanelMapPrefix+"run-flow" ||
+		feed.Rows[6].Command != moduTUIWorkflowPanelAgentsPrefix+"run-flow" ||
+		feed.Rows[7].Command != moduTUIWorkflowPanelBackCommand {
 		t.Fatalf("feed panel rows = %#v", feed.Rows)
 	}
 	if feed.Selected != 0 {
@@ -1432,6 +1519,7 @@ func TestModuTUIWorkflowRunDetailPanelShowsLiveFlowSummary(t *testing.T) {
 	if !moduTUIWorkflowPanelHasShortcut(feed, "p", moduTUIWorkflowPanelControlPrefix+"pause:run-flow") ||
 		!moduTUIWorkflowPanelHasShortcut(feed, "x", moduTUIWorkflowPanelControlPrefix+"stop:run-flow") ||
 		!moduTUIWorkflowPanelHasShortcut(feed, "!", moduTUIWorkflowPanelAgentPrefix+"run-flow:4") ||
+		!moduTUIWorkflowPanelHasShortcut(feed, "?", moduTUIWorkflowPanelGuidePrefix+"run-flow") ||
 		!moduTUIWorkflowPanelHasShortcut(feed, "d", moduTUIWorkflowPanelDetailPrefix+"run-flow") ||
 		!moduTUIWorkflowPanelHasShortcut(feed, "m", moduTUIWorkflowPanelMapPrefix+"run-flow") ||
 		!moduTUIWorkflowPanelHasShortcut(feed, "a", moduTUIWorkflowPanelAgentsPrefix+"run-flow") {
@@ -1439,6 +1527,7 @@ func TestModuTUIWorkflowRunDetailPanelShowsLiveFlowSummary(t *testing.T) {
 	}
 	if !strings.Contains(feed.Footer, "[p] Pause") || !strings.Contains(feed.Footer, "[x] Stop") ||
 		!strings.Contains(feed.Footer, "[!] Attention") ||
+		!strings.Contains(feed.Footer, "[?] Guide") ||
 		!strings.Contains(feed.Footer, "[d] Detail") || !strings.Contains(feed.Footer, "[m] Map") || !strings.Contains(feed.Footer, "[a] Agents") {
 		t.Fatalf("feed panel footer should expose shortcuts: %q", feed.Footer)
 	}
@@ -1518,11 +1607,34 @@ func TestModuTUIWorkflowPhasePanelShowsOneStage(t *testing.T) {
 	if strings.Contains(text, "domain ok") {
 		t.Fatalf("phase panel should not show agents from other phases:\n%s", text)
 	}
-	if len(panel.Rows) != 5 || panel.Rows[0].Command != moduTUIWorkflowPanelAgentPrefix+"run-phase:2" || panel.Rows[1].Command != moduTUIWorkflowPanelAgentPrefix+"run-phase:3" || panel.Rows[2].Command != moduTUIWorkflowPanelDetailPrefix+"run-phase" || panel.Rows[2].Value != "Research" || panel.Rows[3].Command != moduTUIWorkflowPanelAgentsPrefix+"run-phase" || panel.Rows[4].Command != moduTUIWorkflowPanelBackCommand {
+	if len(panel.Rows) != 8 ||
+		panel.Rows[0].Command != moduTUIWorkflowPanelAgentPrefix+"run-phase:2" ||
+		panel.Rows[1].Command != moduTUIWorkflowPanelAgentPrefix+"run-phase:3" ||
+		panel.Rows[2].Command != moduTUIWorkflowPanelGuidePrefix+"run-phase" ||
+		panel.Rows[3].Command != moduTUIWorkflowPanelFeedPrefix+"run-phase" ||
+		panel.Rows[4].Command != moduTUIWorkflowPanelMapPrefix+"run-phase" ||
+		panel.Rows[5].Command != moduTUIWorkflowPanelDetailPrefix+"run-phase" ||
+		panel.Rows[5].Value != "Research" ||
+		panel.Rows[6].Command != moduTUIWorkflowPanelAgentsPrefix+"run-phase" ||
+		panel.Rows[7].Command != moduTUIWorkflowPanelBackCommand {
 		t.Fatalf("phase panel rows = %#v", panel.Rows)
 	}
 	if panel.Selected != 1 {
 		t.Fatalf("phase panel selected row = %d, want running agent row 1: %#v", panel.Selected, panel.Rows)
+	}
+	if !moduTUIWorkflowPanelHasShortcut(panel, "?", moduTUIWorkflowPanelGuidePrefix+"run-phase") ||
+		!moduTUIWorkflowPanelHasShortcut(panel, "f", moduTUIWorkflowPanelFeedPrefix+"run-phase") ||
+		!moduTUIWorkflowPanelHasShortcut(panel, "m", moduTUIWorkflowPanelMapPrefix+"run-phase") ||
+		!moduTUIWorkflowPanelHasShortcut(panel, "d", moduTUIWorkflowPanelDetailPrefix+"run-phase") ||
+		!moduTUIWorkflowPanelHasShortcut(panel, "a", moduTUIWorkflowPanelAgentsPrefix+"run-phase") {
+		t.Fatalf("phase panel shortcuts = %#v", panel.Shortcuts)
+	}
+	if !strings.Contains(panel.Footer, "[?] Guide") ||
+		!strings.Contains(panel.Footer, "[f] Feed") ||
+		!strings.Contains(panel.Footer, "[m] Map") ||
+		!strings.Contains(panel.Footer, "[d] Detail") ||
+		!strings.Contains(panel.Footer, "[a] Agents") {
+		t.Fatalf("phase panel footer should expose navigation shortcuts: %q", panel.Footer)
 	}
 
 	next, ok := moduTUIWorkflowPanelAction(nil, modutui.PanelAction{
@@ -1531,6 +1643,13 @@ func TestModuTUIWorkflowPhasePanelShowsOneStage(t *testing.T) {
 	})
 	if !ok || next.ID != moduTUIWorkflowPhasePanelID {
 		t.Fatalf("phase action should open phase panel, got ok=%v panel=%#v", ok, next)
+	}
+	next, ok = moduTUIWorkflowPanelAction(nil, modutui.PanelAction{
+		PanelID: moduTUIWorkflowPhasePanelID,
+		Command: moduTUIWorkflowPanelGuidePrefix + "run-phase",
+	})
+	if !ok || next.ID != moduTUIWorkflowGuidePanelID {
+		t.Fatalf("phase guide action should open guide panel, got ok=%v panel=%#v", ok, next)
 	}
 }
 
@@ -1553,12 +1672,14 @@ func TestModuTUIWorkflowRunDetailPanelShowsRunningControls(t *testing.T) {
 	}
 	if !moduTUIWorkflowPanelHasShortcut(panel, "p", moduTUIWorkflowPanelControlPrefix+"pause:run-running") ||
 		!moduTUIWorkflowPanelHasShortcut(panel, "x", moduTUIWorkflowPanelControlPrefix+"stop:run-running") ||
+		!moduTUIWorkflowPanelHasShortcut(panel, "?", moduTUIWorkflowPanelGuidePrefix+"run-running") ||
 		!moduTUIWorkflowPanelHasShortcut(panel, "f", moduTUIWorkflowPanelFeedPrefix+"run-running") ||
 		!moduTUIWorkflowPanelHasShortcut(panel, "m", moduTUIWorkflowPanelMapPrefix+"run-running") ||
 		!moduTUIWorkflowPanelHasShortcut(panel, "a", moduTUIWorkflowPanelAgentsPrefix+"run-running") {
 		t.Fatalf("running detail shortcuts = %#v", panel.Shortcuts)
 	}
 	if !strings.Contains(panel.Footer, "[p] Pause") || !strings.Contains(panel.Footer, "[x] Stop") ||
+		!strings.Contains(panel.Footer, "[?] Guide") ||
 		!strings.Contains(panel.Footer, "[f] Feed") || !strings.Contains(panel.Footer, "[m] Map") || !strings.Contains(panel.Footer, "[a] Agents") {
 		t.Fatalf("running detail footer should expose shortcuts: %q", panel.Footer)
 	}
@@ -1578,8 +1699,8 @@ func TestModuTUIWorkflowRunDetailPanelShowsRunningControls(t *testing.T) {
 	if !strings.Contains(text, "active: no agent snapshot yet (running)") {
 		t.Fatalf("detail panel should show empty live snapshot state:\n%s", text)
 	}
-	if panel.Selected != 4 {
-		t.Fatalf("running detail selected row = %d, want Agents row 4 when no phases exist: %#v", panel.Selected, panel.Rows)
+	if panel.Selected != 5 {
+		t.Fatalf("running detail selected row = %d, want Agents row 5 when no phases exist: %#v", panel.Selected, panel.Rows)
 	}
 }
 
@@ -1690,6 +1811,16 @@ func TestModuTUIWorkflowPanelRefFromPanel(t *testing.T) {
 			want: moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowMapPanelID, RunID: "run-map"},
 		},
 		{
+			name: "guide",
+			panel: modutui.Panel{
+				ID: moduTUIWorkflowGuidePanelID,
+				Rows: []modutui.PanelRow{{
+					Command: moduTUIWorkflowPanelFeedPrefix + "run-guide",
+				}},
+			},
+			want: moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowGuidePanelID, RunID: "run-guide"},
+		},
+		{
 			name: "agent",
 			panel: modutui.Panel{
 				ID: moduTUIWorkflowAgentPanelID,
@@ -1785,17 +1916,34 @@ func TestModuTUIWorkflowAgentsAndAgentPanels(t *testing.T) {
 	if agentsPanel.ID != moduTUIWorkflowAgentsPanelID || agentsPanel.Title != "Workflow Agents" {
 		t.Fatalf("unexpected agents panel: %#v", agentsPanel)
 	}
-	if len(agentsPanel.Rows) != 4 {
+	if len(agentsPanel.Rows) != 7 {
 		t.Fatalf("agents panel rows = %#v", agentsPanel.Rows)
 	}
 	if agentsPanel.Rows[0].Command != moduTUIWorkflowPanelAgentPrefix+"run-agents:1" || !strings.Contains(agentsPanel.Rows[0].Label, "#1 [done] collect") || !strings.Contains(agentsPanel.Rows[0].Detail, "Research") || !strings.Contains(agentsPanel.Rows[0].Detail, "1200 tokens") || !strings.Contains(agentsPanel.Rows[0].Detail, "1 tools") {
 		t.Fatalf("first agent row = %#v", agentsPanel.Rows[0])
 	}
-	if agentsPanel.Rows[2].Command != moduTUIWorkflowPanelDetailPrefix+"run-agents" || agentsPanel.Rows[3].Command != moduTUIWorkflowPanelBackCommand {
-		t.Fatalf("agents panel should expose detail and cockpit back rows: %#v", agentsPanel.Rows)
+	if agentsPanel.Rows[2].Command != moduTUIWorkflowPanelGuidePrefix+"run-agents" ||
+		agentsPanel.Rows[3].Command != moduTUIWorkflowPanelFeedPrefix+"run-agents" ||
+		agentsPanel.Rows[4].Command != moduTUIWorkflowPanelMapPrefix+"run-agents" ||
+		agentsPanel.Rows[5].Command != moduTUIWorkflowPanelDetailPrefix+"run-agents" ||
+		agentsPanel.Rows[6].Command != moduTUIWorkflowPanelBackCommand {
+		t.Fatalf("agents panel should expose guide/feed/map/detail/cockpit rows: %#v", agentsPanel.Rows)
 	}
 	if agentsPanel.Selected != 0 {
 		t.Fatalf("agents panel selected row = %d, want first agent row: %#v", agentsPanel.Selected, agentsPanel.Rows)
+	}
+	if !moduTUIWorkflowPanelHasShortcut(agentsPanel, "?", moduTUIWorkflowPanelGuidePrefix+"run-agents") ||
+		!moduTUIWorkflowPanelHasShortcut(agentsPanel, "f", moduTUIWorkflowPanelFeedPrefix+"run-agents") ||
+		!moduTUIWorkflowPanelHasShortcut(agentsPanel, "m", moduTUIWorkflowPanelMapPrefix+"run-agents") ||
+		!moduTUIWorkflowPanelHasShortcut(agentsPanel, "d", moduTUIWorkflowPanelDetailPrefix+"run-agents") {
+		t.Fatalf("agents panel shortcuts = %#v", agentsPanel.Shortcuts)
+	}
+	next, ok := moduTUIWorkflowPanelAction(nil, modutui.PanelAction{
+		PanelID: moduTUIWorkflowAgentsPanelID,
+		Command: moduTUIWorkflowPanelGuidePrefix + "run-agents",
+	})
+	if !ok || next.ID != moduTUIWorkflowGuidePanelID {
+		t.Fatalf("agents guide action should open guide panel, got ok=%v panel=%#v", ok, next)
 	}
 
 	agentPanel := moduTUIWorkflowAgentPanelFromStates(states, "run-agents", 1)
@@ -1822,11 +1970,31 @@ func TestModuTUIWorkflowAgentsAndAgentPanels(t *testing.T) {
 			t.Fatalf("agent panel missing %q:\n%s", want, text)
 		}
 	}
-	if len(agentPanel.Rows) != 3 || agentPanel.Rows[0].Command != moduTUIWorkflowPanelTranscriptPrefix+"run-agents:1" || agentPanel.Rows[1].Command != moduTUIWorkflowPanelAgentsPrefix+"run-agents" || agentPanel.Rows[2].Command != moduTUIWorkflowPanelDetailPrefix+"run-agents" {
+	if len(agentPanel.Rows) != 6 ||
+		agentPanel.Rows[0].Command != moduTUIWorkflowPanelTranscriptPrefix+"run-agents:1" ||
+		agentPanel.Rows[1].Command != moduTUIWorkflowPanelGuidePrefix+"run-agents" ||
+		agentPanel.Rows[2].Command != moduTUIWorkflowPanelFeedPrefix+"run-agents" ||
+		agentPanel.Rows[3].Command != moduTUIWorkflowPanelMapPrefix+"run-agents" ||
+		agentPanel.Rows[4].Command != moduTUIWorkflowPanelAgentsPrefix+"run-agents" ||
+		agentPanel.Rows[5].Command != moduTUIWorkflowPanelDetailPrefix+"run-agents" {
 		t.Fatalf("agent panel back rows = %#v", agentPanel.Rows)
 	}
 	if agentPanel.Selected != 0 {
 		t.Fatalf("agent panel selected row = %d, want transcript row: %#v", agentPanel.Selected, agentPanel.Rows)
+	}
+	if !moduTUIWorkflowPanelHasShortcut(agentPanel, "?", moduTUIWorkflowPanelGuidePrefix+"run-agents") ||
+		!moduTUIWorkflowPanelHasShortcut(agentPanel, "f", moduTUIWorkflowPanelFeedPrefix+"run-agents") ||
+		!moduTUIWorkflowPanelHasShortcut(agentPanel, "m", moduTUIWorkflowPanelMapPrefix+"run-agents") ||
+		!moduTUIWorkflowPanelHasShortcut(agentPanel, "d", moduTUIWorkflowPanelDetailPrefix+"run-agents") ||
+		!moduTUIWorkflowPanelHasShortcut(agentPanel, "a", moduTUIWorkflowPanelAgentsPrefix+"run-agents") {
+		t.Fatalf("agent panel shortcuts = %#v", agentPanel.Shortcuts)
+	}
+	next, ok = moduTUIWorkflowPanelAction(nil, modutui.PanelAction{
+		PanelID: moduTUIWorkflowAgentPanelID,
+		Command: moduTUIWorkflowPanelGuidePrefix + "run-agents",
+	})
+	if !ok || next.ID != moduTUIWorkflowGuidePanelID {
+		t.Fatalf("agent guide action should open guide panel, got ok=%v panel=%#v", ok, next)
 	}
 }
 
@@ -1884,7 +2052,7 @@ func TestModuTUIWorkflowRunningAgentPanelShowsControlRows(t *testing.T) {
 	if !strings.Contains(text, "status: running") || !strings.Contains(text, "cross-check sources") {
 		t.Fatalf("running agent panel missing summary:\n%s", text)
 	}
-	if len(panel.Rows) != 5 {
+	if len(panel.Rows) != 8 {
 		t.Fatalf("running agent panel rows = %#v", panel.Rows)
 	}
 	if panel.Rows[0].Label != "Stop agent" || panel.Rows[0].Command != moduTUIWorkflowPanelAgentControlPrefix+"stop:run-agent-control:3" {
@@ -1896,15 +2064,27 @@ func TestModuTUIWorkflowRunningAgentPanelShowsControlRows(t *testing.T) {
 	if panel.Rows[2].Command != moduTUIWorkflowPanelTranscriptPrefix+"run-agent-control:3" {
 		t.Fatalf("transcript row should follow controls: %#v", panel.Rows)
 	}
+	if panel.Rows[3].Command != moduTUIWorkflowPanelGuidePrefix+"run-agent-control" ||
+		panel.Rows[4].Command != moduTUIWorkflowPanelFeedPrefix+"run-agent-control" ||
+		panel.Rows[5].Command != moduTUIWorkflowPanelMapPrefix+"run-agent-control" {
+		t.Fatalf("agent panel should expose guide, feed, and map rows: %#v", panel.Rows)
+	}
 	if panel.Selected != 2 {
 		t.Fatalf("running agent selected row = %d, want transcript row after controls: %#v", panel.Selected, panel.Rows)
 	}
-	if len(panel.Shortcuts) != 2 ||
-		panel.Shortcuts[0].Key != "x" || panel.Shortcuts[0].Command != moduTUIWorkflowPanelAgentControlPrefix+"stop:run-agent-control:3" ||
-		panel.Shortcuts[1].Key != "r" || panel.Shortcuts[1].Command != moduTUIWorkflowPanelAgentControlPrefix+"restart:run-agent-control:3" {
+	if !moduTUIWorkflowPanelHasShortcut(panel, "x", moduTUIWorkflowPanelAgentControlPrefix+"stop:run-agent-control:3") ||
+		!moduTUIWorkflowPanelHasShortcut(panel, "r", moduTUIWorkflowPanelAgentControlPrefix+"restart:run-agent-control:3") ||
+		!moduTUIWorkflowPanelHasShortcut(panel, "?", moduTUIWorkflowPanelGuidePrefix+"run-agent-control") ||
+		!moduTUIWorkflowPanelHasShortcut(panel, "f", moduTUIWorkflowPanelFeedPrefix+"run-agent-control") ||
+		!moduTUIWorkflowPanelHasShortcut(panel, "m", moduTUIWorkflowPanelMapPrefix+"run-agent-control") ||
+		!moduTUIWorkflowPanelHasShortcut(panel, "d", moduTUIWorkflowPanelDetailPrefix+"run-agent-control") ||
+		!moduTUIWorkflowPanelHasShortcut(panel, "a", moduTUIWorkflowPanelAgentsPrefix+"run-agent-control") {
 		t.Fatalf("running agent shortcuts = %#v", panel.Shortcuts)
 	}
-	if !strings.Contains(panel.Footer, "[x] Stop agent") || !strings.Contains(panel.Footer, "[r] Restart agent") {
+	if !strings.Contains(panel.Footer, "[x] Stop agent") || !strings.Contains(panel.Footer, "[r] Restart agent") ||
+		!strings.Contains(panel.Footer, "[?] Guide") || !strings.Contains(panel.Footer, "[f] Feed") ||
+		!strings.Contains(panel.Footer, "[m] Map") || !strings.Contains(panel.Footer, "[d] Detail") ||
+		!strings.Contains(panel.Footer, "[a] Agents") {
 		t.Fatalf("running agent footer should expose shortcuts: %q", panel.Footer)
 	}
 }
@@ -1970,8 +2150,28 @@ func TestModuTUIWorkflowTranscriptPanelReadsSnapshotTranscript(t *testing.T) {
 			t.Fatalf("transcript panel missing %q:\n%s", want, text)
 		}
 	}
-	if len(panel.Rows) != 2 || panel.Rows[0].Command != moduTUIWorkflowPanelAgentPrefix+"run-transcript:1" || panel.Rows[1].Command != moduTUIWorkflowPanelAgentsPrefix+"run-transcript" {
+	if len(panel.Rows) != 6 ||
+		panel.Rows[0].Command != moduTUIWorkflowPanelAgentPrefix+"run-transcript:1" ||
+		panel.Rows[1].Command != moduTUIWorkflowPanelGuidePrefix+"run-transcript" ||
+		panel.Rows[2].Command != moduTUIWorkflowPanelFeedPrefix+"run-transcript" ||
+		panel.Rows[3].Command != moduTUIWorkflowPanelMapPrefix+"run-transcript" ||
+		panel.Rows[4].Command != moduTUIWorkflowPanelAgentsPrefix+"run-transcript" ||
+		panel.Rows[5].Command != moduTUIWorkflowPanelDetailPrefix+"run-transcript" {
 		t.Fatalf("transcript panel rows = %#v", panel.Rows)
+	}
+	if !moduTUIWorkflowPanelHasShortcut(panel, "?", moduTUIWorkflowPanelGuidePrefix+"run-transcript") ||
+		!moduTUIWorkflowPanelHasShortcut(panel, "f", moduTUIWorkflowPanelFeedPrefix+"run-transcript") ||
+		!moduTUIWorkflowPanelHasShortcut(panel, "m", moduTUIWorkflowPanelMapPrefix+"run-transcript") ||
+		!moduTUIWorkflowPanelHasShortcut(panel, "d", moduTUIWorkflowPanelDetailPrefix+"run-transcript") ||
+		!moduTUIWorkflowPanelHasShortcut(panel, "a", moduTUIWorkflowPanelAgentsPrefix+"run-transcript") {
+		t.Fatalf("transcript panel shortcuts = %#v", panel.Shortcuts)
+	}
+	next, ok := moduTUIWorkflowPanelAction(nil, modutui.PanelAction{
+		PanelID: moduTUIWorkflowTranscriptPanelID,
+		Command: moduTUIWorkflowPanelGuidePrefix + "run-transcript",
+	})
+	if !ok || next.ID != moduTUIWorkflowGuidePanelID {
+		t.Fatalf("transcript guide action should open guide panel, got ok=%v panel=%#v", ok, next)
 	}
 }
 
@@ -2105,6 +2305,7 @@ func TestModuTUIWorkflowPanelFromSlashRoutesReadOnlySubcommands(t *testing.T) {
 		{line: "/workflows show latest", id: moduTUIWorkflowRunDetailPanelID},
 		{line: "/workflows show run-old", id: moduTUIWorkflowRunDetailPanelID},
 		{line: "/workflows feed latest", id: moduTUIWorkflowFeedPanelID},
+		{line: "/workflows guide latest", id: moduTUIWorkflowGuidePanelID},
 		{line: "/workflows map latest", id: moduTUIWorkflowMapPanelID},
 		{line: "/workflows agent latest 2", id: moduTUIWorkflowAgentPanelID},
 		{line: "/workflows transcript latest 2", id: moduTUIWorkflowTranscriptPanelID},

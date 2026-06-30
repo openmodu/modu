@@ -652,6 +652,10 @@ High-priority gaps identified before this round:
 - Extended `/workflows feed <run-id|latest>` with compact phase lanes matching
   the modu TUI feed semantics: `run`, `done`, `err`, and `wait` markers plus a
   legend, so non-TUI output also shows agent distribution by phase.
+- Added `/workflows guide <run-id|latest>` as a compact navigation guide for a
+  workflow run. It explains the Feed, Map, Phase, Agent, and Transcript views,
+  points to the current phase plus first active/attention agents, and avoids
+  expanding the full result or script.
 
 ## Still Missing
 

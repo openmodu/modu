@@ -266,6 +266,7 @@ func TestWorkflowToolGuidesRunManagementThroughWorkflowsCommand(t *testing.T) {
 		"only starts workflow runs",
 		"do not pass action",
 		"/workflows feed <run-id>",
+		"/workflows guide <run-id>",
 		"/workflows show <run-id>",
 		"/workflows map <run-id>",
 		"/workflows agent <run-id> <agent-id>",
@@ -281,6 +282,7 @@ func TestWorkflowToolGuidesRunManagementThroughWorkflowsCommand(t *testing.T) {
 	asyncDescription := async["description"].(string)
 	for _, want := range []string{
 		"/workflows feed <run-id>",
+		"/workflows guide <run-id>",
 		"/workflows show <run-id>",
 		"/workflows map <run-id>",
 		"Do not call this tool with action/status/id fields",
@@ -1872,7 +1874,7 @@ func TestWorkflowsCommandListsAndShowsPersistedRuns(t *testing.T) {
 	if err := cmd(""); err != nil {
 		t.Fatalf("/workflows: %v", err)
 	}
-	if got := api.lastNotify(); !strings.Contains(got, "Workflow runs:") || !strings.Contains(got, "run-1") || !strings.Contains(got, "listed (4 agent(s), 1 error(s))") || !strings.Contains(got, "/workflows feed <run-id|latest>") || !strings.Contains(got, "/workflows map <run-id|latest>") {
+	if got := api.lastNotify(); !strings.Contains(got, "Workflow runs:") || !strings.Contains(got, "run-1") || !strings.Contains(got, "listed (4 agent(s), 1 error(s))") || !strings.Contains(got, "/workflows feed <run-id|latest>") || !strings.Contains(got, "/workflows guide <run-id|latest>") || !strings.Contains(got, "/workflows map <run-id|latest>") {
 		t.Fatalf("list notify = %q", got)
 	}
 	if err := cmd("show latest"); err != nil {
@@ -1891,6 +1893,16 @@ func TestWorkflowsCommandListsAndShowsPersistedRuns(t *testing.T) {
 	}
 	if strings.Contains(got, "FULL_RESULT_END") || strings.Contains(got, "```js") || strings.Contains(got, longScriptTail) {
 		t.Fatalf("feed notify should not include full result or script: %q", got)
+	}
+	if err := cmd("guide latest"); err != nil {
+		t.Fatalf("/workflows guide: %v", err)
+	}
+	got = api.lastNotify()
+	if !strings.Contains(got, "Workflow guide run-1") || !strings.Contains(got, "Workflow: listed") || !strings.Contains(got, "Views:") || !strings.Contains(got, "Feed: live cards") || !strings.Contains(got, "Map: full phase and agent tree") || !strings.Contains(got, "Route:") || !strings.Contains(got, "/workflows -> running run -> Feed") || !strings.Contains(got, "Current phase: Review") || !strings.Contains(got, "Attention: Agent 3 [error] risk @Review: source unavailable") || !strings.Contains(got, "Active: Agent 2 [running] verify @Review tools=1 failed=0") || !strings.Contains(got, "Commands:") || !strings.Contains(got, "/workflows transcript run-1 <agent-id>") {
+		t.Fatalf("guide notify = %q", got)
+	}
+	if strings.Contains(got, "FULL_RESULT_END") || strings.Contains(got, "```js") || strings.Contains(got, longScriptTail) {
+		t.Fatalf("guide notify should not include full result or script: %q", got)
 	}
 	if err := cmd("map latest"); err != nil {
 		t.Fatalf("/workflows map: %v", err)
