@@ -2123,6 +2123,17 @@ func TestWorkflowRuntimeStateTracksRunningRuns(t *testing.T) {
 		RunningCount: 2,
 		ErrorCount:   0,
 		CurrentPhase: "Review",
+		Logs: []string{
+			"old setup log",
+			"phase scoped",
+			"fanout started",
+			"first source done",
+			"second source done",
+			"cross-check started",
+			"risk retry",
+			"risk retry " + strings.Repeat("detail ", 80),
+			"writing summary",
+		},
 		PhaseSummaries: []phaseSummary{{
 			Title:           "Review",
 			AgentCount:      3,
@@ -2187,6 +2198,13 @@ func TestWorkflowRuntimeStateTracksRunningRuns(t *testing.T) {
 	}
 	if phases[0]["title"] != "Review" || phases[0]["agentCount"] != 3 || phases[0]["estimatedTokens"] != 120 || phases[0]["cost"] != 0.0123 || phases[0]["durationMs"] != int64(700) {
 		t.Fatalf("phase state = %+v", phases[0])
+	}
+	logs, ok := runs[0]["logs"].([]string)
+	if !ok || len(logs) != workflowRuntimeLogLimit {
+		t.Fatalf("logs = %#v", runs[0]["logs"])
+	}
+	if logs[0] != "phase scoped" || logs[len(logs)-1] != "writing summary" || !strings.HasSuffix(logs[6], "...") {
+		t.Fatalf("logs were not capped/truncated as expected: %#v", logs)
 	}
 	agents, ok := runs[0]["agents"].([]map[string]any)
 	if !ok || len(agents) != 2 {

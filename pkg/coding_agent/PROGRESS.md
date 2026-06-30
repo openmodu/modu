@@ -637,6 +637,10 @@ High-priority gaps identified before this round:
   covering `UserMessage`, `AssistantMessage`, `ToolResultMessage` and their
   pointer variants, so message type information is preserved during JSONL
   serialization regardless of the concrete Go type the caller passes.
+- Exposed capped recent workflow `log(...)` messages in
+  `RuntimeState().Extensions["workflow"].runs[].logs`, letting host UIs render a
+  lightweight live updates feed without loading full workflow snapshots or child
+  transcripts.
 
 ## Still Missing
 

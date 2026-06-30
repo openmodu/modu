@@ -1573,11 +1573,17 @@ func normalizePanel(panel Panel) Panel {
 	panel.Footer = strings.TrimSpace(panel.Footer)
 	panel.Lines = append([]string(nil), panel.Lines...)
 	panel.Rows = append([]PanelRow(nil), panel.Rows...)
+	panel.Shortcuts = append([]PanelShortcut(nil), panel.Shortcuts...)
 	for i := range panel.Rows {
 		panel.Rows[i].Label = strings.TrimSpace(panel.Rows[i].Label)
 		panel.Rows[i].Detail = strings.TrimSpace(panel.Rows[i].Detail)
 		panel.Rows[i].Value = strings.TrimSpace(panel.Rows[i].Value)
 		panel.Rows[i].Command = strings.TrimSpace(panel.Rows[i].Command)
+	}
+	for i := range panel.Shortcuts {
+		panel.Shortcuts[i].Key = strings.TrimSpace(panel.Shortcuts[i].Key)
+		panel.Shortcuts[i].Label = strings.TrimSpace(panel.Shortcuts[i].Label)
+		panel.Shortcuts[i].Command = strings.TrimSpace(panel.Shortcuts[i].Command)
 	}
 	panel.Selected = clamp(panel.Selected, 0, max(0, len(panel.Rows)-1))
 	return panel
@@ -1595,6 +1601,25 @@ func (m Model) handlePanelKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.hooks.PanelClosed(panelID)
 		}
 		return m, nil
+	}
+	if m.panel != nil && len(m.panel.Shortcuts) > 0 {
+		if shortcut, ok := panelShortcutForKey(m.panel.Shortcuts, msg); ok {
+			action := PanelAction{
+				PanelID: m.panel.ID,
+				Index:   -1,
+				Row: PanelRow{
+					Label:   shortcut.Label,
+					Command: shortcut.Command,
+				},
+				Command: strings.TrimSpace(shortcut.Command),
+			}
+			m.closePanel()
+			m.rebuild()
+			if m.hooks.PanelAction != nil {
+				m.hooks.PanelAction(action)
+			}
+			return m, nil
+		}
 	}
 	if m.panel != nil && len(m.panel.Rows) > 0 {
 		switch {
@@ -1640,6 +1665,19 @@ func (m Model) handlePanelKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	m.rebuild()
 	return m, nil
+}
+
+func panelShortcutForKey(shortcuts []PanelShortcut, msg tea.KeyPressMsg) (PanelShortcut, bool) {
+	text := strings.TrimSpace(msg.Text)
+	if text == "" || msg.Mod != 0 {
+		return PanelShortcut{}, false
+	}
+	for _, shortcut := range shortcuts {
+		if strings.EqualFold(strings.TrimSpace(shortcut.Key), text) && strings.TrimSpace(shortcut.Command) != "" {
+			return shortcut, true
+		}
+	}
+	return PanelShortcut{}, false
 }
 
 func (m *Model) closePanel() {

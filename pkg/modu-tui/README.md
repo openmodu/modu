@@ -136,7 +136,9 @@ Component layout:
   updates a matching open panel while preserving selection/scroll state, and
   `ClearPanelMsg` can close a matching panel programmatically. Panels may
   include selectable rows; ↑/↓ changes selection, Enter emits
-  `Hooks.PanelAction`, and manual close emits `Hooks.PanelClosed`.
+  `Hooks.PanelAction`, manual close emits `Hooks.PanelClosed`, and
+  `Panel.Shortcuts` can map single-key actions such as `p` or `x` into the same
+  `Hooks.PanelAction` path without requiring a row selection.
 - `RequestHumanPromptMsg` renders a blocking human-in-the-loop choice card for
   host prompts such as confirm/select/plan approval; numeric keys choose
   options and Enter/Esc use the configured default.

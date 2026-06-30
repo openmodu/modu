@@ -8,7 +8,10 @@ import (
 // RuntimeState exposes workflow progress to RuntimeState JSON and host UIs.
 // Scripts stay behind /workflows commands; agent prompts are capped to match
 // the /workflows agent detail view.
-const workflowRuntimePromptLimit = 4000
+const (
+	workflowRuntimePromptLimit = 4000
+	workflowRuntimeLogLimit    = 8
+)
 
 func (e *Extension) RuntimeState() any {
 	state := map[string]any{
@@ -62,6 +65,9 @@ func (e *Extension) RuntimeState() any {
 			entry["errorCount"] = run.Snapshot.ErrorCount
 			entry["durationMs"] = run.Snapshot.DurationMs
 			entry["currentPhase"] = run.Snapshot.CurrentPhase
+			if logs := workflowRuntimeLogs(run.Snapshot.Logs); len(logs) > 0 {
+				entry["logs"] = logs
+			}
 			entry["phases"] = workflowRuntimePhaseStates(run.Snapshot.PhaseSummaries)
 			entry["agents"] = workflowRuntimeAgentStates(run.Snapshot.Agents)
 		}
@@ -96,6 +102,25 @@ func workflowRuntimePhaseStates(phases []phaseSummary) []map[string]any {
 			"cost":            phase.Cost,
 			"durationMs":      phase.DurationMs,
 		})
+	}
+	return out
+}
+
+func workflowRuntimeLogs(logs []string) []string {
+	if len(logs) == 0 {
+		return nil
+	}
+	start := 0
+	if len(logs) > workflowRuntimeLogLimit {
+		start = len(logs) - workflowRuntimeLogLimit
+	}
+	out := make([]string, 0, len(logs)-start)
+	for _, log := range logs[start:] {
+		log = strings.TrimSpace(log)
+		if log == "" {
+			continue
+		}
+		out = append(out, preview(log, 240))
 	}
 	return out
 }

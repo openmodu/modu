@@ -142,13 +142,20 @@ type SlashCommand struct {
 }
 
 type Panel struct {
-	ID       string
-	Title    string
-	Subtitle string
-	Lines    []string
-	Rows     []PanelRow
-	Selected int
-	Footer   string
+	ID        string
+	Title     string
+	Subtitle  string
+	Lines     []string
+	Rows      []PanelRow
+	Shortcuts []PanelShortcut
+	Selected  int
+	Footer    string
+}
+
+type PanelShortcut struct {
+	Key     string
+	Label   string
+	Command string
 }
 
 type PanelRow struct {

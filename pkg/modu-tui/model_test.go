@@ -1532,6 +1532,44 @@ func TestPOC2PanelRowsSelectAndEmitAction(t *testing.T) {
 	}
 }
 
+func TestPOC2PanelShortcutEmitsAction(t *testing.T) {
+	actions := make(chan PanelAction, 1)
+	var tm tea.Model = NewModel(Options{
+		Width:  72,
+		Height: 12,
+		Hooks: Hooks{
+			PanelAction: func(action PanelAction) {
+				actions <- action
+			},
+		},
+	})
+	tm, _ = tm.Update(SetPanelMsg{Panel: Panel{
+		ID:    "workflow-run",
+		Title: "Workflow Run",
+		Rows: []PanelRow{
+			{Label: "Open agents", Command: "workflow-panel:agents:run-1"},
+		},
+		Shortcuts: []PanelShortcut{{
+			Key:     "x",
+			Label:   "Stop",
+			Command: "workflow-panel:control:stop:run-1",
+		}},
+	}})
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: "x", Code: 'x'}))
+
+	select {
+	case action := <-actions:
+		if action.PanelID != "workflow-run" || action.Index != -1 || action.Command != "workflow-panel:control:stop:run-1" || action.Row.Label != "Stop" {
+			t.Fatalf("unexpected shortcut action: %#v", action)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected shortcut action")
+	}
+	if tm.(Model).panel != nil {
+		t.Fatal("shortcut action should close panel before dispatch")
+	}
+}
+
 func TestPOC2PanelRefreshPreservesSelectionAndCloseHook(t *testing.T) {
 	closed := make(chan string, 1)
 	var tm tea.Model = NewModel(Options{
