@@ -2,7 +2,6 @@ package workflow
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 )
 
@@ -20,11 +19,14 @@ func (e *Extension) RuntimeState() any {
 		"failedCount":    0,
 		"runs":           []map[string]any{},
 	}
-	if e == nil || e.registry == nil {
+	if e == nil {
 		return state
 	}
-	runs := e.registry.list()
-	sort.Slice(runs, func(i, j int) bool { return runs[i].UpdatedAt.After(runs[j].UpdatedAt) })
+	runs, _, err := e.workflowRuns()
+	if err != nil {
+		state["error"] = err.Error()
+		return state
+	}
 	runStates := make([]map[string]any, 0, len(runs))
 	var latestRunning map[string]any
 	for _, run := range runs {
@@ -48,6 +50,9 @@ func (e *Extension) RuntimeState() any {
 			"scriptPath": run.ScriptPath,
 			"runDir":     run.RunDir,
 			"updatedAt":  run.UpdatedAt.UnixMilli(),
+		}
+		if run.SnapshotPath != "" {
+			entry["snapshotPath"] = run.SnapshotPath
 		}
 		if run.Snapshot != nil {
 			entry["name"] = run.Snapshot.Name

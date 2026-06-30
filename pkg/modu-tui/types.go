@@ -126,6 +126,7 @@ type Hooks struct {
 	ToolPermission       func(ToolCall) ToolPermissionState
 	ToolApprovalDecision func(ToolApprovalResult)
 	InputHistoryChanged  func([]string)
+	PanelAction          func(PanelAction)
 	SlashCommand         func(line string)
 	Interrupt            func()
 	Submit               func(text string)
@@ -137,6 +138,30 @@ type MessageBlockFactory func(Message) (Block, bool)
 type SlashCommand struct {
 	Name        string
 	Description string
+}
+
+type Panel struct {
+	ID       string
+	Title    string
+	Subtitle string
+	Lines    []string
+	Rows     []PanelRow
+	Selected int
+	Footer   string
+}
+
+type PanelRow struct {
+	Label   string
+	Detail  string
+	Value   string
+	Command string
+}
+
+type PanelAction struct {
+	PanelID string
+	Index   int
+	Row     PanelRow
+	Command string
 }
 
 type Options struct {
@@ -179,6 +204,14 @@ type SetTodosMsg struct {
 }
 
 type ClearMessagesMsg struct{}
+
+type SetPanelMsg struct {
+	Panel Panel
+}
+
+type ClearPanelMsg struct {
+	ID string
+}
 
 type RequestToolApprovalMsg struct {
 	Request ToolApprovalRequest

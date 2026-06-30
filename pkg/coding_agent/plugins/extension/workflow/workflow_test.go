@@ -2221,6 +2221,68 @@ func TestWorkflowRuntimePromptPreservesLinesAndCaps(t *testing.T) {
 	}
 }
 
+func TestWorkflowRuntimeStateIncludesPersistedRuns(t *testing.T) {
+	clearWorkflowDisableEnv(t)
+	sessionDir := t.TempDir()
+	runDir := filepath.Join(sessionDir, "extensions", "workflow", "runs", "run-persisted")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	scriptPath := filepath.Join(runDir, "script.js")
+	if err := os.WriteFile(scriptPath, []byte(`meta({ name: "persisted" })`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := workflowSnapshot{
+		Name:       "persisted",
+		RunDir:     runDir,
+		Phases:     []string{"Collect"},
+		AgentCount: 1,
+		DoneCount:  1,
+		PhaseSummaries: []phaseSummary{{
+			Title:      "Collect",
+			AgentCount: 1,
+			DoneCount:  1,
+		}},
+		Agents: []agentSnapshot{{
+			ID:            1,
+			Label:         "market data",
+			Phase:         "Collect",
+			Status:        statusDone,
+			ResultPreview: "ok",
+		}},
+	}
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "snapshot.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ext := New()
+	if err := ext.Init(&fakeAPI{sessionDir: sessionDir}); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	state, ok := ext.RuntimeState().(map[string]any)
+	if !ok {
+		t.Fatalf("RuntimeState type = %T", ext.RuntimeState())
+	}
+	if got, _ := state["completedCount"].(int); got != 1 {
+		t.Fatalf("completedCount = %d, state = %+v", got, state)
+	}
+	runs, ok := state["runs"].([]map[string]any)
+	if !ok || len(runs) != 1 {
+		t.Fatalf("runs = %#v", state["runs"])
+	}
+	if runs[0]["id"] != "run-persisted" || runs[0]["status"] != "completed" || runs[0]["name"] != "persisted" || runs[0]["scriptPath"] != scriptPath {
+		t.Fatalf("persisted run state = %+v", runs[0])
+	}
+	agents, ok := runs[0]["agents"].([]map[string]any)
+	if !ok || len(agents) != 1 || agents[0]["label"] != "market data" {
+		t.Fatalf("persisted agents = %#v", runs[0]["agents"])
+	}
+}
+
 func TestToolExecuteAsyncRegistersRunningWorkflowAndStopCancelsIt(t *testing.T) {
 	clearWorkflowDisableEnv(t)
 	sessionDir := t.TempDir()

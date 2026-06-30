@@ -1431,6 +1431,134 @@ func TestPOC2HumanPromptResolvesFromKeyboard(t *testing.T) {
 	}
 }
 
+func TestPOC2PanelRendersScrollableMainViewAndCloses(t *testing.T) {
+	var tm tea.Model = NewModel(Options{Width: 60, Height: 12, InitialMessages: []Message{{
+		Role: RoleAssistant,
+		Text: "transcript stays behind panel",
+	}}})
+	tm, _ = tm.Update(SetPanelMsg{Panel: Panel{
+		ID:       "workflow",
+		Title:    "Workflow Cockpit",
+		Subtitle: "completed 1  running 0",
+		Lines: []string{
+			"overview",
+			"run one",
+			"run two",
+			"run three",
+			"run four",
+			"run five",
+			"run six",
+			"run seven",
+			"run eight",
+			"run nine",
+		},
+		Footer: "[esc/q] close",
+	}})
+
+	open := tm.(Model)
+	rendered := ansi.Strip(open.render())
+	for _, want := range []string{"Workflow Cockpit", "completed 1", "overview", "panel open", "● panel"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("panel render missing %q:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "transcript stays behind panel") {
+		t.Fatalf("panel should replace viewport, not append transcript:\n%s", rendered)
+	}
+
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyPgDown}))
+	scrolled := tm.(Model)
+	if scrolled.panelOffset == 0 {
+		t.Fatal("expected PgDown to scroll panel")
+	}
+
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: "q"}))
+	closed := tm.(Model)
+	if closed.panel != nil {
+		t.Fatal("expected q to close panel")
+	}
+	if got := ansi.Strip(closed.render()); !strings.Contains(got, "transcript stays behind panel") {
+		t.Fatalf("transcript should return after panel closes:\n%s", got)
+	}
+}
+
+func TestPOC2PanelRowsSelectAndEmitAction(t *testing.T) {
+	actions := make(chan PanelAction, 1)
+	var tm tea.Model = NewModel(Options{
+		Width:  72,
+		Height: 12,
+		Hooks: Hooks{
+			PanelAction: func(action PanelAction) {
+				actions <- action
+			},
+		},
+	})
+	tm, _ = tm.Update(SetPanelMsg{Panel: Panel{
+		ID:    "workflow",
+		Title: "Workflow Cockpit",
+		Rows: []PanelRow{
+			{Label: "run one [completed]", Detail: "5/5 · 1min", Value: "run-one", Command: "/workflows show run-one"},
+			{Label: "run two [running]", Detail: "2/5 · Research", Value: "run-two", Command: "/workflows show run-two"},
+		},
+	}})
+	open := tm.(Model)
+	if open.panelSelected != 0 {
+		t.Fatalf("panelSelected = %d, want 0", open.panelSelected)
+	}
+	rendered := ansi.Strip(open.render())
+	for _, want := range []string{"run one [completed]", "5/5", "[↑/↓] select"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("selectable panel missing %q:\n%s", want, rendered)
+		}
+	}
+
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	selected := tm.(Model)
+	if selected.panelSelected != 1 {
+		t.Fatalf("panelSelected = %d, want 1", selected.panelSelected)
+	}
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	closed := tm.(Model)
+	if closed.panel != nil {
+		t.Fatal("panel should close after Enter action")
+	}
+	select {
+	case action := <-actions:
+		if action.PanelID != "workflow" || action.Index != 1 || action.Row.Value != "run-two" || action.Command != "/workflows show run-two" {
+			t.Fatalf("unexpected panel action: %#v", action)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected panel action")
+	}
+}
+
+func TestPOC2PanelSelectionStaysVisible(t *testing.T) {
+	rows := make([]PanelRow, 0, 16)
+	for i := 0; i < 16; i++ {
+		rows = append(rows, PanelRow{Label: fmt.Sprintf("run-%02d", i+1), Command: fmt.Sprintf("/workflows show run-%02d", i+1)})
+	}
+	var tm tea.Model = NewModel(Options{Width: 60, Height: 10})
+	tm, _ = tm.Update(SetPanelMsg{Panel: Panel{
+		ID:    "workflow",
+		Title: "Workflow Cockpit",
+		Rows:  rows,
+	}})
+	for i := 0; i < 12; i++ {
+		tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	}
+	m := tm.(Model)
+	if m.panelSelected != 12 {
+		t.Fatalf("panelSelected = %d, want 12", m.panelSelected)
+	}
+	if m.panelOffset == 0 {
+		t.Fatal("expected panel offset to follow selected row")
+	}
+	rendered := ansi.Strip(m.render())
+	if !strings.Contains(rendered, "run-13") {
+		t.Fatalf("selected row should be visible:\n%s", rendered)
+	}
+}
+
 func TestPOC2HumanTextSecretInputMasksAndResolves(t *testing.T) {
 	responses := make(chan string, 1)
 	var tm tea.Model = NewModel(Options{Width: 80, Height: 18})
