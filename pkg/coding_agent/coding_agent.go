@@ -111,13 +111,14 @@ type engine struct {
 	sessionStarted  int64
 
 	// Session components — each owns its own state behind a narrow API.
-	ctxMgr      *contextmgr.Manager  // conversation window: tokens, compaction, nested context
-	bash        *bash.Runner         // inline !command execution + cancellation
-	todos       *todo.Store          // session todo list
-	taskManager *bgtask.Manager      // background async tasks
-	plan        *plan.Controller     // plan mode
-	worktree    *worktree.Controller // isolated git worktree
-	extPrompts  extensionPrompts     // host confirm/select callbacks
+	ctxMgr           *contextmgr.Manager // conversation window: tokens, compaction, nested context
+	contextRemaining *contextRemainingProxy
+	bash             *bash.Runner         // inline !command execution + cancellation
+	todos            *todo.Store          // session todo list
+	taskManager      *bgtask.Manager      // background async tasks
+	plan             *plan.Controller     // plan mode
+	worktree         *worktree.Controller // isolated git worktree
+	extPrompts       extensionPrompts     // host confirm/select callbacks
 
 	// bgPromptDriver lets a host (e.g. the TUI) take over hidden extension
 	// prompts (goal continuations) that would otherwise run in a detached
@@ -182,6 +183,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 
 	// Initialize memory store (global ~/.coding_agent/memory + project <cwd>/memory)
 	memoryStore := memory.New(agentDir, opts.Cwd)
+	contextRemaining := &contextRemainingProxy{}
 
 	// Set up tools
 	toolProvider := opts.ToolProvider
@@ -204,6 +206,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 			tools.ValueTodoStore:   todoStoreAdapter{session: nil},
 			tools.ValuePlanMode:    plan.New(nil),
 			tools.ValueWorktree:    worktree.New(nil),
+			tools.ValueContext:     contextRemaining,
 		},
 	})
 
@@ -229,7 +232,9 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	// Build system prompt
 	promptBuilder := systemprompt.NewBuilder(opts.Cwd)
 	promptBuilder.SetModel(opts.Model)
-	promptBuilder.SetMemoryProvider(memoryStore)
+	if memoryFeatureEnabled(cfg) {
+		promptBuilder.SetMemoryProvider(memoryStore)
+	}
 	promptBuilder.SetTools(activeTools)
 	for _, ctxFile := range resourceSnapshot.ContextFiles {
 		promptBuilder.AddContextFile(ctxFile.Path)
@@ -298,33 +303,34 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	})
 
 	cs := &engine{
-		agent:           ag,
-		sessionManager:  sessionMgr,
-		sessionTree:     session.NewTree(sessionMgr),
-		config:          cfg,
-		extensions:      extRunner,
-		skillManager:    skillMgr,
-		promptManager:   promptMgr,
-		resources:       loader,
-		memoryStore:     memoryStore,
-		subagentLoader:  subagentLoader,
-		cwd:             opts.Cwd,
-		agentDir:        agentDir,
-		promptBuilder:   promptBuilder,
-		model:           opts.Model,
-		activeTools:     activeTools,
-		toolProvider:    toolProvider,
-		slashCommands:   make(map[string]SlashCommand),
-		getAPIKey:       getAPIKey,
-		streamFn:        streamFn,
-		retryManager:    retry.New(cfg.RetrySettings, cfg.AutoRetry),
-		eventBus:        eventbus.NewEventBus(),
-		scopedModels:    resolveScopedModels(cfg.ScopedModels, opts.ScopedModels),
-		modelConfigPath: opts.ModelConfigPath,
-		thinkingLevel:   cfg.ThinkingLevel,
-		sessionStarted:  time.Now().UnixMilli(),
-		taskManager:     taskMgr,
-		approvalManager: approvalMgr,
+		agent:            ag,
+		sessionManager:   sessionMgr,
+		sessionTree:      session.NewTree(sessionMgr),
+		config:           cfg,
+		extensions:       extRunner,
+		skillManager:     skillMgr,
+		promptManager:    promptMgr,
+		resources:        loader,
+		memoryStore:      memoryStore,
+		subagentLoader:   subagentLoader,
+		cwd:              opts.Cwd,
+		agentDir:         agentDir,
+		promptBuilder:    promptBuilder,
+		model:            opts.Model,
+		activeTools:      activeTools,
+		toolProvider:     toolProvider,
+		slashCommands:    make(map[string]SlashCommand),
+		getAPIKey:        getAPIKey,
+		streamFn:         streamFn,
+		retryManager:     retry.New(cfg.RetrySettings, cfg.AutoRetry),
+		eventBus:         eventbus.NewEventBus(),
+		scopedModels:     resolveScopedModels(cfg.ScopedModels, opts.ScopedModels),
+		modelConfigPath:  opts.ModelConfigPath,
+		thinkingLevel:    cfg.ThinkingLevel,
+		sessionStarted:   time.Now().UnixMilli(),
+		taskManager:      taskMgr,
+		approvalManager:  approvalMgr,
+		contextRemaining: contextRemaining,
 	}
 	cs.wireComponents()
 	if err := taskMgr.SetStorePath(cs.RuntimePaths().BackgroundTasksFile); err != nil {
@@ -627,6 +633,9 @@ func (s *engine) wireComponents() {
 	})
 	s.ctxMgr.SetModel(s.model)
 	s.ctxMgr.SetPolicy(s.compactionPolicy())
+	if s.contextRemaining != nil {
+		s.contextRemaining.SetSource(s.ctxMgr)
+	}
 }
 
 // Prompt sends a user message and starts processing.
@@ -815,7 +824,7 @@ func (s *engine) GetLastAssistantText() string {
 	return ""
 }
 
-func prepareSubagentDefinition(def *subagent.SubagentDefinition, skillMgr *skills.Manager, memoryStore *memory.Store) *subagent.SubagentDefinition {
+func prepareSubagentDefinition(def *subagent.SubagentDefinition, skillMgr *skills.Manager, memoryStore *memory.Store, memoryEnabled bool) *subagent.SubagentDefinition {
 	if def == nil {
 		return nil
 	}
@@ -842,7 +851,7 @@ func prepareSubagentDefinition(def *subagent.SubagentDefinition, skillMgr *skill
 		}
 	}
 
-	if memoryStore != nil {
+	if memoryEnabled && memoryStore != nil {
 		if mem := memoryContextForScope(memoryStore, clone.MemoryScope); mem != "" {
 			parts = append(parts, mem)
 		}
@@ -857,13 +866,9 @@ func memoryContextForScope(store *memory.Store, scope string) string {
 	case "", "none":
 		return ""
 	case "user", "global":
-		if v := strings.TrimSpace(store.ReadGlobalLongTerm()); v != "" {
-			return "## Global Memory\n\n" + v
-		}
+		return store.GetGlobalMemoryContext()
 	case "project", "local":
-		if v := strings.TrimSpace(store.ReadProjectLongTerm()); v != "" {
-			return "## Project Memory\n\n" + v
-		}
+		return store.GetProjectMemoryContext()
 	case "both", "all":
 		return store.GetMemoryContext()
 	}

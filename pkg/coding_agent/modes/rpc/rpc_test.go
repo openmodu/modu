@@ -2,9 +2,14 @@ package rpc
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // --- Legacy protocol compat ---
@@ -147,6 +152,58 @@ func TestRpcResponseSerialization(t *testing.T) {
 	}
 	if parsed.ID != "1" || !parsed.Success {
 		t.Fatal("response fields mismatch")
+	}
+}
+
+func TestRpcCompactReportsChangedStatus(t *testing.T) {
+	dir := t.TempDir()
+	model := &types.Model{ID: "test", Name: "Test", ProviderID: "test", ContextWindow: 10000}
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  filepath.Join(dir, ".coding_agent"),
+		Model:     model,
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mode := NewRpcMode(session)
+
+	resp := mode.handleCommand(context.Background(), RpcCommand{
+		ID:   "compact-1",
+		Type: RpcCmdCompact,
+	})
+	if !resp.Success {
+		t.Fatalf("expected compact command success, got error %q", resp.Error)
+	}
+	data, ok := resp.Data.(map[string]bool)
+	if !ok {
+		t.Fatalf("expected compact response data map, got %T", resp.Data)
+	}
+	if data["changed"] {
+		t.Fatalf("expected empty-session compact changed=false, got %#v", data)
+	}
+}
+
+func TestRpcClientCompactChangedFromResponse(t *testing.T) {
+	cases := []struct {
+		name string
+		data any
+		want bool
+	}{
+		{"native false", map[string]bool{"changed": false}, false},
+		{"native true", map[string]bool{"changed": true}, true},
+		{"decoded false", map[string]any{"changed": false}, false},
+		{"decoded true", map[string]any{"changed": true}, true},
+		{"legacy missing data", nil, true},
+		{"legacy missing field", map[string]any{}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := compactChangedFromResponse(tc.data); got != tc.want {
+				t.Fatalf("compactChangedFromResponse() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

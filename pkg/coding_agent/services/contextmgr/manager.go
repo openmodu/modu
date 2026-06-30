@@ -49,6 +49,9 @@ type Deps struct {
 type Policy struct {
 	AutoCompaction bool
 	PreserveRecent int
+	// PreserveUserMessagesTokens is forwarded to compaction to retain recent
+	// user-message anchors from the compacted range.
+	PreserveUserMessagesTokens int
 	// Threshold is the percentage of the context window at which
 	// auto-compaction fires. A value <= 0 falls back to defaultThreshold.
 	Threshold float64
@@ -107,6 +110,30 @@ func (m *Manager) Tokens() int {
 	return m.totalTokens
 }
 
+// TokensUntilCompaction returns the remaining tokens before auto-compaction
+// would run. The boolean is false when the threshold is not available for the
+// current session, such as when auto-compaction is disabled or no model is set.
+func (m *Manager) TokensUntilCompaction() (int, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if !m.policy.AutoCompaction || m.model == nil {
+		return 0, false
+	}
+
+	threshold := m.policy.Threshold
+	if threshold <= 0 {
+		threshold = defaultThreshold
+	}
+	window := WindowFor(m.model)
+	thresholdTokens := int(float64(window) * threshold / 100.0)
+	remaining := thresholdTokens - m.totalTokens
+	if remaining < 0 {
+		remaining = 0
+	}
+	return remaining, true
+}
+
 // ResetUsage clears accumulated token usage for a fresh conversation context.
 func (m *Manager) ResetUsage() {
 	m.mu.Lock()
@@ -133,6 +160,13 @@ func (m *Manager) MarkInitialContext(paths []string) {
 
 // Compact summarizes the conversation and replaces it with the summary.
 func (m *Manager) Compact(ctx context.Context) error {
+	_, err := m.CompactIfNeeded(ctx)
+	return err
+}
+
+// CompactIfNeeded summarizes the conversation and reports whether it changed
+// the live message history.
+func (m *Manager) CompactIfNeeded(ctx context.Context) (bool, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -141,6 +175,8 @@ func (m *Manager) Compact(ctx context.Context) error {
 	m.isCompacting = true
 	model := m.model
 	preserve := m.policy.PreserveRecent
+	preserveUserMessagesTokens := m.policy.PreserveUserMessagesTokens
+	tokensBefore := m.totalTokens
 	m.mu.Unlock()
 	defer func() {
 		m.mu.Lock()
@@ -148,16 +184,23 @@ func (m *Manager) Compact(ctx context.Context) error {
 		m.mu.Unlock()
 	}()
 
+	m.PruneTransient()
 	state := m.deps.Agent.GetState()
+	if !compaction.WouldCompact(state.Messages, preserve) {
+		return false, nil
+	}
+
+	m.deps.Host.EmitCompactionStart()
 
 	result, err := compaction.Compact(ctx, state.Messages, compaction.Options{
-		PreserveRecent: preserve,
-		Model:          model,
-		GetAPIKey:      m.deps.APIKey,
-		StreamFn:       m.deps.StreamFn(),
+		PreserveRecent:             preserve,
+		PreserveUserMessagesTokens: preserveUserMessagesTokens,
+		Model:                      model,
+		GetAPIKey:                  m.deps.APIKey,
+		StreamFn:                   m.deps.StreamFn(),
 	})
 	if err != nil {
-		return fmt.Errorf("compaction failed: %w", err)
+		return false, fmt.Errorf("compaction failed: %w", err)
 	}
 
 	m.deps.Agent.ReplaceMessages(result.Messages)
@@ -168,13 +211,18 @@ func (m *Manager) Compact(ctx context.Context) error {
 	m.mu.Unlock()
 
 	_ = m.deps.SessionManager.Append(session.NewEntry(session.EntryTypeCompaction, "", session.CompactionData{
-		Summary:       result.Summary,
-		OriginalCount: result.OriginalCount,
-		NewCount:      result.NewCount,
+		Summary:               result.Summary,
+		TokensBefore:          tokensBefore,
+		OriginalCount:         result.OriginalCount,
+		NewCount:              result.NewCount,
+		PreservedUserMessages: result.PreservedUserMessages,
+		ReadFiles:             result.ReadFiles,
+		ModifiedFiles:         result.ModifiedFiles,
+		ReplacementMessages:   result.Messages,
 	}))
 
 	m.deps.Host.EmitCompactionDone()
-	return nil
+	return true, nil
 }
 
 // MaybeAutoCompact triggers compaction when accumulated token usage crosses the
@@ -197,7 +245,6 @@ func (m *Manager) MaybeAutoCompact(ctx context.Context) {
 
 	usagePercent := float64(tokens) / float64(WindowFor(model)) * 100.0
 	if usagePercent >= threshold {
-		m.deps.Host.EmitCompactionStart()
 		_ = m.Compact(ctx)
 	}
 }

@@ -27,20 +27,24 @@ type PackageResourceInfo struct {
 
 // ContextInfo describes the runtime context sources that can affect prompts.
 type ContextInfo struct {
-	Cwd             string
-	AgentDir        string
-	ModelName       string
-	ModelProvider   string
-	ModelID         string
-	MessageCount    int
-	MemoryBytes     int
-	ContextFiles    []ContextFileInfo
-	Skills          []SkillInfo
-	PromptTemplates []PromptTemplateInfo
-	Packages        []PackageResourceInfo
-	PlanMode        bool
-	ActiveWorktree  string
-	PromptByteCount int
+	Cwd                            string
+	AgentDir                       string
+	ModelName                      string
+	ModelProvider                  string
+	ModelID                        string
+	MessageCount                   int
+	MemoryEnabled                  bool
+	MemorySummaryActive            bool
+	MemoryBytes                    int
+	TokensUntilCompaction          int
+	TokensUntilCompactionAvailable bool
+	ContextFiles                   []ContextFileInfo
+	Skills                         []SkillInfo
+	PromptTemplates                []PromptTemplateInfo
+	Packages                       []PackageResourceInfo
+	PlanMode                       bool
+	ActiveWorktree                 string
+	PromptByteCount                int
 }
 
 // GetContextInfo returns a read-only snapshot of prompt/context sources.
@@ -55,13 +59,18 @@ func (s *CodingSession) GetContextInfo() ContextInfo {
 		ActiveWorktree:  s.ActiveWorktree(),
 		PromptByteCount: len(state.SystemPrompt),
 	}
+	info.MemoryEnabled = memoryFeatureEnabled(s.config)
 	if state.Model != nil {
 		info.ModelName = state.Model.Name
 		info.ModelProvider = state.Model.ProviderID
 		info.ModelID = state.Model.ID
 	}
-	if s.memoryStore != nil {
+	if info.MemoryEnabled && s.memoryStore != nil {
 		info.MemoryBytes = len(s.memoryStore.GetMemoryContext())
+		info.MemorySummaryActive = s.memoryStore.ReadGlobalSummary() != "" || s.memoryStore.ReadProjectSummary() != ""
+	}
+	if s.ctxMgr != nil {
+		info.TokensUntilCompaction, info.TokensUntilCompactionAvailable = s.ctxMgr.TokensUntilCompaction()
 	}
 	if s.resources != nil {
 		resources := s.refreshResourcePaths()

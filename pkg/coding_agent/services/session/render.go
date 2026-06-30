@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -90,7 +91,7 @@ func EntryPreview(entry SessionEntry) string {
 	case BranchSummaryData:
 		return data.Summary
 	case CompactionData:
-		return data.Summary
+		return compactionPreview(data.Summary, data.OriginalCount, data.NewCount, data.TokensBefore, data.PreservedUserMessages, len(data.ReadFiles), len(data.ModifiedFiles))
 	case ModelChangeData:
 		if data.Provider != "" {
 			return data.Provider + "/" + data.ModelID
@@ -98,6 +99,9 @@ func EntryPreview(entry SessionEntry) string {
 		return data.ModelID
 	case map[string]any:
 		if summary, _ := data["summary"].(string); summary != "" {
+			if entry.Type == EntryTypeCompaction {
+				return compactionPreview(summary, intFromMap(data, "originalCount"), intFromMap(data, "newCount"), intFromMap(data, "tokensBefore"), intFromMap(data, "preservedUserMessages"), sliceLenFromMap(data, "readFiles"), sliceLenFromMap(data, "modifiedFiles"))
+			}
 			return summary
 		}
 		if content, ok := data["content"]; ok {
@@ -112,6 +116,59 @@ func EntryPreview(entry SessionEntry) string {
 		}
 	}
 	return ""
+}
+
+func compactionPreview(summary string, originalCount, newCount, tokensBefore, preservedUserMessages, readFiles, modifiedFiles int) string {
+	var details []string
+	if originalCount > 0 || newCount > 0 {
+		details = append(details, fmt.Sprintf("messages %d->%d", originalCount, newCount))
+	}
+	if tokensBefore > 0 {
+		details = append(details, fmt.Sprintf("tokens before %d", tokensBefore))
+	}
+	if preservedUserMessages > 0 {
+		details = append(details, fmt.Sprintf("user anchors %d", preservedUserMessages))
+	}
+	if readFiles > 0 {
+		details = append(details, fmt.Sprintf("read files %d", readFiles))
+	}
+	if modifiedFiles > 0 {
+		details = append(details, fmt.Sprintf("modified files %d", modifiedFiles))
+	}
+	if len(details) == 0 {
+		return summary
+	}
+	if strings.TrimSpace(summary) == "" {
+		return strings.Join(details, ", ")
+	}
+	return summary + " (" + strings.Join(details, ", ") + ")"
+}
+
+func sliceLenFromMap(data map[string]any, key string) int {
+	switch value := data[key].(type) {
+	case []string:
+		return len(value)
+	case []any:
+		return len(value)
+	default:
+		return 0
+	}
+}
+
+func intFromMap(data map[string]any, key string) int {
+	switch value := data[key].(type) {
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case float64:
+		return int(value)
+	case json.Number:
+		i, _ := value.Int64()
+		return int(i)
+	default:
+		return 0
+	}
 }
 
 func previewContent(content any) string {

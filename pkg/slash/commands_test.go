@@ -45,9 +45,10 @@ func TestHandleContextShowsPromptSources(t *testing.T) {
 		t.Fatal(err)
 	}
 	model := &types.Model{
-		ID:         "mimo-v2.5-pro",
-		Name:       "MiMo V2.5 Pro",
-		ProviderID: "xiaomi-mimo",
+		ID:            "mimo-v2.5-pro",
+		Name:          "MiMo V2.5 Pro",
+		ProviderID:    "xiaomi-mimo",
+		ContextWindow: 10000,
 	}
 	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
 		Cwd:       cwd,
@@ -76,10 +77,102 @@ func TestHandleContextShowsPromptSources(t *testing.T) {
 		"resource packages: none",
 		"system prompt:",
 		"memory: empty",
+		"context remaining: 8000 tokens until compaction",
 	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("expected output to contain %q, got:\n%s", want, output)
 		}
+	}
+}
+
+func TestHandleContextShowsDisabledMemory(t *testing.T) {
+	cwd := t.TempDir()
+	agentDir := filepath.Join(cwd, ".coding_agent")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(`{"features":{"memoryTool":false}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	model := &types.Model{ID: "test", Name: "Test", ProviderID: "test"}
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       cwd,
+		AgentDir:  agentDir,
+		Model:     model,
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	printer := &capturePrinter{}
+	handled, exit := Handle(context.Background(), "/context", session, printer, model)
+
+	if !handled || exit {
+		t.Fatalf("expected /context to be handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	if output := printer.String(); !strings.Contains(output, "memory: disabled") {
+		t.Fatalf("expected disabled memory in /context output, got:\n%s", output)
+	}
+}
+
+func TestHandleContextShowsMemorySummaryMode(t *testing.T) {
+	cwd := t.TempDir()
+	agentDir := filepath.Join(cwd, ".coding_agent")
+	model := &types.Model{ID: "test", Name: "Test", ProviderID: "test"}
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       cwd,
+		AgentDir:  agentDir,
+		Model:     model,
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	memoryDir := filepath.Join(cwd, ".modu_code", "memory")
+	if err := os.MkdirAll(memoryDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(memoryDir, "memory_summary.md"), []byte("summary memory fact"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	printer := &capturePrinter{}
+	handled, exit := Handle(context.Background(), "/context", session, printer, model)
+
+	if !handled || exit {
+		t.Fatalf("expected /context to be handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	if output := printer.String(); !strings.Contains(output, "memory: summary (") {
+		t.Fatalf("expected memory summary mode in /context output, got:\n%s", output)
+	}
+}
+
+func TestHandleCompactReportsNoop(t *testing.T) {
+	cwd := t.TempDir()
+	model := &types.Model{ID: "test", Name: "Test", ProviderID: "test", ContextWindow: 10000}
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       cwd,
+		AgentDir:  filepath.Join(cwd, ".coding_agent"),
+		Model:     model,
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	printer := &capturePrinter{}
+	handled, exit := Handle(context.Background(), "/compact", session, printer, model)
+
+	if !handled || exit {
+		t.Fatalf("expected /compact to be handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	output := printer.String()
+	if !strings.Contains(output, "context unchanged: not enough messages to compact") {
+		t.Fatalf("expected no-op compact message, got:\n%s", output)
+	}
+	if strings.Contains(output, "context compacted") {
+		t.Fatalf("no-op compact should not report compacted, got:\n%s", output)
 	}
 }
 

@@ -205,6 +205,70 @@ func TestSessionManagerWritesPiCompatibleHeaderAndEntries(t *testing.T) {
 	}
 }
 
+func TestSessionManagerPersistsCompactionUserAnchorCount(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := NewManager(dir, "/test/project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := NewEntry(EntryTypeCompaction, "", CompactionData{
+		Summary:               "compact",
+		TokensBefore:          9000,
+		OriginalCount:         10,
+		NewCount:              4,
+		PreservedUserMessages: 2,
+		ReadFiles:             []string{"old.go"},
+		ModifiedFiles:         []string{"new.go"},
+	})
+	if err := mgr.Append(entry); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(mgr.FilePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected header plus compaction entry, got %d lines:\n%s", len(lines), string(data))
+	}
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(lines[1]), &raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw["preservedUserMessages"] != float64(2) {
+		t.Fatalf("expected preservedUserMessages in JSON, got %#v", raw)
+	}
+	if files, ok := raw["readFiles"].([]any); !ok || len(files) != 1 || files[0] != "old.go" {
+		t.Fatalf("expected readFiles in JSON, got %#v", raw)
+	}
+	if files, ok := raw["modifiedFiles"].([]any); !ok || len(files) != 1 || files[0] != "new.go" {
+		t.Fatalf("expected modifiedFiles in JSON, got %#v", raw)
+	}
+
+	reloaded, err := NewManager(dir, "/test/project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := reloaded.Load()
+	if len(entries) != 1 {
+		t.Fatalf("expected one reloaded entry, got %d", len(entries))
+	}
+	compaction, ok := entries[0].Data.(CompactionData)
+	if !ok {
+		t.Fatalf("expected reloaded compaction data, got %T", entries[0].Data)
+	}
+	if compaction.PreservedUserMessages != 2 {
+		t.Fatalf("expected reloaded preserved user count 2, got %d", compaction.PreservedUserMessages)
+	}
+	if len(compaction.ReadFiles) != 1 || compaction.ReadFiles[0] != "old.go" {
+		t.Fatalf("expected reloaded read files, got %#v", compaction.ReadFiles)
+	}
+	if len(compaction.ModifiedFiles) != 1 || compaction.ModifiedFiles[0] != "new.go" {
+		t.Fatalf("expected reloaded modified files, got %#v", compaction.ModifiedFiles)
+	}
+}
+
 func TestSessionManagerFork(t *testing.T) {
 	dir := t.TempDir()
 	mgr, _ := NewManager(dir, "/test/project")

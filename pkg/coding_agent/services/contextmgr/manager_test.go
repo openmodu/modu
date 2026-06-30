@@ -190,14 +190,52 @@ func TestMaybeAutoCompactCompactsAboveThreshold(t *testing.T) {
 	}
 }
 
+func TestTokensUntilCompaction(t *testing.T) {
+	host := &mockHost{}
+	m, _ := newManager(t, host, nil)
+	m.SetModel(testModel(10000))
+	m.SetPolicy(Policy{AutoCompaction: true, Threshold: 75})
+	m.AddUsage(2500)
+
+	remaining, ok := m.TokensUntilCompaction()
+	if !ok {
+		t.Fatal("expected context remaining to be available")
+	}
+	if remaining != 5000 {
+		t.Fatalf("expected 5000 tokens until compaction, got %d", remaining)
+	}
+
+	m.AddUsage(6000)
+	remaining, ok = m.TokensUntilCompaction()
+	if !ok {
+		t.Fatal("expected context remaining to remain available")
+	}
+	if remaining != 0 {
+		t.Fatalf("expected remaining tokens to clamp at 0, got %d", remaining)
+	}
+
+	m.SetPolicy(Policy{AutoCompaction: false, Threshold: 75})
+	if _, ok := m.TokensUntilCompaction(); ok {
+		t.Fatal("expected unavailable context remaining when auto-compaction is disabled")
+	}
+}
+
 func TestCompactReplacesMessagesAndResets(t *testing.T) {
 	host := &mockHost{}
 	m, ag := newManager(t, host, summaryStreamFn())
 	m.SetModel(testModel(10000))
 	m.SetPolicy(Policy{PreserveRecent: 2})
-	for i := 0; i < 6; i++ {
+	for i := 0; i < 4; i++ {
 		ag.AppendMessage(userMsg("msg"))
 	}
+	ag.AppendMessage(types.AssistantMessage{Role: "assistant", Content: []types.ContentBlock{
+		&types.ToolCallContent{Type: "toolCall", ID: "read-1", Name: "read", Arguments: map[string]any{"path": "old.go"}},
+	}})
+	ag.AppendMessage(types.AssistantMessage{Role: "assistant", Content: []types.ContentBlock{
+		&types.ToolCallContent{Type: "toolCall", ID: "edit-1", Name: "edit", Arguments: map[string]any{"path": "new.go"}},
+	}})
+	ag.AppendMessage(userMsg("tail one"))
+	ag.AppendMessage(userMsg("tail two"))
 	m.AddUsage(1234)
 
 	if err := m.Compact(context.Background()); err != nil {
@@ -205,9 +243,9 @@ func TestCompactReplacesMessagesAndResets(t *testing.T) {
 	}
 
 	msgs := ag.GetState().Messages
-	// summary + PreserveRecent(2) preserved
-	if len(msgs) != 3 {
-		t.Fatalf("expected 3 messages (summary + 2 preserved), got %d", len(msgs))
+	// summary + compacted-range user anchors + PreserveRecent(2) preserved
+	if len(msgs) != 5 {
+		t.Fatalf("expected 5 messages (summary + 2 user anchors + 2 preserved), got %d", len(msgs))
 	}
 	if !strings.Contains(messageText(msgs[0]), "mock summary") {
 		t.Fatalf("expected summary as first message, got %q", messageText(msgs[0]))
@@ -215,8 +253,109 @@ func TestCompactReplacesMessagesAndResets(t *testing.T) {
 	if m.Tokens() != 0 {
 		t.Fatalf("expected tokens reset, got %d", m.Tokens())
 	}
-	if host.doneCalls != 1 {
-		t.Fatalf("expected EmitCompactionDone once, got %d", host.doneCalls)
+	if host.startCalls != 1 || host.doneCalls != 1 {
+		t.Fatalf("expected one start/done for manual compact, got start=%d done=%d", host.startCalls, host.doneCalls)
+	}
+	entries := m.deps.SessionManager.Load()
+	if len(entries) != 1 || entries[0].Type != session.EntryTypeCompaction {
+		t.Fatalf("expected one compaction session entry, got %#v", entries)
+	}
+	data, ok := entries[0].Data.(session.CompactionData)
+	if !ok {
+		t.Fatalf("expected compaction data, got %T", entries[0].Data)
+	}
+	if data.TokensBefore != 1234 {
+		t.Fatalf("expected compaction tokensBefore 1234, got %d", data.TokensBefore)
+	}
+	if data.OriginalCount != 8 || data.NewCount != len(msgs) {
+		t.Fatalf("unexpected compaction counts: original=%d new=%d messages=%d", data.OriginalCount, data.NewCount, len(msgs))
+	}
+	if data.PreservedUserMessages != 2 {
+		t.Fatalf("expected two preserved user anchors, got %d", data.PreservedUserMessages)
+	}
+	if len(data.ReadFiles) != 1 || data.ReadFiles[0] != "old.go" {
+		t.Fatalf("expected read file metadata, got %#v", data.ReadFiles)
+	}
+	if len(data.ModifiedFiles) != 1 || data.ModifiedFiles[0] != "new.go" {
+		t.Fatalf("expected modified file metadata, got %#v", data.ModifiedFiles)
+	}
+}
+
+func TestCompactNoopDoesNotRecordOrReset(t *testing.T) {
+	host := &mockHost{}
+	m, ag := newManager(t, host, summaryStreamFn())
+	m.SetModel(testModel(10000))
+	m.SetPolicy(Policy{PreserveRecent: 4})
+	ag.AppendMessage(userMsg("one"))
+	ag.AppendMessage(userMsg("two"))
+	m.AddUsage(1234)
+
+	changed, err := m.CompactIfNeeded(context.Background())
+	if err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+	if changed {
+		t.Fatal("expected no-op compaction to report changed=false")
+	}
+
+	if host.startCalls != 0 || host.doneCalls != 0 {
+		t.Fatalf("no-op compaction should not emit events, got start=%d done=%d", host.startCalls, host.doneCalls)
+	}
+	if got := m.Tokens(); got != 1234 {
+		t.Fatalf("no-op compaction should not reset tokens, got %d", got)
+	}
+	if entries := m.deps.SessionManager.Load(); len(entries) != 0 {
+		t.Fatalf("no-op compaction should not write session entries, got %#v", entries)
+	}
+	if msgs := ag.GetState().Messages; len(msgs) != 2 || messageText(msgs[0]) != "one" || messageText(msgs[1]) != "two" {
+		t.Fatalf("no-op compaction should leave messages unchanged, got %#v", msgs)
+	}
+}
+
+func TestCompactCanDisablePreservedUserAnchorsWithPolicy(t *testing.T) {
+	host := &mockHost{}
+	m, ag := newManager(t, host, summaryStreamFn())
+	m.SetModel(testModel(10000))
+	m.SetPolicy(Policy{PreserveRecent: 2, PreserveUserMessagesTokens: -1})
+	for i := 0; i < 6; i++ {
+		ag.AppendMessage(userMsg("msg"))
+	}
+
+	if err := m.Compact(context.Background()); err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+
+	msgs := ag.GetState().Messages
+	if len(msgs) != 3 {
+		t.Fatalf("expected summary plus 2 preserved messages when user anchors are disabled, got %d", len(msgs))
+	}
+	if !strings.Contains(messageText(msgs[0]), "mock summary") {
+		t.Fatalf("expected summary as first message, got %q", messageText(msgs[0]))
+	}
+}
+
+func TestCompactPrunesTransientMessagesBeforeSummarizing(t *testing.T) {
+	host := &mockHost{}
+	m, ag := newManager(t, host, nil)
+	m.SetPolicy(Policy{PreserveRecent: 1})
+	ag.AppendMessage(userMsg("[transient] nested context should not be summarized"))
+	ag.AppendMessage(userMsg("old real user request"))
+	ag.AppendMessage(userMsg("tail real user request"))
+
+	if err := m.Compact(context.Background()); err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+
+	msgs := ag.GetState().Messages
+	if len(msgs) != 2 {
+		t.Fatalf("expected summary plus preserved tail after pruning transient, got %d", len(msgs))
+	}
+	allText := strings.Join([]string{messageText(msgs[0]), messageText(msgs[1])}, "\n")
+	if strings.Contains(allText, "nested context should not be summarized") {
+		t.Fatalf("transient context leaked into compacted history:\n%s", allText)
+	}
+	if !strings.Contains(allText, "old real user request") || !strings.Contains(allText, "tail real user request") {
+		t.Fatalf("expected real user messages to remain represented, got:\n%s", allText)
 	}
 }
 

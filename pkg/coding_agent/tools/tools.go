@@ -4,6 +4,7 @@ import (
 	backendtask "github.com/openmodu/modu/pkg/coding_agent/tools/backend_task"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/bash"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/common"
+	contextremaining "github.com/openmodu/modu/pkg/coding_agent/tools/context_remaining"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/edit"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/find"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/grep"
@@ -35,6 +36,7 @@ const (
 	ValueTaskStore   = "task_store"
 	ValuePlanMode    = "plan_mode"
 	ValueWorktree    = "worktree"
+	ValueContext     = "context_remaining"
 )
 
 type DefaultProvider struct {
@@ -73,6 +75,7 @@ func (p DefaultProvider) Tools(ctx types.ToolContext) []types.Tool {
 		worktree := valueAs[worktreetool.WorktreeManager](ctx, ValueWorktree)
 		out = append(out, worktreetool.NewEnterWorktreeTool(worktree), worktreetool.NewExitWorktreeTool(worktree))
 	}
+	out = append(out, contextremaining.New(valueAs[contextremaining.Provider](ctx, ValueContext)))
 	return out
 }
 

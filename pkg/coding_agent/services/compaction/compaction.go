@@ -19,6 +19,10 @@ var (
 type Options struct {
 	// PreserveRecent is the number of recent messages to keep unchanged.
 	PreserveRecent int
+	// PreserveUserMessagesTokens is an approximate token budget for keeping
+	// recent user messages from the compacted range. Zero uses the default;
+	// negative disables this preservation.
+	PreserveUserMessagesTokens int
 	// Model is the LLM model to use for generating summaries.
 	Model *types.Model
 	// GetAPIKey retrieves an API key for the given provider.
@@ -29,10 +33,13 @@ type Options struct {
 
 // Result holds the outcome of a compaction operation.
 type Result struct {
-	Summary       string
-	OriginalCount int
-	NewCount      int
-	Messages      []types.AgentMessage
+	Summary               string
+	OriginalCount         int
+	NewCount              int
+	PreservedUserMessages int
+	ReadFiles             []string
+	ModifiedFiles         []string
+	Messages              []types.AgentMessage
 }
 
 const compactionPrompt = `You are summarizing a conversation between a user and a coding assistant. Create a concise summary that captures:
@@ -48,6 +55,25 @@ Be specific about technical details. The summary will be used to continue the co
 Format as a structured summary with clear sections.`
 
 const previousConversationSummaryPrefix = "[Previous Conversation Summary]"
+
+const (
+	defaultPreserveUserMessagesTokens = 1024
+	defaultPreserveUserMessagesCount  = 2
+	approxCharsPerToken               = 4
+	preservedUserMessageTruncated     = "\n\n...[truncated for compaction budget]"
+)
+
+// WouldCompact reports whether Compact would reduce this message slice.
+func WouldCompact(messages []types.AgentMessage, preserveRecent int) bool {
+	if len(messages) == 0 {
+		return false
+	}
+	preserve := preserveRecent
+	if preserve <= 0 {
+		preserve = 4
+	}
+	return len(messages) > preserve
+}
 
 // ExtractFileOperations inspects messages to find which files were read or modified
 // using tools, and recursively extracts these from past summary blocks.
@@ -152,12 +178,7 @@ func Compact(ctx context.Context, messages []types.AgentMessage, opts Options) (
 		return &Result{Messages: messages}, nil
 	}
 
-	preserve := opts.PreserveRecent
-	if preserve <= 0 {
-		preserve = 4
-	}
-
-	if len(messages) <= preserve {
+	if !WouldCompact(messages, opts.PreserveRecent) {
 		return &Result{
 			Messages:      messages,
 			OriginalCount: len(messages),
@@ -165,10 +186,16 @@ func Compact(ctx context.Context, messages []types.AgentMessage, opts Options) (
 		}, nil
 	}
 
+	preserve := opts.PreserveRecent
+	if preserve <= 0 {
+		preserve = 4
+	}
+
 	// Split messages into those to compact and those to preserve
 	toCompact := messages[:len(messages)-preserve]
 	toPreserve := messages[len(messages)-preserve:]
 	priorSummary, summaryFreeMessages := flattenPreviousSummaries(toCompact)
+	preservedUserMessages := recentUserMessagesWithinBudget(summaryFreeMessages, opts.PreserveUserMessagesTokens)
 
 	// Build a text representation of messages to compact
 	var sb strings.Builder
@@ -196,7 +223,7 @@ func Compact(ctx context.Context, messages []types.AgentMessage, opts Options) (
 		parts = append(parts, fmt.Sprintf("<modified-files>\n%s\n</modified-files>", strings.Join(modifiedFiles, "\n")))
 	}
 
-	// Build new message list: summary + preserved messages
+	// Build new message list: summary + selected user anchors + preserved messages
 	summaryMsg := types.UserMessage{
 		Role: "user",
 		Content: []types.ContentBlock{
@@ -207,16 +234,143 @@ func Compact(ctx context.Context, messages []types.AgentMessage, opts Options) (
 		},
 	}
 
-	newMessages := make([]types.AgentMessage, 0, 1+len(toPreserve))
+	newMessages := make([]types.AgentMessage, 0, 1+len(preservedUserMessages)+len(toPreserve))
 	newMessages = append(newMessages, summaryMsg)
+	newMessages = append(newMessages, preservedUserMessages...)
 	newMessages = append(newMessages, toPreserve...)
 
 	return &Result{
-		Summary:       summary,
-		OriginalCount: len(messages),
-		NewCount:      len(newMessages),
-		Messages:      newMessages,
+		Summary:               summary,
+		OriginalCount:         len(messages),
+		NewCount:              len(newMessages),
+		PreservedUserMessages: len(preservedUserMessages),
+		ReadFiles:             readFiles,
+		ModifiedFiles:         modifiedFiles,
+		Messages:              newMessages,
 	}, nil
+}
+
+func recentUserMessagesWithinBudget(messages []types.AgentMessage, maxTokens int) []types.AgentMessage {
+	if maxTokens == 0 {
+		maxTokens = defaultPreserveUserMessagesTokens
+	}
+	if maxTokens < 0 {
+		return nil
+	}
+	maxMessages := min(defaultPreserveUserMessagesCount, len(messages)-2)
+	if maxMessages <= 0 {
+		return nil
+	}
+
+	remaining := maxTokens
+	selected := make([]types.AgentMessage, 0)
+	for i := len(messages) - 1; i >= 0 && remaining > 0 && len(selected) < maxMessages; i-- {
+		text, ok := userMessageText(messages[i])
+		if !ok {
+			continue
+		}
+		text = strings.TrimSpace(text)
+		if text == "" || strings.HasPrefix(text, previousConversationSummaryPrefix) {
+			continue
+		}
+
+		tokens := approximateTextTokens(text)
+		if tokens > remaining {
+			text = truncateTextToApproxTokens(text, remaining)
+			if text == "" {
+				break
+			}
+			selected = append(selected, canonicalUserMessage(messages[i], text))
+			break
+		}
+
+		selected = append(selected, canonicalUserMessage(messages[i], text))
+		remaining -= tokens
+	}
+
+	for i, j := 0, len(selected)-1; i < j; i, j = i+1, j-1 {
+		selected[i], selected[j] = selected[j], selected[i]
+	}
+	return selected
+}
+
+func userMessageText(msg types.AgentMessage) (string, bool) {
+	switch m := msg.(type) {
+	case types.UserMessage:
+		return userContentText(m.Content)
+	case *types.UserMessage:
+		return userContentText(m.Content)
+	default:
+		return "", false
+	}
+}
+
+func userContentText(content any) (string, bool) {
+	switch c := content.(type) {
+	case string:
+		return c, true
+	case []types.ContentBlock:
+		parts := make([]string, 0, len(c))
+		for _, block := range c {
+			if tc, ok := block.(*types.TextContent); ok {
+				parts = append(parts, tc.Text)
+			}
+		}
+		if len(parts) == 0 {
+			return "", false
+		}
+		return strings.Join(parts, "\n\n"), true
+	default:
+		return "", false
+	}
+}
+
+func canonicalUserMessage(original types.AgentMessage, text string) types.UserMessage {
+	msg := types.UserMessage{
+		Role: "user",
+		Content: []types.ContentBlock{
+			&types.TextContent{Type: "text", Text: text},
+		},
+	}
+	switch m := original.(type) {
+	case types.UserMessage:
+		if m.Role != "" {
+			msg.Role = m.Role
+		}
+		msg.Timestamp = m.Timestamp
+	case *types.UserMessage:
+		if m.Role != "" {
+			msg.Role = m.Role
+		}
+		msg.Timestamp = m.Timestamp
+	}
+	return msg
+}
+
+func approximateTextTokens(text string) int {
+	runes := len([]rune(text))
+	if runes == 0 {
+		return 0
+	}
+	return (runes + approxCharsPerToken - 1) / approxCharsPerToken
+}
+
+func truncateTextToApproxTokens(text string, maxTokens int) string {
+	if maxTokens <= 0 {
+		return ""
+	}
+	maxRunes := maxTokens * approxCharsPerToken
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return strings.TrimSpace(text)
+	}
+
+	suffixRunes := []rune(preservedUserMessageTruncated)
+	if maxRunes <= len(suffixRunes) {
+		return ""
+	}
+	keep := maxRunes - len(suffixRunes)
+	return strings.TrimSpace(string(runes[:keep])) + preservedUserMessageTruncated
 }
 
 func generateSummary(ctx context.Context, priorSummary, conversationText string, opts Options) (string, error) {

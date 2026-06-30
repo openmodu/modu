@@ -95,6 +95,10 @@ type CompactionConfig struct {
 	MaxContextPercentage float64 `json:"maxContextPercentage,omitempty"`
 	// PreserveRecentMessages is the number of recent messages to preserve during compaction.
 	PreserveRecentMessages int `json:"preserveRecentMessages,omitempty"`
+	// PreserveUserMessagesTokens is an approximate token budget for retaining
+	// recent real user messages from the compacted range. A negative value
+	// disables this preservation.
+	PreserveUserMessagesTokens int `json:"preserveUserMessagesTokens,omitempty"`
 }
 
 // RetryConfig controls auto-retry behavior.
@@ -113,8 +117,9 @@ func Default() *Config {
 		ThinkingLevel:  types.ThinkingLevelMedium,
 		AutoCompaction: true,
 		CompactionSettings: CompactionConfig{
-			MaxContextPercentage:   80.0,
-			PreserveRecentMessages: 4,
+			MaxContextPercentage:       80.0,
+			PreserveRecentMessages:     4,
+			PreserveUserMessagesTokens: 1024,
 		},
 		Features: FeatureConfig{
 			MemoryTool:     boolPtr(true),

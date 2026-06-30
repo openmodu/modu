@@ -259,14 +259,41 @@ func (c *RpcClient) CycleThinkingLevel() (*RpcResponse, error) {
 
 // Compact sends a compact command.
 func (c *RpcClient) Compact() error {
+	_, err := c.CompactIfNeeded()
+	return err
+}
+
+// CompactIfNeeded sends a compact command and reports whether the server
+// actually changed the conversation context. Older servers do not return this
+// field, so a successful response without it is treated as changed.
+func (c *RpcClient) CompactIfNeeded() (bool, error) {
 	resp, err := c.Send(RpcCmdCompact, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !resp.Success {
-		return fmt.Errorf("compact failed: %s", resp.Error)
+		return false, fmt.Errorf("compact failed: %s", resp.Error)
 	}
-	return nil
+	return compactChangedFromResponse(resp.Data), nil
+}
+
+func compactChangedFromResponse(data any) bool {
+	switch value := data.(type) {
+	case nil:
+		return true
+	case map[string]bool:
+		changed, ok := value["changed"]
+		return !ok || changed
+	case map[string]any:
+		changed, ok := value["changed"]
+		if !ok {
+			return true
+		}
+		if v, ok := changed.(bool); ok {
+			return v
+		}
+	}
+	return true
 }
 
 // SetAutoCompaction sends a set_auto_compaction command.

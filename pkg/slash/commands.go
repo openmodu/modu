@@ -74,8 +74,11 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 
 	case "compact":
 		r.PrintInfo("compacting context…")
-		if err := session.Compact(ctx); err != nil {
+		changed, err := session.CompactIfNeeded(ctx)
+		if err != nil {
 			r.PrintError(err)
+		} else if !changed {
+			r.PrintInfo("context unchanged: not enough messages to compact")
 		} else {
 			r.PrintInfo("context compacted")
 		}
@@ -786,7 +789,8 @@ func handleContext(session *coding_agent.CodingSession, r Printer) {
 		"agent dir: " + info.AgentDir,
 		fmt.Sprintf("messages: %d", info.MessageCount),
 		fmt.Sprintf("system prompt: %d bytes", info.PromptByteCount),
-		fmt.Sprintf("memory: %s", bytePresence(info.MemoryBytes)),
+		fmt.Sprintf("memory: %s", memoryPresence(info.MemoryEnabled, info.MemorySummaryActive, info.MemoryBytes)),
+		"context remaining: " + contextRemainingPresence(info.TokensUntilCompaction, info.TokensUntilCompactionAvailable),
 		fmt.Sprintf("plan mode: %s", onOff(info.PlanMode)),
 	}
 	if info.ActiveWorktree != "" {
@@ -849,6 +853,26 @@ func bytePresence(n int) string {
 		return "empty"
 	}
 	return fmt.Sprintf("present (%d bytes)", n)
+}
+
+func memoryPresence(enabled, summaryActive bool, bytes int) string {
+	if !enabled {
+		return "disabled"
+	}
+	if summaryActive {
+		if bytes <= 0 {
+			return "summary"
+		}
+		return fmt.Sprintf("summary (%d bytes)", bytes)
+	}
+	return bytePresence(bytes)
+}
+
+func contextRemainingPresence(tokens int, available bool) string {
+	if !available {
+		return "unknown"
+	}
+	return fmt.Sprintf("%d tokens until compaction", tokens)
 }
 
 func onOff(v bool) string {

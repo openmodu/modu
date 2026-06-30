@@ -454,6 +454,13 @@ func TestNewCodingSessionHonorsFeatureGates(t *testing.T) {
 	if err := os.MkdirAll(agentDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	memoryDir := filepath.Join(dir, ".modu_code", "memory")
+	if err := os.MkdirAll(memoryDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(memoryDir, "MEMORY.md"), []byte("disabled memory fact"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	configContent := `{"features":{"todoTool":false,"taskOutputTool":false,"planMode":false,"worktreeMode":false,"memoryTool":false}}`
 	if err := os.WriteFile(filepath.Join(agentDir, "settings.json"), []byte(configContent), 0o644); err != nil {
 		t.Fatal(err)
@@ -469,10 +476,77 @@ func TestNewCodingSessionHonorsFeatureGates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, name := range []string{"todo_write", "task_output", "enter_plan_mode", "exit_plan_mode", "enter_worktree", "exit_worktree", "memory"} {
+	for _, name := range []string{"todo_write", "task_output", "enter_plan_mode", "exit_plan_mode", "enter_worktree", "exit_worktree", "memo"} {
 		if containsTool(session.GetActiveToolNames(), name) {
 			t.Fatalf("expected feature-gated tool %s to be disabled, got %v", name, session.GetActiveToolNames())
 		}
+	}
+	if prompt := session.GetAgent().GetState().SystemPrompt; strings.Contains(prompt, "disabled memory fact") {
+		t.Fatalf("expected disabled memory feature to suppress prompt memory, got:\n%s", prompt)
+	}
+	if info := session.GetContextInfo(); info.MemoryEnabled {
+		t.Fatal("expected disabled memory feature to report MemoryEnabled=false")
+	} else if info.MemoryBytes != 0 {
+		t.Fatalf("expected disabled memory feature to report 0 memory bytes, got %d", info.MemoryBytes)
+	}
+}
+
+func TestRefreshPromptWithNilConfigKeepsDefaultMemoryEnabled(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  agentDir,
+		Model:     newTestModel(),
+		GetAPIKey: func(provider string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.memoryStore.WriteProjectLongTerm("default memory fact"); err != nil {
+		t.Fatal(err)
+	}
+
+	session.config = nil
+	session.refreshDynamicSystemPrompt()
+
+	if prompt := session.GetAgent().GetState().SystemPrompt; !strings.Contains(prompt, "default memory fact") {
+		t.Fatalf("expected nil config to keep default memory enabled, got:\n%s", prompt)
+	}
+	if info := session.GetContextInfo(); !info.MemoryEnabled {
+		t.Fatal("expected nil config to report default-enabled memory")
+	} else if info.MemoryBytes == 0 {
+		t.Fatal("expected nil config to report default-enabled memory bytes")
+	}
+}
+
+func TestContextInfoReportsMemorySummaryMode(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  agentDir,
+		Model:     newTestModel(),
+		GetAPIKey: func(provider string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.memoryStore.WriteProjectSummary("summary memory fact"); err != nil {
+		t.Fatal(err)
+	}
+
+	info := session.GetContextInfo()
+	if !info.MemoryEnabled {
+		t.Fatal("expected memory to be enabled")
+	}
+	if !info.MemorySummaryActive {
+		t.Fatal("expected memory summary mode to be active")
+	}
+	if info.MemoryBytes == 0 {
+		t.Fatal("expected memory summary context bytes")
 	}
 }
 
@@ -2647,6 +2721,152 @@ func TestMaybeAutoCompact_AboveThreshold(t *testing.T) {
 	}
 }
 
+func TestResumeRestoresCompactedReplacementHistory(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	model := newTestModelWithContext(10000)
+	streamFn := func(ctx context.Context, model *types.Model, llmCtx *types.LLMContext, opts *types.SimpleStreamOptions) (types.EventStream, error) {
+		stream := types.NewEventStream()
+		go func() {
+			msg := &types.AssistantMessage{
+				Role:       "assistant",
+				ProviderID: model.ProviderID,
+				Model:      model.ID,
+				Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "compact summary"}},
+			}
+			stream.Push(types.StreamEvent{Type: "done", Reason: "stop", Message: msg})
+			stream.Resolve(msg, nil)
+			stream.Close()
+		}()
+		return stream, nil
+	}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  agentDir,
+		Model:     model,
+		GetAPIKey: func(p string) (string, error) { return "", nil },
+		StreamFn:  streamFn,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.ctxMgr.SetPolicy(session.compactionPolicy())
+	session.config.CompactionSettings.PreserveRecentMessages = 2
+	session.ctxMgr.SetPolicy(session.compactionPolicy())
+
+	for i := 1; i <= 5; i++ {
+		text := fmt.Sprintf("msg%d", i)
+		msg := types.UserMessage{Role: "user", Content: text}
+		session.agent.AppendMessage(msg)
+		if err := session.sessionManager.Append(sessionpkg.NewEntry(sessionpkg.EntryTypeMessage, "", sessionpkg.MessageData{
+			Role:    types.RoleUser,
+			Content: text,
+		})); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := session.Compact(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	followup := types.UserMessage{Role: "user", Content: "after compact"}
+	session.agent.AppendMessage(followup)
+	if err := session.sessionManager.Append(sessionpkg.NewEntry(sessionpkg.EntryTypeMessage, "", sessionpkg.MessageData{
+		Role:    types.RoleUser,
+		Content: "after compact",
+	})); err != nil {
+		t.Fatal(err)
+	}
+
+	resumed, err := NewCodingSession(CodingSessionOptions{
+		Cwd:             dir,
+		AgentDir:        agentDir,
+		Model:           model,
+		GetAPIKey:       func(p string) (string, error) { return "", nil },
+		StreamFn:        streamFn,
+		ResumeSessionID: session.GetSessionID(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var texts []string
+	for _, msg := range resumed.agent.GetState().Messages {
+		if text := agentMessageText(msg); text != "" {
+			texts = append(texts, text)
+		}
+	}
+	got := strings.Join(texts, "\n")
+	for _, want := range []string{"compact summary", "msg3", "msg4", "msg5", "after compact"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("restored messages missing %q:\n%s", want, got)
+		}
+	}
+	for _, old := range []string{"msg1", "msg2"} {
+		if strings.Contains(got, old) {
+			t.Fatalf("old pre-compaction message %q was restored:\n%s", old, got)
+		}
+	}
+}
+
+func TestContextRemainingToolUsesSessionTokenBudget(t *testing.T) {
+	session := newTestSession(t, newTestModelWithContext(10000))
+	session.config.AutoCompaction = true
+	session.config.CompactionSettings.MaxContextPercentage = 80
+	session.ctxMgr.SetPolicy(session.compactionPolicy())
+	session.ctxMgr.AddUsage(1250)
+
+	var tool types.Tool
+	for _, candidate := range session.activeTools {
+		if candidate.Name() == "get_context_remaining" {
+			tool = candidate
+			break
+		}
+	}
+	if tool == nil {
+		t.Fatalf("expected get_context_remaining in active tools, got %v", toolNamesFromTools(session.activeTools))
+	}
+
+	result, err := tool.Execute(context.Background(), "context-1", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := extractTextBlocks(result.Content); !strings.Contains(text, "6750") {
+		t.Fatalf("expected remaining budget in tool result, got %q", text)
+	}
+	details, ok := result.Details.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map details, got %T", result.Details)
+	}
+	if details["tokens_left"] != 6750 {
+		t.Fatalf("expected tokens_left detail 6750, got %#v", details["tokens_left"])
+	}
+}
+
+func TestContextInfoReportsRemainingTokenBudget(t *testing.T) {
+	session := newTestSession(t, newTestModelWithContext(10000))
+	session.config.AutoCompaction = true
+	session.config.CompactionSettings.MaxContextPercentage = 80
+	session.ctxMgr.SetPolicy(session.compactionPolicy())
+	session.ctxMgr.AddUsage(1250)
+
+	info := session.GetContextInfo()
+	if !info.TokensUntilCompactionAvailable {
+		t.Fatal("expected context remaining budget to be available")
+	}
+	if info.TokensUntilCompaction != 6750 {
+		t.Fatalf("expected 6750 tokens until compaction, got %d", info.TokensUntilCompaction)
+	}
+}
+
+func TestCompactionPolicyIncludesUserAnchorBudget(t *testing.T) {
+	session := newTestSession(t, newTestModelWithContext(10000))
+	session.config.CompactionSettings.PreserveUserMessagesTokens = -1
+
+	policy := session.compactionPolicy()
+	if policy.PreserveUserMessagesTokens != -1 {
+		t.Fatalf("expected user anchor budget to come from config, got %d", policy.PreserveUserMessagesTokens)
+	}
+}
+
 func TestCycleModelNoScoped(t *testing.T) {
 	session := newTestSession(t, newTestModel())
 	result := session.CycleModel()
@@ -3361,7 +3581,7 @@ func TestPrepareSubagentDefinitionInjectsSkillsAndMemory(t *testing.T) {
 		MemoryScope:       "both",
 		DisallowedTools:   []string{"bash"},
 		HarnessBlockTools: []string{"edit", "write"},
-	}, skillMgr, mem)
+	}, skillMgr, mem, true)
 
 	if !strings.Contains(def.SystemPrompt, "Base prompt.") {
 		t.Fatalf("expected base prompt in %q", def.SystemPrompt)
@@ -3374,6 +3594,73 @@ func TestPrepareSubagentDefinitionInjectsSkillsAndMemory(t *testing.T) {
 	}
 	if len(def.DisallowedTools) != 3 || def.DisallowedTools[0] != "bash" || def.DisallowedTools[1] != "edit" || def.DisallowedTools[2] != "write" {
 		t.Fatalf("expected merged disallowed tools, got %#v", def.DisallowedTools)
+	}
+}
+
+func TestPrepareSubagentDefinitionUsesScopedMemorySummaryFirst(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	mem := memory.New(agentDir, dir)
+	if err := mem.WriteProjectLongTerm("raw project note"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mem.WriteProjectSummary("project summary note"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mem.WriteGlobalLongTerm("raw global note"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mem.WriteGlobalSummary("global summary note"); err != nil {
+		t.Fatal(err)
+	}
+
+	projectDef := prepareSubagentDefinition(&subagent.SubagentDefinition{
+		Name:         "worker",
+		SystemPrompt: "Base prompt.",
+		MemoryScope:  "project",
+	}, nil, mem, true)
+	if !strings.Contains(projectDef.SystemPrompt, "## Project Memory Summary") || !strings.Contains(projectDef.SystemPrompt, "project summary note") {
+		t.Fatalf("expected project memory summary in %q", projectDef.SystemPrompt)
+	}
+	if strings.Contains(projectDef.SystemPrompt, "raw project note") {
+		t.Fatalf("expected project summary to suppress raw long-term memory, got %q", projectDef.SystemPrompt)
+	}
+
+	globalDef := prepareSubagentDefinition(&subagent.SubagentDefinition{
+		Name:         "worker",
+		SystemPrompt: "Base prompt.",
+		MemoryScope:  "user",
+	}, nil, mem, true)
+	if !strings.Contains(globalDef.SystemPrompt, "## Global Memory Summary") || !strings.Contains(globalDef.SystemPrompt, "global summary note") {
+		t.Fatalf("expected global memory summary in %q", globalDef.SystemPrompt)
+	}
+	if strings.Contains(globalDef.SystemPrompt, "raw global note") {
+		t.Fatalf("expected global summary to suppress raw long-term memory, got %q", globalDef.SystemPrompt)
+	}
+}
+
+func TestPrepareSubagentDefinitionHonorsDisabledMemoryFeature(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	mem := memory.New(agentDir, dir)
+	if err := mem.WriteGlobalLongTerm("global note"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mem.WriteProjectLongTerm("project note"); err != nil {
+		t.Fatal(err)
+	}
+
+	def := prepareSubagentDefinition(&subagent.SubagentDefinition{
+		Name:         "worker",
+		SystemPrompt: "Base prompt.",
+		MemoryScope:  "both",
+	}, nil, mem, false)
+
+	if !strings.Contains(def.SystemPrompt, "Base prompt.") {
+		t.Fatalf("expected base prompt in %q", def.SystemPrompt)
+	}
+	if strings.Contains(def.SystemPrompt, "global note") || strings.Contains(def.SystemPrompt, "project note") {
+		t.Fatalf("expected disabled memory feature to suppress subagent memory, got %q", def.SystemPrompt)
 	}
 }
 

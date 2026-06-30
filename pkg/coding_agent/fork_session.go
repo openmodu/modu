@@ -47,7 +47,8 @@ func (cs *engine) forkSession(ctx context.Context, opts extension.ForkOptions) (
 		Background:      opts.Background,
 		Isolation:       opts.Isolation,
 	}
-	def = prepareSubagentDefinition(def, cs.skillManager, cs.memoryStore)
+	memoryEnabled := memoryFeatureEnabled(cs.config)
+	def = prepareSubagentDefinition(def, cs.skillManager, cs.memoryStore, memoryEnabled)
 
 	initialMessages, err := cs.initialMessagesForFork(opts.Context, opts.ParentTaskID)
 	if err != nil {
