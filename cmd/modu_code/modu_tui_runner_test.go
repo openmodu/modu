@@ -974,9 +974,13 @@ func TestModuTUIWorkflowCockpitShowsOrchestrationMap(t *testing.T) {
 					"runningAgentCount": 1,
 					"currentPhase":      "Research",
 					"updatedAt":         200,
+					"logs": []string{
+						"scope complete",
+						"research fanout started",
+					},
 					"phases": []map[string]any{
 						{"title": "Scope", "agentCount": 1, "doneCount": 1},
-						{"title": "Research", "agentCount": 2, "doneCount": 1, "runningCount": 1},
+						{"title": "Research", "agentCount": 2, "doneCount": 1, "runningCount": 1, "durationMs": 42000, "estimatedTokens": 1200},
 					},
 					"agents": []map[string]any{
 						{
@@ -1014,6 +1018,15 @@ func TestModuTUIWorkflowCockpitShowsOrchestrationMap(t *testing.T) {
 		"Workflow Cockpit",
 		"overview",
 		"workflow deep_research 2/3 running: Research",
+		"flow",
+		"phases: Scope:done -> Research:run",
+		"now: Research 1/2 running=1",
+		"updates",
+		"- scope complete",
+		"- research fanout started",
+		"timeline",
+		"[done] Scope 1/1",
+		"[running] Research 1/2 · 1 running · est 1200 · 42s",
 		"orchestration map",
 		"[Scope] 1/1 done",
 		"#1 [done] scope",
@@ -1067,6 +1080,36 @@ func TestModuTUIWorkflowCockpitRowsOpenWorkflowDetails(t *testing.T) {
 	}
 	if !strings.Contains(rows[0].Detail, "Report") || !strings.Contains(rows[0].Detail, "1min 05s") {
 		t.Fatalf("row detail should include phase and duration: %#v", rows[0])
+	}
+}
+
+func TestModuTUIWorkflowCockpitPanelSelectsLatestRunningRun(t *testing.T) {
+	panel := moduTUIWorkflowCockpitPanelFromStates(map[string]any{
+		"workflow": map[string]any{
+			"runs": []map[string]any{{
+				"id":        "latest-complete",
+				"name":      "latest_complete",
+				"status":    "completed",
+				"updatedAt": 30,
+			}, {
+				"id":        "active-run",
+				"name":      "active",
+				"status":    "running",
+				"updatedAt": 20,
+			}, {
+				"id":        "old-run",
+				"name":      "old",
+				"status":    "failed",
+				"updatedAt": 10,
+			}},
+		},
+	})
+
+	if panel.Selected != 1 {
+		t.Fatalf("cockpit selected row = %d, want active running row 1: %#v", panel.Selected, panel.Rows)
+	}
+	if panel.Rows[panel.Selected].Value != "active-run" {
+		t.Fatalf("cockpit selected row = %#v, want active-run", panel.Rows[panel.Selected])
 	}
 }
 
@@ -1129,8 +1172,156 @@ func TestModuTUIWorkflowRunDetailPanelShowsRunInPanel(t *testing.T) {
 			t.Fatalf("detail panel missing %q:\n%s", want, text)
 		}
 	}
-	if len(panel.Rows) != 7 || panel.Rows[0].Command != moduTUIWorkflowPanelControlPrefix+"restart:run-detail" || panel.Rows[1].Command != moduTUIWorkflowPanelPhasePrefix+"run-detail:Research" || panel.Rows[2].Command != moduTUIWorkflowPanelPhasePrefix+"run-detail:Report" || panel.Rows[3].Command != moduTUIWorkflowPanelAgentsPrefix+"run-detail" || panel.Rows[4].Command != moduTUIWorkflowPanelResultPrefix+"run-detail" || panel.Rows[5].Command != moduTUIWorkflowPanelScriptPrefix+"run-detail" || panel.Rows[6].Command != moduTUIWorkflowPanelBackCommand {
+	if len(panel.Rows) != 9 ||
+		panel.Rows[0].Command != moduTUIWorkflowPanelFeedPrefix+"run-detail" ||
+		panel.Rows[1].Command != moduTUIWorkflowPanelPhasePrefix+"run-detail:Report" ||
+		panel.Rows[2].Command != moduTUIWorkflowPanelControlPrefix+"restart:run-detail" ||
+		panel.Rows[3].Command != moduTUIWorkflowPanelPhasePrefix+"run-detail:Research" ||
+		panel.Rows[4].Command != moduTUIWorkflowPanelPhasePrefix+"run-detail:Report" ||
+		panel.Rows[5].Command != moduTUIWorkflowPanelAgentsPrefix+"run-detail" ||
+		panel.Rows[6].Command != moduTUIWorkflowPanelResultPrefix+"run-detail" ||
+		panel.Rows[7].Command != moduTUIWorkflowPanelScriptPrefix+"run-detail" ||
+		panel.Rows[8].Command != moduTUIWorkflowPanelBackCommand {
 		t.Fatalf("detail panel should expose control, phase, agents, result, script, and back rows: %#v", panel.Rows)
+	}
+	if panel.Selected != 1 {
+		t.Fatalf("detail panel selected row = %d, want current phase quick row 1: %#v", panel.Selected, panel.Rows)
+	}
+}
+
+func TestModuTUIWorkflowRunDetailPanelShowsLiveFlowSummary(t *testing.T) {
+	states := map[string]any{
+		"workflow": map[string]any{
+			"runs": []map[string]any{{
+				"id":                "run-flow",
+				"name":              "market_watch",
+				"status":            "running",
+				"agentCount":        4,
+				"doneCount":         1,
+				"runningAgentCount": 1,
+				"errorCount":        1,
+				"currentPhase":      "Research",
+				"logs": []string{
+					"old update",
+					"scoped market domain",
+					"primary sources done",
+					"started cross-check",
+					"risk retry",
+					"writing final summary",
+				},
+				"phases": []map[string]any{{
+					"title":      "Scope",
+					"agentCount": 1,
+					"doneCount":  1,
+				}, {
+					"title":           "Research",
+					"agentCount":      2,
+					"doneCount":       1,
+					"runningCount":    1,
+					"errorCount":      1,
+					"durationMs":      42000,
+					"estimatedTokens": 500,
+				}, {
+					"title":      "Report",
+					"agentCount": 1,
+				}},
+				"agents": []map[string]any{{
+					"id":     1,
+					"label":  "scope",
+					"phase":  "Scope",
+					"status": "done",
+				}, {
+					"id":              3,
+					"label":           "verify",
+					"phase":           "Research",
+					"status":          "running",
+					"promptPreview":   "cross-check catalysts",
+					"recentToolCalls": 2,
+				}, {
+					"id":     4,
+					"label":  "risk",
+					"phase":  "Research",
+					"status": "failed",
+					"error":  "source unavailable",
+				}},
+			}},
+		},
+	}
+	panel := moduTUIWorkflowRunDetailPanelFromStates(states, "run-flow")
+
+	text := strings.Join(panel.Lines, "\n")
+	for _, want := range []string{
+		"flow",
+		"phases: Scope:done -> Research:error -> Report:wait",
+		"now: Research 1/2 errors=1",
+		"active: #3 verify [running] @Research 2 tools",
+		"prompt: cross-check catalysts",
+		"attention: #4 risk [failed] @Research",
+		"error: source unavailable",
+		"next: Report",
+		"updates",
+		"- scoped market domain",
+		"- primary sources done",
+		"- started cross-check",
+		"- risk retry",
+		"- writing final summary",
+		"timeline",
+		"[done] Scope 1/1",
+		"[error] Research 1/2 · 1 running · 1 errors · est 500 · 42s",
+		"attention: #4 risk [failed] @Research",
+		"active: #3 verify [running] @Research 2 tools",
+		"[waiting] Report 0/1",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("detail flow summary missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "old update") {
+		t.Fatalf("updates should only show recent entries:\n%s", text)
+	}
+	if len(panel.Rows) < 3 ||
+		panel.Rows[0].Command != moduTUIWorkflowPanelFeedPrefix+"run-flow" ||
+		panel.Rows[1].Command != moduTUIWorkflowPanelPhasePrefix+"run-flow:Research" ||
+		panel.Rows[2].Command != moduTUIWorkflowPanelAgentPrefix+"run-flow:3" {
+		t.Fatalf("detail panel should expose feed, current phase, and active agent quick rows: %#v", panel.Rows)
+	}
+	if panel.Selected != 1 {
+		t.Fatalf("detail panel selected row = %d, want current phase quick row 1: %#v", panel.Selected, panel.Rows)
+	}
+
+	feed := moduTUIWorkflowFeedPanelFromStates(states, "run-flow")
+	if feed.ID != moduTUIWorkflowFeedPanelID || feed.Title != "Workflow Feed" {
+		t.Fatalf("unexpected feed panel: %#v", feed)
+	}
+	feedText := strings.Join(feed.Lines, "\n")
+	for _, want := range []string{
+		"flow",
+		"updates",
+		"timeline",
+		"phases: Scope:done -> Research:error -> Report:wait",
+		"- writing final summary",
+		"[error] Research 1/2 · 1 running · 1 errors · est 500 · 42s",
+	} {
+		if !strings.Contains(feedText, want) {
+			t.Fatalf("feed panel missing %q:\n%s", want, feedText)
+		}
+	}
+	if len(feed.Rows) < 5 ||
+		feed.Rows[0].Command != moduTUIWorkflowPanelPhasePrefix+"run-flow:Research" ||
+		feed.Rows[1].Command != moduTUIWorkflowPanelAgentPrefix+"run-flow:3" ||
+		feed.Rows[2].Command != moduTUIWorkflowPanelDetailPrefix+"run-flow" ||
+		feed.Rows[3].Command != moduTUIWorkflowPanelAgentsPrefix+"run-flow" ||
+		feed.Rows[4].Command != moduTUIWorkflowPanelBackCommand {
+		t.Fatalf("feed panel rows = %#v", feed.Rows)
+	}
+	if feed.Selected != 0 {
+		t.Fatalf("feed panel selected row = %d, want current phase row 0: %#v", feed.Selected, feed.Rows)
+	}
+	if len(feed.Shortcuts) != 2 || feed.Shortcuts[0].Key != "p" || feed.Shortcuts[1].Key != "x" {
+		t.Fatalf("feed panel shortcuts = %#v", feed.Shortcuts)
+	}
+	if !strings.Contains(feed.Footer, "[p] Pause") || !strings.Contains(feed.Footer, "[x] Stop") {
+		t.Fatalf("feed panel footer should expose shortcuts: %q", feed.Footer)
 	}
 }
 
@@ -1204,6 +1395,9 @@ func TestModuTUIWorkflowPhasePanelShowsOneStage(t *testing.T) {
 	if len(panel.Rows) != 5 || panel.Rows[0].Command != moduTUIWorkflowPanelAgentPrefix+"run-phase:2" || panel.Rows[1].Command != moduTUIWorkflowPanelAgentPrefix+"run-phase:3" || panel.Rows[2].Command != moduTUIWorkflowPanelDetailPrefix+"run-phase" || panel.Rows[2].Value != "Research" || panel.Rows[3].Command != moduTUIWorkflowPanelAgentsPrefix+"run-phase" || panel.Rows[4].Command != moduTUIWorkflowPanelBackCommand {
 		t.Fatalf("phase panel rows = %#v", panel.Rows)
 	}
+	if panel.Selected != 1 {
+		t.Fatalf("phase panel selected row = %d, want running agent row 1: %#v", panel.Selected, panel.Rows)
+	}
 
 	next, ok := moduTUIWorkflowPanelAction(nil, modutui.PanelAction{
 		PanelID: moduTUIWorkflowRunDetailPanelID,
@@ -1228,18 +1422,35 @@ func TestModuTUIWorkflowRunDetailPanelShowsRunningControls(t *testing.T) {
 		},
 	}, "run-running")
 
-	if len(panel.Rows) < 3 {
+	if len(panel.Rows) < 4 {
 		t.Fatalf("detail panel rows = %#v", panel.Rows)
 	}
-	if panel.Rows[0].Label != "Pause" || panel.Rows[0].Command != moduTUIWorkflowPanelControlPrefix+"pause:run-running" {
-		t.Fatalf("expected first row to pause running workflow: %#v", panel.Rows[0])
+	if len(panel.Shortcuts) != 2 ||
+		panel.Shortcuts[0].Key != "p" || panel.Shortcuts[0].Command != moduTUIWorkflowPanelControlPrefix+"pause:run-running" ||
+		panel.Shortcuts[1].Key != "x" || panel.Shortcuts[1].Command != moduTUIWorkflowPanelControlPrefix+"stop:run-running" {
+		t.Fatalf("running detail shortcuts = %#v", panel.Shortcuts)
 	}
-	if panel.Rows[1].Label != "Stop" || panel.Rows[1].Command != moduTUIWorkflowPanelControlPrefix+"stop:run-running" {
-		t.Fatalf("expected second row to stop running workflow: %#v", panel.Rows[1])
+	if !strings.Contains(panel.Footer, "[p] Pause") || !strings.Contains(panel.Footer, "[x] Stop") {
+		t.Fatalf("running detail footer should expose shortcuts: %q", panel.Footer)
+	}
+	if panel.Rows[0].Label != "Execution feed" || panel.Rows[0].Command != moduTUIWorkflowPanelFeedPrefix+"run-running" {
+		t.Fatalf("expected first row to open execution feed: %#v", panel.Rows[0])
+	}
+	if panel.Rows[1].Label != "Pause" || panel.Rows[1].Command != moduTUIWorkflowPanelControlPrefix+"pause:run-running" {
+		t.Fatalf("expected second row to pause running workflow: %#v", panel.Rows[1])
+	}
+	if panel.Rows[2].Label != "Stop" || panel.Rows[2].Command != moduTUIWorkflowPanelControlPrefix+"stop:run-running" {
+		t.Fatalf("expected third row to stop running workflow: %#v", panel.Rows[2])
 	}
 	text := strings.Join(panel.Lines, "\n")
 	if !strings.Contains(text, "Pause, Stop") {
 		t.Fatalf("detail panel should list running controls:\n%s", text)
+	}
+	if !strings.Contains(text, "active: no agent snapshot yet (running)") {
+		t.Fatalf("detail panel should show empty live snapshot state:\n%s", text)
+	}
+	if panel.Selected != 3 {
+		t.Fatalf("running detail selected row = %d, want Agents row 3 when no phases exist: %#v", panel.Selected, panel.Rows)
 	}
 }
 
@@ -1257,6 +1468,30 @@ func TestModuTUIWorkflowControlActionBuildsSlashCommand(t *testing.T) {
 
 	if _, _, _, ok := moduTUIWorkflowControlAction(modutui.PanelAction{Command: moduTUIWorkflowPanelControlPrefix + "delete:run-123"}); ok {
 		t.Fatal("unsupported control verb should not be accepted")
+	}
+}
+
+func TestModuTUIWorkflowRunShortcutsFollowStatus(t *testing.T) {
+	tests := []struct {
+		name   string
+		status string
+		want   []string
+	}{
+		{name: "running", status: "running", want: []string{"p:workflow-panel:control:pause:run-short", "x:workflow-panel:control:stop:run-short"}},
+		{name: "paused", status: "paused", want: []string{"p:workflow-panel:control:resume:run-short", "r:workflow-panel:control:restart:run-short"}},
+		{name: "completed", status: "completed", want: []string{"r:workflow-panel:control:restart:run-short"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			shortcuts := moduTUIWorkflowRunShortcuts(moduTUIWorkflowRun{ID: "run-short", Status: tt.status})
+			got := make([]string, 0, len(shortcuts))
+			for _, shortcut := range shortcuts {
+				got = append(got, shortcut.Key+":"+shortcut.Command)
+			}
+			if strings.Join(got, "|") != strings.Join(tt.want, "|") {
+				t.Fatalf("shortcuts = %#v, want %#v", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -1304,6 +1539,16 @@ func TestModuTUIWorkflowPanelRefFromPanel(t *testing.T) {
 				}},
 			},
 			want: moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowRunDetailPanelID, RunID: "run-1"},
+		},
+		{
+			name: "feed",
+			panel: modutui.Panel{
+				ID: moduTUIWorkflowFeedPanelID,
+				Rows: []modutui.PanelRow{{
+					Command: moduTUIWorkflowPanelDetailPrefix + "run-feed",
+				}},
+			},
+			want: moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowFeedPanelID, RunID: "run-feed"},
 		},
 		{
 			name: "agent",
@@ -1410,6 +1655,9 @@ func TestModuTUIWorkflowAgentsAndAgentPanels(t *testing.T) {
 	if agentsPanel.Rows[2].Command != moduTUIWorkflowPanelDetailPrefix+"run-agents" || agentsPanel.Rows[3].Command != moduTUIWorkflowPanelBackCommand {
 		t.Fatalf("agents panel should expose detail and cockpit back rows: %#v", agentsPanel.Rows)
 	}
+	if agentsPanel.Selected != 0 {
+		t.Fatalf("agents panel selected row = %d, want first agent row: %#v", agentsPanel.Selected, agentsPanel.Rows)
+	}
 
 	agentPanel := moduTUIWorkflowAgentPanelFromStates(states, "run-agents", 1)
 	if agentPanel.ID != moduTUIWorkflowAgentPanelID || agentPanel.Title != "Workflow Agent" {
@@ -1437,6 +1685,37 @@ func TestModuTUIWorkflowAgentsAndAgentPanels(t *testing.T) {
 	}
 	if len(agentPanel.Rows) != 3 || agentPanel.Rows[0].Command != moduTUIWorkflowPanelTranscriptPrefix+"run-agents:1" || agentPanel.Rows[1].Command != moduTUIWorkflowPanelAgentsPrefix+"run-agents" || agentPanel.Rows[2].Command != moduTUIWorkflowPanelDetailPrefix+"run-agents" {
 		t.Fatalf("agent panel back rows = %#v", agentPanel.Rows)
+	}
+	if agentPanel.Selected != 0 {
+		t.Fatalf("agent panel selected row = %d, want transcript row: %#v", agentPanel.Selected, agentPanel.Rows)
+	}
+}
+
+func TestModuTUIWorkflowAgentsPanelSelectsRunningAgent(t *testing.T) {
+	panel := moduTUIWorkflowAgentsPanelFromStates(map[string]any{
+		"workflow": map[string]any{
+			"runs": []map[string]any{{
+				"id":     "run-agents-focus",
+				"name":   "market_watch",
+				"status": "running",
+				"agents": []map[string]any{{
+					"id":     1,
+					"label":  "scope",
+					"status": "done",
+				}, {
+					"id":     2,
+					"label":  "verify",
+					"status": "running",
+				}},
+			}},
+		},
+	}, "run-agents-focus")
+
+	if panel.Selected != 1 {
+		t.Fatalf("agents panel selected row = %d, want running agent row 1: %#v", panel.Selected, panel.Rows)
+	}
+	if panel.Rows[panel.Selected].Value != "2" {
+		t.Fatalf("selected agent row = %#v, want agent 2", panel.Rows[panel.Selected])
 	}
 }
 
@@ -1477,6 +1756,17 @@ func TestModuTUIWorkflowRunningAgentPanelShowsControlRows(t *testing.T) {
 	}
 	if panel.Rows[2].Command != moduTUIWorkflowPanelTranscriptPrefix+"run-agent-control:3" {
 		t.Fatalf("transcript row should follow controls: %#v", panel.Rows)
+	}
+	if panel.Selected != 2 {
+		t.Fatalf("running agent selected row = %d, want transcript row after controls: %#v", panel.Selected, panel.Rows)
+	}
+	if len(panel.Shortcuts) != 2 ||
+		panel.Shortcuts[0].Key != "x" || panel.Shortcuts[0].Command != moduTUIWorkflowPanelAgentControlPrefix+"stop:run-agent-control:3" ||
+		panel.Shortcuts[1].Key != "r" || panel.Shortcuts[1].Command != moduTUIWorkflowPanelAgentControlPrefix+"restart:run-agent-control:3" {
+		t.Fatalf("running agent shortcuts = %#v", panel.Shortcuts)
+	}
+	if !strings.Contains(panel.Footer, "[x] Stop agent") || !strings.Contains(panel.Footer, "[r] Restart agent") {
+		t.Fatalf("running agent footer should expose shortcuts: %q", panel.Footer)
 	}
 }
 

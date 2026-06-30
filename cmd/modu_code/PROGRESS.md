@@ -1033,3 +1033,43 @@ enough to implement, verify, and commit independently.
   returned; the existing runtime-state refresh loop then keeps the cockpit
   updated while the workflow registry receives progress snapshots, and final
   tool results still switch to the run detail panel.
+- 2026-07-01: tuned workflow panel default focus. The cockpit now initially
+  selects the latest running run when one exists, run detail panels select the
+  current/running phase instead of a control row, phase and agent-list panels
+  select the running agent, and running agent detail panels focus Transcript
+  instead of Stop/Restart controls. Live refresh still preserves the user's
+  current row selection.
+- 2026-07-01: added a compact live flow summary to `Workflow Run` panels. The
+  detail view now shows a short `flow` block before the full orchestration map,
+  including phase progression, the current phase, active agents, attention/error
+  agents, and the next waiting phase so users can understand the workflow shape
+  without reading the serialized transcript output.
+- 2026-07-01: added a phase timeline to `Workflow Run` panels. The new
+  `timeline` block expands the live flow into one short row per phase with
+  status, progress, token/duration hints, and at most two active/error agent
+  callouts, giving a Claude-Code-style step feed without dumping full child
+  transcripts into the main conversation.
+- 2026-07-01: routed workflow `log(...)` progress messages into dynamic TUI
+  panels. Workflow runtime state now exposes capped recent logs for each run,
+  and `Workflow Run` panels render them as a short `updates` feed between the
+  live flow and phase timeline, so script-authored progress messages are visible
+  without opening `snapshot.json`.
+- 2026-07-01: promoted the latest run's live flow, updates, and phase timeline
+  into the `Workflow Cockpit` first screen. Exact `/workflows` now shows the
+  same compact execution feed that run detail uses, so users can understand the
+  active orchestration shape before drilling into a run, phase, or agent.
+- 2026-07-01: added workflow quick-entry rows and a dedicated `Workflow Feed`
+  panel. Run detail now starts with `Execution feed`, `Current phase`, and
+  `Active agent` rows before control actions, and the feed panel shows only
+  flow/updates/timeline with focused navigation into the current phase or active
+  agent. This makes the dynamic workflow panel behave more like an operations
+  cockpit than a long command list.
+- 2026-07-01: added panel shortcuts for workflow controls. `pkg/modu-tui`
+  panels now support `Panel.Shortcuts`, and workflow run/feed panels map `p` to
+  pause/resume, `x` to stop, and `r` to restart where valid; running agent
+  detail panels map `x` to stop-agent and `r` to restart-agent. All shortcuts
+  reuse the existing `PanelAction` slash-command control path.
+- 2026-07-01: surfaced workflow shortcut hints in panel footers. Run, feed, and
+  running-agent panels now append context-specific `[p]`, `[x]`, and `[r]`
+  control hints to the footer whenever those shortcuts are active, so the TUI
+  exposes controls without requiring users to discover them from row labels.
