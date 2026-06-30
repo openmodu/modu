@@ -1073,3 +1073,48 @@ enough to implement, verify, and commit independently.
   running-agent panels now append context-specific `[p]`, `[x]`, and `[r]`
   control hints to the footer whenever those shortcuts are active, so the TUI
   exposes controls without requiring users to discover them from row labels.
+- 2026-07-01: added a workflow `board` section to the cockpit, run detail, and
+  feed panels. The board renders each phase as a numbered step with done,
+  running, error, or waiting state, then highlights attention and active agents
+  under the relevant phase so users can see the orchestration shape before
+  opening detailed timelines or transcripts.
+- 2026-07-01: split the full workflow orchestration dump into a dedicated
+  `Workflow Map` panel. `/workflows map <run-id|latest>` and the new `Map` rows
+  show the complete phase/agent tree, while run detail stays focused on
+  summary, board, flow, updates, timeline, and actions to avoid turning
+  `/workflows show latest` into a long truncated transcript block.
+- 2026-07-01: made `Workflow Feed` a first-class slash route. In the modu TUI,
+  `/workflows feed <run-id|latest>` opens the live feed panel directly; in the
+  workflow extension command it prints the same short execution-feed shape
+  without full result/script expansion. This gives users an explicit dynamic
+  follow mode instead of forcing `/workflows show latest` to carry both summary
+  and full inspection duties.
+- 2026-07-01: routed workflow started/restarted events into `Workflow Feed` by
+  default when the run is still active. Explicit `/workflows show` continues to
+  open run detail, and completed workflow events still open detail, but live
+  background runs now land in the dynamic follow view immediately.
+- 2026-07-01: added direct view-switch shortcuts across workflow panels. Run
+  detail exposes `[f] Feed`, `[m] Map`, and `[a] Agents`; feed exposes `[d]
+  Detail`, `[m] Map`, and `[a] Agents`; map exposes `[f] Feed`, `[d] Detail`,
+  and `[a] Agents`. The shortcuts reuse the existing panel action routing, so
+  users can move between follow, summary, tree, and agent views without
+  scrolling to navigation rows.
+- 2026-07-01: added compact agent `lanes` to `Workflow Feed`. Each phase now
+  gets a single scan line such as `Research: run #3 verify | err #4 risk`,
+  making the active/done/error agent distribution visible without opening the
+  full map or per-agent list.
+- 2026-07-01: added a lane legend to `Workflow Feed` so the compact agent
+  markers are self-explanatory: `run active`, `done complete`, `err attention`,
+  and `wait queued`.
+- 2026-07-01: added `Attention agent` quick rows to workflow run detail and
+  feed panels. When any agent has an error/failed state, users can jump directly
+  to that agent from the top navigation rows, before drilling through the full
+  agent list or map.
+- 2026-07-01: added `[!] Attention` shortcuts to workflow run detail and feed
+  panels when an error/failed agent exists. The shortcut opens the first
+  attention agent directly through the existing panel action route, matching the
+  `err attention` lane marker.
+- 2026-07-01: made `Workflow Map` interactive instead of a read-only tree. The
+  map panel now includes current/attention/active quick rows, phase rows, and
+  feed/detail/agents navigation rows, and its panel actions can drill directly
+  into phase and agent panels.

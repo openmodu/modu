@@ -641,6 +641,17 @@ High-priority gaps identified before this round:
   `RuntimeState().Extensions["workflow"].runs[].logs`, letting host UIs render a
   lightweight live updates feed without loading full workflow snapshots or child
   transcripts.
+- Added `/workflows map <run-id|latest>` as a lightweight phase/agent
+  orchestration-tree command. It shows phase summaries and per-agent previews
+  without expanding the full workflow result or script, leaving `/workflows
+  show` as the complete metadata/script view.
+- Added `/workflows feed <run-id|latest>` as the short dynamic execution-feed
+  command. It renders run progress, current phase, recent `log(...)` updates,
+  active/attention agents, and phase timeline without expanding the full result
+  or script.
+- Extended `/workflows feed <run-id|latest>` with compact phase lanes matching
+  the modu TUI feed semantics: `run`, `done`, `err`, and `wait` markers plus a
+  legend, so non-TUI output also shows agent distribution by phase.
 
 ## Still Missing
 

@@ -265,7 +265,9 @@ func TestWorkflowToolGuidesRunManagementThroughWorkflowsCommand(t *testing.T) {
 	for _, want := range []string{
 		"only starts workflow runs",
 		"do not pass action",
+		"/workflows feed <run-id>",
 		"/workflows show <run-id>",
+		"/workflows map <run-id>",
 		"/workflows agent <run-id> <agent-id>",
 		"/workflows stop <run-id>",
 	} {
@@ -278,7 +280,9 @@ func TestWorkflowToolGuidesRunManagementThroughWorkflowsCommand(t *testing.T) {
 	async := props["async"].(map[string]any)
 	asyncDescription := async["description"].(string)
 	for _, want := range []string{
+		"/workflows feed <run-id>",
 		"/workflows show <run-id>",
+		"/workflows map <run-id>",
 		"Do not call this tool with action/status/id fields",
 	} {
 		if !strings.Contains(asyncDescription, want) {
@@ -1794,18 +1798,21 @@ func TestWorkflowsCommandListsAndShowsPersistedRuns(t *testing.T) {
 	}
 	now := time.Now()
 	snapshot := workflowSnapshot{
-		Name:       "listed",
-		ScriptPath: filepath.Join(runDir, "script.js"),
-		RunDir:     runDir,
-		Phases:     []string{},
+		Name:         "listed",
+		ScriptPath:   filepath.Join(runDir, "script.js"),
+		RunDir:       runDir,
+		Phases:       []string{},
+		CurrentPhase: "Review",
 		PhaseSummaries: []phaseSummary{{
 			Title:           "Review",
-			AgentCount:      1,
+			AgentCount:      4,
 			DoneCount:       1,
+			RunningCount:    1,
+			ErrorCount:      1,
 			EstimatedTokens: 2,
 			DurationMs:      7,
 		}},
-		Logs: []string{},
+		Logs: []string{"scope complete", "writing review"},
 		Agents: []agentSnapshot{{
 			ID:              1,
 			Label:           "x",
@@ -1817,10 +1824,34 @@ func TestWorkflowsCommandListsAndShowsPersistedRuns(t *testing.T) {
 			EndedAt:         now.Add(7 * time.Millisecond),
 			DurationMs:      7,
 			EstimatedTokens: 2,
+		}, {
+			ID:     2,
+			Label:  "verify",
+			Phase:  "Review",
+			Prompt: "verify",
+			Status: statusRunning,
+			RecentToolCalls: []workflowToolCallSnapshot{{
+				ToolName: "web_search",
+			}},
+		}, {
+			ID:     3,
+			Label:  "risk",
+			Phase:  "Review",
+			Prompt: "risk",
+			Status: statusError,
+			Error:  "source unavailable",
+		}, {
+			ID:     4,
+			Label:  "draft",
+			Phase:  "Review",
+			Prompt: "draft",
+			Status: statusQueued,
 		}},
-		AgentCount: 1,
-		DoneCount:  1,
-		Result:     map[string]any{"ok": true, "long": strings.Repeat("r", 700) + "FULL_RESULT_END"},
+		AgentCount:   4,
+		RunningCount: 1,
+		DoneCount:    1,
+		ErrorCount:   1,
+		Result:       map[string]any{"ok": true, "long": strings.Repeat("r", 700) + "FULL_RESULT_END"},
 	}
 	data, err := json.Marshal(snapshot)
 	if err != nil {
@@ -1841,15 +1872,35 @@ func TestWorkflowsCommandListsAndShowsPersistedRuns(t *testing.T) {
 	if err := cmd(""); err != nil {
 		t.Fatalf("/workflows: %v", err)
 	}
-	if got := api.lastNotify(); !strings.Contains(got, "Workflow runs:") || !strings.Contains(got, "run-1") || !strings.Contains(got, "listed (1 agent(s), 0 error(s))") {
+	if got := api.lastNotify(); !strings.Contains(got, "Workflow runs:") || !strings.Contains(got, "run-1") || !strings.Contains(got, "listed (4 agent(s), 1 error(s))") || !strings.Contains(got, "/workflows feed <run-id|latest>") || !strings.Contains(got, "/workflows map <run-id|latest>") {
 		t.Fatalf("list notify = %q", got)
 	}
 	if err := cmd("show latest"); err != nil {
 		t.Fatalf("/workflows show: %v", err)
 	}
 	got := api.lastNotify()
-	if !strings.Contains(got, "Workflow run run-1") || !strings.Contains(got, "Workflow: listed") || !strings.Contains(got, "Review: 1 agent(s)") || !strings.Contains(got, "estimatedTokens=2") || !strings.Contains(got, "durationMs=7") || !strings.Contains(got, "Result:") || !strings.Contains(got, "FULL_RESULT_END") || !strings.Contains(got, "```js") || !strings.Contains(got, `name: "listed"`) || !strings.Contains(got, longScriptTail) {
+	if !strings.Contains(got, "Workflow run run-1") || !strings.Contains(got, "Workflow: listed") || !strings.Contains(got, "Review: 4 agent(s)") || !strings.Contains(got, "estimatedTokens=2") || !strings.Contains(got, "durationMs=7") || !strings.Contains(got, "Result:") || !strings.Contains(got, "FULL_RESULT_END") || !strings.Contains(got, "```js") || !strings.Contains(got, `name: "listed"`) || !strings.Contains(got, longScriptTail) {
 		t.Fatalf("show notify = %q", got)
+	}
+	if err := cmd("feed latest"); err != nil {
+		t.Fatalf("/workflows feed: %v", err)
+	}
+	got = api.lastNotify()
+	if !strings.Contains(got, "Workflow feed run-1") || !strings.Contains(got, "Workflow: listed") || !strings.Contains(got, "Progress: 1/4 done, 1 running, 1 errors") || !strings.Contains(got, "Current phase: Review") || !strings.Contains(got, "Updates:") || !strings.Contains(got, "- writing review") || !strings.Contains(got, "Lanes:") || !strings.Contains(got, "- Review: done #1 x | run #2 verify 1 tools | err #3 risk | wait #4 draft") || !strings.Contains(got, "Legend: run active | done complete | err attention | wait queued") || !strings.Contains(got, "Active:") || !strings.Contains(got, "Agent 2 [running] verify @Review tools=1 failed=0") || !strings.Contains(got, "Attention:") || !strings.Contains(got, "Agent 3 [error] risk @Review: source unavailable") || !strings.Contains(got, "Timeline:") || !strings.Contains(got, "- Review: 1/4 done, 1 running, 1 errors") {
+		t.Fatalf("feed notify = %q", got)
+	}
+	if strings.Contains(got, "FULL_RESULT_END") || strings.Contains(got, "```js") || strings.Contains(got, longScriptTail) {
+		t.Fatalf("feed notify should not include full result or script: %q", got)
+	}
+	if err := cmd("map latest"); err != nil {
+		t.Fatalf("/workflows map: %v", err)
+	}
+	got = api.lastNotify()
+	if !strings.Contains(got, "Workflow map run-1") || !strings.Contains(got, "Workflow: listed") || !strings.Contains(got, "- Review: 1/4 done, 1 running, 1 errors, estimatedTokens=2, durationMs=7") || !strings.Contains(got, "Agent 1 [done] x estimatedTokens=2 durationMs=7") || !strings.Contains(got, "ResultPreview: ok") {
+		t.Fatalf("map notify = %q", got)
+	}
+	if strings.Contains(got, "FULL_RESULT_END") || strings.Contains(got, "```js") || strings.Contains(got, longScriptTail) {
+		t.Fatalf("map notify should not include full result or script: %q", got)
 	}
 	if err := cmd("agent latest 1"); err != nil {
 		t.Fatalf("/workflows agent: %v", err)
