@@ -219,6 +219,47 @@ func TestHandlePromptsListsPromptTemplates(t *testing.T) {
 	}
 }
 
+func TestHandlePromptsEmptyShowsConcreteExample(t *testing.T) {
+	cwd := t.TempDir()
+	agentDir := filepath.Join(cwd, ".coding_agent")
+	model := &types.Model{
+		ID:         "mimo-v2.5-pro",
+		Name:       "MiMo V2.5 Pro",
+		ProviderID: "xiaomi-mimo",
+	}
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       cwd,
+		AgentDir:  agentDir,
+		Model:     model,
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	printer := &capturePrinter{}
+	handled, exit := Handle(context.Background(), "/prompts", session, printer, model)
+
+	if !handled || exit {
+		t.Fatalf("expected /prompts to be handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	output := printer.String()
+	for _, want := range []string{
+		"no prompt templates found",
+		"mkdir -p .coding_agent/prompts",
+		".coding_agent/prompts/review.md",
+		"description: Review code changes",
+		"$ARGUMENTS",
+		"/reload",
+		"/review cmd/modu_code",
+		"~/.modu/prompts/",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected output to contain %q, got:\n%s", want, output)
+		}
+	}
+}
+
 func TestHandleLeavesTUIOnlyCommandsUnhandled(t *testing.T) {
 	cwd := t.TempDir()
 	model := &types.Model{ID: "test", Name: "Test", ProviderID: "test"}

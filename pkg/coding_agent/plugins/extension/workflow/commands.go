@@ -195,7 +195,7 @@ func (e *Extension) cmdWorkflowsShow(selector string) error {
 			fmt.Fprintf(&b, "- Agent %d [%s%s] %s estimatedTokens=%d%s durationMs=%d\n", agent.ID, agent.Status, cached, agent.Label, agent.EstimatedTokens, cost, agent.DurationMs)
 		}
 		if run.Snapshot.Result != nil {
-			fmt.Fprintf(&b, "Result: %s\n", preview(run.Snapshot.Result, 600))
+			fmt.Fprintf(&b, "Result:\n%s\n", formatWorkflowShowValue(run.Snapshot.Result))
 		}
 	}
 	if run.Error != "" {
@@ -207,13 +207,25 @@ func (e *Extension) cmdWorkflowsShow(selector string) error {
 			return fmt.Errorf("read workflow script %s: %w", run.ScriptPath, err)
 		}
 		script := strings.TrimSpace(string(data))
-		if len(script) > 4000 {
-			script = script[:4000] + "\n..."
-		}
 		fmt.Fprintf(&b, "\n```js\n%s\n```", script)
 	}
 	e.tell(b.String())
 	return nil
+}
+
+func formatWorkflowShowValue(value any) string {
+	switch v := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(v)
+	default:
+		data, err := json.MarshalIndent(v, "", "  ")
+		if err != nil {
+			return strings.TrimSpace(fmt.Sprint(v))
+		}
+		return strings.TrimSpace(string(data))
+	}
 }
 
 func (e *Extension) cmdWorkflowsAgent(selector, agentIDText string) error {

@@ -1786,8 +1786,9 @@ func TestWorkflowsCommandListsAndShowsPersistedRuns(t *testing.T) {
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	longScriptTail := `return agent("x", { label: "x" })`
 	script := `meta({ name: "listed", description: "listed run" })
-return agent("x", { label: "x" })`
+` + strings.Repeat("// keep full script output\n", 180) + longScriptTail
 	if err := os.WriteFile(filepath.Join(runDir, "script.js"), []byte(script), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1819,7 +1820,7 @@ return agent("x", { label: "x" })`
 		}},
 		AgentCount: 1,
 		DoneCount:  1,
-		Result:     map[string]any{"ok": true},
+		Result:     map[string]any{"ok": true, "long": strings.Repeat("r", 700) + "FULL_RESULT_END"},
 	}
 	data, err := json.Marshal(snapshot)
 	if err != nil {
@@ -1847,7 +1848,7 @@ return agent("x", { label: "x" })`
 		t.Fatalf("/workflows show: %v", err)
 	}
 	got := api.lastNotify()
-	if !strings.Contains(got, "Workflow run run-1") || !strings.Contains(got, "Workflow: listed") || !strings.Contains(got, "Review: 1 agent(s)") || !strings.Contains(got, "estimatedTokens=2") || !strings.Contains(got, "durationMs=7") || !strings.Contains(got, "Result:") || !strings.Contains(got, "```js") || !strings.Contains(got, `name: "listed"`) {
+	if !strings.Contains(got, "Workflow run run-1") || !strings.Contains(got, "Workflow: listed") || !strings.Contains(got, "Review: 1 agent(s)") || !strings.Contains(got, "estimatedTokens=2") || !strings.Contains(got, "durationMs=7") || !strings.Contains(got, "Result:") || !strings.Contains(got, "FULL_RESULT_END") || !strings.Contains(got, "```js") || !strings.Contains(got, `name: "listed"`) || !strings.Contains(got, longScriptTail) {
 		t.Fatalf("show notify = %q", got)
 	}
 	if err := cmd("agent latest 1"); err != nil {
@@ -1921,6 +1922,75 @@ return agent("x", { label: "x" })`
 	}
 	if !foundRestart {
 		t.Fatalf("restarted run not found in %+v", runs)
+	}
+}
+
+func TestFormatWorkflowCompletionShowsFlowBeforeFinalResult(t *testing.T) {
+	now := time.Now()
+	text := formatWorkflowCompletion(runResult{
+		Meta: metaInfo{Name: "market_watch", Description: "market watch"},
+		Result: map[string]any{
+			"report": "final answer",
+		},
+		Snapshot: workflowSnapshot{
+			Name: "market_watch",
+			PhaseSummaries: []phaseSummary{{
+				Title:      "Research",
+				AgentCount: 2,
+				DoneCount:  2,
+				DurationMs: 12,
+			}, {
+				Title:      "Synthesis",
+				AgentCount: 1,
+				DoneCount:  1,
+				DurationMs: 5,
+			}},
+			Agents: []agentSnapshot{{
+				ID:              1,
+				Label:           "market breadth",
+				Phase:           "Research",
+				Status:          statusDone,
+				ResultPreview:   "breadth result",
+				StartedAt:       now,
+				EndedAt:         now.Add(10 * time.Millisecond),
+				DurationMs:      10,
+				EstimatedTokens: 42,
+			}, {
+				ID:            2,
+				Label:         "sector rotation",
+				Phase:         "Research",
+				Status:        statusDone,
+				ResultPreview: "sector result",
+			}, {
+				ID:            3,
+				Label:         "report",
+				Phase:         "Synthesis",
+				Status:        statusDone,
+				ResultPreview: "report result",
+			}},
+			AgentCount: 3,
+			DoneCount:  3,
+		},
+	})
+
+	for _, want := range []string{
+		"Workflow market_watch completed with 3 agent(s).",
+		"## Execution flow",
+		"- Research: 2 agent(s), 2 done, 0 running, 0 errors",
+		"#1 [done] market breadth durationMs=10 estimatedTokens=42 result=breadth result",
+		"#2 [done] sector rotation result=sector result",
+		"- Synthesis: 1 agent(s), 1 done, 0 running, 0 errors",
+		"#3 [done] report result=report result",
+		"## Final result",
+		"## report",
+		"final answer",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("formatted completion missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Index(text, "## Execution flow") > strings.Index(text, "## Final result") {
+		t.Fatalf("execution flow should appear before final result:\n%s", text)
 	}
 }
 

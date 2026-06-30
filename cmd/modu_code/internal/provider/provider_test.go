@@ -477,6 +477,42 @@ baseUrl = ""
 	}
 }
 
+func TestSaveConfigPreservesSettingsTable(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeConfig(t, home, `version = 2
+
+[settings]
+disableWorkflows = true
+
+[settings.permissions]
+defaultMode = "auto"
+
+[providers.deepseek]
+type = "openai-compatible"
+baseUrl = "https://api.deepseek.com/v1"
+
+[[models]]
+name = "deepseek"
+provider = "deepseek"
+model = "deepseek-chat"
+`)
+
+	if err := SaveActiveModel("deepseek", "deepseek-chat"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".modu", "config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, want := range []string{`[settings]`, `disableWorkflows = true`, `[settings.permissions]`, `defaultMode = "auto"`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("config save lost settings %q:\n%s", want, text)
+		}
+	}
+}
+
 func writeConfig(t *testing.T, home, content string) {
 	t.Helper()
 	dir := filepath.Join(home, ".modu")

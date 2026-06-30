@@ -34,8 +34,15 @@ type pendingApproval struct {
 }
 
 type pendingHumanPrompt struct {
-	request HumanPromptRequest
+	request  HumanPromptRequest
+	respond  chan<- string
+	selected int
+}
+
+type pendingHumanText struct {
+	request HumanTextRequest
 	respond chan<- string
+	input   InputBlock
 }
 
 type Model struct {
@@ -61,6 +68,7 @@ type Model struct {
 	busy         bool
 	approval     *pendingApproval
 	humanPrompt  *pendingHumanPrompt
+	humanText    *pendingHumanText
 	todos        []TodoItem
 	todosCurrent bool
 
@@ -205,6 +213,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.humanPrompt != nil {
 			return m.handleHumanPromptKey(msg)
 		}
+		if m.humanText != nil {
+			return m.handleHumanTextKey(msg)
+		}
 		switch {
 		case isCtrlCKey(msg):
 			if strings.TrimSpace(m.input.ExpandedValue()) != "" {
@@ -305,6 +316,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.PasteMsg:
+		if m.humanText != nil {
+			m.humanText.input.InsertPaste(msg.Content)
+			m.rebuild()
+			return m, nil
+		}
 		m.resetIMEState()
 		m.input.InsertPaste(msg.Content)
 		m.clearHistorySelection()
@@ -428,6 +444,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case RequestToolApprovalMsg:
 		m.approval = &pendingApproval{request: msg.Request, respond: msg.Respond}
 		m.humanPrompt = nil
+		m.humanText = nil
 		m.clearSlashMatches()
 		m.follow = true
 		m.unseen = 0
@@ -440,8 +457,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case RequestHumanPromptMsg:
-		m.humanPrompt = &pendingHumanPrompt{request: normalizeHumanPromptRequest(msg.Request), respond: msg.Respond}
+		req := normalizeHumanPromptRequest(msg.Request)
+		selected := req.DefaultIndex
+		if selected < 0 && len(req.Options) > 0 {
+			selected = 0
+		}
+		m.humanPrompt = &pendingHumanPrompt{request: req, respond: msg.Respond, selected: selected}
 		m.approval = nil
+		m.humanText = nil
 		m.clearSlashMatches()
 		m.follow = true
 		m.unseen = 0
@@ -450,6 +473,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case CancelHumanPromptMsg:
 		if m.humanPrompt != nil && (msg.ID == "" || msg.ID == m.humanPrompt.request.ID) {
 			m.humanPrompt = nil
+			m.rebuild()
+		}
+
+	case RequestHumanTextMsg:
+		req := normalizeHumanTextRequest(msg.Request)
+		input := InputBlock{}
+		if req.Default != "" {
+			input.Insert(req.Default)
+		}
+		m.humanText = &pendingHumanText{request: req, respond: msg.Respond, input: input}
+		m.approval = nil
+		m.humanPrompt = nil
+		m.clearSlashMatches()
+		m.follow = true
+		m.unseen = 0
+		m.rebuild()
+
+	case CancelHumanTextMsg:
+		if m.humanText != nil && (msg.ID == "" || msg.ID == m.humanText.request.ID) {
+			m.humanText = nil
 			m.rebuild()
 		}
 	}
@@ -636,7 +679,7 @@ func (m *Model) minViewportRows() int {
 }
 
 func (m *Model) hasBlockingPrompt() bool {
-	return m.approval != nil || m.humanPrompt != nil
+	return m.approval != nil || m.humanPrompt != nil || m.humanText != nil
 }
 func (m *Model) maxOffset() int {
 	return max(0, len(m.lines)-m.vpHeight())
@@ -768,7 +811,7 @@ func (m *Model) render() string {
 	inputLines, _, _ := m.input.Render(m.inputRenderWidth(), m.inputRows())
 	if m.approval != nil {
 		inputLines = []string{fitLine(dimStyle.Render(" approval pending "), m.inputRenderWidth())}
-	} else if m.humanPrompt != nil {
+	} else if m.humanPrompt != nil || m.humanText != nil {
 		inputLines = []string{fitLine(dimStyle.Render(" human input pending "), m.inputRenderWidth())}
 	}
 	for i := range inputLines {
@@ -779,7 +822,7 @@ func (m *Model) render() string {
 		state = "● streaming"
 	} else if m.approval != nil {
 		state = "● approval"
-	} else if m.humanPrompt != nil {
+	} else if m.humanPrompt != nil || m.humanText != nil {
 		state = "● input"
 	} else if m.busy {
 		state = "● running"
@@ -1097,6 +1140,9 @@ func (m *Model) approvalPanelLines() []string {
 }
 
 func (m *Model) humanPromptPanelLines() []string {
+	if m.humanText != nil {
+		return m.humanTextPanelLines()
+	}
 	if m.humanPrompt == nil {
 		return nil
 	}
@@ -1114,6 +1160,8 @@ func (m *Model) humanPromptPanelLines() []string {
 	}
 	if len(req.Options) > 0 {
 		body = append(body, "")
+		body = append(body, humanPromptOptionLines(req, m.humanPrompt.selected, innerWidth)...)
+		body = append(body, "")
 		body = append(body, humanPromptActionsLine(req))
 	}
 	lines := CardBlock{Lines: body, BorderStyle: approvalBorderStyle}.RenderWidth(width)
@@ -1130,6 +1178,10 @@ func (m *Model) humanPromptPanelLines() []string {
 	bodyCap := max(1, budget-2)
 	compact := []string{botStyle.Render("Human input required") + " " + dimStyle.Render(ansi.Truncate(title, max(1, innerWidth), "…"))}
 	if len(req.Options) > 0 && bodyCap >= 2 {
+		options := humanPromptOptionLines(req, m.humanPrompt.selected, innerWidth)
+		if len(options) > 0 {
+			compact = append(compact, options[0])
+		}
 		compact = append(compact, humanPromptActionsLine(req))
 	}
 	for len(compact) > bodyCap {
@@ -1142,11 +1194,68 @@ func (m *Model) humanPromptPanelBudget() int {
 	return m.height - m.bottomFixedRows() - m.minViewportRows() - m.approvalPanelHeight()
 }
 
+func (m *Model) humanTextPanelLines() []string {
+	if m.humanText == nil {
+		return nil
+	}
+	width := max(1, m.width)
+	innerWidth := max(1, width-4)
+	req := m.humanText.request
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		title = "Input required"
+	}
+	value := m.humanText.input.ExpandedValue()
+	display := value
+	if req.Secret && display != "" {
+		display = strings.Repeat("*", len([]rune(display)))
+	}
+	if strings.TrimSpace(display) == "" {
+		display = dimStyle.Render(fallbackString(req.Placeholder, "type value"))
+	}
+	var body []string
+	body = append(body, botStyle.Render("Human input required")+" "+dimStyle.Render(title))
+	if text := strings.TrimSpace(req.Body); text != "" {
+		body = append(body, limitedWrappedLines(text, innerWidth, m.maxApprovalDetailLines())...)
+	}
+	body = append(body, "")
+	body = append(body, fitLine("  "+display, innerWidth))
+	body = append(body, "")
+	body = append(body, dimStyle.Render("[enter] save  [esc] cancel"))
+	lines := CardBlock{Lines: body, BorderStyle: approvalBorderStyle}.RenderWidth(width)
+	budget := m.humanPromptPanelBudget()
+	if budget <= 0 {
+		return nil
+	}
+	if len(lines) <= budget {
+		return lines
+	}
+	if budget < 3 {
+		return nil
+	}
+	compact := []string{
+		botStyle.Render("Human input required") + " " + dimStyle.Render(ansi.Truncate(title, max(1, innerWidth), "…")),
+		fitLine("  "+display, innerWidth),
+		dimStyle.Render("[enter] save  [esc] cancel"),
+	}
+	for len(compact) > max(1, budget-2) {
+		compact = compact[:len(compact)-1]
+	}
+	return CardBlock{Lines: compact, BorderStyle: approvalBorderStyle}.RenderWidth(width)
+}
+
 func humanPromptActionsLine(req HumanPromptRequest) string {
 	if len(req.Options) == 0 {
 		return dimStyle.Render("[enter] continue  [esc] cancel")
 	}
-	parts := make([]string, 0, len(req.Options)+1)
+	return dimStyle.Render("[↑/↓] select  [enter] choose  [1-9] quick  [esc] cancel")
+}
+
+func humanPromptOptionLines(req HumanPromptRequest, selected int, width int) []string {
+	if len(req.Options) == 0 {
+		return nil
+	}
+	lines := make([]string, 0, len(req.Options))
 	for i, option := range req.Options {
 		if i >= 9 {
 			break
@@ -1158,16 +1267,19 @@ func humanPromptActionsLine(req HumanPromptRequest) string {
 		if label == "" {
 			label = fmt.Sprintf("Option %d", i+1)
 		}
-		marker := fmt.Sprintf("[%d]", i+1)
-		if i == req.DefaultIndex {
-			marker = "[enter/" + strconv.Itoa(i+1) + "]"
+		prefix := fmt.Sprintf("  %d. ", i+1)
+		if i == selected {
+			prefix = "› " + strconv.Itoa(i+1) + ". "
 		}
-		parts = append(parts, marker+" "+label)
+		line := ansi.Truncate(prefix+label, max(1, width), "…")
+		if i == selected {
+			line = selStyle.Render(line)
+		} else {
+			line = dimStyle.Render(line)
+		}
+		lines = append(lines, line)
 	}
-	if req.DefaultIndex < 0 || req.DefaultIndex >= len(req.Options) {
-		parts = append(parts, "[esc] cancel")
-	}
-	return dimStyle.Render(strings.Join(parts, "  "))
+	return lines
 }
 
 func normalizeHumanPromptRequest(req HumanPromptRequest) HumanPromptRequest {
@@ -1248,6 +1360,22 @@ func approvalDetailLines(text string, width int, limit int) []string {
 	return lines
 }
 
+func normalizeHumanTextRequest(req HumanTextRequest) HumanTextRequest {
+	req.ID = strings.TrimSpace(req.ID)
+	req.Title = strings.TrimSpace(req.Title)
+	req.Body = strings.TrimSpace(req.Body)
+	req.Placeholder = strings.TrimSpace(req.Placeholder)
+	req.Default = normalizeInputText(req.Default)
+	return req
+}
+
+func fallbackString(value, fallback string) string {
+	if strings.TrimSpace(value) != "" {
+		return value
+	}
+	return fallback
+}
+
 func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if isCtrlCKey(msg) {
 		return m, tea.Quit
@@ -1275,8 +1403,22 @@ func (m Model) handleHumanPromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if isEscKey(msg) {
 		return m.resolveHumanPrompt(m.defaultHumanPromptValue()), nil
 	}
+	if m.humanPrompt != nil && len(m.humanPrompt.request.Options) > 0 {
+		switch msg.String() {
+		case "up":
+			return m.moveHumanPromptSelection(-1), nil
+		case "down":
+			return m.moveHumanPromptSelection(1), nil
+		}
+		switch strings.TrimSpace(msg.Text) {
+		case "k":
+			return m.moveHumanPromptSelection(-1), nil
+		case "j":
+			return m.moveHumanPromptSelection(1), nil
+		}
+	}
 	if msg.Code == tea.KeyEnter {
-		return m.resolveHumanPrompt(m.defaultHumanPromptValue()), nil
+		return m.resolveHumanPrompt(m.selectedHumanPromptValue()), nil
 	}
 	if idx, ok := humanPromptOptionIndex(msg); ok && m.humanPrompt != nil {
 		options := m.humanPrompt.request.Options
@@ -1285,6 +1427,84 @@ func (m Model) handleHumanPromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m Model) moveHumanPromptSelection(delta int) Model {
+	if m.humanPrompt == nil || len(m.humanPrompt.request.Options) == 0 {
+		return m
+	}
+	n := min(len(m.humanPrompt.request.Options), 9)
+	if n <= 0 {
+		return m
+	}
+	selected := m.humanPrompt.selected
+	if selected < 0 || selected >= n {
+		selected = 0
+	}
+	m.humanPrompt.selected = (selected + delta + n) % n
+	m.rebuild()
+	return m
+}
+
+func (m Model) handleHumanTextKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.humanText == nil {
+		return m, nil
+	}
+	if isCtrlCKey(msg) {
+		return m, tea.Quit
+	}
+	if isEscKey(msg) {
+		return m.resolveHumanText(""), nil
+	}
+	switch {
+	case msg.Code == tea.KeyEnter:
+		value := m.humanText.input.ExpandedValue()
+		if m.humanText.request.Required && strings.TrimSpace(value) == "" {
+			m.status = "input required"
+			m.rebuild()
+			return m, nil
+		}
+		return m.resolveHumanText(value), nil
+	case msg.Code == tea.KeyLeft, msg.String() == "ctrl+b":
+		m.humanText.input.MoveLeft()
+	case msg.Code == tea.KeyRight, msg.String() == "ctrl+f":
+		m.humanText.input.MoveRight()
+	case msg.Code == tea.KeyHome, msg.String() == "ctrl+a":
+		m.humanText.input.MoveHome()
+	case msg.Code == tea.KeyEnd, msg.String() == "ctrl+e":
+		m.humanText.input.MoveEnd()
+	case msg.Code == tea.KeyBackspace, msg.String() == "ctrl+h":
+		m.humanText.input.Backspace()
+	case isCtrlWKey(msg):
+		m.humanText.input.DeleteWordBackward()
+	case msg.Code == tea.KeyDelete:
+		m.humanText.input.DeleteForward()
+	case msg.Text != "":
+		m.humanText.input.Insert(msg.Text)
+	}
+	m.rebuild()
+	return m, nil
+}
+
+func (m Model) resolveHumanText(value string) Model {
+	if m.humanText == nil {
+		return m
+	}
+	prompt := m.humanText
+	if prompt.respond != nil {
+		select {
+		case prompt.respond <- value:
+		default:
+		}
+	}
+	m.humanText = nil
+	if strings.TrimSpace(value) == "" {
+		m.status = "input cancelled"
+	} else {
+		m.status = "input received"
+	}
+	m.rebuild()
+	return m
 }
 
 func humanPromptOptionIndex(msg tea.KeyPressMsg) (int, bool) {
@@ -1307,6 +1527,18 @@ func (m Model) defaultHumanPromptValue() string {
 		return req.Options[req.DefaultIndex].Value
 	}
 	return ""
+}
+
+func (m Model) selectedHumanPromptValue() string {
+	if m.humanPrompt == nil {
+		return ""
+	}
+	req := m.humanPrompt.request
+	idx := m.humanPrompt.selected
+	if idx >= 0 && idx < len(req.Options) {
+		return req.Options[idx].Value
+	}
+	return m.defaultHumanPromptValue()
 }
 
 func isCtrlCKey(msg tea.KeyPressMsg) bool {

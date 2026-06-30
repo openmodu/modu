@@ -99,6 +99,16 @@ type HumanPromptRequest struct {
 	DefaultIndex int
 }
 
+type HumanTextRequest struct {
+	ID          string
+	Title       string
+	Body        string
+	Placeholder string
+	Default     string
+	Secret      bool
+	Required    bool
+}
+
 type SubmitKind string
 
 const (
@@ -185,5 +195,14 @@ type RequestHumanPromptMsg struct {
 }
 
 type CancelHumanPromptMsg struct {
+	ID string
+}
+
+type RequestHumanTextMsg struct {
+	Request HumanTextRequest
+	Respond chan<- string
+}
+
+type CancelHumanTextMsg struct {
 	ID string
 }

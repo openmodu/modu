@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,14 +26,37 @@ import (
 const moduTUITerminalStatusTTL = 10 * time.Second
 const moduTUIContextCompactDivider = "------------- context compact ------------------"
 
-func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool, opts RunOptions) error {
+func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool, opts RunOptions) (err error) {
 	if n, err := session.RestoreMessages(); err == nil && n > 0 {
 		_ = n
 	}
 
 	initial := messagesFromSessionTranscript(session)
+	if notice := strings.TrimSpace(opts.StartupNotice); notice != "" {
+		initial = append(initial, modutui.Message{
+			Role:         modutui.RoleAssistant,
+			Text:         notice,
+			Preformatted: true,
+		})
+	}
 	var program *tea.Program
 	var programMu sync.RWMutex
+	defer func() {
+		if r := recover(); r != nil {
+			programMu.RLock()
+			p := program
+			programMu.RUnlock()
+			if p != nil {
+				func() {
+					defer func() { _ = recover() }()
+					p.Kill()
+				}()
+			}
+			restoreModuTUITerminal()
+			fmt.Fprintf(os.Stderr, "modu_code TUI panic: %v\n%s\n", r, debug.Stack())
+			err = fmt.Errorf("TUI panic: %v", r)
+		}
+	}()
 	var promptMu sync.Mutex
 	var currentCancel context.CancelFunc
 	var currentPromptID int
@@ -47,6 +72,25 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 			p.Send(msg)
 		}
 	}
+	reportAsyncPanic := func(name string, recovered any) {
+		send(modutui.AppendMessageMsg{Message: modutui.Message{
+			Role:         modutui.RoleAssistant,
+			Text:         fmt.Sprintf("internal panic in %s: %v", name, recovered),
+			Preformatted: true,
+		}})
+		send(modutui.SetStatusMsg{Status: "internal panic", TransientFor: moduTUITerminalStatusTTL})
+	}
+	safeGo := func(name string, fn func()) {
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					reportAsyncPanic(name, r)
+				}
+			}()
+			fn()
+		}()
+	}
+	configWizard := newModuTUIConfigWizard(opts.CommandHooks, send)
 	markForegroundRunStart := func() {
 		foregroundMu.Lock()
 		foregroundRuns++
@@ -89,7 +133,7 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		// deadlock Bubble Tea: Send blocks when the message channel is full —
 		// which happens readily over SSH where queued mouse events fill it — and
 		// the loop is itself waiting for Update to return. Run it off-loop.
-		go func() {
+		safeGo("interrupt", func() {
 			promptMu.Lock()
 			cancel := currentCancel
 			continueQueuedAfterCancel = false
@@ -100,11 +144,11 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 			session.Abort()
 			session.AbortBash()
 			send(modutui.SetStatusMsg{Status: "interrupting"})
-		}()
+		})
 	}
 	runAgentLoop := func(run func(context.Context) error) {
 		markForegroundRunStart()
-		go func() {
+		safeGo("agent loop", func() {
 			send(modutui.SetBusyMsg{Busy: true})
 			send(modutui.SetStatusMsg{Status: "running"})
 			defer func() {
@@ -160,7 +204,7 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 				sendFooter()
 				return
 			}
-		}()
+		})
 	}
 	runPrompt := func(text string) {
 		runAgentLoop(func(ctx context.Context) error {
@@ -179,7 +223,7 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		// the Model.Update loop (submit / slash hooks), where send (program.Send)
 		// blocks the event loop when the message channel is full — readily so
 		// over SSH. Run it off-loop.
-		go func() {
+		safeGo("follow-up queue", func() {
 			if requireActive && !isPromptActive() {
 				send(modutui.SetStatusMsg{Status: "no active task to followup"})
 				return
@@ -190,7 +234,7 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 			}
 			session.FollowUp(text)
 			send(modutui.SetStatusMsg{Status: "queued"})
-		}()
+		})
 	}
 	queueSteer := func(text string, requireActive bool) {
 		// Same hazard as interruptPrompt: this runs synchronously from the
@@ -199,7 +243,7 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		// full — readily so over SSH. Run it off-loop. Ordering is preserved
 		// within the goroutine: Steer enqueues and continueQueuedAfterCancel is
 		// set before cancel(), all before runAgentLoop reads it post-cancel.
-		go func() {
+		safeGo("steer queue", func() {
 			if requireActive && !isPromptActive() {
 				send(modutui.SetStatusMsg{Status: "no active task to steer"})
 				return
@@ -219,9 +263,12 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 			session.Abort()
 			session.AbortBash()
 			send(modutui.SetStatusMsg{Status: "steering"})
-		}()
+		})
 	}
 	submit := func(ev modutui.SubmitEvent) {
+		if configWizard.HandleInput(ctx, ev.Text) {
+			return
+		}
 		switch ev.Kind {
 		case modutui.SubmitKindFollowUp:
 			queueFollowUp(ev.Text, false)
@@ -267,7 +314,21 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 					}
 					return
 				}
-				go runModuTUISlash(ctx, line, session, model, send, isForegroundRunActive)
+				if args, ok := moduTUIConfigArgs(line); ok && strings.TrimSpace(args) == "" {
+					safeGo("config wizard", func() { configWizard.Start(ctx) })
+					return
+				}
+				if args, ok := moduTUIModelArgs(line); ok && strings.TrimSpace(args) == "" {
+					safeGo("model selector", func() { runModuTUIModelSelect(ctx, session, send) })
+					return
+				}
+				safeGo("slash command", func() {
+					runModuTUISlash(ctx, line, session, model, opts.CommandHooks, send, isForegroundRunActive, func() {
+						configWizard.Start(ctx)
+					}, func() {
+						runModuTUIModelSelect(ctx, session, send)
+					})
+				})
 			},
 			Interrupt: interruptPrompt,
 		},
@@ -302,12 +363,19 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 	programMu.Lock()
 	program = prog
 	programMu.Unlock()
-	go func() {
+	safeGo("startup event", func() {
 		session.EmitStartupEvent()
 		session.EmitExtensionEvent("ui_ready")
-	}()
-	_, err := prog.Run()
+	})
+	_, err = prog.Run()
 	return err
+}
+
+func restoreModuTUITerminal() {
+	// Bubble Tea normally restores terminal state. This is a last-resort panic
+	// backstop for raw mode, mouse tracking, cursor visibility, styling, and the
+	// alternate screen buffer.
+	fmt.Fprint(os.Stdout, "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1049l\x1b[?25h\x1b[0m\r\n")
 }
 
 // moduTUIDurationDebounce is how long the tracker waits after an agent_end
@@ -483,7 +551,7 @@ func (p *moduTUISlashPrinter) Text() string {
 	return strings.TrimSpace(strings.Join(p.lines, "\n"))
 }
 
-func runModuTUISlash(ctx context.Context, line string, session *coding_agent.CodingSession, model *types.Model, send func(tea.Msg), keepAgentBusy func() bool) {
+func runModuTUISlash(ctx context.Context, line string, session *coding_agent.CodingSession, model *types.Model, hooks CommandHooks, send func(tea.Msg), keepAgentBusy func() bool, startConfigWizard func(), startModelSelect func()) {
 	send(modutui.SetBusyMsg{Busy: true})
 	send(modutui.SetStatusMsg{Status: moduTUISlashRunningStatus(line)})
 	defer func() {
@@ -494,6 +562,42 @@ func runModuTUISlash(ctx context.Context, line string, session *coding_agent.Cod
 		send(modutui.SetBusyMsg{Busy: false})
 		send(modutui.SetStatusMsg{Status: "idle"})
 	}()
+
+	if args, ok := moduTUIConfigArgs(line); ok {
+		if strings.TrimSpace(args) == "" && startConfigWizard != nil {
+			startConfigWizard()
+			return
+		}
+		if hooks.Config == nil {
+			send(modutui.AppendMessageMsg{Message: modutui.Message{Role: modutui.RoleAssistant, Text: "config command is not available"}})
+			return
+		}
+		out, err := hooks.Config(args)
+		text := strings.TrimSpace(out)
+		if err != nil {
+			if text != "" {
+				text += "\n"
+			}
+			text += "error: " + err.Error()
+		}
+		if text == "" {
+			text = "config command completed"
+		}
+		send(modutui.AppendMessageMsg{Message: modutui.Message{Role: modutui.RoleAssistant, Text: text, Preformatted: true}})
+		return
+	}
+	if args, ok := moduTUIModelArgs(line); ok && strings.TrimSpace(args) == "" && startModelSelect != nil {
+		startModelSelect()
+		return
+	}
+	if args, ok := moduTUIWorkflowArgs(line); ok && strings.TrimSpace(args) == "" {
+		send(modutui.AppendMessageMsg{Message: modutui.Message{
+			Role:         modutui.RoleAssistant,
+			Text:         moduTUIWorkflowCockpitText(session),
+			Preformatted: true,
+		}})
+		return
+	}
 
 	printer := &moduTUISlashPrinter{}
 	handled, exit := slash.Handle(ctx, line, session, printer, model)
@@ -517,6 +621,565 @@ func runModuTUISlash(ctx context.Context, line string, session *coding_agent.Cod
 		return
 	}
 	send(modutui.AppendMessageMsg{Message: modutui.Message{Role: modutui.RoleAssistant, Text: "unknown command: " + line}})
+}
+
+func moduTUIConfigArgs(line string) (string, bool) {
+	line = strings.TrimSpace(line)
+	if line == "/config" {
+		return "", true
+	}
+	if rest, ok := strings.CutPrefix(line, "/config "); ok {
+		return strings.TrimSpace(rest), true
+	}
+	return "", false
+}
+
+func moduTUIModelArgs(line string) (string, bool) {
+	line = strings.TrimSpace(line)
+	if line == "/model" {
+		return "", true
+	}
+	if rest, ok := strings.CutPrefix(line, "/model "); ok {
+		return strings.TrimSpace(rest), true
+	}
+	return "", false
+}
+
+func moduTUIWorkflowArgs(line string) (string, bool) {
+	line = strings.TrimSpace(line)
+	if line == "/workflows" {
+		return "", true
+	}
+	if rest, ok := strings.CutPrefix(line, "/workflows "); ok {
+		return strings.TrimSpace(rest), true
+	}
+	return "", false
+}
+
+func moduTUIWorkflowCockpitText(session *coding_agent.CodingSession) string {
+	if session == nil {
+		return moduTUIWorkflowCockpitTextFromStates(nil)
+	}
+	return moduTUIWorkflowCockpitTextFromStates(session.ExtensionRuntimeStates())
+}
+
+func moduTUIWorkflowCockpitTextFromStates(states map[string]any) string {
+	state, ok := moduTUIWorkflowState(states)
+	if !ok {
+		return strings.Join([]string{
+			"Workflow Cockpit",
+			"",
+			"overview",
+			"  workflow runtime state is not available",
+			"",
+			"next actions",
+			"  enable dynamic workflows in /config",
+			"  start a workflow, then rerun /workflows",
+		}, "\n")
+	}
+	runs := moduTUIWorkflowRuns(state["runs"])
+	var lines []string
+	lines = append(lines, "Workflow Cockpit", "")
+	lines = append(lines, "overview")
+	lines = append(lines, fmt.Sprintf("  running %d  stopped %d  completed %d  failed %d",
+		moduTUIRuntimeStateNumber(state["runningCount"]),
+		moduTUIRuntimeStateNumber(state["stoppedCount"]),
+		moduTUIRuntimeStateNumber(state["completedCount"]),
+		moduTUIRuntimeStateNumber(state["failedCount"]),
+	))
+	if indicator := strings.TrimSpace(moduTUIRuntimeStateString(state["indicator"])); indicator != "" {
+		lines = append(lines, "  "+indicator)
+	}
+	if len(runs) == 0 {
+		lines = append(lines, "  no workflow runs in this session", "", "next actions")
+		lines = append(lines, "  start a workflow, then rerun /workflows")
+		lines = append(lines, "  /workflows list")
+		return strings.Join(lines, "\n")
+	}
+
+	latest := runs[0]
+	name := latest.Name
+	if strings.TrimSpace(name) == "" {
+		name = latest.ID
+	}
+	progress := ""
+	if latest.AgentCount > 0 {
+		progress = fmt.Sprintf(" %d/%d", latest.DoneCount, latest.AgentCount)
+	}
+	current := ""
+	if latest.CurrentPhase != "" {
+		current = " current=" + latest.CurrentPhase
+	}
+	lines = append(lines, fmt.Sprintf("  latest %s [%s]%s%s", name, latest.Status, progress, current))
+	if latest.ErrorCount > 0 {
+		lines = append(lines, fmt.Sprintf("  errors %d", latest.ErrorCount))
+	}
+
+	lines = append(lines, "", "orchestration map")
+	lines = append(lines, moduTUIWorkflowOrchestrationLines(latest)...)
+	lines = append(lines, "", "latest run")
+	lines = append(lines, "  id: "+latest.ID)
+	if latest.Name != "" {
+		lines = append(lines, "  name: "+latest.Name)
+	}
+	lines = append(lines, "  status: "+latest.Status)
+	if latest.CurrentPhase != "" {
+		lines = append(lines, "  current phase: "+latest.CurrentPhase)
+	}
+	lines = append(lines, fmt.Sprintf("  progress: %d/%d done, %d running, %d errors",
+		latest.DoneCount, latest.AgentCount, latest.RunningAgentCount, latest.ErrorCount))
+	lines = append(lines, "", "next actions")
+	lines = append(lines, "  /workflows show latest")
+	lines = append(lines, "  /workflows agent latest <agent-id>")
+	lines = append(lines, "  /workflows stop latest")
+	lines = append(lines, "  rerun /workflows to refresh")
+	return strings.Join(lines, "\n")
+}
+
+func moduTUIWorkflowOrchestrationLines(run moduTUIWorkflowRun) []string {
+	phases := run.Phases
+	if len(phases) == 0 {
+		phases = moduTUIWorkflowDerivedPhases(run.Agents)
+	}
+	if len(phases) == 0 {
+		return []string{"  no phase or agent snapshot yet"}
+	}
+	var lines []string
+	for _, phase := range phases {
+		title := phase.Title
+		if title == "" {
+			title = "(no phase)"
+		}
+		lines = append(lines, fmt.Sprintf("  [%s] %d/%d %s",
+			title, phase.DoneCount, phase.AgentCount, moduTUIWorkflowPhaseStatus(phase)))
+		agents := moduTUIWorkflowAgentsForPhase(run.Agents, phase.Title)
+		if len(agents) == 0 {
+			continue
+		}
+		for i, agent := range agents {
+			if i >= 8 {
+				lines = append(lines, fmt.Sprintf("    ... +%d more agents", len(agents)-i))
+				break
+			}
+			lines = append(lines, "    "+moduTUIWorkflowAgentLine(agent))
+			if agent.Error != "" {
+				lines = append(lines, "      error: "+moduTUITruncate(agent.Error, 120))
+			} else if agent.ResultPreview != "" {
+				lines = append(lines, "      result: "+moduTUITruncate(agent.ResultPreview, 120))
+			} else if agent.PromptPreview != "" {
+				lines = append(lines, "      prompt: "+moduTUITruncate(agent.PromptPreview, 120))
+			}
+			if len(agent.ToolCalls) > 0 {
+				lines = append(lines, "      tools: "+moduTUIWorkflowToolSummary(agent.ToolCalls))
+			}
+		}
+	}
+	return lines
+}
+
+func moduTUIWorkflowDerivedPhases(agents []moduTUIWorkflowAgent) []moduTUIWorkflowPhase {
+	index := map[string]int{}
+	var phases []moduTUIWorkflowPhase
+	for _, agent := range agents {
+		title := agent.Phase
+		if _, ok := index[title]; !ok {
+			index[title] = len(phases)
+			phases = append(phases, moduTUIWorkflowPhase{Title: title})
+		}
+		phase := &phases[index[title]]
+		phase.AgentCount++
+		switch agent.Status {
+		case "done", "completed":
+			phase.DoneCount++
+		case "running":
+			phase.RunningCount++
+		case "error", "failed":
+			phase.ErrorCount++
+		}
+	}
+	return phases
+}
+
+func moduTUIWorkflowAgentsForPhase(agents []moduTUIWorkflowAgent, phase string) []moduTUIWorkflowAgent {
+	var out []moduTUIWorkflowAgent
+	for _, agent := range agents {
+		if agent.Phase == phase {
+			out = append(out, agent)
+		}
+	}
+	return out
+}
+
+func moduTUIWorkflowPhaseStatus(phase moduTUIWorkflowPhase) string {
+	switch {
+	case phase.ErrorCount > 0:
+		return fmt.Sprintf("errors=%d", phase.ErrorCount)
+	case phase.RunningCount > 0:
+		return fmt.Sprintf("running=%d", phase.RunningCount)
+	case phase.AgentCount > 0 && phase.DoneCount >= phase.AgentCount:
+		return "done"
+	case phase.DoneCount > 0:
+		return "in-progress"
+	default:
+		return "waiting"
+	}
+}
+
+func moduTUIWorkflowAgentLine(agent moduTUIWorkflowAgent) string {
+	label := agent.Label
+	if label == "" {
+		label = fmt.Sprintf("agent-%d", agent.ID)
+	}
+	parts := []string{fmt.Sprintf("#%d [%s] %s", agent.ID, agent.Status, label)}
+	if agent.TurnTokens > 0 {
+		parts = append(parts, fmt.Sprintf("tokens=%d", agent.TurnTokens))
+	} else if agent.EstimatedTokens > 0 {
+		parts = append(parts, fmt.Sprintf("estimated=%d", agent.EstimatedTokens))
+	}
+	if agent.RecentToolCalls > 0 {
+		parts = append(parts, fmt.Sprintf("tools=%d", agent.RecentToolCalls))
+	}
+	if agent.FailedToolCalls > 0 {
+		parts = append(parts, fmt.Sprintf("failedTools=%d", agent.FailedToolCalls))
+	}
+	return strings.Join(parts, " ")
+}
+
+func moduTUIWorkflowToolSummary(calls []moduTUIWorkflowToolCall) string {
+	if len(calls) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, min(len(calls), 3))
+	for i, call := range calls {
+		if i >= 3 {
+			parts = append(parts, fmt.Sprintf("+%d more", len(calls)-i))
+			break
+		}
+		name := call.ToolName
+		if name == "" {
+			name = "tool"
+		}
+		item := name
+		if call.IsError {
+			item += " error"
+		}
+		if call.ResultPreview != "" {
+			item += " -> " + moduTUITruncate(call.ResultPreview, 60)
+		} else if call.ArgsPreview != "" {
+			item += " " + moduTUITruncate(call.ArgsPreview, 60)
+		}
+		parts = append(parts, item)
+	}
+	return strings.Join(parts, "; ")
+}
+
+func moduTUIWorkflowState(states map[string]any) (map[string]any, bool) {
+	if states == nil {
+		return nil, false
+	}
+	raw, ok := states["workflow"]
+	if !ok {
+		return nil, false
+	}
+	state, ok := raw.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	return state, true
+}
+
+type moduTUIWorkflowRun struct {
+	ID                string
+	Name              string
+	Status            string
+	AgentCount        int
+	DoneCount         int
+	RunningAgentCount int
+	ErrorCount        int
+	CurrentPhase      string
+	UpdatedAt         int64
+	Phases            []moduTUIWorkflowPhase
+	Agents            []moduTUIWorkflowAgent
+}
+
+type moduTUIWorkflowPhase struct {
+	Title        string
+	AgentCount   int
+	DoneCount    int
+	RunningCount int
+	ErrorCount   int
+}
+
+type moduTUIWorkflowAgent struct {
+	ID              int
+	Label           string
+	Phase           string
+	Status          string
+	PromptPreview   string
+	ResultPreview   string
+	Error           string
+	EstimatedTokens int
+	TurnTokens      int
+	RecentToolCalls int
+	FailedToolCalls int
+	ToolCalls       []moduTUIWorkflowToolCall
+}
+
+type moduTUIWorkflowToolCall struct {
+	ToolName      string
+	ArgsPreview   string
+	ResultPreview string
+	IsError       bool
+}
+
+func moduTUIWorkflowRuns(value any) []moduTUIWorkflowRun {
+	items, ok := value.([]map[string]any)
+	if !ok {
+		rawItems, ok := value.([]any)
+		if !ok {
+			return nil
+		}
+		items = make([]map[string]any, 0, len(rawItems))
+		for _, raw := range rawItems {
+			item, ok := raw.(map[string]any)
+			if ok {
+				items = append(items, item)
+			}
+		}
+	}
+	runs := make([]moduTUIWorkflowRun, 0, len(items))
+	for _, item := range items {
+		run := moduTUIWorkflowRun{
+			ID:                moduTUIRuntimeStateString(item["id"]),
+			Name:              moduTUIRuntimeStateString(item["name"]),
+			Status:            moduTUIRuntimeStateString(item["status"]),
+			AgentCount:        moduTUIRuntimeStateNumber(item["agentCount"]),
+			DoneCount:         moduTUIRuntimeStateNumber(item["doneCount"]),
+			RunningAgentCount: moduTUIRuntimeStateNumber(item["runningAgentCount"]),
+			ErrorCount:        moduTUIRuntimeStateNumber(item["errorCount"]),
+			CurrentPhase:      moduTUIRuntimeStateString(item["currentPhase"]),
+			UpdatedAt:         int64(moduTUIRuntimeStateNumber(item["updatedAt"])),
+			Phases:            moduTUIWorkflowPhases(item["phases"]),
+			Agents:            moduTUIWorkflowAgents(item["agents"]),
+		}
+		if run.Status == "" {
+			run.Status = "unknown"
+		}
+		if run.ID == "" {
+			run.ID = "latest"
+		}
+		if run.AgentCount == 0 && len(run.Agents) > 0 {
+			run.AgentCount = len(run.Agents)
+		}
+		runs = append(runs, run)
+	}
+	sort.SliceStable(runs, func(i, j int) bool { return runs[i].UpdatedAt > runs[j].UpdatedAt })
+	return runs
+}
+
+func moduTUIWorkflowPhases(value any) []moduTUIWorkflowPhase {
+	items := moduTUIRuntimeStateMaps(value)
+	phases := make([]moduTUIWorkflowPhase, 0, len(items))
+	for _, item := range items {
+		phases = append(phases, moduTUIWorkflowPhase{
+			Title:        moduTUIRuntimeStateString(item["title"]),
+			AgentCount:   moduTUIRuntimeStateNumber(item["agentCount"]),
+			DoneCount:    moduTUIRuntimeStateNumber(item["doneCount"]),
+			RunningCount: moduTUIRuntimeStateNumber(item["runningCount"]),
+			ErrorCount:   moduTUIRuntimeStateNumber(item["errorCount"]),
+		})
+	}
+	return phases
+}
+
+func moduTUIWorkflowAgents(value any) []moduTUIWorkflowAgent {
+	items := moduTUIRuntimeStateMaps(value)
+	agents := make([]moduTUIWorkflowAgent, 0, len(items))
+	for _, item := range items {
+		agents = append(agents, moduTUIWorkflowAgent{
+			ID:              moduTUIRuntimeStateNumber(item["id"]),
+			Label:           moduTUIRuntimeStateString(item["label"]),
+			Phase:           moduTUIRuntimeStateString(item["phase"]),
+			Status:          moduTUIRuntimeStateString(item["status"]),
+			PromptPreview:   moduTUIRuntimeStateString(item["promptPreview"]),
+			ResultPreview:   moduTUIRuntimeStateString(item["resultPreview"]),
+			Error:           moduTUIRuntimeStateString(item["error"]),
+			EstimatedTokens: moduTUIRuntimeStateNumber(item["estimatedTokens"]),
+			TurnTokens:      moduTUIRuntimeStateNumber(item["turnTokens"]),
+			RecentToolCalls: moduTUIRuntimeStateNumber(item["recentToolCalls"]),
+			FailedToolCalls: moduTUIRuntimeStateNumber(item["failedToolCalls"]),
+			ToolCalls:       moduTUIWorkflowToolCalls(item["recentToolCallPreviews"]),
+		})
+	}
+	sort.SliceStable(agents, func(i, j int) bool { return agents[i].ID < agents[j].ID })
+	return agents
+}
+
+func moduTUIWorkflowToolCalls(value any) []moduTUIWorkflowToolCall {
+	items := moduTUIRuntimeStateMaps(value)
+	calls := make([]moduTUIWorkflowToolCall, 0, len(items))
+	for _, item := range items {
+		calls = append(calls, moduTUIWorkflowToolCall{
+			ToolName:      moduTUIRuntimeStateString(item["toolName"]),
+			ArgsPreview:   moduTUIRuntimeStateString(item["argsPreview"]),
+			ResultPreview: moduTUIRuntimeStateString(item["resultPreview"]),
+			IsError:       moduTUIRuntimeStateBool(item["isError"]),
+		})
+	}
+	return calls
+}
+
+func moduTUIRuntimeStateMaps(value any) []map[string]any {
+	switch items := value.(type) {
+	case []map[string]any:
+		return items
+	case []any:
+		out := make([]map[string]any, 0, len(items))
+		for _, raw := range items {
+			if item, ok := raw.(map[string]any); ok {
+				out = append(out, item)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func moduTUIRuntimeStateString(value any) string {
+	switch v := value.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case fmt.Stringer:
+		return strings.TrimSpace(v.String())
+	default:
+		return ""
+	}
+}
+
+func moduTUIRuntimeStateNumber(value any) int {
+	switch v := value.(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case int32:
+		return int(v)
+	case float64:
+		return int(v)
+	case float32:
+		return int(v)
+	case json.Number:
+		n, _ := v.Int64()
+		return int(n)
+	case string:
+		n, _ := strconv.Atoi(strings.TrimSpace(v))
+		return n
+	default:
+		return 0
+	}
+}
+
+func moduTUIRuntimeStateBool(value any) bool {
+	switch v := value.(type) {
+	case bool:
+		return v
+	case string:
+		return strings.EqualFold(strings.TrimSpace(v), "true")
+	default:
+		return false
+	}
+}
+
+func moduTUITruncate(text string, limit int) string {
+	text = strings.TrimSpace(strings.Join(strings.Fields(text), " "))
+	if limit <= 0 || len([]rune(text)) <= limit {
+		return text
+	}
+	runes := []rune(text)
+	if limit <= 3 {
+		return string(runes[:limit])
+	}
+	return string(runes[:limit-3]) + "..."
+}
+
+func runModuTUIModelSelect(ctx context.Context, session *coding_agent.CodingSession, send func(tea.Msg)) {
+	if session == nil || send == nil {
+		return
+	}
+	models := session.GetAvailableModels()
+	sort.Slice(models, func(i, j int) bool {
+		if models[i].ProviderID == models[j].ProviderID {
+			return models[i].ID < models[j].ID
+		}
+		return models[i].ProviderID < models[j].ProviderID
+	})
+	if len(models) == 0 {
+		send(modutui.AppendMessageMsg{Message: modutui.Message{
+			Role: modutui.RoleAssistant,
+			Text: "no models configured",
+		}})
+		return
+	}
+	current := session.GetModel()
+	options := make([]modutui.HumanPromptOption, 0, min(len(models), 9))
+	for i, model := range models {
+		if i >= 9 {
+			break
+		}
+		label := model.Name
+		if strings.TrimSpace(label) == "" {
+			label = model.ID
+		}
+		label = fmt.Sprintf("%s (%s / %s)", label, model.ProviderID, model.ID)
+		if current != nil && current.ProviderID == model.ProviderID && current.ID == model.ID {
+			label = "* " + label
+		}
+		options = append(options, modutui.HumanPromptOption{
+			Label: label,
+			Value: model.ProviderID + "/" + model.ID,
+		})
+	}
+	ch := make(chan string, 1)
+	send(modutui.RequestHumanPromptMsg{
+		Request: modutui.HumanPromptRequest{
+			ID:           "model-select",
+			Title:        "Model",
+			Body:         "Choose active model",
+			Options:      options,
+			DefaultIndex: -1,
+		},
+		Respond: ch,
+	})
+	var target string
+	select {
+	case target = <-ch:
+	case <-ctx.Done():
+		send(modutui.CancelHumanPromptMsg{ID: "model-select"})
+		return
+	}
+	target = strings.TrimSpace(target)
+	if target == "" {
+		send(modutui.SetStatusMsg{Status: "model unchanged", TransientFor: moduTUITerminalStatusTTL})
+		return
+	}
+	providerID, modelID, ok := strings.Cut(target, "/")
+	if !ok || providerID == "" || modelID == "" {
+		send(modutui.AppendMessageMsg{Message: modutui.Message{Role: modutui.RoleAssistant, Text: "invalid model selection"}})
+		return
+	}
+	before := session.GetModel()
+	if err := session.SetModelByID(providerID, modelID); err != nil {
+		send(modutui.AppendMessageMsg{Message: modutui.Message{Role: modutui.RoleAssistant, Text: "error: " + err.Error()}})
+		send(modutui.SetStatusMsg{Status: "model unchanged", TransientFor: moduTUITerminalStatusTTL})
+		return
+	}
+	after := session.GetModel()
+	if before != nil && after != nil && before.ProviderID == after.ProviderID && before.ID == after.ID {
+		send(modutui.SetStatusMsg{Status: "model unchanged", TransientFor: moduTUITerminalStatusTTL})
+		return
+	}
+	send(modutui.SetStatusMsg{Status: "model changed; context cleared", TransientFor: moduTUITerminalStatusTTL})
 }
 
 func moduTUISlashRunningStatus(line string) string {
@@ -787,7 +1450,9 @@ func baseModuTUISlashCommands() []modutui.SlashCommand {
 	return []modutui.SlashCommand{
 		{Name: "/help", Description: "Show available commands"},
 		{Name: "/clear", Description: "Clear the current session"},
+		{Name: "/config", Description: "Configure providers and models"},
 		{Name: "/model", Description: "Switch the active model"},
+		{Name: "/workflows", Description: "Show workflow cockpit"},
 		{Name: "/compact", Description: "Manually trigger context compaction"},
 		{Name: "/tokens", Description: "Show token usage"},
 		{Name: "/context", Description: "Show loaded context"},

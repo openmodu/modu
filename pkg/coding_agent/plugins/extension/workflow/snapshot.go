@@ -453,6 +453,9 @@ func (s *snapshotTracker) emitSnapshot(snapshot workflowSnapshot, completed bool
 	if s.onUpdate == nil || snapshot.Name == "" {
 		return
 	}
+	defer func() {
+		_ = recover()
+	}()
 	s.onUpdate(types.ToolResult{
 		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: renderSnapshot(snapshot, completed)}},
 		Details: snapshot,

@@ -33,6 +33,7 @@ import (
 	_ "github.com/openmodu/modu/pkg/coding_agent/plugins/extension/goal"     // register builtin extension via init()
 	_ "github.com/openmodu/modu/pkg/coding_agent/plugins/extension/subagent" // register builtin extension via init()
 	_ "github.com/openmodu/modu/pkg/coding_agent/plugins/extension/workflow" // register builtin extension via init()
+	"github.com/openmodu/modu/pkg/types"
 
 	"github.com/openmodu/modu/cmd/modu_code/internal/acp"
 	"github.com/openmodu/modu/cmd/modu_code/internal/provider"
@@ -40,6 +41,8 @@ import (
 
 var runTUI = runModuTUI
 var interactiveExitOutput io.Writer = os.Stdout
+
+const unconfiguredProviderID = "unconfigured"
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "config" {
@@ -68,10 +71,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	interactiveMode := *printPrompt == "" && !*rpcMode && !*acpMode
 	model, getAPIKey := provider.Resolve()
-	if model == nil {
+	missingProvider := model == nil
+	if missingProvider && !interactiveMode {
 		printMissingProviderHint(os.Stderr)
 		os.Exit(1)
+	}
+	if missingProvider {
+		model = unconfiguredModel()
 	}
 
 	thinkingLevel := provider.ResolveThinkingLevel()
@@ -102,7 +110,7 @@ func main() {
 		ModelConfigPath:   provider.ConfigPath(),
 		ResumeSessionID:   *resumeID,
 		Extensions:        exts,
-		DeferStartupEvent: *printPrompt == "" && !*rpcMode && !*acpMode,
+		DeferStartupEvent: interactiveMode,
 	}
 	session, err := coding_agent.NewCodingSession(sessionOpts)
 	if err != nil {
@@ -189,21 +197,29 @@ func main() {
 		case <-ctx.Done():
 		}
 	}()
-	if err := runTUI(ctx, session, model, *noApprove, RunOptions{CommandHooks: CommandHooks{
+	runOpts := RunOptions{CommandHooks: CommandHooks{
 		Config: func(args string) (string, error) {
 			return runConfigHook(args, session)
 		},
-		ConfigModels:      configModelEntries,
-		ConfigProviders:   configProviderEntries,
-		ConfigAdd:         configAddModel,
-		ConfigSetProvider: configSetProvider,
+		ConfigModels:    configModelEntries,
+		ConfigProviders: configProviderEntries,
+		ConfigAdd: func(input ConfigModelInput) (string, error) {
+			return configAddModel(input, session)
+		},
+		ConfigSetProvider: func(input ConfigProviderInput) (string, error) {
+			return configSetProvider(input, session)
+		},
 		ConfigUse: func(target string) (string, error) {
 			return configUseModel(target, session)
 		},
 		ConfigRemove:     configRemoveModel,
 		ConfigWorkflows:  func() (string, error) { return configToggleWorkflows(session) },
 		SaveScopedModels: provider.SetScopedModelIDs,
-	}}); err != nil {
+	}}
+	if missingProvider {
+		runOpts.StartupNotice = missingProviderStartupNotice()
+	}
+	if err := runTUI(ctx, session, model, *noApprove, runOpts); err != nil {
 		fmt.Fprintf(os.Stderr, "ui error: %v\n", err)
 		os.Exit(1)
 	}
@@ -222,29 +238,58 @@ func printInteractiveExitSummary(out io.Writer, session *coding_agent.CodingSess
 	fmt.Fprintf(out, "Session saved: %s\nResume with: modu_code --resume %s\n", id, id)
 }
 
+func unconfiguredModel() *types.Model {
+	return &types.Model{
+		ID:         "unconfigured",
+		Name:       "No model configured",
+		ProviderID: unconfiguredProviderID,
+	}
+}
+
 func printMissingProviderHint(w io.Writer) {
 	if w == nil {
 		return
 	}
+	fmt.Fprint(w, missingProviderHintText())
+}
+
+func missingProviderStartupNotice() string {
 	configPath := provider.ConfigPath()
-	fmt.Fprintln(w, "No model provider is configured yet.")
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Quick start:")
-	fmt.Fprintln(w, "  1. Create an example config:")
-	fmt.Fprintln(w, "     modu_code config init")
-	fmt.Fprintln(w, "  2. Edit the config with your provider, model, and API key:")
-	fmt.Fprintf(w, "     %s\n", configPath)
-	fmt.Fprintln(w, "  3. Check it:")
-	fmt.Fprintln(w, "     modu_code config validate")
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "For a local OpenAI-compatible server, you can also add a model directly:")
-	fmt.Fprintln(w, `  modu_code config add local-qwen lmstudio qwen http://127.0.0.1:1234/v1 lm-studio --description "local coding model"`)
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Environment alternatives:")
-	fmt.Fprintln(w, "  OPENAI_API_KEY                      uses OPENAI_MODEL or gpt-4o")
-	fmt.Fprintln(w, "  DEEPSEEK_API_KEY                    uses DEEPSEEK_MODEL or deepseek-chat")
-	fmt.Fprintln(w, "  ANTHROPIC_API_KEY + ANTHROPIC_MODEL")
-	fmt.Fprintln(w, "  OLLAMA_HOST + OLLAMA_MODEL")
+	return strings.TrimSpace(fmt.Sprintf(`No model provider is configured yet.
+
+Open /config to set up a provider, API key, and model.
+
+Recommended flow:
+  1. Type /config
+  2. Choose Provider and enter an API key/base URL
+  3. If models are discovered, choose Active Model
+
+Config file:
+  %s
+`, configPath))
+}
+
+func missingProviderHintText() string {
+	configPath := provider.ConfigPath()
+	return fmt.Sprintf(`No model provider is configured yet.
+
+Quick start:
+  1. Create an example config:
+     modu_code config init
+  2. Edit the config with your provider, model, and API key:
+     %s
+  3. Check it:
+     modu_code config validate
+
+For a local OpenAI-compatible server, you can also add a model directly:
+  modu_code config add local-qwen lmstudio qwen http://127.0.0.1:1234/v1 lm-studio --description "local coding model"
+
+Environment alternatives:
+  OPENAI_API_KEY                      uses OPENAI_MODEL or gpt-4o
+  DEEPSEEK_API_KEY                    uses DEEPSEEK_MODEL or deepseek-chat
+  ANTHROPIC_API_KEY + ANTHROPIC_MODEL
+  OLLAMA_HOST + OLLAMA_MODEL
+`, configPath)
 }
 
 func enterStartupWorktree(session *coding_agent.CodingSession) error {

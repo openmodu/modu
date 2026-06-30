@@ -12,6 +12,7 @@ import (
 
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	modutui "github.com/openmodu/modu/pkg/modu-tui"
+	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -582,7 +583,7 @@ func TestModuTUISlashCommandsIncludeBaseAndSessionCommands(t *testing.T) {
 		}
 		seen[cmd.Name] = true
 	}
-	for _, want := range []string{"/help", "/clear", "/tokens", "/compact"} {
+	for _, want := range []string{"/help", "/clear", "/config", "/model", "/tokens", "/compact"} {
 		if !seen[want] {
 			t.Fatalf("missing slash command %q in %#v", want, commands)
 		}
@@ -812,6 +813,16 @@ func TestModuTUISlashPrinterCapturesSectionsAndClear(t *testing.T) {
 	}
 }
 
+func joinedModuTUIAppendMessages(messages []tea.Msg) string {
+	var parts []string
+	for _, msg := range messages {
+		if appendMsg, ok := msg.(modutui.AppendMessageMsg); ok {
+			parts = append(parts, appendMsg.Message.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
 func TestRunModuTUISlashSendsPreformattedHelpOutput(t *testing.T) {
 	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
 		Cwd:       t.TempDir(),
@@ -824,9 +835,9 @@ func TestRunModuTUISlashSendsPreformattedHelpOutput(t *testing.T) {
 	}
 
 	var messages []tea.Msg
-	runModuTUISlash(context.Background(), "/help", session, session.GetModel(), func(msg tea.Msg) {
+	runModuTUISlash(context.Background(), "/help", session, session.GetModel(), CommandHooks{}, func(msg tea.Msg) {
 		messages = append(messages, msg)
-	}, nil)
+	}, nil, nil, nil)
 
 	var got *modutui.Message
 	for _, msg := range messages {
@@ -849,6 +860,380 @@ func TestRunModuTUISlashSendsPreformattedHelpOutput(t *testing.T) {
 	}
 }
 
+func TestRunModuTUISlashRoutesConfigHook(t *testing.T) {
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       t.TempDir(),
+		AgentDir:  t.TempDir(),
+		Model:     &types.Model{ID: "test", Name: "Test", ProviderID: "test"},
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	called := false
+	var messages []tea.Msg
+	runModuTUISlash(context.Background(), "/config validate", session, session.GetModel(), CommandHooks{
+		Config: func(args string) (string, error) {
+			called = true
+			if args != "validate" {
+				t.Fatalf("config args = %q, want validate", args)
+			}
+			return "config: test\nstatus: missing", nil
+		},
+	}, func(msg tea.Msg) {
+		messages = append(messages, msg)
+	}, nil, nil, nil)
+
+	if !called {
+		t.Fatal("expected config hook to be called")
+	}
+	var got *modutui.Message
+	for _, msg := range messages {
+		if appendMsg, ok := msg.(modutui.AppendMessageMsg); ok {
+			next := appendMsg.Message
+			got = &next
+			break
+		}
+	}
+	if got == nil {
+		t.Fatalf("expected AppendMessageMsg in %#v", messages)
+	}
+	if !got.Preformatted || !strings.Contains(got.Text, "status: missing") {
+		t.Fatalf("unexpected config output: %#v", got)
+	}
+	if strings.Contains(got.Text, "unknown command") {
+		t.Fatalf("/config should not fall through to unknown command: %q", got.Text)
+	}
+}
+
+func TestRunModuTUISlashExactConfigStartsWizard(t *testing.T) {
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       t.TempDir(),
+		AgentDir:  t.TempDir(),
+		Model:     &types.Model{ID: "test", Name: "Test", ProviderID: "test"},
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	started := false
+	configCalled := false
+	runModuTUISlash(context.Background(), "/config", session, session.GetModel(), CommandHooks{
+		Config: func(args string) (string, error) {
+			configCalled = true
+			return "should not be called", nil
+		},
+	}, func(msg tea.Msg) {}, nil, func() {
+		started = true
+	}, nil)
+
+	if !started {
+		t.Fatal("expected exact /config to start wizard")
+	}
+	if configCalled {
+		t.Fatal("exact /config should not call config status hook")
+	}
+}
+
+func TestRunModuTUISlashExactModelStartsSelector(t *testing.T) {
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       t.TempDir(),
+		AgentDir:  t.TempDir(),
+		Model:     providers.GetModel("deepseek", "deepseek-chat"),
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	started := false
+	runModuTUISlash(context.Background(), "/model", session, session.GetModel(), CommandHooks{}, func(msg tea.Msg) {}, nil, nil, func() {
+		started = true
+	})
+
+	if !started {
+		t.Fatal("expected exact /model to start selector")
+	}
+}
+
+func TestModuTUIWorkflowCockpitShowsOrchestrationMap(t *testing.T) {
+	text := moduTUIWorkflowCockpitTextFromStates(map[string]any{
+		"workflow": map[string]any{
+			"runningCount":   1,
+			"completedCount": 2,
+			"indicator":      "workflow deep_research 2/3 running: Research",
+			"runs": []map[string]any{
+				{
+					"id":                "20260630T130648.520375000Z",
+					"name":              "deep_research",
+					"status":            "running",
+					"agentCount":        3,
+					"doneCount":         2,
+					"runningAgentCount": 1,
+					"currentPhase":      "Research",
+					"updatedAt":         200,
+					"phases": []map[string]any{
+						{"title": "Scope", "agentCount": 1, "doneCount": 1},
+						{"title": "Research", "agentCount": 2, "doneCount": 1, "runningCount": 1},
+					},
+					"agents": []map[string]any{
+						{
+							"id":            1,
+							"label":         "scope",
+							"phase":         "Scope",
+							"status":        "done",
+							"resultPreview": "DOMAIN finance/markets; angles selected",
+						},
+						{
+							"id":              2,
+							"label":           "primary sources",
+							"phase":           "Research",
+							"status":          "done",
+							"turnTokens":      1200,
+							"recentToolCalls": 2,
+							"recentToolCallPreviews": []map[string]any{
+								{"toolName": "web_search", "resultPreview": "market close data"},
+							},
+						},
+						{
+							"id":            3,
+							"label":         "watch tomorrow",
+							"phase":         "Research",
+							"status":        "running",
+							"promptPreview": "Find tomorrow's catalysts",
+						},
+					},
+				},
+			},
+		},
+	})
+
+	for _, want := range []string{
+		"Workflow Cockpit",
+		"overview",
+		"workflow deep_research 2/3 running: Research",
+		"orchestration map",
+		"[Scope] 1/1 done",
+		"#1 [done] scope",
+		"result: DOMAIN finance/markets; angles selected",
+		"[Research] 1/2 running=1",
+		"#2 [done] primary sources tokens=1200 tools=2",
+		"tools: web_search -> market close data",
+		"#3 [running] watch tomorrow",
+		"prompt: Find tomorrow's catalysts",
+		"latest run",
+		"/workflows agent latest <agent-id>",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("workflow cockpit missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestRunModuTUISlashExactWorkflowsShowsCockpit(t *testing.T) {
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       t.TempDir(),
+		AgentDir:  t.TempDir(),
+		Model:     &types.Model{ID: "test", Name: "Test", ProviderID: "test"},
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var messages []tea.Msg
+	runModuTUISlash(context.Background(), "/workflows", session, session.GetModel(), CommandHooks{}, func(msg tea.Msg) {
+		messages = append(messages, msg)
+	}, nil, nil, nil)
+
+	var got *modutui.Message
+	for _, msg := range messages {
+		if appendMsg, ok := msg.(modutui.AppendMessageMsg); ok {
+			next := appendMsg.Message
+			got = &next
+			break
+		}
+	}
+	if got == nil {
+		t.Fatalf("expected AppendMessageMsg in %#v", messages)
+	}
+	if !got.Preformatted || !strings.Contains(got.Text, "Workflow Cockpit") {
+		t.Fatalf("unexpected workflows cockpit output: %#v", got)
+	}
+	if strings.Contains(got.Text, "unknown command") {
+		t.Fatalf("/workflows should not fall through to unknown command: %q", got.Text)
+	}
+}
+
+func TestRunModuTUIModelSelectSwitchesModel(t *testing.T) {
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       t.TempDir(),
+		AgentDir:  t.TempDir(),
+		Model:     providers.GetModel("deepseek", "deepseek-chat"),
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var messages []tea.Msg
+	done := make(chan struct{})
+	go func() {
+		runModuTUIModelSelect(context.Background(), session, func(msg tea.Msg) {
+			messages = append(messages, msg)
+			if prompt, ok := msg.(modutui.RequestHumanPromptMsg); ok {
+				prompt.Respond <- "openai/gpt-4o"
+			}
+		})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("model selector did not finish")
+	}
+	if got := session.GetModel(); got == nil || got.ProviderID != "openai" || got.ID != "gpt-4o" {
+		t.Fatalf("expected selected model openai/gpt-4o, got %#v", got)
+	}
+	var sawPrompt bool
+	for _, msg := range messages {
+		if prompt, ok := msg.(modutui.RequestHumanPromptMsg); ok {
+			sawPrompt = true
+			if prompt.Request.Title != "Model" || !strings.Contains(prompt.Request.Body, "Choose active model") {
+				t.Fatalf("unexpected model prompt: %#v", prompt.Request)
+			}
+		}
+	}
+	if !sawPrompt {
+		t.Fatalf("expected model selection prompt in %#v", messages)
+	}
+}
+
+func TestModuTUIConfigWizardProviderFlow(t *testing.T) {
+	var messages []tea.Msg
+	var prompts []modutui.HumanPromptRequest
+	var saved ConfigProviderInput
+	responses := []string{"setup", "deepseek", "api-key"}
+	textResponses := []string{"sk-test", "https://api.deepseek.com/v1"}
+	wizard := newModuTUIConfigWizard(CommandHooks{
+		ConfigProviders: func() ([]ConfigProviderEntry, error) {
+			return []ConfigProviderEntry{{
+				Name:      "deepseek",
+				Type:      "openai-compatible",
+				BaseURL:   "https://api.deepseek.com/v1",
+				APIKeyEnv: "DEEPSEEK_API_KEY",
+			}}, nil
+		},
+		ConfigSetProvider: func(input ConfigProviderInput) (string, error) {
+			saved = input
+			return "saved provider: " + input.Provider, nil
+		},
+	}, func(msg tea.Msg) {
+		messages = append(messages, msg)
+		if prompt, ok := msg.(modutui.RequestHumanPromptMsg); ok {
+			prompts = append(prompts, prompt.Request)
+			if len(responses) == 0 {
+				prompt.Respond <- ""
+				return
+			}
+			next := responses[0]
+			responses = responses[1:]
+			prompt.Respond <- next
+		}
+		if prompt, ok := msg.(modutui.RequestHumanTextMsg); ok {
+			if len(textResponses) == 0 {
+				t.Fatalf("unexpected text prompt: %#v", prompt.Request)
+			}
+			next := textResponses[0]
+			textResponses = textResponses[1:]
+			prompt.Respond <- next
+		}
+	})
+
+	done := make(chan struct{})
+	go func() {
+		wizard.Start(context.Background())
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("wizard did not finish provider card selection")
+	}
+	wizard.handleInput(context.Background(), "-")
+	wizard.handleInput(context.Background(), "-")
+
+	if len(prompts) < 2 {
+		t.Fatalf("expected top and provider prompts, got %#v", prompts)
+	}
+	if prompts[0].Title != "Config" || len(prompts[0].Options) != 2 || prompts[0].Options[0].Label != "Setup with provider or add model manually" || prompts[0].Options[1].Label != "Show config status" {
+		t.Fatalf("unexpected config menu prompt: %#v", prompts[0])
+	}
+	if prompts[1].Title != "Config: provider" || len(prompts[1].Options) != 4 {
+		t.Fatalf("unexpected provider prompt: %#v", prompts[1])
+	}
+	for i, want := range []struct {
+		label string
+		value string
+	}{
+		{label: "DeepSeek", value: "deepseek"},
+		{label: "LMStudio", value: "lmstudio"},
+		{label: "Ollama", value: "ollama"},
+		{label: "Custom OpenAI-Compatible", value: "custom"},
+	} {
+		if prompts[1].Options[i].Label != want.label || prompts[1].Options[i].Value != want.value {
+			t.Fatalf("provider option %d = %#v, want %#v", i, prompts[1].Options[i], want)
+		}
+	}
+	if saved.Provider != "deepseek" || saved.APIKey != "sk-test" || saved.APIKeyEnv != "" || saved.BaseURL != "https://api.deepseek.com/v1" {
+		t.Fatalf("unexpected saved provider: %#v", saved)
+	}
+	text := joinedModuTUIAppendMessages(messages)
+	for _, want := range []string{"saved provider: deepseek"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("wizard output missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "sk-test") {
+		t.Fatalf("API key should not be echoed to transcript:\n%s", text)
+	}
+}
+
+func TestModuTUIConfigWizardHandleInputReportsActive(t *testing.T) {
+	done := make(chan struct{})
+	wizard := newModuTUIConfigWizard(CommandHooks{}, func(msg tea.Msg) {})
+	wizard.mu.Lock()
+	wizard.active = true
+	wizard.step = "menu"
+	wizard.mu.Unlock()
+
+	if !wizard.HandleInput(context.Background(), "q") {
+		t.Fatal("expected active wizard to handle input")
+	}
+	go func() {
+		for {
+			wizard.mu.Lock()
+			active := wizard.active
+			wizard.mu.Unlock()
+			if !active {
+				close(done)
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("wizard did not handle cancel input")
+	}
+	if wizard.HandleInput(context.Background(), "hello") {
+		t.Fatal("inactive wizard should not handle input")
+	}
+}
+
 func TestRunModuTUISlashDoesNotResetStatusWhenAgentRunStarted(t *testing.T) {
 	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
 		Cwd:       t.TempDir(),
@@ -861,9 +1246,9 @@ func TestRunModuTUISlashDoesNotResetStatusWhenAgentRunStarted(t *testing.T) {
 	}
 
 	var messages []tea.Msg
-	runModuTUISlash(context.Background(), "/help", session, session.GetModel(), func(msg tea.Msg) {
+	runModuTUISlash(context.Background(), "/help", session, session.GetModel(), CommandHooks{}, func(msg tea.Msg) {
 		messages = append(messages, msg)
-	}, func() bool { return true })
+	}, func() bool { return true }, nil, nil)
 
 	for _, msg := range messages {
 		switch msg := msg.(type) {

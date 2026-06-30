@@ -13,7 +13,8 @@ type CommandHooks struct {
 }
 
 type RunOptions struct {
-	CommandHooks CommandHooks
+	CommandHooks  CommandHooks
+	StartupNotice string
 }
 
 type ConfigModelEntry struct {
