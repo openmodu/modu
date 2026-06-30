@@ -457,7 +457,7 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 	case "prompts":
 		prompts := session.GetPromptTemplates()
 		if len(prompts) == 0 {
-			r.PrintInfo("no prompt templates found")
+			printNoPromptTemplatesFound(r)
 			return true, false
 		}
 		r.PrintInfo(fmt.Sprintf("available prompt templates (%d):", len(prompts)))
@@ -495,6 +495,34 @@ func resolveExportPath(session *coding_agent.CodingSession, path string) string 
 		return filepath.Clean(path)
 	}
 	return filepath.Join(cwd, path)
+}
+
+func printNoPromptTemplatesFound(r Printer) {
+	lines := []string{
+		"no prompt templates found",
+		"",
+		"Create a project prompt template:",
+		"  mkdir -p .coding_agent/prompts",
+		"  $EDITOR .coding_agent/prompts/review.md",
+		"",
+		"Example .coding_agent/prompts/review.md:",
+		"  ---",
+		"  description: Review code changes",
+		"  ---",
+		"  Review the following target and point out bugs, regressions, and missing tests:",
+		"",
+		"  $ARGUMENTS",
+		"",
+		"Then run:",
+		"  /reload",
+		"  /prompts",
+		"  /review cmd/modu_code",
+		"",
+		"User-wide templates also work under ~/.modu/prompts/.",
+	}
+	for _, line := range lines {
+		r.PrintInfo(line)
+	}
 }
 
 var copyTextToClipboard = func(text string) error {
@@ -975,6 +1003,8 @@ func PrintHelp(r Printer) {
 		"/help, /h           — show this help",
 		"/quit, /exit        — exit",
 		"/clear              — clear the screen",
+		"/config             — configure providers and models",
+		"/config validate    — validate model config",
 		"/model              — show or switch model",
 		"/model list         — list configured models",
 		"/compact            — compact the conversation context",

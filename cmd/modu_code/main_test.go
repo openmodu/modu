@@ -144,7 +144,7 @@ func TestConfigToggleWorkflowsWritesSettings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("configToggleWorkflows disable: %v", err)
 	}
-	path := filepath.Join(home, ".modu", "settings.json")
+	path := filepath.Join(home, ".modu", "config.toml")
 	if !strings.Contains(out, "dynamic workflows: disabled") || !strings.Contains(out, path) {
 		t.Fatalf("unexpected disable output:\n%s", out)
 	}
@@ -152,8 +152,8 @@ func TestConfigToggleWorkflowsWritesSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), `"disableWorkflows": true`) {
-		t.Fatalf("expected disableWorkflows true in settings:\n%s", string(data))
+	if !strings.Contains(string(data), "[settings]") || !strings.Contains(string(data), "disableWorkflows = true") {
+		t.Fatalf("expected disableWorkflows true in config.toml settings:\n%s", string(data))
 	}
 
 	out, err = configToggleWorkflows(nil)
@@ -330,6 +330,54 @@ baseUrl = ""
 	}
 	if !strings.Contains(stderr.String(), "problems") {
 		t.Fatalf("expected problems output, got:\n%s", stderr.String())
+	}
+}
+
+func TestMainStartsTUIWhenProviderMissing(t *testing.T) {
+	home := t.TempDir()
+	project := filepath.Join(t.TempDir(), "project")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	for _, key := range []string{
+		"ANTHROPIC_API_KEY",
+		"ANTHROPIC_MODEL",
+		"OPENAI_API_KEY",
+		"OPENAI_MODEL",
+		"DEEPSEEK_API_KEY",
+		"DEEPSEEK_MODEL",
+		"OLLAMA_HOST",
+		"OLLAMA_MODEL",
+		"LMSTUDIO_MODEL",
+		"LMSTUDIO_BASE_URL",
+	} {
+		t.Setenv(key, "")
+	}
+
+	setupMainTestInvocation(t, project, "modu_code")
+
+	called := false
+	runTUI = func(ctx context.Context, session *coding_agent.CodingSession, model *types.Model, noApprove bool, opts RunOptions) error {
+		called = true
+		if model == nil || model.ProviderID != unconfiguredProviderID {
+			t.Fatalf("expected unconfigured startup model, got %#v", model)
+		}
+		if got := session.GetModel(); got == nil || got.ProviderID != unconfiguredProviderID {
+			t.Fatalf("expected session to start with unconfigured model, got %#v", got)
+		}
+		if !strings.Contains(opts.StartupNotice, "/config") || !strings.Contains(opts.StartupNotice, filepath.Join(home, ".modu", "config.toml")) {
+			t.Fatalf("expected startup notice to guide /config, got:\n%s", opts.StartupNotice)
+		}
+		if opts.CommandHooks.ConfigProviders == nil || opts.CommandHooks.ConfigSetProvider == nil || opts.CommandHooks.ConfigUse == nil {
+			t.Fatalf("expected config hooks for first-run setup: %#v", opts.CommandHooks)
+		}
+		return nil
+	}
+
+	main()
+	if !called {
+		t.Fatal("expected TUI runner to be called")
 	}
 }
 

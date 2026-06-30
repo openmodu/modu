@@ -872,3 +872,90 @@ enough to implement, verify, and commit independently.
   dynamic-workflow prompt guidance, Ultracode guidance, and README docs now say
   the `workflow` tool only starts runs and `/workflows ...` commands handle
   status, agent details, stop/resume, restart, save, and the TUI panel.
+- 2026-06-30: first-run `modu_code` now opens the interactive TUI even when no
+  model provider is configured. The session starts with an explicit
+  unconfigured placeholder model and shows a startup notice directing the user
+  to `/config`; non-interactive `-p`, `--rpc`, and `--acp` still fail fast with
+  the CLI quick-start guidance. `/config add` and provider setup now sync the
+  current session to the resolved active model after config writes.
+- 2026-06-30: `env GOCACHE=/private/tmp/modu-go-build go test ./cmd/modu_code ./pkg/tui ./pkg/slash ./pkg/coding_agent`
+  passed for the first-run `/config` TUI setup slice.
+- 2026-06-30: fixed the newer `modu-tui` runner so `/config` is handled as a
+  local slash command instead of falling through to `unknown command`. The
+  config status output now lists usable slash subcommands for add/use/list and
+  validate.
+- 2026-06-30: `/config` in the newer `modu-tui` runner now opens an
+  interactive configuration wizard. While the wizard is active, ordinary input
+  is routed to the wizard instead of the model. The flow supports provider
+  setup/model discovery, manual model add, active model selection, and status
+  display. API keys are configured via environment variable names in the wizard
+  so secrets are not echoed into transcript history.
+- 2026-06-30: exact `/config` now opens the wizard even if it reaches the
+  generic slash runner fallback. `/config validate` and other argument-bearing
+  config commands still use the textual command output path.
+- 2026-06-30: config wizard choices now use the `modu-tui` fixed human-prompt
+  card instead of printing menu text into the transcript. The shared prompt card
+  renders vertical options, supports up/down and j/k navigation, Enter to
+  choose, numeric quick selection, and Esc cancel. `/config` action, provider,
+  and active-model choices use this card; free-text fields still use the normal
+  input line.
+- 2026-06-30: provider setup now asks how to configure authentication before
+  requesting any key material. Choosing "Paste API key" opens a masked fixed
+  input card backed by `RequestHumanTextMsg`, so the key is not echoed into the
+  transcript or input history; choosing env-var still records an env var name,
+  and local providers can skip keys.
+- 2026-06-30: exact `/model` in the newer `modu-tui` runner now opens the same
+  fixed selection card used by `/config`. The card lists available models with
+  the current model marked, supports keyboard selection, and switches through
+  `SetModelByID`; argument-bearing commands such as `/model list` and
+  `/model <provider> <modelId>` still use the existing slash output path.
+- 2026-06-30: registered `/config` in the newer `modu-tui` base slash command
+  list so it appears in slash completion/discovery instead of only existing as
+  a runtime intercept. `/help` now also documents `/config` and
+  `/config validate`, with test coverage guarding `/config` and `/model` in
+  the base command registry.
+- 2026-06-30: simplified the `/config` wizard card hierarchy. The top card now
+  offers only "Setup with provider or add model manually" and "Show config
+  status"; choosing setup opens a fixed provider card ordered as DeepSeek,
+  LMStudio, Ollama, and Custom OpenAI-Compatible. Non-top card cancellation
+  returns to the previous layer, and text prompts accept `back` to go back.
+- 2026-06-30: improved the empty `/prompts` slash-command state. Instead of
+  only saying no templates were found, it now prints a concrete
+  `.coding_agent/prompts/review.md` example, shows `$ARGUMENTS`, and gives the
+  follow-up `/reload`, `/prompts`, and `/review cmd/modu_code` commands.
+- 2026-06-30: merged global coding-agent settings into `~/.modu/config.toml`
+  under `[settings]` while keeping project `.coding_agent/settings.json` and
+  legacy global `settings.json` readable. Global saves now write only
+  non-default settings, so empty `retrySettings`, `harness`, `permissions`, and
+  default feature flags are omitted. Legacy global JSON is migrated into
+  `config.toml` when no `[settings]` table exists, and model config saves
+  preserve the `[settings]` table.
+- 2026-06-30: added panic containment around the newer `modu-tui` runner. The
+  top-level TUI now restores terminal state, exits alternate screen/mouse
+  tracking, prints a clean panic stack to stderr, and returns a UI error;
+  background TUI goroutines for agent runs, slash commands, config/model
+  panels, queueing, interrupts, and startup events now recover and report an
+  internal panic in the TUI instead of crashing the whole process.
+- 2026-06-30: fixed the workflow panic shown from
+  `snapshotTracker.finishAgent -> emitSnapshot`. Workflow progress `onUpdate`
+  callbacks are now best-effort and recover locally, so a registry/TUI progress
+  sink panic cannot crash the workflow goroutine or leave the terminal in a raw
+  control-sequence state. Added focused snapshot tracker coverage for a
+  panicking update callback during agent finish and completion.
+- 2026-06-30: reworked workflow completion output so users can see the
+  orchestration before reading the payload. Completed workflows now render an
+  `Execution flow` section grouped by phase with each agent's status,
+  duration/token/tool/result preview, followed by a separate `Final result`
+  section. This prevents dynamic workflow results from arriving as one
+  undifferentiated transcript blob.
+- 2026-06-30: exact `/workflows` in the newer `modu-tui` runner now renders a
+  local `Workflow Cockpit` instead of falling through to the transcript-style
+  session slash command. The cockpit opens with run counts and the live
+  indicator, then shows an orchestration map grouped by phase with agent
+  status, prompt/result/tool previews, followed by latest-run metadata and
+  drill-down commands.
+- 2026-06-30: `/workflows show <run-id|latest>` no longer truncates the final
+  workflow `Result` at 600 characters or the persisted workflow script at 4000
+  characters. Structured results render as indented JSON, plain text results
+  keep their original text, and the persisted-run coverage now asserts long
+  result/script tails are present.

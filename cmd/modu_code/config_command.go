@@ -3,11 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -24,11 +21,18 @@ func runConfigHook(args string, session *coding_agent.CodingSession) (string, er
 	}
 	var out bytes.Buffer
 	err := runConfigCommand(fields, &out, &out)
-	if err == nil && len(fields) == 2 && fields[0] == "use" && session != nil {
-		if switchErr := session.SetModelByName(fields[1]); switchErr != nil {
-			fmt.Fprintf(&out, "current session: unchanged (%v)\n", switchErr)
-		} else {
-			fmt.Fprintln(&out, "current session: switched")
+	if err == nil && len(fields) > 0 && session != nil {
+		switch fields[0] {
+		case "add":
+			appendConfigSessionSync(&out, session)
+		case "use":
+			if len(fields) == 2 {
+				if switchErr := session.SetModelByName(fields[1]); switchErr != nil {
+					fmt.Fprintf(&out, "current session: unchanged (%v)\n", switchErr)
+				} else {
+					fmt.Fprintln(&out, "current session: switched")
+				}
+			}
 		}
 	}
 	return out.String(), err
@@ -107,7 +111,7 @@ func configProviderPresetEntries(seen map[string]bool) []ConfigProviderEntry {
 	return out
 }
 
-func configAddModel(input ConfigModelInput) (string, error) {
+func configAddModel(input ConfigModelInput, session *coding_agent.CodingSession) (string, error) {
 	entry := provider.ModelConfig{
 		Name:        input.Name,
 		Description: input.Description,
@@ -124,10 +128,13 @@ func configAddModel(input ConfigModelInput) (string, error) {
 	if created {
 		action = "added"
 	}
-	return fmt.Sprintf("%s model: %s\nconfig: %s\n", action, entry.Name, provider.ConfigPath()), nil
+	var out bytes.Buffer
+	fmt.Fprintf(&out, "%s model: %s\nconfig: %s\n", action, entry.Name, provider.ConfigPath())
+	appendConfigSessionSync(&out, session)
+	return out.String(), nil
 }
 
-func configSetProvider(input ConfigProviderInput) (string, error) {
+func configSetProvider(input ConfigProviderInput, session *coding_agent.CodingSession) (string, error) {
 	err := provider.UpsertProviderConfig(input.Provider, provider.ProviderConfig{
 		Type:      input.Type,
 		BaseURL:   input.BaseURL,
@@ -148,7 +155,26 @@ func configSetProvider(input ConfigProviderInput) (string, error) {
 		fmt.Fprintf(&out, "model discovery: found=%d added=%d updated=%d\n", discovery.Found, discovery.Added, discovery.Updated)
 	}
 	fmt.Fprintf(&out, "config: %s\n", provider.ConfigPath())
+	appendConfigSessionSync(&out, session)
 	return out.String(), nil
+}
+
+func appendConfigSessionSync(out io.Writer, session *coding_agent.CodingSession) {
+	if out == nil || session == nil {
+		return
+	}
+	model, _ := provider.Resolve()
+	if model == nil {
+		fmt.Fprintln(out, "current session: configure an active model to start chatting")
+		return
+	}
+	current := session.GetModel()
+	if current != nil && current.ProviderID == model.ProviderID && current.ID == model.ID {
+		fmt.Fprintln(out, "current session: active model already selected")
+		return
+	}
+	session.SetModel(model)
+	fmt.Fprintln(out, "current session: switched")
 }
 
 func configUseModel(target string, session *coding_agent.CodingSession) (string, error) {
@@ -178,13 +204,10 @@ func configRemoveModel(target string) (string, error) {
 }
 
 func configToggleWorkflows(session *coding_agent.CodingSession) (string, error) {
-	path := filepath.Join(coding_agent.DefaultAgentDir(), "settings.json")
-	cfg := agentconfig.Default()
-	if data, err := os.ReadFile(path); err == nil {
-		if err := json.Unmarshal(data, cfg); err != nil {
-			return "", fmt.Errorf("read settings %s: %w", path, err)
-		}
-	} else if !os.IsNotExist(err) {
+	agentDir := coding_agent.DefaultAgentDir()
+	path := agentconfig.GlobalConfigPath(agentDir)
+	cfg, err := agentconfig.Load(agentDir, "")
+	if err != nil {
 		return "", fmt.Errorf("read settings %s: %w", path, err)
 	}
 
@@ -339,6 +362,10 @@ func printConfigShow(stdout io.Writer) error {
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "TUI:")
 	fmt.Fprintln(stdout, "  /config")
+	fmt.Fprintln(stdout, "  /config add <name> <provider> <model> <baseUrl> [apiKey] [--description text]")
+	fmt.Fprintln(stdout, "  /config use <name|provider/model|provider:model|model>")
+	fmt.Fprintln(stdout, "  /config list")
+	fmt.Fprintln(stdout, "  /config validate")
 	return nil
 }
 

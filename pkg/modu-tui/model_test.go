@@ -1261,7 +1261,7 @@ func TestPOC2AcceptsExternalMessagesAndBusyState(t *testing.T) {
 }
 
 func TestPOC2MergesToolMessagesByToolID(t *testing.T) {
-	var tm tea.Model = NewModel(Options{Width: 80, Height: 12})
+	var tm tea.Model = NewModel(Options{Width: 80, Height: 18})
 	tm, _ = tm.Update(AppendMessageMsg{Message: Message{
 		Tool:      true,
 		ToolID:    "call-1",
@@ -1404,13 +1404,19 @@ func TestPOC2HumanPromptResolvesFromKeyboard(t *testing.T) {
 		t.Fatal("expected pending human prompt")
 	}
 	rendered := ansi.Strip(pending.render())
-	for _, want := range []string{"Human input required", "Choose commit shape", "[enter/1] 2 commits", "[2] 1 commit", "human input pending"} {
+	for _, want := range []string{"Human input required", "Choose commit shape", "1. 2 commits", "[↑/↓] select", "human input pending"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("human prompt missing %q:\n%s", want, rendered)
 		}
 	}
 
-	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: "2", Code: '2'}))
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	moved := tm.(Model)
+	if moved.humanPrompt == nil || moved.humanPrompt.selected != 1 {
+		t.Fatalf("expected down key to select second option, got %#v", moved.humanPrompt)
+	}
+
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	resolved := tm.(Model)
 	if resolved.humanPrompt != nil {
 		t.Fatal("human prompt should clear after response")
@@ -1422,6 +1428,46 @@ func TestPOC2HumanPromptResolvesFromKeyboard(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("expected human prompt response")
+	}
+}
+
+func TestPOC2HumanTextSecretInputMasksAndResolves(t *testing.T) {
+	responses := make(chan string, 1)
+	var tm tea.Model = NewModel(Options{Width: 80, Height: 18})
+	tm, _ = tm.Update(RequestHumanTextMsg{
+		Request: HumanTextRequest{
+			Title:       "API key",
+			Body:        "Paste API key",
+			Placeholder: "sk-...",
+			Secret:      true,
+			Required:    true,
+		},
+		Respond: responses,
+	})
+	for _, r := range "sk-secret" {
+		tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: string(r), Code: r}))
+	}
+	pending := tm.(Model)
+	rendered := ansi.Strip(pending.render())
+	if strings.Contains(rendered, "sk-secret") {
+		t.Fatalf("secret input should be masked:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "*********") || !strings.Contains(rendered, "[enter] save") {
+		t.Fatalf("secret prompt missing masked value/actions:\n%s", rendered)
+	}
+
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	resolved := tm.(Model)
+	if resolved.humanText != nil {
+		t.Fatal("human text prompt should clear after response")
+	}
+	select {
+	case got := <-responses:
+		if got != "sk-secret" {
+			t.Fatalf("response = %q, want sk-secret", got)
+		}
+	default:
+		t.Fatal("expected human text response")
 	}
 }
 

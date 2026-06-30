@@ -252,12 +252,94 @@ func formatWorkflowCompletion(result runResult) string {
 	if body == "" {
 		body = "(workflow returned no result)"
 	}
-	text := fmt.Sprintf("Workflow %s completed with %d agent(s).\n\n%s",
-		result.Meta.Name, result.Snapshot.AgentCount, body)
+	text := fmt.Sprintf("Workflow %s completed with %d agent(s).", result.Meta.Name, result.Snapshot.AgentCount)
+	if flow := workflowExecutionFlowText(result.Snapshot); flow != "" {
+		text += "\n\n## Execution flow\n\n" + flow
+	}
+	text += "\n\n## Final result\n\n" + body
 	if result.Snapshot.ScriptPath != "" {
 		text += "\n\nScript: " + result.Snapshot.ScriptPath
 	}
 	return text
+}
+
+func workflowExecutionFlowText(snapshot workflowSnapshot) string {
+	if len(snapshot.Agents) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	phases := snapshot.PhaseSummaries
+	if len(phases) == 0 {
+		phases = computePhaseSummaries(snapshot.Phases, snapshot.Agents, time.Now())
+	}
+	seenAgents := map[int]bool{}
+	if len(phases) > 0 {
+		for _, phase := range phases {
+			title := strings.TrimSpace(phase.Title)
+			if title == "" {
+				title = "(no phase)"
+			}
+			if b.Len() > 0 {
+				b.WriteString("\n")
+			}
+			fmt.Fprintf(&b, "- %s: %d agent(s), %d done, %d running, %d errors", title, phase.AgentCount, phase.DoneCount, phase.RunningCount, phase.ErrorCount)
+			if phase.DurationMs > 0 {
+				fmt.Fprintf(&b, ", durationMs=%d", phase.DurationMs)
+			}
+			b.WriteByte('\n')
+			for _, agent := range snapshot.Agents {
+				if workflowAgentPhaseKey(agent.Phase) != workflowAgentPhaseKey(phase.Title) {
+					continue
+				}
+				seenAgents[agent.ID] = true
+				b.WriteString(workflowExecutionAgentLine(agent))
+			}
+		}
+	}
+	for _, agent := range snapshot.Agents {
+		if seenAgents[agent.ID] {
+			continue
+		}
+		if b.Len() == 0 {
+			b.WriteString("- (unphased)\n")
+		}
+		b.WriteString(workflowExecutionAgentLine(agent))
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func workflowExecutionAgentLine(agent agentSnapshot) string {
+	label := strings.TrimSpace(agent.Label)
+	if label == "" {
+		label = fmt.Sprintf("agent-%d", agent.ID)
+	}
+	line := fmt.Sprintf("  - #%d [%s] %s", agent.ID, agent.Status, label)
+	if agent.DurationMs > 0 {
+		line += fmt.Sprintf(" durationMs=%d", agent.DurationMs)
+	}
+	if agent.EstimatedTokens > 0 {
+		line += fmt.Sprintf(" estimatedTokens=%d", agent.EstimatedTokens)
+	}
+	if agent.FailedToolCalls > 0 {
+		line += fmt.Sprintf(" failedTools=%d", agent.FailedToolCalls)
+	}
+	if len(agent.RecentToolCalls) > 0 {
+		line += fmt.Sprintf(" recentTools=%d", len(agent.RecentToolCalls))
+	}
+	if strings.TrimSpace(agent.Error) != "" {
+		line += " error=" + preview(agent.Error, 120)
+	} else if strings.TrimSpace(agent.ResultPreview) != "" {
+		line += " result=" + preview(agent.ResultPreview, 120)
+	}
+	return line + "\n"
+}
+
+func workflowAgentPhaseKey(phase string) string {
+	phase = strings.TrimSpace(phase)
+	if phase == "" {
+		return ""
+	}
+	return phase
 }
 
 // renderWorkflowResult turns a workflow's returned value into readable text
