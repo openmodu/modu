@@ -687,3 +687,9 @@ High-priority gaps identified before this round:
 2. Expand integration coverage around background tasks, tool replacement, and session switching.
 3. Add richer host action policies such as backoff variants, command/dir allowlist presets, and per-action failure handling.
 4. Keep refining the runtime state/control plane so more session resources are represented as first-class harness-managed artifacts instead of ad hoc prompt/session state.
+
+## 2026-07-01
+
+- Exposed run-level observed workflow cost through workflow runtime state. The
+  TUI can now read the snapshot cost directly for top-level workflow metrics,
+  while phase and agent cost remain available for fallback aggregation.
