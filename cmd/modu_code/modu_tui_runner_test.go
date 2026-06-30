@@ -185,6 +185,18 @@ func TestMessageFromSessionEventIncludesPermissionDenied(t *testing.T) {
 	}
 }
 
+func TestMessageFromSessionEventIncludesContextCompactDivider(t *testing.T) {
+	msg, ok := messageFromSessionEvent(coding_agent.SessionEvent{
+		Type: coding_agent.SessionEventCompactionDone,
+	})
+	if !ok {
+		t.Fatal("expected compaction done event to render")
+	}
+	if msg.Text != moduTUIContextCompactDivider || !msg.Preformatted || !msg.Plain {
+		t.Fatalf("unexpected compact message: %#v", msg)
+	}
+}
+
 func TestMessagesFromAgentEventFormatsBashToolAsSingleClaudeStyleBlock(t *testing.T) {
 	start := messagesFromAgentEvent(types.Event{
 		Type:       types.EventTypeToolExecutionStart,
@@ -575,6 +587,46 @@ func TestModuTUISlashCommandsIncludeBaseAndSessionCommands(t *testing.T) {
 			t.Fatalf("missing slash command %q in %#v", want, commands)
 		}
 	}
+}
+
+func TestMessagesFromSessionTranscriptRestoresCompactionDivider(t *testing.T) {
+	streamFn := func(ctx context.Context, _ *types.Model, _ *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+		stream := types.NewEventStream()
+		go func() {
+			stream.Resolve(&types.AssistantMessage{
+				Role:       types.RoleAssistant,
+				StopReason: "stop",
+				Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "compact summary"}},
+				Timestamp:  time.Now().UnixMilli(),
+			}, nil)
+			stream.Close()
+		}()
+		return stream, nil
+	}
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       t.TempDir(),
+		AgentDir:  t.TempDir(),
+		Model:     &types.Model{ID: "test", Name: "Test", ProviderID: "test", ContextWindow: 32768},
+		GetAPIKey: func(string) (string, error) { return "", nil },
+		StreamFn:  streamFn,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 6; i++ {
+		session.GetAgent().AppendMessage(types.UserMessage{Role: types.RoleUser, Content: "msg"})
+	}
+	if err := session.Compact(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	messages := messagesFromSessionTranscript(session)
+	for _, msg := range messages {
+		if msg.Text == moduTUIContextCompactDivider {
+			return
+		}
+	}
+	t.Fatalf("expected compact divider in transcript: %#v", messages)
 }
 
 func TestModuTUIQueueCommandParsesSteerAndFollowUp(t *testing.T) {

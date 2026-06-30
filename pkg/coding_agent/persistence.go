@@ -56,8 +56,44 @@ func (s *engine) RestoreMessages() (int, error) {
 		return s.migrateOldMessagesJSON()
 	}
 	s.agent.ReplaceMessages(msgs)
+	s.restoreTokenUsageFromMessages(msgs)
 	s.lastSavedIndex = len(msgs)
 	return len(msgs), nil
+}
+
+func (s *engine) restoreTokenUsageFromMessages(msgs []types.AgentMessage) {
+	if s == nil || s.ctxMgr == nil {
+		return
+	}
+	s.ctxMgr.ResetUsage()
+	for _, msg := range msgs {
+		s.ctxMgr.AddUsage(agentMessageUsageTokens(msg))
+	}
+}
+
+func agentMessageUsageTokens(msg types.AgentMessage) int {
+	switch m := msg.(type) {
+	case types.AssistantMessage:
+		return usageTokens(m.Usage)
+	case *types.AssistantMessage:
+		if m == nil {
+			return 0
+		}
+		return usageTokens(m.Usage)
+	default:
+		return 0
+	}
+}
+
+func usageTokens(usage types.AgentUsage) int {
+	tokens := usage.TotalTokens
+	if tokens == 0 {
+		tokens = usage.Input + usage.Output
+	}
+	if tokens < 0 {
+		return 0
+	}
+	return tokens
 }
 
 func branchSummaryMessageFromSessionData(data any) (types.UserMessage, bool) {
@@ -100,6 +136,7 @@ func (s *engine) migrateOldMessagesJSON() (int, error) {
 
 	// Set messages to memory and trigger save in new format
 	s.agent.ReplaceMessages(msgs)
+	s.restoreTokenUsageFromMessages(msgs)
 	s.lastSavedIndex = 0 // force save all
 	if err := s.SaveMessages(); err != nil {
 		return 0, err

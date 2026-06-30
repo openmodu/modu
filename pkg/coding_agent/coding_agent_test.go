@@ -2953,6 +2953,7 @@ func TestPromptPersistsAndResumesAssistantWhenStreamClosesAfterResolve(t *testin
 				Model:      model.ID,
 				StopReason: "stop",
 				Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "assistant after close"}},
+				Usage:      types.AgentUsage{Input: 120, Output: 80, TotalTokens: 200},
 				Timestamp:  time.Now().UnixMilli(),
 			}
 			stream.Resolve(msg, nil)
@@ -3004,6 +3005,19 @@ func TestPromptPersistsAndResumesAssistantWhenStreamClosesAfterResolve(t *testin
 	text, ok := assistant.Content[0].(*types.TextContent)
 	if !ok || text.Text != "assistant after close" {
 		t.Fatalf("assistant text block = %#v, want assistant after close", assistant.Content[0])
+	}
+	if got := resumed.GetSessionStats().TotalTokens; got != 200 {
+		t.Fatalf("resumed total tokens = %d, want 200", got)
+	}
+}
+
+func TestAgentMessageUsageTokensFallsBackToInputOutput(t *testing.T) {
+	msg := types.AssistantMessage{
+		Role:  types.RoleAssistant,
+		Usage: types.AgentUsage{Input: 11, Output: 7},
+	}
+	if got := agentMessageUsageTokens(msg); got != 18 {
+		t.Fatalf("usage tokens = %d, want 18", got)
 	}
 }
 
@@ -3626,6 +3640,58 @@ func TestMaybeAutoCompact_DisabledByConfig(t *testing.T) {
 	msgsAfter := len(session.agent.GetState().Messages)
 	if msgsAfter != msgsBefore {
 		t.Fatal("should not compact when AutoCompaction is disabled")
+	}
+}
+
+func TestContinueRunsAutoCompaction(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".coding_agent")
+	model := newTestModelWithContext(10000)
+	var streamCalls int32
+	streamFn := func(ctx context.Context, _ *types.Model, _ *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+		stream := types.NewEventStream()
+		call := atomic.AddInt32(&streamCalls, 1)
+		go func() {
+			text := "continued"
+			if call > 1 {
+				text = "compact summary"
+			}
+			stream.Resolve(&types.AssistantMessage{
+				Role:       types.RoleAssistant,
+				StopReason: "stop",
+				Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: text}},
+				Usage:      types.AgentUsage{Input: 9000},
+				Timestamp:  time.Now().UnixMilli(),
+			}, nil)
+			stream.Close()
+		}()
+		return stream, nil
+	}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  agentDir,
+		Model:     model,
+		GetAPIKey: func(p string) (string, error) { return "", nil },
+		StreamFn:  streamFn,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: fmt.Sprintf("msg %d", i)})
+	}
+
+	if err := session.Continue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := session.GetSessionStats().TotalTokens; got != 0 {
+		t.Fatalf("expected continue auto-compaction to reset tokens, got %d", got)
+	}
+	if calls := atomic.LoadInt32(&streamCalls); calls < 2 {
+		t.Fatalf("expected continue plus compaction stream calls, got %d", calls)
+	}
+	if got := len(session.GetMessages()); got >= 6 {
+		t.Fatalf("expected compaction to shrink messages, got %d", got)
 	}
 }
 
