@@ -10,6 +10,8 @@ var (
 	thinkingMarkerStyle           = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("5"))
 	slashInputStyle               = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
 	toolExpandedMarkerStyle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("2"))
+	panelTitleStyle               = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
+	panelSectionStyle             = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
 	dimStyle                      = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
 	ruleStyle                     = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
 	cardBorderStyle               = lipgloss.NewStyle().Foreground(lipgloss.Color("248"))

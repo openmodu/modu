@@ -887,23 +887,14 @@ func (m *Model) buildPanelLines() []string {
 	if title == "" {
 		title = "Panel"
 	}
-	body = append(body, botStyle.Render(title))
+	body = append(body, panelTitleStyle.Render(title))
 	if subtitle := strings.TrimSpace(panel.Subtitle); subtitle != "" {
 		body = append(body, dimStyle.Render(ansi.Truncate(subtitle, innerWidth, "…")))
 	}
 	if len(panel.Lines) > 0 {
 		body = append(body, "")
 	}
-	for _, raw := range panel.Lines {
-		if strings.TrimSpace(raw) == "" {
-			body = append(body, "")
-			continue
-		}
-		wrapped := ansi.Wrap(raw, innerWidth, "")
-		for _, line := range strings.Split(strings.TrimSuffix(wrapped, "\n"), "\n") {
-			body = append(body, line)
-		}
-	}
+	body = append(body, panelBodyLines(panel.Lines, innerWidth)...)
 	if len(panel.Rows) > 0 {
 		if len(panel.Lines) > 0 {
 			body = append(body, "")
@@ -916,13 +907,196 @@ func (m *Model) buildPanelLines() []string {
 	footer := strings.TrimSpace(panel.Footer)
 	if footer == "" {
 		if len(panel.Rows) > 0 {
-			footer = "[↑/↓] select  [enter] open  [esc/q] close"
+			footer = "[up/down] select  [enter] open  [esc/q] close"
 		} else {
-			footer = "[esc/q] close  [↑/↓] scroll"
+			footer = "[esc/q] close  [up/down] scroll"
 		}
 	}
 	body = append(body, "", dimStyle.Render(footer))
 	return CardBlock{Lines: body}.RenderWidth(width)
+}
+
+func panelBodyLines(lines []string, width int) []string {
+	width = max(1, width)
+	renderer := markdownRenderer(width)
+	var out []string
+	for i := 0; i < len(lines); {
+		if strings.TrimSpace(lines[i]) == "" {
+			out = append(out, "")
+			i++
+			continue
+		}
+
+		block := []string{lines[i]}
+		if panelLineStartsCodeFence(lines[i]) {
+			i++
+			for i < len(lines) {
+				block = append(block, lines[i])
+				if panelLineStartsCodeFence(lines[i]) {
+					i++
+					break
+				}
+				i++
+			}
+		} else {
+			i++
+			for i < len(lines) && strings.TrimSpace(lines[i]) != "" {
+				block = append(block, lines[i])
+				i++
+			}
+		}
+
+		if panelBlockLooksMarkdown(block) {
+			out = append(out, panelMarkdownLines(renderer, strings.Join(block, "\n"), width)...)
+		} else {
+			for _, raw := range block {
+				out = append(out, panelPlainLines(raw, width)...)
+			}
+		}
+	}
+	return out
+}
+
+func panelPlainLines(raw string, width int) []string {
+	raw = panelStylePlainLine(raw)
+	wrapped := ansi.Wrap(raw, width, "")
+	if wrapped == "" {
+		return []string{""}
+	}
+	return strings.Split(strings.TrimSuffix(wrapped, "\n"), "\n")
+}
+
+func panelStylePlainLine(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return raw
+	}
+	if strings.HasPrefix(trimmed, "+-- ") {
+		return panelSectionStyle.Render(raw)
+	}
+	if panelLooksLikeSectionHeading(raw) {
+		return panelSectionStyle.Render(raw)
+	}
+	return raw
+}
+
+func panelLooksLikeSectionHeading(raw string) bool {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || trimmed != raw {
+		return false
+	}
+	if strings.ContainsAny(trimmed, ":|[]{}()") || strings.Contains(trimmed, "->") {
+		return false
+	}
+	if strings.HasPrefix(trimmed, "#") || panelLineStartsMarkdownBlock(trimmed) {
+		return false
+	}
+	words := strings.Fields(trimmed)
+	return len(words) > 0 && len(words) <= 4 && len(trimmed) <= 48
+}
+
+func panelMarkdownLines(renderer MarkdownRenderer, source string, width int) []string {
+	rendered, err := renderMarkdownWithBorderedTables(renderer, source, width)
+	if err != nil {
+		var out []string
+		for _, line := range strings.Split(source, "\n") {
+			out = append(out, panelPlainLines(line, width)...)
+		}
+		return out
+	}
+	rendered = strings.TrimRight(rendered, "\n")
+	if rendered == "" {
+		return nil
+	}
+	lines := strings.Split(rendered, "\n")
+	for i, line := range lines {
+		if heading, ok := panelMarkdownHeadingText(line); ok {
+			lines[i] = panelSectionStyle.Render(heading)
+		}
+	}
+	return lines
+}
+
+func panelBlockLooksMarkdown(lines []string) bool {
+	for _, line := range lines {
+		if panelLineStartsMarkdownBlock(line) || panelLineHasInlineMarkdown(line) {
+			return true
+		}
+	}
+	return false
+}
+
+func panelLineStartsMarkdownBlock(raw string) bool {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return false
+	}
+	if strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "> ") || panelLineStartsCodeFence(trimmed) {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* ") {
+		return true
+	}
+	if len(trimmed) >= 3 && trimmed[0] >= '0' && trimmed[0] <= '9' {
+		for i := 1; i < len(trimmed); i++ {
+			if trimmed[i] == '.' && i+1 < len(trimmed) && trimmed[i+1] == ' ' {
+				return true
+			}
+			if trimmed[i] < '0' || trimmed[i] > '9' {
+				break
+			}
+		}
+	}
+	if strings.HasPrefix(trimmed, "|") && strings.HasSuffix(trimmed, "|") {
+		return true
+	}
+	return false
+}
+
+func panelOrderedMarkdownLine(line string) bool {
+	if len(line) < 3 || line[0] < '0' || line[0] > '9' {
+		return false
+	}
+	for i := 1; i < len(line); i++ {
+		if line[i] == '.' && i+1 < len(line) && line[i+1] == ' ' {
+			return true
+		}
+		if line[i] < '0' || line[i] > '9' {
+			return false
+		}
+	}
+	return false
+}
+
+func panelLineStartsCodeFence(line string) bool {
+	return strings.HasPrefix(strings.TrimSpace(line), "```")
+}
+
+func panelLineHasInlineMarkdown(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return false
+	}
+	return strings.Contains(trimmed, "**") ||
+		strings.Contains(trimmed, "__") ||
+		strings.Contains(trimmed, "`") ||
+		strings.Contains(trimmed, "](")
+}
+
+func panelMarkdownHeadingText(line string) (string, bool) {
+	trimmed := strings.TrimSpace(ansi.Strip(line))
+	if !strings.HasPrefix(trimmed, "#") {
+		return "", false
+	}
+	markers := 0
+	for markers < len(trimmed) && trimmed[markers] == '#' {
+		markers++
+	}
+	if markers == 0 || markers > 6 || markers >= len(trimmed) || trimmed[markers] != ' ' {
+		return "", false
+	}
+	text := strings.TrimSpace(trimmed[markers:])
+	return text, text != ""
 }
 
 func panelRowLine(row PanelRow, idx, selected, width int) string {
@@ -935,7 +1109,7 @@ func panelRowLine(row PanelRow, idx, selected, width int) string {
 	}
 	prefix := "  "
 	if idx == selected {
-		prefix = "› "
+		prefix = "> "
 	}
 	line := prefix + label
 	if detail := strings.TrimSpace(row.Detail); detail != "" {
@@ -1444,7 +1618,7 @@ func humanPromptActionsLine(req HumanPromptRequest) string {
 	if len(req.Options) == 0 {
 		return dimStyle.Render("[enter] continue  [esc] cancel")
 	}
-	return dimStyle.Render("[↑/↓] select  [enter] choose  [1-9] quick  [esc] cancel")
+	return dimStyle.Render("[up/down] select  [enter] choose  [1-9] quick  [esc] cancel")
 }
 
 func humanPromptOptionLines(req HumanPromptRequest, selected int, width int) []string {
@@ -1465,7 +1639,7 @@ func humanPromptOptionLines(req HumanPromptRequest, selected int, width int) []s
 		}
 		prefix := fmt.Sprintf("  %d. ", i+1)
 		if i == selected {
-			prefix = "› " + strconv.Itoa(i+1) + ". "
+			prefix = "> " + strconv.Itoa(i+1) + ". "
 		}
 		line := ansi.Truncate(prefix+label, max(1, width), "…")
 		if i == selected {

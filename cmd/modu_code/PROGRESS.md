@@ -1285,3 +1285,8 @@ enough to implement, verify, and commit independently.
   history entry.
 - 2026-07-01: `go test ./pkg/modu-tui`, `go test ./cmd/modu_code`, and
   `go test ./pkg/coding_agent ./pkg/slash` passed for the hot-load/history fix.
+- 2026-07-01: improved workflow panel readability. `pkg/modu-tui` panel titles
+  now use a distinct title color, section headings use a secondary color,
+  obvious markdown blocks in panel bodies render through the existing Markdown
+  renderer, and workflow panel footers use ASCII `up/down` hints instead of
+  arrow glyphs that can display poorly in some terminals.
