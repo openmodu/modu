@@ -4040,6 +4040,7 @@ func moduTUIWorkflowResultPanelFromStates(states map[string]any, runID string) m
 		Rows:      moduTUIWorkflowArtifactNavigationRows(run),
 		Shortcuts: shortcuts,
 		Footer:    moduTUIWorkflowPanelFooter("[up/down] select  [enter] open  [esc/q] close", shortcuts),
+		Markdown:  true,
 	}
 }
 

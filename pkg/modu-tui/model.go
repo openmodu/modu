@@ -894,7 +894,7 @@ func (m *Model) buildPanelLines() []string {
 	if len(panel.Lines) > 0 {
 		body = append(body, "")
 	}
-	body = append(body, panelBodyLines(panel.Lines, innerWidth)...)
+	body = append(body, panelBodyLines(panel.Lines, innerWidth, panel.Markdown)...)
 	if len(panel.Rows) > 0 {
 		if len(panel.Lines) > 0 {
 			body = append(body, "")
@@ -916,9 +916,12 @@ func (m *Model) buildPanelLines() []string {
 	return CardBlock{Lines: body}.RenderWidth(width)
 }
 
-func panelBodyLines(lines []string, width int) []string {
+func panelBodyLines(lines []string, width int, renderMarkdown bool) []string {
 	width = max(1, width)
-	renderer := markdownRenderer(width)
+	var renderer MarkdownRenderer
+	if renderMarkdown {
+		renderer = markdownRenderer(width)
+	}
 	var out []string
 	for i := 0; i < len(lines); {
 		if strings.TrimSpace(lines[i]) == "" {
@@ -946,7 +949,7 @@ func panelBodyLines(lines []string, width int) []string {
 			}
 		}
 
-		if panelBlockLooksMarkdown(block) {
+		if renderMarkdown && panelBlockLooksMarkdown(block) {
 			out = append(out, panelMarkdownLines(renderer, strings.Join(block, "\n"), width)...)
 		} else {
 			for _, raw := range block {

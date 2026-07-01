@@ -141,8 +141,9 @@ Component layout:
   `Panel.Shortcuts` can map single-key actions such as `p` or `x` into the same
   `Hooks.PanelAction` path without requiring a row selection. Panel titles use
   a distinct title color, plain section headings use a secondary color, obvious
-  markdown blocks inside `Panel.Lines` are rendered, and default panel footers
-  use ASCII key names to avoid terminal glyph issues.
+  markdown blocks inside `Panel.Lines` are rendered only when `Panel.Markdown`
+  is true, and default panel footers use ASCII key names to avoid terminal glyph
+  issues.
 - `RequestHumanPromptMsg` renders a blocking human-in-the-loop choice card for
   host prompts such as confirm/select/plan approval; numeric keys choose
   options and Enter/Esc use the configured default.

@@ -1560,8 +1560,9 @@ func TestPOC2PanelRowsSelectAndEmitAction(t *testing.T) {
 func TestPOC2PanelStylesTitleAndRendersMarkdownBlocks(t *testing.T) {
 	var tm tea.Model = NewModel(Options{Width: 72, Height: 16})
 	tm, _ = tm.Update(SetPanelMsg{Panel: Panel{
-		ID:    "workflow-result",
-		Title: "Workflow Result",
+		ID:       "workflow-result",
+		Title:    "Workflow Result",
+		Markdown: true,
 		Lines: []string{
 			"context",
 			"workflow: market_watch",
@@ -1595,8 +1596,9 @@ func TestPOC2PanelStylesTitleAndRendersMarkdownBlocks(t *testing.T) {
 func TestPOC2PanelRendersMarkdownParagraphsAndFencedCode(t *testing.T) {
 	var tm tea.Model = NewModel(Options{Width: 80, Height: 18})
 	tm, _ = tm.Update(SetPanelMsg{Panel: Panel{
-		ID:    "workflow-result",
-		Title: "Workflow Result",
+		ID:       "workflow-result",
+		Title:    "Workflow Result",
+		Markdown: true,
 		Lines: []string{
 			"## Markdown report",
 			"This is **important** and `inline`.",
@@ -1619,6 +1621,29 @@ func TestPOC2PanelRendersMarkdownParagraphsAndFencedCode(t *testing.T) {
 	for _, want := range []string{"Markdown report", "important", "inline", "package main", "func main() {}"} {
 		if !strings.Contains(stripped, want) {
 			t.Fatalf("rendered panel markdown missing %q:\n%s", want, stripped)
+		}
+	}
+}
+
+func TestPOC2PanelDoesNotRenderMarkdownByDefault(t *testing.T) {
+	var tm tea.Model = NewModel(Options{Width: 80, Height: 18})
+	tm, _ = tm.Update(SetPanelMsg{Panel: Panel{
+		ID:    "workflow-script",
+		Title: "Workflow Script",
+		Lines: []string{
+			"script",
+			"return \"# Smoke Report\"",
+			"```txt",
+			"result code block",
+			"```",
+		},
+	}})
+
+	model := tm.(Model)
+	stripped := ansi.Strip(model.render())
+	for _, want := range []string{"return \"# Smoke Report\"", "```txt", "result code block", "```"} {
+		if !strings.Contains(stripped, want) {
+			t.Fatalf("plain panel should keep script markdown-looking text %q:\n%s", want, stripped)
 		}
 	}
 }
