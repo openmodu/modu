@@ -1261,7 +1261,7 @@ func TestPOC2AcceptsExternalMessagesAndBusyState(t *testing.T) {
 }
 
 func TestPOC2MergesToolMessagesByToolID(t *testing.T) {
-	var tm tea.Model = NewModel(Options{Width: 80, Height: 12})
+	var tm tea.Model = NewModel(Options{Width: 80, Height: 18})
 	tm, _ = tm.Update(AppendMessageMsg{Message: Message{
 		Tool:      true,
 		ToolID:    "call-1",
@@ -1404,13 +1404,19 @@ func TestPOC2HumanPromptResolvesFromKeyboard(t *testing.T) {
 		t.Fatal("expected pending human prompt")
 	}
 	rendered := ansi.Strip(pending.render())
-	for _, want := range []string{"Human input required", "Choose commit shape", "[enter/1] 2 commits", "[2] 1 commit", "human input pending"} {
+	for _, want := range []string{"Human input required", "Choose commit shape", "1. 2 commits", "[↑/↓] select", "human input pending"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("human prompt missing %q:\n%s", want, rendered)
 		}
 	}
 
-	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: "2", Code: '2'}))
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	moved := tm.(Model)
+	if moved.humanPrompt == nil || moved.humanPrompt.selected != 1 {
+		t.Fatalf("expected down key to select second option, got %#v", moved.humanPrompt)
+	}
+
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	resolved := tm.(Model)
 	if resolved.humanPrompt != nil {
 		t.Fatal("human prompt should clear after response")
@@ -1422,6 +1428,269 @@ func TestPOC2HumanPromptResolvesFromKeyboard(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("expected human prompt response")
+	}
+}
+
+func TestPOC2PanelRendersScrollableMainViewAndCloses(t *testing.T) {
+	var tm tea.Model = NewModel(Options{Width: 60, Height: 12, InitialMessages: []Message{{
+		Role: RoleAssistant,
+		Text: "transcript stays behind panel",
+	}}})
+	tm, _ = tm.Update(SetPanelMsg{Panel: Panel{
+		ID:       "workflow",
+		Title:    "Workflow Cockpit",
+		Subtitle: "completed 1  running 0",
+		Lines: []string{
+			"overview",
+			"run one",
+			"run two",
+			"run three",
+			"run four",
+			"run five",
+			"run six",
+			"run seven",
+			"run eight",
+			"run nine",
+		},
+		Footer: "[esc/q] close",
+	}})
+
+	open := tm.(Model)
+	rendered := ansi.Strip(open.render())
+	for _, want := range []string{"Workflow Cockpit", "completed 1", "overview", "panel open", "● panel"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("panel render missing %q:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "transcript stays behind panel") {
+		t.Fatalf("panel should replace viewport, not append transcript:\n%s", rendered)
+	}
+
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyPgDown}))
+	scrolled := tm.(Model)
+	if scrolled.panelOffset == 0 {
+		t.Fatal("expected PgDown to scroll panel")
+	}
+
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: "q"}))
+	closed := tm.(Model)
+	if closed.panel != nil {
+		t.Fatal("expected q to close panel")
+	}
+	if got := ansi.Strip(closed.render()); !strings.Contains(got, "transcript stays behind panel") {
+		t.Fatalf("transcript should return after panel closes:\n%s", got)
+	}
+}
+
+func TestPOC2PanelRowsSelectAndEmitAction(t *testing.T) {
+	actions := make(chan PanelAction, 1)
+	var tm tea.Model = NewModel(Options{
+		Width:  72,
+		Height: 12,
+		Hooks: Hooks{
+			PanelAction: func(action PanelAction) {
+				actions <- action
+			},
+		},
+	})
+	tm, _ = tm.Update(SetPanelMsg{Panel: Panel{
+		ID:    "workflow",
+		Title: "Workflow Cockpit",
+		Rows: []PanelRow{
+			{Label: "run one [completed]", Detail: "5/5 · 1min", Value: "run-one", Command: "/workflows show run-one"},
+			{Label: "run two [running]", Detail: "2/5 · Research", Value: "run-two", Command: "/workflows show run-two"},
+		},
+	}})
+	open := tm.(Model)
+	if open.panelSelected != 0 {
+		t.Fatalf("panelSelected = %d, want 0", open.panelSelected)
+	}
+	rendered := ansi.Strip(open.render())
+	for _, want := range []string{"run one [completed]", "5/5", "[↑/↓] select"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("selectable panel missing %q:\n%s", want, rendered)
+		}
+	}
+
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	selected := tm.(Model)
+	if selected.panelSelected != 1 {
+		t.Fatalf("panelSelected = %d, want 1", selected.panelSelected)
+	}
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	closed := tm.(Model)
+	if closed.panel != nil {
+		t.Fatal("panel should close after Enter action")
+	}
+	select {
+	case action := <-actions:
+		if action.PanelID != "workflow" || action.Index != 1 || action.Row.Value != "run-two" || action.Command != "/workflows show run-two" {
+			t.Fatalf("unexpected panel action: %#v", action)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected panel action")
+	}
+}
+
+func TestPOC2PanelShortcutEmitsAction(t *testing.T) {
+	actions := make(chan PanelAction, 1)
+	var tm tea.Model = NewModel(Options{
+		Width:  72,
+		Height: 12,
+		Hooks: Hooks{
+			PanelAction: func(action PanelAction) {
+				actions <- action
+			},
+		},
+	})
+	tm, _ = tm.Update(SetPanelMsg{Panel: Panel{
+		ID:    "workflow-run",
+		Title: "Workflow Run",
+		Rows: []PanelRow{
+			{Label: "Open agents", Command: "workflow-panel:agents:run-1"},
+		},
+		Shortcuts: []PanelShortcut{{
+			Key:     "x",
+			Label:   "Stop",
+			Command: "workflow-panel:control:stop:run-1",
+		}},
+	}})
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: "x", Code: 'x'}))
+
+	select {
+	case action := <-actions:
+		if action.PanelID != "workflow-run" || action.Index != -1 || action.Command != "workflow-panel:control:stop:run-1" || action.Row.Label != "Stop" {
+			t.Fatalf("unexpected shortcut action: %#v", action)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected shortcut action")
+	}
+	if tm.(Model).panel != nil {
+		t.Fatal("shortcut action should close panel before dispatch")
+	}
+}
+
+func TestPOC2PanelRefreshPreservesSelectionAndCloseHook(t *testing.T) {
+	closed := make(chan string, 1)
+	var tm tea.Model = NewModel(Options{
+		Width:  72,
+		Height: 12,
+		Hooks: Hooks{
+			PanelClosed: func(panelID string) {
+				closed <- panelID
+			},
+		},
+	})
+	tm, _ = tm.Update(SetPanelMsg{Panel: Panel{
+		ID:    "workflow",
+		Title: "Workflow Cockpit",
+		Rows: []PanelRow{
+			{Label: "run one", Value: "run-one"},
+			{Label: "run two", Value: "run-two"},
+		},
+	}})
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	selected := tm.(Model)
+	if selected.panelSelected != 1 {
+		t.Fatalf("panelSelected before refresh = %d, want 1", selected.panelSelected)
+	}
+
+	tm, _ = tm.Update(RefreshPanelMsg{Panel: Panel{
+		ID:    "workflow",
+		Title: "Workflow Cockpit",
+		Rows: []PanelRow{
+			{Label: "run one [done]", Value: "run-one"},
+			{Label: "run two [running]", Value: "run-two"},
+			{Label: "run three [queued]", Value: "run-three"},
+		},
+	}})
+	refreshed := tm.(Model)
+	if refreshed.panelSelected != 1 {
+		t.Fatalf("panelSelected after refresh = %d, want 1", refreshed.panelSelected)
+	}
+	rendered := ansi.Strip(refreshed.render())
+	if !strings.Contains(rendered, "run two [running]") {
+		t.Fatalf("refreshed panel content missing updated row:\n%s", rendered)
+	}
+
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: "q"}))
+	if tm.(Model).panel != nil {
+		t.Fatal("panel should close after q")
+	}
+	select {
+	case panelID := <-closed:
+		if panelID != "workflow" {
+			t.Fatalf("closed panel id = %q, want workflow", panelID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected panel close hook")
+	}
+}
+
+func TestPOC2PanelSelectionStaysVisible(t *testing.T) {
+	rows := make([]PanelRow, 0, 16)
+	for i := 0; i < 16; i++ {
+		rows = append(rows, PanelRow{Label: fmt.Sprintf("run-%02d", i+1), Command: fmt.Sprintf("/workflows show run-%02d", i+1)})
+	}
+	var tm tea.Model = NewModel(Options{Width: 60, Height: 10})
+	tm, _ = tm.Update(SetPanelMsg{Panel: Panel{
+		ID:    "workflow",
+		Title: "Workflow Cockpit",
+		Rows:  rows,
+	}})
+	for i := 0; i < 12; i++ {
+		tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	}
+	m := tm.(Model)
+	if m.panelSelected != 12 {
+		t.Fatalf("panelSelected = %d, want 12", m.panelSelected)
+	}
+	if m.panelOffset == 0 {
+		t.Fatal("expected panel offset to follow selected row")
+	}
+	rendered := ansi.Strip(m.render())
+	if !strings.Contains(rendered, "run-13") {
+		t.Fatalf("selected row should be visible:\n%s", rendered)
+	}
+}
+
+func TestPOC2HumanTextSecretInputMasksAndResolves(t *testing.T) {
+	responses := make(chan string, 1)
+	var tm tea.Model = NewModel(Options{Width: 80, Height: 18})
+	tm, _ = tm.Update(RequestHumanTextMsg{
+		Request: HumanTextRequest{
+			Title:       "API key",
+			Body:        "Paste API key",
+			Placeholder: "sk-...",
+			Secret:      true,
+			Required:    true,
+		},
+		Respond: responses,
+	})
+	for _, r := range "sk-secret" {
+		tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: string(r), Code: r}))
+	}
+	pending := tm.(Model)
+	rendered := ansi.Strip(pending.render())
+	if strings.Contains(rendered, "sk-secret") {
+		t.Fatalf("secret input should be masked:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "*********") || !strings.Contains(rendered, "[enter] save") {
+		t.Fatalf("secret prompt missing masked value/actions:\n%s", rendered)
+	}
+
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	resolved := tm.(Model)
+	if resolved.humanText != nil {
+		t.Fatal("human text prompt should clear after response")
+	}
+	select {
+	case got := <-responses:
+		if got != "sk-secret" {
+			t.Fatalf("response = %q, want sk-secret", got)
+		}
+	default:
+		t.Fatal("expected human text response")
 	}
 }
 

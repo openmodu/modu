@@ -111,7 +111,7 @@ func (e *Extension) cmdDeepResearch(argsText string) error {
 	if scriptPath != "" {
 		text += "\nScript: " + scriptPath
 	}
-	text += "\nUse /workflows to watch progress."
+	text += "\n" + workflowStartGuidance(runID)
 	e.tell(text)
 	return nil
 }

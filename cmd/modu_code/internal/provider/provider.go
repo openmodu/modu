@@ -24,6 +24,7 @@ type Config struct {
 	Roles        map[string]string         `json:"roles,omitempty" toml:"roles,omitempty"`
 	ScopedModels []string                  `json:"scopedModels,omitempty" toml:"scopedModels,omitempty"`
 	Reasoning    ReasoningConfig           `json:"reasoning,omitempty" toml:"reasoning,omitempty"`
+	Settings     map[string]any            `json:"settings,omitempty" toml:"settings,omitempty"`
 	Providers    map[string]ProviderConfig `json:"providers,omitempty" toml:"providers,omitempty"`
 	Models       []ModelConfig             `json:"models,omitempty" toml:"models,omitempty"`
 

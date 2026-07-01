@@ -1952,12 +1952,11 @@ func TestLoadConfigMissing(t *testing.T) {
 	if cfg.ThinkingLevel == "" {
 		t.Fatal("should have defaults when files are missing")
 	}
-	data, err := os.ReadFile(filepath.Join(agentDir, "settings.json"))
-	if err != nil {
-		t.Fatalf("expected default settings.json bootstrap, got %v", err)
+	if _, err := os.Stat(filepath.Join(agentDir, "settings.json")); !os.IsNotExist(err) {
+		t.Fatalf("default settings.json should not be bootstrapped, got %v", err)
 	}
-	if !strings.Contains(string(data), `"harness"`) {
-		t.Fatalf("expected bootstrapped settings to include harness config, got %q", string(data))
+	if _, err := os.Stat(config.GlobalConfigPath(agentDir)); !os.IsNotExist(err) {
+		t.Fatalf("default config.toml settings should not be bootstrapped, got %v", err)
 	}
 }
 

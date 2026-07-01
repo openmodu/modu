@@ -637,6 +637,42 @@ High-priority gaps identified before this round:
   covering `UserMessage`, `AssistantMessage`, `ToolResultMessage` and their
   pointer variants, so message type information is preserved during JSONL
   serialization regardless of the concrete Go type the caller passes.
+- Exposed capped recent workflow `log(...)` messages in
+  `RuntimeState().Extensions["workflow"].runs[].logs`, letting host UIs render a
+  lightweight live updates feed without loading full workflow snapshots or child
+  transcripts.
+- Added `/workflows map <run-id|latest>` as a lightweight phase/agent
+  orchestration-tree command. It shows phase summaries and per-agent previews
+  without expanding the full workflow result or script, leaving `/workflows
+  show` as the complete metadata/script view.
+- Added `/workflows feed <run-id|latest>` as the short dynamic execution-feed
+  command. It renders run progress, current phase, recent `log(...)` updates,
+  active/attention agents, and phase timeline without expanding the full result
+  or script.
+- Extended `/workflows feed <run-id|latest>` with compact phase lanes matching
+  the modu TUI feed semantics: `run`, `done`, `err`, and `wait` markers plus a
+  legend, so non-TUI output also shows agent distribution by phase.
+- Added `/workflows guide <run-id|latest>` as a compact navigation guide for a
+  workflow run. It explains the Feed, Map, Phase, Agent, Transcript,
+  Result/Script views, points to the current phase plus first active/attention
+  agents, and avoids expanding the full result or script.
+- Changed `/workflows show <run-id|latest>` to stay summary-first. It now shows
+  metadata, phase/agent summaries, artifact paths, result preview, and next
+  navigation commands instead of expanding the full result payload or script
+  body into the terminal output.
+- Changed background workflow completion notifications to stay summary-first.
+  They now show execution flow, result preview, script path, and next navigation
+  commands while leaving full result/script inspection to the TUI Result/Script
+  artifact panels.
+- Updated workflow tool and README guidance to point users at the `/workflows`
+  TUI cockpit first, then Feed/Guide/Map/Detail drill-downs, instead of
+  presenting `/workflows show` as the primary inspection surface.
+- Unified async workflow start notifications across the workflow tool,
+  `/deep-research`, saved workflow commands, and `/workflows restart` so they
+  all point users to the `/workflows` cockpit first while still listing direct
+  feed/guide/show/stop commands for scriptable access.
+- Updated the `/workflows list` footer to use the same cockpit-first entry
+  point before listing feed/guide/map/show command fallbacks.
 
 ## Still Missing
 
@@ -651,3 +687,9 @@ High-priority gaps identified before this round:
 2. Expand integration coverage around background tasks, tool replacement, and session switching.
 3. Add richer host action policies such as backoff variants, command/dir allowlist presets, and per-action failure handling.
 4. Keep refining the runtime state/control plane so more session resources are represented as first-class harness-managed artifacts instead of ad hoc prompt/session state.
+
+## 2026-07-01
+
+- Exposed run-level observed workflow cost through workflow runtime state. The
+  TUI can now read the snapshot cost directly for top-level workflow metrics,
+  while phase and agent cost remain available for fallback aggregation.

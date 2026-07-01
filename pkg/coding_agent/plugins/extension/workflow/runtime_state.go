@@ -2,14 +2,16 @@ package workflow
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 )
 
 // RuntimeState exposes workflow progress to RuntimeState JSON and host UIs.
 // Scripts stay behind /workflows commands; agent prompts are capped to match
 // the /workflows agent detail view.
-const workflowRuntimePromptLimit = 4000
+const (
+	workflowRuntimePromptLimit = 4000
+	workflowRuntimeLogLimit    = 8
+)
 
 func (e *Extension) RuntimeState() any {
 	state := map[string]any{
@@ -20,11 +22,14 @@ func (e *Extension) RuntimeState() any {
 		"failedCount":    0,
 		"runs":           []map[string]any{},
 	}
-	if e == nil || e.registry == nil {
+	if e == nil {
 		return state
 	}
-	runs := e.registry.list()
-	sort.Slice(runs, func(i, j int) bool { return runs[i].UpdatedAt.After(runs[j].UpdatedAt) })
+	runs, _, err := e.workflowRuns()
+	if err != nil {
+		state["error"] = err.Error()
+		return state
+	}
 	runStates := make([]map[string]any, 0, len(runs))
 	var latestRunning map[string]any
 	for _, run := range runs {
@@ -49,14 +54,21 @@ func (e *Extension) RuntimeState() any {
 			"runDir":     run.RunDir,
 			"updatedAt":  run.UpdatedAt.UnixMilli(),
 		}
+		if run.SnapshotPath != "" {
+			entry["snapshotPath"] = run.SnapshotPath
+		}
 		if run.Snapshot != nil {
 			entry["name"] = run.Snapshot.Name
 			entry["agentCount"] = run.Snapshot.AgentCount
 			entry["doneCount"] = run.Snapshot.DoneCount
 			entry["runningAgentCount"] = run.Snapshot.RunningCount
 			entry["errorCount"] = run.Snapshot.ErrorCount
+			entry["cost"] = run.Snapshot.Cost
 			entry["durationMs"] = run.Snapshot.DurationMs
 			entry["currentPhase"] = run.Snapshot.CurrentPhase
+			if logs := workflowRuntimeLogs(run.Snapshot.Logs); len(logs) > 0 {
+				entry["logs"] = logs
+			}
 			entry["phases"] = workflowRuntimePhaseStates(run.Snapshot.PhaseSummaries)
 			entry["agents"] = workflowRuntimeAgentStates(run.Snapshot.Agents)
 		}
@@ -91,6 +103,25 @@ func workflowRuntimePhaseStates(phases []phaseSummary) []map[string]any {
 			"cost":            phase.Cost,
 			"durationMs":      phase.DurationMs,
 		})
+	}
+	return out
+}
+
+func workflowRuntimeLogs(logs []string) []string {
+	if len(logs) == 0 {
+		return nil
+	}
+	start := 0
+	if len(logs) > workflowRuntimeLogLimit {
+		start = len(logs) - workflowRuntimeLogLimit
+	}
+	out := make([]string, 0, len(logs)-start)
+	for _, log := range logs[start:] {
+		log = strings.TrimSpace(log)
+		if log == "" {
+			continue
+		}
+		out = append(out, preview(log, 240))
 	}
 	return out
 }

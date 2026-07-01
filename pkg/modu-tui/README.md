@@ -130,6 +130,15 @@ Component layout:
   applications feed external session events into the model without coupling
   this package to a specific agent runtime. `SetStatusMsg.TransientFor` can be
   set for completion/error notices that should disappear automatically.
+- `SetPanelMsg` opens a host-owned, scrollable main-view panel for richer TUI
+  surfaces such as workflow cockpits. The panel replaces the transcript
+  viewport until the user closes it with Esc, q, or Ctrl+C; `RefreshPanelMsg`
+  updates a matching open panel while preserving selection/scroll state, and
+  `ClearPanelMsg` can close a matching panel programmatically. Panels may
+  include selectable rows; ↑/↓ changes selection, Enter emits
+  `Hooks.PanelAction`, manual close emits `Hooks.PanelClosed`, and
+  `Panel.Shortcuts` can map single-key actions such as `p` or `x` into the same
+  `Hooks.PanelAction` path without requiring a row selection.
 - `RequestHumanPromptMsg` renders a blocking human-in-the-loop choice card for
   host prompts such as confirm/select/plan approval; numeric keys choose
   options and Enter/Esc use the configured default.

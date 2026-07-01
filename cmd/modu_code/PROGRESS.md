@@ -872,3 +872,408 @@ enough to implement, verify, and commit independently.
   dynamic-workflow prompt guidance, Ultracode guidance, and README docs now say
   the `workflow` tool only starts runs and `/workflows ...` commands handle
   status, agent details, stop/resume, restart, save, and the TUI panel.
+- 2026-06-30: first-run `modu_code` now opens the interactive TUI even when no
+  model provider is configured. The session starts with an explicit
+  unconfigured placeholder model and shows a startup notice directing the user
+  to `/config`; non-interactive `-p`, `--rpc`, and `--acp` still fail fast with
+  the CLI quick-start guidance. `/config add` and provider setup now sync the
+  current session to the resolved active model after config writes.
+- 2026-06-30: `env GOCACHE=/private/tmp/modu-go-build go test ./cmd/modu_code ./pkg/tui ./pkg/slash ./pkg/coding_agent`
+  passed for the first-run `/config` TUI setup slice.
+- 2026-06-30: fixed the newer `modu-tui` runner so `/config` is handled as a
+  local slash command instead of falling through to `unknown command`. The
+  config status output now lists usable slash subcommands for add/use/list and
+  validate.
+- 2026-06-30: `/config` in the newer `modu-tui` runner now opens an
+  interactive configuration wizard. While the wizard is active, ordinary input
+  is routed to the wizard instead of the model. The flow supports provider
+  setup/model discovery, manual model add, active model selection, and status
+  display. API keys are configured via environment variable names in the wizard
+  so secrets are not echoed into transcript history.
+- 2026-06-30: exact `/config` now opens the wizard even if it reaches the
+  generic slash runner fallback. `/config validate` and other argument-bearing
+  config commands still use the textual command output path.
+- 2026-06-30: config wizard choices now use the `modu-tui` fixed human-prompt
+  card instead of printing menu text into the transcript. The shared prompt card
+  renders vertical options, supports up/down and j/k navigation, Enter to
+  choose, numeric quick selection, and Esc cancel. `/config` action, provider,
+  and active-model choices use this card; free-text fields still use the normal
+  input line.
+- 2026-06-30: provider setup now asks how to configure authentication before
+  requesting any key material. Choosing "Paste API key" opens a masked fixed
+  input card backed by `RequestHumanTextMsg`, so the key is not echoed into the
+  transcript or input history; choosing env-var still records an env var name,
+  and local providers can skip keys.
+- 2026-06-30: exact `/model` in the newer `modu-tui` runner now opens the same
+  fixed selection card used by `/config`. The card lists available models with
+  the current model marked, supports keyboard selection, and switches through
+  `SetModelByID`; argument-bearing commands such as `/model list` and
+  `/model <provider> <modelId>` still use the existing slash output path.
+- 2026-06-30: registered `/config` in the newer `modu-tui` base slash command
+  list so it appears in slash completion/discovery instead of only existing as
+  a runtime intercept. `/help` now also documents `/config` and
+  `/config validate`, with test coverage guarding `/config` and `/model` in
+  the base command registry.
+- 2026-06-30: simplified the `/config` wizard card hierarchy. The top card now
+  offers only "Setup with provider or add model manually" and "Show config
+  status"; choosing setup opens a fixed provider card ordered as DeepSeek,
+  LMStudio, Ollama, and Custom OpenAI-Compatible. Non-top card cancellation
+  returns to the previous layer, and text prompts accept `back` to go back.
+- 2026-06-30: improved the empty `/prompts` slash-command state. Instead of
+  only saying no templates were found, it now prints a concrete
+  `.coding_agent/prompts/review.md` example, shows `$ARGUMENTS`, and gives the
+  follow-up `/reload`, `/prompts`, and `/review cmd/modu_code` commands.
+- 2026-06-30: merged global coding-agent settings into `~/.modu/config.toml`
+  under `[settings]` while keeping project `.coding_agent/settings.json` and
+  legacy global `settings.json` readable. Global saves now write only
+  non-default settings, so empty `retrySettings`, `harness`, `permissions`, and
+  default feature flags are omitted. Legacy global JSON is migrated into
+  `config.toml` when no `[settings]` table exists, and model config saves
+  preserve the `[settings]` table.
+- 2026-06-30: added panic containment around the newer `modu-tui` runner. The
+  top-level TUI now restores terminal state, exits alternate screen/mouse
+  tracking, prints a clean panic stack to stderr, and returns a UI error;
+  background TUI goroutines for agent runs, slash commands, config/model
+  panels, queueing, interrupts, and startup events now recover and report an
+  internal panic in the TUI instead of crashing the whole process.
+- 2026-06-30: fixed the workflow panic shown from
+  `snapshotTracker.finishAgent -> emitSnapshot`. Workflow progress `onUpdate`
+  callbacks are now best-effort and recover locally, so a registry/TUI progress
+  sink panic cannot crash the workflow goroutine or leave the terminal in a raw
+  control-sequence state. Added focused snapshot tracker coverage for a
+  panicking update callback during agent finish and completion.
+- 2026-06-30: reworked workflow completion output so users can see the
+  orchestration before reading the payload. Completed workflows now render an
+  `Execution flow` section grouped by phase with each agent's status,
+  duration/token/tool/result preview, followed by a separate `Final result`
+  section. This prevents dynamic workflow results from arriving as one
+  undifferentiated transcript blob.
+- 2026-06-30: exact `/workflows` in the newer `modu-tui` runner now renders a
+  local `Workflow Cockpit` instead of falling through to the transcript-style
+  session slash command. The cockpit opens with run counts and the live
+  indicator, then shows an orchestration map grouped by phase with agent
+  status, prompt/result/tool previews, followed by latest-run metadata and
+  drill-down commands.
+- 2026-06-30: `/workflows show <run-id|latest>` no longer truncates the final
+  workflow `Result` at 600 characters or the persisted workflow script at 4000
+  characters. Structured results render as indented JSON, plain text results
+  keep their original text, and the persisted-run coverage now asserts long
+  result/script tails are present.
+- 2026-06-30: started the Claude-Code-style dynamic workflow TUI surface for the
+  newer `modu-tui` runner. `pkg/modu-tui` now has a host-owned scrollable
+  `SetPanelMsg`/`ClearPanelMsg` main-view panel, exact `/workflows` opens the
+  workflow cockpit in that panel instead of appending transcript text, and
+  workflow `RuntimeState()` now merges persisted runs with live registry state
+  so the cockpit and `/workflows list` no longer disagree after a restart.
+- 2026-06-30: made the `modu-tui` panel selectable. Panels can now render
+  host-owned rows, use ↑/↓ to move selection, and emit `Hooks.PanelAction` on
+  Enter. The `/workflows` cockpit uses this to list recent workflow runs as
+  selectable rows; pressing Enter closes the panel and opens
+  `/workflows show <run-id>` for the selected run.
+- 2026-06-30: moved `/workflows` run selection one step further into the TUI.
+  Selecting a run in the workflow cockpit now opens a `Workflow Run` detail
+  panel instead of dumping `/workflows show` output into the transcript. The
+  detail panel shows summary metadata, phase/agent orchestration, agent result
+  previews, and a selectable Back row that returns to the cockpit.
+- 2026-06-30: added workflow detail subviews inside the newer `modu-tui` panel.
+  The `Workflow Run` panel now exposes selectable `Result` and `Script` rows;
+  choosing them opens `Workflow Result` or `Workflow Script` panels in-place,
+  reading full result data from `snapshot.json` and full workflow source from
+  `script.js`, with Back rows returning to the run detail or cockpit.
+- 2026-06-30: added workflow agent subviews to the newer `modu-tui` panel. The
+  `Workflow Run` detail panel now has an `Agents` row, which opens a selectable
+  `Workflow Agents` list. Selecting an agent opens a `Workflow Agent` panel with
+  summary metadata, prompt/result/error previews, and recent tool-call previews,
+  plus Back rows to the agent list or run detail.
+- 2026-06-30: added full workflow agent transcript browsing inside the
+  `modu-tui` panel. `Workflow Agent` now exposes a `Transcript` row, which reads
+  the selected agent's full child transcript from `snapshot.json` and renders
+  user/assistant/tool entries, tool calls, and usage in a `Workflow Transcript`
+  panel with Back rows to the agent or agent list.
+- 2026-06-30: added workflow control actions to the newer `modu-tui` workflow
+  detail panel. Running workflows expose `Pause` and `Stop`; stopped workflows
+  expose `Resume` and `Restart`; completed/failed workflows expose `Restart`,
+  with each row routed through the existing `/workflows` control commands and
+  returning to the refreshed run detail panel.
+- 2026-06-30: made workflow panels live-refresh while they are open. The
+  `modu_code` runner now tracks the current workflow cockpit/detail/agent/result
+  panel, polls the workflow runtime-state fingerprint, and sends
+  `RefreshPanelMsg` when the state changes. `pkg/modu-tui` preserves the
+  selected row and scroll offset on same-panel refreshes, and `Hooks.PanelClosed`
+  stops refreshing when the user closes the panel.
+- 2026-06-30: added phase-level workflow drill-down. `Workflow Run` panels now
+  expose each orchestration phase as a selectable row before the global
+  Agents/Result/Script actions; selecting a phase opens a live-refreshing
+  `Workflow Phase` panel showing only that stage's progress, agent rows,
+  prompt/result/error previews, and tool summaries, with navigation back to the
+  run detail, all agents, or cockpit.
+- 2026-06-30: routed read-only workflow slash subcommands into the new panel
+  surface. `/workflows list` opens the cockpit, `/workflows show <run|latest>`
+  opens the run detail panel, and `/workflows agent|transcript <run|latest>
+  <agent-id>` opens the corresponding agent/transcript panel. Control commands
+  such as pause/stop/resume/restart still execute through the workflow slash
+  command path.
+- 2026-07-01: added per-agent workflow controls to the `Workflow Agent` panel.
+  Running agents now expose `Stop agent` and `Restart agent` rows that route to
+  the existing `/workflows agent-stop` and `/workflows agent-restart` commands,
+  then return to the refreshed agent detail panel. Completed agents keep the
+  read-only Transcript/Back navigation.
+- 2026-07-01: routed workflow lifecycle notifications into the panel surface.
+  Workflow extension `Run:`/`New run:` start messages now open the matching
+  `Workflow Run` detail panel, completion messages open the latest run detail,
+  and control/error notifications update the status line instead of appending a
+  large workflow block to the transcript.
+- 2026-07-01: routed workflow tool results into the panel surface. Async
+  `workflow` tool results with `Details.runID` now open the matching run detail
+  panel, synchronous completion results open the latest run detail, and the
+  transcript tool block keeps only a compact "Opened workflow run panel" summary
+  instead of rendering the full workflow report inline.
+- 2026-07-01: workflow tool starts now open the `Workflow Cockpit` immediately.
+  This gives synchronous workflow runs a live panel surface before a run id is
+  returned; the existing runtime-state refresh loop then keeps the cockpit
+  updated while the workflow registry receives progress snapshots, and final
+  tool results still switch to the run detail panel.
+- 2026-07-01: tuned workflow panel default focus. The cockpit now initially
+  selects the latest running run when one exists, run detail panels select the
+  current/running phase instead of a control row, phase and agent-list panels
+  select the running agent, and running agent detail panels focus Transcript
+  instead of Stop/Restart controls. Live refresh still preserves the user's
+  current row selection.
+- 2026-07-01: added a compact live flow summary to `Workflow Run` panels. The
+  detail view now shows a short `flow` block before the full orchestration map,
+  including phase progression, the current phase, active agents, attention/error
+  agents, and the next waiting phase so users can understand the workflow shape
+  without reading the serialized transcript output.
+- 2026-07-01: added a phase timeline to `Workflow Run` panels. The new
+  `timeline` block expands the live flow into one short row per phase with
+  status, progress, token/duration hints, and at most two active/error agent
+  callouts, giving a Claude-Code-style step feed without dumping full child
+  transcripts into the main conversation.
+- 2026-07-01: routed workflow `log(...)` progress messages into dynamic TUI
+  panels. Workflow runtime state now exposes capped recent logs for each run,
+  and `Workflow Run` panels render them as a short `updates` feed between the
+  live flow and phase timeline, so script-authored progress messages are visible
+  without opening `snapshot.json`.
+- 2026-07-01: promoted the latest run's live flow, updates, and phase timeline
+  into the `Workflow Cockpit` first screen. Exact `/workflows` now shows the
+  same compact execution feed that run detail uses, so users can understand the
+  active orchestration shape before drilling into a run, phase, or agent.
+- 2026-07-01: added workflow quick-entry rows and a dedicated `Workflow Feed`
+  panel. Run detail now starts with `Execution feed`, `Current phase`, and
+  `Active agent` rows before control actions, and the feed panel shows only
+  flow/updates/timeline with focused navigation into the current phase or active
+  agent. This makes the dynamic workflow panel behave more like an operations
+  cockpit than a long command list.
+- 2026-07-01: added panel shortcuts for workflow controls. `pkg/modu-tui`
+  panels now support `Panel.Shortcuts`, and workflow run/feed panels map `p` to
+  pause/resume, `x` to stop, and `r` to restart where valid; running agent
+  detail panels map `x` to stop-agent and `r` to restart-agent. All shortcuts
+  reuse the existing `PanelAction` slash-command control path.
+- 2026-07-01: surfaced workflow shortcut hints in panel footers. Run, feed, and
+  running-agent panels now append context-specific `[p]`, `[x]`, and `[r]`
+  control hints to the footer whenever those shortcuts are active, so the TUI
+  exposes controls without requiring users to discover them from row labels.
+- 2026-07-01: added a workflow `board` section to the cockpit, run detail, and
+  feed panels. The board renders each phase as a numbered step with done,
+  running, error, or waiting state, then highlights attention and active agents
+  under the relevant phase so users can see the orchestration shape before
+  opening detailed timelines or transcripts.
+- 2026-07-01: split the full workflow orchestration dump into a dedicated
+  `Workflow Map` panel. `/workflows map <run-id|latest>` and the new `Map` rows
+  show the complete phase/agent tree, while run detail stays focused on
+  summary, board, flow, updates, timeline, and actions to avoid turning
+  `/workflows show latest` into a long truncated transcript block.
+- 2026-07-01: made `Workflow Feed` a first-class slash route. In the modu TUI,
+  `/workflows feed <run-id|latest>` opens the live feed panel directly; in the
+  workflow extension command it prints the same short execution-feed shape
+  without full result/script expansion. This gives users an explicit dynamic
+  follow mode instead of forcing `/workflows show latest` to carry both summary
+  and full inspection duties.
+- 2026-07-01: routed workflow started/restarted events into `Workflow Feed` by
+  default when the run is still active. Explicit `/workflows show` continues to
+  open run detail, and completed workflow events still open detail, but live
+  background runs now land in the dynamic follow view immediately.
+- 2026-07-01: added direct view-switch shortcuts across workflow panels. Run
+  detail exposes `[f] Feed`, `[m] Map`, and `[a] Agents`; feed exposes `[d]
+  Detail`, `[m] Map`, and `[a] Agents`; map exposes `[f] Feed`, `[d] Detail`,
+  and `[a] Agents`. The shortcuts reuse the existing panel action routing, so
+  users can move between follow, summary, tree, and agent views without
+  scrolling to navigation rows.
+- 2026-07-01: added compact agent `lanes` to `Workflow Feed`. Each phase now
+  gets a single scan line such as `Research: run #3 verify | err #4 risk`,
+  making the active/done/error agent distribution visible without opening the
+  full map or per-agent list.
+- 2026-07-01: added a lane legend to `Workflow Feed` so the compact agent
+  markers are self-explanatory: `run active`, `done complete`, `err attention`,
+  and `wait queued`.
+- 2026-07-01: added `Attention agent` quick rows to workflow run detail and
+  feed panels. When any agent has an error/failed state, users can jump directly
+  to that agent from the top navigation rows, before drilling through the full
+  agent list or map.
+- 2026-07-01: added `[!] Attention` shortcuts to workflow run detail and feed
+  panels when an error/failed agent exists. The shortcut opens the first
+  attention agent directly through the existing panel action route, matching the
+  `err attention` lane marker.
+- 2026-07-01: made `Workflow Map` interactive instead of a read-only tree. The
+  map panel now includes current/attention/active quick rows, phase rows, and
+  feed/detail/agents navigation rows, and its panel actions can drill directly
+  into phase and agent panels.
+- 2026-07-01: added lightweight cards to the top of `Workflow Feed`. The feed
+  now starts with stable `Status`, `Attention`, `Active`, and `Next` cards when
+  the runtime snapshot has matching data, giving active workflow runs a more
+  scannable Claude-style status surface before the board, lanes, updates, and
+  timeline sections.
+- 2026-07-01: changed the `/workflows` cockpit entry action for running runs to
+  open `Workflow Feed` instead of run detail. Completed, failed, and stopped
+  rows still open detail, but active runs now follow the dynamic status surface
+  by default when selected from the cockpit.
+- 2026-07-01: added a run-scoped `Workflow Guide` panel behind the `[?] Guide`
+  shortcut from Feed, Detail, and Map. The guide shows how Feed, Map, Phase,
+  Agent, and Transcript views fit together for the current run, plus direct rows
+  back into the live feed, structure map, detail panel, current phase, active
+  agent, and attention agent when those snapshots exist.
+- 2026-07-01: added the TUI slash route `/workflows guide <run-id|latest>` so
+  users can open the run-scoped guide directly from the prompt, not only through
+  `[?] Guide` inside an existing workflow panel.
+- 2026-07-01: slimmed the `/workflows` cockpit so it no longer embeds the full
+  orchestration map for the latest run. The cockpit now stays as a dashboard
+  with board/flow/updates/timeline plus explicit Guide, Feed, Map, and Detail
+  next actions; the complete tree remains in `Workflow Map`.
+- 2026-07-01: promoted `Workflow Guide` to a selectable row in run detail,
+  feed, and map panels, not only a `[?] Guide` shortcut. The quick current
+  phase/attention/active rows stay first, then the navigation group starts with
+  Guide so users can discover the view map without memorizing shortcuts.
+- 2026-07-01: added run-level navigation to `Workflow Phase` panels. A phase now
+  keeps its agent rows first, then exposes Guide, Feed, Map, Detail, Agents, and
+  Back rows plus `[?]`, `[f]`, `[m]`, `[d]`, and `[a]` shortcuts, so drilling
+  into one orchestration stage does not strand the user away from the live feed
+  or structure map.
+- 2026-07-01: added the same run-level navigation to `Workflow Agent` detail
+  panels. Transcript and running-agent control rows keep priority, then Guide,
+  Feed, Map, Agents, and Detail let users jump back to the run-level dynamic
+  views after inspecting an active or attention agent.
+- 2026-07-01: added run-level navigation to `Workflow Agents` list panels. The
+  agent rows still stay first for quick selection, followed by Guide, Feed, Map,
+  Detail, and Back rows plus `[?]`, `[f]`, `[m]`, and `[d]` shortcuts, so the
+  all-agents list also connects back to the live workflow surfaces.
+- 2026-07-01: added run-level navigation to `Workflow Transcript` panels. The
+  transcript keeps `Back to agent` first, then exposes Guide, Feed, Map, Agents,
+  and Detail rows plus matching shortcuts, so a deep transcript drill-down can
+  return directly to the dynamic workflow surfaces.
+- 2026-07-01: added run-level navigation to `Workflow Result` and `Workflow
+  Script` panels. Final artifact views now expose Guide, Feed, Map, Agents,
+  Detail, and Back rows plus `[?]`, `[f]`, `[m]`, `[d]`, and `[a]` shortcuts, so
+  reading the result or generated script no longer traps the user away from the
+  live workflow surfaces.
+- 2026-07-01: added `Result` and `Script` to `Workflow Guide` as first-class
+  artifact views. The guide now explains where final output and generated
+  scripts fit in the run map, and its rows can jump directly into those panels
+  without returning through run detail first.
+- 2026-07-01: added latest-run shortcuts to the `Workflow Cockpit`. The cockpit
+  footer now exposes `[?] Guide`, `[f] Feed`, `[m] Map`, and `[d] Detail` for
+  the latest run, and its copy says `open` instead of `details` because running
+  rows intentionally enter the live Feed.
+- 2026-07-01: capped `Workflow Result` and `Workflow Script` panel previews at
+  a fixed line budget and added snapshot/script path headers. Oversized
+  artifacts now show a truncation line with the full artifact path, keeping the
+  dynamic TUI responsive while preserving a clear route to the complete data.
+- 2026-07-01: aligned workflow guidance copy with the dynamic TUI design. Tool
+  descriptions and README text now direct users to the `/workflows` cockpit,
+  Feed, Guide, Map, and artifact panels first instead of treating
+  `/workflows show` as the primary inspection surface.
+- 2026-07-01: unified async workflow start notifications around the same
+  cockpit-first guidance. The workflow tool, `/deep-research`, saved workflow
+  commands, and `/workflows restart` now tell users to open `/workflows` for the
+  cockpit before listing direct feed/guide/show/stop command fallbacks.
+- 2026-07-01: updated `/workflows list` terminal guidance to match the TUI entry
+  model. The list footer now starts with `Open /workflows for the cockpit`
+  before listing feed/guide/map/show command fallbacks.
+- 2026-07-01: added a `Metrics` card to the `Workflow Feed`. The live feed now
+  surfaces run-level agent totals, phase state counts, aggregated estimated
+  tokens, and elapsed duration directly in the card stack, so the dynamic TUI
+  gives a quick execution health read before users drill into phases or agents.
+- 2026-07-01: added a `Path` card to the `Workflow Feed`. The feed card stack
+  now shows the phase route, current node, and next queued phase before the
+  agent-specific cards, making the workflow orchestration visible without
+  forcing users to read the serialized timeline or open the map panel first.
+- 2026-07-01: added an `Outcome` card to terminal `Workflow Feed` views. When a
+  run completes, fails, or stops, the feed now surfaces final artifact entry
+  points, snapshot/script paths, and Result/Script rows plus `[o]` and `[s]`
+  shortcuts, so final data is reachable as structured TUI artifacts instead of
+  being buried at the end of serialized workflow output.
+- 2026-07-01: wired observed workflow cost into the Feed `Metrics` card. The TUI
+  now reads run/phase/agent cost from workflow runtime state and renders the
+  real observed total when available, alongside agent totals, phase counts,
+  estimated tokens, and elapsed duration.
+- 2026-07-01: added a latest-run preview to the `Workflow Cockpit` panel. The
+  `/workflows` entry view now embeds the same Status, Metrics, Path, and
+  terminal Outcome cards used by the Feed, and terminal latest runs expose
+  `[o] Result` and `[s] Script` shortcuts directly from the cockpit.
+- 2026-07-01: added a `recent runs` board to the `Workflow Cockpit` panel. The
+  `/workflows` entry view now shows the latest run cards plus a compact list of
+  recent workflow runs with status, progress, phase, duration, and error counts,
+  so users can see both the active workflow and nearby run history before
+  selecting a row.
+- 2026-07-01: changed `Workflow Cockpit` run rows to open the Feed for every
+  run status. Running rows still enter the live surface, while completed,
+  failed, or stopped rows now land on the Feed Outcome cards and can use `[d]`
+  for metadata detail instead of bypassing the dynamic workflow view.
+- 2026-07-01: made terminal `Workflow Feed` panels select the `Result` row by
+  default. Completed, failed, or stopped runs now land on the Outcome cards with
+  Enter ready to open the final artifact, while non-terminal feeds still select
+  the current phase or attention/active agent first.
+- 2026-07-01: routed workflow completion notifications and workflow tool
+  completion events back to the Feed instead of the metadata detail panel. The
+  dynamic TUI now keeps lifecycle follow-up on the same live surface and lets
+  terminal feeds expose Outcome/Result/Script as the primary completion path.
+- 2026-07-01: routed workflow tool update events back to the Feed. Runtime
+  snapshot updates now resolve their run from `runID`, `runDir`,
+  `snapshotPath`, or `scriptPath`, so active workflow progress can refresh the
+  dynamic panel instead of disappearing until final completion.
+- 2026-07-01: added a `Plan` card to workflow run cards. The Cockpit preview
+  and Feed now show the numbered phase route, current orchestration point, next
+  blocked/queued stage, and compact per-stage labels before lower-level metrics
+  and logs, making the workflow arrangement visible without reading a serialized
+  transcript.
+- 2026-07-01: made workflow tool/session updates refresh the current workflow
+  panel in place when possible. If the user is looking at Cockpit, Map, Phase,
+  Agent, Result, Script, or Feed for the same run, incoming live updates now
+  send `RefreshPanelMsg` for that view instead of forcing the UI back to Feed.
+- 2026-07-01: added a topology section to `Workflow Map`. The map now starts
+  with numbered phase nodes, phase-to-phase path edges, and compact per-phase
+  agent lanes before the detailed tree, so users can read the workflow
+  arrangement before drilling into each agent's output.
+- 2026-07-01: removed duplicate phase rows from `Workflow Map` navigation. The
+  current phase remains the first focused row, while the full phase list skips
+  commands already present in that focus area, making map navigation less
+  repetitive without changing Feed or Run Detail quick rows.
+- 2026-07-01: added phase position context to `Workflow Phase`. A phase drill
+  down now shows its stage number, previous/current/next path, and neighboring
+  phase names before the agent list, so users keep the orchestration context
+  after opening one stage from the Map or Feed.
+- 2026-07-01: added orchestration context to `Workflow Agent`. Agent detail now
+  shows the parent phase position, phase path, agent index inside that phase,
+  and compact peer lanes before result/tool details, keeping agent drill-downs
+  tied to the workflow plan.
+- 2026-07-01: added run context to `Workflow Result` and `Workflow Script`.
+  Artifact panels now show workflow name, run id, status, progress, current
+  phase, and the phase plan route before the payload or script body, so final
+  outputs remain tied to the dynamic workflow execution view.
+- 2026-07-01: refreshed `Workflow Guide` copy to match the dynamic TUI surface.
+  The guide now describes Feed Plan/Metrics cards, Map topology, Phase/Agent
+  context, artifact run context, and return paths between artifact views and the
+  execution surfaces.
+- 2026-07-01: added a panel-derived run-id fallback for workflow refresh events.
+  Completion notifications that do not carry `runID` details can now reuse the
+  run id embedded in the returned Feed/Result/Script panel, so current workflow
+  subviews can refresh in place instead of being replaced unnecessarily.
+- 2026-07-01: added phase lanes to `Workflow Agents`. The all-agent view now
+  starts with phase-grouped agent lanes before the selectable flat list, so
+  users can compare worker distribution across stages without opening the Map.
+- 2026-07-01: exposed Result/Script shortcuts from `Workflow Guide`. The guide
+  footer now includes `[o] Result` and `[s] Script`, matching its updated
+  description of artifact views as first-class workflow surfaces.
+- 2026-07-01: added parent-phase navigation to `Workflow Agent` and
+  `Workflow Transcript`. Agent drill-downs now offer a direct return to the
+  orchestration stage they belong to, preserving the Phase -> Agent ->
+  Transcript hierarchy during inspection.

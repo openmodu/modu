@@ -2,7 +2,6 @@ package coding_agent
 
 import (
 	"encoding/json"
-	"path/filepath"
 	"strings"
 
 	"github.com/openmodu/modu/pkg/coding_agent/foundation/config"
@@ -44,8 +43,9 @@ func (s *CodingSession) EffectiveConfigJSON() string {
 	payload := map[string]any{
 		"config": s.config,
 		"paths": map[string]string{
-			"global":  filepath.Join(s.agentDir, "settings.json"),
-			"project": filepath.Join(s.cwd, ".coding_agent", "settings.json"),
+			"global":       config.GlobalConfigPath(s.agentDir),
+			"legacyGlobal": config.LegacyGlobalSettingsPath(s.agentDir),
+			"project":      config.ProjectSettingsPath(s.cwd),
 		},
 	}
 	data, err := json.MarshalIndent(payload, "", "  ")

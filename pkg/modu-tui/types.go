@@ -99,6 +99,16 @@ type HumanPromptRequest struct {
 	DefaultIndex int
 }
 
+type HumanTextRequest struct {
+	ID          string
+	Title       string
+	Body        string
+	Placeholder string
+	Default     string
+	Secret      bool
+	Required    bool
+}
+
 type SubmitKind string
 
 const (
@@ -116,6 +126,8 @@ type Hooks struct {
 	ToolPermission       func(ToolCall) ToolPermissionState
 	ToolApprovalDecision func(ToolApprovalResult)
 	InputHistoryChanged  func([]string)
+	PanelAction          func(PanelAction)
+	PanelClosed          func(panelID string)
 	SlashCommand         func(line string)
 	Interrupt            func()
 	Submit               func(text string)
@@ -127,6 +139,37 @@ type MessageBlockFactory func(Message) (Block, bool)
 type SlashCommand struct {
 	Name        string
 	Description string
+}
+
+type Panel struct {
+	ID        string
+	Title     string
+	Subtitle  string
+	Lines     []string
+	Rows      []PanelRow
+	Shortcuts []PanelShortcut
+	Selected  int
+	Footer    string
+}
+
+type PanelShortcut struct {
+	Key     string
+	Label   string
+	Command string
+}
+
+type PanelRow struct {
+	Label   string
+	Detail  string
+	Value   string
+	Command string
+}
+
+type PanelAction struct {
+	PanelID string
+	Index   int
+	Row     PanelRow
+	Command string
 }
 
 type Options struct {
@@ -170,6 +213,18 @@ type SetTodosMsg struct {
 
 type ClearMessagesMsg struct{}
 
+type SetPanelMsg struct {
+	Panel Panel
+}
+
+type RefreshPanelMsg struct {
+	Panel Panel
+}
+
+type ClearPanelMsg struct {
+	ID string
+}
+
 type RequestToolApprovalMsg struct {
 	Request ToolApprovalRequest
 	Respond chan<- ToolApprovalDecision
@@ -185,5 +240,14 @@ type RequestHumanPromptMsg struct {
 }
 
 type CancelHumanPromptMsg struct {
+	ID string
+}
+
+type RequestHumanTextMsg struct {
+	Request HumanTextRequest
+	Respond chan<- string
+}
+
+type CancelHumanTextMsg struct {
 	ID string
 }
