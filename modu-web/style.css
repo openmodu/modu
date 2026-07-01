@@ -662,13 +662,15 @@ body {
 }
 
 .footer-links a,
+.footer-contact,
 .legal-document a {
   color: #C4B5FD;
   text-decoration: none;
   transition: color 0.2s;
 }
 
-.footer-links a {
+.footer-links a,
+.footer-contact {
   min-width: 92px;
   padding: 0.55rem 0.9rem;
   border: 1px solid rgba(196, 181, 253, 0.38);
@@ -677,6 +679,11 @@ body {
   font-size: 0.95rem;
   font-weight: 600;
   text-align: center;
+}
+
+.contact-email {
+  color: #C4B5FD;
+  font-weight: 600;
 }
 
 .footer-links a:hover,
@@ -885,7 +892,8 @@ body {
     width: 100%;
   }
 
-  .footer-links a {
+  .footer-links a,
+  .footer-contact {
     flex: 1 1 128px;
   }
 
