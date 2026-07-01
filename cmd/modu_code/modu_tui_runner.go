@@ -1722,7 +1722,7 @@ func moduTUIWorkflowCockpitPanelFromStatesWithText(states map[string]any, text s
 		Rows:      rows,
 		Shortcuts: shortcuts,
 		Selected:  moduTUIWorkflowCockpitSelectedRow(states, rows),
-		Footer:    moduTUIWorkflowPanelFooter("[↑/↓] select run  [enter] open  [esc/q] close", shortcuts),
+		Footer:    moduTUIWorkflowPanelFooter("[up/down] select run  [enter] open  [esc/q] close", shortcuts),
 	}
 }
 
@@ -1843,7 +1843,7 @@ func moduTUIWorkflowRunDetailPanelFromStates(states map[string]any, runID string
 		Rows:      rows,
 		Shortcuts: shortcuts,
 		Selected:  moduTUIWorkflowRunDetailSelectedRow(run, rows),
-		Footer:    moduTUIWorkflowPanelFooter("[↑/↓] select  [enter] open  [esc/q] close", shortcuts),
+		Footer:    moduTUIWorkflowPanelFooter("[up/down] select  [enter] open  [esc/q] close", shortcuts),
 	}
 }
 
@@ -2001,7 +2001,7 @@ func moduTUIWorkflowFeedPanelFromStates(states map[string]any, runID string) mod
 		Rows:      rows,
 		Shortcuts: shortcuts,
 		Selected:  moduTUIWorkflowFeedSelectedRow(run, rows),
-		Footer:    moduTUIWorkflowPanelFooter("[↑/↓] select  [enter] open  [esc/q] close", shortcuts),
+		Footer:    moduTUIWorkflowPanelFooter("[up/down] select  [enter] open  [esc/q] close", shortcuts),
 	}
 }
 
@@ -2102,7 +2102,7 @@ func moduTUIWorkflowGuidePanelFromStates(states map[string]any, runID string) mo
 		Rows:      rows,
 		Shortcuts: shortcuts,
 		Selected:  moduTUIWorkflowRunFocusSelectedRow(rows),
-		Footer:    moduTUIWorkflowPanelFooter("[↑/↓] select  [enter] open  [esc/q] close", shortcuts),
+		Footer:    moduTUIWorkflowPanelFooter("[up/down] select  [enter] open  [esc/q] close", shortcuts),
 	}
 }
 
@@ -2533,7 +2533,7 @@ func moduTUIWorkflowMapPanelFromStates(states map[string]any, runID string) modu
 		Rows:      rows,
 		Shortcuts: shortcuts,
 		Selected:  moduTUIWorkflowRunFocusSelectedRow(rows),
-		Footer:    moduTUIWorkflowPanelFooter("[↑/↓] select  [enter] open  [esc/q] close", shortcuts),
+		Footer:    moduTUIWorkflowPanelFooter("[up/down] select  [enter] open  [esc/q] close", shortcuts),
 	}
 }
 
@@ -3597,7 +3597,7 @@ func moduTUIWorkflowPhasePanelFromStates(states map[string]any, runID, phaseTitl
 		Rows:      rows,
 		Shortcuts: shortcuts,
 		Selected:  moduTUIWorkflowAgentSelectedRow(agents, rows),
-		Footer:    moduTUIWorkflowPanelFooter("[↑/↓] select agent  [enter] open  [esc/q] close", shortcuts),
+		Footer:    moduTUIWorkflowPanelFooter("[up/down] select agent  [enter] open  [esc/q] close", shortcuts),
 	}
 }
 
@@ -3683,7 +3683,7 @@ func moduTUIWorkflowAgentsPanelFromStates(states map[string]any, runID string) m
 		Rows:      rows,
 		Shortcuts: shortcuts,
 		Selected:  moduTUIWorkflowAgentSelectedRow(run.Agents, rows),
-		Footer:    moduTUIWorkflowPanelFooter("[↑/↓] select agent  [enter] detail  [esc/q] close", shortcuts),
+		Footer:    moduTUIWorkflowPanelFooter("[up/down] select agent  [enter] detail  [esc/q] close", shortcuts),
 	}
 }
 
@@ -3810,7 +3810,7 @@ func moduTUIWorkflowAgentPanelFromStates(states map[string]any, runID string, ag
 		Rows:      rows,
 		Shortcuts: shortcuts,
 		Selected:  len(controlRows),
-		Footer:    moduTUIWorkflowPanelFooter("[↑/↓] select  [enter] open  [esc/q] close", shortcuts),
+		Footer:    moduTUIWorkflowPanelFooter("[up/down] select  [enter] open  [esc/q] close", shortcuts),
 	}
 }
 
@@ -4039,7 +4039,7 @@ func moduTUIWorkflowResultPanelFromStates(states map[string]any, runID string) m
 		Lines:     lines,
 		Rows:      moduTUIWorkflowArtifactNavigationRows(run),
 		Shortcuts: shortcuts,
-		Footer:    moduTUIWorkflowPanelFooter("[↑/↓] select  [enter] open  [esc/q] close", shortcuts),
+		Footer:    moduTUIWorkflowPanelFooter("[up/down] select  [enter] open  [esc/q] close", shortcuts),
 	}
 }
 
@@ -4085,7 +4085,7 @@ func moduTUIWorkflowScriptPanelFromStates(states map[string]any, runID string) m
 		Lines:     lines,
 		Rows:      moduTUIWorkflowArtifactNavigationRows(run),
 		Shortcuts: shortcuts,
-		Footer:    moduTUIWorkflowPanelFooter("[↑/↓] select  [enter] open  [esc/q] close", shortcuts),
+		Footer:    moduTUIWorkflowPanelFooter("[up/down] select  [enter] open  [esc/q] close", shortcuts),
 	}
 }
 
