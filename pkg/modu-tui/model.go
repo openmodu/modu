@@ -77,26 +77,27 @@ type Model struct {
 	todos         []TodoItem
 	todosCurrent  bool
 
-	selecting         bool
-	selStart, selEnd  cell
-	dragCol           int
-	autoScroll        int  // edge auto-scroll direction during drag: -1 up, +1 down, 0 none
-	autoScrolling     bool // a tick loop is currently live
-	autoScrollTicks   int
-	status            string
-	statusExpiresAt   time.Time
-	statusExpiresText string
-	statusHint        string
-	footer            string
-	infoCardLines     []string
-	disableMouse      bool
-	arrowKeysScroll   bool
-	hooks             Hooks
-	blockFactories    []MessageBlockFactory
-	blockGap          int
-	slashCommands     []SlashCommand
-	slashMatches      []SlashCommand
-	slashIndex        int
+	selecting             bool
+	selStart, selEnd      cell
+	dragCol               int
+	autoScroll            int  // edge auto-scroll direction during drag: -1 up, +1 down, 0 none
+	autoScrolling         bool // a tick loop is currently live
+	autoScrollTicks       int
+	status                string
+	statusExpiresAt       time.Time
+	statusExpiresText     string
+	statusHint            string
+	footer                string
+	infoCardLines         []string
+	disableMouse          bool
+	arrowKeysScroll       bool
+	hooks                 Hooks
+	blockFactories        []MessageBlockFactory
+	blockGap              int
+	slashCommands         []SlashCommand
+	slashCommandsProvider func() []SlashCommand
+	slashMatches          []SlashCommand
+	slashIndex            int
 }
 
 func NewModel(options ...Options) Model {
@@ -119,6 +120,7 @@ func NewModel(options ...Options) Model {
 		opts.Hooks = options[0].Hooks
 		opts.BlockFactories = append([]MessageBlockFactory(nil), options[0].BlockFactories...)
 		opts.SlashCommands = append([]SlashCommand(nil), options[0].SlashCommands...)
+		opts.SlashCommandsProvider = options[0].SlashCommandsProvider
 		if options[0].BlockGap > 0 {
 			opts.BlockGap = options[0].BlockGap
 		}
@@ -127,23 +129,24 @@ func NewModel(options ...Options) Model {
 		}
 	}
 	m := Model{
-		width:           opts.Width,
-		height:          opts.Height,
-		follow:          true,
-		selStart:        cell{line: -1},
-		selEnd:          cell{line: -1},
-		streamReply:     opts.StreamReply,
-		statusHint:      opts.StatusHint,
-		footer:          opts.Footer,
-		infoCardLines:   cleanInfoCardLines(opts.InfoCardLines),
-		todos:           normalizeTodos(opts.Todos),
-		disableMouse:    opts.DisableMouse,
-		arrowKeysScroll: opts.ArrowKeysScroll,
-		hooks:           opts.Hooks,
-		blockFactories:  opts.BlockFactories,
-		blockGap:        opts.BlockGap,
-		slashCommands:   normalizeSlashCommands(opts.SlashCommands),
-		inputHistory:    normalizeInputHistory(opts.InputHistory),
+		width:                 opts.Width,
+		height:                opts.Height,
+		follow:                true,
+		selStart:              cell{line: -1},
+		selEnd:                cell{line: -1},
+		streamReply:           opts.StreamReply,
+		statusHint:            opts.StatusHint,
+		footer:                opts.Footer,
+		infoCardLines:         cleanInfoCardLines(opts.InfoCardLines),
+		todos:                 normalizeTodos(opts.Todos),
+		disableMouse:          opts.DisableMouse,
+		arrowKeysScroll:       opts.ArrowKeysScroll,
+		hooks:                 opts.Hooks,
+		blockFactories:        opts.BlockFactories,
+		blockGap:              opts.BlockGap,
+		slashCommands:         normalizeSlashCommands(opts.SlashCommands),
+		slashCommandsProvider: opts.SlashCommandsProvider,
+		inputHistory:          normalizeInputHistory(opts.InputHistory),
 	}
 	m.historyIdx = len(m.inputHistory)
 	for _, msg := range opts.InitialMessages {
@@ -1160,6 +1163,9 @@ func (m *Model) todoPanelLines() []string {
 }
 
 func (m *Model) updateSlashMatches() {
+	if m.slashCommandsProvider != nil {
+		m.slashCommands = normalizeSlashCommands(m.slashCommandsProvider())
+	}
 	matches := matchSlashCommands(m.input.Value, m.slashCommands)
 	if len(matches) == 0 {
 		m.clearSlashMatches()

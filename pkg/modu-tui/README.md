@@ -33,12 +33,13 @@ It owns only the reusable UI shell:
   that translate swipe gestures into arrows without breaking prompt history
 - selection auto-scroll has a missing-release guard so mobile SSH clients that
   drop mouse release events cannot leave a permanent 30ms redraw loop running
-- slash commands can be supplied through `Options.SlashCommands`; typing `/`
-  opens a bottom card with filtered command matches, `Tab` completes, and
-  `Enter` dispatches through `Hooks.SlashCommand`; the leading slash command
-  token in the input is highlighted separately from its arguments, and the
-  slash picker does not trigger the away-from-bottom jump hint unless the user
-  was already scrolled away from the bottom
+- slash commands can be supplied through `Options.SlashCommands` or refreshed
+  on demand with `Options.SlashCommandsProvider`; typing `/` opens a bottom card
+  with filtered command matches, `Tab` completes, and `Enter` dispatches
+  through `Hooks.SlashCommand`; the leading slash command token in the input is
+  highlighted separately from its arguments, and the slash picker does not
+  trigger the away-from-bottom jump hint unless the user was already scrolled
+  away from the bottom
 - tool-call messages with the same `ToolID` are merged into a single block so
   call/start/result updates do not scatter through the transcript
 - Read-style tool calls render with a compact `Read N lines` result summary
