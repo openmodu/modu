@@ -1287,6 +1287,7 @@ enough to implement, verify, and commit independently.
   `go test ./pkg/coding_agent ./pkg/slash` passed for the hot-load/history fix.
 - 2026-07-01: improved workflow panel readability. `pkg/modu-tui` panel titles
   now use a distinct title color, section headings use a secondary color,
-  obvious markdown blocks in panel bodies render through the existing Markdown
-  renderer, and workflow panel footers use ASCII `up/down` hints instead of
-  arrow glyphs that can display poorly in some terminals.
+  result panels can opt into Markdown rendering for artifact text, and workflow
+  panel footers use ASCII `up/down` hints instead of arrow glyphs that can
+  display poorly in some terminals. Script/code panels remain plain text so
+  markdown-looking content inside source files is not accidentally reformatted.

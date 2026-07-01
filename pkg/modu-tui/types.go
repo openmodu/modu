@@ -150,6 +150,7 @@ type Panel struct {
 	Shortcuts []PanelShortcut
 	Selected  int
 	Footer    string
+	Markdown  bool
 }
 
 type PanelShortcut struct {
