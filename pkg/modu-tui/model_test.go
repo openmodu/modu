@@ -1066,6 +1066,28 @@ func TestPOC2SlashPickerCompletesCommandWithTab(t *testing.T) {
 	}
 }
 
+func TestPOC2SlashPickerRefreshesCommandsFromProvider(t *testing.T) {
+	commands := []SlashCommand{{Name: "/old", Description: "Old command"}}
+	var tm tea.Model = NewModel(Options{
+		Width:  50,
+		Height: 10,
+		SlashCommandsProvider: func() []SlashCommand {
+			return commands
+		},
+	})
+	commands = []SlashCommand{{Name: "/fresh", Description: "Fresh command"}}
+
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: "/", Code: '/'}))
+	m := tm.(Model)
+	rendered := ansi.Strip(m.render())
+	if !strings.Contains(rendered, "/fresh") {
+		t.Fatalf("slash picker should include refreshed command:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "/old") {
+		t.Fatalf("slash picker should not keep stale command:\n%s", rendered)
+	}
+}
+
 func TestPOC2SlashPickerDoesNotShowJumpHintAtBottom(t *testing.T) {
 	var tm tea.Model = NewModel(Options{
 		Width:         72,

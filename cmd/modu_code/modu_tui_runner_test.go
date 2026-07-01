@@ -679,6 +679,46 @@ func TestModuTUIInputHistoryPersistenceTrimsTo100(t *testing.T) {
 	}
 }
 
+func TestModuTUIInputHistoryPersistencePreservesMultilinePrompts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "history", "input_history")
+	history := []string{
+		"single line",
+		"first line\nsecond line\nthird line",
+	}
+
+	if err := saveModuTUIInputHistory(path, history); err != nil {
+		t.Fatalf("saveModuTUIInputHistory returned error: %v", err)
+	}
+	got, err := loadModuTUIInputHistory(path)
+	if err != nil {
+		t.Fatalf("loadModuTUIInputHistory returned error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("loaded history len = %d, want 2: %#v", len(got), got)
+	}
+	if got[1] != history[1] {
+		t.Fatalf("multiline prompt = %q, want %q", got[1], history[1])
+	}
+}
+
+func TestModuTUIInputHistoryLoadsLegacyLineFormat(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "history", "input_history")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("first\nsecond\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := loadModuTUIInputHistory(path)
+	if err != nil {
+		t.Fatalf("loadModuTUIInputHistory returned error: %v", err)
+	}
+	if len(got) != 2 || got[0] != "first" || got[1] != "second" {
+		t.Fatalf("legacy history = %#v, want [first second]", got)
+	}
+}
+
 func TestModuTUIInfoCardLinesIncludeStartupContext(t *testing.T) {
 	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
 		Cwd:       t.TempDir(),

@@ -173,21 +173,22 @@ type PanelAction struct {
 }
 
 type Options struct {
-	Width           int
-	Height          int
-	InitialMessages []Message
-	InputHistory    []string
-	Todos           []TodoItem
-	StreamReply     string
-	StatusHint      string
-	Footer          string
-	InfoCardLines   []string
-	DisableMouse    bool
-	ArrowKeysScroll bool
-	Hooks           Hooks
-	BlockFactories  []MessageBlockFactory
-	BlockGap        int
-	SlashCommands   []SlashCommand
+	Width                 int
+	Height                int
+	InitialMessages       []Message
+	InputHistory          []string
+	Todos                 []TodoItem
+	StreamReply           string
+	StatusHint            string
+	Footer                string
+	InfoCardLines         []string
+	DisableMouse          bool
+	ArrowKeysScroll       bool
+	Hooks                 Hooks
+	BlockFactories        []MessageBlockFactory
+	BlockGap              int
+	SlashCommands         []SlashCommand
+	SlashCommandsProvider func() []SlashCommand
 }
 
 type AppendMessageMsg struct {

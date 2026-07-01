@@ -393,6 +393,9 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		Footer:          moduTUIFooter(session),
 		InfoCardLines:   moduTUIInfoCardLines(session, model),
 		SlashCommands:   moduTUISlashCommands(session),
+		SlashCommandsProvider: func() []modutui.SlashCommand {
+			return moduTUISlashCommands(session)
+		},
 		DisableMouse:    mouseDisabled,
 		ArrowKeysScroll: arrowKeysScroll,
 		Hooks: modutui.Hooks{
@@ -5312,9 +5315,20 @@ func loadModuTUIInputHistory(path string) ([]string, error) {
 	items := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
 	out := make([]string, 0, min(len(items), 100))
 	for _, item := range items {
-		item = strings.TrimSpace(item)
-		if item != "" {
-			out = append(out, item)
+		line := strings.TrimSpace(item)
+		if line == "" {
+			continue
+		}
+		var decoded string
+		if err := json.Unmarshal([]byte(line), &decoded); err == nil {
+			decoded = strings.TrimSpace(decoded)
+			if decoded != "" {
+				out = append(out, decoded)
+			}
+			continue
+		}
+		if line != "" {
+			out = append(out, line)
 		}
 	}
 	if len(out) > 100 {
@@ -5333,7 +5347,22 @@ func saveModuTUIInputHistory(path string, history []string) error {
 	if len(history) > 100 {
 		history = history[len(history)-100:]
 	}
-	return os.WriteFile(path, []byte(strings.Join(history, "\n")+"\n"), 0o600)
+	var lines []string
+	for _, item := range history {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		encoded, err := json.Marshal(item)
+		if err != nil {
+			return err
+		}
+		lines = append(lines, string(encoded))
+	}
+	if len(lines) == 0 {
+		return os.WriteFile(path, nil, 0o600)
+	}
+	return os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600)
 }
 
 func moduTUISlashCommands(session *coding_agent.CodingSession) []modutui.SlashCommand {
