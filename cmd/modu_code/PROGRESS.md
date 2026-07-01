@@ -1277,3 +1277,17 @@ enough to implement, verify, and commit independently.
   `Workflow Transcript`. Agent drill-downs now offer a direct return to the
   orchestration stage they belong to, preserving the Phase -> Agent ->
   Transcript hierarchy during inspection.
+- 2026-07-01: fixed TUI resource hot loading and multiline input history.
+  The modu-tui slash picker can now refresh commands from the active session on
+  each `/` match, so newly added skills and prompt-template slash commands show
+  without restarting. Input history is now stored as JSON lines while still
+  reading the legacy one-line format, so multiline prompts restore as one
+  history entry.
+- 2026-07-01: `go test ./pkg/modu-tui`, `go test ./cmd/modu_code`, and
+  `go test ./pkg/coding_agent ./pkg/slash` passed for the hot-load/history fix.
+- 2026-07-01: improved workflow panel readability. `pkg/modu-tui` panel titles
+  now use a distinct title color, section headings use a secondary color,
+  result panels can opt into Markdown rendering for artifact text, and workflow
+  panel footers use ASCII `up/down` hints instead of arrow glyphs that can
+  display poorly in some terminals. Script/code panels remain plain text so
+  markdown-looking content inside source files is not accidentally reformatted.

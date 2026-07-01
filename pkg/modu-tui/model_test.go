@@ -1066,6 +1066,28 @@ func TestPOC2SlashPickerCompletesCommandWithTab(t *testing.T) {
 	}
 }
 
+func TestPOC2SlashPickerRefreshesCommandsFromProvider(t *testing.T) {
+	commands := []SlashCommand{{Name: "/old", Description: "Old command"}}
+	var tm tea.Model = NewModel(Options{
+		Width:  50,
+		Height: 10,
+		SlashCommandsProvider: func() []SlashCommand {
+			return commands
+		},
+	})
+	commands = []SlashCommand{{Name: "/fresh", Description: "Fresh command"}}
+
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: "/", Code: '/'}))
+	m := tm.(Model)
+	rendered := ansi.Strip(m.render())
+	if !strings.Contains(rendered, "/fresh") {
+		t.Fatalf("slash picker should include refreshed command:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "/old") {
+		t.Fatalf("slash picker should not keep stale command:\n%s", rendered)
+	}
+}
+
 func TestPOC2SlashPickerDoesNotShowJumpHintAtBottom(t *testing.T) {
 	var tm tea.Model = NewModel(Options{
 		Width:         72,
@@ -1404,7 +1426,7 @@ func TestPOC2HumanPromptResolvesFromKeyboard(t *testing.T) {
 		t.Fatal("expected pending human prompt")
 	}
 	rendered := ansi.Strip(pending.render())
-	for _, want := range []string{"Human input required", "Choose commit shape", "1. 2 commits", "[↑/↓] select", "human input pending"} {
+	for _, want := range []string{"Human input required", "Choose commit shape", "1. 2 commits", "[up/down] select", "human input pending"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("human prompt missing %q:\n%s", want, rendered)
 		}
@@ -1506,10 +1528,13 @@ func TestPOC2PanelRowsSelectAndEmitAction(t *testing.T) {
 		t.Fatalf("panelSelected = %d, want 0", open.panelSelected)
 	}
 	rendered := ansi.Strip(open.render())
-	for _, want := range []string{"run one [completed]", "5/5", "[↑/↓] select"} {
+	for _, want := range []string{"run one [completed]", "5/5", "[up/down] select"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("selectable panel missing %q:\n%s", want, rendered)
 		}
+	}
+	if strings.Contains(rendered, "↑") || strings.Contains(rendered, "↓") {
+		t.Fatalf("panel footer should avoid arrow glyphs:\n%s", rendered)
 	}
 
 	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
@@ -1529,6 +1554,97 @@ func TestPOC2PanelRowsSelectAndEmitAction(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("expected panel action")
+	}
+}
+
+func TestPOC2PanelStylesTitleAndRendersMarkdownBlocks(t *testing.T) {
+	var tm tea.Model = NewModel(Options{Width: 72, Height: 16})
+	tm, _ = tm.Update(SetPanelMsg{Panel: Panel{
+		ID:       "workflow-result",
+		Title:    "Workflow Result",
+		Markdown: true,
+		Lines: []string{
+			"context",
+			"workflow: market_watch",
+			"",
+			"# Report",
+			"- market breadth improved",
+			"- watch policy headlines",
+		},
+		Rows: []PanelRow{{Label: "Back", Command: "back"}},
+	}})
+
+	model := tm.(Model)
+	rendered := model.render()
+	stripped := ansi.Strip(rendered)
+	if !strings.Contains(rendered, panelTitleStyle.Render("Workflow Result")) {
+		t.Fatalf("panel title should use panel title style:\n%q", rendered)
+	}
+	if !strings.Contains(rendered, panelSectionStyle.Render("context")) {
+		t.Fatalf("plain section heading should use panel section style:\n%q", rendered)
+	}
+	if strings.Contains(stripped, "# Report") {
+		t.Fatalf("markdown heading should be rendered instead of shown raw:\n%s", stripped)
+	}
+	for _, want := range []string{"Report", "market breadth improved", "watch policy headlines"} {
+		if !strings.Contains(stripped, want) {
+			t.Fatalf("rendered panel markdown missing %q:\n%s", want, stripped)
+		}
+	}
+}
+
+func TestPOC2PanelRendersMarkdownParagraphsAndFencedCode(t *testing.T) {
+	var tm tea.Model = NewModel(Options{Width: 80, Height: 18})
+	tm, _ = tm.Update(SetPanelMsg{Panel: Panel{
+		ID:       "workflow-result",
+		Title:    "Workflow Result",
+		Markdown: true,
+		Lines: []string{
+			"## Markdown report",
+			"This is **important** and `inline`.",
+			"",
+			"```go",
+			"package main",
+			"",
+			"func main() {}",
+			"```",
+		},
+	}})
+
+	model := tm.(Model)
+	stripped := ansi.Strip(model.render())
+	for _, raw := range []string{"## Markdown report", "**important**", "`inline`", "```go"} {
+		if strings.Contains(stripped, raw) {
+			t.Fatalf("panel markdown should render %q instead of showing it raw:\n%s", raw, stripped)
+		}
+	}
+	for _, want := range []string{"Markdown report", "important", "inline", "package main", "func main() {}"} {
+		if !strings.Contains(stripped, want) {
+			t.Fatalf("rendered panel markdown missing %q:\n%s", want, stripped)
+		}
+	}
+}
+
+func TestPOC2PanelDoesNotRenderMarkdownByDefault(t *testing.T) {
+	var tm tea.Model = NewModel(Options{Width: 80, Height: 18})
+	tm, _ = tm.Update(SetPanelMsg{Panel: Panel{
+		ID:    "workflow-script",
+		Title: "Workflow Script",
+		Lines: []string{
+			"script",
+			"return \"# Smoke Report\"",
+			"```txt",
+			"result code block",
+			"```",
+		},
+	}})
+
+	model := tm.(Model)
+	stripped := ansi.Strip(model.render())
+	for _, want := range []string{"return \"# Smoke Report\"", "```txt", "result code block", "```"} {
+		if !strings.Contains(stripped, want) {
+			t.Fatalf("plain panel should keep script markdown-looking text %q:\n%s", want, stripped)
+		}
 	}
 }
 

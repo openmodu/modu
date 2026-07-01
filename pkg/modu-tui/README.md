@@ -33,12 +33,13 @@ It owns only the reusable UI shell:
   that translate swipe gestures into arrows without breaking prompt history
 - selection auto-scroll has a missing-release guard so mobile SSH clients that
   drop mouse release events cannot leave a permanent 30ms redraw loop running
-- slash commands can be supplied through `Options.SlashCommands`; typing `/`
-  opens a bottom card with filtered command matches, `Tab` completes, and
-  `Enter` dispatches through `Hooks.SlashCommand`; the leading slash command
-  token in the input is highlighted separately from its arguments, and the
-  slash picker does not trigger the away-from-bottom jump hint unless the user
-  was already scrolled away from the bottom
+- slash commands can be supplied through `Options.SlashCommands` or refreshed
+  on demand with `Options.SlashCommandsProvider`; typing `/` opens a bottom card
+  with filtered command matches, `Tab` completes, and `Enter` dispatches
+  through `Hooks.SlashCommand`; the leading slash command token in the input is
+  highlighted separately from its arguments, and the slash picker does not
+  trigger the away-from-bottom jump hint unless the user was already scrolled
+  away from the bottom
 - tool-call messages with the same `ToolID` are merged into a single block so
   call/start/result updates do not scatter through the transcript
 - Read-style tool calls render with a compact `Read N lines` result summary
@@ -135,10 +136,14 @@ Component layout:
   viewport until the user closes it with Esc, q, or Ctrl+C; `RefreshPanelMsg`
   updates a matching open panel while preserving selection/scroll state, and
   `ClearPanelMsg` can close a matching panel programmatically. Panels may
-  include selectable rows; ↑/↓ changes selection, Enter emits
+  include selectable rows; Up/Down changes selection, Enter emits
   `Hooks.PanelAction`, manual close emits `Hooks.PanelClosed`, and
   `Panel.Shortcuts` can map single-key actions such as `p` or `x` into the same
-  `Hooks.PanelAction` path without requiring a row selection.
+  `Hooks.PanelAction` path without requiring a row selection. Panel titles use
+  a distinct title color, plain section headings use a secondary color, obvious
+  markdown blocks inside `Panel.Lines` are rendered only when `Panel.Markdown`
+  is true, and default panel footers use ASCII key names to avoid terminal glyph
+  issues.
 - `RequestHumanPromptMsg` renders a blocking human-in-the-loop choice card for
   host prompts such as confirm/select/plan approval; numeric keys choose
   options and Enter/Esc use the configured default.
