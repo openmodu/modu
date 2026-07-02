@@ -438,6 +438,7 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 				}
 				command := strings.TrimSpace(action.Command)
 				if command == "" {
+					send(modutui.ClearPanelMsg{ID: action.PanelID})
 					return
 				}
 				safeGo("panel action", func() {
@@ -446,6 +447,7 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 					}, func() {
 						runModuTUIModelSelect(ctx, session, send)
 					})
+					send(modutui.ClearPanelMsg{ID: action.PanelID})
 				})
 			},
 			PanelClosed: func(panelID string) {
@@ -1219,55 +1221,18 @@ func (ref moduTUIWorkflowPanelRef) Panel(session *coding_agent.CodingSession) (m
 	}
 }
 
+// moduTUIWorkflowPanelRefFromPanel recovers which run/phase/agent a panel is
+// showing from the Meta every workflow panel builder attaches to itself. Panel
+// content (Rows/Lines) is rendered UI, not a reliable source of truth for
+// this: a layout change that drops or reorders a row would silently break
+// live-refresh tracking. Meta round-trips through Set/RefreshPanelMsg
+// unchanged, so this always reflects exactly what the builder constructed.
 func moduTUIWorkflowPanelRefFromPanel(panel modutui.Panel) (moduTUIWorkflowPanelRef, bool) {
-	ref := moduTUIWorkflowPanelRef{PanelID: strings.TrimSpace(panel.ID)}
-	switch ref.PanelID {
-	case moduTUIWorkflowCockpitPanelID:
-		return ref, true
-	case moduTUIWorkflowRunDetailPanelID:
-		if runID := moduTUIWorkflowRunIDFromPanelRows(panel.Rows); runID != "" {
-			ref.RunID = runID
-			return ref, true
-		}
-	case moduTUIWorkflowFeedPanelID:
-		if runID := moduTUIWorkflowRunIDFromPanelRows(panel.Rows); runID != "" {
-			ref.RunID = runID
-			return ref, true
-		}
-	case moduTUIWorkflowGuidePanelID:
-		if runID := moduTUIWorkflowRunIDFromPanelRows(panel.Rows); runID != "" {
-			ref.RunID = runID
-			return ref, true
-		}
-	case moduTUIWorkflowMapPanelID:
-		if runID := moduTUIWorkflowRunIDFromPanelRows(panel.Rows); runID != "" {
-			ref.RunID = runID
-			return ref, true
-		}
-	case moduTUIWorkflowAgentsPanelID:
-		if runID := moduTUIWorkflowRunIDFromPanelRows(panel.Rows); runID != "" {
-			ref.RunID = runID
-			return ref, true
-		}
-	case moduTUIWorkflowPhasePanelID:
-		if runID, phase, ok := moduTUIWorkflowPhaseRefFromPanelRows(panel.Rows); ok {
-			ref.RunID = runID
-			ref.Phase = phase
-			return ref, true
-		}
-	case moduTUIWorkflowAgentPanelID, moduTUIWorkflowTranscriptPanelID:
-		if runID, agentID, ok := moduTUIWorkflowAgentRefFromPanelRows(panel.Rows); ok {
-			ref.RunID = runID
-			ref.AgentID = agentID
-			return ref, true
-		}
-	case moduTUIWorkflowResultPanelID, moduTUIWorkflowScriptPanelID:
-		if runID := moduTUIWorkflowRunIDFromPanelRows(panel.Rows); runID != "" {
-			ref.RunID = runID
-			return ref, true
-		}
+	ref, ok := panel.Meta.(moduTUIWorkflowPanelRef)
+	if !ok || ref.PanelID == "" {
+		return moduTUIWorkflowPanelRef{}, false
 	}
-	return moduTUIWorkflowPanelRef{}, false
+	return ref, true
 }
 
 func moduTUIWorkflowRunIDFromPanel(panel modutui.Panel) string {
@@ -1276,116 +1241,6 @@ func moduTUIWorkflowRunIDFromPanel(panel modutui.Panel) string {
 		return ""
 	}
 	return strings.TrimSpace(ref.RunID)
-}
-
-func moduTUIWorkflowRunIDFromPanelRows(rows []modutui.PanelRow) string {
-	for _, row := range rows {
-		command := strings.TrimSpace(row.Command)
-		for _, prefix := range []string{
-			moduTUIWorkflowPanelDetailPrefix,
-			moduTUIWorkflowPanelFeedPrefix,
-			moduTUIWorkflowPanelGuidePrefix,
-			moduTUIWorkflowPanelMapPrefix,
-			moduTUIWorkflowPanelResultPrefix,
-			moduTUIWorkflowPanelScriptPrefix,
-			moduTUIWorkflowPanelAgentsPrefix,
-		} {
-			if runID, ok := strings.CutPrefix(command, prefix); ok && strings.TrimSpace(runID) != "" {
-				return strings.TrimSpace(runID)
-			}
-		}
-		if rest, ok := strings.CutPrefix(command, moduTUIWorkflowPanelPhasePrefix); ok {
-			runID, _, hasPhase := strings.Cut(rest, ":")
-			if hasPhase && strings.TrimSpace(runID) != "" {
-				return strings.TrimSpace(runID)
-			}
-		}
-		if rest, ok := strings.CutPrefix(command, moduTUIWorkflowPanelControlPrefix); ok {
-			_, runID, hasRunID := strings.Cut(rest, ":")
-			if hasRunID && strings.TrimSpace(runID) != "" {
-				return strings.TrimSpace(runID)
-			}
-		}
-		if rest, ok := strings.CutPrefix(command, moduTUIWorkflowPanelAgentPrefix); ok {
-			runID, _, hasAgentID := strings.Cut(rest, ":")
-			if hasAgentID && strings.TrimSpace(runID) != "" {
-				return strings.TrimSpace(runID)
-			}
-		}
-		if rest, ok := strings.CutPrefix(command, moduTUIWorkflowPanelTranscriptPrefix); ok {
-			runID, _, hasAgentID := strings.Cut(rest, ":")
-			if hasAgentID && strings.TrimSpace(runID) != "" {
-				return strings.TrimSpace(runID)
-			}
-		}
-		if rest, ok := strings.CutPrefix(command, moduTUIWorkflowPanelAgentControlPrefix); ok {
-			_, tail, hasVerb := strings.Cut(rest, ":")
-			if !hasVerb {
-				continue
-			}
-			runID, _, hasAgentID := strings.Cut(tail, ":")
-			if hasAgentID && strings.TrimSpace(runID) != "" {
-				return strings.TrimSpace(runID)
-			}
-		}
-	}
-	return ""
-}
-
-func moduTUIWorkflowAgentRefFromPanelRows(rows []modutui.PanelRow) (string, int, bool) {
-	for _, row := range rows {
-		command := strings.TrimSpace(row.Command)
-		for _, prefix := range []string{moduTUIWorkflowPanelAgentPrefix, moduTUIWorkflowPanelTranscriptPrefix} {
-			rest, ok := strings.CutPrefix(command, prefix)
-			if !ok {
-				continue
-			}
-			runID, agentIDText, hasAgentID := strings.Cut(rest, ":")
-			if !hasAgentID || strings.TrimSpace(runID) == "" {
-				continue
-			}
-			agentID, err := strconv.Atoi(strings.TrimSpace(agentIDText))
-			if err != nil || agentID <= 0 {
-				continue
-			}
-			return strings.TrimSpace(runID), agentID, true
-		}
-		if rest, ok := strings.CutPrefix(command, moduTUIWorkflowPanelAgentControlPrefix); ok {
-			_, tail, hasVerb := strings.Cut(rest, ":")
-			if !hasVerb {
-				continue
-			}
-			runID, agentIDText, hasAgentID := strings.Cut(tail, ":")
-			if !hasAgentID || strings.TrimSpace(runID) == "" {
-				continue
-			}
-			agentID, err := strconv.Atoi(strings.TrimSpace(agentIDText))
-			if err != nil || agentID <= 0 {
-				continue
-			}
-			return strings.TrimSpace(runID), agentID, true
-		}
-	}
-	return "", 0, false
-}
-
-func moduTUIWorkflowPhaseRefFromPanelRows(rows []modutui.PanelRow) (string, string, bool) {
-	for _, row := range rows {
-		command := strings.TrimSpace(row.Command)
-		rest, ok := strings.CutPrefix(command, moduTUIWorkflowPanelPhasePrefix)
-		if !ok {
-			if runID, detailOK := strings.CutPrefix(command, moduTUIWorkflowPanelDetailPrefix); detailOK && strings.TrimSpace(runID) != "" {
-				return strings.TrimSpace(runID), row.Value, true
-			}
-			continue
-		}
-		runID, phase, hasPhase := strings.Cut(rest, ":")
-		if !hasPhase || strings.TrimSpace(runID) == "" {
-			continue
-		}
-		return strings.TrimSpace(runID), phase, true
-	}
-	return "", "", false
 }
 
 func moduTUIWorkflowRuntimeFingerprint(session *coding_agent.CodingSession) string {
@@ -1723,6 +1578,7 @@ func moduTUIWorkflowCockpitPanelFromStatesWithText(states map[string]any, text s
 		Shortcuts: shortcuts,
 		Selected:  moduTUIWorkflowCockpitSelectedRow(states, rows),
 		Footer:    moduTUIWorkflowPanelFooter("[up/down] select run  [enter] open  [esc/q] close", shortcuts),
+		Meta:      moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowCockpitPanelID},
 	}
 }
 
@@ -1749,6 +1605,7 @@ func moduTUIWorkflowRunDetailPanelFromStates(states map[string]any, runID string
 				Command: moduTUIWorkflowPanelBackCommand,
 			}},
 			Footer: "[enter] back  [esc/q] close",
+			Meta:   moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowRunDetailPanelID, RunID: runID},
 		}
 	}
 	name := run.Name
@@ -1844,6 +1701,7 @@ func moduTUIWorkflowRunDetailPanelFromStates(states map[string]any, runID string
 		Shortcuts: shortcuts,
 		Selected:  moduTUIWorkflowRunDetailSelectedRow(run, rows),
 		Footer:    moduTUIWorkflowPanelFooter("[up/down] select  [enter] open  [esc/q] close", shortcuts),
+		Meta:      moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowRunDetailPanelID, RunID: run.ID},
 	}
 }
 
@@ -2002,6 +1860,7 @@ func moduTUIWorkflowFeedPanelFromStates(states map[string]any, runID string) mod
 		Shortcuts: shortcuts,
 		Selected:  moduTUIWorkflowFeedSelectedRow(run, rows),
 		Footer:    moduTUIWorkflowPanelFooter("[up/down] select  [enter] open  [esc/q] close", shortcuts),
+		Meta:      moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowFeedPanelID, RunID: run.ID},
 	}
 }
 
@@ -2103,6 +1962,7 @@ func moduTUIWorkflowGuidePanelFromStates(states map[string]any, runID string) mo
 		Shortcuts: shortcuts,
 		Selected:  moduTUIWorkflowRunFocusSelectedRow(rows),
 		Footer:    moduTUIWorkflowPanelFooter("[up/down] select  [enter] open  [esc/q] close", shortcuts),
+		Meta:      moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowGuidePanelID, RunID: run.ID},
 	}
 }
 
@@ -2534,6 +2394,7 @@ func moduTUIWorkflowMapPanelFromStates(states map[string]any, runID string) modu
 		Shortcuts: shortcuts,
 		Selected:  moduTUIWorkflowRunFocusSelectedRow(rows),
 		Footer:    moduTUIWorkflowPanelFooter("[up/down] select  [enter] open  [esc/q] close", shortcuts),
+		Meta:      moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowMapPanelID, RunID: run.ID},
 	}
 }
 
@@ -3598,6 +3459,7 @@ func moduTUIWorkflowPhasePanelFromStates(states map[string]any, runID, phaseTitl
 		Shortcuts: shortcuts,
 		Selected:  moduTUIWorkflowAgentSelectedRow(agents, rows),
 		Footer:    moduTUIWorkflowPanelFooter("[up/down] select agent  [enter] open  [esc/q] close", shortcuts),
+		Meta:      moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowPhasePanelID, RunID: run.ID, Phase: phase.Title},
 	}
 }
 
@@ -3684,6 +3546,7 @@ func moduTUIWorkflowAgentsPanelFromStates(states map[string]any, runID string) m
 		Shortcuts: shortcuts,
 		Selected:  moduTUIWorkflowAgentSelectedRow(run.Agents, rows),
 		Footer:    moduTUIWorkflowPanelFooter("[up/down] select agent  [enter] detail  [esc/q] close", shortcuts),
+		Meta:      moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowAgentsPanelID, RunID: run.ID},
 	}
 }
 
@@ -3712,6 +3575,7 @@ func moduTUIWorkflowAgentPanelFromStates(states map[string]any, runID string, ag
 				Command: moduTUIWorkflowPanelAgentsPrefix + run.ID,
 			}},
 			Footer: "[enter] back  [esc/q] close",
+			Meta:   moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowAgentPanelID, RunID: run.ID, AgentID: agentID},
 		}
 	}
 	label := agent.Label
@@ -3811,6 +3675,7 @@ func moduTUIWorkflowAgentPanelFromStates(states map[string]any, runID string, ag
 		Shortcuts: shortcuts,
 		Selected:  len(controlRows),
 		Footer:    moduTUIWorkflowPanelFooter("[up/down] select  [enter] open  [esc/q] close", shortcuts),
+		Meta:      moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowAgentPanelID, RunID: run.ID, AgentID: agent.ID},
 	}
 }
 
@@ -3909,6 +3774,7 @@ func moduTUIWorkflowTranscriptPanelFromStates(states map[string]any, runID strin
 		Rows:      rows,
 		Shortcuts: shortcuts,
 		Footer:    moduTUIWorkflowPanelFooter("[enter] back  [esc/q] close", shortcuts),
+		Meta:      moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowTranscriptPanelID, RunID: run.ID, AgentID: agentID},
 	}
 }
 
@@ -4041,6 +3907,7 @@ func moduTUIWorkflowResultPanelFromStates(states map[string]any, runID string) m
 		Shortcuts: shortcuts,
 		Footer:    moduTUIWorkflowPanelFooter("[up/down] select  [enter] open  [esc/q] close", shortcuts),
 		Markdown:  true,
+		Meta:      moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowResultPanelID, RunID: run.ID},
 	}
 }
 
@@ -4087,6 +3954,7 @@ func moduTUIWorkflowScriptPanelFromStates(states map[string]any, runID string) m
 		Rows:      moduTUIWorkflowArtifactNavigationRows(run),
 		Shortcuts: shortcuts,
 		Footer:    moduTUIWorkflowPanelFooter("[up/down] select  [enter] open  [esc/q] close", shortcuts),
+		Meta:      moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowScriptPanelID, RunID: run.ID},
 	}
 }
 
@@ -4138,6 +4006,7 @@ func moduTUIWorkflowMissingRunPanel(id, title, runID string) modutui.Panel {
 			Command: moduTUIWorkflowPanelBackCommand,
 		}},
 		Footer: "[enter] back  [esc/q] close",
+		Meta:   moduTUIWorkflowPanelRef{PanelID: id, RunID: strings.TrimSpace(runID)},
 	}
 }
 

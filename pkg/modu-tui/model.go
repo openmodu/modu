@@ -470,10 +470,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.panelOffset = 0
 			m.panelSelected = clamp(panel.Selected, 0, max(0, len(panel.Rows)-1))
 		} else {
-			selected := m.panelSelected
+			selected := preserveRowSelection(m.panel.Rows, m.panelSelected, panel.Rows)
 			offset := m.panelOffset
 			m.panel = &panel
-			m.panelSelected = clamp(selected, 0, max(0, len(panel.Rows)-1))
+			m.panelSelected = selected
 			m.panelOffset = offset
 		}
 		m.clearSlashMatches()
@@ -1749,6 +1749,24 @@ func fallbackString(value, fallback string) string {
 	return fallback
 }
 
+// preserveRowSelection keeps the cursor on the same logical row across a
+// panel refresh even when the row's position shifts (e.g. a cockpit list
+// re-sorted by last-updated time). It matches by PanelRow.Value, which
+// callers use as a stable row identity (run ID, phase title, agent ID),
+// falling back to clamping the old index when the row can't be found.
+func preserveRowSelection(oldRows []PanelRow, oldSelected int, newRows []PanelRow) int {
+	if oldSelected >= 0 && oldSelected < len(oldRows) {
+		if key := oldRows[oldSelected].Value; key != "" {
+			for i, row := range newRows {
+				if row.Value == key {
+					return i
+				}
+			}
+		}
+	}
+	return clamp(oldSelected, 0, max(0, len(newRows)-1))
+}
+
 func normalizePanel(panel Panel) Panel {
 	panel.ID = strings.TrimSpace(panel.ID)
 	panel.Title = strings.TrimSpace(panel.Title)
@@ -1796,10 +1814,14 @@ func (m Model) handlePanelKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				},
 				Command: strings.TrimSpace(shortcut.Command),
 			}
-			m.closePanel()
-			m.rebuild()
+			// Leave the panel showing until the hook replaces or clears it via
+			// Set/Refresh/ClearPanelMsg — closing eagerly here forces a render
+			// with no panel in between, which flickers on every navigation.
 			if m.hooks.PanelAction != nil {
 				m.hooks.PanelAction(action)
+			} else {
+				m.closePanel()
+				m.rebuild()
 			}
 			return m, nil
 		}
@@ -1824,10 +1846,13 @@ func (m Model) handlePanelKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				Row:     row,
 				Command: strings.TrimSpace(row.Command),
 			}
-			m.closePanel()
-			m.rebuild()
+			// See the shortcut case above: don't close eagerly, or every
+			// drill-down flickers through a no-panel frame.
 			if m.hooks.PanelAction != nil {
 				m.hooks.PanelAction(action)
+			} else {
+				m.closePanel()
+				m.rebuild()
 			}
 			return m, nil
 		}

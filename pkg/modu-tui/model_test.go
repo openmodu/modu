@@ -1543,9 +1543,9 @@ func TestPOC2PanelRowsSelectAndEmitAction(t *testing.T) {
 		t.Fatalf("panelSelected = %d, want 1", selected.panelSelected)
 	}
 	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
-	closed := tm.(Model)
-	if closed.panel != nil {
-		t.Fatal("panel should close after Enter action")
+	afterEnter := tm.(Model)
+	if afterEnter.panel == nil {
+		t.Fatal("panel should stay open until the hook replaces or clears it, to avoid a no-panel flicker frame")
 	}
 	select {
 	case action := <-actions:
@@ -1681,8 +1681,8 @@ func TestPOC2PanelShortcutEmitsAction(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("expected shortcut action")
 	}
-	if tm.(Model).panel != nil {
-		t.Fatal("shortcut action should close panel before dispatch")
+	if tm.(Model).panel == nil {
+		t.Fatal("panel should stay open until the hook replaces or clears it, to avoid a no-panel flicker frame")
 	}
 }
 

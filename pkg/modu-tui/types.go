@@ -151,6 +151,11 @@ type Panel struct {
 	Selected  int
 	Footer    string
 	Markdown  bool
+	// Meta is opaque to modutui: it round-trips through Set/RefreshPanelMsg
+	// unchanged so a caller can stash its own stable panel identity (e.g. which
+	// entity a panel is showing) instead of having to recover it later by
+	// parsing rendered Rows.
+	Meta any
 }
 
 type PanelShortcut struct {

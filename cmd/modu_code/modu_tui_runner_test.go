@@ -2069,113 +2069,43 @@ func TestModuTUIWorkflowAgentControlActionBuildsSlashCommand(t *testing.T) {
 }
 
 func TestModuTUIWorkflowPanelRefFromPanel(t *testing.T) {
+	// Panel builders attach their own identity via Meta rather than the ref
+	// being recovered by parsing rendered Rows, so this exercises the
+	// pass-through directly: whatever Meta a builder sets is what a later
+	// refresh will look up by.
 	tests := []struct {
-		name  string
-		panel modutui.Panel
-		want  moduTUIWorkflowPanelRef
+		name string
+		ref  moduTUIWorkflowPanelRef
 	}{
-		{
-			name:  "cockpit",
-			panel: modutui.Panel{ID: moduTUIWorkflowCockpitPanelID},
-			want:  moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowCockpitPanelID},
-		},
-		{
-			name: "detail",
-			panel: modutui.Panel{
-				ID: moduTUIWorkflowRunDetailPanelID,
-				Rows: []modutui.PanelRow{{
-					Command: moduTUIWorkflowPanelAgentsPrefix + "run-1",
-				}},
-			},
-			want: moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowRunDetailPanelID, RunID: "run-1"},
-		},
-		{
-			name: "feed",
-			panel: modutui.Panel{
-				ID: moduTUIWorkflowFeedPanelID,
-				Rows: []modutui.PanelRow{{
-					Command: moduTUIWorkflowPanelDetailPrefix + "run-feed",
-				}},
-			},
-			want: moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowFeedPanelID, RunID: "run-feed"},
-		},
-		{
-			name: "map",
-			panel: modutui.Panel{
-				ID: moduTUIWorkflowMapPanelID,
-				Rows: []modutui.PanelRow{{
-					Command: moduTUIWorkflowPanelDetailPrefix + "run-map",
-				}},
-			},
-			want: moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowMapPanelID, RunID: "run-map"},
-		},
-		{
-			name: "guide",
-			panel: modutui.Panel{
-				ID: moduTUIWorkflowGuidePanelID,
-				Rows: []modutui.PanelRow{{
-					Command: moduTUIWorkflowPanelFeedPrefix + "run-guide",
-				}},
-			},
-			want: moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowGuidePanelID, RunID: "run-guide"},
-		},
-		{
-			name: "agent",
-			panel: modutui.Panel{
-				ID: moduTUIWorkflowAgentPanelID,
-				Rows: []modutui.PanelRow{{
-					Command: moduTUIWorkflowPanelAgentControlPrefix + "stop:run-2:7",
-				}},
-			},
-			want: moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowAgentPanelID, RunID: "run-2", AgentID: 7},
-		},
-		{
-			name: "transcript",
-			panel: modutui.Panel{
-				ID: moduTUIWorkflowTranscriptPanelID,
-				Rows: []modutui.PanelRow{{
-					Command: moduTUIWorkflowPanelAgentPrefix + "run-3:9",
-				}},
-			},
-			want: moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowTranscriptPanelID, RunID: "run-3", AgentID: 9},
-		},
-		{
-			name: "phase",
-			panel: modutui.Panel{
-				ID: moduTUIWorkflowPhasePanelID,
-				Rows: []modutui.PanelRow{{
-					Value:   "Research",
-					Command: moduTUIWorkflowPanelDetailPrefix + "run-phase",
-				}},
-			},
-			want: moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowPhasePanelID, RunID: "run-phase", Phase: "Research"},
-		},
-		{
-			name: "result",
-			panel: modutui.Panel{
-				ID: moduTUIWorkflowResultPanelID,
-				Rows: []modutui.PanelRow{{
-					Command: moduTUIWorkflowPanelDetailPrefix + "run-4",
-				}},
-			},
-			want: moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowResultPanelID, RunID: "run-4"},
-		},
+		{name: "cockpit", ref: moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowCockpitPanelID}},
+		{name: "detail", ref: moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowRunDetailPanelID, RunID: "run-1"}},
+		{name: "feed", ref: moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowFeedPanelID, RunID: "run-feed"}},
+		{name: "map", ref: moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowMapPanelID, RunID: "run-map"}},
+		{name: "guide", ref: moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowGuidePanelID, RunID: "run-guide"}},
+		{name: "agent", ref: moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowAgentPanelID, RunID: "run-2", AgentID: 7}},
+		{name: "transcript", ref: moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowTranscriptPanelID, RunID: "run-3", AgentID: 9}},
+		{name: "phase", ref: moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowPhasePanelID, RunID: "run-phase", Phase: "Research"}},
+		{name: "result", ref: moduTUIWorkflowPanelRef{PanelID: moduTUIWorkflowResultPanelID, RunID: "run-4"}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := moduTUIWorkflowPanelRefFromPanel(tt.panel)
+			panel := modutui.Panel{ID: tt.ref.PanelID, Meta: tt.ref}
+			got, ok := moduTUIWorkflowPanelRefFromPanel(panel)
 			if !ok {
 				t.Fatal("expected workflow panel ref")
 			}
-			if got != tt.want {
-				t.Fatalf("panel ref = %#v, want %#v", got, tt.want)
+			if got != tt.ref {
+				t.Fatalf("panel ref = %#v, want %#v", got, tt.ref)
 			}
 		})
 	}
 
 	if _, ok := moduTUIWorkflowPanelRefFromPanel(modutui.Panel{ID: "config"}); ok {
 		t.Fatal("non-workflow panel should not produce a workflow panel ref")
+	}
+	if _, ok := moduTUIWorkflowPanelRefFromPanel(modutui.Panel{ID: moduTUIWorkflowRunDetailPanelID}); ok {
+		t.Fatal("a panel missing Meta should not produce a workflow panel ref, even with a recognized ID")
 	}
 }
 
