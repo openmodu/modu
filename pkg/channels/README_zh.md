@@ -32,7 +32,8 @@ type ChannelContext interface {
 Telegram Bot API 的实现。
 
 ### 飞书 (Feishu/Lark)
-飞书机器人 API 的实现。
+飞书机器人 API 的实现。WebSocket bot 支持私聊和群聊事件；宿主应用需要限制
+入口时可调用 `SetAllowedChatIDs` 指定允许的飞书 chat_id。
 
 ## 使用
 

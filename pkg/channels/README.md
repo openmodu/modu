@@ -32,7 +32,9 @@ type ChannelContext interface {
 Implementation of the Telegram Bot API.
 
 ### Feishu (Lark)
-Implementation of the Feishu Bot API.
+Implementation of the Feishu Bot API. The WebSocket bot accepts private and
+group chat events. Call `SetAllowedChatIDs` when the host application needs to
+restrict inbound messages to specific Feishu chat IDs.
 
 ## Usage
 

@@ -13,6 +13,7 @@ import (
 
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/services/session"
+	"github.com/openmodu/modu/pkg/feishubot"
 	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/types"
 )
@@ -216,6 +217,40 @@ func TestHandlePromptsListsPromptTemplates(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Fatalf("expected output to contain %q, got:\n%s", want, output)
 		}
+	}
+}
+
+func TestHandleFeishuSavesAppAndChats(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	printer := &capturePrinter{}
+	handled, exit := Handle(context.Background(), "/feishu app cli_a secret_a", nil, printer, nil)
+	if !handled || exit {
+		t.Fatalf("expected /feishu app handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	cfg, err := feishubot.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AppID != "cli_a" || cfg.AppSecret != "secret_a" {
+		t.Fatalf("app config = %+v", cfg)
+	}
+	if out := printer.String(); !strings.Contains(out, "Feishu app config saved") {
+		t.Fatalf("expected save output, got:\n%s", out)
+	}
+
+	printer = &capturePrinter{}
+	handled, exit = Handle(context.Background(), "/feishu chats oc_a oc_b oc_a", nil, printer, nil)
+	if !handled || exit {
+		t.Fatalf("expected /feishu chats handled without exit, handled=%v exit=%v", handled, exit)
+	}
+	cfg, err = feishubot.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(cfg.ChatIDs, ",") != "oc_a,oc_b" {
+		t.Fatalf("chat IDs = %#v", cfg.ChatIDs)
 	}
 }
 

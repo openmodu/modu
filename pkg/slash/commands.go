@@ -12,6 +12,7 @@ import (
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/types"
 
+	"github.com/openmodu/modu/pkg/feishubot"
 	"github.com/openmodu/modu/pkg/tgbot"
 )
 
@@ -479,6 +480,14 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 			arg = strings.TrimSpace(parts[1])
 		}
 		handleTelegram(arg, r)
+		return true, false
+
+	case "feishu":
+		arg := ""
+		if len(parts) > 1 {
+			arg = strings.TrimSpace(parts[1])
+		}
+		handleFeishu(arg, r)
 		return true, false
 
 	default:
@@ -998,6 +1007,102 @@ func handleTelegram(arg string, r Printer) {
 	r.PrintInfo("  start: automatic on modu_code startup when a token is set")
 }
 
+func handleFeishu(arg string, r Printer) {
+	configPath := feishubot.ConfigPath()
+
+	if strings.HasPrefix(arg, "app ") {
+		fields := strings.Fields(strings.TrimSpace(strings.TrimPrefix(arg, "app ")))
+		if len(fields) != 2 {
+			r.PrintInfo("usage: /feishu app <app_id> <app_secret>")
+			return
+		}
+		cfg, err := feishubot.LoadConfig()
+		if err != nil {
+			cfg = &feishubot.Config{}
+		}
+		cfg.AppID = fields[0]
+		cfg.AppSecret = fields[1]
+		if err := feishubot.SaveConfig(cfg); err != nil {
+			r.PrintError(fmt.Errorf("save feishu config: %w", err))
+			return
+		}
+		r.PrintInfo("Feishu app config saved to " + configPath)
+		r.PrintInfo("Restart modu_code to start the bot.")
+		return
+	}
+
+	if strings.HasPrefix(arg, "chats ") || strings.HasPrefix(arg, "chat ") {
+		_, value, _ := strings.Cut(arg, " ")
+		fields := strings.Fields(value)
+		if len(fields) == 0 {
+			r.PrintInfo("usage: /feishu chats <chat_id> [chat_id...]")
+			return
+		}
+		cfg, err := feishubot.LoadConfig()
+		if err != nil {
+			cfg = &feishubot.Config{}
+		}
+		cfg.ChatIDs = fields
+		if err := feishubot.SaveConfig(cfg); err != nil {
+			r.PrintError(fmt.Errorf("save feishu config: %w", err))
+			return
+		}
+		r.PrintInfo("Feishu chat allowlist saved to " + configPath)
+		r.PrintInfo("Restart modu_code to apply chat changes.")
+		return
+	}
+
+	if arg == "clear-chats" || arg == "clear-chat" {
+		cfg, err := feishubot.LoadConfig()
+		if err != nil {
+			cfg = &feishubot.Config{}
+		}
+		cfg.ChatIDs = nil
+		if err := feishubot.SaveConfig(cfg); err != nil {
+			r.PrintError(fmt.Errorf("save feishu config: %w", err))
+			return
+		}
+		r.PrintInfo("Feishu chat allowlist cleared.")
+		r.PrintInfo("Restart modu_code to apply chat changes.")
+		return
+	}
+
+	cfg, err := feishubot.LoadConfig()
+	if err != nil {
+		r.PrintInfo("feishu config: " + configPath)
+		r.PrintError(fmt.Errorf("read config: %w", err))
+		return
+	}
+
+	r.PrintInfo("feishu config: " + configPath)
+	if cfg.AppID != "" {
+		r.PrintInfo("  appID: " + cfg.AppID + "  (set)")
+	} else {
+		r.PrintInfo("  appID: (not set)")
+	}
+	if cfg.AppSecret != "" {
+		r.PrintInfo("  appSecret: " + maskSecret(cfg.AppSecret) + "  (set)")
+	} else {
+		r.PrintInfo("  appSecret: (not set)")
+	}
+	if len(cfg.ChatIDs) > 0 {
+		r.PrintInfo("  chatIDs: " + strings.Join(cfg.ChatIDs, ", "))
+	} else {
+		r.PrintInfo("  chatIDs: (all authorized chats)")
+	}
+	r.PrintInfo("  env: " + feishubot.EnvAppID + ", " + feishubot.EnvAppSecret + ", " + feishubot.EnvChatIDs)
+	r.PrintInfo("  set with: /feishu app <app_id> <app_secret>")
+	r.PrintInfo("  optional allowlist: /feishu chats <chat_id> [chat_id...]")
+	r.PrintInfo("  start: automatic on modu_code startup when appID/appSecret are set")
+}
+
+func maskSecret(s string) string {
+	if len(s) <= 8 {
+		return strings.Repeat("*", len(s))
+	}
+	return s[:4] + strings.Repeat("*", len(s)-8) + s[len(s)-4:]
+}
+
 func PrintHelp(r Printer) {
 	lines := []string{
 		"/help, /h           — show this help",
@@ -1030,6 +1135,9 @@ func PrintHelp(r Printer) {
 		"/worktree [status|list|diff|cleanup|on|off] — inspect, diff, clean, or toggle isolated worktree mode",
 		"/skills             — list available skills",
 		"/prompts            — list available prompt templates",
+		"/feishu             — show Feishu bot config",
+		"/feishu app <id> <secret> — set Feishu app credentials",
+		"/feishu chats <ids> — restrict Feishu chats",
 		"/telegram           — show Telegram bot config",
 		"/telegram token <t> — set Telegram bot token",
 		"",

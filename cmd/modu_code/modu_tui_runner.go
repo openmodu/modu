@@ -18,6 +18,7 @@ import (
 	"golang.org/x/term"
 
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
+	"github.com/openmodu/modu/pkg/feishubot"
 	modutui "github.com/openmodu/modu/pkg/modu-tui"
 	"github.com/openmodu/modu/pkg/slash"
 	"github.com/openmodu/modu/pkg/types"
@@ -545,6 +546,9 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 	programMu.Lock()
 	program = prog
 	programMu.Unlock()
+	safeGo("feishu bot startup", func() {
+		startModuTUIFeishuBot(ctx, session, &promptMu, send)
+	})
 	refreshDone := make(chan struct{})
 	defer close(refreshDone)
 	safeGo("workflow panel refresh", func() {
@@ -567,6 +571,67 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 	})
 	_, err = prog.Run()
 	return err
+}
+
+func startModuTUIFeishuBot(ctx context.Context, session *coding_agent.CodingSession, promptMu *sync.Mutex, send func(tea.Msg)) {
+	feishubot.RuntimeLogf("modu_code feishu startup check")
+	cfg, err := feishubot.EffectiveConfig()
+	if err != nil {
+		feishubot.RuntimeLogf("config error: %v", err)
+		if send != nil {
+			send(modutui.AppendMessageMsg{Message: modutui.Message{
+				Role:         modutui.RoleAssistant,
+				Text:         "feishu config error: " + err.Error(),
+				Preformatted: true,
+			}})
+		}
+		return
+	}
+	if cfg == nil || !cfg.Ready() {
+		feishubot.RuntimeLogf("bot disabled: app_id_set=%v app_secret_set=%v", cfg != nil && strings.TrimSpace(cfg.AppID) != "", cfg != nil && strings.TrimSpace(cfg.AppSecret) != "")
+		return
+	}
+	printer := &moduTUIChannelPrinter{send: send, channel: "feishu"}
+	if err := feishubot.Start(ctx, *cfg, session, printer, promptMu); err != nil {
+		feishubot.RuntimeLogf("bot start failed: %v", err)
+		printer.PrintError(err)
+		return
+	}
+	feishubot.RuntimeLogf("bot start requested")
+}
+
+type moduTUIChannelPrinter struct {
+	send    func(tea.Msg)
+	channel string
+}
+
+func (p *moduTUIChannelPrinter) PrintUser(text string) {
+	if p == nil || p.send == nil || strings.TrimSpace(text) == "" {
+		return
+	}
+	p.send(modutui.AppendMessageMsg{Message: modutui.Message{
+		Role:         modutui.RoleUser,
+		Text:         text,
+		Preformatted: true,
+	}})
+}
+
+func (p *moduTUIChannelPrinter) PrintInfo(text string) {
+	if p == nil || p.send == nil || strings.TrimSpace(text) == "" {
+		return
+	}
+	p.send(modutui.AppendMessageMsg{Message: modutui.Message{
+		Role:         modutui.RoleAssistant,
+		Text:         "[" + p.channel + "] " + text,
+		Preformatted: true,
+	}})
+}
+
+func (p *moduTUIChannelPrinter) PrintError(err error) {
+	if err == nil {
+		return
+	}
+	p.PrintInfo("error: " + err.Error())
 }
 
 func restoreModuTUITerminal() {

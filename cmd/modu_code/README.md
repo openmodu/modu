@@ -133,6 +133,43 @@ Bubble Tea 的全屏 TUI 保留为实验路径；默认交互路径使用 Bubble
 
 ---
 
+## Feishu
+
+配置 `MODU_FEISHU_APP_ID` / `MODU_FEISHU_APP_SECRET`，或写入 `~/.modu/channels/feishu/config.toml` 后，`modu_code` 会启动共享当前 session 的飞书机器人。飞书和 TUI 共用同一个 steer / follow-up 队列：
+
+```toml
+appID = "cli_xxx"
+appSecret = "xxx"
+chatIDs = ["oc_xxx"] # 可选；为空时接收所有已授权会话
+```
+
+TUI 中可以用 slash 命令配置：
+
+```bash
+/feishu
+/feishu app <app_id> <app_secret>
+/feishu chats <chat_id> [chat_id...]
+/feishu clear-chats
+```
+
+也可以用环境变量：
+
+```bash
+MODU_FEISHU_APP_ID=cli_xxx
+MODU_FEISHU_APP_SECRET=xxx
+MODU_FEISHU_CHAT_IDS=oc_xxx,oc_yyy
+```
+
+飞书运行诊断会写入 `~/.modu/channels/feishu/debug.log`，不进入 TUI。
+
+| 飞书输入 | 任务空闲时 | 任务运行中 |
+|------|------|------|
+| 普通消息 | 作为新 prompt 执行 | 加入 follow-up 队列 |
+| `/followup <message>` / `/f <message>` | 提示当前没有 active task | 加入 follow-up 队列 |
+| `/steer <message>` / `/s <message>` | 提示当前没有 active task | 加入 steer 队列并中断当前轮 |
+
+---
+
 ## Telegram
 
 配置 `MOMS_TG_TOKEN` 或 `~/.modu/channels/telegram/config.toml` 后，`modu_code` 会启动共享当前 session 的 Telegram bot。Telegram 和 TUI 共用同一个 steer / follow-up 队列：
@@ -153,6 +190,9 @@ Bubble Tea 的全屏 TUI 保留为实验路径；默认交互路径使用 Bubble
 | `/model [query]` | 打开带搜索的模型选择器 |
 | `/scoped-models [list\|set\|add\|remove\|clear\|edit]` | 配置模型循环范围 |
 | `/config` | 打开模型配置页面 |
+| `/feishu` | 查看飞书机器人配置 |
+| `/feishu app <app_id> <app_secret>` | 保存飞书应用凭证 |
+| `/feishu chats <chat_id...>` | 限定飞书机器人响应的 chat |
 | `/context` | 查看当前 prompt/context 来源 |
 | `/doctor` | 查看基础运行诊断 |
 | `/worktree` | 查看 worktree 状态、diff、列表和 cleanup |

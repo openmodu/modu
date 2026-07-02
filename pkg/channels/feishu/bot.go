@@ -29,6 +29,10 @@ type Bot struct {
 	client    *lark.Client
 	onMessage channels.MessageHandler
 	onAbort   channels.AbortHandler
+	debugf    func(format string, args ...any)
+
+	allowedMu      sync.RWMutex
+	allowedChatIDs map[string]struct{}
 
 	// chatID string → int64 stable mapping (FNV hash)
 	chatIDMap sync.Map
@@ -41,7 +45,7 @@ type Bot struct {
 // NewBot creates a new Feishu bot.
 // onMessage is called for every user message; onAbort is called when the user sends "stop".
 func NewBot(appID, appSecret string, onMessage channels.MessageHandler, onAbort channels.AbortHandler) (*Bot, error) {
-	client := lark.NewClient(appID, appSecret)
+	client := lark.NewClient(appID, appSecret, lark.WithLogger(noopLogger{}))
 	return &Bot{
 		appID:     appID,
 		appSecret: appSecret,
@@ -51,8 +55,41 @@ func NewBot(appID, appSecret string, onMessage channels.MessageHandler, onAbort 
 	}, nil
 }
 
+// SetAllowedChatIDs restricts inbound messages to the provided Feishu chat IDs.
+// An empty list means all chats the app is authorized to receive are accepted.
+func (b *Bot) SetAllowedChatIDs(chatIDs []string) {
+	b.allowedMu.Lock()
+	defer b.allowedMu.Unlock()
+	if len(chatIDs) == 0 {
+		b.allowedChatIDs = nil
+		return
+	}
+	allowed := make(map[string]struct{}, len(chatIDs))
+	for _, id := range chatIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		allowed[id] = struct{}{}
+	}
+	if len(allowed) == 0 {
+		b.allowedChatIDs = nil
+		return
+	}
+	b.allowedChatIDs = allowed
+}
+
+// SetDebugLogger records Feishu channel diagnostics. It is optional and must not
+// write to stdout/stderr from TUI hosts.
+func (b *Bot) SetDebugLogger(debugf func(format string, args ...any)) {
+	b.allowedMu.Lock()
+	defer b.allowedMu.Unlock()
+	b.debugf = debugf
+}
+
 // Run starts the WebSocket long connection and blocks until ctx is cancelled.
 func (b *Bot) Run(ctx context.Context) error {
+	b.debug("websocket starting")
 	eventDispatcher := dispatcher.NewEventDispatcher("", "").
 		OnP2MessageReceiveV1(func(ctx context.Context, event *larkim.P2MessageReceiveV1) error {
 			return b.handleMessageEvent(ctx, event)
@@ -60,29 +97,43 @@ func (b *Bot) Run(ctx context.Context) error {
 
 	wsClient := larkws.NewClient(b.appID, b.appSecret,
 		larkws.WithEventHandler(eventDispatcher),
+		larkws.WithLogger(noopLogger{}),
 	)
 
-	fmt.Println("[feishu] connecting via WebSocket long connection...")
-	return wsClient.Start(ctx)
+	err := wsClient.Start(ctx)
+	if err != nil {
+		b.debug("websocket stopped: %v", err)
+	} else {
+		b.debug("websocket stopped")
+	}
+	return err
 }
+
+type noopLogger struct{}
+
+func (noopLogger) Debug(context.Context, ...interface{}) {}
+func (noopLogger) Info(context.Context, ...interface{})  {}
+func (noopLogger) Warn(context.Context, ...interface{})  {}
+func (noopLogger) Error(context.Context, ...interface{}) {}
 
 // handleMessageEvent processes incoming im.message.receive_v1 events.
 func (b *Bot) handleMessageEvent(ctx context.Context, event *larkim.P2MessageReceiveV1) error {
 	if event.Event == nil || event.Event.Message == nil {
+		b.debug("message event ignored: missing event/message")
 		return nil
 	}
 	msg := event.Event.Message
-
-	// Only handle p2p (private) messages.
-	if msg.ChatType == nil || *msg.ChatType != "p2p" {
-		return nil
-	}
 
 	chatID := ""
 	if msg.ChatId != nil {
 		chatID = *msg.ChatId
 	}
 	if chatID == "" {
+		b.debug("message event ignored: empty chat_id")
+		return nil
+	}
+	if !b.chatAllowed(chatID) {
+		b.debug("message event ignored: chat_id %s not allowed", chatID)
 		return nil
 	}
 
@@ -99,11 +150,22 @@ func (b *Bot) handleMessageEvent(ctx context.Context, event *larkim.P2MessageRec
 		}
 		if err := json.Unmarshal([]byte(*msg.Content), &textMsg); err == nil {
 			text = textMsg.Text
+		} else {
+			b.debug("message event text parse failed: chat_id=%s message_id=%s err=%v", chatID, messageID, err)
 		}
 	}
 	if text == "" {
 		text = "(attachment)"
 	}
+	messageType := ""
+	if msg.MessageType != nil {
+		messageType = *msg.MessageType
+	}
+	chatType := ""
+	if msg.ChatType != nil {
+		chatType = *msg.ChatType
+	}
+	b.debug("message event accepted: chat_id=%s chat_type=%s message_id=%s message_type=%s text_len=%d", chatID, chatType, messageID, messageType, len(text))
 
 	// Stop command.
 	if strings.EqualFold(strings.TrimSpace(text), "stop") {
@@ -131,8 +193,31 @@ func (b *Bot) handleMessageEvent(ctx context.Context, event *larkim.P2MessageRec
 		senderName:  senderName,
 	}
 
-	b.onMessage(ctx, fCtx)
+	if b.onMessage != nil {
+		b.onMessage(ctx, fCtx)
+	} else {
+		b.debug("message event dropped: onMessage handler is nil")
+	}
 	return nil
+}
+
+func (b *Bot) chatAllowed(chatID string) bool {
+	b.allowedMu.RLock()
+	defer b.allowedMu.RUnlock()
+	if len(b.allowedChatIDs) == 0 {
+		return true
+	}
+	_, ok := b.allowedChatIDs[chatID]
+	return ok
+}
+
+func (b *Bot) debug(format string, args ...any) {
+	b.allowedMu.RLock()
+	debugf := b.debugf
+	b.allowedMu.RUnlock()
+	if debugf != nil {
+		debugf(format, args...)
+	}
 }
 
 // chatIDToInt64 returns a stable int64 for a Feishu string chat_id using FNV hash.
@@ -164,6 +249,34 @@ func (b *Bot) sendText(ctx context.Context, chatID, text string) (string, error)
 	}
 	if !resp.Success() {
 		return "", fmt.Errorf("feishu sendText: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+	if resp.Data != nil && resp.Data.MessageId != nil {
+		return *resp.Data.MessageId, nil
+	}
+	return "", nil
+}
+
+// replyText replies to the original Feishu message. This is preferable for
+// inbound event handling because it works naturally in p2p, group, and thread
+// contexts.
+func (b *Bot) replyText(ctx context.Context, messageID, text string) (string, error) {
+	if strings.TrimSpace(messageID) == "" {
+		return "", fmt.Errorf("feishu replyText: empty message_id")
+	}
+	content, _ := json.Marshal(map[string]string{"text": text})
+	resp, err := b.client.Im.Message.Reply(ctx,
+		larkim.NewReplyMessageReqBuilder().
+			MessageId(messageID).
+			Body(larkim.NewReplyMessageReqBodyBuilder().
+				MsgType("text").
+				Content(string(content)).
+				Build()).
+			Build())
+	if err != nil {
+		return "", fmt.Errorf("feishu replyText: %w", err)
+	}
+	if !resp.Success() {
+		return "", fmt.Errorf("feishu replyText: code=%d msg=%s", resp.Code, resp.Msg)
 	}
 	if resp.Data != nil && resp.Data.MessageId != nil {
 		return *resp.Data.MessageId, nil
@@ -265,16 +378,16 @@ type feishuContext struct {
 	messageText string
 	senderName  string
 
-	mu          sync.Mutex
-	mainMsgID   string // feishu message_id of the main response card
-	responded   bool
-	parts       []string
+	mu        sync.Mutex
+	mainMsgID string // feishu message_id of the main response card
+	responded bool
+	parts     []string
 }
 
-func (c *feishuContext) ChatID() int64       { return c.bot.chatIDToInt64(c.chatID) }
-func (c *feishuContext) MessageText() string { return c.messageText }
-func (c *feishuContext) MessageTS() string   { return c.messageID }
-func (c *feishuContext) SenderName() string  { return c.senderName }
+func (c *feishuContext) ChatID() int64                { return c.bot.chatIDToInt64(c.chatID) }
+func (c *feishuContext) MessageText() string          { return c.messageText }
+func (c *feishuContext) MessageTS() string            { return c.messageID }
+func (c *feishuContext) SenderName() string           { return c.senderName }
 func (c *feishuContext) Images() []types.ImageContent { return nil }
 
 func (c *feishuContext) Respond(text string, _ bool) error {
@@ -317,6 +430,13 @@ func (c *feishuContext) ReplaceMessage(text string) error {
 }
 
 func (c *feishuContext) RespondInThread(text string) error {
+	if strings.TrimSpace(c.messageID) != "" {
+		if _, err := c.bot.replyText(context.Background(), c.messageID, text); err == nil {
+			return nil
+		} else {
+			c.bot.debug("replyText failed, fallback to sendText: chat_id=%s message_id=%s err=%v", c.chatID, c.messageID, err)
+		}
+	}
 	_, err := c.bot.sendText(context.Background(), c.chatID, text)
 	return err
 }
