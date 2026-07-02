@@ -24,7 +24,7 @@ SSH 环境默认保留终端 mouse reporting，滚轮和拖拽选择可以直接
 MODU_TUI_MOUSE=off modu_code
 ```
 
-SSH 下拖选复制会发 OSC52；在 tmux/screen 中会使用 passthrough，让本地终端更新本机剪贴板。
+SSH 下拖选复制会发 OSC52；在 tmux/screen 中会使用 passthrough，让本地终端更新本机剪贴板。OSC52 写入没有回执，终端或 multiplexer 拦掉时（如 tmux 未开 `allow-passthrough`、终端不支持/未授权 OSC52）复制会静默丢失，因此远程复制后状态栏会附带提示兜底手势：按住 Shift 拖选可绕过 mouse reporting 走终端原生选择（macOS Terminal.app 用 Fn、iTerm2 用 Option），选中后用终端自己的复制快捷键（macOS `Cmd+C`、Linux 一般 `Ctrl+Shift+C`，多数终端选中即复制）。也可用 `MODU_TUI_MOUSE=off` 彻底交还鼠标。
 
 在 SSH 兼容模式下，输入框为空且没有输入历史可选时，Up/Down 会滚动对话内容，适配移动端 SSH 把滑动手势转成方向键的行为；有输入历史时 Up/Down 优先切换历史输入。
 

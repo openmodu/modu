@@ -133,13 +133,28 @@ func (m *Model) copySelection() tea.Cmd {
 	}
 	m.status = fmt.Sprintf("✓ copied %d chars (%s)", len([]rune(text)), how)
 	if needsOSC52 {
+		// An OSC52 write carries no acknowledgement: when the terminal or a
+		// multiplexer in between drops it (tmux without allow-passthrough,
+		// terminals without OSC52 support/permission) the copy silently
+		// vanishes. Point at the terminal-native escape hatch so the user
+		// isn't stranded.
+		m.status += " · no clipboard? Shift+drag to copy via terminal"
 		return tea.Batch(tea.SetClipboard(text), tea.Raw(clipboardSequence(text)))
 	}
 	return nil
 }
 
 func isRemoteSession() bool {
-	return os.Getenv("SSH_TTY") != "" || os.Getenv("SSH_CONNECTION") != "" || os.Getenv("SSH_CLIENT") != ""
+	if os.Getenv("SSH_TTY") != "" || os.Getenv("SSH_CONNECTION") != "" || os.Getenv("SSH_CLIENT") != "" {
+		return true
+	}
+	// Inside tmux/screen, SSH_TTY/SSH_CONNECTION reflect whoever started the
+	// multiplexer session, not whoever is currently attached — reattaching
+	// over SSH to a session created locally leaves them empty. Since we can't
+	// tell whether the real display is local or remote, assume remote and
+	// always try OSC52 rather than silently writing to the clipboard of
+	// whatever machine the multiplexer's original session ran on.
+	return os.Getenv("TMUX") != "" || os.Getenv("STY") != "" || strings.HasPrefix(os.Getenv("TERM"), "screen")
 }
 
 func clipboardSequence(text string) string {
@@ -148,7 +163,12 @@ func clipboardSequence(text string) string {
 	case os.Getenv("TMUX") != "":
 		seq = seq.Tmux()
 	case strings.HasPrefix(os.Getenv("TERM"), "screen"):
-		seq = seq.Screen()
+		// TERM=screen-* is ambiguous: it's GNU screen's TERM, but also tmux's
+		// default TERM — and over SSH the multiplexer usually sits on the
+		// local side, where TERM is forwarded but TMUX is not, so we can't
+		// tell which one it is. Emit both wrappings: the matching multiplexer
+		// unwraps its own format and the other is dropped as an unknown DCS.
+		return seq.Screen().String() + seq.Tmux().String()
 	}
 	return seq.String()
 }

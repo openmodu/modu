@@ -1,7 +1,9 @@
 package webtools
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	stdhtml "html"
 	"io"
@@ -13,18 +15,29 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
+	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/base"
+	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark"
+	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/table"
+	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/launcher"
+	"github.com/go-rod/rod/lib/proto"
+	trafilatura "github.com/markusmobius/go-trafilatura"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/common"
 	"github.com/openmodu/modu/pkg/types"
 	nethtml "golang.org/x/net/html"
 )
 
 const (
-	defaultFetchMaxBytes  = 50 * 1024
-	maxFetchBytes         = 256 * 1024
+	defaultFetchMaxBytes  = 2 * 1024 * 1024
+	maxFetchBytes         = 32 * 1024 * 1024
 	defaultSearchEndpoint = "https://duckduckgo.com/html/?q={query}"
 	defaultSearchMaxBytes = 128 * 1024
 	defaultSearchResults  = 5
 	maxSearchResults      = 10
+	defaultJSWait         = 2 * time.Second
+	maxJSWait             = 15 * time.Second
+	defaultFetchUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 )
 
 type HTTPClient interface {
@@ -33,6 +46,29 @@ type HTTPClient interface {
 
 type FetchTool struct {
 	client HTTPClient
+}
+
+type FetchOptions struct {
+	MaxBytes int
+	Raw      bool
+	JSRender bool
+	JSWait   time.Duration
+}
+
+type FetchPage struct {
+	URL          string `json:"url"`
+	Status       string `json:"status"`
+	ContentType  string `json:"content_type"`
+	Bytes        int    `json:"bytes"`
+	Truncated    bool   `json:"truncated"`
+	RenderedHTML bool   `json:"rendered_html"`
+	Extracted    bool   `json:"extracted"`
+	Title        string `json:"title,omitempty"`
+	Author       string `json:"author,omitempty"`
+	Date         string `json:"date,omitempty"`
+	SiteName     string `json:"site_name,omitempty"`
+	Description  string `json:"description,omitempty"`
+	Content      string `json:"content"`
 }
 
 func NewFetchTool() types.Tool {
@@ -54,11 +90,19 @@ func (t *FetchTool) Parameters() any {
 			},
 			"max_bytes": map[string]any{
 				"type":        "integer",
-				"description": "Maximum response bytes to read, capped at 262144. Defaults to 51200.",
+				"description": "Maximum response bytes to read, capped at 33554432. Defaults to 2097152.",
 			},
 			"raw": map[string]any{
 				"type":        "boolean",
-				"description": "Return raw response text instead of extracting visible HTML text.",
+				"description": "Return raw response text instead of extracting Markdown from HTML.",
+			},
+			"js_render": map[string]any{
+				"type":        "boolean",
+				"description": "Render the page in a headless browser with JavaScript before extracting Markdown.",
+			},
+			"js_wait_ms": map[string]any{
+				"type":        "integer",
+				"description": "Additional browser wait time after page load when js_render is true. Capped at 15000ms. Defaults to 2000ms.",
 			},
 		},
 		"required": []string{"url"},
@@ -66,37 +110,245 @@ func (t *FetchTool) Parameters() any {
 }
 func (t *FetchTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate types.ToolUpdateCallback) (types.ToolResult, error) {
 	target, _ := args["url"].(string)
-	u, err := validateHTTPURL(target)
+	raw, _ := args["raw"].(bool)
+	jsRender, _ := args["js_render"].(bool)
+	page, err := Fetch(ctx, t.client, target, FetchOptions{
+		MaxBytes: boundedInt(args["max_bytes"], defaultFetchMaxBytes, maxFetchBytes),
+		Raw:      raw,
+		JSRender: jsRender,
+		JSWait:   boundedDurationMS(args["js_wait_ms"], defaultJSWait, maxJSWait),
+	})
 	if err != nil {
 		return common.ErrorResult(err.Error()), nil
 	}
-	maxBytes := boundedInt(args["max_bytes"], defaultFetchMaxBytes, maxFetchBytes)
-	body, status, contentType, truncated, err := fetch(ctx, t.client, u.String(), maxBytes)
+	return textResult(formatFetchText(page), page), nil
+}
+
+func Fetch(ctx context.Context, client HTTPClient, target string, opts FetchOptions) (*FetchPage, error) {
+	u, err := validateHTTPURL(target)
 	if err != nil {
-		return common.ErrorResult(fmt.Sprintf("fetch failed: %v", err)), nil
+		return nil, err
 	}
-	raw, _ := args["raw"].(bool)
-	text := string(body)
-	rendered := false
-	title := ""
-	if !raw && strings.Contains(strings.ToLower(contentType), "html") {
-		title = htmlTitle(text)
-		text = visibleHTMLText(text)
-		rendered = true
+	if client == nil {
+		client = &http.Client{Timeout: 15 * time.Second}
 	}
-	if truncated {
-		text += fmt.Sprintf("\n\n... (truncated after %d bytes)", maxBytes)
+	maxBytes := opts.MaxBytes
+	if maxBytes <= 0 {
+		maxBytes = defaultFetchMaxBytes
 	}
-	prefix := fmt.Sprintf("URL: %s\nStatus: %s\nContent-Type: %s\n\n", u.String(), status, contentType)
-	return textResult(prefix+text, map[string]any{
-		"url":           u.String(),
-		"status":        status,
-		"content_type":  contentType,
-		"bytes":         len(body),
-		"truncated":     truncated,
-		"rendered_html": rendered,
-		"title":         title,
-	}), nil
+	if maxBytes > maxFetchBytes {
+		maxBytes = maxFetchBytes
+	}
+	if opts.JSRender {
+		doc, err := renderJavaScriptHTML(ctx, u.String(), boundedDuration(opts.JSWait, defaultJSWait, maxJSWait))
+		if err != nil {
+			return nil, fmt.Errorf("js render failed: %w", err)
+		}
+		page := &FetchPage{
+			URL:         u.String(),
+			Status:      "200 OK (browser rendered)",
+			ContentType: "text/html; charset=utf-8",
+			Bytes:       len(doc),
+			Content:     doc,
+		}
+		if opts.Raw {
+			return page, nil
+		}
+		return extractPageMarkdown(page, doc, u), nil
+	}
+	body, status, contentType, truncated, err := fetch(ctx, client, u.String(), maxBytes)
+	if err != nil {
+		return nil, fmt.Errorf("fetch failed: %w", err)
+	}
+
+	page := &FetchPage{
+		URL:         u.String(),
+		Status:      status,
+		ContentType: contentType,
+		Bytes:       len(body),
+		Truncated:   truncated,
+		Content:     string(body),
+	}
+	if opts.Raw || !strings.Contains(strings.ToLower(contentType), "html") {
+		return page, nil
+	}
+	return extractPageMarkdown(page, string(body), u), nil
+}
+
+func extractPageMarkdown(page *FetchPage, doc string, u *url.URL) *FetchPage {
+	extracted, err := extractMarkdown(doc, u)
+	if err != nil {
+		page.Content = visibleHTMLText(doc)
+		page.Title = htmlTitle(doc)
+		page.RenderedHTML = true
+		return page
+	}
+	page.Content = extracted.Markdown
+	page.RenderedHTML = true
+	page.Extracted = extracted.Extracted
+	page.Title = extracted.Title
+	page.Author = extracted.Author
+	page.Date = extracted.Date
+	page.SiteName = extracted.SiteName
+	page.Description = extracted.Description
+	return page
+}
+
+func (p *FetchPage) JSON() ([]byte, error) {
+	return json.MarshalIndent(p, "", "  ")
+}
+
+type extractedMarkdown struct {
+	Markdown    string
+	Extracted   bool
+	Title       string
+	Author      string
+	Date        string
+	SiteName    string
+	Description string
+}
+
+func extractMarkdown(doc string, baseURL *url.URL) (extractedMarkdown, error) {
+	opts := trafilatura.Options{
+		OriginalURL:     baseURL,
+		EnableFallback:  true,
+		ExcludeComments: true,
+		IncludeLinks:    true,
+		HtmlDateMode:    trafilatura.Disabled,
+		Config: &trafilatura.Config{
+			CacheSize:             trafilatura.DefaultConfig().CacheSize,
+			MaxDuplicateCount:     trafilatura.DefaultConfig().MaxDuplicateCount,
+			MinDuplicateCheckSize: trafilatura.DefaultConfig().MinDuplicateCheckSize,
+			MinExtractedSize:      0,
+			MinOutputSize:         1,
+		},
+	}
+	result, err := trafilatura.Extract(strings.NewReader(doc), opts)
+	if err != nil {
+		markdown, convErr := markdownFromHTML(doc, baseURL)
+		if convErr != nil {
+			return extractedMarkdown{}, err
+		}
+		return extractedMarkdown{
+			Markdown:  strings.TrimSpace(markdown),
+			Extracted: false,
+			Title:     htmlTitle(doc),
+		}, nil
+	}
+
+	var rendered bytes.Buffer
+	if result.ContentNode != nil {
+		if err := nethtml.Render(&rendered, result.ContentNode); err != nil {
+			return extractedMarkdown{}, err
+		}
+	}
+	markdown, err := markdownFromHTML(rendered.String(), baseURL)
+	if err != nil {
+		return extractedMarkdown{}, err
+	}
+	if strings.TrimSpace(markdown) == "" {
+		markdown = result.ContentText
+	}
+
+	meta := result.Metadata
+	date := ""
+	if !meta.Date.IsZero() {
+		date = meta.Date.Format(time.RFC3339)
+	}
+	return extractedMarkdown{
+		Markdown:    strings.TrimSpace(markdown),
+		Extracted:   true,
+		Title:       firstNonEmpty(meta.Title, htmlTitle(doc)),
+		Author:      meta.Author,
+		Date:        date,
+		SiteName:    meta.Sitename,
+		Description: meta.Description,
+	}, nil
+}
+
+func markdownFromHTML(doc string, baseURL *url.URL) (string, error) {
+	conv := converter.NewConverter(
+		converter.WithPlugins(
+			base.NewBasePlugin(),
+			commonmark.NewCommonmarkPlugin(),
+			table.NewTablePlugin(
+				table.WithHeaderPromotion(true),
+			),
+		),
+	)
+	domain := ""
+	if baseURL != nil {
+		domain = baseURL.String()
+	}
+	out, err := conv.ConvertString(doc, converter.WithDomain(domain))
+	if err != nil {
+		return "", err
+	}
+	return out, nil
+}
+
+func renderJavaScriptHTML(ctx context.Context, target string, wait time.Duration) (string, error) {
+	l := launcher.New().Context(ctx).Headless(true).NoSandbox(true)
+	controlURL, err := l.Launch()
+	if err != nil {
+		return "", err
+	}
+	defer l.Cleanup()
+
+	browser := rod.New().Context(ctx).ControlURL(controlURL)
+	if err := browser.Connect(); err != nil {
+		return "", err
+	}
+	defer browser.Close()
+
+	page, err := browser.Page(proto.TargetCreateTarget{URL: "about:blank"})
+	if err != nil {
+		return "", err
+	}
+	defer page.Close()
+
+	if err := page.SetUserAgent(&proto.NetworkSetUserAgentOverride{
+		UserAgent:      defaultFetchUserAgent,
+		AcceptLanguage: "zh-CN,zh;q=0.9,en;q=0.8",
+		Platform:       "MacIntel",
+	}); err != nil {
+		return "", err
+	}
+	u, _ := url.Parse(target)
+	if u != nil && strings.EqualFold(u.Host, "mp.weixin.qq.com") {
+		if _, err := page.SetExtraHeaders([]string{"Referer", "https://mp.weixin.qq.com/"}); err != nil {
+			return "", err
+		}
+	}
+	if err := page.Navigate(target); err != nil {
+		return "", err
+	}
+	_ = page.WaitLoad()
+	if wait > 0 {
+		time.Sleep(wait)
+	}
+	_ = page.WaitStable(500 * time.Millisecond)
+	return page.HTML()
+}
+
+func formatFetchText(page *FetchPage) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "URL: %s\nStatus: %s\nContent-Type: %s\n", page.URL, page.Status, page.ContentType)
+	if page.Title != "" {
+		fmt.Fprintf(&b, "Title: %s\n", page.Title)
+	}
+	if page.Author != "" {
+		fmt.Fprintf(&b, "Author: %s\n", page.Author)
+	}
+	if page.Date != "" {
+		fmt.Fprintf(&b, "Date: %s\n", page.Date)
+	}
+	fmt.Fprintln(&b)
+	b.WriteString(page.Content)
+	if page.Truncated {
+		fmt.Fprintf(&b, "\n\n... (truncated after %d bytes)", page.Bytes)
+	}
+	return b.String()
 }
 
 type SearchTool struct {
@@ -228,8 +480,12 @@ func fetch(ctx context.Context, client HTTPClient, target string, maxBytes int) 
 	if err != nil {
 		return nil, "", "", false, err
 	}
-	req.Header.Set("User-Agent", "modu-code/1.0")
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml,text/plain,application/json;q=0.9,*/*;q=0.8")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain,application/json;q=0.8,*/*;q=0.7")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	if req.URL != nil && strings.EqualFold(req.URL.Host, "mp.weixin.qq.com") {
+		req.Header.Set("Referer", "https://mp.weixin.qq.com/")
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, "", "", false, err
@@ -420,6 +676,15 @@ func normalizeSpace(s string) string {
 	return strings.TrimSpace(b.String())
 }
 
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func stripTagsFallback(s string) string {
 	var b strings.Builder
 	inTag := false
@@ -448,6 +713,24 @@ func boundedInt(v any, fallback, max int) int {
 		n = max
 	}
 	return n
+}
+
+func boundedDurationMS(v any, fallback, max time.Duration) time.Duration {
+	n := common.ToInt(v)
+	if n <= 0 {
+		return fallback
+	}
+	return boundedDuration(time.Duration(n)*time.Millisecond, fallback, max)
+}
+
+func boundedDuration(v time.Duration, fallback, max time.Duration) time.Duration {
+	if v <= 0 {
+		v = fallback
+	}
+	if v > max {
+		v = max
+	}
+	return v
 }
 
 func statusCode(status string) int {

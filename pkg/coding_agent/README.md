@@ -218,7 +218,7 @@ Workflow runtime state also includes capped recent workflow `log(...)` messages 
 
 `/workflows feed <run-id|latest>` 可查看短动态执行流，包括最近 `log(...)` updates、compact lanes、active/attention agents 和 phase timeline；`/workflows guide <run-id|latest>` 可查看 Feed、Map、Phase、Agent、Transcript、Result、Script 的用途和当前 run 的推荐导航命令；`/workflows map <run-id|latest>` 可查看轻量 phase/agent orchestration tree，不展开完整 result 或 script；`/workflows agent <run-id|latest> <agent-id>` 可查看单个 workflow agent 的 label、phase、状态、估算 token、turn token、observed cost、失败 tool-call 数、最近 child tool 名称、参数预览、结果预览、错误状态、耗时、错误、结果预览和原始 prompt；`/workflows transcript <run-id|latest> <agent-id>` 可浏览该 agent 捕获到的 child user/assistant/tool-result transcript、tool call 参数和 usage。
 
-`/deep-research <question>` 是内置 bundled workflow，会在后台运行 scope、parallel research、cross-check、synthesis 四个阶段，并复用 `/workflows` 查看/停止/恢复能力。该 workflow 会请求内置 opt-in `web_search` / `web_fetch` 工具；联网引用报告质量取决于运行时网络权限、搜索 endpoint 可用性和抓取到的来源质量。
+`/deep-research <question>` 是内置 bundled workflow，会在后台运行 scope、parallel research、cross-check、synthesis 四个阶段，并复用 `/workflows` 查看/停止/恢复能力。该 workflow 会请求内置 opt-in `web_search` / `web_fetch` 工具；联网引用报告质量取决于运行时网络权限、搜索 endpoint 可用性和抓取到的来源质量。`web_fetch` 使用 HTTP 抓取、Trafilatura 正文提取和 HTML-to-Markdown 转换，默认输出适合 LLM 阅读的 Markdown，也可通过 `raw` 返回原始响应文本；对客户端渲染页面可显式启用 `js_render`（CLI 为 `--js`）先用 Rod 渲染 DOM 后再提取。
 
 `/workflows pause <run-id>` 和 `/workflows stop <run-id>` 都会取消当前运行并进入 stopped 状态；`/workflows resume <run-id|latest>` 可恢复同一进程/session 内被 pause/stop 的后台 workflow：已完成 agent 结果从内存缓存返回，不会再次 `ForkSession`，未完成分支继续 live 执行；退出进程后只能使用 `/workflows restart <run-id|latest>` fresh run。
 

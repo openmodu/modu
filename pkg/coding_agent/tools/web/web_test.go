@@ -4,16 +4,19 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/go-rod/rod/lib/launcher"
 	"github.com/openmodu/modu/pkg/types"
 )
 
 func TestWebFetchReturnsVisibleHTMLText(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(`<html><head><title>Example</title><style>.x{}</style></head><body><h1>Source Title</h1><script>ignore()</script><p>Important finding.</p></body></html>`))
+		_, _ = w.Write([]byte(`<html><head><title>Example</title><style>.x{}</style></head><body><nav>Noise link</nav><main><h1>Source Title</h1><script>ignore()</script><p>Important <strong>finding</strong> from <a href="/source">the source</a>.</p></main></body></html>`))
 	}))
 	defer server.Close()
 
@@ -22,13 +25,64 @@ func TestWebFetchReturnsVisibleHTMLText(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := extractText(result.Content)
-	for _, want := range []string{"Status: 200 OK", "Source Title", "Important finding."} {
+	for _, want := range []string{"Status: 200 OK", "Title: Source Title", "# Source Title", "**finding**", server.URL + "/source"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected %q in fetch output:\n%s", want, text)
 		}
 	}
-	if strings.Contains(text, "ignore()") || strings.Contains(text, ".x{}") {
-		t.Fatalf("expected script/style text to be removed:\n%s", text)
+	if strings.Contains(text, "ignore()") || strings.Contains(text, ".x{}") || strings.Contains(text, "Noise link") {
+		t.Fatalf("expected script/style/nav text to be removed:\n%s", text)
+	}
+}
+
+func TestFetchJSONIncludesMetadataAndMarkdown(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<html><head><title>Example JSON</title><meta name="author" content="Ada"></head><body><article><h1>Report</h1><p>Useful body.</p></article></body></html>`))
+	}))
+	defer server.Close()
+
+	page, err := Fetch(context.Background(), nil, server.URL, FetchOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := page.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	for _, want := range []string{`"title": "Report"`, "# Report", "Useful body."} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected %q in JSON:\n%s", want, got)
+		}
+	}
+}
+
+func TestFetchWithJSRender(t *testing.T) {
+	if os.Getenv("MODU_WEB_FETCH_ROD_TEST") != "1" {
+		t.Skip("set MODU_WEB_FETCH_ROD_TEST=1 to run Rod browser integration test")
+	}
+	if _, ok := launcher.LookPath(); !ok {
+		t.Skip("no Chrome/Chromium browser found")
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<html><head><title>JS page</title></head><body><main id="app">loading</main><script>setTimeout(() => { document.getElementById('app').innerHTML = '<article><h1>Rendered JS</h1><p>Client generated body.</p></article>'; }, 20);</script></body></html>`))
+	}))
+	defer server.Close()
+
+	page, err := Fetch(context.Background(), nil, server.URL, FetchOptions{
+		JSRender: true,
+		JSWait:   200 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"# Rendered JS", "Client generated body."} {
+		if !strings.Contains(page.Content, want) {
+			t.Fatalf("expected %q in rendered markdown:\n%s", want, page.Content)
+		}
 	}
 }
 

@@ -168,6 +168,9 @@ func TestPOC2CopySelectionUsesOSC52OverSSH(t *testing.T) {
 	if !strings.Contains(m.status, "local+OSC52") {
 		t.Fatalf("copy status should report OSC52 path, got %q", m.status)
 	}
+	if !strings.Contains(m.status, "Shift+drag") {
+		t.Fatalf("OSC52 copy status should hint at terminal-native Shift+drag fallback, got %q", m.status)
+	}
 }
 
 func TestPOC2CopySelectionUsesTmuxPassthrough(t *testing.T) {
@@ -180,12 +183,65 @@ func TestPOC2CopySelectionUsesTmuxPassthrough(t *testing.T) {
 	}
 }
 
-func TestPOC2CopySelectionUsesLocalClipboardWithoutOSC52WhenLocalSucceeds(t *testing.T) {
-	// This case asserts the non-remote path, so clear any inherited SSH env
-	// (e.g. when the test itself runs over SSH).
+func TestPOC2ClipboardSequenceScreenTermEmitsBothWrappings(t *testing.T) {
+	// TERM=screen-256color is also tmux's default TERM, and over SSH only
+	// TERM (not TMUX) is forwarded from the local side — so the actual
+	// multiplexer is unknowable. Both wrappings must be emitted so whichever
+	// one is really there unwraps its own format.
+	t.Setenv("TMUX", "")
+	t.Setenv("TERM", "screen-256color")
+
+	seq := clipboardSequence("hi")
+	if !strings.Contains(seq, "\x1bPtmux;") {
+		t.Fatalf("screen TERM sequence should include tmux passthrough wrapping: %q", seq)
+	}
+	if !strings.HasPrefix(seq, "\x1bP") || strings.HasPrefix(seq, "\x1bPtmux;") {
+		t.Fatalf("screen TERM sequence should start with a screen DCS chunk: %q", seq)
+	}
+}
+
+func TestPOC2CopySelectionUsesOSC52InsideTmuxWithoutSSHEnv(t *testing.T) {
+	// Reattaching to a tmux session over SSH after it was created locally
+	// leaves SSH_TTY/SSH_CONNECTION/SSH_CLIENT unset inside the pane, even
+	// though the attached client may now be remote. isRemoteSession must
+	// treat "inside tmux" itself as reason enough to try OSC52, or a
+	// successful local clipboard write on the tmux host would be mistaken
+	// for a successful copy to the actual (possibly remote) client.
 	t.Setenv("SSH_TTY", "")
 	t.Setenv("SSH_CONNECTION", "")
 	t.Setenv("SSH_CLIENT", "")
+	t.Setenv("TMUX", "/tmp/tmux")
+	oldWrite := writeLocalClipboard
+	writeLocalClipboard = func(string) error { return nil }
+	t.Cleanup(func() { writeLocalClipboard = oldWrite })
+
+	m := NewModel(Options{
+		Width:           40,
+		Height:          8,
+		InitialMessages: []Message{{Role: RoleAssistant, Text: "copy me"}},
+	})
+	m.selStart = cell{line: 0, col: 2}
+	m.selEnd = cell{line: 0, col: 9}
+
+	cmd := m.copySelection()
+	if cmd == nil {
+		t.Fatal("copySelection should still try OSC52 inside tmux even without SSH env vars")
+	}
+	raw, _ := copyCommandMessages(cmd)
+	if !strings.Contains(raw, "\x1bPtmux;") || !strings.Contains(raw, "52;c;") {
+		t.Fatalf("expected tmux-wrapped OSC52 sequence, got %q", raw)
+	}
+}
+
+func TestPOC2CopySelectionUsesLocalClipboardWithoutOSC52WhenLocalSucceeds(t *testing.T) {
+	// This case asserts the non-remote path, so clear any inherited SSH/tmux/
+	// screen env (e.g. when the test itself runs over SSH or inside tmux).
+	t.Setenv("SSH_TTY", "")
+	t.Setenv("SSH_CONNECTION", "")
+	t.Setenv("SSH_CLIENT", "")
+	t.Setenv("TMUX", "")
+	t.Setenv("STY", "")
+	t.Setenv("TERM", "xterm-256color")
 	oldWrite := writeLocalClipboard
 	writeLocalClipboard = func(string) error { return nil }
 	t.Cleanup(func() { writeLocalClipboard = oldWrite })
