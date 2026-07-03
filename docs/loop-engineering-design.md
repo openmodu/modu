@@ -216,3 +216,49 @@ daily_budget_tokens: 3000000
 - Human review:哪一步停下来等人 —— ✅(draft PR 永不 merge;inbox 新增条目和 PR 链接直接进完成通知;verifier 连续驳回转 paused)
 
 一句话总结:**P0 + P1 全部落地——goal 有 fresh-model 裁判(可用 reviewer.md 定制),cron 有三档断路器 + 日额度 + 人门通知,morning-triage 示例把五动作端到端串齐。唯一剩下的是 P2 的 MCP connector(独立排期),以及只能实跑的"连跑两天"验收。**
+
+## 5. 测试方案
+
+分两层:自动化测试(每次改动都跑,已全绿)和真机 E2E(需要真实 model,按阶段手工走一遍)。
+
+### 5.1 自动化测试(已有,随手可跑)
+
+```
+go test ./pkg/cron/... ./pkg/coding_agent/plugins/extension/goal/ ./pkg/coding_agent/plugins/extension/ ./pkg/coding_agent/plugins/extension/cron/
+```
+
+覆盖对照:
+
+- §3.1 goal verifier:`goal/verifier_test.go`(12 例)——REJECT 后 goal 保持 active 且错误带逐条理由、连续驳回转 paused、resume 清零计数、PASS 完成、ForkSession 故障 fail-open、verdict 不可解析按 REJECT 处理、禁用时不 fork、**reviewer.md 定义被采用/契约重附/model 优先级/工具沙箱不变**
+- §3.2 三档 cap:`cron/config/config_test.go`(EffectiveTimeout 回退、ValidateCaps、字段 round-trip)、`cron/runlog/usage_test.go`(日台账累加/隔天独立/31 天裁剪)、`cron/runner/runner_test.go`(超日额度拒跑且 run_end 可区分、重试只发生在 status=error、断路器状态不重试、ctx 取消停止重试)
+- §3.3 模板可解析:三份模板都过真实解析器——SKILL.md 过 `pkg/skills` Manager、reviewer.md 过 `subagent.ParseDefinition`、workflow 脚本过 goja(runtime 同款包裹)。这一步在交付时验证过;若改模板,用同样方式回归
+- §3.5 inbox 人门:`cron/notify/notify_test.go`——本次 run 新增/历史存量按 mtime 区分、PR 链接去重保序、空 cwd 不采集
+- 调度骨架:`cron/daemon_test.go`(热加载换新调度器、坏 config/坏 cron 表达式回滚保留旧调度器)、`cron/scheduler/scheduler_test.go`(skip/queue/kill 并发策略)
+
+### 5.2 真机 E2E(分阶段,每阶段独立可跑)
+
+前置(一次性):① `go install ./cmd/modu_code` 重装二进制(调度器嵌在 TUI 进程里,旧二进制没有这些功能);② 建 `~/.modu/extensions.yaml` 开 verifier(文件是增量覆盖,只写 goal 一项即可):
+
+```yaml
+extensions:
+  - name: goal
+    config:
+      verifier:
+        enabled: true
+```
+
+**阶段 1 · 内嵌调度器冒烟(§2.1)**:启动 `modu_code` 进 TUI;另开终端 `tail -f ~/.modu_cron/daemon.log`,应见 `loaded N task(s)` + `cron scheduler started`。TUI 里说"加一个每分钟的测试任务 smoke-test,prompt 是 say hello in one word"——daemon.log 应出现 `config file changed, reloading...`(聊天建任务 + 热加载一起验了)。等 1-2 分钟:`~/.modu_cron/logs/smoke-test/` 出现 NDJSON,最后一行 `run_end` 为 `status:"ok"` 且带 `tokens`;session 列表里出现名为 `cron:smoke-test` 的完整会话(按 job id 关联)。通过标准:任务无人触发自己跑了,TUI 界面没被日志糊花。
+
+**阶段 2 · 三档 cap(§3.2)**:没有手动触发命令,用 `@every 1m` 的专用任务让断路器自己撞线,测完即删:
+
+- timeout:任务 prompt "run bash: sleep 120"、`timeout: 20s` → 下一轮 `run_end` = `status:"timeout"`
+- token cap:prompt "逐个读 pkg/ 下所有 go 文件并总结"、`max_tokens_per_run: 3000` → `status:"token_cap"`
+- 日额度:config.yaml 临时加 `daily_budget_tokens: 1000`(当天台账已有消耗)→ 任何任务下一轮 `status:"budget_exceeded"`,日志只有 run_start/run_end 两行,channel 收到告警。**测完立刻删掉这行**,否则真实任务会被拒跑
+
+**阶段 3 · 通知 + inbox 人门(§3.5)**:给 smoke-test 挂 `channels: [feishu-daily]`,等一轮,飞书收到 task/status/duration/summary。再把 prompt 改成"在 ./inbox/ 写一个 test-item.md 然后说 done"→ 下一轮通知出现 `inbox: 1 new item(s) waiting for you: test-item.md`;**再下一轮不应重复报该存量条目**(只报当天新增是这条的核心断言)。
+
+**阶段 4 · goal verifier + reviewer(§3.1/§3.3)**:`cp examples/agents/reviewer.md ~/.modu/agents/`;TUI 里 `/goal 在 /tmp/goal-test.txt 写入 hello 并确认文件存在`。完成时应先出现 goal-verifier 的 fork 会话,然后通知区出现 `goal: verifier PASS — completion confirmed by independent check`。验尸式检查(文章 rubric):跑若干真实 goal 后,最近几轮里 verifier 至少真 REJECT 过一次——从未说过 no 的 evaluator 统计上不可能在工作。
+
+**阶段 5 · morning-triage 连跑两天(§3.4)**:按 `examples/loops/morning-triage/README.md` 安装;先把 cron 改成 `@every 5m` 快速跑通一轮(`state/triage.md` 生成并 commit、通知带 inbox),确认后改回 `0 0 6 * * 1-5`,连挂两个早上。第二天检查:未完成 finding 状态延续、已完成的不重做、昨天的 inbox 条目还在、通知只报当天新增。
+
+清理:测试任务(smoke-test / cap-*)在 TUI 里说一句"删掉"即可;临时的 `daily_budget_tokens` 记得移除。
