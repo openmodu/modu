@@ -19,11 +19,11 @@ const (
 	extensionShutdown           = "session_shutdown"
 	extensionSubagentChildUsage = "subagent_child_usage"
 	goalContinuationType        = "pi-goal-continuation"
-	goalBudgetLimitType   = "pi-goal-budget-limit"
-	replaceGoalChoice     = "Replace current goal"
-	cancelReplaceChoice   = "Cancel"
-	resumeGoalChoice      = "Resume goal"
-	leaveGoalPausedChoice = "Leave paused"
+	goalBudgetLimitType         = "pi-goal-budget-limit"
+	replaceGoalChoice           = "Replace current goal"
+	cancelReplaceChoice         = "Cancel"
+	resumeGoalChoice            = "Resume goal"
+	leaveGoalPausedChoice       = "Leave paused"
 )
 
 // Extension wires persistent /goal support into a CodingSession.
@@ -49,6 +49,9 @@ type Extension struct {
 	// /goal-watch [on|off]. Not persisted — every session starts hidden so
 	// the statusbar stays clean until the user opts in.
 	watching bool
+	// verifier configures the maker-checker completion gate; zero value =
+	// disabled (update_goal completes without independent verification).
+	verifier verifierConfig
 }
 
 // Options configures the Extension. The zero value is usable.
@@ -161,6 +164,7 @@ func (e *Extension) Init(api extension.ExtensionAPI) error {
 	api.RegisterTool(&createGoalTool{store: e.store, onCreate: e.beginAgentGoalAccounting})
 	api.RegisterTool(&updateGoalTool{
 		store:          e.store,
+		verify:         e.verifyCompletion,
 		beforeComplete: func() { e.accountCurrentAgentTurn(types.AgentUsage{}, false) },
 		onComplete:     e.markGoalCompletedThisTurn,
 	})

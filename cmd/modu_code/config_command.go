@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openmodu/modu/cmd/modu_code/internal/provider"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	agentconfig "github.com/openmodu/modu/pkg/coding_agent/foundation/config"
+	"github.com/openmodu/modu/pkg/provider"
 )
 
 func runConfigHook(args string, session *coding_agent.CodingSession) (string, error) {

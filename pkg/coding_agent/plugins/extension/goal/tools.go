@@ -60,7 +60,10 @@ func (t *createGoalTool) Execute(_ context.Context, _ string, args map[string]an
 }
 
 type updateGoalTool struct {
-	store          *Store
+	store *Store
+	// verify, when non-nil, is the maker-checker gate: it returns
+	// (message, true) to reject the completion claim before MarkComplete.
+	verify         func(ctx context.Context) (string, bool)
 	beforeComplete func()
 	onComplete     func(Goal)
 }
@@ -86,10 +89,15 @@ func (t *updateGoalTool) Parameters() any {
 	}
 }
 
-func (t *updateGoalTool) Execute(_ context.Context, _ string, args map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
+func (t *updateGoalTool) Execute(ctx context.Context, _ string, args map[string]any, _ types.ToolUpdateCallback) (types.ToolResult, error) {
 	status, _ := args["status"].(string)
 	if status != "complete" {
 		return textResult("update_goal can only mark the existing goal complete; pause, resume, and budget-limited status changes are controlled by the user or system", true), nil
+	}
+	if t.verify != nil {
+		if msg, rejected := t.verify(ctx); rejected {
+			return textResult(msg, true), nil
+		}
 	}
 	if t.beforeComplete != nil {
 		t.beforeComplete()

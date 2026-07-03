@@ -30,13 +30,16 @@ import (
 	"github.com/openmodu/modu/pkg/coding_agent/modes"
 	"github.com/openmodu/modu/pkg/coding_agent/modes/rpc"
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
+	_ "github.com/openmodu/modu/pkg/coding_agent/plugins/extension/cron"     // register builtin extension via init()
 	_ "github.com/openmodu/modu/pkg/coding_agent/plugins/extension/goal"     // register builtin extension via init()
 	_ "github.com/openmodu/modu/pkg/coding_agent/plugins/extension/subagent" // register builtin extension via init()
 	_ "github.com/openmodu/modu/pkg/coding_agent/plugins/extension/workflow" // register builtin extension via init()
+	croncli "github.com/openmodu/modu/pkg/cron/cli"
+	cronconfig "github.com/openmodu/modu/pkg/cron/config"
 	"github.com/openmodu/modu/pkg/types"
 
 	"github.com/openmodu/modu/cmd/modu_code/internal/acp"
-	"github.com/openmodu/modu/cmd/modu_code/internal/provider"
+	"github.com/openmodu/modu/pkg/provider"
 )
 
 var runTUI = runModuTUI
@@ -48,6 +51,13 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "config" {
 		if err := runConfigCommand(os.Args[2:], os.Stdout, os.Stderr); err != nil {
 			fmt.Fprintf(os.Stderr, "config: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "cron" {
+		if err := croncli.Main("modu_code cron", os.Args[2:], cronconfig.DefaultPath()); err != nil {
+			fmt.Fprintf(os.Stderr, "cron: %v\n", err)
 			os.Exit(1)
 		}
 		return
@@ -91,7 +101,7 @@ func main() {
 	// rows). All user-facing notifications still reach the scrollback via
 	// api.Notify -> SessionEventExtensionNotify -> a "section" uiBlock,
 	// which is the only path the TUI can safely render multi-line text.
-	// Resolve the active extension set from ~/.modu_code/extensions.yaml
+	// Resolve the active extension set from ~/.modu/extensions.yaml
 	// (falls back to every builtin when the file is absent — that keeps the
 	// default install behaviorally identical to "goal always on").
 	exts, err := extension.LoadEnabled(extension.LoadOptions{})

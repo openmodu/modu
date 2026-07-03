@@ -260,6 +260,18 @@ func (b *Bot) chatIDToInt64(chatID string) int64 {
 }
 
 // sendText sends a plain text message to a Feishu chat_id.
+// SendText sends one plain-text message to a Feishu chat using app
+// credentials, without starting the inbound websocket bot. Intended for
+// fire-and-forget outbound notifications (e.g. modu_cron task completion).
+func SendText(ctx context.Context, appID, appSecret, chatID, text string) error {
+	b, err := NewBot(appID, appSecret, nil, nil)
+	if err != nil {
+		return err
+	}
+	_, err = b.sendText(ctx, chatID, text)
+	return err
+}
+
 func (b *Bot) sendText(ctx context.Context, chatID, text string) (string, error) {
 	content, _ := json.Marshal(map[string]string{"text": text})
 	resp, err := b.client.Im.Message.Create(ctx,
