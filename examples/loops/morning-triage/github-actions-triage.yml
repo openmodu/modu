@@ -1,0 +1,61 @@
+# Cloud variant of the morning-triage loop: the exact same skill, but fired
+# by GitHub Actions instead of the scheduler embedded in your local modu_code
+# session — "running while you sleep" without a machine of yours being on.
+# Copy to .github/workflows/triage.yml in the target repo.
+#
+# Both variants can coexist: local embedded scheduler for tight loops while
+# you work, this for the 06:00 sweep. state/triage.md is committed back to
+# the repo, so either side picks up where the other left off.
+name: morning-triage
+
+on:
+  schedule:
+    - cron: "0 22 * * 0-4" # 06:00 Asia/Shanghai (UTC+8) on weekdays, in UTC
+  workflow_dispatch: {} # manual trigger for testing
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45 # per-run wall-clock breaker (Cap Before You Ship)
+    permissions:
+      contents: write # commit state/triage.md + inbox entries
+      pull-requests: write # open draft PRs, never merge
+      issues: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: build modu_code
+        run: go build -o /usr/local/bin/modu_code ./cmd/modu_code
+
+      - name: install the triage skill for this run
+        run: |
+          mkdir -p ~/.modu/skills
+          cp -r examples/loops/morning-triage/skills/morning-triage ~/.modu/skills/
+
+      - name: configure model
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          # pkg/provider resolves env vars when ~/.modu/config.toml is absent;
+          # any provider from the resolution chain works here.
+          echo "provider via DEEPSEEK_API_KEY"
+
+      - name: morning triage
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          modu_code -p "/morning-triage" -json --no-approve | tee triage-run.jsonl
+
+      - name: surface the human door
+        run: |
+          # PRs are opened as drafts by the loop itself, never merged here.
+          # New inbox entries are the "uncertain — needs a human" pile.
+          ls inbox/ 2>/dev/null && echo "^ items waiting for human review" || echo "inbox empty"

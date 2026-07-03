@@ -3,6 +3,8 @@ package goal
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -259,5 +261,77 @@ func TestUpdateGoalVerifierDisabledSkipsFork(t *testing.T) {
 	}
 	if len(api.forkOpts) != 0 {
 		t.Fatalf("no fork expected when disabled, got %d", len(api.forkOpts))
+	}
+}
+
+func TestVerifierUsesReviewerAgentDefinition(t *testing.T) {
+	e, api, tool := newVerifierExtension(t, map[string]any{"enabled": true})
+
+	// Install a user-level reviewer agent definition under agentDir/agents/.
+	agentDir := t.TempDir()
+	agentsDir := filepath.Join(agentDir, "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	def := "---\nname: reviewer\nmodel: custom-critic\ntools: read, bash\n---\nCUSTOM REVIEWER PROMPT BODY\n"
+	if err := os.WriteFile(filepath.Join(agentsDir, "reviewer.md"), []byte(def), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	api.agentDir = agentDir
+
+	api.fork = func(_ context.Context, opts extension.ForkOptions) (string, error) {
+		return `{"verdict":"PASS","reasons":[]}`, nil
+	}
+	_, res := callToolResult(t, tool, map[string]any{"status": "complete"})
+	if res.IsError {
+		t.Fatalf("expected PASS completion, got error")
+	}
+
+	if len(api.forkOpts) != 1 {
+		t.Fatalf("fork calls=%d, want 1", len(api.forkOpts))
+	}
+	opts := api.forkOpts[0]
+	if !strings.Contains(opts.SystemPrompt, "CUSTOM REVIEWER PROMPT BODY") {
+		t.Fatalf("custom reviewer prompt not used: %s", opts.SystemPrompt)
+	}
+	if !strings.Contains(opts.SystemPrompt, `{"verdict":"PASS","reasons":[]}`) {
+		t.Fatalf("verdict contract must be re-appended to custom prompt: %s", opts.SystemPrompt)
+	}
+	if opts.Model != "custom-critic" {
+		t.Fatalf("reviewer model not used: %q", opts.Model)
+	}
+	// The tool whitelist stays the verifier's own sandbox regardless of the
+	// definition's tools frontmatter.
+	want := map[string]bool{"read": true, "grep": true, "ls": true, "find": true, "bash": true}
+	if len(opts.AllowedTools) != len(want) {
+		t.Fatalf("verifier tool sandbox changed: %v", opts.AllowedTools)
+	}
+	for _, tl := range opts.AllowedTools {
+		if !want[tl] {
+			t.Fatalf("unexpected tool %q in verifier sandbox: %v", tl, opts.AllowedTools)
+		}
+	}
+	_ = e
+}
+
+func TestVerifierConfigModelBeatsReviewerModel(t *testing.T) {
+	_, api, tool := newVerifierExtension(t, map[string]any{"enabled": true, "model": "cfg-model"})
+
+	agentDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(agentDir, "agents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	def := "---\nname: reviewer\nmodel: custom-critic\n---\nBODY\n"
+	if err := os.WriteFile(filepath.Join(agentDir, "agents", "reviewer.md"), []byte(def), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	api.agentDir = agentDir
+
+	api.fork = func(_ context.Context, opts extension.ForkOptions) (string, error) {
+		return `{"verdict":"PASS","reasons":[]}`, nil
+	}
+	_, _ = callToolResult(t, tool, map[string]any{"status": "complete"})
+	if len(api.forkOpts) != 1 || api.forkOpts[0].Model != "cfg-model" {
+		t.Fatalf("explicit verifier config model must win, got %+v", api.forkOpts)
 	}
 }

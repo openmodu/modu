@@ -50,7 +50,7 @@ func TestCompletionPostsWebhookPayload(t *testing.T) {
 		LogPath: logPath,
 		Started: started,
 		Ended:   ended,
-	}, nil)
+	}, nil, "")
 	if err != nil {
 		t.Fatalf("Completion: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestCompletionReportsMissingChannel(t *testing.T) {
 	err := NewSender().Completion(context.Background(), &config.Config{}, config.Task{
 		ID:      "x",
 		Channel: "missing",
-	}, runner.Result{}, nil)
+	}, runner.Result{}, nil, "")
 	if err == nil || !strings.Contains(err.Error(), `channel "missing" not found`) {
 		t.Fatalf("expected missing channel error, got %v", err)
 	}
@@ -93,11 +93,72 @@ func TestCompletionUsesEnvURL(t *testing.T) {
 	err := NewSender().Completion(context.Background(), cfg, config.Task{
 		ID:      "x",
 		Channel: "ops",
-	}, runner.Result{}, nil)
+	}, runner.Result{}, nil, "")
 	if err != nil {
 		t.Fatalf("Completion: %v", err)
 	}
 	if !called {
 		t.Fatal("server was not called")
+	}
+}
+
+func TestBuildPayloadSurfacesInboxAndPRLinks(t *testing.T) {
+	cwd := t.TempDir()
+	inbox := filepath.Join(cwd, "inbox")
+	if err := os.MkdirAll(inbox, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+
+	// One entry left before the run (stale) and two during it (new).
+	stale := filepath.Join(inbox, "old-question.md")
+	if err := os.WriteFile(stale, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	past := started.Add(-time.Hour)
+	if err := os.Chtimes(stale, past, past); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"flaky-auth.md", "dep-bump.md"} {
+		if err := os.WriteFile(filepath.Join(inbox, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	logPath := filepath.Join(cwd, "run.log")
+	logBody := `{"type":"assistant","text":"opened https://github.com/openmodu/modu/pull/12 and https://github.com/openmodu/modu/pull/12 again, plus https://github.com/other/repo/pull/3"}` + "\n"
+	if err := os.WriteFile(logPath, []byte(logBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := buildPayload(config.Task{ID: "t"}, runner.Result{
+		LogPath: logPath,
+		Started: started,
+		Ended:   started.Add(time.Second),
+	}, nil, cwd)
+
+	if len(p.InboxNew) != 2 || p.InboxNew[0] != "dep-bump.md" || p.InboxNew[1] != "flaky-auth.md" {
+		t.Fatalf("InboxNew=%v, want the two new entries sorted", p.InboxNew)
+	}
+	if len(p.PRLinks) != 2 ||
+		p.PRLinks[0] != "https://github.com/openmodu/modu/pull/12" ||
+		p.PRLinks[1] != "https://github.com/other/repo/pull/3" {
+		t.Fatalf("PRLinks=%v, want two deduped links in first-seen order", p.PRLinks)
+	}
+	if !strings.Contains(p.Text, "inbox: 2 new item(s) waiting for you: dep-bump.md, flaky-auth.md") {
+		t.Fatalf("text missing inbox line: %s", p.Text)
+	}
+	if !strings.Contains(p.Text, "pr: https://github.com/openmodu/modu/pull/12") {
+		t.Fatalf("text missing pr line: %s", p.Text)
+	}
+}
+
+func TestBuildPayloadNoInboxNoCwd(t *testing.T) {
+	p := buildPayload(config.Task{ID: "t"}, runner.Result{}, nil, "")
+	if p.InboxNew != nil || p.PRLinks != nil {
+		t.Fatalf("expected no inbox/pr data: %+v", p)
+	}
+	if strings.Contains(p.Text, "inbox:") || strings.Contains(p.Text, "pr:") {
+		t.Fatalf("text should not mention inbox/pr: %s", p.Text)
 	}
 }

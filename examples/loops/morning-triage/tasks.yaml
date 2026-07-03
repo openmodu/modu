@@ -1,0 +1,23 @@
+# Append this task to ~/.modu_cron/tasks.yaml (or just tell modu_code:
+# "每个工作日早上 6 点跑 /morning-triage" and let cron_add write it).
+#
+# Cap Before You Ship: all three per-task breakers are set BEFORE the loop's
+# first unattended run, plus the shared daily budget in config.yaml.
+tasks:
+  - id: morning-triage
+    cron: "0 0 6 * * 1-5"        # 06:00 on weekdays (sec min hour dom mon dow)
+    prompt: "/morning-triage"    # slash form invokes the installed skill
+    enabled: true
+    on_overlap: skip
+    timeout: 30m                 # per-run wall-clock breaker
+    max_tokens_per_run: 400000   # per-run token breaker (input+output)
+    max_retries: 1               # retry plain errors once; cap trips never retry
+    channels: [feishu-daily]     # completion notice: status, summary, new inbox items, PR links
+
+# And in ~/.modu_cron/config.yaml:
+#
+#   daily_budget_tokens: 3000000   # shared across all tasks, rolls over at local midnight
+#   channels:
+#     feishu-daily:
+#       type: feishu_bot
+#       chat_id: oc_xxxxxxxxxxxx   # credentials reuse ~/.modu/channels/feishu/config.toml

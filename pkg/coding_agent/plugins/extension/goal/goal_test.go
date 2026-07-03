@@ -27,6 +27,7 @@ type fakeAPI struct {
 	selects  []string
 	selectQ  []string
 	dir      string
+	agentDir string
 	// fork, when set, backs ForkSession so verifier tests can script the
 	// child's reply. forkOpts records every call for assertions.
 	fork     func(context.Context, extension.ForkOptions) (string, error)
@@ -80,7 +81,7 @@ func (f *fakeAPI) SetModel(string, string) error    { return nil }
 func (f *fakeAPI) GetCommands() []extension.Command { return nil }
 func (f *fakeAPI) SessionID() string                { return "test-session" }
 func (f *fakeAPI) SessionDir() string               { return f.dir }
-func (f *fakeAPI) AgentDir() string                 { return "" }
+func (f *fakeAPI) AgentDir() string                 { return f.agentDir }
 func (f *fakeAPI) Cwd() string                      { return "/tmp/project" }
 func (f *fakeAPI) IsIdle() bool                     { return true }
 func (f *fakeAPI) HasPendingMessages() bool         { return false }

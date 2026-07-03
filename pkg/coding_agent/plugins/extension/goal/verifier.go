@@ -27,6 +27,7 @@ import (
 	"strings"
 
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
+	"github.com/openmodu/modu/pkg/coding_agent/plugins/subagent"
 )
 
 const (
@@ -174,6 +175,17 @@ func parseVerifierVerdict(text string) (verifierVerdict, bool) {
 	return out, found
 }
 
+// verifierVerdictContract is the machine-readable half of the verifier
+// prompt: parseVerifierVerdict depends on it, so it is appended to whatever
+// system prompt the verifier ends up with — builtin or a user-provided
+// `reviewer` agent definition.
+const verifierVerdictContract = `VERDICT: your final message MUST end with a single JSON object:
+{"verdict":"PASS","reasons":[]}
+or
+{"verdict":"REJECT","reasons":["<one concrete, actionable reason>", "..."]}
+PASS only if every requirement holds. A REJECT without concrete reasons is
+useless — the author must know exactly what to fix.`
+
 func verifierSystemPrompt() string {
 	return `ROLE: Adversarial goal-completion verifier (maker-checker).
 An agent claims it has completed an objective. You were not part of that
@@ -196,12 +208,32 @@ CHECK, in order:
 You have read-only discovery tools plus bash. Do not modify, commit, or
 delete anything.
 
-VERDICT: your final message MUST end with a single JSON object:
-{"verdict":"PASS","reasons":[]}
-or
-{"verdict":"REJECT","reasons":["<one concrete, actionable reason>", "..."]}
-PASS only if every requirement holds. A REJECT without concrete reasons is
-useless — the author must know exactly what to fix.`
+` + verifierVerdictContract
+}
+
+// reviewerAgentName is the subagent definition the verifier looks for. A
+// user (or project) that defines agents/reviewer.md — see
+// examples/agents/reviewer.md — customizes both workflow review agents and
+// this goal verifier from the same file: its body replaces the builtin
+// system prompt (the VERDICT JSON contract is re-appended so parsing keeps
+// working) and its model frontmatter is used when the verifier config does
+// not set one. The tool whitelist is NOT taken from the definition: the
+// verifier always runs with its own read+bash sandbox.
+const reviewerAgentName = "reviewer"
+
+// reviewerOverride returns the system prompt and model from a user-defined
+// reviewer agent, or ("", "") when none is defined.
+func (e *Extension) reviewerOverride() (systemPrompt, model string) {
+	if e.api == nil {
+		return "", ""
+	}
+	loader := subagent.NewLoader()
+	loader.Discover(e.api.AgentDir(), e.api.Cwd())
+	def, ok := loader.Get(reviewerAgentName)
+	if !ok || strings.TrimSpace(def.SystemPrompt) == "" {
+		return "", ""
+	}
+	return strings.TrimSpace(def.SystemPrompt) + "\n\n" + verifierVerdictContract, def.Model
 }
 
 func verifierTaskPrompt(g Goal) string {
@@ -231,13 +263,21 @@ func (e *Extension) verifyCompletion(ctx context.Context) (string, bool) {
 		return "", false
 	}
 	cfg := e.verifierSnapshot()
+	sysPrompt := verifierSystemPrompt()
+	model := cfg.Model
+	if customPrompt, customModel := e.reviewerOverride(); customPrompt != "" {
+		sysPrompt = customPrompt
+		if model == "" {
+			model = customModel
+		}
+	}
 	out, err := e.api.ForkSession(ctx, extension.ForkOptions{
 		Name:         "goal-verifier",
-		SystemPrompt: verifierSystemPrompt(),
+		SystemPrompt: sysPrompt,
 		Task:         verifierTaskPrompt(g),
 		AllowedTools: verifierTools,
 		Context:      "fresh",
-		Model:        cfg.Model,
+		Model:        model,
 		MaxTurns:     cfg.maxTurns(),
 	})
 	if err != nil {

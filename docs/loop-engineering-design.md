@@ -154,42 +154,41 @@ daily_budget_tokens: 3000000
 
 **验收(已过)**:单测覆盖字段解析/round-trip、EffectiveTimeout 回退、ValidateCaps、台账累加与 31 天裁剪、超日额度拒跑且 run_end 状态可区分、重试只发生在 plain error、ctx 取消停止重试(config/runlog/runner 三包全绿)。留一条实测项:配好真实 model 后,用一个死循环 prompt 验证三档至少一档能打断(見 README「三档 cap」节)。
 
-### 3.3 P1 · Evaluator sub-agent 约定 + 内置模板
+### 3.3 P1 · Evaluator sub-agent 约定 + 内置模板 ✅ 已实现(2026-07-03)
 
 **问题**:sub-agent 机制齐了,但仓库里没有一份"reviewer 长什么样"的参考,用户从零写容易漏掉 ASSUME BROKEN / execute-don't-read / VERDICT 三要素。
 
-**方案**:零核心代码,交付约定和模板。
+**已落地的实现**:
 
-- 在 agents 目录约定下提供内置 `reviewer` 模板(随 `modu_code config` 初始化或文档提供),内容对齐文章 §V-D:ROLE(adversarial)/ ASSUME(broken until proven)/ CHECK(先跑再读,按项目失败模式排序)/ USE(Bash 跑测试、gh 查 CI)/ VERDICT(PASS 需全项通过,REJECT 必须逐条给理由)
-- frontmatter 默认:只读工具 + Bash,建议配 `model` 覆盖(与 generator 不同的模型,"同 model 换 prompt 经常保留盲点")
-- 与 §3.1 打通:goal verifier 的默认 system prompt 就用这份模板,一处维护
+- `examples/agents/reviewer.md`:完整模板,对齐文章 §V-D——ROLE(adversarial maker-checker)/ ASSUME(broken until proven)/ CHECK(execute-don't-read,四步)/ USE(bash 跑测试、gh 查 CI)/ VERDICT(PASS 需全项通过,REJECT 必须逐条给理由,末行 JSON)。frontmatter:`tools: read, grep, ls, find, bash`、`max_turns: 12`、注释建议 `model` 覆盖("同 model 换 prompt 经常保留盲点")。装法:`cp examples/agents/reviewer.md ~/.modu/agents/`(或项目 `.coding_agent/agents/`)
+- **与 §3.1 真打通**(不止文案层面):goal verifier 在 fork 前会查找名为 `reviewer` 的 subagent 定义——找到就用它的 body 当 system prompt(VERDICT JSON 契约会重新附加,保证解析不坏)、用它的 `model` 当默认模型(显式 verifier config 的 model 优先);工具沙箱**不**从定义取,verifier 永远保持自己的 read+bash 白名单。没有定义时回退内置 prompt,完全向后兼容。一份 `reviewer.md` 同时定制 workflow 里的 review agent 和 goal 裁判——一处维护
+- 验收调整:modu 的 workflow `agent()` 没有按定义名解析的选项(那是设计时的假设,实际 API 是 prompt + tools/schema),所以 workflow 侧的 reviewer 用法是同一契约的内联 prompt + `schema: VERDICT`(见 §3.4 的 triage-fixes 脚本);"跑通一次真实 REJECT" 由 goal 侧单测覆盖(自定义 reviewer 定义被采用、契约被附加、model 优先级、沙箱不变,`verifier_test.go` 新增 2 例)
 
-**验收**:workflow 脚本里 `agent("review ...", {agentType/定义名: "reviewer", schema: VERDICT})` 跑通一次真实 REJECT。
-
-### 3.4 P1 · 示例 loop:morning-triage 参考实现
+### 3.4 P1 · 示例 loop:morning-triage 参考实现 ✅ 已实现(2026-07-03)
 
 **问题**:六部件都在,但没有一个把五动作串起来的端到端样例。文章的态度:第一个 loop 要"小到不像一个系统"。
 
-**方案**:仓库交付 `examples/loops/morning-triage/`,一比一落文章附录 A 的完整 first loop:
+**已落地的实现**(`examples/loops/morning-triage/`,一比一落文章附录 A 的完整 first loop):
 
-- `skills/morning-triage/SKILL.md`:Read(gh run list 失败 CI / 24h 新 issue / git log --since=yesterday / 昨天的 state 文件)→ Judge(actionable vs noise,"只留今天值得开 worktree 的")→ Write(追加 `./state/triage.md`,四列:finding/source/priority/status,commit 回仓库)→ Handoff(每条 finding 输出 worktree=fix/slug + goal 停止条件)→ **Stop 段**(Never merge / Never delete / 不确定的写 `./inbox/`)
-- `tasks.yaml` 片段:cron 06:00 触发 `/morning-triage`,带 §3.2 三档 cap,通知 channel
-- 可选的 workflow 脚本:读 triage.md,每条 finding `agent(..., {isolation:"worktree"})` 起草修复,`reviewer` sub-agent 挑刺,PASS 才 `gh pr create --draft`(永不 merge)
-- 云端变体:一份 `.github/workflows/triage.yml`,用 `modu_code -p "/morning-triage" -json` 跑同一个 skill——本机 daemon 和云端 Actions 二选一或并用
+- `skills/morning-triage/SKILL.md`:Read(gh run list 失败 CI / 24h 新 issue / git log --since / 昨天的 `./state/triage.md` + `./inbox/`)→ Judge(actionable vs noise,"只留今天值得开 worktree 的")→ Write(追加 `./state/triage.md` 四列表格,commit 回仓库)→ Hand off(每条 finding 输出 `worktree=fix/slug goal=<可验证停止条件>`,本 run 只 triage 不修)→ **Stop 段**(Never merge / Never delete / Never push main / 不确定的一事一文件写 `./inbox/`)
+- `tasks.yaml`:工作日 06:00 触发 `/morning-triage`,三档 cap + `daily_budget_tokens` + feishu_bot channel 全配好(Cap Before You Ship)
+- `triage-fixes.workflow.js`:Load(读 open findings,schema 校验)→ Fix(每条 finding `isolation:'worktree'` 起草,批量上限 3——review 带宽即天花板)→ Review(对抗式 reviewer,同 `examples/agents/reviewer.md` 契约,`schema: VERDICT`)→ Deliver(PASS 才 `gh pr create --draft` 永不 merge;REJECT 写 `./inbox/<slug>.md`)。用 modu 的真实 workflow 方言(`meta({...})` 调用、非 ES module、camelCase opts)——初稿照 Claude Code 语法写的版本在 modu 跑不起来,已按 `tool.go` 的 API 说明重写
+- `github-actions-triage.yml`:云端变体,`modu_code -p "/morning-triage" -json --no-approve`,与本机内嵌调度器共享 repo 里的 `state/triage.md`,可并存
+- `README.md`:五动作对照表、安装步骤、inbox 约定、Read-a-Sample 纪律、两天连跑验收清单 + Nodding Loop 验尸检查
 
-**验收**:文章 L4 那条"跑出来才知道"的检查——连跑两天,第二天的 run 能读回第一天的 state 与 inbox,未完成 finding 状态延续,不重做已完成的活。
+**验证**:三份模板都过了真实解析器——SKILL.md 经 `pkg/skills` Manager 发现且内容完整、reviewer.md 经 `subagent.ParseDefinition`(tools/max_turns 正确)、workflow 脚本经 goja 按 runtime 同款包裹编译通过。文章 L4 那条"连跑两天"的验收只能实跑:第二天 state/inbox 延续、通知里只出现当天新增条目(检查方法已写进示例 README)。
 
-### 3.5 P1 · 人门收口:inbox 约定 + 通知带上"待人审"清单
+### 3.5 P1 · 人门收口:inbox 约定 + 通知带上"待人审"清单 ✅ 已实现(2026-07-03)
 
-**问题**:人门的三种形态里,通知已有、PR 不 merge 靠 Stop 段约定,但"不确定的进 inbox 等人"目前没有任何呈现——inbox 文件写了也没人知道。
+**问题**:人门的三种形态里,通知已有、PR 不 merge 靠 Stop 段约定,但"不确定的进 inbox 等人"原先没有任何呈现——inbox 文件写了也没人知道。
 
-**方案**:
+**已落地的实现**(`pkg/cron/notify`):
 
-- 约定 `./inbox/` 目录语义(每文件一事,markdown),写进 §3.4 的示例与文档
-- modu_cron 完成通知追加一段:本次 run 后 `./inbox/` 新增条目数与标题列表、新开 PR 链接——把"门"送到人眼前(telegram/feishu 里直接看到今天有几件事等你)
-- 文档写明 Read-a-Sample 纪律:不读全部,每天读一个,解释不出来 = 你的地图掉队了
-
-**改动点**:`pkg/cron/notify` 加一个 run 后置采集钩子;其余是文档。
+- `Completion` 签名加 `cwd`(run 的工作目录,daemon 传入);payload 新增 `inbox_new` 和 `pr_links` 两个字段,通知文本追加 `inbox: N new item(s) waiting for you: a.md, b.md` 和 `pr: <url>` 行
+- inbox 采集:`<cwd>/inbox/` 下 mtime 在本次 run 开始之后的文件(跳过 dotfile/子目录),按名排序,列最多 10 个、计数是真实总数——**只报当天新增**,昨天的存量不重复轰炸
+- PR 链接:正则扫本次 run 的精简日志提取 GitHub PR URL,按首次出现去重,上限 5 条——agent 开了 draft PR,通知里直接可点
+- `./inbox/` 目录语义(一事一文件、处理完即删)和 Read-a-Sample 纪律写进 §3.4 示例的 README
+- 单测:新增/存量区分(Chtimes 造旧文件)、PR 去重与顺序、空 cwd 不采集(`notify_test.go` 新增 2 例)
 
 ### 3.6 P2 · MCP connector 支持
 
@@ -203,17 +202,17 @@ daily_budget_tokens: 3000000
 
 1. ✅ §3.2 cron caps —— 先装断路器,后面所有实验都有保险丝(2026-07-03 完成)
 2. ✅ §3.1 goal verifier —— 补上 say no 的门,loop 从此有 Verification 这一动(2026-07-03 完成)
-3. §3.3 reviewer 模板(可直接复用 verifier.go 里的 adversarial prompt)
-4. §3.4 morning-triage 示例 + §3.5 inbox 通知 —— 五动作端到端串起来,连跑两天验收
+3. ✅ §3.3 reviewer 模板 —— `examples/agents/reviewer.md`,goal verifier 自动采用同名定义,一处维护(2026-07-03 完成)
+4. ✅ §3.4 morning-triage 示例 + §3.5 inbox 通知 —— 五动作端到端串起来(2026-07-03 完成;连跑两天的验收只能实跑,清单在示例 README)
 5. §3.6 MCP —— 独立排期
 
 完成后对照文章 First-Loop Checklist 六问自检:
 
-- Discovery source:skill 按 timer 读 CI/issues/commits/inbox —— §3.4 后 ✅
-- State file:`./state/triage.md` 磁盘跨轮记忆 —— §3.4 后 ✅
-- Evaluator:会 say no 的独立 check —— ✅ 已装(extensions.yaml 开 `verifier.enabled` 后生效)
-- Isolation:每个并行 agent 自己的 worktree —— ✅
-- Token cap:跑歪谁叫停 —— ✅ 已装(任务三档 + `daily_budget_tokens`)
-- Human review:哪一步停下来等人 —— §3.5 后 ✅(通知已有 + verifier 连续驳回转 paused 已是一道人门;inbox 呈现待补)
+- Discovery source:skill 按 timer 读 CI/issues/commits/inbox —— ✅(`examples/loops/morning-triage`)
+- State file:`./state/triage.md` 磁盘跨轮记忆 —— ✅(skill 的 Write 段,commit 回 repo)
+- Evaluator:会 say no 的独立 check —— ✅(extensions.yaml 开 `verifier.enabled`;reviewer.md 可定制)
+- Isolation:每个并行 agent 自己的 worktree —— ✅(triage-fixes 每 finding 一个 worktree)
+- Token cap:跑歪谁叫停 —— ✅(任务三档 + `daily_budget_tokens`)
+- Human review:哪一步停下来等人 —— ✅(draft PR 永不 merge;inbox 新增条目和 PR 链接直接进完成通知;verifier 连续驳回转 paused)
 
-一句话总结:**两件 P0 已落地——goal 有了 fresh-model 裁判(maker-checker),cron 有了三档断路器 + 日额度。剩下的是 P1 的模板、示例与 inbox 约定,以及 P2 的 MCP。**
+一句话总结:**P0 + P1 全部落地——goal 有 fresh-model 裁判(可用 reviewer.md 定制),cron 有三档断路器 + 日额度 + 人门通知,morning-triage 示例把五动作端到端串齐。唯一剩下的是 P2 的 MCP connector(独立排期),以及只能实跑的"连跑两天"验收。**

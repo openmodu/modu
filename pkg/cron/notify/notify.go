@@ -12,6 +12,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -36,7 +39,14 @@ type Payload struct {
 	LogPath    string `json:"log_path,omitempty"`
 	Summary    string `json:"summary,omitempty"`
 	Error      string `json:"error,omitempty"`
-	Text       string `json:"text"`
+	// InboxNew lists ./inbox entries the run left for a human (files under
+	// <working_dir>/inbox touched during the run) — the loop's "open door",
+	// surfaced in the notification instead of sitting unseen on disk.
+	InboxNew []string `json:"inbox_new,omitempty"`
+	// PRLinks are GitHub pull-request URLs found in the run's log, so the
+	// notification links straight to what is waiting for review.
+	PRLinks []string `json:"pr_links,omitempty"`
+	Text    string   `json:"text"`
 }
 
 // NewSender returns a Sender with a bounded HTTP timeout.
@@ -46,8 +56,10 @@ func NewSender() *Sender {
 
 // Completion sends one task completion notification to every channel named by
 // task.channel / task.channels. Missing or invalid channels are reported after
-// all other configured channels have been attempted.
-func (s *Sender) Completion(ctx context.Context, cfg *config.Config, task config.Task, res runner.Result, runErr error) error {
+// all other configured channels have been attempted. cwd is the run's working
+// directory, used to surface ./inbox entries the run left for a human; empty
+// skips that check.
+func (s *Sender) Completion(ctx context.Context, cfg *config.Config, task config.Task, res runner.Result, runErr error, cwd string) error {
 	names := task.NotificationChannels()
 	if len(names) == 0 {
 		return nil
@@ -62,7 +74,7 @@ func (s *Sender) Completion(ctx context.Context, cfg *config.Config, task config
 		s.Client = NewSender().Client
 	}
 
-	payload := buildPayload(task, res, runErr)
+	payload := buildPayload(task, res, runErr, cwd)
 	var errs []error
 	for _, name := range names {
 		ch, ok := cfg.Channels[name]
@@ -149,7 +161,7 @@ func (s *Sender) postJSON(ctx context.Context, url string, body any) error {
 	return nil
 }
 
-func buildPayload(task config.Task, res runner.Result, runErr error) Payload {
+func buildPayload(task config.Task, res runner.Result, runErr error, cwd string) Payload {
 	status := res.Status
 	errText := ""
 	if runErr != nil {
@@ -172,9 +184,70 @@ func buildPayload(task config.Task, res runner.Result, runErr error) Payload {
 		LogPath:    res.LogPath,
 		Summary:    summary,
 		Error:      errText,
+		InboxNew:   collectInboxNew(cwd, res.Started),
+		PRLinks:    prLinks(res.LogPath),
 	}
 	payload.Text = formatText(payload)
 	return payload
+}
+
+// inboxMaxListed caps how many inbox entries the notification names; the
+// count still reflects the true total.
+const inboxMaxListed = 10
+
+// collectInboxNew returns the names of files under <cwd>/inbox modified at
+// or after since (the run's start) — i.e. what this run left for a human.
+// Dotfiles and subdirectories are ignored. Missing dir yields nil.
+func collectInboxNew(cwd string, since time.Time) []string {
+	if strings.TrimSpace(cwd) == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(filepath.Join(cwd, "inbox"))
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, entry := range entries {
+		if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || info.ModTime().Before(since) {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	sort.Strings(names)
+	return names
+}
+
+// prLinkRe matches GitHub pull-request URLs in the run log — both PRs the
+// agent reported opening and ones referenced in tool output.
+var prLinkRe = regexp.MustCompile(`https://github\.com/[\w.-]+/[\w.-]+/pull/\d+`)
+
+// prLinks extracts unique GitHub PR URLs from the run's log file, in first-
+// seen order, capped at 5.
+func prLinks(logPath string) []string {
+	if logPath == "" {
+		return nil
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var links []string
+	for _, link := range prLinkRe.FindAllString(string(data), -1) {
+		if seen[link] {
+			continue
+		}
+		seen[link] = true
+		links = append(links, link)
+		if len(links) == 5 {
+			break
+		}
+	}
+	return links
 }
 
 func formatText(p Payload) string {
@@ -190,6 +263,18 @@ func formatText(p Payload) string {
 	}
 	if p.Summary != "" {
 		fmt.Fprintf(&b, "summary: %s\n", truncate(p.Summary, 1200))
+	}
+	if n := len(p.InboxNew); n > 0 {
+		listed := p.InboxNew
+		suffix := ""
+		if n > inboxMaxListed {
+			listed = listed[:inboxMaxListed]
+			suffix = fmt.Sprintf(" (+%d more)", n-inboxMaxListed)
+		}
+		fmt.Fprintf(&b, "inbox: %d new item(s) waiting for you: %s%s\n", n, strings.Join(listed, ", "), suffix)
+	}
+	for _, link := range p.PRLinks {
+		fmt.Fprintf(&b, "pr: %s\n", link)
 	}
 	if p.LogPath != "" {
 		fmt.Fprintf(&b, "log: %s", p.LogPath)
