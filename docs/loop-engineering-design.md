@@ -262,3 +262,16 @@ extensions:
 **阶段 5 · morning-triage 连跑两天(§3.4)**:按 `examples/loops/morning-triage/README.md` 安装;先把 cron 改成 `@every 5m` 快速跑通一轮(`state/triage.md` 生成并 commit、通知带 inbox),确认后改回 `0 0 6 * * 1-5`,连挂两个早上。第二天检查:未完成 finding 状态延续、已完成的不重做、昨天的 inbox 条目还在、通知只报当天新增。
 
 清理:测试任务(smoke-test / cap-*)在 TUI 里说一句"删掉"即可;临时的 `daily_budget_tokens` 记得移除。
+
+### 5.3 真机执行记录(2026-07-03,deepseek-v4-flash)
+
+用无头 harness 直接驱动 `pkg/cron.RunScheduler` + `modu_code -p`,以上阶段已实跑一遍:
+
+- **调度器**:3 任务并发 tick、fsnotify 热加载、75s 干净退出 ✅;运行日志/台账落 `~/.modu/cron/logs/` ✅
+- **token cap**:`status:"token_cap"`,`10372 tokens >= cap 2000`,每轮精确切断 ✅
+- **timeout**:`status:"timeout"`,15s 整切断 ✅。注:用 `sleep` 造慢任务测不出来——agent 会把 sleep 丢后台,bash 工具还自带"前台 sleep≥2s 直接拒绝"的防呆,要用真计算(python 忙等)才能撞线
+- **日额度**:`status:"budget_exceeded"`,0ms 拒跑、不建 session、channel 收到告警 ✅
+- **inbox 人门**:run 内写 `./inbox/test-item.md`,完成通知带 `inbox: 1 new item(s)` ✅(飞书实收)
+- **goal verifier PASS**:真目标(写文件)完成,update_goal 通过 ✅
+- **goal verifier REJECT(决定性)**:令 agent 谎报完成(不建文件直接 complete),update_goal 被驳回——`rejected by the independent goal verifier (reject 1/3)`,理由精确指出"文件不存在" ✅。maker-checker 门真机工作
+- **顺手抓到并修掉一个真 bug**:并发 tick 各自调 `provider.Resolve()` 写全局 `providers.Models` map → fatal concurrent map writes(commit 5910069 加锁修复)。另发现一个**预存在**的流式管道 data race(openai `readSSE` 写 in-flight message vs `pkg/agent.collectAssistantMessage` 读,任何流式会话都有,与 loop 改动无关)——待独立修复
