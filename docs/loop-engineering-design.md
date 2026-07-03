@@ -40,7 +40,7 @@ Loop engineering 是 prompt → context → harness 之上的第四层:人从循
 
 ~~待做~~ ✅ 已补齐(见 §3.2):per-run timeout / token cap / max retries + 全局日额度已实现,cron 任务跑歪时有三档断路器叫停。
 
-补充(2026-07-03 追加):cron 与 coding_agent 已打通双向——① `config`/`crontools`/`scheduler` 提升到 `pkg/cron/`,新增 builtin `cron` 扩展,modu_code 会话内可直接用 `cron_add`/`cron_list`/`cron_remove` 管理任务表(flock + 原子写防跨进程写坏,daemon fsnotify 热加载接住改动);② modu_cron 每个 tick 的 session 现在加载 builtin 扩展(goal/subagent/workflow),cron 任务可以 `create_goal` 长跑并由 §3.1 的 verifier 裁判完成,extensions.yaml 坏了降级为无扩展继续跑。执行面(常驻调度)仍需要独立 daemon 进程——TUI session 是短命进程,"running while you sleep" 需要常驻;再进一步:连独立的 `modu_code cron` 命令/进程都删了——调度器现在**跑在 `modu_code` 正常交互式 TUI 进程里**(`cmd/modu_code/main.go` 启动 TUI 前起一个 goroutine 直接调 `pkg/cron.RunScheduler(ctx, cfgPath)`,ctx 随 TUI 退出而取消;`-p`/`-rpc`/`-acp` 这类一次性或外部客户端驱动的模式不启动它,避免在不预期场合悄悄花 token)。这意味着"loop 自己醒来"现在等价于"你开着一个 `modu_code` 会话"——想要真正人不在也能跑,得让某台机器上一直挂一个 `modu_code`(tmux/screen)。cron 自己那份重复的 env-only provider 删了——`cmd/modu_code/internal/provider` 提升为共享的 `pkg/provider`,cron 任务直接用 `modu_code` 当前激活的 model,不再有第二套模型配置源。CLI 的 `add`/`init`/`list`/`logs`/`rm`/`run` 六个子命令、cron 专属的 Telegram 入站轮询(`telegram_inbound.go`)、以及 `pkg/cron/cli` 这个包本身全删了——task 的增删查没有 CLI 或独立 Telegram bot 存在的必要,`cron` 扩展已经把 cron_add/cron_list/cron_remove 挂进任何 modu_code session(交互式或 modu_code 自带的 Telegram bot),配置文件缺失时调度器也能以零任务起步;`logs` 直接读 `~/.modu_cron/logs/<id>/*.log`(NDJSON,cat/jq 即可)。调度器自身的 log.Printf 输出重定向到 `~/.modu_cron/daemon.log`,不会打进终端糊掉 bubbletea 界面。每次 cron 运行现在还会把完整 session 记录(不是精简 NDJSON,是像交互式会话一样存进 `~/.modu/sessions/` 的那份)按 `cron:<task_id>` 命名,可以在 session 列表/`--resume` 里按任务 id 找到对应的运行历史。通知渠道另支持 `feishu_bot` 类型(飞书应用机器人,凭据自动复用 `~/.modu/channels/feishu/config.toml`)。
+补充(2026-07-03 追加):cron 与 coding_agent 已打通双向——① `config`/`crontools`/`scheduler` 提升到 `pkg/cron/`,新增 builtin `cron` 扩展,modu_code 会话内可直接用 `cron_add`/`cron_list`/`cron_remove` 管理任务表(flock + 原子写防跨进程写坏,daemon fsnotify 热加载接住改动);② modu_cron 每个 tick 的 session 现在加载 builtin 扩展(goal/subagent/workflow),cron 任务可以 `create_goal` 长跑并由 §3.1 的 verifier 裁判完成,extensions.yaml 坏了降级为无扩展继续跑。执行面(常驻调度)仍需要独立 daemon 进程——TUI session 是短命进程,"running while you sleep" 需要常驻;再进一步:连独立的 `modu_code cron` 命令/进程都删了——调度器现在**跑在 `modu_code` 正常交互式 TUI 进程里**(`cmd/modu_code/main.go` 启动 TUI 前起一个 goroutine 直接调 `pkg/cron.RunScheduler(ctx, cfgPath)`,ctx 随 TUI 退出而取消;`-p`/`-rpc`/`-acp` 这类一次性或外部客户端驱动的模式不启动它,避免在不预期场合悄悄花 token)。这意味着"loop 自己醒来"现在等价于"你开着一个 `modu_code` 会话"——想要真正人不在也能跑,得让某台机器上一直挂一个 `modu_code`(tmux/screen)。cron 自己那份重复的 env-only provider 删了——`cmd/modu_code/internal/provider` 提升为共享的 `pkg/provider`,cron 任务直接用 `modu_code` 当前激活的 model,不再有第二套模型配置源。CLI 的 `add`/`init`/`list`/`logs`/`rm`/`run` 六个子命令、cron 专属的 Telegram 入站轮询(`telegram_inbound.go`)、以及 `pkg/cron/cli` 这个包本身全删了——task 的增删查没有 CLI 或独立 Telegram bot 存在的必要,`cron` 扩展已经把 cron_add/cron_list/cron_remove 挂进任何 modu_code session(交互式或 modu_code 自带的 Telegram bot),配置文件缺失时调度器也能以零任务起步;`logs` 直接读 `~/.modu/cron/logs/<id>/*.log`(NDJSON,cat/jq 即可)。调度器自身的 log.Printf 输出重定向到 `~/.modu/cron/daemon.log`,不会打进终端糊掉 bubbletea 界面。每次 cron 运行现在还会把完整 session 记录(不是精简 NDJSON,是像交互式会话一样存进 `~/.modu/sessions/` 的那份)按 `cron:<task_id>` 命名,可以在 session 列表/`--resume` 里按任务 id 找到对应的运行历史。通知渠道另支持 `feishu_bot` 类型(飞书应用机器人,凭据自动复用 `~/.modu/channels/feishu/config.toml`)。
 
 ### 2.2 Worktrees / Handoff — ✅ 基本完成
 
@@ -147,7 +147,7 @@ daily_budget_tokens: 3000000
 
 - per-run timeout:`runner.Execute` 内 `context.WithTimeout(task.EffectiveTimeout())`,daemon tick 和手动 `run <id>` 走同一道闸;调度器原来写死的 30m 改为 runner 负责
 - per-run token cap:runner `session.Subscribe` 累计 assistant usage(input+output,与 goal budget 同口径),越线 cancel
-- daily budget:`~/.modu_cron/logs/usage.json` 按本地时区天聚合(保留 31 天),tick 前检查、超额拒跑(`status=budget_exceeded`,run_start/run_end 照记,channel 照发通知),run 后累加
+- daily budget:`~/.modu/cron/logs/usage.json` 按本地时区天聚合(保留 31 天),tick 前检查、超额拒跑(`status=budget_exceeded`,run_start/run_end 照记,channel 照发通知),run 后累加
 - max retries:`runner.ExecuteWithRetries`,**只重试 status=error**——timeout/token_cap/budget_exceeded 是断路器,重试它们等于拆保险丝
 - `run_end` 新增 `tokens` 字段;`status` 取值 `ok/error/timeout/token_cap/budget_exceeded`;完成通知的 status 同步区分
 - cap 配置非法时 `scheduler.Add` 报错 → daemon 热加载失败回滚(与非法 cron 同一套保护)
@@ -247,7 +247,7 @@ extensions:
         enabled: true
 ```
 
-**阶段 1 · 内嵌调度器冒烟(§2.1)**:启动 `modu_code` 进 TUI;另开终端 `tail -f ~/.modu_cron/daemon.log`,应见 `loaded N task(s)` + `cron scheduler started`。TUI 里说"加一个每分钟的测试任务 smoke-test,prompt 是 say hello in one word"——daemon.log 应出现 `config file changed, reloading...`(聊天建任务 + 热加载一起验了)。等 1-2 分钟:`~/.modu_cron/logs/smoke-test/` 出现 NDJSON,最后一行 `run_end` 为 `status:"ok"` 且带 `tokens`;session 列表里出现名为 `cron:smoke-test` 的完整会话(按 job id 关联)。通过标准:任务无人触发自己跑了,TUI 界面没被日志糊花。
+**阶段 1 · 内嵌调度器冒烟(§2.1)**:启动 `modu_code` 进 TUI;另开终端 `tail -f ~/.modu/cron/daemon.log`,应见 `loaded N task(s)` + `cron scheduler started`。TUI 里说"加一个每分钟的测试任务 smoke-test,prompt 是 say hello in one word"——daemon.log 应出现 `config file changed, reloading...`(聊天建任务 + 热加载一起验了)。等 1-2 分钟:`~/.modu/cron/logs/smoke-test/` 出现 NDJSON,最后一行 `run_end` 为 `status:"ok"` 且带 `tokens`;session 列表里出现名为 `cron:smoke-test` 的完整会话(按 job id 关联)。通过标准:任务无人触发自己跑了,TUI 界面没被日志糊花。
 
 **阶段 2 · 三档 cap(§3.2)**:没有手动触发命令,用 `@every 1m` 的专用任务让断路器自己撞线,测完即删:
 

@@ -1,4 +1,4 @@
-# Append this task to ~/.modu_cron/tasks.yaml (or just tell modu_code:
+# Append this task to ~/.modu/cron/tasks.yaml (or just tell modu_code:
 # "每个工作日早上 6 点跑 /morning-triage" and let cron_add write it).
 #
 # Cap Before You Ship: all three per-task breakers are set BEFORE the loop's
@@ -14,7 +14,7 @@ tasks:
     max_retries: 1               # retry plain errors once; cap trips never retry
     channels: [feishu-daily]     # completion notice: status, summary, new inbox items, PR links
 
-# And in ~/.modu_cron/config.yaml:
+# And in ~/.modu/cron/config.yaml:
 #
 #   daily_budget_tokens: 3000000   # shared across all tasks, rolls over at local midnight
 #   channels:

@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/openmodu/modu/pkg/coding_agent/foundation/resource"
 )
 
 // OverlapPolicy decides what to do when a task fires while the previous run
@@ -172,13 +174,11 @@ type TasksConfig struct {
 	Tasks []Task `yaml:"tasks"`
 }
 
-// DefaultPath returns ~/.modu_cron/config.yaml.
+// DefaultPath returns the cron config path inside modu's single config
+// home: ~/.modu/cron/config.yaml. There is no separate ~/.modu_cron
+// directory — everything modu owns lives under ~/.modu.
 func DefaultPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "config.yaml"
-	}
-	return filepath.Join(home, ".modu_cron", "config.yaml")
+	return filepath.Join(resource.DefaultAgentDir(), "cron", "config.yaml")
 }
 
 // DefaultTasksPath returns the default tasks file next to cfgPath.

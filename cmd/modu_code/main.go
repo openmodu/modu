@@ -240,12 +240,12 @@ func main() {
 }
 
 // startCronScheduler embeds pkg/cron's scheduler loop in this process,
-// running until ctx is cancelled. Reads whatever ~/.modu_cron/config.yaml
+// running until ctx is cancelled. Reads whatever ~/.modu/cron/config.yaml
 // and tasks.yaml currently hold — missing files mean zero tasks, not an
 // error, so this is always safe to start. The standard `log` package (which
 // pkg/cron uses for its own startup/reload/retry messages, and which
 // nothing else on this interactive path touches) is redirected to
-// ~/.modu_cron/daemon.log first, since writing to the real stderr while
+// ~/.modu/cron/daemon.log first, since writing to the real stderr while
 // bubbletea owns the terminal would corrupt the screen.
 func startCronScheduler(ctx context.Context) {
 	cfgPath := cronconfig.DefaultPath()

@@ -3,7 +3,7 @@
 // CodingSession, so an interactive modu_code session can schedule and
 // manage cron tasks in natural language.
 //
-// This is the management surface only: tasks land in ~/.modu_cron's
+// This is the management surface only: tasks land in ~/.modu/cron's
 // config/tasks files and are executed by the long-lived modu_cron daemon,
 // which hot-reloads the task file (fsnotify) — changes made here take
 // effect without restarting it. Writes are serialized against the daemon
@@ -14,7 +14,7 @@
 //	extensions:
 //	  - name: cron
 //	    config:
-//	      config_path: /custom/path/config.yaml   # default ~/.modu_cron/config.yaml
+//	      config_path: /custom/path/config.yaml   # default ~/.modu/cron/config.yaml
 package cron
 
 import (

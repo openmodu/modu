@@ -1,7 +1,7 @@
 // Package runlog manages per-task run log files.
 //
 // Layout: <root>/<task_id>/<local-RFC3339-timestamp>.log
-// Default root: ~/.modu_cron/logs.
+// Default root: ~/.modu/cron/logs.
 package runlog
 
 import (
@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/openmodu/modu/pkg/coding_agent/foundation/resource"
 )
 
 // Store creates and opens log files under a root directory.
@@ -21,7 +23,7 @@ type Store struct {
 }
 
 // New returns a Store rooted at the given directory. Empty root falls back to
-// ~/.modu_cron/logs.
+// ~/.modu/cron/logs.
 func New(root string) *Store {
 	if root == "" {
 		root = DefaultRoot()
@@ -29,13 +31,10 @@ func New(root string) *Store {
 	return &Store{root: root}
 }
 
-// DefaultRoot returns ~/.modu_cron/logs (or "./logs" if HOME is unset).
+// DefaultRoot returns the cron log root inside modu's single config home:
+// ~/.modu/cron/logs.
 func DefaultRoot() string {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return filepath.Join(".", "logs")
-	}
-	return filepath.Join(home, ".modu_cron", "logs")
+	return filepath.Join(resource.DefaultAgentDir(), "cron", "logs")
 }
 
 // Entry describes one finished run's log file.

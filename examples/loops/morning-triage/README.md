@@ -30,9 +30,9 @@
    mkdir -p .coding_agent/workflows && cp examples/loops/morning-triage/triage-fixes.workflow.js .coding_agent/workflows/triage-fixes.js
    ```
 
-4. 建任务——直接在 `modu_code` 里说"每个工作日早上 6 点跑 /morning-triage,超时 30 分钟,单次最多 40 万 token",或手工把 `tasks.yaml` 的内容并进 `~/.modu_cron/tasks.yaml`。**三档 cap 和 `daily_budget_tokens` 在第一次无人值守运行之前就要配好**(Cap Before You Ship)。
+4. 建任务——直接在 `modu_code` 里说"每个工作日早上 6 点跑 /morning-triage,超时 30 分钟,单次最多 40 万 token",或手工把 `tasks.yaml` 的内容并进 `~/.modu/cron/tasks.yaml`。**三档 cap 和 `daily_budget_tokens` 在第一次无人值守运行之前就要配好**(Cap Before You Ship)。
 
-5. 开着 `modu_code`(交互 TUI)——调度器就嵌在里面,到点自动跑。运行记录:精简日志在 `~/.modu_cron/logs/morning-triage/`,完整 session 在 `~/.modu/sessions/` 里名为 `cron:morning-triage`。
+5. 开着 `modu_code`(交互 TUI)——调度器就嵌在里面,到点自动跑。运行记录:精简日志在 `~/.modu/cron/logs/morning-triage/`,完整 session 在 `~/.modu/sessions/` 里名为 `cron:morning-triage`。
 
 云端变体见 `github-actions-triage.yml`(机器关着也跑);两个变体共享 `state/triage.md`(提交在 repo 里),可并存。
 

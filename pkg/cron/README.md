@@ -3,13 +3,13 @@
 Cron-driven agent runner built on modu's CodingAgent. No separate binary, no
 subcommand, no daemon you have to remember to start: the scheduler runs
 embedded inside `modu_code`'s normal interactive TUI process. Launch
-`modu_code` like you always do — if `~/.modu_cron/tasks.yaml` has tasks, they
+`modu_code` like you always do — if `~/.modu/cron/tasks.yaml` has tasks, they
 run on schedule in the background; if it doesn't, the scheduler just sits
 idle. Quit `modu_code` and scheduling stops until you launch it again.
 
 ## 用法
 
-没有用法——`modu_code` 正常启动就带着调度器。默认配置：`~/.modu_cron/config.yaml`（不存在也没关系，见下）。示例见 `config.example.yaml`。
+没有用法——`modu_code` 正常启动就带着调度器。默认配置：`~/.modu/cron/config.yaml`（不存在也没关系，见下）。示例见 `config.example.yaml`。
 
 配置文件缺失完全没问题：调度器会以零任务、`working_dir` = `modu_code` 启动时的当前目录起步，之后靠聊天里说话建任务（见下面）。
 
@@ -64,23 +64,23 @@ cron 没有自己的 model/provider 配置——任务运行时用的是 `modu_c
 
 每次 tick 会产出两份记录,分别回答"发生了什么"和"agent 具体怎么想的":
 
-- **精简运行日志**——`~/.modu_cron/logs/<task_id>/<timestamp>.log`,NDJSON,见下面「任务日志」
+- **精简运行日志**——`~/.modu/cron/logs/<task_id>/<timestamp>.log`,NDJSON,见下面「任务日志」
 - **完整 session 记录**——像交互式会话一样存进 `~/.modu/sessions/`,session 名固定是 `cron:<task_id>`,所以能直接在 session 列表/`--resume` 里按任务 id 找到某次 cron 运行的完整对话(工具调用参数、thinking、原始事件都在,不是精简版)
 
-调度器自身的操作日志(启动/reload/重试/通知失败)写在 `~/.modu_cron/daemon.log`——不会打进 `modu_code` 的终端,因为直接写 stderr 会把 bubbletea 的界面搞花。
+调度器自身的操作日志(启动/reload/重试/通知失败)写在 `~/.modu/cron/daemon.log`——不会打进 `modu_code` 的终端,因为直接写 stderr 会把 bubbletea 的界面搞花。
 
 ### 任务日志
 
 没有 `logs` 子命令——每次 tick 生成一个 NDJSON 文件，直接用文件工具看：
 
 ```
-~/.modu_cron/logs/<task_id>/<local-RFC3339-timestamp-with-ns>.log
+~/.modu/cron/logs/<task_id>/<local-RFC3339-timestamp-with-ns>.log
 ```
 
 ```
-ls ~/.modu_cron/logs/<task_id>/                 # 列出该任务所有 run,文件名即时间戳
-tail -1 ~/.modu_cron/logs/<task_id>/*.log        # 看最新一次 run 的最后一行(通常是 run_end)
-jq . ~/.modu_cron/logs/<task_id>/<file>.log      # 格式化看某一次完整事件流
+ls ~/.modu/cron/logs/<task_id>/                 # 列出该任务所有 run,文件名即时间戳
+tail -1 ~/.modu/cron/logs/<task_id>/*.log        # 看最新一次 run 的最后一行(通常是 run_end)
+jq . ~/.modu/cron/logs/<task_id>/<file>.log      # 格式化看某一次完整事件流
 ```
 
 文件名和日志里的 `started_at` / `ended_at` 使用本地时区；文件名里的 `:` 会替换成 `-`。落盘前 `runner` 已经把 `coding_agent` 的完整事件流过滤成**精简版**——只保留 7 种关键事件，每行一个 JSON 对象：
@@ -172,7 +172,7 @@ tasks:
 daily_budget_tokens: 3000000  # 所有任务共享的当日 token 总额度（本地时区按天滚动）
 ```
 
-- 日额度台账落在 `~/.modu_cron/logs/usage.json`，每次 run 结束累加，超额后当天后续 tick 直接拒跑（`run_end` 记 `status=budget_exceeded`，配置了 channel 会收到通知），第二天自动恢复
+- 日额度台账落在 `~/.modu/cron/logs/usage.json`，每次 run 结束累加，超额后当天后续 tick 直接拒跑（`run_end` 记 `status=budget_exceeded`，配置了 channel 会收到通知），第二天自动恢复
 - `run_end` 带 `tokens` 字段（本次 run 消耗），`status` 可为 `ok` / `error` / `timeout` / `token_cap` / `budget_exceeded`
 - timeout / token_cap / budget_exceeded 属于断路器：**不会**触发 `max_retries` 重试
 - `timeout` / `max_tokens_per_run` / `max_retries` 配置非法时调度器 reload 会失败回滚（与非法 cron 表达式同一套保护）
