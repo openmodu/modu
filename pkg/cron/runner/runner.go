@@ -138,6 +138,10 @@ func Execute(ctx context.Context, deps Deps, task config.Task) (Result, error) {
 		return res, wrapped
 	}
 	defer session.Close("modu_cron_run_done")
+	// Name the persisted session record after the cron job so it's
+	// findable/resumable by job id, not just by the separate NDJSON summary
+	// log this function also writes.
+	session.SetSessionName("cron:" + task.ID)
 
 	// Per-run wall-clock cap. Applied here (not in the scheduler) so manual
 	// `run <id>` invocations get the same breaker as daemon ticks.

@@ -21,8 +21,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -34,7 +36,7 @@ import (
 	_ "github.com/openmodu/modu/pkg/coding_agent/plugins/extension/goal"     // register builtin extension via init()
 	_ "github.com/openmodu/modu/pkg/coding_agent/plugins/extension/subagent" // register builtin extension via init()
 	_ "github.com/openmodu/modu/pkg/coding_agent/plugins/extension/workflow" // register builtin extension via init()
-	croncli "github.com/openmodu/modu/pkg/cron/cli"
+	cronscheduler "github.com/openmodu/modu/pkg/cron"
 	cronconfig "github.com/openmodu/modu/pkg/cron/config"
 	"github.com/openmodu/modu/pkg/types"
 
@@ -55,14 +57,6 @@ func main() {
 		}
 		return
 	}
-	if len(os.Args) > 1 && os.Args[1] == "cron" {
-		if err := croncli.Main("modu_code cron", os.Args[2:], cronconfig.DefaultPath()); err != nil {
-			fmt.Fprintf(os.Stderr, "cron: %v\n", err)
-			os.Exit(1)
-		}
-		return
-	}
-
 	var (
 		printPrompt = flag.String("p", "", "run in print mode: send prompt and output result to stdout")
 		printJSON   = flag.Bool("json", false, "with -p: output NDJSON event stream instead of plain text")
@@ -207,6 +201,14 @@ func main() {
 		case <-ctx.Done():
 		}
 	}()
+
+	// The cron scheduler runs embedded in the interactive TUI process — no
+	// separate daemon/binary. Zero configured tasks means it just sits idle.
+	// Its own log.Printf output is redirected to a file first: the default
+	// logger writes straight to the real stderr, which corrupts bubbletea's
+	// alt-screen the same way an unguided extension Out writer would.
+	startCronScheduler(ctx)
+
 	runOpts := RunOptions{CommandHooks: CommandHooks{
 		Config: func(args string) (string, error) {
 			return runConfigHook(args, session)
@@ -235,6 +237,29 @@ func main() {
 	}
 	closeSession()
 	printInteractiveExitSummary(interactiveExitOutput, session)
+}
+
+// startCronScheduler embeds pkg/cron's scheduler loop in this process,
+// running until ctx is cancelled. Reads whatever ~/.modu_cron/config.yaml
+// and tasks.yaml currently hold — missing files mean zero tasks, not an
+// error, so this is always safe to start. The standard `log` package (which
+// pkg/cron uses for its own startup/reload/retry messages, and which
+// nothing else on this interactive path touches) is redirected to
+// ~/.modu_cron/daemon.log first, since writing to the real stderr while
+// bubbletea owns the terminal would corrupt the screen.
+func startCronScheduler(ctx context.Context) {
+	cfgPath := cronconfig.DefaultPath()
+	logPath := filepath.Join(filepath.Dir(cfgPath), "daemon.log")
+	if f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+		log.SetOutput(f)
+	} else {
+		log.SetOutput(io.Discard)
+	}
+	go func() {
+		if err := cronscheduler.RunScheduler(ctx, cfgPath); err != nil {
+			log.Printf("cron scheduler exited: %v", err)
+		}
+	}()
 }
 
 func printInteractiveExitSummary(out io.Writer, session *coding_agent.CodingSession) {

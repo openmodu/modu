@@ -1,13 +1,18 @@
-package cli
+// Package cron is modu_code's cron scheduler: RunScheduler drives task
+// execution (via pkg/cron/runner), hot-reload (via pkg/cron/scheduler +
+// fsnotify), and completion notifications (via pkg/cron/notify). It has no
+// CLI of its own — modu_code's interactive TUI embeds it directly (starts a
+// goroutine on launch, tied to the program's lifetime context), and task
+// management (add/list/remove) is the builtin 'cron' extension's
+// cron_add/cron_list/cron_remove tools, not a command here.
+package cron
 
 import (
 	"context"
 	"fmt"
 	"log"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -27,17 +32,17 @@ import (
 // libraries can produce 2-5 events for a single save) into one reload.
 const reloadDebounce = 300 * time.Millisecond
 
-// Daemon loads the config and runs the scheduler until SIGINT/SIGTERM.
-// SIGHUP and config file changes (via fsnotify) trigger a hot reload that
+// RunScheduler loads the config and runs the scheduler until ctx is
+// cancelled. Config file changes (via fsnotify) trigger a hot reload that
 // swaps in a fresh Scheduler instance — in-flight runs of the old one
 // continue to completion in the background.
 //
-// Natural-language task management (add/list/remove via chat) is not part
-// of the daemon — it comes from modu_code's builtin 'cron' extension, which
-// registers cron_add/cron_list/cron_remove on any modu_code session
-// (interactive or its own Telegram bot). The daemon only executes and
-// schedules what's on disk.
-func Daemon(ctx context.Context, cfgPath string) error {
+// Shutdown and signal handling are the caller's responsibility — this just
+// reacts to ctx.Done(). A missing config file is not an error: it starts
+// with zero tasks and cwd as the fallback working directory, so callers can
+// unconditionally start this alongside a normal session with nothing to
+// configure first.
+func RunScheduler(ctx context.Context, cfgPath string) error {
 	runFn, err := buildRunner(cfgPath)
 	if err != nil {
 		return err
@@ -48,14 +53,10 @@ func Daemon(ctx context.Context, cfgPath string) error {
 		return err
 	}
 	defer func() {
-		log.Printf("shutting down...")
+		log.Printf("cron scheduler shutting down...")
 		<-sch.Stop().Done()
 	}()
-	log.Printf("modu_cron daemon started")
-
-	sigs := make(chan os.Signal, 4)
-	signal.Notify(sigs, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(sigs)
+	log.Printf("cron scheduler started")
 
 	watcher, fsCh := startFSWatch(cfgPath)
 	if watcher != nil {
@@ -72,15 +73,6 @@ func Daemon(ctx context.Context, cfgPath string) error {
 		select {
 		case <-ctx.Done():
 			return nil
-
-		case sig := <-sigs:
-			switch sig {
-			case syscall.SIGHUP:
-				log.Printf("SIGHUP received, reloading...")
-				sch = reloadScheduler(sch, cfgPath, runFn)
-			default:
-				return nil // SIGINT / SIGTERM
-			}
 
 		case ev, ok := <-fsCh:
 			if !ok {
@@ -186,27 +178,27 @@ func reloadScheduler(old *scheduler.Scheduler, cfgPath string, run scheduler.Run
 // startFSWatch arms an fsnotify watcher on cfgPath's parent directory. We
 // watch the directory (not the file) because some YAML libraries write via
 // rename, which detaches a file-level watch. Returns nil watcher + nil
-// channel if fsnotify can't initialize; the daemon then runs with SIGHUP-only
-// reloads instead of failing.
+// channel if fsnotify can't initialize; the scheduler then keeps running the
+// config it already loaded but won't pick up further edits without a
+// restart.
 func startFSWatch(cfgPath string) (*fsnotify.Watcher, chan fsnotify.Event) {
 	dir := filepath.Dir(cfgPath)
 	if dir == "" {
 		dir = "."
 	}
-	// Ensure the dir exists even on a fresh install where add/rm haven't
-	// run yet — otherwise fsnotify can't subscribe and we silently
-	// downgrade to SIGHUP-only reload.
+	// Ensure the dir exists even on a fresh install where no task has been
+	// added yet — otherwise fsnotify can't subscribe.
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		log.Printf("create config dir %s failed: %v; SIGHUP-only reload", dir, err)
+		log.Printf("create config dir %s failed: %v; hot reload disabled", dir, err)
 		return nil, nil
 	}
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Printf("fsnotify unavailable (%v); SIGHUP-only reload", err)
+		log.Printf("fsnotify unavailable (%v); hot reload disabled", err)
 		return nil, nil
 	}
 	if err := w.Add(dir); err != nil {
-		log.Printf("fsnotify watch %s failed: %v; SIGHUP-only reload", dir, err)
+		log.Printf("fsnotify watch %s failed: %v; hot reload disabled", dir, err)
 		_ = w.Close()
 		return nil, nil
 	}
@@ -214,9 +206,9 @@ func startFSWatch(cfgPath string) (*fsnotify.Watcher, chan fsnotify.Event) {
 		taskDir := filepath.Dir(config.ResolveTasksPath(cfgPath, cfg))
 		if taskDir != "" && filepath.Clean(taskDir) != filepath.Clean(dir) {
 			if err := os.MkdirAll(taskDir, 0o755); err != nil {
-				log.Printf("create tasks dir %s failed: %v; task-file changes need SIGHUP", taskDir, err)
+				log.Printf("create tasks dir %s failed: %v; task-file changes won't hot reload", taskDir, err)
 			} else if err := w.Add(taskDir); err != nil {
-				log.Printf("fsnotify watch %s failed: %v; task-file changes need SIGHUP", taskDir, err)
+				log.Printf("fsnotify watch %s failed: %v; task-file changes won't hot reload", taskDir, err)
 			}
 		}
 	}
