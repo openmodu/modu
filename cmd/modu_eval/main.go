@@ -87,7 +87,34 @@ Environment:
 		},
 	}
 
-	rootCmd.AddCommand(runCmd, viewCmd, checkCmd, commentCmd)
+	agentOpts := agentEvalOptions{
+		Agent:      "go",
+		PromptArg:  "-p",
+		JSONOutput: true,
+		Summary:    true,
+	}
+	agentCmd := &cobra.Command{
+		Use:   "agent [task file or dir...]",
+		Short: "Run markdown tasks against modu_code or another local coding agent",
+		Example: `  modu_eval agent eval/tasks/modu_code
+  modu_eval agent --agent modu_code --agent-arg --no-approve eval/tasks/modu_code/001_sanity.md
+  modu_eval agent --json-output=false --agent claude --agent-arg --print --prompt-arg "" task.md`,
+		Run: func(cmd *cobra.Command, args []string) {
+			if err := runAgentEvalCommand(args, agentOpts); err != nil {
+				exitErr(err)
+			}
+		},
+	}
+	agentCmd.Flags().StringVar(&agentOpts.Agent, "agent", agentOpts.Agent, "agent executable")
+	agentCmd.Flags().StringArrayVar(&agentOpts.AgentArgs, "agent-arg", nil, "agent argument before the prompt; repeatable; defaults to: run ./cmd/modu_code --no-approve")
+	agentCmd.Flags().StringVar(&agentOpts.PromptArg, "prompt-arg", agentOpts.PromptArg, "argument name used to pass the prompt; empty appends the prompt as a positional arg")
+	agentCmd.Flags().BoolVar(&agentOpts.JSONOutput, "json-output", agentOpts.JSONOutput, "tell modu_code to emit JSON events and parse assistant/tool metadata")
+	agentCmd.Flags().StringVar(&agentOpts.OutputDir, "output", "", "output directory for per-task result.json files")
+	agentCmd.Flags().IntVar(&agentOpts.TimeoutSeconds, "timeout", 300, "maximum seconds per task")
+	agentCmd.Flags().BoolVar(&agentOpts.KeepGoing, "keep-going", false, "continue after a failed task")
+	agentCmd.Flags().BoolVar(&agentOpts.Summary, "summary", true, "write summary.md in the output directory")
+
+	rootCmd.AddCommand(runCmd, viewCmd, checkCmd, commentCmd, agentCmd)
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
