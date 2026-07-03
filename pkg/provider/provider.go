@@ -1046,9 +1046,6 @@ func configTargetsToScopeIDs(cfg Config, targets []string) []string {
 }
 
 func registerModel(cfg ModelConfig, baseURL string, headers map[string]string) {
-	if providers.Models[cfg.Provider] == nil {
-		providers.Models[cfg.Provider] = make(map[string]*types.Model)
-	}
 	name := cfg.Name
 	if name == "" {
 		name = cfg.Model + " (" + cfg.Provider + ")"
@@ -1057,14 +1054,14 @@ func registerModel(cfg ModelConfig, baseURL string, headers map[string]string) {
 	if contextWindow == 0 {
 		contextWindow = defaultContextWindow(cfg.Provider, cfg.Model)
 	}
-	providers.Models[cfg.Provider][cfg.Model] = &types.Model{
+	providers.RegisterModel(cfg.Provider, &types.Model{
 		ID:            cfg.Model,
 		Name:          name,
 		ProviderID:    cfg.Provider,
 		BaseURL:       baseURL,
 		Headers:       headers,
 		ContextWindow: contextWindow,
-	}
+	})
 }
 
 func defaultContextWindow(providerID, modelID string) int {
@@ -1092,11 +1089,5 @@ func defaultContextWindow(providerID, modelID string) int {
 }
 
 func unregisterModel(cfg ModelConfig) {
-	if providers.Models[cfg.Provider] == nil {
-		return
-	}
-	delete(providers.Models[cfg.Provider], cfg.Model)
-	if len(providers.Models[cfg.Provider]) == 0 {
-		delete(providers.Models, cfg.Provider)
-	}
+	providers.UnregisterModel(cfg.Provider, cfg.Model)
 }
