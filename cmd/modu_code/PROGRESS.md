@@ -8,8 +8,12 @@ enough to implement, verify, and commit independently.
 - 2026-07-02: added Feishu bot support for `modu_code`: configuration is stored
   under `~/.modu/channels/feishu/config.toml` or read from
   `MODU_FEISHU_APP_ID` / `MODU_FEISHU_APP_SECRET`, `/feishu` can save app
-  credentials and chat allowlists, and the default `modu-tui` runner starts the
-  Feishu WebSocket bot against the current session.
+  credentials and chat allowlists, and the default `modu-tui` runner starts a
+  Feishu `pkg/channels.Channel` through the generic channel/CodingSession bridge.
+- 2026-07-03: deduplicated inbound channel events in the generic
+  channel/CodingSession bridge by channel, chat ID, and platform message ID, and
+  dispatch Feishu message handlers asynchronously so the WebSocket event
+  callback can acknowledge delivery before the agent run finishes.
 - 2026-06-30: moved the default `modu_code` runtime/config root from
   `~/.coding_agent` to `~/.modu`, and changed the main model config from
   `config.json` JSON to `config.toml` TOML across config init/show/list/validate

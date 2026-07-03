@@ -17,8 +17,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"golang.org/x/term"
 
+	"github.com/openmodu/modu/pkg/channels"
+	"github.com/openmodu/modu/pkg/channels/feishu"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
-	"github.com/openmodu/modu/pkg/feishubot"
 	modutui "github.com/openmodu/modu/pkg/modu-tui"
 	"github.com/openmodu/modu/pkg/slash"
 	"github.com/openmodu/modu/pkg/types"
@@ -574,10 +575,10 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 }
 
 func startModuTUIFeishuBot(ctx context.Context, session *coding_agent.CodingSession, promptMu *sync.Mutex, send func(tea.Msg)) {
-	feishubot.RuntimeLogf("modu_code feishu startup check")
-	cfg, err := feishubot.EffectiveConfig()
+	feishu.RuntimeLogf("modu_code feishu startup check")
+	cfg, err := feishu.EffectiveConfig()
 	if err != nil {
-		feishubot.RuntimeLogf("config error: %v", err)
+		feishu.RuntimeLogf("config error: %v", err)
 		if send != nil {
 			send(modutui.AppendMessageMsg{Message: modutui.Message{
 				Role:         modutui.RoleAssistant,
@@ -588,16 +589,33 @@ func startModuTUIFeishuBot(ctx context.Context, session *coding_agent.CodingSess
 		return
 	}
 	if cfg == nil || !cfg.Ready() {
-		feishubot.RuntimeLogf("bot disabled: app_id_set=%v app_secret_set=%v", cfg != nil && strings.TrimSpace(cfg.AppID) != "", cfg != nil && strings.TrimSpace(cfg.AppSecret) != "")
+		feishu.RuntimeLogf("bot disabled: app_id_set=%v app_secret_set=%v", cfg != nil && strings.TrimSpace(cfg.AppID) != "", cfg != nil && strings.TrimSpace(cfg.AppSecret) != "")
 		return
 	}
-	printer := &moduTUIChannelPrinter{send: send, channel: "feishu"}
-	if err := feishubot.Start(ctx, *cfg, session, printer, promptMu); err != nil {
-		feishubot.RuntimeLogf("bot start failed: %v", err)
+	bot, err := feishu.NewBot(cfg.AppID, cfg.AppSecret, nil, nil)
+	if err != nil {
+		feishu.RuntimeLogf("bot create failed: %v", err)
+		printer := &moduTUIChannelPrinter{send: send, channel: "feishu"}
 		printer.PrintError(err)
 		return
 	}
-	feishubot.RuntimeLogf("bot start requested")
+	bot.SetAllowedChatIDs(cfg.ChatIDs)
+	bot.SetDebugLogger(feishu.RuntimeLogf)
+	feishu.RuntimeLogf("bot configured: app_id=%s chat_allowlist=%d", cfg.AppID, len(cfg.ChatIDs))
+
+	printer := &moduTUIChannelPrinter{send: send, channel: "feishu"}
+	if err := channels.StartCodingBridge(ctx, channels.CodingBridgeOptions{
+		Channel:  bot,
+		Session:  session,
+		Printer:  printer,
+		PromptMu: promptMu,
+		Logf:     feishu.RuntimeLogf,
+	}); err != nil {
+		feishu.RuntimeLogf("bot start failed: %v", err)
+		printer.PrintError(err)
+		return
+	}
+	feishu.RuntimeLogf("bot start requested")
 }
 
 type moduTUIChannelPrinter struct {

@@ -12,7 +12,7 @@ import (
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/types"
 
-	"github.com/openmodu/modu/pkg/feishubot"
+	"github.com/openmodu/modu/pkg/channels/feishu"
 	"github.com/openmodu/modu/pkg/tgbot"
 )
 
@@ -1008,7 +1008,7 @@ func handleTelegram(arg string, r Printer) {
 }
 
 func handleFeishu(arg string, r Printer) {
-	configPath := feishubot.ConfigPath()
+	configPath := feishu.ConfigPath()
 
 	if strings.HasPrefix(arg, "app ") {
 		fields := strings.Fields(strings.TrimSpace(strings.TrimPrefix(arg, "app ")))
@@ -1016,13 +1016,13 @@ func handleFeishu(arg string, r Printer) {
 			r.PrintInfo("usage: /feishu app <app_id> <app_secret>")
 			return
 		}
-		cfg, err := feishubot.LoadConfig()
+		cfg, err := feishu.LoadConfig()
 		if err != nil {
-			cfg = &feishubot.Config{}
+			cfg = &feishu.Config{}
 		}
 		cfg.AppID = fields[0]
 		cfg.AppSecret = fields[1]
-		if err := feishubot.SaveConfig(cfg); err != nil {
+		if err := feishu.SaveConfig(cfg); err != nil {
 			r.PrintError(fmt.Errorf("save feishu config: %w", err))
 			return
 		}
@@ -1038,12 +1038,12 @@ func handleFeishu(arg string, r Printer) {
 			r.PrintInfo("usage: /feishu chats <chat_id> [chat_id...]")
 			return
 		}
-		cfg, err := feishubot.LoadConfig()
+		cfg, err := feishu.LoadConfig()
 		if err != nil {
-			cfg = &feishubot.Config{}
+			cfg = &feishu.Config{}
 		}
 		cfg.ChatIDs = fields
-		if err := feishubot.SaveConfig(cfg); err != nil {
+		if err := feishu.SaveConfig(cfg); err != nil {
 			r.PrintError(fmt.Errorf("save feishu config: %w", err))
 			return
 		}
@@ -1053,12 +1053,12 @@ func handleFeishu(arg string, r Printer) {
 	}
 
 	if arg == "clear-chats" || arg == "clear-chat" {
-		cfg, err := feishubot.LoadConfig()
+		cfg, err := feishu.LoadConfig()
 		if err != nil {
-			cfg = &feishubot.Config{}
+			cfg = &feishu.Config{}
 		}
 		cfg.ChatIDs = nil
-		if err := feishubot.SaveConfig(cfg); err != nil {
+		if err := feishu.SaveConfig(cfg); err != nil {
 			r.PrintError(fmt.Errorf("save feishu config: %w", err))
 			return
 		}
@@ -1067,7 +1067,7 @@ func handleFeishu(arg string, r Printer) {
 		return
 	}
 
-	cfg, err := feishubot.LoadConfig()
+	cfg, err := feishu.LoadConfig()
 	if err != nil {
 		r.PrintInfo("feishu config: " + configPath)
 		r.PrintError(fmt.Errorf("read config: %w", err))
@@ -1090,7 +1090,7 @@ func handleFeishu(arg string, r Printer) {
 	} else {
 		r.PrintInfo("  chatIDs: (all authorized chats)")
 	}
-	r.PrintInfo("  env: " + feishubot.EnvAppID + ", " + feishubot.EnvAppSecret + ", " + feishubot.EnvChatIDs)
+	r.PrintInfo("  env: " + feishu.EnvAppID + ", " + feishu.EnvAppSecret + ", " + feishu.EnvChatIDs)
 	r.PrintInfo("  set with: /feishu app <app_id> <app_secret>")
 	r.PrintInfo("  optional allowlist: /feishu chats <chat_id> [chat_id...]")
 	r.PrintInfo("  start: automatic on modu_code startup when appID/appSecret are set")

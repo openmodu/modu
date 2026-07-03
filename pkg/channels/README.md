@@ -4,9 +4,24 @@ Messaging channel interface and implementations (Telegram, Feishu, etc.) for Age
 
 ## Overview
 
-`pkg/channels` provides a unified `ChannelContext` interface that allows Agents to interact with various messaging platforms without knowing the platform-specific details. This is primarily used by the `moms` bot system.
+`pkg/channels` provides a unified channel runtime interface for messaging
+platforms. Business code wires a `Channel` into a generic bridge and responds
+through `ChannelContext`, without knowing platform-specific protocol details.
 
-## Interface: ChannelContext
+## Interfaces
+
+`Channel` is the runtime surface for an inbound messaging platform:
+
+```go
+type Channel interface {
+	Name() string
+	Run(ctx context.Context) error
+	SetMessageHandler(MessageHandler)
+	SetAbortHandler(AbortHandler)
+}
+```
+
+`ChannelContext` is the surface for one inbound message:
 
 ```go
 type ChannelContext interface {
@@ -34,31 +49,45 @@ Implementation of the Telegram Bot API.
 ### Feishu (Lark)
 Implementation of the Feishu Bot API. The WebSocket bot accepts private and
 group chat events. Call `SetAllowedChatIDs` when the host application needs to
-restrict inbound messages to specific Feishu chat IDs.
+restrict inbound messages to specific Feishu chat IDs. Message handlers are
+dispatched asynchronously so the Feishu event callback can acknowledge delivery
+without waiting for the agent run to finish.
 
 ## Usage
 
-Typically, a channel implementation will listen for incoming messages and invoke a `MessageHandler`:
+Hosts can either set a `MessageHandler` directly, or connect a channel to a
+`coding_agent.CodingSession` with the generic bridge:
 
 ```go
-type MessageHandler func(ctx context.Context, chCtx ChannelContext)
+bot, _ := feishu.NewBot(appID, appSecret, nil, nil)
+bot.SetAllowedChatIDs(chatIDs)
+channels.StartCodingBridge(ctx, channels.CodingBridgeOptions{
+    Channel: bot,
+    Session: session,
+})
 ```
 
-Example (conceptual):
+The generic bridge deduplicates inbound messages by channel name, chat ID, and
+`ChannelContext.MessageTS()`. Channel implementations should return a stable
+platform message ID from `MessageTS` so retried deliveries are ignored before
+they reach the UI or agent queue.
+
+Direct channel usage is still available for non-agent consumers:
 
 ```go
-tgChannel := telegram.NewTelegramChannel(token)
-tgChannel.Start(func(ctx context.Context, chCtx channels.ChannelContext) {
+bot.SetMessageHandler(func(ctx context.Context, chCtx channels.ChannelContext) {
     text := chCtx.MessageText()
     chCtx.Respond("You said: " + text, true)
 })
+bot.Run(ctx)
 ```
 
 ## Package Structure
 
 ```
 pkg/channels/
-├── channel.go      # Interface definitions
+├── channel.go      # Channel and ChannelContext interfaces
+├── bridge.go       # Generic channel <-> CodingSession bridge
 ├── feishu/         # Feishu implementation
 └── telegram/       # Telegram implementation
 ```

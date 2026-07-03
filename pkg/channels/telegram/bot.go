@@ -64,6 +64,16 @@ func NewBot(token, attachDir string, onMessage channels.MessageHandler, onAbort 
 // Username returns the bot's Telegram username (without @).
 func (b *Bot) Username() string { return b.api.Self.UserName }
 
+func (b *Bot) Name() string { return "telegram" }
+
+func (b *Bot) SetMessageHandler(handler channels.MessageHandler) {
+	b.onMessage = handler
+}
+
+func (b *Bot) SetAbortHandler(handler channels.AbortHandler) {
+	b.onAbort = handler
+}
+
 // Run starts receiving updates and blocks until ctx is cancelled.
 func (b *Bot) Run(ctx context.Context) error {
 	// Remove any previously configured webhook so that getUpdates works.

@@ -55,6 +55,20 @@ func NewBot(appID, appSecret string, onMessage channels.MessageHandler, onAbort 
 	}, nil
 }
 
+func (b *Bot) Name() string { return "feishu" }
+
+func (b *Bot) SetMessageHandler(handler channels.MessageHandler) {
+	b.allowedMu.Lock()
+	defer b.allowedMu.Unlock()
+	b.onMessage = handler
+}
+
+func (b *Bot) SetAbortHandler(handler channels.AbortHandler) {
+	b.allowedMu.Lock()
+	defer b.allowedMu.Unlock()
+	b.onAbort = handler
+}
+
 // SetAllowedChatIDs restricts inbound messages to the provided Feishu chat IDs.
 // An empty list means all chats the app is authorized to receive are accepted.
 func (b *Bot) SetAllowedChatIDs(chatIDs []string) {
@@ -91,7 +105,7 @@ func (b *Bot) SetDebugLogger(debugf func(format string, args ...any)) {
 func (b *Bot) Run(ctx context.Context) error {
 	b.debug("websocket starting")
 	eventDispatcher := dispatcher.NewEventDispatcher("", "").
-		OnP2MessageReceiveV1(func(ctx context.Context, event *larkim.P2MessageReceiveV1) error {
+		OnP2MessageReceiveV1(func(_ context.Context, event *larkim.P2MessageReceiveV1) error {
 			return b.handleMessageEvent(ctx, event)
 		})
 
@@ -170,8 +184,8 @@ func (b *Bot) handleMessageEvent(ctx context.Context, event *larkim.P2MessageRec
 	// Stop command.
 	if strings.EqualFold(strings.TrimSpace(text), "stop") {
 		chatInt64 := b.chatIDToInt64(chatID)
-		if b.onAbort != nil {
-			b.onAbort(chatInt64)
+		if handler := b.abortHandler(); handler != nil {
+			handler(chatInt64)
 		}
 		b.sendText(ctx, chatID, "已停止。") //nolint:errcheck
 		return nil
@@ -193,12 +207,25 @@ func (b *Bot) handleMessageEvent(ctx context.Context, event *larkim.P2MessageRec
 		senderName:  senderName,
 	}
 
-	if b.onMessage != nil {
-		b.onMessage(ctx, fCtx)
+	handler := b.messageHandler()
+	if handler != nil {
+		go handler(ctx, fCtx)
 	} else {
 		b.debug("message event dropped: onMessage handler is nil")
 	}
 	return nil
+}
+
+func (b *Bot) messageHandler() channels.MessageHandler {
+	b.allowedMu.RLock()
+	defer b.allowedMu.RUnlock()
+	return b.onMessage
+}
+
+func (b *Bot) abortHandler() channels.AbortHandler {
+	b.allowedMu.RLock()
+	defer b.allowedMu.RUnlock()
+	return b.onAbort
 }
 
 func (b *Bot) chatAllowed(chatID string) bool {

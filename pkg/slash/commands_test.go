@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openmodu/modu/pkg/channels/feishu"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/services/session"
-	"github.com/openmodu/modu/pkg/feishubot"
 	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/types"
 )
@@ -229,7 +229,7 @@ func TestHandleFeishuSavesAppAndChats(t *testing.T) {
 	if !handled || exit {
 		t.Fatalf("expected /feishu app handled without exit, handled=%v exit=%v", handled, exit)
 	}
-	cfg, err := feishubot.LoadConfig()
+	cfg, err := feishu.LoadConfig()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestHandleFeishuSavesAppAndChats(t *testing.T) {
 	if !handled || exit {
 		t.Fatalf("expected /feishu chats handled without exit, handled=%v exit=%v", handled, exit)
 	}
-	cfg, err = feishubot.LoadConfig()
+	cfg, err = feishu.LoadConfig()
 	if err != nil {
 		t.Fatal(err)
 	}

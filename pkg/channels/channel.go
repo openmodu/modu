@@ -37,6 +37,16 @@ type ChannelContext interface {
 	Images() []types.ImageContent
 }
 
+// Channel is the unified runtime interface for an inbound messaging channel.
+// Platform implementations own protocol details; business code wires one
+// handler and communicates only through ChannelContext.
+type Channel interface {
+	Name() string
+	Run(ctx context.Context) error
+	SetMessageHandler(MessageHandler)
+	SetAbortHandler(AbortHandler)
+}
+
 // MessageHandler is called by a channel when a new message arrives.
 // The implementation (moms Dispatcher) processes the message and responds via chCtx.
 type MessageHandler func(ctx context.Context, chCtx ChannelContext)

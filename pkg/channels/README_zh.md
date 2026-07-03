@@ -4,9 +4,23 @@ Agent 通信的消息通道接口及实现（Telegram、飞书等）。
 
 ## 概述
 
-`pkg/channels` 提供了一个统一的 `ChannelContext` 接口，允许 Agent 在不知道具体平台细节的情况下与各种消息平台进行交互。这主要用于 `moms` 机器人系统。
+`pkg/channels` 提供统一的消息通道运行时接口。业务代码把 `Channel` 接到通用
+bridge，然后只通过 `ChannelContext` 回复，不需要知道飞书、Telegram 等平台协议细节。
 
-## 接口: ChannelContext
+## 接口
+
+`Channel` 是一个入站消息平台的统一运行时接口：
+
+```go
+type Channel interface {
+	Name() string
+	Run(ctx context.Context) error
+	SetMessageHandler(MessageHandler)
+	SetAbortHandler(AbortHandler)
+}
+```
+
+`ChannelContext` 是单条入站消息的回复接口：
 
 ```go
 type ChannelContext interface {
@@ -33,31 +47,43 @@ Telegram Bot API 的实现。
 
 ### 飞书 (Feishu/Lark)
 飞书机器人 API 的实现。WebSocket bot 支持私聊和群聊事件；宿主应用需要限制
-入口时可调用 `SetAllowedChatIDs` 指定允许的飞书 chat_id。
+入口时可调用 `SetAllowedChatIDs` 指定允许的飞书 chat_id。消息 handler 会异步派发，
+让飞书事件回调不用等待 agent 执行完成即可确认投递。
 
 ## 使用
 
-通常，通道实现会监听传入的消息并调用 `MessageHandler`：
+宿主可以直接设置 `MessageHandler`，也可以用通用 bridge 接到
+`coding_agent.CodingSession`：
 
 ```go
-type MessageHandler func(ctx context.Context, chCtx ChannelContext)
+bot, _ := feishu.NewBot(appID, appSecret, nil, nil)
+bot.SetAllowedChatIDs(chatIDs)
+channels.StartCodingBridge(ctx, channels.CodingBridgeOptions{
+    Channel: bot,
+    Session: session,
+})
 ```
 
-示例（概念性）：
+通用 bridge 会按通道名、chat ID 和 `ChannelContext.MessageTS()` 对入站消息做去重。
+Channel 实现应从 `MessageTS` 返回稳定的平台消息 ID，这样平台重投同一消息时，
+重复事件会在进入 UI 或 agent 队列前被忽略。
+
+非 agent 场景仍可直接使用 channel：
 
 ```go
-tgChannel := telegram.NewTelegramChannel(token)
-tgChannel.Start(func(ctx context.Context, chCtx channels.ChannelContext) {
+bot.SetMessageHandler(func(ctx context.Context, chCtx channels.ChannelContext) {
     text := chCtx.MessageText()
     chCtx.Respond("你说：" + text, true)
 })
+bot.Run(ctx)
 ```
 
 ## 目录结构
 
 ```
 pkg/channels/
-├── channel.go      # 接口定义
+├── channel.go      # Channel 和 ChannelContext 接口
+├── bridge.go       # 通用 channel <-> CodingSession bridge
 ├── feishu/         # 飞书实现
 └── telegram/       # Telegram 实现
 ```
