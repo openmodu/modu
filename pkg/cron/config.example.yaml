@@ -1,5 +1,8 @@
-# modu_cron sample configuration.
-# Copy to ~/.modu_cron/config.yaml and edit, or run `modu_code cron init`.
+# modu_cron sample configuration. Copy to ~/.modu_cron/config.yaml and edit.
+# There is no `init` command — `modu_code cron` starts the daemon directly,
+# tolerating a missing config file (zero tasks, cwd as working_dir). Add
+# tasks by talking to modu_code (cron_add / cron_list / cron_remove tools),
+# not by editing this file by hand, though hand-editing works too.
 #
 # No model/provider settings here: cron tasks run with whatever model is
 # currently active in modu_code (`modu_code config`, ~/.modu/config.toml) —
