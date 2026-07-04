@@ -25,12 +25,12 @@ echo
 echo "[1/3] Load prompt: read only state/triage.md"
 
 # Extract the Load phase agent prompt between the Load phase marker and findings assignment
-# We look for the prompt string that contains "state/triage.md"
-PROMPT_LINE=$(grep -n "Read only the file" "$WORKFLOW" || true)
+# We look for the prompt string that contains "state/triage.md" and "Read only"
+PROMPT_LINE=$(grep -n "Read only" "$WORKFLOW" || true)
 if [[ -z "$PROMPT_LINE" ]]; then
-    fail "Load prompt does not contain 'Read only the file'"
+    fail "Load prompt does not contain 'Read only'"
 else
-    pass "Load prompt contains 'Read only the file'"
+    pass "Load prompt contains 'Read only'"
 fi
 
 # Verify it mentions state/triage.md
@@ -41,10 +41,10 @@ else
 fi
 
 # Verify the prompt explicitly restricts to not exploring other files
-if grep -q "do NOT read any other file" "$WORKFLOW"; then
-    pass "Load prompt explicitly forbids reading other files"
+if grep -q "do not inspect source files, git history" "$WORKFLOW"; then
+    pass "Load prompt explicitly forbids inspecting source files, git history, CI, or filesystem"
 else
-    fail "Load prompt does NOT forbid reading other files"
+    fail "Load prompt does NOT forbid inspecting other files"
 fi
 
 echo
