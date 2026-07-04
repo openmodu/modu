@@ -100,16 +100,18 @@ if (batch.length > 0) {
     (verdict, f) =>
       agent(
         verdict && verdict.verdict === 'PASS'
-          ? 'Open a DRAFT pull request for branch fix/' + f.slug + ' with gh: ' +
-            '`gh pr create --draft --head fix/' + f.slug + ' --title "fix: ' + f.slug +
-            '" --body "Automated triage fix. Definition of done: ' + f.goal + '"`. ' +
-            'Then update the finding row in ./state/triage.md to status pr-open and ' +
-            'commit. NEVER merge it.'
+          ? 'Push the branch and open a DRAFT pull request:\n' +
+            '1. `git push -u origin fix/' + f.slug + '`\n' +
+            '2. `gh pr create --draft --base feat/loop --head fix/' + f.slug +
+            ' --title "fix: ' + f.slug + '" --body "Automated triage fix. ' +
+            'Definition of done: ' + f.goal + '"`\n' +
+            '3. Update the finding row in ./state/triage.md to status pr-open and commit.\n' +
+            'NEVER merge it.'
           : 'The reviewer rejected the fix for ' + f.slug + ': ' +
             JSON.stringify(verdict && verdict.reasons) + '. Write ./inbox/' + f.slug +
             '.md summarizing the finding, the attempted fix, and the rejection ' +
             'reasons so a human can decide. Leave the finding open in ./state/triage.md.',
-        { label: 'deliver:' + f.slug, phase: 'Deliver' },
+        { label: 'deliver:' + f.slug, phase: 'Deliver', tools: ['read', 'bash'] },
       ).then(() => ({ slug: f.slug, pass: !!(verdict && verdict.verdict === 'PASS') })),
   )
 }
