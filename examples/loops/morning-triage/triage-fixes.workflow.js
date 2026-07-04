@@ -49,11 +49,12 @@ const VERDICT_SCHEMA = {
 
 phase('Load')
 const loaded = await agent(
-  'Read ./state/triage.md. Return every finding whose status is "open", as ' +
+  'Read only the file ./state/triage.md (do NOT read any other file or explore the repo). ' +
+    'Return every finding whose status is "open", as ' +
     '{slug, finding, goal} where slug is a short branch-safe name and goal is a ' +
     'verifiable stop condition for the fix (tests/lint that must pass). Return ' +
     '{"findings":[]} if none.',
-  { label: 'load-findings', tools: ['read', 'grep', 'ls'], schema: FINDINGS_SCHEMA },
+  { label: 'load-findings', tools: ['read'], schema: FINDINGS_SCHEMA },
 )
 const findings = (loaded && loaded.findings) || []
 log(findings.length + ' open finding(s)')
