@@ -65,6 +65,83 @@ go run ./cmd/modu_eval comment -v ./pkg/agent -run Eval
 
 This writes `comment.md`.
 
+## Agent Task Runner
+
+`modu_eval agent` runs PinchBench-style markdown tasks against `modu_code` in
+print mode. This is separate from the Go-test eval mode above: it materializes a
+temporary workspace, sends the task prompt to a local coding-agent process, runs
+deterministic checks, and writes one `result.json` per task.
+
+Default command under test:
+
+```bash
+go run ./cmd/modu_code --no-approve --json -p "<task prompt>"
+```
+
+Run the bundled smoke task:
+
+```bash
+go run ./cmd/modu_eval agent eval/tasks/modu_code --keep-going
+```
+
+Use an installed `modu_code` binary instead of `go run`:
+
+```bash
+go run ./cmd/modu_eval agent \
+  --agent modu_code \
+  --agent-arg --no-approve \
+  eval/tasks/modu_code
+```
+
+Results are written under `eval/results/modu-code-<timestamp>/` by default.
+Each task gets a `result.json` with stdout/stderr, parsed assistant text, tool
+calls from JSON output, workspace snapshot, check results, and scores. With
+`--summary` enabled, the run also writes `summary.md`.
+
+Task files are markdown with YAML frontmatter:
+
+```markdown
+---
+id: edit_readme
+name: edit README
+timeout_seconds: 120
+workspace_files:
+  - path: "README.md"
+    content: |
+      # Demo
+checks:
+  - name: assistant responded
+    type: assistant_responded
+  - name: readme updated
+    type: file_contains
+    path: "README.md"
+    value: "Usage"
+---
+
+## Prompt
+
+Update README.md with a Usage section.
+```
+
+Supported deterministic check types:
+
+- `assistant_responded`
+- `output_contains`, `output_not_contains`, `output_regex`
+- `tool_called` (requires JSON output)
+- `file_exists`, `file_contains`, `file_not_contains`, `file_regex`
+- `command_succeeds` with `command: ["go", "test", "./..."]`
+
+If the agent cannot write directly to the local workspace, it may return files
+using markdown fences such as:
+
+````markdown
+```file path="relative/path.ext"
+content
+```
+````
+
+The runner extracts those artifacts into the workspace before grading.
+
 ## Environment
 
 Main model:
