@@ -46,6 +46,8 @@ func (f *fakeAPI) BackgroundTasks() []extension.TaskSnapshot { return nil }
 func (f *fakeAPI) InterruptBackgroundTask(string, string) (extension.TaskSnapshot, bool) {
 	return extension.TaskSnapshot{}, false
 }
+func (f *fakeAPI) AddPending(int) {}
+func (f *fakeAPI) DonePending()   {}
 func (f *fakeAPI) ForkSession(context.Context, extension.ForkOptions) (string, error) {
 	return "", nil
 }

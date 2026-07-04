@@ -218,11 +218,13 @@ func (e *Extension) startBackgroundWorkflow(exec workflowExecution) string {
 	if err := persistWorkflowRunStatus(exec.RunDir, workflowStatusRunning, ""); err != nil {
 		e.tell(fmt.Sprintf("Workflow %s status persistence failed: %v", runID, err))
 	}
+	e.api.AddPending(1)
 	go e.runBackgroundWorkflow(runID, ctx, exec)
 	return runID
 }
 
 func (e *Extension) runBackgroundWorkflow(runID string, ctx context.Context, exec workflowExecution) {
+	defer e.api.DonePending()
 	if exec.AgentCache == nil {
 		exec.AgentCache = newWorkflowAgentCache()
 	}
