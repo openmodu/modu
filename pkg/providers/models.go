@@ -2,12 +2,49 @@ package providers
 
 import (
 	"strings"
+	"sync"
 
 	"github.com/openmodu/modu/pkg/types"
 )
 
+// modelsMu guards Models. The registry used to be touched only once at
+// startup, but embedded cron scheduling resolves the provider config on
+// every task tick — concurrent ticks means concurrent writes. Access the
+// map through RegisterModel/UnregisterModel/GetModel(s), never directly.
+var modelsMu sync.RWMutex
+
 // Models is the global model registry, keyed by provider name → model ID.
+// Do not read or write it directly outside this package — use the accessor
+// functions, which hold modelsMu.
 var Models = make(map[string]map[string]*types.Model)
+
+// RegisterModel adds (or replaces) a model under the given provider name.
+func RegisterModel(provider string, m *types.Model) {
+	if m == nil {
+		return
+	}
+	modelsMu.Lock()
+	defer modelsMu.Unlock()
+	if Models[provider] == nil {
+		Models[provider] = make(map[string]*types.Model)
+	}
+	Models[provider][m.ID] = m
+}
+
+// UnregisterModel removes a model, dropping the provider bucket when it
+// becomes empty. Unknown provider/model is a no-op.
+func UnregisterModel(provider, modelID string) {
+	modelsMu.Lock()
+	defer modelsMu.Unlock()
+	bucket := Models[provider]
+	if bucket == nil {
+		return
+	}
+	delete(bucket, modelID)
+	if len(bucket) == 0 {
+		delete(Models, provider)
+	}
+}
 
 func init() {
 	openaiModels := make(map[string]*types.Model)
@@ -58,6 +95,8 @@ func init() {
 
 // GetModel returns a model by provider and ID. If provider is empty, searches all providers.
 func GetModel(provider string, id string) *types.Model {
+	modelsMu.RLock()
+	defer modelsMu.RUnlock()
 	if provider != "" {
 		if p, ok := Models[provider]; ok {
 			return p[id]
@@ -75,6 +114,8 @@ func GetModel(provider string, id string) *types.Model {
 
 // GetAllProviders returns all registered provider names.
 func GetAllProviders() []string {
+	modelsMu.RLock()
+	defer modelsMu.RUnlock()
 	out := make([]string, 0, len(Models))
 	for provider := range Models {
 		out = append(out, provider)
@@ -84,6 +125,8 @@ func GetAllProviders() []string {
 
 // GetModels returns all models registered under the given provider.
 func GetModels(provider string) []*types.Model {
+	modelsMu.RLock()
+	defer modelsMu.RUnlock()
 	if p, ok := Models[provider]; ok {
 		out := make([]*types.Model, 0, len(p))
 		for _, model := range p {

@@ -19,11 +19,11 @@ const (
 	extensionShutdown           = "session_shutdown"
 	extensionSubagentChildUsage = "subagent_child_usage"
 	goalContinuationType        = "pi-goal-continuation"
-	goalBudgetLimitType   = "pi-goal-budget-limit"
-	replaceGoalChoice     = "Replace current goal"
-	cancelReplaceChoice   = "Cancel"
-	resumeGoalChoice      = "Resume goal"
-	leaveGoalPausedChoice = "Leave paused"
+	goalBudgetLimitType         = "pi-goal-budget-limit"
+	replaceGoalChoice           = "Replace current goal"
+	cancelReplaceChoice         = "Cancel"
+	resumeGoalChoice            = "Resume goal"
+	leaveGoalPausedChoice       = "Leave paused"
 )
 
 // Extension wires persistent /goal support into a CodingSession.
@@ -49,6 +49,9 @@ type Extension struct {
 	// /goal-watch [on|off]. Not persisted — every session starts hidden so
 	// the statusbar stays clean until the user opts in.
 	watching bool
+	// verifier configures the maker-checker completion gate; zero value =
+	// disabled (update_goal completes without independent verification).
+	verifier verifierConfig
 }
 
 // Options configures the Extension. The zero value is usable.
@@ -78,6 +81,37 @@ func init() {
 }
 
 func (e *Extension) Name() string { return "goal" }
+
+// StartAutomationGoal creates the session goal for a host-driven automation
+// before the first agent turn. It intentionally does not queue the initial
+// hidden continuation because the host is about to send the task prompt; the
+// normal agent_end hook will drive follow-up turns until completion.
+func (e *Extension) StartAutomationGoal(objective string) (Goal, error) {
+	g, err := e.store.Start(objective)
+	if err != nil {
+		return Goal{}, err
+	}
+	if g.Status == StatusActive {
+		e.beginAgentGoalAccounting(g)
+	}
+	return g, nil
+}
+
+// AutomationGoalStatus exposes the current goal status to headless hosts that
+// need to wait until hidden continuations have completed or a cap stops them.
+func (e *Extension) AutomationGoalStatus() (Status, bool, error) {
+	g, ok, err := e.store.CurrentErr()
+	if err != nil || !ok {
+		return "", ok, err
+	}
+	return g.Status, true, nil
+}
+
+// AutomationVerifierEnabled reports whether update_goal(status=complete) is
+// currently gated by the maker-checker verifier for host-driven automations.
+func (e *Extension) AutomationVerifierEnabled() bool {
+	return e.verifierEnabled()
+}
 
 // RuntimeState exposes goal state for RuntimeState JSON and host UIs.
 //
@@ -161,6 +195,7 @@ func (e *Extension) Init(api extension.ExtensionAPI) error {
 	api.RegisterTool(&createGoalTool{store: e.store, onCreate: e.beginAgentGoalAccounting})
 	api.RegisterTool(&updateGoalTool{
 		store:          e.store,
+		verify:         e.verifyCompletion,
 		beforeComplete: func() { e.accountCurrentAgentTurn(types.AgentUsage{}, false) },
 		onComplete:     e.markGoalCompletedThisTurn,
 	})

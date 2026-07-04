@@ -1,12 +1,16 @@
 // Package extension's config.go resolves the active extension list for a
 // CodingSession by combining the builtin Registry with the on-disk YAML
-// config at ~/.modu_code/extensions.yaml.
+// config at ~/.modu/extensions.yaml (legacy ~/.modu_code/extensions.yaml is
+// still honored when only it exists).
 //
 // Resolution rules:
 //
 //	missing/empty file  → every registered builtin, lexicographic order, no per-ext config
-//	present file        → only entries listed in `extensions:`, in file order
-//	  - `enabled: false`   → entry skipped
+//	present file        → entries listed in `extensions:` first (file order),
+//	                      then every unmentioned builtin (lexicographic order).
+//	                      The file is an overlay, not a whitelist — configuring
+//	                      one extension does not silently drop the others.
+//	  - `enabled: false`   → extension disabled (the only way to turn one off)
 //	  - unknown `name`     → warning to stderr, entry skipped
 //	  - duplicate `name`   → warning to stderr, first occurrence kept
 //	  - non-nil `config:`  → passed to ApplyConfig if the extension implements
@@ -43,7 +47,7 @@ type configFile struct {
 // LoadOptions controls how LoadEnabled resolves the extension list. Both
 // fields are optional — leaving them zero uses production defaults.
 type LoadOptions struct {
-	// ConfigPath overrides the default ~/.modu_code/extensions.yaml lookup.
+	// ConfigPath overrides the default ~/.modu/extensions.yaml lookup.
 	// Tests pass an explicit path; production passes "".
 	ConfigPath string
 	// Stderr receives one-line warnings for unknown / duplicate names.
@@ -51,15 +55,29 @@ type LoadOptions struct {
 	Stderr io.Writer
 }
 
-// DefaultConfigPath returns ~/.modu_code/extensions.yaml. Empty string if
-// the home directory cannot be determined — LoadEnabled treats that as
-// "no config file" and falls back to builtins.
+// DefaultConfigPath returns ~/.modu/extensions.yaml (the agent runtime
+// directory), falling back to the legacy ~/.modu_code/extensions.yaml when
+// only that file exists. Empty string if the home directory cannot be
+// determined — LoadEnabled treats that as "no config file" and falls back
+// to builtins.
 func DefaultConfigPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return ""
 	}
-	return filepath.Join(home, ".modu_code", "extensions.yaml")
+	primary := filepath.Join(home, ".modu", "extensions.yaml")
+	if fileExists(primary) {
+		return primary
+	}
+	if legacy := filepath.Join(home, ".modu_code", "extensions.yaml"); fileExists(legacy) {
+		return legacy
+	}
+	return primary
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // LoadEnabled resolves the active extension list. See the package-level
@@ -108,6 +126,14 @@ func LoadEnabled(opts LoadOptions) ([]Extension, error) {
 		}
 		order = append(order, entry.Name)
 		perConfig[entry.Name] = entry.Config
+	}
+	// Overlay semantics: builtins the file never mentions stay enabled, so a
+	// user adding `config:` for one extension doesn't have to enumerate (and
+	// hand-maintain) the full builtin list.
+	for _, name := range BuiltinNames() {
+		if !seen[name] {
+			order = append(order, name)
+		}
 	}
 	return buildExtensions(order, perConfig)
 }

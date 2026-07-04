@@ -271,3 +271,93 @@ func TestLoadEnabledMalformedYAMLErrors(t *testing.T) {
 		t.Errorf("error should mention parse: %v", err)
 	}
 }
+
+func TestDefaultConfigPathPrefersModuDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	primary := filepath.Join(home, ".modu", "extensions.yaml")
+	legacy := filepath.Join(home, ".modu_code", "extensions.yaml")
+
+	// Neither file exists: default to the ~/.modu path.
+	if got := DefaultConfigPath(); got != primary {
+		t.Fatalf("no files: got %q, want %q", got, primary)
+	}
+
+	// Only the legacy file exists: keep honoring it.
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte("extensions: []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := DefaultConfigPath(); got != legacy {
+		t.Fatalf("legacy only: got %q, want %q", got, legacy)
+	}
+
+	// Both exist: ~/.modu wins.
+	if err := os.MkdirAll(filepath.Dir(primary), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(primary, []byte("extensions: []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := DefaultConfigPath(); got != primary {
+		t.Fatalf("both exist: got %q, want %q", got, primary)
+	}
+}
+
+func TestLoadEnabledFileIsOverlayNotWhitelist(t *testing.T) {
+	seedRegistry(t, "alpha", "beta", "gamma")
+	t.Cleanup(resetRegistryForTest)
+
+	dir := t.TempDir()
+	// Only gamma is mentioned (with config); alpha and beta must stay
+	// enabled, appended in lexicographic order after the file entries.
+	body := `
+extensions:
+  - name: gamma
+    config:
+      tuned: true
+`
+	path := writeConfigFile(t, dir, body)
+
+	got, err := LoadEnabled(LoadOptions{ConfigPath: path})
+	if err != nil {
+		t.Fatalf("LoadEnabled: %v", err)
+	}
+	want := []string{"gamma", "alpha", "beta"}
+	if len(got) != len(want) {
+		t.Fatalf("got %d exts, want %d: %v", len(got), len(want), got)
+	}
+	for i, n := range want {
+		if got[i].Name() != n {
+			t.Errorf("position %d: got %q want %q", i, got[i].Name(), n)
+		}
+	}
+	cs, ok := got[0].(*configurableStub)
+	if !ok || cs.cfg["tuned"] != true {
+		t.Errorf("gamma config not applied: %T %v", got[0], got[0])
+	}
+}
+
+func TestLoadEnabledOverlayStillHonorsDisable(t *testing.T) {
+	seedRegistry(t, "alpha", "beta")
+	t.Cleanup(resetRegistryForTest)
+
+	dir := t.TempDir()
+	body := `
+extensions:
+  - name: alpha
+    enabled: false
+`
+	path := writeConfigFile(t, dir, body)
+
+	got, err := LoadEnabled(LoadOptions{ConfigPath: path})
+	if err != nil {
+		t.Fatalf("LoadEnabled: %v", err)
+	}
+	if len(got) != 1 || got[0].Name() != "beta" {
+		t.Errorf("disabled alpha must not be re-appended: %v", got)
+	}
+}

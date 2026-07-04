@@ -55,6 +55,10 @@ type Goal struct {
 	UpdatedAt       int64  `json:"updatedAt"`
 	LastStartedAt   *int64 `json:"lastStartedAt,omitempty"`
 	CompletedAt     *int64 `json:"completedAt,omitempty"`
+	// VerifierRejects counts consecutive completion claims the independent
+	// goal verifier has rejected. Reset whenever the goal (re)enters active
+	// via an explicit status update, so a user resume grants a fresh round.
+	VerifierRejects int `json:"verifierRejects,omitempty"`
 }
 
 type goalFile struct {
@@ -230,6 +234,7 @@ func (s *Store) ReplaceObjective(objective string, tokenBudget *int) (Goal, erro
 	if nextStatus == StatusActive {
 		if previousStatus != StatusActive {
 			current.LastStartedAt = &now
+			current.VerifierRejects = 0
 		}
 	} else {
 		current.LastStartedAt = nil
@@ -322,6 +327,7 @@ func (s *Store) updateStatus(status Status) (Goal, error) {
 	if nextStatus == StatusActive {
 		if previousStatus != StatusActive {
 			current.LastStartedAt = &now
+			current.VerifierRejects = 0
 		}
 	} else {
 		current.LastStartedAt = nil
@@ -333,6 +339,26 @@ func (s *Store) updateStatus(status Status) (Goal, error) {
 	} else {
 		current.CompletedAt = nil
 	}
+	if err := s.writeLocked(current); err != nil {
+		return Goal{}, err
+	}
+	return *current, nil
+}
+
+// IncrementVerifierRejects bumps the consecutive verifier-reject counter on
+// the current goal and returns the updated goal.
+func (s *Store) IncrementVerifierRejects() (Goal, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, err := s.readLocked()
+	if err != nil {
+		return Goal{}, err
+	}
+	if current == nil {
+		return Goal{}, ErrNoGoal
+	}
+	current.VerifierRejects++
+	current.UpdatedAt = nowSeconds()
 	if err := s.writeLocked(current); err != nil {
 		return Goal{}, err
 	}
@@ -575,6 +601,9 @@ func validateGoalFields(g *Goal) error {
 	}
 	if g.CompletedAt != nil && *g.CompletedAt < 0 {
 		return fmt.Errorf("%w: completedAt must be non-negative", ErrInvalidStore)
+	}
+	if g.VerifierRejects < 0 {
+		return fmt.Errorf("%w: verifierRejects must be non-negative", ErrInvalidStore)
 	}
 	return nil
 }

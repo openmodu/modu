@@ -1,0 +1,61 @@
+# modu_cron sample configuration. Copy to ~/.modu/cron/config.yaml and edit.
+# There is no separate cron command or daemon — the scheduler runs embedded
+# in modu_code's normal interactive TUI process, tolerating a missing config
+# file (zero tasks, cwd as working_dir). Add tasks by talking to modu_code
+# (cron_add / cron_list / cron_remove tools), not by editing this file by
+# hand, though hand-editing works too.
+#
+# No model/provider settings here: cron tasks run with whatever model is
+# currently active in modu_code (`modu_code config`, ~/.modu/config.toml) —
+# the same model your interactive session uses. Switch it there.
+
+working_dir: /path/to/project
+
+tasks_file: tasks.yaml
+
+# Shared daily token ceiling across all tasks (input+output tokens). Once the
+# day's usage reaches it, further runs are skipped with a notification until
+# the local-time day rolls over. Omit or 0 to disable.
+# daily_budget_tokens: 3000000
+
+channels:
+  ops-webhook:
+    type: webhook
+    url_env: MODU_CRON_OPS_WEBHOOK_URL
+  telegram-home:
+    type: telegram
+    token_env: MODU_CRON_TG_TOKEN
+    chat_id_env: MODU_CRON_TG_CHAT_ID
+  feishu-alerts:
+    type: feishu_webhook
+    url_env: MODU_CRON_FEISHU_WEBHOOK_URL
+  feishu-bot:
+    type: feishu_bot
+    chat_id: oc_xxxxxxxxxxxx
+    # app_id / app_secret 留空时自动复用 ~/.modu/channels/feishu/config.toml
+    # (也可显式给 app_id/app_secret 或 app_id_env/app_secret_env)
+
+# Put cron tasks in ~/.modu/cron/tasks.yaml:
+#
+# tasks:
+#   - id: heartbeat
+#     cron: "*/10 * * * * *"   # every 10 seconds
+#     prompt: "say hello"
+#     enabled: true
+#     channels: [ops-webhook]
+#
+#   - id: daily-summary
+#     cron: "0 0 9 * * *"      # 09:00 every day
+#     timezone: Asia/Shanghai  # optional IANA timezone; empty = process local time
+#     prompt: "summarize yesterday's commits in this repo"
+#     goal: "Produce a sourced summary and verify the report file was updated"
+#     enabled: false
+#     channels: [telegram-home, feishu-alerts]
+#     timeout: 45m             # per-run wall-clock cap (default 30m)
+#     max_tokens_per_run: 500000  # per-run token cap, 0 = unlimited
+#     max_retries: 2           # re-run after plain errors (not cap trips)
+#
+# Cron expressions use the 6-field form (seconds first): "sec min hour dom mon dow".
+#
+# Legacy single-file configs with an inline `tasks:` block are still readable,
+# but new task changes are written to tasks_file.

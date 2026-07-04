@@ -16,6 +16,92 @@ High-priority gaps identified before this round:
 
 ## Completed In This Round
 
+- Continued the loop-engineering live audit on 2026-07-04: GitHub open issues
+  were empty, recent CI was green, historical failures were old Apr-May runs,
+  and no real actionable triage finding existed to justify a draft PR.
+- Hardened the A-stock loop contract so non-trading days or all-empty core
+  market data preserve the previous `state/watchlist.md` instead of writing a
+  false "today" state. The watchlist state verifier now also rejects future
+  dates and weekend-dated watchlists directly, so structural validation cannot
+  accidentally accept non-trading-day evidence. It also requires at least one
+  discovered theme row and one discovered stock row, so empty tables cannot
+  pass as Persistence + Discovery.
+- Tightened A-stock live evidence further: an accepted
+  `morning-market-daily` session must now show the post-write read-back of
+  `state/watchlist.md` or equivalent structural confirmation, so the loop
+  proves it wrote the state it will read tomorrow.
+- Reproduced the A-stock cron task in
+  `examples/loops/morning-triage/tasks.yaml` and tightened the live prompt to
+  require the exact `# A股观察清单` state skeleton, discovered theme/stock
+  tables, removed-item table, and a post-write read-back of
+  `state/watchlist.md` before the run can claim success.
+- Hardened the morning-triage no-action path: even when CI/issues/commits
+  produce no actionable finding, the skill now writes a single closed
+  `No actionable findings` heartbeat row for today's date so future strict
+  scheduler evidence can prove state was read and carried forward.
+- Ran a temporary high-frequency `loop-smoke-fast` canary against the live
+  scheduler to prove the core unattended path now works end to end:
+  scheduler-triggered run, `goal:` created with verifier enabled, state file
+  written and read back, `update_goal(status=complete)`, and
+  `run_end status=ok goal_status=complete`. The first low-cap attempt hit
+  `token_cap`, proving the cap path too; the temporary task and
+  `state/loop-smoke.md` were removed afterward and the live scheduler returned
+  to the two real loop tasks. Added
+  `examples/loops/morning-triage/verify-loop-smoke-canary.sh` to re-check the
+  log/session evidence without treating it as the final two-day triage or
+  trading-day watchlist acceptance.
+- Smoke-tested the saved `triage-fixes` workflow entry through the workflow
+  tool in print mode. The run loaded `state/triage.md`, found zero open
+  findings, and returned `{"fixed":[],"rejected":[]}` without entering
+  Fix/Review/Deliver. This proves the workflow entry is callable, but it is
+  intentionally not counted as reviewer/draft-PR evidence. Added
+  `examples/loops/morning-triage/verify-triage-fixes-empty-smoke.sh` so the
+  live gate can re-check that entry smoke without confusing it with the real
+  draft-PR gate.
+- Registered a real open triage finding for the print-mode saved-workflow
+  bug: `/workflow:triage-fixes` under `modu_code -p` starts a background
+  workflow run and exits before it can write a snapshot. A foreground
+  `triage-fixes` workflow run picked up the finding and entered an isolated
+  worktree, but the run was manually interrupted after several minutes without
+  reaching Review/Deliver. The isolated draft was then manually reviewed enough
+  to run focused tests plus `go test ./...`, pushed as
+  `fix/print-mode-workflow-exits-early`, and opened as draft PR
+  https://github.com/openmodu/modu/pull/75. This satisfies the "draft PR
+  waiting for review" user door for this finding, but not the strict
+  triage-fixes live verifier's requirement that the PR be created by the
+  workflow Deliver stage.
+- Tightened the `triage-fixes` Load phase after inspecting that foreground
+  run: the Load agent's only job is to parse `state/triage.md`, but it had
+  enough tools to wander into source discovery and burned an estimated 871k
+  tokens before Fix. The workflow now tells Load to read only
+  `state/triage.md`, with only the `read` tool exposed, and the contract
+  verifier checks that this does not regress. Re-ran the saved workflow empty
+  smoke afterward; run `20260704T030434.979690000Z` used one
+  `read ./state/triage.md` call, estimated 3098 tokens, and returned zero
+  fixed/rejected findings.
+- Registered that Load over-exploration as a real triage finding and ran
+  `triage-fixes` again. Run `20260704T030800.639159000Z` loaded the finding
+  with a single `read ./state/triage.md`, produced branch
+  `fix/load-phase-over-explores`, and the reviewer returned PASS after
+  executing the contract and an empty smoke probe. The workflow was interrupted
+  during Deliver before it could create the PR itself, so draft PR
+  https://github.com/openmodu/modu/pull/76 was opened manually from the
+  workflow-generated branch and recorded as `pr-open` in `state/triage.md`.
+- Added a next-run preflight for the installed loop: `verify-next-run-windows.sh`
+  loads the real cron config and calls `pkg/cron/scheduler.Next` to print the
+  next enabled task ticks, so waiting for natural evidence has an explicit
+  schedule instead of a hand-computed date. The readiness and next-run checks
+  now also require the two live loop tasks to be enabled, and next-run requires
+  those expected tasks to carry `goal:` before accepting their future ticks.
+  The final live gate also runs the high-frequency canary verifier before the
+  slower business-loop acceptance checks, plus offline fixtures proving that
+  verifier rejects manual triggers, missing `update_goal`, and uncleaned
+  temporary task/state leftovers.
+  It now also enforces the target Asia/Shanghai workday clocks: 06:00 for
+  `morning-triage` and 10:20 for `morning-market-daily`. Added
+  `verify-next-run-windows-fixtures.sh` so the final gate also proves the
+  verifier rejects missing goals, wrong clocks, wrong timezones, and weekend
+  schedules.
 - Moved the default coding-agent runtime directory from `~/.coding_agent` to
   `~/.modu`, so sessions, worktrees, runtime state, global memory, global
   skills, prompts, agents, packages, and settings now share the new Modu root.
@@ -694,3 +780,166 @@ High-priority gaps identified before this round:
 - Exposed run-level observed workflow cost through workflow runtime state. The
   TUI can now read the snapshot cost directly for top-level workflow metrics,
   while phase and agent cost remain available for fallback aggregation.
+
+## 2026-07-04
+
+- Added the cron `goal:` harness path for loop engineering work: scheduled
+  tasks can now declare a verifiable objective, the cron runner creates the
+  session goal before sending the task prompt, and headless print-mode runs
+  drain queued hidden follow-up turns until the goal reaches complete or a cap
+  stops the run. Slim cron logs now record `trigger`, `has_goal`, and final
+  `goal_status` so strict two-day loop evidence can distinguish real scheduler
+  runs from manual bootstrap runs.
+- Installed the morning-triage loop and A-stock watchlist loop against this
+  repository, plus readiness/contract verifiers that check the local
+  `.coding_agent/` payload and live `~/.modu/cron/task.yaml` without exposing
+  channel secrets. The remaining acceptance evidence still depends on two real
+  workday scheduler logs and a real trading-day `state/watchlist.md` run.
+- Tightened the two-day morning-triage verifier so it also rejects an exact
+  finding that was already `closed`/`done` and later reappears as `open`;
+  semantic "same issue, different wording" review remains a manual check.
+- Extended the triage-fixes contract verifier to include the human-review
+  notification door: cron completion payloads must still surface new inbox
+  items and draft PR links, with unit coverage in `pkg/cron/notify`.
+- Added `verify-live-loop.sh` as the final gate that aggregates installed
+  readiness, triage-fixes/review notification contracts, A-stock workflow
+  contract, strict two-workday natural cron evidence, and real
+  `state/watchlist.md` evidence. It is expected to fail until the future
+  scheduler/trading-day runs exist.
+- Added `verify-a-stock-loop.sh` so A-stock acceptance now requires the
+  watchlist date to match a scheduler-triggered, verifier-enabled,
+  goal-complete
+  `morning-market-daily` cron log linked to a full `cron:morning-market-daily`
+  session, not just a structurally valid `state/watchlist.md`; the session
+  must also show watchlist read/write, a direct market-data source, and the
+  watchlist update step.
+- Tightened cron goal evidence so `run_start` for `goal:` tasks records
+  `goal_verifier=true/false`. Strict two-day and A-stock live gates now require
+  `goal_verifier=true`, and readiness fails if the active goal extension config
+  does not enable the verifier, so `goal_status=complete` is no longer accepted
+  as a proxy for verified completion.
+- Added `verify-triage-fixes-live.sh` so the final gate now requires real
+  reviewer/draft-PR evidence for the handoff half: a `pr-open` triage row,
+  same-file session/log proof of reviewer execution, `gh pr create --draft`,
+  a `state/triage.md` update path, and a PR URL for the current GitHub
+  repository, plus an open draft PR verified through `gh pr view`.
+- Hardened bootstrap two-day evidence so `MANUAL_DAY1_SESSION` must be a
+  session from this repository that actually scanned failed CI, issues,
+  recent commits, and `state/triage.md`; arbitrary session JSONL files no
+  longer satisfy the day-1 escape hatch.
+- Started a detached `tmux` session named `modu-loop-cron` running
+  `go run ./cmd/modu_code` from this repository, so the embedded scheduler is
+  now armed for future workday cron ticks. Added `verify-scheduler-running.sh`
+  to check the process, optional tmux session, daemon lifecycle log, and that
+  the two loop tasks loaded. The final `verify-live-loop.sh` gate now includes
+  that scheduler-running preflight.
+- Tightened final evidence boundaries again: strict morning-triage natural
+  cron acceptance now requires two distinct scheduler run dates, and A-stock
+  loop evidence rejects weekend-dated watchlists before matching the
+  `morning-market-daily` scheduler log. The A-stock live gate also requires
+  the linked full session to mention the same watchlist date, so state, slim
+  log, and session evidence all agree on one run.
+- Implemented the existing cron task `timezone:` field: scheduler registration
+  now applies it through robfig's `CRON_TZ=` support, `cron_add` can persist
+  it, and both live loop tasks now pin `Asia/Shanghai` so weekday morning and
+  A-share market timing do not depend on the host process timezone.
+- Hardened `verify-scheduler-running.sh` so the scheduler preflight requires
+  `loaded 2 task(s)` inside the current daemon lifecycle since the last
+  shutdown, rather than accepting stale task-load evidence from an older
+  scheduler process.
+- Added task timezone to slim `run_start` logs and tightened strict
+  morning-triage plus A-stock live gates to require
+  `timezone:"Asia/Shanghai"`, so accepted natural cron evidence proves the
+  run came from the intended Shanghai schedule, not just any scheduler tick.
+- Hardened readiness again with a Go-backed parse check: the live
+  `~/.modu/cron/config.yaml` and task file are loaded through
+  `pkg/cron/config` and registered with `pkg/cron/scheduler`, so invalid cron
+  expressions or IANA timezones fail before waiting for a future natural tick.
+- Hardened the live A-stock cron prompt itself: it now carries the
+  `a-stock-data` source rules for Tencent-first行情, serial Eastmoney-only
+  unique data with UA/Referer, and no fabricated market observations. Readiness
+  now checks those constraints plus the required watchlist skeleton and
+  write-readback confirmation in the live `morning-market-daily` task, not
+  only in the example workflow file.
+- Hardened two-day morning-triage evidence again: every accepted full session,
+  including the manual day-1 bootstrap and future scheduler logs, must prove
+  it actually ran the Discovery inputs for failed CI, issues, recent commits,
+  `state/triage.md`, and `inbox/`. Added
+  `examples/loops/morning-triage/verify-two-day-fixtures.sh` with a strict
+  positive case plus negative cases for manual-triggered logs, duplicate run
+  dates, and missing issue scanning.
+- Added `examples/workflows/verify-a-stock-loop-fixtures.sh` and wired it into
+  the final live-loop gate. The fixture builds a minimal valid
+  watchlist/log/session set and rejects fake-evidence cases: no direct market
+  data source, no watchlist update evidence, no post-write watchlist read-back
+  evidence, and a scheduler log date that does not match the watchlist date.
+  This hardens the A-stock verifier without pretending that the missing real
+  trading-day run already happened.
+- Added `examples/loops/morning-triage/verify-triage-fixes-live-fixtures.sh`
+  and wired it into the final live-loop gate. It exercises the live draft-PR
+  verifier with an offline positive case plus negative cases for missing
+  `pr-open` state, missing reviewer evidence, missing `gh pr create --draft`,
+  a PR URL from the wrong repository, a non-`workflow:triage-fixes` session,
+  and a workflow session from the wrong cwd. This keeps the real draft-PR gate
+  strict while still acknowledging that no actionable finding has produced a
+  real PR yet.
+- Fixed a cron goal-harness retry boundary: `goal paused` and
+  `goal budget-limited` outcomes now become explicit run statuses
+  (`goal_paused`, `goal_budget_limited`) and are treated as circuit breakers,
+  not transient `error`s. This prevents verifier max-reject handoff to a human
+  from being retried as a fresh cron attempt.
+- Tightened the same boundary for configuration failures: if a task declares
+  `goal:` but the goal extension is unavailable or explicitly disabled, the
+  run now records `status=goal_unavailable` and does not retry. A focused
+  runner test disables the goal extension through `extensions.yaml` and checks
+  that run_start/run_end still land with the circuit-breaker status.
+- Restarted the live `modu-loop-cron` tmux scheduler after the runner status
+  changes so the future natural ticks use the current harness code. The new
+  daemon lifecycle started at 2026-07-04 09:47 Asia/Shanghai and loaded the two
+  loop tasks from the live config.
+- Tightened the triage-fixes draft-PR persistence contract: the PASS delivery
+  prompt now captures the `gh pr create --draft` URL and writes it into the
+  same `state/triage.md` row that moves to `pr-open`. The live verifier now
+  extracts PR URLs from `pr-open` rows and requires session/log evidence to
+  contain that exact URL, so state, reviewer evidence, and GitHub draft PR
+  checks all refer to the same handoff.
+- Added the task goal text to cron `run_start` logs for `goal:` tasks. Strict
+  morning-triage evidence now requires the logged goal to mention
+  `state/triage.md`, and A-stock loop evidence requires the logged goal to
+  mention `state/watchlist.md`, so future scheduler logs prove not just that a
+  goal existed, but that the intended persistent-state objective was created.
+- Restarted the live `modu-loop-cron` scheduler again after adding
+  `run_start.goal`; the daemon lifecycle started at 2026-07-04 09:55
+  Asia/Shanghai and loaded the two live loop tasks, preserving the Monday
+  natural run windows.
+- Hardened `verify-scheduler-running.sh` so the live preflight now rejects a
+  stale scheduler process that started before the newest Go source edit under
+  `cmd/` or `pkg/`. This turns "remember to restart tmux after harness code
+  changes" into a checked invariant before future natural cron evidence is
+  trusted.
+- Hardened the same scheduler preflight for cron prompt freshness: it now
+  resolves the live task file from `~/.modu/cron/config.yaml` and requires the
+  current daemon lifecycle's latest task load/reload timestamp to be newer
+  than both the cron config and task file mtimes. This prevents accepting an
+  armed scheduler that is still running stale task prompts after a live config
+  edit.
+- Hardened the triage-fixes live draft-PR verifier against a real false
+  positive found during the PR #77 run. The previous version could extract old
+  PR URLs from the state text that the workflow loaded, so it reported PR #75
+  even though the successful Deliver phase had just created PR #77. The
+  verifier now prefers workflow `snapshot.json`, extracts created PR URLs only
+  from the `gh pr create --draft` tool result, intersects those with current
+  `state/triage.md` `pr-open` URLs, and has a fixture rejecting "created PR was
+  not persisted in state".
+- Completed the strict triage-fixes reviewer → draft PR → state persistence
+  path with workflow run `20260704T032025.510037000Z`: Fix created
+  `fix/deliver-phase-prompt`, Review returned PASS, Deliver pushed the branch,
+  ran `gh pr create --draft --base feat/loop --head fix/deliver-phase-prompt`,
+  received https://github.com/openmodu/modu/pull/77, and wrote that same URL
+  into `state/triage.md`. `verify-triage-fixes-live.sh` now reports PR #77.
+- Hardened the remaining natural-cron evidence gates for repo ownership. Both
+  `verify-two-day.sh` and `verify-a-stock-loop.sh` now require the full session
+  JSONL linked from the slim cron log to contain `cwd` equal to this repo, not
+  just a `cron:<task_id>` session name and matching behavior text. Their
+  fixtures now reject wrong-cwd sessions, preventing evidence from another
+  checkout from satisfying the "run on modu itself" acceptance.
