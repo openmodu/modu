@@ -46,7 +46,9 @@ channels:
 #
 #   - id: daily-summary
 #     cron: "0 0 9 * * *"      # 09:00 every day
+#     timezone: Asia/Shanghai  # optional IANA timezone; empty = process local time
 #     prompt: "summarize yesterday's commits in this repo"
+#     goal: "Produce a sourced summary and verify the report file was updated"
 #     enabled: false
 #     channels: [telegram-home, feishu-alerts]
 #     timeout: 45m             # per-run wall-clock cap (default 30m)

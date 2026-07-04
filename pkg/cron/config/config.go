@@ -44,6 +44,7 @@ type Task struct {
 	ID        string        `yaml:"id"`
 	Cron      string        `yaml:"cron"`
 	Prompt    string        `yaml:"prompt"`
+	Goal      string        `yaml:"goal,omitempty"`
 	Enabled   bool          `yaml:"enabled"`
 	Timezone  string        `yaml:"timezone,omitempty"`
 	OnOverlap OverlapPolicy `yaml:"on_overlap,omitempty"`
@@ -75,6 +76,9 @@ func (t Task) EffectiveTimeout() time.Duration {
 // ValidateCaps rejects malformed cap settings so config reload fails loudly
 // instead of silently falling back to defaults.
 func (t Task) ValidateCaps() error {
+	if len(strings.TrimSpace(t.Goal)) > 4000 {
+		return fmt.Errorf("task %s: goal is too long", t.ID)
+	}
 	if s := strings.TrimSpace(t.Timeout); s != "" {
 		d, err := time.ParseDuration(s)
 		if err != nil {

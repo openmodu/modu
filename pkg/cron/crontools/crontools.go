@@ -66,6 +66,14 @@ func (t *addTool) Parameters() any {
 				"type":        "string",
 				"description": "Prompt the agent will be given when this task fires",
 			},
+			"goal": map[string]any{
+				"type":        "string",
+				"description": "Optional objective to create as a persistent goal when this task fires. The runner continues hidden goal turns until update_goal is verified complete or a cap stops the run.",
+			},
+			"timezone": map[string]any{
+				"type":        "string",
+				"description": "Optional IANA timezone for the cron schedule, e.g. \"Asia/Shanghai\". Empty means the scheduler process local timezone.",
+			},
 			"enabled": map[string]any{
 				"type":        "boolean",
 				"description": "Whether the schedule is active (default true)",
@@ -89,11 +97,10 @@ func (t *addTool) Execute(ctx context.Context, _ string, args map[string]any, _ 
 	id, _ := args["id"].(string)
 	cronExpr, _ := args["cron"].(string)
 	prompt, _ := args["prompt"].(string)
+	goalText, _ := args["goal"].(string)
+	timezone, _ := args["timezone"].(string)
 	if id == "" || cronExpr == "" || prompt == "" {
 		return errorResult("id, cron, and prompt are all required"), nil
-	}
-	if err := scheduler.ValidateCron(cronExpr); err != nil {
-		return errorResult(fmt.Sprintf("invalid cron expression %q: %v", cronExpr, err)), nil
 	}
 	enabled := true
 	if v, ok := args["enabled"].(bool); ok {
@@ -112,6 +119,19 @@ func (t *addTool) Execute(ctx context.Context, _ string, args map[string]any, _ 
 	if err != nil {
 		return errorResult(err.Error()), nil
 	}
+	task := config.Task{
+		ID:        id,
+		Cron:      cronExpr,
+		Prompt:    prompt,
+		Goal:      strings.TrimSpace(goalText),
+		Timezone:  strings.TrimSpace(timezone),
+		Enabled:   enabled,
+		OnOverlap: overlap,
+		Channels:  channels,
+	}
+	if err := scheduler.ValidateTaskCron(task); err != nil {
+		return errorResult(fmt.Sprintf("invalid cron expression %q: %v", cronExpr, err)), nil
+	}
 
 	fileMu.Lock()
 	defer fileMu.Unlock()
@@ -128,14 +148,10 @@ func (t *addTool) Execute(ctx context.Context, _ string, args map[string]any, _ 
 			return errorResult(fmt.Sprintf("task %q already exists", id)), nil
 		}
 	}
-	cfg.Tasks = append(cfg.Tasks, config.Task{
-		ID:        id,
-		Cron:      cronExpr,
-		Prompt:    prompt,
-		Enabled:   enabled,
-		OnOverlap: overlap,
-		Channels:  channels,
-	})
+	cfg.Tasks = append(cfg.Tasks, task)
+	if err := cfg.Tasks[len(cfg.Tasks)-1].ValidateCaps(); err != nil {
+		return errorResult(err.Error()), nil
+	}
 	taskPath := config.ResolveTasksPath(t.cfgPath, cfg)
 	if err := config.SaveTasks(taskPath, cfg.Tasks); err != nil {
 		return errorResult(fmt.Sprintf("save tasks: %v", err)), nil
@@ -153,7 +169,7 @@ type listTool struct{ cfgPath string }
 func (t *listTool) Name() string  { return "cron_list" }
 func (t *listTool) Label() string { return "List Cron Tasks" }
 func (t *listTool) Description() string {
-	return `List all tasks currently configured in modu_cron, with their cron expression, enabled flag, overlap policy, notification channels, prompt, and configured notification channel names.`
+	return `List all tasks currently configured in modu_cron, with their cron expression, timezone, enabled flag, overlap policy, notification channels, prompt, and configured notification channel names.`
 }
 
 func (t *listTool) Parameters() any {
@@ -190,7 +206,15 @@ func (t *listTool) Execute(ctx context.Context, _ string, _ map[string]any, _ ty
 		if len(channelNames) > 0 {
 			channelText = ", channels=" + strings.Join(channelNames, "|")
 		}
-		fmt.Fprintf(&b, "- %s [%s, %s, %s%s]: %s\n", task.ID, task.Cron, enabled, policy, channelText, task.Prompt)
+		timezoneText := ""
+		if strings.TrimSpace(task.Timezone) != "" {
+			timezoneText = ", timezone=" + strings.TrimSpace(task.Timezone)
+		}
+		goalText := ""
+		if strings.TrimSpace(task.Goal) != "" {
+			goalText = ", goal"
+		}
+		fmt.Fprintf(&b, "- %s [%s, %s, %s%s%s%s]: %s\n", task.ID, task.Cron, enabled, policy, timezoneText, channelText, goalText, task.Prompt)
 	}
 	if chText := configuredChannelsText(cfg); chText != "" {
 		fmt.Fprintf(&b, "\n%s\n", chText)

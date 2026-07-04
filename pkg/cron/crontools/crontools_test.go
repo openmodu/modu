@@ -58,6 +58,8 @@ func TestAddHappyPath(t *testing.T) {
 		"id":         "daily",
 		"cron":       "0 0 9 * * *",
 		"prompt":     "summarize",
+		"goal":       "produce the daily summary",
+		"timezone":   "Asia/Shanghai",
 		"enabled":    true,
 		"on_overlap": "queue",
 		"channels":   []any{"ops", "mobile"},
@@ -68,6 +70,12 @@ func TestAddHappyPath(t *testing.T) {
 	cfg, _ := config.Load(cfgPath)
 	if len(cfg.Tasks) != 1 || cfg.Tasks[0].ID != "daily" || cfg.Tasks[0].OnOverlap != config.OverlapQueue {
 		t.Errorf("config not persisted correctly: %+v", cfg.Tasks)
+	}
+	if cfg.Tasks[0].Goal != "produce the daily summary" {
+		t.Errorf("goal not persisted correctly: %+v", cfg.Tasks[0])
+	}
+	if cfg.Tasks[0].Timezone != "Asia/Shanghai" {
+		t.Errorf("timezone not persisted correctly: %+v", cfg.Tasks[0])
 	}
 	if got := cfg.Tasks[0].NotificationChannels(); len(got) != 2 || got[0] != "ops" || got[1] != "mobile" {
 		t.Errorf("channels not persisted correctly: %+v", got)
@@ -100,6 +108,23 @@ func TestAddRejectsBadCron(t *testing.T) {
 	})
 	if !strings.Contains(text, "invalid cron") {
 		t.Errorf("expected invalid-cron error, got: %q", text)
+	}
+	cfg, _ := config.Load(cfgPath)
+	if len(cfg.Tasks) != 0 {
+		t.Error("nothing should have been persisted")
+	}
+}
+
+func TestAddRejectsBadTimezone(t *testing.T) {
+	cfgPath, add, _, _ := freshTools(t)
+	text, _ := callTool(t, add, map[string]any{
+		"id":       "x",
+		"cron":     "0 0 9 * * *",
+		"prompt":   "p",
+		"timezone": "Not/AZone",
+	})
+	if !strings.Contains(text, "invalid cron") || !strings.Contains(text, "invalid timezone") {
+		t.Errorf("expected timezone validation error, got: %q", text)
 	}
 	cfg, _ := config.Load(cfgPath)
 	if len(cfg.Tasks) != 0 {
@@ -164,10 +189,10 @@ func TestListEmpty(t *testing.T) {
 
 func TestListShowsTasks(t *testing.T) {
 	cfgPath, add, list, _ := freshTools(t)
-	callTool(t, add, map[string]any{"id": "a", "cron": "@every 1m", "prompt": "alpha", "channels": []any{"ops"}})
+	callTool(t, add, map[string]any{"id": "a", "cron": "0 0 9 * * *", "prompt": "alpha", "goal": "finish alpha", "timezone": "Asia/Shanghai", "channels": []any{"ops"}})
 	callTool(t, add, map[string]any{"id": "b", "cron": "@every 5m", "prompt": "beta", "enabled": false})
 	text, res := callTool(t, list, nil)
-	if !strings.Contains(text, "- a [@every 1m, on, skip, channels=ops]: alpha") {
+	if !strings.Contains(text, "- a [0 0 9 * * *, on, skip, timezone=Asia/Shanghai, channels=ops, goal]: alpha") {
 		t.Errorf("missing task a row:\n%s", text)
 	}
 	if !strings.Contains(text, "- b [@every 5m, off, skip]: beta") {

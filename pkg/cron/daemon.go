@@ -26,6 +26,7 @@ import (
 	"github.com/openmodu/modu/pkg/cron/runner"
 	"github.com/openmodu/modu/pkg/cron/scheduler"
 	"github.com/openmodu/modu/pkg/provider"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // reloadDebounce collapses bursts of fsnotify events (editors and YAML
@@ -113,26 +114,30 @@ func buildRunner(cfgPath string) (scheduler.Runner, error) {
 			return cfgErr
 		}
 		model, getAPIKey := provider.Resolve()
-		cwd := config.ResolveWorkingDir(cfgPath, cfg, fallbackCwd)
-		deps := runner.Deps{
-			Cwd:               cwd,
-			AgentDir:          coding_agent.DefaultAgentDir(),
-			Model:             model,
-			GetAPIKey:         getAPIKey,
-			Logs:              runlog.New(""),
-			CustomTools:       crontools.New(cfgPath),
-			DailyBudgetTokens: cfg.DailyBudgetTokens,
-		}
+		deps := buildRunnerDeps(cfgPath, cfg, fallbackCwd, model, getAPIKey)
 		res, runErr := runner.ExecuteWithRetries(ctx, task, func(ctx context.Context, task config.Task) (runner.Result, error) {
 			return runner.Execute(ctx, deps, task)
 		})
 		if len(task.NotificationChannels()) > 0 {
-			if notifyErr := sender.Completion(ctx, cfg, task, res, runErr, cwd); notifyErr != nil {
+			if notifyErr := sender.Completion(ctx, cfg, task, res, runErr, deps.Cwd); notifyErr != nil {
 				log.Printf("task %s: notify failed: %v", task.ID, notifyErr)
 			}
 		}
 		return runErr
 	}, nil
+}
+
+func buildRunnerDeps(cfgPath string, cfg *config.Config, fallbackCwd string, model *types.Model, getAPIKey func(string) (string, error)) runner.Deps {
+	return runner.Deps{
+		Cwd:               config.ResolveWorkingDir(cfgPath, cfg, fallbackCwd),
+		AgentDir:          coding_agent.DefaultAgentDir(),
+		Model:             model,
+		GetAPIKey:         getAPIKey,
+		Logs:              runlog.New(""),
+		CustomTools:       crontools.New(cfgPath),
+		Trigger:           "scheduler",
+		DailyBudgetTokens: cfg.DailyBudgetTokens,
+	}
 }
 
 // loadAndStart reads cfgPath, builds a Scheduler, starts it.

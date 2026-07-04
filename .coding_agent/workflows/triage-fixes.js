@@ -5,9 +5,6 @@
 // worktree per finding for a generator agent, then an adversarial reviewer
 // (same contract as examples/agents/reviewer.md) judges each draft, and only
 // a PASS opens a DRAFT pull request — never a merge.
-//
-// Install: copy into the repo as .coding_agent/workflows/triage-fixes.js,
-// then tell modu_code: "run the triage-fixes workflow".
 meta({
   name: 'triage-fixes',
   description: 'Draft fixes for open triage findings in isolated worktrees, adversarially review each, open draft PRs for passes',

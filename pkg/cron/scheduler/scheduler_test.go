@@ -24,6 +24,50 @@ func TestAddRejectsBadInput(t *testing.T) {
 	if err := s.Add(config.Task{ID: "y", Cron: "* * * * * *", Enabled: false}); err != nil {
 		t.Errorf("disabled task should be silently skipped, got: %v", err)
 	}
+	if err := s.Add(config.Task{ID: "tz", Cron: "* * * * * *", Timezone: "Not/AZone", Enabled: true}); err == nil {
+		t.Error("invalid timezone should fail")
+	}
+}
+
+func TestTaskCronExpressionAppliesTimezone(t *testing.T) {
+	task := config.Task{ID: "sh", Cron: "0 20 10 * * 1-5", Timezone: "Asia/Shanghai"}
+	got, err := taskCronExpression(task)
+	if err != nil {
+		t.Fatalf("taskCronExpression: %v", err)
+	}
+	if got != "CRON_TZ=Asia/Shanghai 0 20 10 * * 1-5" {
+		t.Fatalf("cron expression=%q", got)
+	}
+	if err := ValidateTaskCron(task); err != nil {
+		t.Fatalf("ValidateTaskCron: %v", err)
+	}
+}
+
+func TestTaskCronExpressionRejectsDuplicateTimezone(t *testing.T) {
+	task := config.Task{ID: "tz", Cron: "CRON_TZ=UTC 0 20 10 * * 1-5", Timezone: "Asia/Shanghai"}
+	if _, err := taskCronExpression(task); err == nil {
+		t.Fatal("expected duplicate timezone error")
+	}
+}
+
+func TestNextAppliesTaskTimezone(t *testing.T) {
+	from := time.Date(2026, 7, 4, 2, 5, 0, 0, time.FixedZone("CST", 8*60*60))
+	task := config.Task{ID: "market", Cron: "0 20 10 * * 1-5", Timezone: "Asia/Shanghai"}
+	got, err := Next(task, from)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	want := time.Date(2026, 7, 6, 10, 20, 0, 0, time.FixedZone("CST", 8*60*60))
+	if !got.Equal(want) {
+		t.Fatalf("Next=%s, want %s", got.Format(time.RFC3339), want.Format(time.RFC3339))
+	}
+}
+
+func TestNextRejectsInvalidTaskCron(t *testing.T) {
+	task := config.Task{ID: "bad", Cron: "not a cron", Timezone: "Asia/Shanghai"}
+	if _, err := Next(task, time.Now()); err == nil {
+		t.Fatal("expected invalid cron error")
+	}
 }
 
 // TestSkipPolicyDropsOverlap drives onTick directly (no real cron) to verify
@@ -122,6 +166,37 @@ func TestQueuePolicySerializes(t *testing.T) {
 	})
 	if got := atomic.LoadInt32(&runs); got != 3 {
 		t.Errorf("runs=%d; want 3 (1 immediate + 2 queued)", got)
+	}
+}
+
+func TestTickPassesGoalTaskToRunner(t *testing.T) {
+	got := make(chan config.Task, 1)
+	s := New(func(ctx context.Context, task config.Task) error {
+		got <- task
+		return nil
+	})
+	task := config.Task{
+		ID:      "goal-task",
+		Cron:    "* * * * * *",
+		Prompt:  "run loop",
+		Goal:    "verify loop completion",
+		Enabled: true,
+	}
+	if err := s.Add(task); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	s.onTick(s.tasks["goal-task"])
+
+	select {
+	case fired := <-got:
+		if fired.Goal != task.Goal {
+			t.Fatalf("Goal=%q, want %q", fired.Goal, task.Goal)
+		}
+		if fired.Prompt != task.Prompt {
+			t.Fatalf("Prompt=%q, want %q", fired.Prompt, task.Prompt)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runner did not receive fired task")
 	}
 }
 

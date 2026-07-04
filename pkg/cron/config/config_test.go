@@ -2,6 +2,7 @@ package config
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -25,7 +26,7 @@ func TestTaskEffectiveTimeout(t *testing.T) {
 }
 
 func TestTaskValidateCaps(t *testing.T) {
-	valid := Task{ID: "a", Timeout: "45m", MaxTokensPerRun: 100, MaxRetries: 2}
+	valid := Task{ID: "a", Goal: "produce the daily report", Timeout: "45m", MaxTokensPerRun: 100, MaxRetries: 2}
 	if err := valid.ValidateCaps(); err != nil {
 		t.Fatalf("valid caps rejected: %v", err)
 	}
@@ -37,6 +38,7 @@ func TestTaskValidateCaps(t *testing.T) {
 		{ID: "a", Timeout: "-5m"},
 		{ID: "a", MaxTokensPerRun: -1},
 		{ID: "a", MaxRetries: -1},
+		{ID: "a", Goal: strings.Repeat("x", 4001)},
 	} {
 		if err := bad.ValidateCaps(); err == nil {
 			t.Errorf("ValidateCaps accepted invalid task %+v", bad)
@@ -50,7 +52,7 @@ func TestCapFieldsRoundTrip(t *testing.T) {
 		DailyBudgetTokens: 3_000_000,
 		Tasks: []Task{{
 			ID: "a", Cron: "@daily", Prompt: "p", Enabled: true,
-			Timeout: "45m", MaxTokensPerRun: 500_000, MaxRetries: 2,
+			Goal: "finish the scheduled objective", Timezone: "Asia/Shanghai", Timeout: "45m", MaxTokensPerRun: 500_000, MaxRetries: 2,
 		}},
 	}
 	if err := Save(path, in); err != nil {
@@ -64,8 +66,8 @@ func TestCapFieldsRoundTrip(t *testing.T) {
 		t.Errorf("DailyBudgetTokens=%d, want 3000000", out.DailyBudgetTokens)
 	}
 	task := out.Tasks[0]
-	if task.Timeout != "45m" || task.MaxTokensPerRun != 500_000 || task.MaxRetries != 2 {
-		t.Errorf("cap fields not persisted: %+v", task)
+	if task.Goal != "finish the scheduled objective" || task.Timezone != "Asia/Shanghai" || task.Timeout != "45m" || task.MaxTokensPerRun != 500_000 || task.MaxRetries != 2 {
+		t.Errorf("goal/timezone/cap fields not persisted: %+v", task)
 	}
 }
 

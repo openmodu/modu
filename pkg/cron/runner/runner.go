@@ -4,7 +4,7 @@
 // stream is filtered through summaryWriter and written to a per-run log
 // file as a slim NDJSON transcript:
 //
-//	{"type":"run_start",     "task_id":..., "prompt":..., "started_at":...}
+//	{"type":"run_start",     "task_id":..., "prompt":..., "trigger":..., "timezone":..., "has_goal":..., "goal_verifier":..., "started_at":...}
 //	{"type":"session_start", "session_id":..., "model":...}
 //	{"type":"user",          "text":...}
 //	{"type":"tool_call",     "name":..., "args":...}
@@ -25,12 +25,14 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/coding_agent/modes"
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
+	goalext "github.com/openmodu/modu/pkg/coding_agent/plugins/extension/goal"
 	"github.com/openmodu/modu/pkg/types"
 
 	"github.com/openmodu/modu/pkg/cron/config"
@@ -47,11 +49,20 @@ const debugRawEnv = "MODU_CRON_DEBUG_RAW"
 // StatusOK also carries an error; only StatusError is retryable — the cap
 // statuses are circuit breakers, and retrying a tripped breaker defeats it.
 const (
-	StatusOK             = "ok"
-	StatusError          = "error"
-	StatusTimeout        = "timeout"
-	StatusTokenCap       = "token_cap"
-	StatusBudgetExceeded = "budget_exceeded"
+	StatusOK              = "ok"
+	StatusError           = "error"
+	StatusTimeout         = "timeout"
+	StatusTokenCap        = "token_cap"
+	StatusBudgetExceeded  = "budget_exceeded"
+	StatusGoalUnavailable = "goal_unavailable"
+	StatusGoalPaused      = "goal_paused"
+	StatusGoalBudget      = "goal_budget_limited"
+)
+
+var (
+	errTaskGoalUnavailable   = errors.New("goal extension unavailable")
+	errTaskGoalPaused        = errors.New("goal paused before completion")
+	errTaskGoalBudgetLimited = errors.New("goal budget limited before completion")
 )
 
 // Deps gathers everything a Runner needs to spin up a CodingSession per tick.
@@ -62,6 +73,11 @@ type Deps struct {
 	GetAPIKey   func(provider string) (string, error)
 	Logs        *runlog.Store
 	CustomTools []types.Tool
+	// Trigger identifies who started this run in the slim log. The embedded
+	// scheduler sets "scheduler"; ad hoc harnesses and tests default to
+	// "manual" so acceptance scripts can distinguish natural cron evidence
+	// from bootstrap/manual runs.
+	Trigger string
 	// DailyBudgetTokens mirrors config.Config.DailyBudgetTokens: once the
 	// day's ledger (kept by Logs) reaches it, Execute refuses to start a
 	// session. Zero disables the check.
@@ -76,6 +92,9 @@ type Result struct {
 	Ended   time.Time
 	// Status is one of the Status* constants.
 	Status string
+	// GoalStatus records the final status of a task-owned goal, when the task
+	// declares goal: and the goal extension was able to create it.
+	GoalStatus string
 	// Tokens is the run's accumulated input+output tokens.
 	Tokens int
 }
@@ -100,12 +119,25 @@ func Execute(ctx context.Context, deps Deps, task config.Task) (Result, error) {
 	res.LogPath = run.Path()
 	defer func() { _ = run.Close() }()
 
-	writeJSONLine(run, map[string]any{
+	goalText := strings.TrimSpace(task.Goal)
+	hasGoal := goalText != ""
+	extensions := loadExtensions(task.ID)
+	start := map[string]any{
 		"type":       "run_start",
 		"task_id":    task.ID,
 		"prompt":     task.Prompt,
+		"trigger":    normalizeTrigger(deps.Trigger),
+		"has_goal":   hasGoal,
 		"started_at": formatLogTime(res.Started),
-	})
+	}
+	if timezone := strings.TrimSpace(task.Timezone); timezone != "" {
+		start["timezone"] = timezone
+	}
+	if hasGoal {
+		start["goal"] = goalText
+		start["goal_verifier"] = taskGoalVerifierEnabled(extensions)
+	}
+	writeJSONLine(run, start)
 
 	// Daily budget breaker: refuse to start a session once today's ledger is
 	// at the ceiling. The run still leaves a run_start/run_end pair behind so
@@ -129,7 +161,7 @@ func Execute(ctx context.Context, deps Deps, task config.Task) (Result, error) {
 		Model:       deps.Model,
 		GetAPIKey:   deps.GetAPIKey,
 		CustomTools: deps.CustomTools,
-		Extensions:  loadExtensions(task.ID),
+		Extensions:  extensions,
 	})
 	if err != nil {
 		res.Ended = time.Now()
@@ -176,12 +208,41 @@ func Execute(ctx context.Context, deps Deps, task config.Task) (Result, error) {
 		}
 	}
 
+	prompt := task.Prompt
+	var goalRunner *goalext.Extension
+	var driver *goalPromptDriver
+	if hasGoal {
+		driver = newGoalPromptDriver(runCtx)
+		session.SetBackgroundPromptDriver(driver.Drive)
+		goalRunner, err = startTaskGoal(extensions, goalText)
+		if err != nil {
+			res.Ended = time.Now()
+			wrapped := fmt.Errorf("start goal: %w", err)
+			if status := goalCircuitBreakerStatus(wrapped); status != "" {
+				res.Status = status
+			}
+			writeRunEnd(run, res, wrapped)
+			return res, wrapped
+		}
+		prompt = buildGoalTaskPrompt(goalText, task.Prompt)
+	}
+
 	err = modes.RunPrint(runCtx, modes.PrintOptions{
 		Mode:     modes.PrintModeJSON,
-		Messages: []string{task.Prompt},
+		Messages: []string{prompt},
 		Session:  session,
 		Output:   output,
 	})
+	if err == nil && goalRunner != nil {
+		err = waitForTaskGoal(runCtx, session, goalRunner, driver)
+	}
+	if goalRunner != nil {
+		if status, ok, serr := goalRunner.AutomationGoalStatus(); serr != nil {
+			log.Printf("task %s: goal status read failed: %v", task.ID, serr)
+		} else if ok {
+			res.GoalStatus = string(status)
+		}
+	}
 	res.Ended = time.Now()
 	res.Tokens = int(tokens.Load())
 	if lerr := deps.Logs.AddDailyTokens(res.Started, res.Tokens); lerr != nil {
@@ -189,6 +250,7 @@ func Execute(ctx context.Context, deps Deps, task config.Task) (Result, error) {
 	}
 
 	var runErr error
+	goalStatus := goalCircuitBreakerStatus(err)
 	switch {
 	case capTripped.Load():
 		res.Status = StatusTokenCap
@@ -196,6 +258,9 @@ func Execute(ctx context.Context, deps Deps, task config.Task) (Result, error) {
 	case errors.Is(runCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil:
 		res.Status = StatusTimeout
 		runErr = fmt.Errorf("run timed out after %s", task.EffectiveTimeout())
+	case goalStatus != "":
+		res.Status = goalStatus
+		runErr = err
 	case err != nil:
 		res.Status = StatusError
 		runErr = fmt.Errorf("run prompt: %w", err)
@@ -246,9 +311,9 @@ func assistantUsage(message any) (types.AgentUsage, bool) {
 }
 
 // ExecuteWithRetries runs exec (normally Execute) up to task.MaxRetries+1
-// times, re-running only after plain errors — timeout / token-cap / budget
-// trips are circuit breakers and are never retried. Backoff doubles from
-// retryBaseDelay and is cut short when ctx is cancelled.
+// times, re-running only after plain errors — timeout / token-cap / budget /
+// goal-cap/config trips are circuit breakers and are never retried. Backoff
+// doubles from retryBaseDelay and is cut short when ctx is cancelled.
 func ExecuteWithRetries(ctx context.Context, task config.Task, exec func(context.Context, config.Task) (Result, error)) (Result, error) {
 	res, err := exec(ctx, task)
 	for attempt := 1; attempt <= task.MaxRetries; attempt++ {
@@ -279,6 +344,164 @@ var retrySleep = func(ctx context.Context, d time.Duration) bool {
 		return false
 	case <-time.After(d):
 		return true
+	}
+}
+
+func startTaskGoal(extensions []extension.Extension, objective string) (*goalext.Extension, error) {
+	for _, ext := range extensions {
+		g, ok := ext.(*goalext.Extension)
+		if !ok {
+			continue
+		}
+		if _, err := g.StartAutomationGoal(objective); err != nil {
+			return nil, err
+		}
+		return g, nil
+	}
+	return nil, fmt.Errorf("%w: task declares goal but goal extension is not enabled", errTaskGoalUnavailable)
+}
+
+func taskGoalVerifierEnabled(extensions []extension.Extension) bool {
+	for _, ext := range extensions {
+		g, ok := ext.(*goalext.Extension)
+		if ok {
+			return g.AutomationVerifierEnabled()
+		}
+	}
+	return false
+}
+
+func normalizeTrigger(trigger string) string {
+	trigger = strings.TrimSpace(trigger)
+	if trigger == "" {
+		return "manual"
+	}
+	return trigger
+}
+
+func buildGoalTaskPrompt(goal, prompt string) string {
+	return fmt.Sprintf(`This cron task has already created the following goal:
+
+%s
+
+Work on the task prompt below. When the goal is actually achieved and no required work remains, call update_goal with status=complete. If the verifier rejects completion, continue fixing the specific rejection reasons.
+
+Task prompt:
+%s`, strings.TrimSpace(goal), strings.TrimSpace(prompt))
+}
+
+type goalPromptDriver struct {
+	ctx context.Context
+
+	mu      sync.Mutex
+	running int
+	done    chan struct{}
+	err     error
+}
+
+func newGoalPromptDriver(ctx context.Context) *goalPromptDriver {
+	return &goalPromptDriver{
+		ctx:  ctx,
+		done: make(chan struct{}),
+	}
+}
+
+func (d *goalPromptDriver) Drive(run func(context.Context) error) bool {
+	d.mu.Lock()
+	if d.running == 0 {
+		d.done = make(chan struct{})
+	}
+	d.running++
+	d.mu.Unlock()
+
+	go func() {
+		err := run(d.ctx)
+		d.mu.Lock()
+		if err != nil && d.err == nil {
+			d.err = err
+		}
+		d.running--
+		if d.running == 0 {
+			close(d.done)
+		}
+		d.mu.Unlock()
+	}()
+	return true
+}
+
+func (d *goalPromptDriver) Wait(ctx context.Context) error {
+	for {
+		d.mu.Lock()
+		if d.running == 0 {
+			err := d.err
+			d.mu.Unlock()
+			return err
+		}
+		done := d.done
+		d.mu.Unlock()
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func (d *goalPromptDriver) Running() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.running > 0
+}
+
+func waitForTaskGoal(ctx context.Context, session *coding_agent.CodingSession, goalRunner *goalext.Extension, driver *goalPromptDriver) error {
+	for {
+		status, ok, err := goalRunner.AutomationGoalStatus()
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("goal disappeared before completion")
+		}
+		switch status {
+		case goalext.StatusComplete:
+			return nil
+		case goalext.StatusPaused:
+			return errTaskGoalPaused
+		case goalext.StatusBudgetLimited:
+			return errTaskGoalBudgetLimited
+		}
+		if agent := session.GetAgent(); agent != nil && agent.HasQueuedMessages() {
+			if err := session.Continue(ctx); err != nil {
+				return fmt.Errorf("continue queued goal prompt: %w", err)
+			}
+			session.WaitForIdle()
+			continue
+		}
+		if driver.Running() {
+			if err := driver.Wait(ctx); err != nil {
+				return err
+			}
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			return fmt.Errorf("goal remained active without a queued continuation")
+		}
+	}
+}
+
+func goalCircuitBreakerStatus(err error) string {
+	switch {
+	case errors.Is(err, errTaskGoalUnavailable):
+		return StatusGoalUnavailable
+	case errors.Is(err, errTaskGoalPaused):
+		return StatusGoalPaused
+	case errors.Is(err, errTaskGoalBudgetLimited):
+		return StatusGoalBudget
+	default:
+		return ""
 	}
 }
 
@@ -319,6 +542,9 @@ func writeRunEnd(w io.Writer, res Result, err error) {
 	}
 	if res.Tokens > 0 {
 		obj["tokens"] = res.Tokens
+	}
+	if res.GoalStatus != "" {
+		obj["goal_status"] = res.GoalStatus
 	}
 	if err != nil {
 		obj["error"] = err.Error()

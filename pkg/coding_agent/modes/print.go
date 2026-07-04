@@ -68,10 +68,9 @@ func runPrintText(ctx context.Context, opts PrintOptions) error {
 
 	// Send all prompts sequentially
 	for _, msg := range opts.Messages {
-		if err := opts.Session.Prompt(ctx, msg); err != nil {
-			return fmt.Errorf("prompt failed: %w", err)
+		if err := promptAndDrainQueued(ctx, opts.Session, msg); err != nil {
+			return err
 		}
-		opts.Session.WaitForIdle()
 	}
 
 	// Output the final assistant text
@@ -142,14 +141,30 @@ func runPrintJSON(ctx context.Context, opts PrintOptions) error {
 
 	// Send all prompts sequentially
 	for _, msg := range opts.Messages {
-		if err := opts.Session.Prompt(ctx, msg); err != nil {
-			return fmt.Errorf("prompt failed: %w", err)
+		if err := promptAndDrainQueued(ctx, opts.Session, msg); err != nil {
+			return err
 		}
-		opts.Session.WaitForIdle()
 	}
 
 	// Output session end
 	_ = enc.Encode(map[string]string{"type": "session_end"})
 
 	return nil
+}
+
+func promptAndDrainQueued(ctx context.Context, session *coding_agent.CodingSession, msg string) error {
+	if err := session.Prompt(ctx, msg); err != nil {
+		return fmt.Errorf("prompt failed: %w", err)
+	}
+	session.WaitForIdle()
+	for {
+		agent := session.GetAgent()
+		if agent == nil || !agent.HasQueuedMessages() {
+			return nil
+		}
+		if err := session.Continue(ctx); err != nil {
+			return fmt.Errorf("continue queued prompt: %w", err)
+		}
+		session.WaitForIdle()
+	}
 }

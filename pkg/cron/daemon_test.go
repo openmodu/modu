@@ -10,6 +10,7 @@ import (
 
 	"github.com/openmodu/modu/pkg/cron/config"
 	"github.com/openmodu/modu/pkg/cron/scheduler"
+	"github.com/openmodu/modu/pkg/types"
 )
 
 // Helper: count how many runs the runner observed.
@@ -51,6 +52,37 @@ func TestReloadSchedulerSwapsTasks(t *testing.T) {
 		t.Fatal("reload should have returned a new scheduler instance")
 	}
 	defer next.Stop()
+}
+
+func TestBuildRunnerDepsMarksEmbeddedSchedulerTrigger(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	workingDir := filepath.Join(dir, "repo")
+	cfg := &config.Config{
+		WorkingDir:        workingDir,
+		DailyBudgetTokens: 12345,
+	}
+	model := &types.Model{ID: "mock", ProviderID: "openai"}
+
+	deps := buildRunnerDeps(cfgPath, cfg, "/fallback", model, func(string) (string, error) { return "", nil })
+	if deps.Trigger != "scheduler" {
+		t.Fatalf("Trigger=%q, want scheduler", deps.Trigger)
+	}
+	if deps.Cwd != workingDir {
+		t.Fatalf("Cwd=%q, want %q", deps.Cwd, workingDir)
+	}
+	if deps.DailyBudgetTokens != 12345 {
+		t.Fatalf("DailyBudgetTokens=%d, want 12345", deps.DailyBudgetTokens)
+	}
+	if deps.Model != model {
+		t.Fatal("Model was not preserved")
+	}
+	if deps.Logs == nil {
+		t.Fatal("Logs store is nil")
+	}
+	if len(deps.CustomTools) == 0 {
+		t.Fatal("expected cron management tools")
+	}
 }
 
 func TestReloadSchedulerKeepsOldOnLoadFailure(t *testing.T) {

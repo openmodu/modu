@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,6 +30,31 @@ var exprParser = cron.NewParser(
 func ValidateCron(expr string) error {
 	_, err := exprParser.Parse(expr)
 	return err
+}
+
+// ValidateTaskCron returns nil if task's cron expression and optional
+// timezone produce a schedule this scheduler can register.
+func ValidateTaskCron(task config.Task) error {
+	expr, err := taskCronExpression(task)
+	if err != nil {
+		return err
+	}
+	_, err = exprParser.Parse(expr)
+	return err
+}
+
+// Next returns the next fire time for task after from, applying the same cron
+// parser and optional task Timezone that Scheduler.Add uses.
+func Next(task config.Task, from time.Time) (time.Time, error) {
+	expr, err := taskCronExpression(task)
+	if err != nil {
+		return time.Time{}, err
+	}
+	schedule, err := exprParser.Parse(expr)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return schedule.Next(from), nil
 }
 
 // Scheduler owns a cron.Cron and one runState per registered task.
@@ -85,6 +111,10 @@ func (s *Scheduler) Add(task config.Task) error {
 	if err := task.ValidateCaps(); err != nil {
 		return err
 	}
+	cronExpr, err := taskCronExpression(task)
+	if err != nil {
+		return err
+	}
 
 	s.mu.Lock()
 	if _, exists := s.tasks[task.ID]; exists {
@@ -102,13 +132,28 @@ func (s *Scheduler) Add(task config.Task) error {
 	s.tasks[task.ID] = state
 	s.mu.Unlock()
 
-	if _, err := s.cron.AddFunc(task.Cron, func() { s.onTick(state) }); err != nil {
+	if _, err := s.cron.AddFunc(cronExpr, func() { s.onTick(state) }); err != nil {
 		s.mu.Lock()
 		delete(s.tasks, task.ID)
 		s.mu.Unlock()
-		return fmt.Errorf("task %s: invalid cron %q: %w", task.ID, task.Cron, err)
+		return fmt.Errorf("task %s: invalid cron %q: %w", task.ID, cronExpr, err)
 	}
 	return nil
+}
+
+func taskCronExpression(task config.Task) (string, error) {
+	expr := strings.TrimSpace(task.Cron)
+	tz := strings.TrimSpace(task.Timezone)
+	if tz == "" {
+		return expr, nil
+	}
+	if strings.HasPrefix(expr, "CRON_TZ=") || strings.HasPrefix(expr, "TZ=") {
+		return "", fmt.Errorf("task %s: use timezone field instead of embedding TZ in cron expression", task.ID)
+	}
+	if _, err := time.LoadLocation(tz); err != nil {
+		return "", fmt.Errorf("task %s: invalid timezone %q: %w", task.ID, task.Timezone, err)
+	}
+	return "CRON_TZ=" + tz + " " + expr, nil
 }
 
 // LoadAll registers every enabled task from cfg.
