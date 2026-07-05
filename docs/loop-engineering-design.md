@@ -317,9 +317,9 @@ tail -1 "$(ls -t ~/.modu/cron/logs/cap-timeout/*.log | head -1)"
 **Case 6 · session 按 job id 关联(半分钟)**
 
 - TUI 里输入 `/sessions`(注意带 s;`/session` 是另一个命令)→ 列表里应出现名为 **cron:loop-smoke** 的会话(每轮 tick 一条,名字相同)。
-- 想看内容:从列表拷下那条的 session 文件路径,输入 `/resume <session-file>` 切进去——能看到该轮完整对话:goal 创建、agent 干活、`update_goal` 调用与 verifier 放行/驳回的现场。看完 `/resume` 回原 session 或直接继续(当前会话本身也在列表里)。
-- 不想切换的话,退出 TUI 后 `modu_code --resume <id前缀>` 打开同一条也行(id 在 `/sessions` 列表里)。
-- 判定:每次 cron run 都能按任务 id 找到完整 session ✅。
+- 想看内容:`/resume <id 或唯一前缀>`(文件路径也行)切进去——**屏幕会立刻回放目标会话的完整历史**(与启动时 `--resume` 相同的渲染):goal 创建、agent 干活、`update_goal` 被 verifier 放行/驳回的现场。看完用 `/resume <原会话id>` 切回来(自己的会话也在 `/sessions` 列表里)。
+- 传错 id 会明确报错且不切换(旧版会静默"切"到一个空会话——已修)。
+- 判定:每次 cron run 都能按任务 id 找到并完整回放 session ✅。
 
 **Case 7 · 清理 + 收尾**
 

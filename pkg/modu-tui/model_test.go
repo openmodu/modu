@@ -2042,3 +2042,27 @@ func TestPOC2ToolApprovalBlocksInputEditing(t *testing.T) {
 		t.Fatal("approval should remain pending after unrelated key")
 	}
 }
+
+func TestSetMessagesMsgReplacesTranscript(t *testing.T) {
+	var tm tea.Model = NewModel(Options{Width: 72, Height: 12, InitialMessages: []Message{
+		{Role: RoleUser, Text: "old conversation"},
+		{Role: RoleAssistant, Text: "old reply"},
+	}})
+	m := tm.(Model)
+
+	tm, _ = m.Update(SetMessagesMsg{Messages: []Message{
+		{Role: RoleUser, Text: "resumed question"},
+		{Role: RoleAssistant, Text: "resumed answer"},
+	}})
+	m = tm.(Model)
+
+	rendered := ansi.Strip(m.render())
+	if strings.Contains(rendered, "old conversation") || strings.Contains(rendered, "old reply") {
+		t.Fatalf("old transcript should be gone after SetMessagesMsg:\n%s", rendered)
+	}
+	for _, want := range []string{"resumed question", "resumed answer"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("replayed transcript missing %q:\n%s", want, rendered)
+		}
+	}
+}

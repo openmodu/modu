@@ -452,6 +452,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.unseen = 0
 		m.rebuild()
 
+	case SetMessagesMsg:
+		m.messages = nil
+		m.clearSelection()
+		for _, message := range msg.Messages {
+			m.appendMessage(message)
+		}
+		m.follow = true
+		m.unseen = 0
+		m.rebuild()
+		m.clampScroll()
+
 	case SetPanelMsg:
 		panel := normalizePanel(msg.Panel)
 		m.panel = &panel
