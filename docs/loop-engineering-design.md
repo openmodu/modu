@@ -272,22 +272,53 @@ go test ./pkg/cron/... ./pkg/coding_agent/plugins/extension/goal/ ./pkg/coding_a
 - 收尾:说"清掉这个 goal"。
 - 判定:maker-checker 门真的会驳回,且带具体理由 ✅。这同时满足文章的验尸检查(evaluator 至少真 REJECT 过一次)。
 
-**Case 4 · 三档断路器(每档等一轮,测完即删)**
+**Case 4 · 三档断路器(约 5 分钟;4a/4b 可同时挂,4c 最后做)**
 
-- timeout:说"加任务 cap-timeout:每 30 秒,prompt 是'前台运行 bash:python3 计一个 90 秒的忙等循环,等它输出',timeout 15 秒"。→ 下一轮日志 `"status":"timeout"`,duration ≈ 15000ms。**注意:不能用 sleep 造慢任务**——agent 会把 sleep 丢后台,bash 工具还自带"前台 sleep≥2s 拒绝"的防呆,必须用真计算。
-- token cap:说"加任务 cap-token:每 30 秒,prompt 是'逐个读 pkg/ 下的 go 文件并极其详细地总结',单次上限 3000 token"。→ `"status":"token_cap"`,error 里有实际用量。
-- 日额度:说"把 daily_budget_tokens 临时改成 1000"。→ 下一轮任何任务 `"status":"budget_exceeded"`,duration 0ms(连 session 都不建),挂了 channel 的任务飞书收到告警。**立刻说"改回 3000000"**。
-- 判定:三档独立生效;三种断路器状态都不触发 max_retries 重试 ✅。
+4a timeout——在 TUI 里逐字说:
 
-**Case 5 · 人门:通知 + inbox(等两轮)**
+> 加一个测试任务 cap-timeout:每 30 秒跑一次,timeout 15 秒,不要通知。prompt 是:用 bash 工具在前台(background=false)运行 `python3 -c "import time; time.sleep(90); print('done')"`,你需要它的输出,等它打印 done 再回复。
 
-- 说:"给 loop-smoke 挂上 feishu-daily,prompt 里加一句:在 ./inbox/ 写一个 tui-test.md 说明有事需要人决定"。
-- 看:下一轮飞书通知包含 task/status/耗时/摘要 + `inbox: 1 new item(s) waiting for you: tui-test.md`;**再下一轮**通知不再重复报 tui-test.md(只报当天新增是核心断言)。
-- 判定:门被送到人眼前,且不重复轰炸 ✅。
+(python 的 sleep 不会被 bash 工具的防呆拦——它只拦以 `sleep` 开头的 shell 命令;prompt 里必须强调前台+要输出,否则 agent 会丢后台绕过去。)等约 45 秒,观察终端跑:
+
+```
+tail -1 "$(ls -t ~/.modu/cron/logs/cap-timeout/*.log | head -1)"
+```
+
+判定:`"status":"timeout"`、`duration_ms` ≈ 15000、error 是 `run timed out after 15s`。
+
+4b token cap——说:
+
+> 加一个测试任务 cap-token:每 30 秒跑一次,单次 token 上限 3000,不要通知。prompt 是:逐个读取 pkg/ 目录下的 Go 文件并写非常详细的总结。
+
+等约 45 秒,同样 tail 最新日志。判定:`"status":"token_cap"`,error 形如 `per-run token cap reached: 10372 tokens >= cap 2000`(system prompt 本身就超 3000,第一条回复结束即切断)。
+
+4c 日额度(会拦住**所有**任务,所以放最后、立刻恢复)——说:
+
+> 把 cron 配置里的 daily_budget_tokens 临时改成 1000
+
+等下一轮任何测试任务触发,tail 它的最新日志。判定:`"status":"budget_exceeded"`、`duration_ms:0`、整个文件只有 run_start/run_end 两行(session 都没建)。**马上说**:
+
+> 把 daily_budget_tokens 改回 3000000
+
+三档验完顺手说"删掉 cap-timeout 和 cap-token"。附加判定:三种断路器状态的下一行日志不会出现重试(max_retries 只对 status=error 生效)。
+
+**Case 5 · 人门:通知 + inbox(等两轮,约 2 分钟)**
+
+前提:loop-smoke 还在(没有就按 Case 1 再建)。说:
+
+> 修改 loop-smoke 任务:加上通知渠道 feishu-daily;prompt 里追加一句——如果 ./inbox/tui-test.md 不存在,就创建它,内容是"测试:这件事需要人决定";如果已经存在,不要动它。
+
+(**"不存在才创建"是关键**:通知按 mtime 判定"本轮新增",prompt 若每轮重写该文件,它每轮都算新增,就测不出去重了。)
+
+- 第 1 轮后看飞书:消息应包含 task/status/耗时/摘要,以及 `inbox: 1 new item(s) waiting for you: tui-test.md`。
+- 什么都不做,等第 2 轮:新的飞书消息**不应再有** inbox 那行(文件还在磁盘上,但不是本轮新增)。
+- 判定:门送到人眼前,且只报当天新增、不重复轰炸 ✅。
 
 **Case 6 · session 按 job id 关联(半分钟)**
 
-- TUI 里 `/session`(或退出后重开时看列表)→ 出现名为 `cron:loop-smoke` 的会话;打开能看到完整对话,包括 update_goal 被 verifier 拦下/放行的完整现场。
+- TUI 里输入 `/sessions`(注意带 s;`/session` 是另一个命令)→ 列表里应出现名为 **cron:loop-smoke** 的会话(每轮 tick 一条,名字相同)。
+- 想看内容:从列表拷下那条的 session 文件路径,输入 `/resume <session-file>` 切进去——能看到该轮完整对话:goal 创建、agent 干活、`update_goal` 调用与 verifier 放行/驳回的现场。看完 `/resume` 回原 session 或直接继续(当前会话本身也在列表里)。
+- 不想切换的话,退出 TUI 后 `modu_code --resume <id前缀>` 打开同一条也行(id 在 `/sessions` 列表里)。
 - 判定:每次 cron run 都能按任务 id 找到完整 session ✅。
 
 **Case 7 · 清理 + 收尾**
