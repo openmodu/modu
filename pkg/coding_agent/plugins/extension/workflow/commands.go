@@ -897,6 +897,7 @@ func (e *Extension) cmdWorkflowsResume(selector string) error {
 	if err := persistWorkflowRunStatus(exec.RunDir, workflowStatusRunning, ""); err != nil {
 		e.tell(fmt.Sprintf("Workflow %s status persistence failed: %v", run.ID, err))
 	}
+	e.api.AddPending(1)
 	go e.runBackgroundWorkflow(run.ID, ctx, exec)
 	text := fmt.Sprintf("Workflow run %s resumed in background.", run.ID)
 	if exec.ScriptPath != "" {

@@ -32,6 +32,7 @@ type Runner struct {
 	interruptTask  func(id, reason string) (TaskSnapshot, bool)
 	forkSession    func(ctx context.Context, opts ForkOptions) (string, error)
 	mu             sync.RWMutex
+	pendingWg      sync.WaitGroup
 }
 
 // NewRunner creates a new extension runner.
@@ -370,6 +371,24 @@ func (r *Runner) GetHooks() []ToolHook {
 	result := make([]ToolHook, len(r.hooks))
 	copy(result, r.hooks)
 	return result
+}
+
+// AddPending increments the pending-work counter. Extensions call this before
+// spawning background work that must finish before the session can safely close.
+func (r *Runner) AddPending(delta int) {
+	r.pendingWg.Add(delta)
+}
+
+// DonePending decrements the pending-work counter. Call via defer after
+// background work completes.
+func (r *Runner) DonePending() {
+	r.pendingWg.Done()
+}
+
+// WaitForPending blocks until all registered pending work completes. Safe to
+// call even when no pending work has been registered (returns immediately).
+func (r *Runner) WaitForPending() {
+	r.pendingWg.Wait()
 }
 
 // ExecuteCommand finds and executes a slash command.

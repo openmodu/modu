@@ -34,6 +34,7 @@ type fakeAPI struct {
 	permissionMode string
 	active         int
 	maxActive      int
+	pendingWg      sync.WaitGroup
 }
 
 type workflowConfirmCall struct {
@@ -119,6 +120,8 @@ func (f *fakeAPI) BackgroundTasks() []extension.TaskSnapshot { return nil }
 func (f *fakeAPI) InterruptBackgroundTask(string, string) (extension.TaskSnapshot, bool) {
 	return extension.TaskSnapshot{}, false
 }
+func (f *fakeAPI) AddPending(delta int) { f.pendingWg.Add(delta) }
+func (f *fakeAPI) DonePending()         { f.pendingWg.Done() }
 func (f *fakeAPI) ForkSession(ctx context.Context, opts extension.ForkOptions) (string, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, opts)
@@ -206,6 +209,20 @@ func (f *fakeAPI) lastSelect() workflowSelectCall {
 		return workflowSelectCall{}
 	}
 	return f.selects[len(f.selects)-1]
+}
+
+func (f *fakeAPI) waitForPending(t *testing.T) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		f.pendingWg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for pending work")
+	}
 }
 
 func (f *fakeAPI) command(name string) extension.CommandHandler {
@@ -3007,6 +3024,91 @@ return agent("review", { label: "review" })
 	}
 	if got := api.lastNotify(); !strings.Contains(got, "args must be valid JSON") {
 		t.Fatalf("notify = %q", got)
+	}
+}
+
+func TestSavedWorkflowCompletesInPrintMode(t *testing.T) {
+	clearWorkflowDisableEnv(t)
+	cwd := t.TempDir()
+	sessionDir := t.TempDir()
+	projectDir := filepath.Join(cwd, ".coding_agent", "workflows")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "triage-fixes.js"), []byte(`
+meta({ name: "triage_fixes", description: "triage fixes workflow" })
+phase("Fix")
+return agent("fix:print-mode-workflow-exits-early", { label: "fix" })
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	api := &fakeAPI{
+		cwd:        cwd,
+		sessionDir: sessionDir,
+	}
+	api.responder = func(ctx context.Context, opts extension.ForkOptions) (string, error) {
+		return "fix applied: print mode workflow test", nil
+	}
+	ext := New()
+	if err := ext.Init(api); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	cmd := api.command("triage-fixes")
+	if cmd == nil {
+		t.Fatal("missing saved workflow command")
+	}
+	// Invoke the command (simulating print mode: fire and forget via slash command).
+	if err := cmd(""); err != nil {
+		t.Fatalf("/triage-fixes: %v", err)
+	}
+	// Wait for pending work to complete — this is what print mode does after
+	// WaitForIdle via WaitForPendingWork.
+	api.waitForPending(t)
+
+	// Verify the run completed with persisted status and snapshot.
+	runs, _, err := ext.workflowRuns()
+	if err != nil {
+		t.Fatalf("workflowRuns: %v", err)
+	}
+	if len(runs) == 0 {
+		t.Fatal("no workflow runs found")
+	}
+	run := runs[0]
+	if run.Status != workflowStatusCompleted {
+		t.Fatalf("run status = %q, want %q", run.Status, workflowStatusCompleted)
+	}
+	if run.Snapshot == nil || run.Snapshot.Result == nil {
+		t.Fatalf("snapshot missing or result is nil: %+v", run.Snapshot)
+	}
+	// Also verify the on-disk status.json.
+	statusPath := filepath.Join(sessionDir, "extensions", "workflow", "runs", run.ID, "status.json")
+	statusData, err := os.ReadFile(statusPath)
+	if err != nil {
+		t.Fatalf("read status.json: %v", err)
+	}
+	var statusFile workflowRunStatusFile
+	if err := json.Unmarshal(statusData, &statusFile); err != nil {
+		t.Fatalf("decode status.json: %v", err)
+	}
+	if statusFile.Status != workflowStatusCompleted {
+		t.Fatalf("status.json status = %q, want %q", statusFile.Status, workflowStatusCompleted)
+	}
+	// Verify the on-disk snapshot.json.
+	snapshotPath := filepath.Join(sessionDir, "extensions", "workflow", "runs", run.ID, "snapshot.json")
+	snapshotData, err := os.ReadFile(snapshotPath)
+	if err != nil {
+		t.Fatalf("read snapshot.json: %v", err)
+	}
+	var snapshotFile workflowSnapshot
+	if err := json.Unmarshal(snapshotData, &snapshotFile); err != nil {
+		t.Fatalf("decode snapshot.json: %v", err)
+	}
+	if snapshotFile.Result == nil {
+		t.Fatal("snapshot.json result is nil")
+	}
+	// Confirm the completion notification was also sent.
+	if got := api.lastNotify(); !strings.Contains(got, "Workflow triage_fixes completed") {
+		t.Fatalf("completion notify = %q", got)
 	}
 }
 
