@@ -1,101 +1,17 @@
-# Append this task to ~/.modu/cron/tasks.yaml (or just tell modu_code:
-# "每个工作日早上 6 点跑 /morning-triage" and let cron_add write it).
+# Reference task config for the morning-triage loop. You normally don't edit
+# this file by hand — tell modu_code "每个工作日早上 6 点跑 /morning-triage,
+# 目标是更新 state/triage.md" and cron_add writes ~/.modu/cron/tasks.yaml.
 #
 # Cap Before You Ship: all three per-task breakers are set BEFORE the loop's
 # first unattended run, plus the shared daily budget in config.yaml.
 tasks:
-  - id: morning-market-daily
-    cron: "0 20 10 * * 1-5"     # 10:20 on weekdays (sec min hour dom mon dow)
-    timezone: Asia/Shanghai
-    goal: "Update state/watchlist.md with today's A股 morning themes/stocks, compare the previous watchlist against today's evidence, and produce a sourced mobile-friendly morning brief."
-    prompt: |-
-      Skills: a-stock-data
-
-      先用 bash 命令 `date '+%Y-%m-%d %A'` 获取今天的日期。现在是A股早盘时间(10:20)。
-
-      数据源规则：
-      - 行情/指数优先用腾讯财经API；不要为了行情去打东财。
-      - 同花顺热点、同花顺北向可直接HTTP获取。
-      - 东财只用于行业板块、龙虎榜、解禁、全球资讯等独有数据；所有东财请求必须串行，至少间隔1秒，并带 User-Agent/Referer。
-      - 如果今天不是交易日或核心接口全部返回空，明确写"非交易日/暂无数据"，不要编造涨跌幅、成交额、题材或标的；不要创建或更新 state/watchlist.md，保留上一轮状态。
-
-      这是一个持续运行的 loop，不是一次性简报。开始分析前必须读取仓库里的 `state/watchlist.md`：
-      - 如果文件存在，先复盘上一轮关注的题材/标的：今天是延续、走弱、证伪，还是仍需观察。
-      - 如果文件不存在，说明本轮是基线，并在结束前创建它。
-
-      请执行以下A股早盘行情分析：
-
-      ## 一、大盘指数（优先用腾讯财经API）
-      拉取以下指数的实时行情（最新价、涨跌幅、成交额）：
-      - 上证指数(000001)
-      - 深证成指(399001)
-      - 创业板指(399006)
-      - 科创50(000688)
-
-      ## 二、当日热点题材（用同花顺热点）
-      拉取今日同花顺热点板块及强势股，列出TOP 5热点题材的名称、领涨股和涨幅。
-
-      ## 三、行业板块涨跌排名（用东财行业板块排名）
-      拉取今日行业板块涨跌排名，列出涨幅前5和跌幅前5的行业板块。
-
-      ## 四、北向资金动向（用同花顺北向）
-      拉取沪股通和深股通今日的分钟资金流向，给出净流入/流出概况。
-
-      ## 五、短期强势股（同花顺热点中涨幅居前的个股）
-      列出3-5只今日表现强势的个股及其涨幅。
-
-      ---
-
-      分析完成后必须更新 `state/watchlist.md`，用 Markdown 写入完整状态，不要只追加流水账。若今日为非交易日或核心行情/热点/行业数据全部暂无数据，不要创建或更新 `state/watchlist.md`，只输出"非交易日/暂无数据，已保留上一轮 watchlist"。固定使用以下结构：
-
-      # A股观察清单
-
-      ## 最新日期
-      YYYY-MM-DD
-
-      ## 上一轮复盘
-      - 题材/标的：
-      - 今日验证：
-      - 结论：
-
-      ## 今日发现的题材
-      | 题材 | 强度 | 证据 | 代表标的 | 明日验证点 |
-      | --- | --- | --- | --- | --- |
-
-      ## 今日发现的标的
-      | 代码 | 名称 | 触发原因 | 所属题材 | 风险 | 明日验证点 |
-      | --- | --- | --- | --- | --- | --- |
-
-      ## 明日观察假设
-      -
-
-      ## 已移出观察
-      | 题材/标的 | 移出原因 | 日期 |
-      | --- | --- | --- |
-
-      约束：
-      - 最新日期必须写今天的 Asia/Shanghai 日期。
-      - 上一轮复盘逐条写清延续/走弱/证伪/待观察；没有历史 watchlist 时写明本轮是基线。
-      - 今日发现的题材/标的表不得为空；如果没有有效交易数据或无法形成至少一个题材和一个标的，按"非交易日/暂无数据"处理，不要创建或更新 state/watchlist.md。
-      - 写完后读回 state/watchlist.md，确认标题、最新日期、题材表、标的表、已移出观察表存在且最新日期是今天。
-
-      将以上信息整理为结构化的早盘行情简报，作为你的最后一条回复完整输出。运行结束后简报会自动推送到飞书，不要自己调用任何推送工具。简报要求：
-      - 简洁、关键数据突出
-      - 每个板块一行核心结论
-      - 适合手机端阅读
-      - 明确写出上一轮 watchlist 复盘结论
-      - 最后确认写完后读回 state/watchlist.md，且文件已写入今天日期
-    enabled: true
-    on_overlap: skip
-    timeout: 20m
-    max_tokens_per_run: 300000
-    max_retries: 1
-    channels: [feishu-daily]
-
   - id: morning-triage
     cron: "0 0 6 * * 1-5"        # 06:00 on weekdays (sec min hour dom mon dow)
-    timezone: Asia/Shanghai
+    timezone: Asia/Shanghai      # pin the schedule; survives machine moves
     prompt: "/morning-triage"    # slash form invokes the installed skill
+    # goal: makes the run a real loop turn — the runner creates a session
+    # goal before the prompt, the goal verifier (maker-checker) judges
+    # completion, and run_end records goal_status.
     goal: "Triage today's actionable CI/issues changes, update state/triage.md, and leave every uncertain or blocked item in inbox/"
     enabled: true
     on_overlap: skip
@@ -103,6 +19,19 @@ tasks:
     max_tokens_per_run: 400000   # per-run token breaker (input+output)
     max_retries: 1               # retry plain errors once; cap trips never retry
     channels: [feishu-daily]     # completion notice: status, summary, new inbox items, PR links
+
+  # Quick functional verification (see README「快速功能验证」): a short,
+  # high-frequency, throwaway loop that proves Scheduling→Goal→Verifier→State
+  # in a few minutes. Add it when you want to check the pipeline, delete it
+  # right after — never leave it enabled.
+  # - id: loop-smoke
+  #   cron: "@every 30s"
+  #   goal: "state/loop-smoke.md exists and its last line is this run's timestamp"
+  #   prompt: "Read state/loop-smoke.md if it exists (your previous runs' memory), then append one line with the current timestamp from `date '+%F %T'`."
+  #   enabled: true
+  #   on_overlap: skip
+  #   timeout: 3m
+  #   max_tokens_per_run: 100000
 
 # And in ~/.modu/cron/config.yaml:
 #

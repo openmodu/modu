@@ -220,6 +220,14 @@ type SetTodosMsg struct {
 
 type ClearMessagesMsg struct{}
 
+// SetMessagesMsg replaces the whole conversation transcript in one shot —
+// the runtime equivalent of Options.InitialMessages. Used when the host
+// switches the underlying session (e.g. /resume) and needs the screen to
+// show the new session's history instead of a blind one-line confirmation.
+type SetMessagesMsg struct {
+	Messages []Message
+}
+
 type SetPanelMsg struct {
 	Panel Panel
 }

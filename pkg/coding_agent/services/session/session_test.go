@@ -340,6 +340,42 @@ func TestSessionManagerListIncludesNameAndSortsByModified(t *testing.T) {
 	}
 }
 
+func TestFindByIDPrefix(t *testing.T) {
+	dir := t.TempDir()
+	sessionDir := DefaultSessionDir(dir, "/test/project")
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"abc123.jsonl", "abd456.jsonl", "abc.jsonl"} {
+		if err := os.WriteFile(filepath.Join(sessionDir, name), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	info, ok, err := FindByIDPrefix(dir, "/test/project", "abc123")
+	if err != nil || !ok || info.ID != "abc123" {
+		t.Fatalf("exact match: info=%#v ok=%v err=%v", info, ok, err)
+	}
+	// "abc" is a prefix of "abc123" but also an exact filename — exact wins.
+	info, ok, err = FindByIDPrefix(dir, "/test/project", "abc")
+	if err != nil || !ok || info.ID != "abc" {
+		t.Fatalf("exact over prefix: info=%#v ok=%v err=%v", info, ok, err)
+	}
+	info, ok, err = FindByIDPrefix(dir, "/test/project", "abd")
+	if err != nil || !ok || info.ID != "abd456" {
+		t.Fatalf("unique prefix: info=%#v ok=%v err=%v", info, ok, err)
+	}
+	if _, _, err = FindByIDPrefix(dir, "/test/project", "ab"); err == nil {
+		t.Fatal("expected ambiguous prefix error")
+	}
+	if _, ok, err = FindByIDPrefix(dir, "/test/project", "zzz"); err != nil || ok {
+		t.Fatalf("missing id: ok=%v err=%v", ok, err)
+	}
+	if _, ok, err = FindByIDPrefix(dir, "/other/cwd", "abc"); err != nil || ok {
+		t.Fatalf("missing dir: ok=%v err=%v", ok, err)
+	}
+}
+
 func TestSessionManagerCreateBranchedSessionCopiesPathOnly(t *testing.T) {
 	dir := t.TempDir()
 	mgr, err := NewManager(dir, "/test/project")

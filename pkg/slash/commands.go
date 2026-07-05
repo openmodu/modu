@@ -3,6 +3,7 @@ package slash
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -117,15 +118,25 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 
 	case "resume":
 		if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
-			r.PrintInfo("usage: /resume <session-file>")
+			r.PrintInfo("usage: /resume <session-file | session-id-prefix>")
 			return true, false
 		}
-		path := strings.TrimSpace(parts[1])
-		if err := session.SwitchSession(path); err != nil {
-			r.PrintError(err)
-		} else {
-			r.PrintInfo("resumed session: " + path)
+		target := strings.TrimSpace(parts[1])
+		// Accept both a session file path and a session id (or unique
+		// prefix), matching the `modu_code --resume <id>` startup flag.
+		// The stat check decides the route up front: SwitchSession quietly
+		// tolerates missing files (it would "resume" onto an empty session
+		// at a bogus path), so only hand it real files.
+		if fi, statErr := os.Stat(target); statErr == nil && !fi.IsDir() {
+			if err := session.SwitchSession(target); err != nil {
+				r.PrintError(err)
+				return true, false
+			}
+		} else if err := session.ResumeByID(target); err != nil {
+			r.PrintError(fmt.Errorf("resume %q: %v", target, err))
+			return true, false
 		}
+		r.PrintInfo("resumed session: " + session.GetSessionFile())
 		return true, false
 
 	case "fork-session":

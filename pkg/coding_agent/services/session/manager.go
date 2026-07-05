@@ -2,6 +2,7 @@ package session
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -29,16 +30,15 @@ type Manager struct {
 
 // SessionInfo is the lightweight session selector/listing view.
 type SessionInfo struct {
-	Path            string
-	ID              string
-	Cwd             string
-	Name            string
-	ParentSession   string
-	Created         time.Time
-	Modified        time.Time
-	MessageCount    int
-	FirstMessage    string
-	AllMessagesText string
+	Path          string
+	ID            string
+	Cwd           string
+	Name          string
+	ParentSession string
+	Created       time.Time
+	Modified      time.Time
+	MessageCount  int
+	FirstMessage  string
 }
 
 // NewManager creates or continues the most recent session for projectPath.
@@ -715,61 +715,136 @@ func Delete(agentDir, sessionPath string) error {
 }
 
 // BuildSessionInfo reads a session file summary.
+// On-disk line shapes (see SessionEntry.MarshalJSON): the header is a
+// struct marshal, so its line STARTS with {"type":"session",...}; entries
+// are map marshals with alphabetically sorted keys, so their authentic
+// "type" is always the LAST key and the line ENDS with "type":"<T>"}.
+// Matching prefix/suffix is exact and O(1) per line — the same byte
+// sequence inside a huge message payload can never sit at the line edge.
+var (
+	gateHeaderPrefix      = []byte(`{"type":"session",`)
+	gateMessageSuffix     = []byte(`"type":"message"}`)
+	gateSessionInfoSuffix = []byte(`"type":"session_info"}`)
+)
+
+// BuildSessionInfo summarizes one session file for listings and id lookup.
+//
+// It deliberately does NOT load the session through NewManagerFromFile:
+// listings touch every session in a directory, and cron-driven sessions grow
+// to tens of megabytes each — fully parsing every entry (the old approach)
+// made a simple `--resume <id>` burn ~40s of CPU against a 2GB session dir.
+// Instead this streams the file once and only JSON-decodes the handful of
+// lines the summary needs (header, session_info names, the first user
+// message); message lines are counted via the line-edge gate without
+// decoding their payload.
 func BuildSessionInfo(path string) (SessionInfo, error) {
-	m, err := NewManagerFromFile(path)
-	if err != nil {
-		return SessionInfo{}, err
-	}
 	stat, err := os.Stat(path)
 	if err != nil {
 		return SessionInfo{}, err
 	}
-	header := m.Header()
-	created, _ := time.Parse(time.RFC3339Nano, header.Timestamp)
-	if created.IsZero() {
-		created = stat.ModTime()
+	file, err := os.Open(path)
+	if err != nil {
+		return SessionInfo{}, err
 	}
+	defer file.Close()
+
 	info := SessionInfo{
-		Path:          path,
-		ID:            header.ID,
-		Cwd:           header.Cwd,
-		ParentSession: header.ParentSession,
-		Created:       created,
-		Modified:      stat.ModTime(),
-		Name:          m.SessionName(),
+		Path:     path,
+		Modified: stat.ModTime(),
 	}
-	var all []string
-	for _, entry := range m.Load() {
-		if entry.Type != EntryTypeMessage {
-			continue
+
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
+	headerSeen := false
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
+		switch {
+		case bytes.HasSuffix(line, gateMessageSuffix):
+			info.MessageCount++
+			if info.FirstMessage == "" {
+				var entry struct {
+					Message struct {
+						Role    string          `json:"role"`
+						Content json.RawMessage `json:"content"`
+					} `json:"message"`
+				}
+				if json.Unmarshal(line, &entry) == nil && entry.Message.Role == "user" {
+					var text string
+					if json.Unmarshal(entry.Message.Content, &text) == nil && text != "" {
+						info.FirstMessage = text
+					}
+				}
+			}
+		case bytes.HasSuffix(line, gateSessionInfoSuffix):
+			var entry struct {
+				Name string `json:"name"`
+			}
+			if json.Unmarshal(line, &entry) == nil {
+				// Last session_info entry wins, mirroring SessionName().
+				info.Name = entry.Name
+			}
+		case !headerSeen && bytes.HasPrefix(line, gateHeaderPrefix):
+			var header Header
+			if json.Unmarshal(line, &header) == nil && header.Type == "session" {
+				headerSeen = true
+				info.ID = header.ID
+				info.Cwd = header.Cwd
+				info.ParentSession = header.ParentSession
+				if created, err := time.Parse(time.RFC3339Nano, header.Timestamp); err == nil {
+					info.Created = created
+				}
+			}
 		}
-		info.MessageCount++
-		role, text := messageRoleText(entry.Data)
-		if text == "" || (role != "user" && role != "assistant") {
-			continue
-		}
-		if info.FirstMessage == "" && role == "user" {
-			info.FirstMessage = text
-		}
-		all = append(all, text)
+	}
+	if err := scanner.Err(); err != nil {
+		return SessionInfo{}, err
+	}
+	if info.Created.IsZero() {
+		info.Created = stat.ModTime()
 	}
 	if info.FirstMessage == "" {
 		info.FirstMessage = "(no messages)"
 	}
-	info.AllMessagesText = strings.Join(all, " ")
 	return info, nil
 }
 
-func messageRoleText(data any) (string, string) {
-	switch v := data.(type) {
-	case MessageData:
-		text, _ := v.Content.(string)
-		return string(v.Role), text
-	case map[string]any:
-		role, _ := v["role"].(string)
-		content, _ := v["content"].(string)
-		return role, content
-	default:
-		return "", ""
+// FindByIDPrefix resolves a session id (or unique prefix) to its file using
+// the filename convention — every session is written as <id>.jsonl — so the
+// lookup is a directory listing, never a content parse. Returns ok=false
+// when nothing matches; ambiguous prefixes are an error.
+func FindByIDPrefix(agentDir, cwd, id string) (SessionInfo, bool, error) {
+	dir := DefaultSessionDir(agentDir, cwd)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return SessionInfo{}, false, nil
+		}
+		return SessionInfo{}, false, err
 	}
+	match := ""
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+			continue
+		}
+		stem := strings.TrimSuffix(entry.Name(), ".jsonl")
+		if stem == id {
+			match = entry.Name()
+			break
+		}
+		if strings.HasPrefix(stem, id) {
+			if match != "" {
+				return SessionInfo{}, false, fmt.Errorf("ambiguous session id prefix %q", id)
+			}
+			match = entry.Name()
+		}
+	}
+	if match == "" {
+		return SessionInfo{}, false, nil
+	}
+	path := filepath.Join(dir, match)
+	info := SessionInfo{Path: path, ID: strings.TrimSuffix(match, ".jsonl")}
+	if stat, err := os.Stat(path); err == nil {
+		info.Modified = stat.ModTime()
+	}
+	return info, true, nil
 }

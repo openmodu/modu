@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
+	"github.com/openmodu/modu/pkg/coding_agent/services/session"
 	modutui "github.com/openmodu/modu/pkg/modu-tui"
 	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/types"
@@ -3200,5 +3201,175 @@ func TestModuTUISlashRunningStatusUsesCommandName(t *testing.T) {
 		if got := moduTUISlashRunningStatus(tt.line); got != tt.want {
 			t.Fatalf("moduTUISlashRunningStatus(%q) = %q, want %q", tt.line, got, tt.want)
 		}
+	}
+}
+
+// craftSavedSession writes a real session JSONL (via the session manager)
+// into the per-cwd session dir so /resume has something to switch to.
+// Returns the file path and session id.
+func craftSavedSession(t *testing.T, agentDir, cwd, name, userText string) (string, string) {
+	t.Helper()
+	mgr, err := session.NewFreshManager(agentDir, cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.AppendSessionInfo(name); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Append(session.NewEntry(session.EntryTypeMessage, "", session.MessageData{
+		Role:    types.RoleUser,
+		Content: userText,
+	})); err != nil {
+		t.Fatal(err)
+	}
+	return mgr.FilePath(), mgr.SessionID()
+}
+
+func TestRunModuTUISlashResumeReplaysTargetHistory(t *testing.T) {
+	cwd := t.TempDir()
+	agentDir := t.TempDir()
+	oldPath, _ := craftSavedSession(t, agentDir, cwd, "old-run", "hello from the old session")
+
+	current, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       cwd,
+		AgentDir:  agentDir,
+		Model:     &types.Model{ID: "test", Name: "Test", ProviderID: "test"},
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prevFile := current.GetSessionFile()
+
+	var sent []tea.Msg
+	runModuTUISlash(context.Background(), "/resume "+oldPath, current, current.GetModel(), CommandHooks{}, func(msg tea.Msg) {
+		sent = append(sent, msg)
+	}, nil, nil, nil)
+
+	if current.GetSessionFile() != oldPath {
+		t.Fatalf("session not switched: got %q, want %q", current.GetSessionFile(), oldPath)
+	}
+	if current.GetSessionFile() == prevFile {
+		t.Fatal("session file unchanged")
+	}
+	var replay *modutui.SetMessagesMsg
+	confirmed := false
+	for _, msg := range sent {
+		switch m := msg.(type) {
+		case modutui.SetMessagesMsg:
+			next := m
+			replay = &next
+		case modutui.AppendMessageMsg:
+			if strings.Contains(m.Message.Text, "resumed session: "+oldPath) {
+				confirmed = true
+			}
+		}
+	}
+	if replay == nil {
+		t.Fatalf("expected SetMessagesMsg replaying target history, got %#v", sent)
+	}
+	found := false
+	for _, m := range replay.Messages {
+		if strings.Contains(m.Text, "hello from the old session") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("replayed history missing old session content: %#v", replay.Messages)
+	}
+	if !confirmed {
+		t.Fatalf("missing resumed-session confirmation in %#v", sent)
+	}
+}
+
+func TestRunModuTUISlashResumeAcceptsIDPrefix(t *testing.T) {
+	cwd := t.TempDir()
+	agentDir := t.TempDir()
+	oldPath, oldID := craftSavedSession(t, agentDir, cwd, "old-run", "prefix resume works")
+
+	current, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       cwd,
+		AgentDir:  agentDir,
+		Model:     &types.Model{ID: "test", Name: "Test", ProviderID: "test"},
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var sent []tea.Msg
+	runModuTUISlash(context.Background(), "/resume "+oldID[:8], current, current.GetModel(), CommandHooks{}, func(msg tea.Msg) {
+		sent = append(sent, msg)
+	}, nil, nil, nil)
+
+	if current.GetSessionFile() != oldPath {
+		t.Fatalf("id-prefix resume did not switch: got %q, want %q", current.GetSessionFile(), oldPath)
+	}
+	for _, msg := range sent {
+		if m, ok := msg.(modutui.SetMessagesMsg); ok {
+			for _, message := range m.Messages {
+				if strings.Contains(message.Text, "prefix resume works") {
+					return
+				}
+			}
+		}
+	}
+	t.Fatalf("expected SetMessagesMsg with target history, got %#v", sent)
+}
+
+func TestRunModuTUISlashNonSwitchingCommandDoesNotReplay(t *testing.T) {
+	current, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       t.TempDir(),
+		AgentDir:  t.TempDir(),
+		Model:     &types.Model{ID: "test", Name: "Test", ProviderID: "test"},
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sent []tea.Msg
+	runModuTUISlash(context.Background(), "/help", current, current.GetModel(), CommandHooks{}, func(msg tea.Msg) {
+		sent = append(sent, msg)
+	}, nil, nil, nil)
+	for _, msg := range sent {
+		if _, ok := msg.(modutui.SetMessagesMsg); ok {
+			t.Fatalf("non-switching command must not replay history: %#v", sent)
+		}
+	}
+}
+
+func TestRunModuTUISlashResumeRejectsUnknownTarget(t *testing.T) {
+	current, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       t.TempDir(),
+		AgentDir:  t.TempDir(),
+		Model:     &types.Model{ID: "test", Name: "Test", ProviderID: "test"},
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prevFile := current.GetSessionFile()
+
+	var sent []tea.Msg
+	runModuTUISlash(context.Background(), "/resume definitely-not-a-session", current, current.GetModel(), CommandHooks{}, func(msg tea.Msg) {
+		sent = append(sent, msg)
+	}, nil, nil, nil)
+
+	// The old behavior silently "resumed" onto an empty session at a bogus
+	// relative path; now an unknown target must fail loudly and not switch.
+	if current.GetSessionFile() != prevFile {
+		t.Fatalf("session must not switch on unknown target: %q", current.GetSessionFile())
+	}
+	errSeen := false
+	for _, msg := range sent {
+		if _, ok := msg.(modutui.SetMessagesMsg); ok {
+			t.Fatalf("no history replay expected on failed resume: %#v", sent)
+		}
+		if m, ok := msg.(modutui.AppendMessageMsg); ok && strings.Contains(m.Message.Text, "definitely-not-a-session") {
+			errSeen = true
+		}
+	}
+	if !errSeen {
+		t.Fatalf("expected an error message naming the target, got %#v", sent)
 	}
 }

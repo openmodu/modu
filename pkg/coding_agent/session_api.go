@@ -294,26 +294,19 @@ func resolveSessionInfoByID(agentDir, cwd, id string) (session.SessionInfo, erro
 	if id == "" {
 		return session.SessionInfo{}, fmt.Errorf("session id is required")
 	}
-	sessions, err := session.List(agentDir, cwd)
+	// Session files are named <id>.jsonl, so id resolution is a directory
+	// listing — never a content parse. The previous implementation went
+	// through session.List, which summarizes every session file in the
+	// directory; against a multi-GB session dir that made `--resume <id>`
+	// burn ~40s before even starting.
+	info, ok, err := session.FindByIDPrefix(agentDir, cwd, id)
 	if err != nil {
 		return session.SessionInfo{}, err
 	}
-	var match *session.SessionInfo
-	for i := range sessions {
-		if sessions[i].ID == id {
-			return sessions[i], nil
-		}
-		if strings.HasPrefix(sessions[i].ID, id) {
-			if match != nil {
-				return session.SessionInfo{}, fmt.Errorf("ambiguous session id prefix %q", id)
-			}
-			match = &sessions[i]
-		}
-	}
-	if match == nil {
+	if !ok {
 		return session.SessionInfo{}, fmt.Errorf("no session found with id %q", id)
 	}
-	return *match, nil
+	return info, nil
 }
 
 // SwitchSession loads messages from a different session file and replaces the current agent messages.

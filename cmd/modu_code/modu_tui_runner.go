@@ -881,10 +881,18 @@ func runModuTUISlash(ctx context.Context, line string, session *coding_agent.Cod
 	}
 
 	printer := &moduTUISlashPrinter{}
+	prevSessionFile := session.GetSessionFile()
 	handled, exit := slash.Handle(ctx, line, session, printer, model)
 	if handled {
 		if printer.clear {
 			send(modutui.ClearMessagesMsg{})
+		}
+		// A command that switched the underlying session (/resume,
+		// /fork-session, ...) must replay the target session's history —
+		// the same render the startup --resume path gets — instead of
+		// leaving the screen showing the previous conversation.
+		if session.GetSessionFile() != prevSessionFile {
+			send(modutui.SetMessagesMsg{Messages: messagesFromSessionTranscript(session)})
 		}
 		if text := printer.Text(); text != "" {
 			send(modutui.AppendMessageMsg{Message: modutui.Message{Role: modutui.RoleAssistant, Text: text, Preformatted: true}})
