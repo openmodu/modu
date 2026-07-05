@@ -239,33 +239,66 @@ go test ./pkg/cron/... ./pkg/coding_agent/plugins/extension/goal/ ./pkg/coding_a
 - §3.5 inbox 人门:`cron/notify/notify_test.go`——本次 run 新增/历史存量按 mtime 区分、PR 链接去重保序、空 cwd 不采集
 - 调度骨架:`cron/daemon_test.go`(热加载换新调度器、坏 config/坏 cron 表达式回滚保留旧调度器)、`cron/scheduler/scheduler_test.go`(skip/queue/kill 并发策略)
 
-### 5.2 真机 E2E(分阶段,每阶段独立可跑)
+### 5.2 TUI 亲手验证 playbook(全程说话,不写 shell)
 
-前置(一次性):① `go install ./cmd/modu_code` 重装二进制(调度器嵌在 TUI 进程里,旧二进制没有这些功能);② 建 `~/.modu/extensions.yaml` 开 verifier(文件是增量覆盖,只写 goal 一项即可):
+原则:你的操作面只有两样——在 TUI 里说话,和在**另一个终端**看两类观察点(`tail -f ~/.modu/cron/daemon.log`、`~/.modu/cron/logs/<task>/` 里的 NDJSON)。每个 case 都写明:说什么 → 看什么 → 怎么判定。
 
-```yaml
-extensions:
-  - name: goal
-    config:
-      verifier:
-        enabled: true
-```
+**Case 0 · 准备(一次,约 2 分钟)**
 
-**阶段 1 · 内嵌调度器冒烟(§2.1)**:启动 `modu_code` 进 TUI;另开终端 `tail -f ~/.modu/cron/daemon.log`,应见 `loaded N task(s)` + `cron scheduler started`。TUI 里说"加一个每分钟的测试任务 smoke-test,prompt 是 say hello in one word"——daemon.log 应出现 `config file changed, reloading...`(聊天建任务 + 热加载一起验了)。等 1-2 分钟:`~/.modu/cron/logs/smoke-test/` 出现 NDJSON,最后一行 `run_end` 为 `status:"ok"` 且带 `tokens`;session 列表里出现名为 `cron:smoke-test` 的完整会话(按 job id 关联)。通过标准:任务无人触发自己跑了,TUI 界面没被日志糊花。
+1. **停掉所有已在跑的 modu_code**(`ps aux | grep modu_code`;调度器嵌在每个 TUI 进程里,两个实例会把同一份任务表各跑一遍,双倍执行双倍花钱)。测试期间全程只保留你手上这一个。
+2. `go install ./cmd/modu_code`——**必须重装**,goal 字段是 07-04 才进的,旧二进制没有。
+3. 确认 `~/.modu/extensions.yaml` 有 goal verifier(增量覆盖语义,只写 goal 一项即可):`extensions: [{name: goal, config: {verifier: {enabled: true}}}]`。
+4. 另开终端:`tail -f ~/.modu/cron/daemon.log`。启动 `modu_code`(在 modu 仓库目录),daemon.log 应出现 `loaded 2 task(s)` + `cron scheduler started`。
+5. 背景事实:周末测试不受真实任务干扰(两个真实任务都是工作日 cron);测试消耗计入 `daily_budget_tokens`(量很小);working_dir 是仓库根,临时 state 文件会落在仓库里,最后清掉。
 
-**阶段 2 · 三档 cap(§3.2)**:没有手动触发命令,用 `@every 1m` 的专用任务让断路器自己撞线,测完即删:
+**Case 1 · 说话建任务 + 热加载(约 1 分钟)**
 
-- timeout:任务 prompt "run bash: sleep 120"、`timeout: 20s` → 下一轮 `run_end` = `status:"timeout"`
-- token cap:prompt "逐个读 pkg/ 下所有 go 文件并总结"、`max_tokens_per_run: 3000` → `status:"token_cap"`
-- 日额度:config.yaml 临时加 `daily_budget_tokens: 1000`(当天台账已有消耗)→ 任何任务下一轮 `status:"budget_exceeded"`,日志只有 run_start/run_end 两行,channel 收到告警。**测完立刻删掉这行**,否则真实任务会被拒跑
+- 说:"现在有哪些 cron 任务?" → agent 调 `cron_list`,列出 morning-market-daily 和 morning-triage。
+- 说:"加一个测试任务 loop-smoke:每 30 秒跑一次,goal 是 state/loop-smoke.md 存在且最后一行是本次运行的时间戳,prompt 是'读 state/loop-smoke.md(它是你之前几轮的记忆),用 date 追加一行当前时间戳,然后读回确认',超时 3 分钟,单次最多 15 万 token,不要通知"。
+- 看:daemon.log 出现 `config file changed, reloading...` → `reloaded: 3 task(s)`。
+- 判定:说话建任务 + 热加载 ✅。(`cron_add` 支持 goal/timezone;cap 三件套 agent 会用 Edit 直接补进 task.yaml——也是合法路径,热加载同样接住。)
 
-**阶段 3 · 通知 + inbox 人门(§3.5)**:给 smoke-test 挂 `channels: [feishu-daily]`,等一轮,飞书收到 task/status/duration/summary。再把 prompt 改成"在 ./inbox/ 写一个 test-item.md 然后说 done"→ 下一轮通知出现 `inbox: 1 new item(s) waiting for you: test-item.md`;**再下一轮不应重复报该存量条目**(只报当天新增是这条的核心断言)。
+**Case 2 · goal loop 核心链路(等 2-3 轮,约 2 分钟)**
 
-**阶段 4 · goal verifier + reviewer(§3.1/§3.3)**:`cp examples/agents/reviewer.md ~/.modu/agents/`;TUI 里 `/goal 在 /tmp/goal-test.txt 写入 hello 并确认文件存在`。完成时应先出现 goal-verifier 的 fork 会话,然后通知区出现 `goal: verifier PASS — completion confirmed by independent check`。验尸式检查(文章 rubric):跑若干真实 goal 后,最近几轮里 verifier 至少真 REJECT 过一次——从未说过 no 的 evaluator 统计上不可能在工作。
+- 什么都不用说,等。每 ~30 秒一轮。
+- 看(另一终端):`ls ~/.modu/cron/logs/loop-smoke/`;最新文件第一行应含 `"trigger":"scheduler"`、`"has_goal":true`、`"goal_verifier":true`;最后一行应是 `"status":"ok"` + `"goal_status":"complete"`;仓库里 `state/loop-smoke.md` 每轮多一行。
+- 判定:Scheduling→Goal→Verifier→State 全链路 ✅,feeds itself ✅。(参考值:单轮 12-22 秒、约 7 万 token 含 verifier。)
 
-**阶段 5 · morning-triage 连跑两天(§3.4)**:按 `examples/loops/morning-triage/README.md` 安装;先把 cron 改成 `@every 5m` 快速跑通一轮(`state/triage.md` 生成并 commit、通知带 inbox),确认后改回 `0 0 6 * * 1-5`,连挂两个早上。第二天检查:未完成 finding 状态延续、已完成的不重做、昨天的 inbox 条目还在、通知只报当天新增。
+**Case 3 · verifier 会说不(决定性,约 1 分钟)**
 
-清理:测试任务(smoke-test / cap-*)在 TUI 里说一句"删掉"即可;临时的 `daily_budget_tokens` 记得移除。
+- 说:"测试一下 goal 裁判:用 create_goal 建一个 goal,objective 是'文件 /tmp/goal-reject-tui.txt 存在且内容为 hello'。然后**不要做任何工作**(故意的),直接调 update_goal 标记完成,把工具返回的原文给我看。"
+- 看:工具返回 `update_goal rejected by the independent goal verifier (reject 1/3)... 文件不存在`;通知区出现 `goal: verifier REJECT (1/3)`。
+- 加分:让它再谎报两次 → 第 3 次后 goal 转 paused + 通知(人门)。
+- 收尾:说"清掉这个 goal"。
+- 判定:maker-checker 门真的会驳回,且带具体理由 ✅。这同时满足文章的验尸检查(evaluator 至少真 REJECT 过一次)。
+
+**Case 4 · 三档断路器(每档等一轮,测完即删)**
+
+- timeout:说"加任务 cap-timeout:每 30 秒,prompt 是'前台运行 bash:python3 计一个 90 秒的忙等循环,等它输出',timeout 15 秒"。→ 下一轮日志 `"status":"timeout"`,duration ≈ 15000ms。**注意:不能用 sleep 造慢任务**——agent 会把 sleep 丢后台,bash 工具还自带"前台 sleep≥2s 拒绝"的防呆,必须用真计算。
+- token cap:说"加任务 cap-token:每 30 秒,prompt 是'逐个读 pkg/ 下的 go 文件并极其详细地总结',单次上限 3000 token"。→ `"status":"token_cap"`,error 里有实际用量。
+- 日额度:说"把 daily_budget_tokens 临时改成 1000"。→ 下一轮任何任务 `"status":"budget_exceeded"`,duration 0ms(连 session 都不建),挂了 channel 的任务飞书收到告警。**立刻说"改回 3000000"**。
+- 判定:三档独立生效;三种断路器状态都不触发 max_retries 重试 ✅。
+
+**Case 5 · 人门:通知 + inbox(等两轮)**
+
+- 说:"给 loop-smoke 挂上 feishu-daily,prompt 里加一句:在 ./inbox/ 写一个 tui-test.md 说明有事需要人决定"。
+- 看:下一轮飞书通知包含 task/status/耗时/摘要 + `inbox: 1 new item(s) waiting for you: tui-test.md`;**再下一轮**通知不再重复报 tui-test.md(只报当天新增是核心断言)。
+- 判定:门被送到人眼前,且不重复轰炸 ✅。
+
+**Case 6 · session 按 job id 关联(半分钟)**
+
+- TUI 里 `/session`(或退出后重开时看列表)→ 出现名为 `cron:loop-smoke` 的会话;打开能看到完整对话,包括 update_goal 被 verifier 拦下/放行的完整现场。
+- 判定:每次 cron run 都能按任务 id 找到完整 session ✅。
+
+**Case 7 · 清理 + 收尾**
+
+- 说:"删掉 loop-smoke、cap-timeout、cap-token 三个任务,把 state/loop-smoke.md 和 inbox/tui-test.md 也删掉"。
+- 看:daemon.log `reloaded: 2 task(s)`;仓库干净。
+
+**Case 8 · 自然两天验收(不用操作,周一之后看)**
+
+- 前提:一直挂着**一个** modu_code(tmux/screen)。
+- 周一 06:00 / 10:20 自然触发后看:日志第一行 `"trigger":"scheduler"`(不是 manual)、末行 `goal_status:"complete"`;`state/triage.md` 延续上周状态、已完成 finding 不回退;飞书通知只报当天新增 inbox。连续两个工作日满足即为最终验收(标准见 §2.1 补充)。
 
 ### 5.3 真机执行记录(2026-07-03,deepseek-v4-flash)
 
