@@ -193,6 +193,13 @@ type ExtensionAPI interface {
 	// it stops or ctx is cancelled. Errors include child agent failures
 	// and host-side dispatch problems (e.g. fork support not wired).
 	ForkSession(ctx context.Context, opts ForkOptions) (string, error)
+	// AddPending increments the pending-work counter. Extensions call this
+	// before spawning background work that must finish before the session
+	// can safely close (e.g. print mode).
+	AddPending(delta int)
+	// DonePending decrements the pending-work counter. Call via defer in the
+	// goroutine that performs the background work.
+	DonePending()
 }
 
 // CommandHandler handles a slash command invocation.

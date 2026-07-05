@@ -73,6 +73,9 @@ func runPrintText(ctx context.Context, opts PrintOptions) error {
 		}
 	}
 
+	// Wait for background workflows to complete before closing.
+	opts.Session.WaitForPendingWork()
+
 	// Output the final assistant text
 	if lastAssistantText != "" {
 		fmt.Fprintln(opts.Output, lastAssistantText)
@@ -145,6 +148,9 @@ func runPrintJSON(ctx context.Context, opts PrintOptions) error {
 			return err
 		}
 	}
+
+	// Wait for background workflows to complete before closing.
+	opts.Session.WaitForPendingWork()
 
 	// Output session end
 	_ = enc.Encode(map[string]string{"type": "session_end"})

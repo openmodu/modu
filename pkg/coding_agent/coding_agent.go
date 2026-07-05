@@ -764,6 +764,15 @@ func (s *engine) WaitForIdle() {
 	s.agent.WaitForIdle()
 }
 
+// WaitForPendingWork blocks until all extension-registered pending background
+// work completes. Call after WaitForIdle to ensure background workflows finish
+// before the session closes (e.g. in print/headless mode).
+func (s *engine) WaitForPendingWork() {
+	if s.extensions != nil {
+		s.extensions.WaitForPending()
+	}
+}
+
 // Abort cancels the current operation.
 func (s *engine) Abort() {
 	s.agent.Abort()
