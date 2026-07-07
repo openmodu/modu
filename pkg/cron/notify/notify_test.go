@@ -44,7 +44,7 @@ func TestCompletionPostsWebhookPayload(t *testing.T) {
 	cfg := &config.Config{Channels: map[string]config.Channel{
 		"ops": {Type: "webhook", URL: srv.URL},
 	}}
-	task := config.Task{ID: "daily", Channel: "ops"}
+	task := config.Task{UUID: "11111111-1111-1111-1111-111111111111", Name: "daily", Channel: "ops"}
 
 	err := NewSender().Completion(context.Background(), cfg, task, runner.Result{
 		LogPath: logPath,
@@ -54,7 +54,7 @@ func TestCompletionPostsWebhookPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Completion: %v", err)
 	}
-	if got.Event != "modu_cron.task_completed" || got.TaskID != "daily" || got.Status != "ok" {
+	if got.Event != "modu_cron.task_completed" || got.TaskID != task.UUID || got.TaskName != "daily" || got.Status != "ok" {
 		t.Fatalf("unexpected payload: %+v", got)
 	}
 	if got.Summary != "all done" || !strings.Contains(got.Text, "summary: all done") {

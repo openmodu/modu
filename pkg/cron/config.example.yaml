@@ -2,8 +2,8 @@
 # There is no separate cron command or daemon — the scheduler runs embedded
 # in modu_code's normal interactive TUI process, tolerating a missing config
 # file (zero tasks, cwd as working_dir). Add tasks by talking to modu_code
-# (cron_add / cron_list / cron_remove tools), not by editing this file by
-# hand, though hand-editing works too.
+# (cron_add / cron_list / cron_remove / cron_update tools, or /cron slash),
+# not by editing this file by hand, though hand-editing works too.
 #
 # No model/provider settings here: cron tasks run with whatever model is
 # currently active in modu_code (`modu_code config`, ~/.modu/config.toml) —
@@ -38,13 +38,15 @@ channels:
 # Put cron tasks in ~/.modu/cron/tasks.yaml:
 #
 # tasks:
-#   - id: heartbeat
+#   - uuid: 11111111-1111-1111-1111-111111111111
+#     name: heartbeat
 #     cron: "*/10 * * * * *"   # every 10 seconds
 #     prompt: "say hello"
 #     enabled: true
 #     channels: [ops-webhook]
 #
-#   - id: daily-summary
+#   - uuid: 22222222-2222-2222-2222-222222222222
+#     name: daily-summary
 #     cron: "0 0 9 * * *"      # 09:00 every day
 #     timezone: Asia/Shanghai  # optional IANA timezone; empty = process local time
 #     prompt: "summarize yesterday's commits in this repo"

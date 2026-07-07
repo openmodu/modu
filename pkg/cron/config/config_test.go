@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -66,8 +67,58 @@ func TestCapFieldsRoundTrip(t *testing.T) {
 		t.Errorf("DailyBudgetTokens=%d, want 3000000", out.DailyBudgetTokens)
 	}
 	task := out.Tasks[0]
+	if task.Name != "a" || task.ID != "" || task.UUID == "" {
+		t.Errorf("legacy id not normalized to uuid/name: %+v", task)
+	}
 	if task.Goal != "finish the scheduled objective" || task.Timezone != "Asia/Shanghai" || task.Timeout != "45m" || task.MaxTokensPerRun != 500_000 || task.MaxRetries != 2 {
 		t.Errorf("goal/timezone/cap fields not persisted: %+v", task)
+	}
+}
+
+func TestLegacyIDMigratesToNameAndUUID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tasks.yaml")
+	if err := os.WriteFile(path, []byte("tasks:\n  - id: daily\n    cron: '@every 1m'\n    prompt: p\n    enabled: true\n"), 0o644); err != nil {
+		t.Fatalf("write legacy tasks: %v", err)
+	}
+	cfg, err := LoadTasks(path)
+	if err != nil {
+		t.Fatalf("LoadTasks: %v", err)
+	}
+	if len(cfg.Tasks) != 1 {
+		t.Fatalf("expected one task, got %+v", cfg.Tasks)
+	}
+	task := cfg.Tasks[0]
+	if task.Name != "daily" || task.ID != "" || task.UUID == "" {
+		t.Fatalf("legacy id was not migrated: %+v", task)
+	}
+	if err := SaveTasks(path, cfg.Tasks); err != nil {
+		t.Fatalf("SaveTasks: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	text := string(data)
+	if strings.Contains(text, "\n    id:") || !strings.Contains(text, "name: daily") || !strings.Contains(text, "uuid: ") {
+		t.Fatalf("saved YAML should use uuid/name without id:\n%s", text)
+	}
+}
+
+func TestLegacyGeneratedUUIDIsStableAcrossLoads(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tasks.yaml")
+	if err := os.WriteFile(path, []byte("tasks:\n  - id: daily\n    cron: '@every 1m'\n    prompt: p\n    enabled: true\n"), 0o644); err != nil {
+		t.Fatalf("write legacy tasks: %v", err)
+	}
+	first, err := LoadTasks(path)
+	if err != nil {
+		t.Fatalf("first LoadTasks: %v", err)
+	}
+	second, err := LoadTasks(path)
+	if err != nil {
+		t.Fatalf("second LoadTasks: %v", err)
+	}
+	if first.Tasks[0].UUID == "" || first.Tasks[0].UUID != second.Tasks[0].UUID {
+		t.Fatalf("legacy generated UUID should be stable: first=%+v second=%+v", first.Tasks[0], second.Tasks[0])
 	}
 }
 
@@ -128,7 +179,7 @@ func TestLoadMissingRuntimeStillReadsDefaultTasksFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if len(cfg.Tasks) != 1 || cfg.Tasks[0].ID != "a" {
+	if len(cfg.Tasks) != 1 || cfg.Tasks[0].Name != "a" || cfg.Tasks[0].UUID == "" {
 		t.Fatalf("default tasks file not loaded: %+v", cfg.Tasks)
 	}
 }
@@ -183,7 +234,7 @@ func TestLoadUsesIsolatedTasksFile(t *testing.T) {
 	if cfg.WorkingDir != "/repo" || cfg.Channels["tg"].Type != "telegram" {
 		t.Fatalf("runtime config not preserved: %+v", cfg)
 	}
-	if len(cfg.Tasks) != 1 || cfg.Tasks[0].ID != "a" {
+	if len(cfg.Tasks) != 1 || cfg.Tasks[0].Name != "a" || cfg.Tasks[0].UUID == "" {
 		t.Fatalf("tasks file not loaded: %+v", cfg.Tasks)
 	}
 	runtimeCfg, err := LoadRuntime(cfgPath)
@@ -212,7 +263,7 @@ func TestLoadPrefersDefaultTasksFileOverLegacyEmbeddedTasks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if len(cfg.Tasks) != 1 || cfg.Tasks[0].ID != "isolated" {
+	if len(cfg.Tasks) != 1 || cfg.Tasks[0].Name != "isolated" || cfg.Tasks[0].UUID == "" {
 		t.Fatalf("expected isolated task file to win, got %+v", cfg.Tasks)
 	}
 }

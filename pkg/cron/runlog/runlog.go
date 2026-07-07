@@ -1,6 +1,6 @@
 // Package runlog manages per-task run log files.
 //
-// Layout: <root>/<task_id>/<local-RFC3339-timestamp>.log
+// Layout: <root>/<task_uuid>/<local-RFC3339-timestamp>.log
 // Default root: ~/.modu/cron/logs.
 package runlog
 

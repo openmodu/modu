@@ -99,14 +99,19 @@ func New(runner Runner) *Scheduler {
 // Add registers a task. The cron expression follows robfig/cron's 6-field
 // format (with seconds). Disabled tasks are skipped silently.
 func (s *Scheduler) Add(task config.Task) error {
+	task.Normalize()
 	if !task.Enabled {
 		return nil
 	}
-	if task.ID == "" {
-		return fmt.Errorf("task missing id")
+	taskID := task.Identity()
+	if taskID == "" {
+		return fmt.Errorf("task missing uuid")
+	}
+	if strings.TrimSpace(task.Name) == "" {
+		return fmt.Errorf("task %s: missing name", taskID)
 	}
 	if task.Cron == "" {
-		return fmt.Errorf("task %s: empty cron expression", task.ID)
+		return fmt.Errorf("task %s: empty cron expression", taskID)
 	}
 	if err := task.ValidateCaps(); err != nil {
 		return err
@@ -117,9 +122,9 @@ func (s *Scheduler) Add(task config.Task) error {
 	}
 
 	s.mu.Lock()
-	if _, exists := s.tasks[task.ID]; exists {
+	if _, exists := s.tasks[taskID]; exists {
 		s.mu.Unlock()
-		return fmt.Errorf("task %s: already scheduled", task.ID)
+		return fmt.Errorf("task %s: already scheduled", taskID)
 	}
 	state := &runState{
 		task:          task,
@@ -129,14 +134,14 @@ func (s *Scheduler) Add(task config.Task) error {
 		state.queue = make(chan struct{}, config.QueueCapacity)
 		go s.drainQueue(state)
 	}
-	s.tasks[task.ID] = state
+	s.tasks[taskID] = state
 	s.mu.Unlock()
 
 	if _, err := s.cron.AddFunc(cronExpr, func() { s.onTick(state) }); err != nil {
 		s.mu.Lock()
-		delete(s.tasks, task.ID)
+		delete(s.tasks, taskID)
 		s.mu.Unlock()
-		return fmt.Errorf("task %s: invalid cron %q: %w", task.ID, cronExpr, err)
+		return fmt.Errorf("task %s: invalid cron %q: %w", taskID, cronExpr, err)
 	}
 	return nil
 }
@@ -148,10 +153,10 @@ func taskCronExpression(task config.Task) (string, error) {
 		return expr, nil
 	}
 	if strings.HasPrefix(expr, "CRON_TZ=") || strings.HasPrefix(expr, "TZ=") {
-		return "", fmt.Errorf("task %s: use timezone field instead of embedding TZ in cron expression", task.ID)
+		return "", fmt.Errorf("task %s: use timezone field instead of embedding TZ in cron expression", task.Identity())
 	}
 	if _, err := time.LoadLocation(tz); err != nil {
-		return "", fmt.Errorf("task %s: invalid timezone %q: %w", task.ID, task.Timezone, err)
+		return "", fmt.Errorf("task %s: invalid timezone %q: %w", task.Identity(), task.Timezone, err)
 	}
 	return "CRON_TZ=" + tz + " " + expr, nil
 }
@@ -193,7 +198,7 @@ func (s *Scheduler) onTick(state *runState) {
 	state.mu.Unlock()
 
 	if streak > 0 && streak%warnEvery == 0 {
-		log.Printf("task %s: %d consecutive overlaps — cron frequency may exceed task duration", state.task.ID, streak)
+		log.Printf("task %s: %d consecutive overlaps — cron frequency may exceed task duration", state.task.Identity(), streak)
 	}
 
 	switch policy {
@@ -201,7 +206,7 @@ func (s *Scheduler) onTick(state *runState) {
 		select {
 		case state.queue <- struct{}{}:
 		default:
-			log.Printf("task %s: queue full (cap=%d), dropping tick", state.task.ID, config.QueueCapacity)
+			log.Printf("task %s: queue full (cap=%d), dropping tick", state.task.Identity(), config.QueueCapacity)
 		}
 	case config.OverlapKill:
 		state.mu.Lock()
@@ -214,7 +219,7 @@ func (s *Scheduler) onTick(state *runState) {
 		// To avoid races we let drainAndRun pick it up.
 		go s.runAfterPrevious(state)
 	default: // OverlapSkip
-		log.Printf("task %s: previous run still in flight, skipping tick", state.task.ID)
+		log.Printf("task %s: previous run still in flight, skipping tick", state.task.Identity())
 	}
 }
 
@@ -273,11 +278,11 @@ func (s *Scheduler) execute(state *runState, _ context.Context) {
 	}()
 
 	if err := s.runner(ctx, state.task); err != nil {
-		log.Printf("task %s: %v", state.task.ID, err)
+		log.Printf("task %s: %v", state.task.Identity(), err)
 	}
 }
 
 func defaultRunner(_ context.Context, task config.Task) error {
-	log.Printf("tick task=%s prompt=%q", task.ID, task.Prompt)
+	log.Printf("tick task=%s name=%q prompt=%q", task.Identity(), task.DisplayName(), task.Prompt)
 	return nil
 }

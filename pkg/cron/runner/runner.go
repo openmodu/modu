@@ -105,13 +105,16 @@ type Result struct {
 // Returns the Result regardless of error so callers can surface the log
 // path on failure too.
 func Execute(ctx context.Context, deps Deps, task config.Task) (Result, error) {
+	task.Normalize()
+	taskID := task.Identity()
+	taskName := task.DisplayName()
 	res := Result{Started: time.Now(), Status: StatusError}
 	if task.Prompt == "" {
 		res.Ended = time.Now()
-		return res, fmt.Errorf("task %s: empty prompt", task.ID)
+		return res, fmt.Errorf("task %s: empty prompt", taskID)
 	}
 
-	run, err := deps.Logs.Open(task.ID)
+	run, err := deps.Logs.Open(taskID)
 	if err != nil {
 		res.Ended = time.Now()
 		return res, fmt.Errorf("open log: %w", err)
@@ -121,10 +124,11 @@ func Execute(ctx context.Context, deps Deps, task config.Task) (Result, error) {
 
 	goalText := strings.TrimSpace(task.Goal)
 	hasGoal := goalText != ""
-	extensions := loadExtensions(task.ID)
+	extensions := loadExtensions(taskID)
 	start := map[string]any{
 		"type":       "run_start",
-		"task_id":    task.ID,
+		"task_id":    taskID,
+		"task_name":  taskName,
 		"prompt":     task.Prompt,
 		"trigger":    normalizeTrigger(deps.Trigger),
 		"has_goal":   hasGoal,
@@ -145,7 +149,7 @@ func Execute(ctx context.Context, deps Deps, task config.Task) (Result, error) {
 	if deps.DailyBudgetTokens > 0 {
 		used, lerr := deps.Logs.DailyTokens(res.Started)
 		if lerr != nil {
-			log.Printf("task %s: daily usage ledger read failed: %v", task.ID, lerr)
+			log.Printf("task %s: daily usage ledger read failed: %v", taskID, lerr)
 		} else if used >= deps.DailyBudgetTokens {
 			res.Ended = time.Now()
 			res.Status = StatusBudgetExceeded
@@ -171,9 +175,9 @@ func Execute(ctx context.Context, deps Deps, task config.Task) (Result, error) {
 	}
 	defer session.Close("modu_cron_run_done")
 	// Name the persisted session record after the cron job so it's
-	// findable/resumable by job id, not just by the separate NDJSON summary
+	// findable/resumable by job name, not just by the separate NDJSON summary
 	// log this function also writes.
-	session.SetSessionName("cron:" + task.ID)
+	session.SetSessionName("cron:" + taskName + ":" + shortTaskUUID(taskID))
 
 	// Per-run wall-clock cap. Applied here (not in the scheduler) so manual
 	// `run <id>` invocations get the same breaker as daemon ticks.
@@ -238,7 +242,7 @@ func Execute(ctx context.Context, deps Deps, task config.Task) (Result, error) {
 	}
 	if goalRunner != nil {
 		if status, ok, serr := goalRunner.AutomationGoalStatus(); serr != nil {
-			log.Printf("task %s: goal status read failed: %v", task.ID, serr)
+			log.Printf("task %s: goal status read failed: %v", taskID, serr)
 		} else if ok {
 			res.GoalStatus = string(status)
 		}
@@ -246,7 +250,7 @@ func Execute(ctx context.Context, deps Deps, task config.Task) (Result, error) {
 	res.Ended = time.Now()
 	res.Tokens = int(tokens.Load())
 	if lerr := deps.Logs.AddDailyTokens(res.Started, res.Tokens); lerr != nil {
-		log.Printf("task %s: daily usage ledger write failed: %v", task.ID, lerr)
+		log.Printf("task %s: daily usage ledger write failed: %v", taskID, lerr)
 	}
 
 	var runErr error
@@ -321,7 +325,7 @@ func ExecuteWithRetries(ctx context.Context, task config.Task, exec func(context
 			break
 		}
 		delay := min(retryBaseDelay<<(attempt-1), retryMaxDelay)
-		log.Printf("task %s: attempt %d/%d failed (%v), retrying in %s", task.ID, attempt, task.MaxRetries+1, err, delay)
+		log.Printf("task %s: attempt %d/%d failed (%v), retrying in %s", task.Identity(), attempt, task.MaxRetries+1, err, delay)
 		if !retrySleep(ctx, delay) {
 			return res, err
 		}
@@ -554,4 +558,12 @@ func writeRunEnd(w io.Writer, res Result, err error) {
 
 func formatLogTime(t time.Time) string {
 	return t.Local().Format(time.RFC3339Nano)
+}
+
+func shortTaskUUID(id string) string {
+	id = strings.TrimSpace(id)
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
 }

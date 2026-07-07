@@ -1300,3 +1300,12 @@ enough to implement, verify, and commit independently.
   panel footers use ASCII `up/down` hints instead of arrow glyphs that can
   display poorly in some terminals. Script/code panels remain plain text so
   markdown-looking content inside source files is not accidentally reformatted.
+- 2026-07-07: migrated cron task identity from legacy `id` to `uuid` + `name`.
+  Legacy `id:` loads as `name:` and gets a stable generated UUID so list/remove
+  works before the migrated file is saved; new saves write `uuid/name`,
+  scheduler/logs/notifications use UUID identity, and notifications also include
+  `task_name`. The cron extension now registers `/cron`: `list` and
+  `rm <uuid>` run directly through cron tools and notify formatted output, while
+  `add` and `update` inject a natural-language cron management turn. Verified
+  with `go test ./pkg/cron/... ./pkg/coding_agent/plugins/extension/cron` and
+  `go test ./pkg/slash ./pkg/coding_agent ./cmd/modu_code ./pkg/tui`.

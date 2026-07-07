@@ -12,19 +12,19 @@ import (
 
 func TestAddRejectsBadInput(t *testing.T) {
 	s := New(nil)
-	if err := s.Add(config.Task{ID: "", Cron: "* * * * * *", Enabled: true}); err == nil {
-		t.Error("empty id should fail")
+	if err := s.Add(config.Task{UUID: "u", Cron: "* * * * * *", Enabled: true}); err == nil {
+		t.Error("empty name should fail")
 	}
-	if err := s.Add(config.Task{ID: "x", Cron: "", Enabled: true}); err == nil {
+	if err := s.Add(config.Task{UUID: "u", Name: "x", Cron: "", Enabled: true}); err == nil {
 		t.Error("empty cron should fail")
 	}
-	if err := s.Add(config.Task{ID: "x", Cron: "not a cron", Enabled: true}); err == nil {
+	if err := s.Add(config.Task{UUID: "u", Name: "x", Cron: "not a cron", Enabled: true}); err == nil {
 		t.Error("invalid cron should fail")
 	}
 	if err := s.Add(config.Task{ID: "y", Cron: "* * * * * *", Enabled: false}); err != nil {
 		t.Errorf("disabled task should be silently skipped, got: %v", err)
 	}
-	if err := s.Add(config.Task{ID: "tz", Cron: "* * * * * *", Timezone: "Not/AZone", Enabled: true}); err == nil {
+	if err := s.Add(config.Task{UUID: "u", Name: "tz", Cron: "* * * * * *", Timezone: "Not/AZone", Enabled: true}); err == nil {
 		t.Error("invalid timezone should fail")
 	}
 }
@@ -82,11 +82,11 @@ func TestSkipPolicyDropsOverlap(t *testing.T) {
 		<-release
 		return nil
 	})
-	task := config.Task{ID: "t", Cron: "* * * * * *", Enabled: true, OnOverlap: config.OverlapSkip}
+	task := config.Task{UUID: "uuid-t", Name: "t", Cron: "* * * * * *", Enabled: true, OnOverlap: config.OverlapSkip}
 	if err := s.Add(task); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	state := s.tasks["t"]
+	state := s.tasks["uuid-t"]
 
 	go s.onTick(state) // first run: blocks on release
 	waitFor(t, func() bool {
@@ -139,11 +139,11 @@ func TestQueuePolicySerializes(t *testing.T) {
 		<-gate
 		return nil
 	})
-	task := config.Task{ID: "q", Cron: "* * * * * *", Enabled: true, OnOverlap: config.OverlapQueue}
+	task := config.Task{UUID: "uuid-q", Name: "q", Cron: "* * * * * *", Enabled: true, OnOverlap: config.OverlapQueue}
 	if err := s.Add(task); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	state := s.tasks["q"]
+	state := s.tasks["uuid-q"]
 
 	go s.onTick(state) // first run starts immediately
 	waitFor(t, func() bool {
@@ -176,7 +176,8 @@ func TestTickPassesGoalTaskToRunner(t *testing.T) {
 		return nil
 	})
 	task := config.Task{
-		ID:      "goal-task",
+		UUID:    "uuid-goal-task",
+		Name:    "goal-task",
 		Cron:    "* * * * * *",
 		Prompt:  "run loop",
 		Goal:    "verify loop completion",
@@ -185,7 +186,7 @@ func TestTickPassesGoalTaskToRunner(t *testing.T) {
 	if err := s.Add(task); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	s.onTick(s.tasks["goal-task"])
+	s.onTick(s.tasks["uuid-goal-task"])
 
 	select {
 	case fired := <-got:

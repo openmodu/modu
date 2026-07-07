@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 
 	"github.com/openmodu/modu/pkg/coding_agent/foundation/resource"
@@ -41,7 +42,9 @@ const DefaultRunTimeout = 30 * time.Minute
 
 // Task describes a single scheduled prompt for the agent to run.
 type Task struct {
-	ID        string        `yaml:"id"`
+	UUID      string        `yaml:"uuid,omitempty"`
+	Name      string        `yaml:"name,omitempty"`
+	ID        string        `yaml:"id,omitempty"`
 	Cron      string        `yaml:"cron"`
 	Prompt    string        `yaml:"prompt"`
 	Goal      string        `yaml:"goal,omitempty"`
@@ -62,6 +65,48 @@ type Task struct {
 	MaxRetries int `yaml:"max_retries,omitempty"`
 }
 
+// Identity returns the stable identifier used for scheduling, removal, logs,
+// and notifications. ID is a legacy fallback for old in-memory callers.
+func (t Task) Identity() string {
+	if s := strings.TrimSpace(t.UUID); s != "" {
+		return s
+	}
+	if s := strings.TrimSpace(t.ID); s != "" {
+		return s
+	}
+	return strings.TrimSpace(t.Name)
+}
+
+// DisplayName returns the human-readable task name. Legacy id becomes name
+// when loaded from disk; ID remains a fallback for existing tests/callers.
+func (t Task) DisplayName() string {
+	if s := strings.TrimSpace(t.Name); s != "" {
+		return s
+	}
+	if s := strings.TrimSpace(t.ID); s != "" {
+		return s
+	}
+	return strings.TrimSpace(t.UUID)
+}
+
+// Normalize fills the new uuid/name fields and migrates legacy id to name.
+// It intentionally clears ID so newly saved YAML uses name instead of id.
+func (t *Task) Normalize() {
+	if t == nil {
+		return
+	}
+	t.UUID = strings.TrimSpace(t.UUID)
+	t.Name = strings.TrimSpace(t.Name)
+	t.ID = strings.TrimSpace(t.ID)
+	if t.Name == "" && t.ID != "" {
+		t.Name = t.ID
+	}
+	if t.UUID == "" {
+		t.UUID = uuid.NewString()
+	}
+	t.ID = ""
+}
+
 // EffectiveTimeout returns the parsed per-run timeout, falling back to
 // DefaultRunTimeout for empty or unparseable values. Use ValidateCaps to
 // surface parse errors to the user instead of relying on the fallback.
@@ -77,22 +122,22 @@ func (t Task) EffectiveTimeout() time.Duration {
 // instead of silently falling back to defaults.
 func (t Task) ValidateCaps() error {
 	if len(strings.TrimSpace(t.Goal)) > 4000 {
-		return fmt.Errorf("task %s: goal is too long", t.ID)
+		return fmt.Errorf("task %s: goal is too long", t.Identity())
 	}
 	if s := strings.TrimSpace(t.Timeout); s != "" {
 		d, err := time.ParseDuration(s)
 		if err != nil {
-			return fmt.Errorf("task %s: invalid timeout %q: %w", t.ID, t.Timeout, err)
+			return fmt.Errorf("task %s: invalid timeout %q: %w", t.Identity(), t.Timeout, err)
 		}
 		if d <= 0 {
-			return fmt.Errorf("task %s: timeout must be positive, got %q", t.ID, t.Timeout)
+			return fmt.Errorf("task %s: timeout must be positive, got %q", t.Identity(), t.Timeout)
 		}
 	}
 	if t.MaxTokensPerRun < 0 {
-		return fmt.Errorf("task %s: max_tokens_per_run must be non-negative", t.ID)
+		return fmt.Errorf("task %s: max_tokens_per_run must be non-negative", t.Identity())
 	}
 	if t.MaxRetries < 0 {
-		return fmt.Errorf("task %s: max_retries must be non-negative", t.ID)
+		return fmt.Errorf("task %s: max_retries must be non-negative", t.Identity())
 	}
 	return nil
 }
@@ -237,6 +282,7 @@ func Load(path string) (*Config, error) {
 				}
 				cfg.Tasks = tasksCfg.Tasks
 			}
+			NormalizeLoadedTasks(cfg.Tasks)
 			return cfg, nil
 		}
 		return nil, fmt.Errorf("read %s: %w", path, err)
@@ -253,6 +299,7 @@ func Load(path string) (*Config, error) {
 		}
 		cfg.Tasks = tasksCfg.Tasks
 	}
+	NormalizeLoadedTasks(cfg.Tasks)
 	return &cfg, nil
 }
 
@@ -270,6 +317,7 @@ func LoadRuntime(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
+	NormalizeLoadedTasks(cfg.Tasks)
 	return &cfg, nil
 }
 
@@ -286,6 +334,7 @@ func LoadTasks(path string) (*TasksConfig, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
+	NormalizeLoadedTasks(cfg.Tasks)
 	return &cfg, nil
 }
 
@@ -293,7 +342,9 @@ func LoadTasks(path string) (*TasksConfig, error) {
 // tests; new runtime config writes should use SaveRuntime, and task mutations
 // should use SaveTasks.
 func Save(path string, cfg *Config) error {
-	data, err := yaml.Marshal(cfg)
+	clone := *cfg
+	clone.Tasks = normalizeTaskSlice(clone.Tasks)
+	data, err := yaml.Marshal(&clone)
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
@@ -313,11 +364,49 @@ func SaveRuntime(path string, cfg *Config) error {
 
 // SaveTasks writes the isolated task file, creating parent directories.
 func SaveTasks(path string, tasks []Task) error {
-	data, err := yaml.Marshal(TasksConfig{Tasks: tasks})
+	data, err := yaml.Marshal(TasksConfig{Tasks: normalizeTaskSlice(tasks)})
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
 	return writeFileAtomic(path, data)
+}
+
+// NormalizeTasks normalizes tasks in place.
+func NormalizeTasks(tasks []Task) {
+	for i := range tasks {
+		tasks[i].Normalize()
+	}
+}
+
+// NormalizeLoadedTasks normalizes tasks loaded from disk. Missing UUIDs are
+// derived deterministically so `/cron list` can show a UUID that `/cron rm`
+// can resolve on a subsequent load before the migrated file is saved.
+func NormalizeLoadedTasks(tasks []Task) {
+	for i := range tasks {
+		if strings.TrimSpace(tasks[i].UUID) == "" {
+			tasks[i].UUID = legacyTaskUUID(i, tasks[i])
+		}
+		tasks[i].Normalize()
+	}
+}
+
+func normalizeTaskSlice(tasks []Task) []Task {
+	if len(tasks) == 0 {
+		return tasks
+	}
+	out := make([]Task, len(tasks))
+	copy(out, tasks)
+	NormalizeTasks(out)
+	return out
+}
+
+func legacyTaskUUID(index int, task Task) string {
+	name := strings.TrimSpace(task.Name)
+	if name == "" {
+		name = strings.TrimSpace(task.ID)
+	}
+	seed := fmt.Sprintf("modu-cron-task:%d:%s:%s:%s", index, name, strings.TrimSpace(task.Cron), strings.TrimSpace(task.Prompt))
+	return uuid.NewSHA1(uuid.NameSpaceURL, []byte(seed)).String()
 }
 
 // writeFileAtomic writes data via a temp file + rename in the target

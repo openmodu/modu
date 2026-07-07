@@ -32,6 +32,7 @@ type Sender struct {
 type Payload struct {
 	Event      string `json:"event"`
 	TaskID     string `json:"task_id"`
+	TaskName   string `json:"task_name,omitempty"`
 	Status     string `json:"status"`
 	StartedAt  string `json:"started_at"`
 	EndedAt    string `json:"ended_at"`
@@ -176,7 +177,8 @@ func buildPayload(task config.Task, res runner.Result, runErr error, cwd string)
 	summary := lastAssistantText(res.LogPath)
 	payload := Payload{
 		Event:      "modu_cron.task_completed",
-		TaskID:     task.ID,
+		TaskID:     task.Identity(),
+		TaskName:   task.DisplayName(),
 		Status:     status,
 		StartedAt:  res.Started.Local().Format(time.RFC3339Nano),
 		EndedAt:    res.Ended.Local().Format(time.RFC3339Nano),
@@ -253,7 +255,11 @@ func prLinks(logPath string) []string {
 func formatText(p Payload) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "modu_cron task completed\n")
-	fmt.Fprintf(&b, "task: %s\n", p.TaskID)
+	if strings.TrimSpace(p.TaskName) != "" {
+		fmt.Fprintf(&b, "task: %s (%s)\n", p.TaskName, p.TaskID)
+	} else {
+		fmt.Fprintf(&b, "task: %s\n", p.TaskID)
+	}
 	fmt.Fprintf(&b, "status: %s\n", p.Status)
 	if p.DurationMS >= 0 {
 		fmt.Fprintf(&b, "duration: %s\n", (time.Duration(p.DurationMS) * time.Millisecond).Round(100*time.Millisecond))
