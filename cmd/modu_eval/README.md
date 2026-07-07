@@ -84,6 +84,17 @@ Run the bundled smoke task:
 go run ./cmd/modu_eval agent eval/tasks/modu_code --keep-going
 ```
 
+When stdout is a terminal, `modu_eval` opens an interactive TUI while the agent
+eval run is executing. The TUI starts with pending tasks, marks the active task
+as running, and refreshes the core metrics as each result is written. It focuses
+on the run-level metrics that matter for golden sets: task pass rate, check pass
+rate, average task time, category breakdown, grading-type breakdown, and per-task
+failure details. Disable it in automation:
+
+```bash
+go run ./cmd/modu_eval agent --tui=false eval/tasks/modu_code --keep-going
+```
+
 Use an installed `modu_code` binary instead of `go run`:
 
 ```bash
@@ -141,6 +152,25 @@ content
 ````
 
 The runner extracts those artifacts into the workspace before grading.
+
+## Agent Result TUI
+
+`modu_eval agent` opens the result TUI by default only in an interactive terminal.
+It renders the task queue immediately and updates after every completed task.
+
+Keys:
+
+```text
+up/down or j/k     Move through task results
+enter              Open task detail view
+esc                Return to summary view
+f                  Toggle failures-only filter
+q or ctrl+c        Quit after the run completes
+```
+
+The summary view shows core golden-set metrics and a task table. The detail view
+shows check results, failure reason, assistant output, tool calls, workspace, and
+source task path.
 
 ## Environment
 

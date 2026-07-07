@@ -241,3 +241,141 @@ def grade(transcript, workspace_path):
 		t.Fatalf("python grade with source import root failed: %#v", results)
 	}
 }
+
+func TestSummarizeAgentResults(t *testing.T) {
+	results := []agentRunResult{
+		{
+			TaskID:               "pass",
+			Category:             "productivity",
+			GradingType:          "deterministic",
+			Status:               "success",
+			ExecutionTimeSeconds: 2,
+			CheckResults: []agentCheckResult{
+				{Name: "a", Pass: true, Score: 1},
+				{Name: "b", Pass: true, Score: 1},
+			},
+		},
+		{
+			TaskID:               "fail",
+			Category:             "productivity",
+			GradingType:          "llm",
+			Status:               "failed",
+			ExecutionTimeSeconds: 4,
+			CheckResults: []agentCheckResult{
+				{Name: "a", Pass: true, Score: 1},
+				{Name: "b", Pass: false, Score: 0},
+			},
+		},
+	}
+
+	metrics := summarizeAgentResults(results)
+	if metrics.TotalTasks != 2 || metrics.PassedTasks != 1 {
+		t.Fatalf("task metrics = %#v", metrics)
+	}
+	if metrics.TotalChecks != 4 || metrics.PassedChecks != 3 {
+		t.Fatalf("check metrics = %#v", metrics)
+	}
+	if metrics.TotalSeconds != 6 {
+		t.Fatalf("total seconds = %v, want 6", metrics.TotalSeconds)
+	}
+	if len(metrics.ByCategory) != 1 || metrics.ByCategory[0].Name != "productivity" || metrics.ByCategory[0].PassedTasks != 1 {
+		t.Fatalf("category metrics = %#v", metrics.ByCategory)
+	}
+	if len(metrics.ByGradingType) != 2 {
+		t.Fatalf("grading metrics = %#v", metrics.ByGradingType)
+	}
+}
+
+func TestAgentTUIFailureFilter(t *testing.T) {
+	model := initialAgentModel([]agentRunResult{
+		{TaskID: "pass", Status: "success"},
+		{TaskID: "fail", Status: "failed"},
+	})
+	model.showFailures = true
+	filtered := model.filterResults()
+	if len(filtered) != 1 || filtered[0].TaskID != "fail" {
+		t.Fatalf("filtered = %#v, want only failed task", filtered)
+	}
+}
+
+func TestAgentTUIRenderIncludesCoreMetrics(t *testing.T) {
+	model := initialAgentModel([]agentRunResult{
+		{
+			TaskID:      "golden_001",
+			Name:        "Golden One",
+			Category:    "personal_assistant",
+			GradingType: "deterministic",
+			Status:      "success",
+			CheckResults: []agentCheckResult{
+				{Name: "assistant", Pass: true, Score: 1},
+			},
+		},
+	})
+	model.width = 120
+	view := model.renderListView()
+	for _, want := range []string{"Core Metrics", "Task pass rate", "Check pass rate", "By Category", "personal_assistant", "golden_001"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("rendered view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestAgentLiveTUIUpdatesFromRunMessages(t *testing.T) {
+	tasks := []agentTask{
+		{ID: "task_one", Name: "Task One", Category: "golden", GradingType: "deterministic"},
+		{ID: "task_two", Name: "Task Two", Category: "golden", GradingType: "deterministic"},
+	}
+	model := initialAgentLiveModel(tasks, "/tmp/results")
+	model.width = 120
+
+	initial := model.renderListView()
+	for _, want := range []string{"0/2 complete", "PENDING", "task_one", "task_two"} {
+		if !strings.Contains(initial, want) {
+			t.Fatalf("initial live view missing %q:\n%s", want, initial)
+		}
+	}
+
+	updated, _ := model.Update(agentTaskStartedMsg{Task: tasks[0], Index: 0, Total: 2})
+	model = updated.(agentTUIModel)
+	running := model.renderListView()
+	for _, want := range []string{"running task_one", "RUNNING"} {
+		if !strings.Contains(running, want) {
+			t.Fatalf("running live view missing %q:\n%s", want, running)
+		}
+	}
+
+	updated, _ = model.Update(agentTaskResultMsg{
+		Result: agentRunResult{
+			TaskID:      "task_one",
+			Name:        "Task One",
+			Category:    "golden",
+			GradingType: "deterministic",
+			Status:      "success",
+			CheckResults: []agentCheckResult{
+				{Name: "assistant", Pass: true, Score: 1},
+			},
+		},
+		Index: 0,
+		Total: 2,
+	})
+	model = updated.(agentTUIModel)
+	afterResult := model.renderListView()
+	for _, want := range []string{"1/2 complete", "Task pass rate:  100.0% (1/1)", "task_two", "PENDING"} {
+		if !strings.Contains(afterResult, want) {
+			t.Fatalf("result live view missing %q:\n%s", want, afterResult)
+		}
+	}
+}
+
+func TestRenderAgentCheckDetailsIncludesFailureReason(t *testing.T) {
+	result := agentRunResult{
+		Status: "failed",
+		CheckResults: []agentCheckResult{
+			{Name: "file updated", Type: "file_contains", Pass: false, Score: 0, Reason: "missing expected text"},
+		},
+	}
+	got := renderAgentCheckDetails(result)
+	if !strings.Contains(got, "[FAIL]") || !strings.Contains(got, "missing expected text") {
+		t.Fatalf("check details = %q", got)
+	}
+}

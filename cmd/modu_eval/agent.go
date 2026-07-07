@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 )
 
@@ -28,6 +29,7 @@ type agentEvalOptions struct {
 	TimeoutSeconds int
 	KeepGoing      bool
 	Summary        bool
+	TUI            bool
 }
 
 type agentTask struct {
@@ -132,25 +134,70 @@ func runAgentEvalCommand(paths []string, opts agentEvalOptions) error {
 		return fmt.Errorf("create output dir: %w", err)
 	}
 
+	tasks, err := parseAgentTasks(taskPaths)
+	if err != nil {
+		return err
+	}
+
 	cleanup, err := prepareAgentCommand(&opts)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
-	var results []agentRunResult
-	var failed int
+	if opts.TUI && term.IsTerminal(int(os.Stdout.Fd())) {
+		return runAgentEvalCommandWithTUI(tasks, opts)
+	}
+
+	results, failed, err := runAgentEvalTasks(tasks, opts, agentRunCallbacks{
+		Result: func(result agentRunResult, _, _ int) {
+			printAgentResultLine(result)
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if err := finishAgentEvalRun(opts, results); err != nil {
+		return err
+	}
+	if failed > 0 {
+		return fmt.Errorf("%d agent eval task(s) failed", failed)
+	}
+	return nil
+}
+
+func parseAgentTasks(taskPaths []string) ([]agentTask, error) {
+	tasks := make([]agentTask, 0, len(taskPaths))
 	for _, taskPath := range taskPaths {
 		task, err := parseAgentTask(taskPath)
 		if err != nil {
-			return err
+			return nil, err
+		}
+		tasks = append(tasks, task)
+	}
+	return tasks, nil
+}
+
+type agentRunCallbacks struct {
+	Start  func(task agentTask, index, total int)
+	Result func(result agentRunResult, index, total int)
+}
+
+func runAgentEvalTasks(tasks []agentTask, opts agentEvalOptions, callbacks agentRunCallbacks) ([]agentRunResult, int, error) {
+	var results []agentRunResult
+	var failed int
+	for i, task := range tasks {
+		if callbacks.Start != nil {
+			callbacks.Start(task, i, len(tasks))
 		}
 		result := runAgentTask(task, opts)
 		results = append(results, result)
 		if err := writeAgentResult(opts.OutputDir, result); err != nil {
-			return err
+			return results, failed, err
 		}
-		printAgentResultLine(result)
+		if callbacks.Result != nil {
+			callbacks.Result(result, i, len(tasks))
+		}
 		if result.Status != "success" {
 			failed++
 			if !opts.KeepGoing {
@@ -158,16 +205,22 @@ func runAgentEvalCommand(paths []string, opts agentEvalOptions) error {
 			}
 		}
 	}
-	if opts.Summary {
-		if err := writeAgentSummary(opts.OutputDir, results); err != nil {
-			return err
-		}
+	return results, failed, nil
+}
+
+func finishAgentEvalRun(opts agentEvalOptions, results []agentRunResult) error {
+	if err := writeAgentEvalSummaryIfNeeded(opts, results); err != nil {
+		return err
 	}
 	fmt.Printf("agent eval results: %s\n", opts.OutputDir)
-	if failed > 0 {
-		return fmt.Errorf("%d agent eval task(s) failed", failed)
-	}
 	return nil
+}
+
+func writeAgentEvalSummaryIfNeeded(opts agentEvalOptions, results []agentRunResult) error {
+	if !opts.Summary {
+		return nil
+	}
+	return writeAgentSummary(opts.OutputDir, results)
 }
 
 func prepareAgentCommand(opts *agentEvalOptions) (func(), error) {
