@@ -28,6 +28,9 @@ type Server struct {
 	sessID atomic.Int64
 	msgID  atomic.Int64
 
+	sessionMu       sync.Mutex
+	activeSessionID string
+
 	// reverse tracks outbound RPC requests (used for permission prompts).
 	revMu   sync.Mutex
 	reverse map[int64]chan *rpcMsg
@@ -115,16 +118,20 @@ func (s *Server) dispatch(ctx context.Context, msg *rpcMsg) {
 			"serverInfo":      map[string]any{"name": "modu_code", "version": "0.1.0"},
 		})
 	case "session/new":
+		s.sessionMu.Lock()
+		defer s.sessionMu.Unlock()
 		n := s.sessID.Add(1)
+		sessionID := fmt.Sprintf("modu-sess-%d", n)
 		// Each session/new clears history so this subprocess is stateless
 		// across sessions (matches how ACP uses (agentID,cwd) as session key).
 		if err := s.session.ClearConversation(); err != nil {
 			s.replyErr(id, -32000, err.Error())
 			return
 		}
-		s.reply(id, map[string]any{"sessionId": fmt.Sprintf("modu-sess-%d", n)})
+		s.activeSessionID = sessionID
+		s.reply(id, map[string]any{"sessionId": sessionID})
 	case "session/prompt":
-		go s.handlePrompt(ctx, id, msg)
+		s.handlePrompt(ctx, id, msg)
 	default:
 		s.replyErr(id, -32601, "method not found")
 	}
@@ -142,6 +149,18 @@ func (s *Server) handlePrompt(ctx context.Context, id int64, msg *rpcMsg) {
 		s.replyErr(id, -32602, "invalid params")
 		return
 	}
+
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	if s.activeSessionID == "" {
+		s.replyErr(id, -32000, "session not initialized")
+		return
+	}
+	if p.SessionID != s.activeSessionID {
+		s.replyErr(id, -32000, "unknown session")
+		return
+	}
+
 	var promptText strings.Builder
 	for _, part := range p.Prompt {
 		if part.Type == "text" {

@@ -366,17 +366,19 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 			cs.extensions.EmitEvent(event)
 		}
 		if event.Type == types.EventTypeMessageEnd {
-			addUsage := func(u types.AgentUsage) {
+			recordUsage := func(u types.AgentUsage) {
 				t := u.TotalTokens
 				if t == 0 {
 					t = u.Input + u.Output
 				}
-				cs.ctxMgr.AddUsage(t)
+				if t > 0 {
+					cs.ctxMgr.RecordUsageSnapshot(t)
+				}
 			}
 			if msg, ok := event.Message.(types.AssistantMessage); ok {
-				addUsage(msg.Usage)
+				recordUsage(msg.Usage)
 			} else if msg, ok := event.Message.(*types.AssistantMessage); ok {
-				addUsage(msg.Usage)
+				recordUsage(msg.Usage)
 			}
 			cs.handleMessageEnd(event.Message)
 			return
@@ -684,6 +686,10 @@ func (s *engine) Prompt(ctx context.Context, text string) error {
 				return s.executeSkill(ctx, skill, cmdArgs)
 			}
 		}
+	}
+
+	if s.agent.GetState().IsStreaming {
+		return fmt.Errorf("agent is already processing")
 	}
 
 	// Record to session

@@ -21,12 +21,16 @@ func TestWindowForFallsBackToDefault(t *testing.T) {
 	}
 }
 
-func TestTokenAccountingAndReset(t *testing.T) {
+func TestTokenAccountingAddSnapshotAndReset(t *testing.T) {
 	m := New(Deps{})
 	m.AddUsage(120)
 	m.AddUsage(80)
 	if m.Tokens() != 200 {
 		t.Fatalf("expected 200 accumulated tokens, got %d", m.Tokens())
+	}
+	m.RecordUsageSnapshot(350)
+	if m.Tokens() != 350 {
+		t.Fatalf("expected snapshot to replace tokens, got %d", m.Tokens())
 	}
 	m.ResetUsage()
 	if m.Tokens() != 0 {

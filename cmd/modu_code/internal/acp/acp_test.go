@@ -5,10 +5,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -158,11 +162,123 @@ func TestReplySendsErrorFrameWhenResultCannotMarshal(t *testing.T) {
 	}
 }
 
+func TestPromptRejectsUnknownSession(t *testing.T) {
+	var out bytes.Buffer
+	s := testACPServer(&out)
+	s.activeSessionID = "modu-sess-1"
+	id := int64(9)
+	params := mustJSON(t, map[string]any{
+		"sessionId": "modu-sess-2",
+		"prompt":    []map[string]string{{"type": "text", "text": "hello"}},
+	})
+
+	s.handlePrompt(context.Background(), id, &rpcMsg{ID: &id, Params: params})
+
+	lines := waitWrittenLines(t, s, &out)
+	if len(lines) != 1 {
+		t.Fatalf("expected one error frame, got %d: %q", len(lines), strings.Join(lines, "\n"))
+	}
+	var frame rpcMsg
+	if err := json.Unmarshal([]byte(lines[0]), &frame); err != nil {
+		t.Fatal(err)
+	}
+	if frame.Error == nil || !strings.Contains(frame.Error.Message, "unknown session") {
+		t.Fatalf("expected unknown session error, got %#v", frame)
+	}
+}
+
+func TestPromptsRunSeriallyForSharedSession(t *testing.T) {
+	var out bytes.Buffer
+	dir := t.TempDir()
+	model := &types.Model{ID: "test", ProviderID: "test"}
+	var calls atomic.Int64
+	var active atomic.Int64
+	var peak atomic.Int64
+	streamFn := func(ctx context.Context, _ *types.Model, _ *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+		stream := types.NewEventStream()
+		go func() {
+			current := active.Add(1)
+			for {
+				p := peak.Load()
+				if current <= p || peak.CompareAndSwap(p, current) {
+					break
+				}
+			}
+			defer active.Add(-1)
+			defer stream.Close()
+			time.Sleep(20 * time.Millisecond)
+			n := calls.Add(1)
+			msg := &types.AssistantMessage{
+				Role:       types.RoleAssistant,
+				ProviderID: model.ProviderID,
+				Model:      model.ID,
+				StopReason: "stop",
+				Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "ok"}},
+				Usage:      types.AgentUsage{Input: int(n), Output: 1, TotalTokens: int(n) + 1},
+				Timestamp:  time.Now().UnixMilli(),
+			}
+			stream.Push(types.StreamEvent{Type: types.EventDone, Reason: "stop", Message: msg})
+			stream.Resolve(msg, nil)
+		}()
+		return stream, nil
+	}
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  filepath.Join(dir, ".modu"),
+		Model:     model,
+		GetAPIKey: func(string) (string, error) { return "", nil },
+		StreamFn:  streamFn,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close("test")
+	s := &Server{
+		session:         session,
+		out:             bufio.NewWriter(&out),
+		reverse:         make(map[int64]chan *rpcMsg),
+		activeSessionID: "modu-sess-1",
+	}
+
+	var wg sync.WaitGroup
+	for i := int64(1); i <= 2; i++ {
+		wg.Add(1)
+		go func(id int64) {
+			defer wg.Done()
+			params := mustJSON(t, map[string]any{
+				"sessionId": "modu-sess-1",
+				"prompt":    []map[string]string{{"type": "text", "text": "hello"}},
+			})
+			s.handlePrompt(context.Background(), id, &rpcMsg{ID: &id, Params: params})
+		}(i)
+	}
+	wg.Wait()
+
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("expected both prompts to run, calls=%d output=%s", got, out.String())
+	}
+	if got := peak.Load(); got != 1 {
+		t.Fatalf("expected prompt streams to be serialized, peak=%d", got)
+	}
+	if strings.Contains(out.String(), "agent is already processing") {
+		t.Fatalf("expected no concurrent-agent error, output:\n%s", out.String())
+	}
+}
+
 func testACPServer(out *bytes.Buffer) *Server {
 	return &Server{
 		out:     bufio.NewWriter(out),
 		reverse: make(map[int64]chan *rpcMsg),
 	}
+}
+
+func mustJSON(t *testing.T, v any) json.RawMessage {
+	t.Helper()
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 func waitReverseRequest(t *testing.T, s *Server) int64 {

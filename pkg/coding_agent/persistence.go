@@ -72,8 +72,14 @@ func (s *engine) restoreTokenUsageFromMessages(msgs []types.AgentMessage) {
 		return
 	}
 	s.ctxMgr.ResetUsage()
+	lastUsage := 0
 	for _, msg := range msgs {
-		s.ctxMgr.AddUsage(agentMessageUsageTokens(msg))
+		if tokens := agentMessageUsageTokens(msg); tokens > 0 {
+			lastUsage = tokens
+		}
+	}
+	if lastUsage > 0 {
+		s.ctxMgr.RecordUsageSnapshot(lastUsage)
 	}
 }
 
