@@ -54,6 +54,36 @@ The assistant responds.
 	}
 }
 
+func TestParseAgentTaskExtractsAutomatedChecks(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "task.md")
+	content := `---
+id: python_grade
+---
+
+## Prompt
+
+Say ok.
+
+## Automated Checks
+
+` + "```python" + `
+def grade(transcript, workspace_path):
+    return {"ok": 1.0}
+` + "```" + `
+`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("write task: %v", err)
+	}
+	task, err := parseAgentTask(path)
+	if err != nil {
+		t.Fatalf("parseAgentTask() error = %v", err)
+	}
+	if !strings.Contains(task.GradeCode, "def grade") {
+		t.Fatalf("grade code not extracted: %q", task.GradeCode)
+	}
+}
+
 func TestAgentWorkspaceRejectsUnsafePaths(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := safeWorkspacePath(dir, "../escape.txt"); err == nil {
@@ -131,5 +161,83 @@ func TestRunAgentTaskWithFakeAgent(t *testing.T) {
 	}
 	if len(result.CheckResults) != 2 {
 		t.Fatalf("check results = %#v", result.CheckResults)
+	}
+}
+
+func TestUsesDefaultGoRunModuCode(t *testing.T) {
+	if !usesDefaultGoRunModuCode(agentEvalOptions{
+		Agent:     "go",
+		AgentArgs: []string{"run", "./cmd/modu_code", "--no-approve"},
+	}) {
+		t.Fatal("expected default go run modu_code command to be detected")
+	}
+	if usesDefaultGoRunModuCode(agentEvalOptions{
+		Agent:     "go",
+		AgentArgs: []string{"run", "./cmd/modu_code", "--no-approve", "--extra"},
+	}) {
+		t.Fatal("custom go args should not be treated as default")
+	}
+	if usesDefaultGoRunModuCode(agentEvalOptions{
+		Agent:     "modu_code",
+		AgentArgs: []string{"--no-approve"},
+	}) {
+		t.Fatal("installed binary should not be treated as default")
+	}
+}
+
+func TestRunPythonGrade(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "answer.txt"), []byte("ready\n"), 0644); err != nil {
+		t.Fatalf("write answer: %v", err)
+	}
+	code := `
+def grade(transcript, workspace_path):
+    from pathlib import Path
+    text = Path(workspace_path, "answer.txt").read_text()
+    return {
+        "file_ready": 1.0 if "ready" in text else 0.0,
+        "has_transcript": 1.0 if transcript else 0.0,
+    }
+`
+	results := runPythonGrade(code, []map[string]any{pinchbenchTextMessage("assistant", "ready")}, dir, "")
+	if len(results) != 2 {
+		t.Fatalf("results = %#v", results)
+	}
+	for _, result := range results {
+		if !result.Pass || result.Score != 1.0 {
+			t.Fatalf("python grade failed: %#v", result)
+		}
+	}
+}
+
+func TestRunPythonGradeUsesSourceTaskImportRoot(t *testing.T) {
+	repo := t.TempDir()
+	helperDir := filepath.Join(repo, "eval")
+	if err := os.MkdirAll(helperDir, 0755); err != nil {
+		t.Fatalf("mkdir helper: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(helperDir, "__init__.py"), []byte(""), 0644); err != nil {
+		t.Fatalf("write init: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(helperDir, "grader_helpers.py"), []byte("def ok():\n    return 1.0\n"), 0644); err != nil {
+		t.Fatalf("write helper: %v", err)
+	}
+	taskDir := filepath.Join(repo, "eval", "tasks", "suite")
+	if err := os.MkdirAll(taskDir, 0755); err != nil {
+		t.Fatalf("mkdir task dir: %v", err)
+	}
+	sourceTask := filepath.Join(taskDir, "task.md")
+	if err := os.WriteFile(sourceTask, []byte(""), 0644); err != nil {
+		t.Fatalf("write source task: %v", err)
+	}
+
+	code := `
+def grade(transcript, workspace_path):
+    from eval.grader_helpers import ok
+    return {"helper": ok()}
+`
+	results := runPythonGrade(code, []map[string]any{pinchbenchTextMessage("assistant", "ready")}, t.TempDir(), sourceTask)
+	if len(results) != 1 || !results[0].Pass {
+		t.Fatalf("python grade with source import root failed: %#v", results)
 	}
 }

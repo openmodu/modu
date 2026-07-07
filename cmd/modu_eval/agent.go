@@ -41,6 +41,7 @@ type agentTask struct {
 
 	Prompt     string `yaml:"-"`
 	SourcePath string `yaml:"-"`
+	GradeCode  string `yaml:"-"`
 }
 
 type workspaceFile struct {
@@ -101,12 +102,14 @@ type workspaceSnapshot struct {
 	SHA256 string `json:"sha256"`
 }
 
+var defaultModuCodeAgentArgs = []string{"run", "./cmd/modu_code", "--no-approve"}
+
 func runAgentEvalCommand(paths []string, opts agentEvalOptions) error {
 	if opts.Agent == "" {
 		opts.Agent = "go"
 	}
 	if len(opts.AgentArgs) == 0 {
-		opts.AgentArgs = []string{"run", "./cmd/modu_code", "--no-approve"}
+		opts.AgentArgs = append([]string(nil), defaultModuCodeAgentArgs...)
 	}
 	if opts.TimeoutSeconds <= 0 {
 		opts.TimeoutSeconds = 300
@@ -128,6 +131,12 @@ func runAgentEvalCommand(paths []string, opts agentEvalOptions) error {
 	if err := os.MkdirAll(opts.OutputDir, 0755); err != nil {
 		return fmt.Errorf("create output dir: %w", err)
 	}
+
+	cleanup, err := prepareAgentCommand(&opts)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
 
 	var results []agentRunResult
 	var failed int
@@ -159,6 +168,45 @@ func runAgentEvalCommand(paths []string, opts agentEvalOptions) error {
 		return fmt.Errorf("%d agent eval task(s) failed", failed)
 	}
 	return nil
+}
+
+func prepareAgentCommand(opts *agentEvalOptions) (func(), error) {
+	if !usesDefaultGoRunModuCode(*opts) {
+		return func() {}, nil
+	}
+	root, err := findModuleRootForAgentEval()
+	if err != nil {
+		return nil, err
+	}
+	tempDir, err := os.MkdirTemp("", "modu-eval-agent-bin-")
+	if err != nil {
+		return nil, fmt.Errorf("create agent build dir: %w", err)
+	}
+	binary := filepath.Join(tempDir, "modu_code")
+	build := exec.Command("go", "build", "-o", binary, "./cmd/modu_code")
+	build.Dir = root
+	var output bytes.Buffer
+	build.Stdout = &output
+	build.Stderr = &output
+	if err := build.Run(); err != nil {
+		_ = os.RemoveAll(tempDir)
+		return nil, fmt.Errorf("build modu_code agent: %w: %s", err, output.String())
+	}
+	opts.Agent = binary
+	opts.AgentArgs = []string{"--no-approve"}
+	return func() { _ = os.RemoveAll(tempDir) }, nil
+}
+
+func usesDefaultGoRunModuCode(opts agentEvalOptions) bool {
+	if opts.Agent != "go" || len(opts.AgentArgs) != len(defaultModuCodeAgentArgs) {
+		return false
+	}
+	for i := range defaultModuCodeAgentArgs {
+		if opts.AgentArgs[i] != defaultModuCodeAgentArgs[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func collectAgentTaskPaths(paths []string) ([]string, error) {
@@ -240,6 +288,7 @@ func parseAgentTask(path string) (agentTask, error) {
 	}
 	task.Prompt = strings.TrimSpace(prompt)
 	task.SourcePath = path
+	task.GradeCode = extractPythonCodeBlock(markdownSection(body, "Automated Checks"))
 	return task, nil
 }
 
@@ -276,6 +325,18 @@ func markdownSection(body, name string) string {
 		}
 	}
 	return strings.TrimSpace(strings.Join(out, "\n"))
+}
+
+func extractPythonCodeBlock(section string) string {
+	if strings.TrimSpace(section) == "" {
+		return ""
+	}
+	re := regexp.MustCompile("(?s)```python\\s*\\n(.*?)\\n```")
+	match := re.FindStringSubmatch(section)
+	if len(match) < 2 {
+		return ""
+	}
+	return strings.TrimSpace(match[1])
 }
 
 func runAgentTask(task agentTask, opts agentEvalOptions) agentRunResult {
@@ -331,6 +392,7 @@ func runAgentTask(task agentTask, opts agentEvalOptions) agentRunResult {
 	stdoutText := stdout.String()
 	stderrText := stderr.String()
 	assistantText, toolCalls := parseAgentStdout(stdoutText, opts.JSONOutput)
+	transcript := buildAgentTranscript(task.Prompt, stdoutText, assistantText, opts.JSONOutput)
 	artifacts, artifactErr := extractAgentFileArtifacts(workspace, stdoutText)
 	if status == "success" && artifactErr != nil {
 		status = "artifact_error"
@@ -341,6 +403,10 @@ func runAgentTask(task agentTask, opts agentEvalOptions) agentRunResult {
 	scores := map[string]float64{}
 	if status == "success" {
 		checkResults = runAgentChecks(task.Checks, workspace, stdoutText, assistantText, toolCalls)
+		if task.GradeCode != "" {
+			pythonResults := runPythonGrade(task.GradeCode, transcript, workspace, task.SourcePath)
+			checkResults = append(checkResults, pythonResults...)
+		}
 		for _, check := range checkResults {
 			scores[check.Name] = check.Score
 			if !check.Pass && status == "success" {
@@ -506,6 +572,82 @@ func parseAgentStdout(stdout string, jsonOutput bool) (string, []string) {
 	return strings.TrimSpace(text.String()), tools
 }
 
+func buildAgentTranscript(prompt, stdout, assistantText string, jsonOutput bool) []map[string]any {
+	transcript := []map[string]any{
+		pinchbenchTextMessage("user", prompt),
+	}
+	if jsonOutput {
+		scanner := bufio.NewScanner(strings.NewReader(stdout))
+		scanner.Buffer(make([]byte, 0, 1024*1024), 20*1024*1024)
+		for scanner.Scan() {
+			var line map[string]any
+			if err := json.Unmarshal(scanner.Bytes(), &line); err != nil {
+				continue
+			}
+			toolName, _ := line["toolName"].(string)
+			toolCallID, _ := line["toolCallId"].(string)
+			if toolName == "" {
+				continue
+			}
+			if args, ok := line["args"]; ok {
+				transcript = append(transcript, pinchbenchToolUse(toolName, toolCallID, args))
+			}
+			if result, ok := line["result"]; ok {
+				isError, _ := line["isError"].(bool)
+				transcript = append(transcript, pinchbenchToolResult(toolName, toolCallID, result, isError))
+			}
+		}
+	}
+	if strings.TrimSpace(assistantText) == "" {
+		assistantText = strings.TrimSpace(stdout)
+	}
+	if strings.TrimSpace(assistantText) != "" {
+		transcript = append(transcript, pinchbenchTextMessage("assistant", assistantText))
+	}
+	return transcript
+}
+
+func pinchbenchTextMessage(role, text string) map[string]any {
+	return map[string]any{
+		"type": "message",
+		"message": map[string]any{
+			"role":    role,
+			"content": []map[string]any{{"type": "text", "text": text}},
+		},
+	}
+}
+
+func pinchbenchToolUse(name, id string, input any) map[string]any {
+	return map[string]any{
+		"type": "message",
+		"message": map[string]any{
+			"role": "assistant",
+			"content": []map[string]any{{
+				"type":  "tool_use",
+				"name":  name,
+				"id":    id,
+				"input": input,
+			}},
+		},
+	}
+}
+
+func pinchbenchToolResult(name, id string, output any, isError bool) map[string]any {
+	return map[string]any{
+		"type": "message",
+		"message": map[string]any{
+			"role": "tool",
+			"content": []map[string]any{{
+				"type":     "tool_result",
+				"name":     name,
+				"id":       id,
+				"output":   output,
+				"is_error": isError,
+			}},
+		},
+	}
+}
+
 var fileFenceRE = regexp.MustCompile("(?s)```(?:file\\s+path=|file_path=|file:|file=)[\"']?([^\"'\\n]+)[\"']?[^\\n]*\\n(.*?)\\n```")
 
 func extractAgentFileArtifacts(workspace, stdout string) ([]workspaceSnapshot, error) {
@@ -603,6 +745,181 @@ func runAgentCheck(check agentCheck, workspace, stdout, assistantText string, to
 	}
 	result.Reason = reason
 	return result
+}
+
+func runPythonGrade(gradeCode string, transcript []map[string]any, workspace, sourceTask string) []agentCheckResult {
+	tempDir, err := os.MkdirTemp("", "modu-agent-grade-")
+	if err != nil {
+		return []agentCheckResult{pythonGradeError("python_grade", err)}
+	}
+	defer os.RemoveAll(tempDir)
+
+	transcriptPath := filepath.Join(tempDir, "transcript.json")
+	transcriptData, err := json.Marshal(transcript)
+	if err != nil {
+		return []agentCheckResult{pythonGradeError("python_grade", err)}
+	}
+	if err := os.WriteFile(transcriptPath, transcriptData, 0600); err != nil {
+		return []agentCheckResult{pythonGradeError("python_grade", err)}
+	}
+
+	runnerPath := filepath.Join(tempDir, "grade_runner.py")
+	runner := `import contextlib
+import io
+import json
+import pathlib
+import sys
+import textwrap
+import traceback
+
+grade_code_path, transcript_path, workspace_path = sys.argv[1:4]
+payload = {"scores": {}, "error": None}
+stdout = io.StringIO()
+stderr = io.StringIO()
+try:
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        namespace = {"__name__": "modu_agent_task_grade"}
+        grade_code = pathlib.Path(grade_code_path).read_text(encoding="utf-8")
+        exec(compile(textwrap.dedent(grade_code), grade_code_path, "exec"), namespace)
+        grade = namespace.get("grade")
+        if not callable(grade):
+            raise ValueError("Automated Checks block must define grade(transcript, workspace_path)")
+        transcript = json.loads(pathlib.Path(transcript_path).read_text(encoding="utf-8"))
+        result = grade(transcript, workspace_path)
+        payload["scores"] = result or {}
+except Exception as exc:
+    payload["error"] = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
+payload["stdout"] = stdout.getvalue()
+payload["stderr"] = stderr.getvalue()
+print(json.dumps(payload, ensure_ascii=False))
+`
+	if err := os.WriteFile(runnerPath, []byte(runner), 0600); err != nil {
+		return []agentCheckResult{pythonGradeError("python_grade", err)}
+	}
+
+	gradePath := filepath.Join(tempDir, "task_grade.py")
+	if err := os.WriteFile(gradePath, []byte(gradeCode), 0600); err != nil {
+		return []agentCheckResult{pythonGradeError("python_grade", err)}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "python3", runnerPath, gradePath, transcriptPath, workspace)
+	if root, err := findModuleRootForAgentEval(); err == nil {
+		cmd.Dir = root
+	}
+	pythonPath := strings.Join(pythonImportRoots(sourceTask), string(os.PathListSeparator))
+	if pythonPath != "" {
+		cmd.Env = append(os.Environ(), "PYTHONPATH="+pythonPath)
+	} else {
+		cmd.Env = os.Environ()
+	}
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return []agentCheckResult{pythonGradeError("python_grade", fmt.Errorf("python grade timed out"))}
+		}
+		return []agentCheckResult{pythonGradeError("python_grade", fmt.Errorf("%w: %s", err, output.String()))}
+	}
+
+	var payload struct {
+		Scores map[string]any `json:"scores"`
+		Error  string         `json:"error"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &payload); err != nil {
+		return []agentCheckResult{pythonGradeError("python_grade", fmt.Errorf("parse python grade output: %w: %s", err, output.String()))}
+	}
+	if payload.Error != "" {
+		return []agentCheckResult{pythonGradeError("python_grade", errors.New(payload.Error))}
+	}
+	if len(payload.Scores) == 0 {
+		return []agentCheckResult{{Name: "python_grade", Type: "python_grade", Pass: true, Score: 1.0}}
+	}
+	names := make([]string, 0, len(payload.Scores))
+	for name := range payload.Scores {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	results := make([]agentCheckResult, 0, len(names))
+	for _, name := range names {
+		score := scoreValue(payload.Scores[name])
+		results = append(results, agentCheckResult{
+			Name:  name,
+			Type:  "python_grade",
+			Pass:  score >= 1.0,
+			Score: score,
+		})
+	}
+	return results
+}
+
+func scoreValue(value any) float64 {
+	switch v := value.(type) {
+	case float64:
+		return v
+	case int:
+		return float64(v)
+	case bool:
+		if v {
+			return 1.0
+		}
+		return 0.0
+	default:
+		return 0.0
+	}
+}
+
+func pythonGradeError(name string, err error) agentCheckResult {
+	return agentCheckResult{Name: name, Type: "python_grade", Pass: false, Score: 0.0, ErrorText: err.Error()}
+}
+
+func findModuleRootForAgentEval() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for {
+		if stat, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil && !stat.IsDir() {
+			return dir, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("module root not found")
+		}
+		dir = parent
+	}
+}
+
+func pythonImportRoots(sourceTask string) []string {
+	seen := map[string]bool{}
+	var roots []string
+	add := func(path string) {
+		if path == "" || seen[path] {
+			return
+		}
+		seen[path] = true
+		roots = append(roots, path)
+	}
+	if root, err := findModuleRootForAgentEval(); err == nil {
+		add(root)
+	}
+	if sourceTask != "" {
+		dir := filepath.Dir(sourceTask)
+		for {
+			if stat, err := os.Stat(filepath.Join(dir, "eval", "grader_helpers.py")); err == nil && !stat.IsDir() {
+				add(dir)
+				break
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+			dir = parent
+		}
+	}
+	return roots
 }
 
 func regexpCheck(pattern, value string) (bool, string) {

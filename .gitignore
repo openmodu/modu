@@ -10,6 +10,9 @@ use.md
 /acp-gateway.db
 /comment.md
 /evals.jsonl
+/eval/results/
+/eval/grader_helpers.py
+/eval/tasks/modu_code/golden_personal_assistant_100/
 examples/runtime_demo/runtime_demo_data/
 examples/runtime_demo_live/runtime_demo_live_data/
 examples/runtime_demo_live/runtime_demo_live
