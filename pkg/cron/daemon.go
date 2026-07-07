@@ -120,7 +120,7 @@ func buildRunner(cfgPath string) (scheduler.Runner, error) {
 		})
 		if len(task.NotificationChannels()) > 0 {
 			if notifyErr := sender.Completion(ctx, cfg, task, res, runErr, deps.Cwd); notifyErr != nil {
-				log.Printf("task %s: notify failed: %v", task.ID, notifyErr)
+				log.Printf("task %s: notify failed: %v", task.Identity(), notifyErr)
 			}
 		}
 		return runErr

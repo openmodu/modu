@@ -30,22 +30,22 @@ func callTool(t *testing.T, tool types.Tool, args map[string]any) (string, types
 	return tc.Text, res
 }
 
-func freshTools(t *testing.T) (cfgPath string, add, list, rm types.Tool) {
+func freshTools(t *testing.T) (cfgPath string, add, list, rm, update types.Tool) {
 	t.Helper()
 	cfgPath = filepath.Join(t.TempDir(), "config.yaml")
 	tools := New(cfgPath)
-	if len(tools) != 3 {
-		t.Fatalf("expected 3 tools, got %d", len(tools))
+	if len(tools) != 4 {
+		t.Fatalf("expected 4 tools, got %d", len(tools))
 	}
-	return cfgPath, tools[0], tools[1], tools[2]
+	return cfgPath, tools[0], tools[1], tools[2], tools[3]
 }
 
 func TestToolMetadata(t *testing.T) {
-	_, add, list, rm := freshTools(t)
-	if add.Name() != "cron_add" || list.Name() != "cron_list" || rm.Name() != "cron_remove" {
-		t.Errorf("unexpected names: %s, %s, %s", add.Name(), list.Name(), rm.Name())
+	_, add, list, rm, update := freshTools(t)
+	if add.Name() != "cron_add" || list.Name() != "cron_list" || rm.Name() != "cron_remove" || update.Name() != "cron_update" {
+		t.Errorf("unexpected names: %s, %s, %s, %s", add.Name(), list.Name(), rm.Name(), update.Name())
 	}
-	for _, tl := range []types.Tool{add, list, rm} {
+	for _, tl := range []types.Tool{add, list, rm, update} {
 		if tl.Label() == "" || tl.Description() == "" || tl.Parameters() == nil {
 			t.Errorf("%s: empty metadata", tl.Name())
 		}
@@ -53,9 +53,9 @@ func TestToolMetadata(t *testing.T) {
 }
 
 func TestAddHappyPath(t *testing.T) {
-	cfgPath, add, _, _ := freshTools(t)
-	text, _ := callTool(t, add, map[string]any{
-		"id":         "daily",
+	cfgPath, add, _, _, _ := freshTools(t)
+	text, res := callTool(t, add, map[string]any{
+		"name":       "daily",
 		"cron":       "0 0 9 * * *",
 		"prompt":     "summarize",
 		"goal":       "produce the daily summary",
@@ -64,11 +64,15 @@ func TestAddHappyPath(t *testing.T) {
 		"on_overlap": "queue",
 		"channels":   []any{"ops", "mobile"},
 	})
-	if !strings.Contains(text, "added task \"daily\"") || !strings.Contains(text, "hot-reload") {
+	if !strings.Contains(text, "added task \"daily\"") || !strings.Contains(text, "uuid=") || !strings.Contains(text, "hot-reload") {
 		t.Errorf("missing add/hot-reload phrasing: %q", text)
 	}
+	uuid := resultString(t, res, "uuid")
+	if uuid == "" {
+		t.Fatalf("expected generated uuid in details: %+v", res.Details)
+	}
 	cfg, _ := config.Load(cfgPath)
-	if len(cfg.Tasks) != 1 || cfg.Tasks[0].ID != "daily" || cfg.Tasks[0].OnOverlap != config.OverlapQueue {
+	if len(cfg.Tasks) != 1 || cfg.Tasks[0].Name != "daily" || cfg.Tasks[0].UUID != uuid || cfg.Tasks[0].ID != "" || cfg.Tasks[0].OnOverlap != config.OverlapQueue {
 		t.Errorf("config not persisted correctly: %+v", cfg.Tasks)
 	}
 	if cfg.Tasks[0].Goal != "produce the daily summary" {
@@ -83,10 +87,10 @@ func TestAddHappyPath(t *testing.T) {
 }
 
 func TestAddDefaults(t *testing.T) {
-	cfgPath, add, _, _ := freshTools(t)
+	cfgPath, add, _, _, _ := freshTools(t)
 	// enabled & on_overlap omitted → defaults true / skip.
 	callTool(t, add, map[string]any{
-		"id":     "minimal",
+		"name":   "minimal",
 		"cron":   "@every 1m",
 		"prompt": "ping",
 	})
@@ -100,9 +104,9 @@ func TestAddDefaults(t *testing.T) {
 }
 
 func TestAddRejectsBadCron(t *testing.T) {
-	cfgPath, add, _, _ := freshTools(t)
+	cfgPath, add, _, _, _ := freshTools(t)
 	text, _ := callTool(t, add, map[string]any{
-		"id":     "x",
+		"name":   "x",
 		"cron":   "not a cron",
 		"prompt": "p",
 	})
@@ -116,9 +120,9 @@ func TestAddRejectsBadCron(t *testing.T) {
 }
 
 func TestAddRejectsBadTimezone(t *testing.T) {
-	cfgPath, add, _, _ := freshTools(t)
+	cfgPath, add, _, _, _ := freshTools(t)
 	text, _ := callTool(t, add, map[string]any{
-		"id":       "x",
+		"name":     "x",
 		"cron":     "0 0 9 * * *",
 		"prompt":   "p",
 		"timezone": "Not/AZone",
@@ -132,31 +136,31 @@ func TestAddRejectsBadTimezone(t *testing.T) {
 	}
 }
 
-func TestAddRejectsDuplicateID(t *testing.T) {
-	cfgPath, add, _, _ := freshTools(t)
-	callTool(t, add, map[string]any{"id": "x", "cron": "@every 1m", "prompt": "p"})
-	text, _ := callTool(t, add, map[string]any{"id": "x", "cron": "@every 5m", "prompt": "q"})
-	if !strings.Contains(text, "already exists") {
-		t.Errorf("expected duplicate error, got: %q", text)
+func TestAddAllowsDuplicateName(t *testing.T) {
+	cfgPath, add, _, _, _ := freshTools(t)
+	callTool(t, add, map[string]any{"name": "x", "cron": "@every 1m", "prompt": "p"})
+	text, _ := callTool(t, add, map[string]any{"name": "x", "cron": "@every 5m", "prompt": "q"})
+	if !strings.Contains(text, "added task \"x\"") {
+		t.Errorf("expected duplicate name to be allowed, got: %q", text)
 	}
 	cfg, _ := config.Load(cfgPath)
-	if len(cfg.Tasks) != 1 || cfg.Tasks[0].Prompt != "p" {
-		t.Errorf("second add should not have overwritten: %+v", cfg.Tasks)
+	if len(cfg.Tasks) != 2 || cfg.Tasks[0].UUID == cfg.Tasks[1].UUID {
+		t.Errorf("duplicate names should persist with distinct uuids: %+v", cfg.Tasks)
 	}
 }
 
 func TestAddRejectsMissingFields(t *testing.T) {
-	_, add, _, _ := freshTools(t)
-	text, _ := callTool(t, add, map[string]any{"id": "x"})
+	_, add, _, _, _ := freshTools(t)
+	text, _ := callTool(t, add, map[string]any{"name": "x"})
 	if !strings.Contains(text, "required") {
 		t.Errorf("expected missing-field error, got: %q", text)
 	}
 }
 
 func TestAddRejectsBadOverlap(t *testing.T) {
-	_, add, _, _ := freshTools(t)
+	_, add, _, _, _ := freshTools(t)
 	text, _ := callTool(t, add, map[string]any{
-		"id":         "x",
+		"name":       "x",
 		"cron":       "@every 1m",
 		"prompt":     "p",
 		"on_overlap": "explode",
@@ -167,9 +171,9 @@ func TestAddRejectsBadOverlap(t *testing.T) {
 }
 
 func TestAddRejectsBadChannels(t *testing.T) {
-	_, add, _, _ := freshTools(t)
+	_, add, _, _, _ := freshTools(t)
 	text, _ := callTool(t, add, map[string]any{
-		"id":       "x",
+		"name":     "x",
 		"cron":     "@every 1m",
 		"prompt":   "p",
 		"channels": []any{"ops", 12},
@@ -180,7 +184,7 @@ func TestAddRejectsBadChannels(t *testing.T) {
 }
 
 func TestListEmpty(t *testing.T) {
-	_, _, list, _ := freshTools(t)
+	_, _, list, _, _ := freshTools(t)
 	text, _ := callTool(t, list, nil)
 	if !strings.Contains(text, "no tasks") {
 		t.Errorf("expected empty message, got: %q", text)
@@ -188,14 +192,16 @@ func TestListEmpty(t *testing.T) {
 }
 
 func TestListShowsTasks(t *testing.T) {
-	cfgPath, add, list, _ := freshTools(t)
-	callTool(t, add, map[string]any{"id": "a", "cron": "0 0 9 * * *", "prompt": "alpha", "goal": "finish alpha", "timezone": "Asia/Shanghai", "channels": []any{"ops"}})
-	callTool(t, add, map[string]any{"id": "b", "cron": "@every 5m", "prompt": "beta", "enabled": false})
+	cfgPath, add, list, _, _ := freshTools(t)
+	_, addA := callTool(t, add, map[string]any{"name": "a", "cron": "0 0 9 * * *", "prompt": "alpha", "goal": "finish alpha", "timezone": "Asia/Shanghai", "channels": []any{"ops"}})
+	uuidA := resultString(t, addA, "uuid")
+	_, addB := callTool(t, add, map[string]any{"name": "b", "cron": "@every 5m", "prompt": "beta", "enabled": false})
+	uuidB := resultString(t, addB, "uuid")
 	text, res := callTool(t, list, nil)
-	if !strings.Contains(text, "- a [0 0 9 * * *, on, skip, timezone=Asia/Shanghai, channels=ops, goal]: alpha") {
+	if !strings.Contains(text, "- "+uuidA+" \"a\" [0 0 9 * * *, on, skip, timezone=Asia/Shanghai, channels=ops, goal]: alpha") {
 		t.Errorf("missing task a row:\n%s", text)
 	}
-	if !strings.Contains(text, "- b [@every 5m, off, skip]: beta") {
+	if !strings.Contains(text, "- "+uuidB+" \"b\" [@every 5m, off, skip]: beta") {
 		t.Errorf("missing task b row:\n%s", text)
 	}
 	details, _ := res.Details.(map[string]any)
@@ -206,7 +212,7 @@ func TestListShowsTasks(t *testing.T) {
 }
 
 func TestListShowsConfiguredChannels(t *testing.T) {
-	cfgPath, _, list, _ := freshTools(t)
+	cfgPath, _, list, _, _ := freshTools(t)
 	if err := config.Save(cfgPath, &config.Config{
 		Channels: map[string]config.Channel{
 			"tg":  {Type: "telegram"},
@@ -225,10 +231,11 @@ func TestListShowsConfiguredChannels(t *testing.T) {
 }
 
 func TestRemoveHappyPath(t *testing.T) {
-	cfgPath, add, _, rm := freshTools(t)
-	callTool(t, add, map[string]any{"id": "x", "cron": "@every 1m", "prompt": "p"})
-	text, _ := callTool(t, rm, map[string]any{"id": "x"})
-	if !strings.Contains(text, "removed task \"x\"") {
+	cfgPath, add, _, rm, _ := freshTools(t)
+	_, addRes := callTool(t, add, map[string]any{"name": "x", "cron": "@every 1m", "prompt": "p"})
+	uuid := resultString(t, addRes, "uuid")
+	text, _ := callTool(t, rm, map[string]any{"uuid": uuid})
+	if !strings.Contains(text, "removed task \"x\"") || !strings.Contains(text, uuid) {
 		t.Errorf("missing remove message: %q", text)
 	}
 	cfg, _ := config.Load(cfgPath)
@@ -238,18 +245,39 @@ func TestRemoveHappyPath(t *testing.T) {
 }
 
 func TestRemoveUnknownIDErrors(t *testing.T) {
-	_, _, _, rm := freshTools(t)
-	text, _ := callTool(t, rm, map[string]any{"id": "ghost"})
+	_, _, _, rm, _ := freshTools(t)
+	text, _ := callTool(t, rm, map[string]any{"uuid": "ghost"})
 	if !strings.Contains(text, "not found") {
 		t.Errorf("expected not-found, got: %q", text)
 	}
 }
 
 func TestRemoveMissingID(t *testing.T) {
-	_, _, _, rm := freshTools(t)
+	_, _, _, rm, _ := freshTools(t)
 	text, _ := callTool(t, rm, map[string]any{})
-	if !strings.Contains(text, "id is required") {
+	if !strings.Contains(text, "uuid is required") {
 		t.Errorf("expected id-required, got: %q", text)
+	}
+}
+
+func TestUpdateHappyPath(t *testing.T) {
+	cfgPath, add, _, _, update := freshTools(t)
+	_, addRes := callTool(t, add, map[string]any{"name": "x", "cron": "@every 1m", "prompt": "p"})
+	uuid := resultString(t, addRes, "uuid")
+	text, _ := callTool(t, update, map[string]any{
+		"uuid":       uuid,
+		"name":       "renamed",
+		"cron":       "@every 5m",
+		"prompt":     "q",
+		"enabled":    false,
+		"on_overlap": "kill",
+	})
+	if !strings.Contains(text, "updated task \"renamed\"") || !strings.Contains(text, uuid) {
+		t.Fatalf("missing update message: %q", text)
+	}
+	cfg, _ := config.Load(cfgPath)
+	if len(cfg.Tasks) != 1 || cfg.Tasks[0].UUID != uuid || cfg.Tasks[0].Name != "renamed" || cfg.Tasks[0].Cron != "@every 5m" || cfg.Tasks[0].Prompt != "q" || cfg.Tasks[0].Enabled || cfg.Tasks[0].OnOverlap != config.OverlapKill {
+		t.Fatalf("task not updated correctly: %+v", cfg.Tasks)
 	}
 }
 
@@ -257,7 +285,7 @@ func TestRemoveMissingID(t *testing.T) {
 // ids and verifies all 50 land in the file. Without the package-level mutex
 // they'd interleave load-modify-save and most would be lost.
 func TestConcurrentAddsSerialize(t *testing.T) {
-	cfgPath, add, _, _ := freshTools(t)
+	cfgPath, add, _, _, _ := freshTools(t)
 	const n = 50
 	var wg sync.WaitGroup
 	wg.Add(n)
@@ -266,7 +294,7 @@ func TestConcurrentAddsSerialize(t *testing.T) {
 			defer wg.Done()
 			id := "task-" + string(rune('a'+(i%26))) + "-" + intToStr(i)
 			callTool(t, add, map[string]any{
-				"id":     id,
+				"name":   id,
 				"cron":   "@every 1m",
 				"prompt": "p",
 			})
@@ -277,6 +305,16 @@ func TestConcurrentAddsSerialize(t *testing.T) {
 	if len(cfg.Tasks) != n {
 		t.Errorf("expected %d tasks after concurrent adds, got %d", n, len(cfg.Tasks))
 	}
+}
+
+func resultString(t *testing.T, res types.ToolResult, key string) string {
+	t.Helper()
+	details, _ := res.Details.(map[string]any)
+	if details == nil {
+		t.Fatalf("missing details map: %+v", res.Details)
+	}
+	value, _ := details[key].(string)
+	return value
 }
 
 func intToStr(i int) string {
