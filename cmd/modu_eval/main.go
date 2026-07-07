@@ -92,6 +92,7 @@ Environment:
 		PromptArg:  "-p",
 		JSONOutput: true,
 		Summary:    true,
+		TUI:        true,
 	}
 	agentCmd := &cobra.Command{
 		Use:   "agent [task file or dir...]",
@@ -113,6 +114,7 @@ Environment:
 	agentCmd.Flags().IntVar(&agentOpts.TimeoutSeconds, "timeout", 300, "maximum seconds per task")
 	agentCmd.Flags().BoolVar(&agentOpts.KeepGoing, "keep-going", false, "continue after a failed task")
 	agentCmd.Flags().BoolVar(&agentOpts.Summary, "summary", true, "write summary.md in the output directory")
+	agentCmd.Flags().BoolVar(&agentOpts.TUI, "tui", true, "open an interactive TUI summary after the run when stdout is a terminal")
 
 	rootCmd.AddCommand(runCmd, viewCmd, checkCmd, commentCmd, agentCmd)
 	if err := rootCmd.Execute(); err != nil {
