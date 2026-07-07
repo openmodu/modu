@@ -211,10 +211,9 @@ type Config struct {
 	TasksFile  string             `yaml:"tasks_file,omitempty"`
 	Tasks      []Task             `yaml:"tasks,omitempty"`
 
-	// DailyBudgetTokens is the shared daily token ceiling across all tasks.
-	// Once the day's accumulated usage reaches it, further runs are skipped
-	// (with a notification) until the local-time day rolls over. Zero
-	// disables the daily budget.
+	// DailyBudgetTokens is the per-task daily token ceiling. Global daily
+	// usage is still recorded for observability, but this budget only gates
+	// the task being started. Zero disables the daily budget.
 	DailyBudgetTokens int `yaml:"daily_budget_tokens,omitempty"`
 }
 

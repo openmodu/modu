@@ -21,9 +21,14 @@ const usageRetainDays = 31
 // the same assumption crontools makes for tasks.yaml.
 var usageMu sync.Mutex
 
-// usageFile is the on-disk shape of the ledger: local-time day -> tokens.
+// usageFile is the on-disk shape of the ledger.
+//
+// Days is the global local-time day -> tokens total kept for observability.
+// TaskDays is task id -> local-time day -> tokens, used by per-task budget
+// checks so one expensive task does not block unrelated tasks.
 type usageFile struct {
-	Days map[string]int `json:"days"`
+	Days     map[string]int            `json:"days"`
+	TaskDays map[string]map[string]int `json:"task_days,omitempty"`
 }
 
 func usageDay(t time.Time) string {
@@ -35,7 +40,7 @@ func (s *Store) usagePath() string {
 }
 
 // DailyTokens returns the tokens recorded for day (local time). A missing
-// ledger yields zero.
+// ledger yields zero. This is the global total across all tasks.
 func (s *Store) DailyTokens(day time.Time) (int, error) {
 	usageMu.Lock()
 	defer usageMu.Unlock()
@@ -44,6 +49,18 @@ func (s *Store) DailyTokens(day time.Time) (int, error) {
 		return 0, err
 	}
 	return file.Days[usageDay(day)], nil
+}
+
+// TaskDailyTokens returns the tokens recorded for taskID on day (local time).
+// A missing ledger or task entry yields zero.
+func (s *Store) TaskDailyTokens(taskID string, day time.Time) (int, error) {
+	usageMu.Lock()
+	defer usageMu.Unlock()
+	file, err := s.readUsageLocked()
+	if err != nil {
+		return 0, err
+	}
+	return file.TaskDays[taskID][usageDay(day)], nil
 }
 
 // AddDailyTokens adds tokens to day's total and prunes entries older than
@@ -61,16 +78,38 @@ func (s *Store) AddDailyTokens(day time.Time, tokens int) error {
 	key := usageDay(day)
 	file.Days[key] += tokens
 	cutoff := usageDay(day.AddDate(0, 0, -usageRetainDays))
-	for d := range file.Days {
-		if d < cutoff {
-			delete(file.Days, d)
-		}
+	pruneUsageFile(&file, cutoff)
+	return s.writeUsageLocked(file)
+}
+
+// AddTaskDailyTokens adds tokens to both the global daily total and the
+// per-task daily total. Zero or negative deltas are ignored.
+func (s *Store) AddTaskDailyTokens(taskID string, day time.Time, tokens int) error {
+	if tokens <= 0 {
+		return nil
 	}
+	usageMu.Lock()
+	defer usageMu.Unlock()
+	file, err := s.readUsageLocked()
+	if err != nil {
+		return err
+	}
+	key := usageDay(day)
+	file.Days[key] += tokens
+	if file.TaskDays == nil {
+		file.TaskDays = map[string]map[string]int{}
+	}
+	if file.TaskDays[taskID] == nil {
+		file.TaskDays[taskID] = map[string]int{}
+	}
+	file.TaskDays[taskID][key] += tokens
+	cutoff := usageDay(day.AddDate(0, 0, -usageRetainDays))
+	pruneUsageFile(&file, cutoff)
 	return s.writeUsageLocked(file)
 }
 
 func (s *Store) readUsageLocked() (usageFile, error) {
-	file := usageFile{Days: map[string]int{}}
+	file := usageFile{Days: map[string]int{}, TaskDays: map[string]map[string]int{}}
 	data, err := os.ReadFile(s.usagePath())
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -84,7 +123,31 @@ func (s *Store) readUsageLocked() (usageFile, error) {
 	if file.Days == nil {
 		file.Days = map[string]int{}
 	}
+	if file.TaskDays == nil {
+		file.TaskDays = map[string]map[string]int{}
+	}
 	return file, nil
+}
+
+func pruneUsageFile(file *usageFile, cutoff string) {
+	if file == nil {
+		return
+	}
+	for d := range file.Days {
+		if d < cutoff {
+			delete(file.Days, d)
+		}
+	}
+	for taskID, days := range file.TaskDays {
+		for d := range days {
+			if d < cutoff {
+				delete(days, d)
+			}
+		}
+		if len(days) == 0 {
+			delete(file.TaskDays, taskID)
+		}
+	}
 }
 
 func (s *Store) writeUsageLocked(file usageFile) error {

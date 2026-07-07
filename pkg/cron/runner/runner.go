@@ -78,9 +78,9 @@ type Deps struct {
 	// "manual" so acceptance scripts can distinguish natural cron evidence
 	// from bootstrap/manual runs.
 	Trigger string
-	// DailyBudgetTokens mirrors config.Config.DailyBudgetTokens: once the
-	// day's ledger (kept by Logs) reaches it, Execute refuses to start a
-	// session. Zero disables the check.
+	// DailyBudgetTokens mirrors config.Config.DailyBudgetTokens: once this
+	// task's daily ledger (kept by Logs) reaches it, Execute refuses to start a
+	// session for this task. Zero disables the check.
 	DailyBudgetTokens int
 }
 
@@ -143,11 +143,11 @@ func Execute(ctx context.Context, deps Deps, task config.Task) (Result, error) {
 	}
 	writeJSONLine(run, start)
 
-	// Daily budget breaker: refuse to start a session once today's ledger is
-	// at the ceiling. The run still leaves a run_start/run_end pair behind so
-	// "why didn't my task run" is answerable from the logs alone.
+	// Daily budget breaker: refuse to start a session once this task's daily
+	// ledger is at the ceiling. The run still leaves a run_start/run_end pair
+	// behind so "why didn't my task run" is answerable from the logs alone.
 	if deps.DailyBudgetTokens > 0 {
-		used, lerr := deps.Logs.DailyTokens(res.Started)
+		used, lerr := deps.Logs.TaskDailyTokens(taskID, res.Started)
 		if lerr != nil {
 			log.Printf("task %s: daily usage ledger read failed: %v", taskID, lerr)
 		} else if used >= deps.DailyBudgetTokens {
@@ -249,7 +249,7 @@ func Execute(ctx context.Context, deps Deps, task config.Task) (Result, error) {
 	}
 	res.Ended = time.Now()
 	res.Tokens = int(tokens.Load())
-	if lerr := deps.Logs.AddDailyTokens(res.Started, res.Tokens); lerr != nil {
+	if lerr := deps.Logs.AddTaskDailyTokens(taskID, res.Started, res.Tokens); lerr != nil {
 		log.Printf("task %s: daily usage ledger write failed: %v", taskID, lerr)
 	}
 
