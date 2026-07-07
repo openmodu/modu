@@ -20,11 +20,11 @@ import (
 // refuses to run before any session (and thus any provider) is needed.
 func TestExecuteDailyBudgetExceeded(t *testing.T) {
 	logs := runlog.New(t.TempDir())
-	if err := logs.AddDailyTokens(time.Now(), 1000); err != nil {
+	if err := logs.AddTaskDailyTokens("t", time.Now(), 1000); err != nil {
 		t.Fatalf("seed ledger: %v", err)
 	}
 	deps := Deps{Logs: logs, DailyBudgetTokens: 500}
-	task := config.Task{ID: "t", Prompt: "hello"}
+	task := config.Task{UUID: "t", Prompt: "hello"}
 
 	res, err := Execute(context.Background(), deps, task)
 	if err == nil {
@@ -70,11 +70,11 @@ func TestExecuteDailyBudgetExceeded(t *testing.T) {
 // this providerless test env, which is fine — status must not be budget).
 func TestExecuteUnderBudgetStillRuns(t *testing.T) {
 	logs := runlog.New(t.TempDir())
-	if err := logs.AddDailyTokens(time.Now(), 100); err != nil {
+	if err := logs.AddTaskDailyTokens("t", time.Now(), 100); err != nil {
 		t.Fatalf("seed ledger: %v", err)
 	}
 	deps := Deps{Logs: logs, DailyBudgetTokens: 500}
-	task := config.Task{ID: "t", Prompt: "hello"}
+	task := config.Task{UUID: "t", Prompt: "hello"}
 
 	res, _ := Execute(context.Background(), deps, task)
 	if res.Status == StatusBudgetExceeded {
@@ -82,13 +82,27 @@ func TestExecuteUnderBudgetStillRuns(t *testing.T) {
 	}
 }
 
+func TestExecuteBudgetIsPerTask(t *testing.T) {
+	logs := runlog.New(t.TempDir())
+	if err := logs.AddTaskDailyTokens("other", time.Now(), 1000); err != nil {
+		t.Fatalf("seed ledger: %v", err)
+	}
+	deps := Deps{Logs: logs, DailyBudgetTokens: 500}
+	task := config.Task{UUID: "t", Prompt: "hello"}
+
+	res, _ := Execute(context.Background(), deps, task)
+	if res.Status == StatusBudgetExceeded {
+		t.Fatalf("other task's budget tripped this task: %+v", res)
+	}
+}
+
 func TestExecuteRunStartRecordsTrigger(t *testing.T) {
 	logs := runlog.New(t.TempDir())
-	if err := logs.AddDailyTokens(time.Now(), 1); err != nil {
+	if err := logs.AddTaskDailyTokens("t", time.Now(), 1); err != nil {
 		t.Fatalf("seed ledger: %v", err)
 	}
 	deps := Deps{Logs: logs, DailyBudgetTokens: 1, Trigger: "scheduler"}
-	task := config.Task{ID: "t", Prompt: "hello"}
+	task := config.Task{UUID: "t", Prompt: "hello"}
 
 	res, err := Execute(context.Background(), deps, task)
 	if err == nil {
@@ -111,11 +125,11 @@ func TestExecuteRunStartRecordsTrigger(t *testing.T) {
 func TestExecuteRunStartRecordsGoalTask(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	logs := runlog.New(t.TempDir())
-	if err := logs.AddDailyTokens(time.Now(), 1); err != nil {
+	if err := logs.AddTaskDailyTokens("t", time.Now(), 1); err != nil {
 		t.Fatalf("seed ledger: %v", err)
 	}
 	deps := Deps{Logs: logs, DailyBudgetTokens: 1}
-	task := config.Task{ID: "t", Prompt: "hello", Goal: "finish hello", Timezone: "Asia/Shanghai"}
+	task := config.Task{UUID: "t", Prompt: "hello", Goal: "finish hello", Timezone: "Asia/Shanghai"}
 
 	res, err := Execute(context.Background(), deps, task)
 	if err == nil {
@@ -162,11 +176,11 @@ extensions:
 	}
 
 	logs := runlog.New(t.TempDir())
-	if err := logs.AddDailyTokens(time.Now(), 1); err != nil {
+	if err := logs.AddTaskDailyTokens("t", time.Now(), 1); err != nil {
 		t.Fatalf("seed ledger: %v", err)
 	}
 	deps := Deps{Logs: logs, DailyBudgetTokens: 1}
-	task := config.Task{ID: "t", Prompt: "hello", Goal: "finish hello"}
+	task := config.Task{UUID: "t", Prompt: "hello", Goal: "finish hello"}
 
 	res, err := Execute(context.Background(), deps, task)
 	if err == nil {

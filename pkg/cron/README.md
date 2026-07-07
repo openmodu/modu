@@ -187,10 +187,10 @@ tasks:
 `config.yaml` 全局项：
 
 ```yaml
-daily_budget_tokens: 3000000  # 所有任务共享的当日 token 总额度（本地时区按天滚动）
+daily_budget_tokens: 3000000  # 单个任务的当日 token 总额度（本地时区按天滚动）
 ```
 
-- 日额度台账落在 `~/.modu/cron/logs/usage.json`，每次 run 结束累加，超额后当天后续 tick 直接拒跑（`run_end` 记 `status=budget_exceeded`，配置了 channel 会收到通知），第二天自动恢复
+- 日额度台账落在 `~/.modu/cron/logs/usage.json`，`days` 保留全局累计统计，`task_days` 用于单任务预算判断；某个任务超额后只拒跑该任务当天后续 tick（`run_end` 记 `status=budget_exceeded`，配置了 channel 会收到通知），第二天自动恢复
 - `run_end` 带 `tokens` 字段（本次 run 消耗），`status` 可为 `ok` / `error` / `timeout` / `token_cap` / `budget_exceeded` / `goal_unavailable` / `goal_paused` / `goal_budget_limited`
 - timeout / token_cap / budget_exceeded / goal_unavailable / goal_paused / goal_budget_limited 属于断路器：**不会**触发 `max_retries` 重试
 - `timeout` / `max_tokens_per_run` / `max_retries` 配置非法时调度器 reload 会失败回滚（与非法 cron 表达式同一套保护）

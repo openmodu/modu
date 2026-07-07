@@ -3,7 +3,7 @@
 # 目标是更新 state/triage.md" and cron_add writes ~/.modu/cron/tasks.yaml.
 #
 # Cap Before You Ship: all three per-task breakers are set BEFORE the loop's
-# first unattended run, plus the shared daily budget in config.yaml.
+# first unattended run, plus the per-task daily budget in config.yaml.
 tasks:
   - id: morning-triage
     cron: "0 0 6 * * 1-5"        # 06:00 on weekdays (sec min hour dom mon dow)
@@ -35,7 +35,7 @@ tasks:
 
 # And in ~/.modu/cron/config.yaml:
 #
-#   daily_budget_tokens: 3000000   # shared across all tasks, rolls over at local midnight
+#   daily_budget_tokens: 3000000   # per task, rolls over at local midnight
 #   channels:
 #     feishu-daily:
 #       type: feishu_bot
