@@ -96,14 +96,29 @@ func (m *Manager) SetPolicy(p Policy) {
 	m.mu.Unlock()
 }
 
-// AddUsage accumulates token usage reported by the model.
+// AddUsage accumulates token usage. Tests and callers that intentionally track
+// incremental usage can use this directly; normal agent turns should call
+// RecordUsageSnapshot because provider usage is reported as the full request
+// window for that turn, not a delta from the previous turn.
 func (m *Manager) AddUsage(tokens int) {
 	m.mu.Lock()
 	m.totalTokens += tokens
 	m.mu.Unlock()
 }
 
-// Tokens returns accumulated token usage since the last compaction.
+// RecordUsageSnapshot records the current conversation window size reported by
+// the latest model request. This avoids double-counting historical prompt
+// tokens across turns.
+func (m *Manager) RecordUsageSnapshot(tokens int) {
+	if tokens < 0 {
+		tokens = 0
+	}
+	m.mu.Lock()
+	m.totalTokens = tokens
+	m.mu.Unlock()
+}
+
+// Tokens returns the current token window estimate since the last compaction.
 func (m *Manager) Tokens() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()

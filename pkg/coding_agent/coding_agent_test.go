@@ -2661,6 +2661,56 @@ func newTestSession(t *testing.T, model *types.Model) *CodingSession {
 	return session
 }
 
+func TestPromptUsageTracksLatestContextWindowNotCumulativeSpend(t *testing.T) {
+	dir := t.TempDir()
+	model := newTestModelWithContext(10000)
+	var calls int
+	streamFn := func(ctx context.Context, _ *types.Model, _ *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+		calls++
+		total := 100
+		if calls == 2 {
+			total = 150
+		}
+		stream := types.NewEventStream()
+		go func() {
+			defer stream.Close()
+			msg := &types.AssistantMessage{
+				Role:       types.RoleAssistant,
+				ProviderID: model.ProviderID,
+				Model:      model.ID,
+				StopReason: "stop",
+				Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "ok"}},
+				Usage:      types.AgentUsage{Input: total - 10, Output: 10, TotalTokens: total},
+				Timestamp:  time.Now().UnixMilli(),
+			}
+			stream.Push(types.StreamEvent{Type: types.EventDone, Reason: "stop", Message: msg})
+			stream.Resolve(msg, nil)
+		}()
+		return stream, nil
+	}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  filepath.Join(dir, ".coding_agent"),
+		Model:     model,
+		GetAPIKey: func(p string) (string, error) { return "", nil },
+		StreamFn:  streamFn,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close("test")
+
+	if err := session.Prompt(context.Background(), "one"); err != nil {
+		t.Fatalf("first prompt: %v", err)
+	}
+	if err := session.Prompt(context.Background(), "two"); err != nil {
+		t.Fatalf("second prompt: %v", err)
+	}
+	if got := session.GetSessionStats().TotalTokens; got != 150 {
+		t.Fatalf("context token window = %d, want latest request total 150", got)
+	}
+}
+
 func TestMaybeAutoCompact_BelowThreshold(t *testing.T) {
 	session := newTestSession(t, newTestModelWithContext(10000))
 
@@ -3237,6 +3287,19 @@ func TestAgentMessageUsageTokensFallsBackToInputOutput(t *testing.T) {
 	}
 	if got := agentMessageUsageTokens(msg); got != 18 {
 		t.Fatalf("usage tokens = %d, want 18", got)
+	}
+}
+
+func TestRestoreTokenUsageUsesLatestAssistantUsageSnapshot(t *testing.T) {
+	session := newTestSession(t, newTestModelWithContext(10000))
+	session.restoreTokenUsageFromMessages([]types.AgentMessage{
+		types.AssistantMessage{Role: types.RoleAssistant, Usage: types.AgentUsage{TotalTokens: 100}},
+		types.UserMessage{Role: types.RoleUser, Content: "next"},
+		types.AssistantMessage{Role: types.RoleAssistant, Usage: types.AgentUsage{TotalTokens: 150}},
+	})
+
+	if got := session.GetSessionStats().TotalTokens; got != 150 {
+		t.Fatalf("restored context token window = %d, want latest assistant usage 150", got)
 	}
 }
 

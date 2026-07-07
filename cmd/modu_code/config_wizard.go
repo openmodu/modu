@@ -86,7 +86,7 @@ func (w *moduTUIConfigWizard) handleInput(ctx context.Context, input string) {
 		return
 	}
 	if strings.EqualFold(input, "back") {
-		w.backToMenu()
+		w.backToMenu(ctx)
 		return
 	}
 
@@ -118,7 +118,7 @@ func (w *moduTUIConfigWizard) handleInput(ctx context.Context, input string) {
 	case "active-choice":
 		w.handleActiveChoice(ctx, input)
 	default:
-		w.backToMenu()
+		w.backToMenu(ctx)
 	}
 }
 
@@ -325,7 +325,7 @@ func (w *moduTUIConfigWizard) saveProvider(ctx context.Context, provider ConfigP
 	if ctx.Err() != nil {
 		return
 	}
-	w.backToMenu()
+	w.backToMenu(ctx)
 }
 
 func (w *moduTUIConfigWizard) handleProviderAPIKeyEnv(input string) {
@@ -360,7 +360,7 @@ func (w *moduTUIConfigWizard) handleProviderBaseURL(ctx context.Context, input s
 	if ctx.Err() != nil {
 		return
 	}
-	w.backToMenu()
+	w.backToMenu(ctx)
 }
 
 func (w *moduTUIConfigWizard) handleModelName(input string) {
@@ -428,7 +428,7 @@ func (w *moduTUIConfigWizard) handleModelDescription(ctx context.Context, input 
 	if ctx.Err() != nil {
 		return
 	}
-	w.backToMenu()
+	w.backToMenu(ctx)
 }
 
 func (w *moduTUIConfigWizard) openActiveModelChoice(ctx context.Context) {
@@ -489,7 +489,7 @@ func (w *moduTUIConfigWizard) handleActiveChoice(ctx context.Context, input stri
 	if ctx.Err() != nil {
 		return
 	}
-	w.backToMenu()
+	w.backToMenu(ctx)
 }
 
 func (w *moduTUIConfigWizard) showStatus(ctx context.Context) {
@@ -502,16 +502,16 @@ func (w *moduTUIConfigWizard) showStatus(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
 	}
-	w.backToMenu()
+	w.backToMenu(ctx)
 }
 
-func (w *moduTUIConfigWizard) backToMenu() {
+func (w *moduTUIConfigWizard) backToMenu(ctx context.Context) {
 	w.mu.Lock()
 	w.active = false
 	w.step = ""
 	w.mu.Unlock()
 	w.setStatus("config")
-	go w.openMenu(context.Background())
+	w.openMenu(ctx)
 }
 
 func (w *moduTUIConfigWizard) cancel(status string) {
