@@ -364,6 +364,8 @@ type Extension interface {
 | `TruncateTail` | 保留后 N 行（bash 工具用） | 2000 行 |
 | `TruncateLine` | 单行字符截断（grep 工具用） | 500 字符 |
 
+工具返回给模型的文本只包含预算内 preview。支持 artifact 的工具（当前包括 `bash`、`grep`、`find`、`ls`、`web_fetch`）在截断时会把完整 raw 输出写入 `RuntimePaths().ToolResultsDir/sessions/<session-id>/`，并在 `ToolResult.Details.output` 写入 `truncated`、`rawBytes`、`shownBytes`、`strategy`、`artifactId` 和 `artifactPath`。TUI 展开工具输出或执行 `/tool-output <call-id>` 时可从本地 artifact 读取完整内容，不会自动把完整 raw 输出送回模型上下文。模型需要取回被截断的中段时使用 `read_tool_result(call_id, offset, limit)` 分页读取 artifact。`read` 不重复落 artifact；大文件继续通过 `offset`/`limit` 分页读取，源文件本身就是可取回内容。
+
 ### 11. 内置斜杠命令
 
 | 命令 | 功能 |
@@ -387,6 +389,7 @@ type Extension interface {
 | `/changelog` | 显示当前 git 仓库最近提交 |
 | `/settings` | 显示当前配置 |
 | `/tools` | 显示当前活跃工具 |
+| `/tool-output <call-id>` | 显示某次工具调用的完整本地 artifact 输出 |
 | `/skills` | 显示已发现 skills |
 | `/prompts` | 显示已发现 prompt templates |
 | `/help` | 显示帮助信息 |
