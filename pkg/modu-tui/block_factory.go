@@ -9,17 +9,24 @@ func defaultBlockFromMessage(m Message) Block {
 	}
 	if m.Tool {
 		call := ToolCall{
-			ID:         m.ToolID,
-			Name:       m.ToolName,
-			Summary:    m.Summary,
-			Detail:     m.Detail,
-			Input:      m.ToolInput,
-			Output:     m.ToolOutput,
-			Code:       m.ToolCode,
-			Language:   m.ToolLanguage,
-			Error:      m.ToolError,
-			Done:       m.ToolDone,
-			NoCollapse: m.ToolNoCollapse,
+			ID:           m.ToolID,
+			Name:         m.ToolName,
+			Summary:      m.Summary,
+			Detail:       m.Detail,
+			Input:        m.ToolInput,
+			Output:       m.ToolOutput,
+			ArtifactID:   m.ToolArtifactID,
+			ArtifactPath: m.ToolArtifactPath,
+			ArtifactText: m.ToolArtifactText,
+			ArtifactErr:  m.ToolArtifactErr,
+			ArtifactRead: m.ToolArtifactRead,
+			Truncated:    m.ToolTruncated,
+			BatchSize:    m.ToolBatchSize,
+			Code:         m.ToolCode,
+			Language:     m.ToolLanguage,
+			Error:        m.ToolError,
+			Done:         m.ToolDone,
+			NoCollapse:   m.ToolNoCollapse,
 		}
 		return ToolCallBlock{
 			CollapsibleBlock: CollapsibleBlock{

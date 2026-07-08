@@ -2,6 +2,7 @@ package modutui
 
 import (
 	"bytes"
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -55,16 +56,27 @@ func (b ToolCallBlock) Render(ctx RenderContext) BlockRender {
 
 func toolBlockSummary(summary string, call ToolCall) string {
 	summary = strings.TrimSpace(summary)
-	if summary != "" {
-		return summary
+	if summary == "" {
+		summary = strings.TrimSpace(call.Summary)
 	}
-	if summary = strings.TrimSpace(call.Summary); summary != "" {
-		return summary
+	if summary == "" {
+		if call.NoCollapse {
+			summary = toolDisplayName(call.Name)
+		} else {
+			summary = "Ran " + toolDisplayName(call.Name)
+		}
 	}
-	if call.NoCollapse {
-		return toolDisplayName(call.Name)
+	var meta []string
+	if call.BatchSize > 1 {
+		meta = append(meta, fmt.Sprintf("parallel %d", call.BatchSize))
 	}
-	return "Ran " + toolDisplayName(call.Name)
+	if call.Truncated && call.ArtifactID != "" {
+		meta = append(meta, "artifact "+call.ArtifactID)
+	}
+	if len(meta) > 0 {
+		summary += " · " + strings.Join(meta, " · ")
+	}
+	return summary
 }
 
 func toolExpandedHeaderLines(width int, call ToolCall) []string {
@@ -110,7 +122,7 @@ func toolInvocationLine(call ToolCall) string {
 }
 
 func toolOutputLines(ctx RenderContext, call ToolCall) []string {
-	output := strings.TrimRight(call.Output, "\n")
+	output := strings.TrimRight(toolDisplayOutput(call), "\n")
 	var lines []string
 	if strings.TrimSpace(output) == "" {
 		lines = append(lines, toolOutputBranchPrefix()+"no content data")
@@ -125,6 +137,23 @@ func toolOutputLines(ctx RenderContext, call ToolCall) []string {
 	}
 
 	return lines
+}
+
+func toolDisplayOutput(call ToolCall) string {
+	if strings.TrimSpace(call.ArtifactPath) == "" {
+		return call.Output
+	}
+	if !call.ArtifactRead {
+		return call.Output
+	}
+	if call.ArtifactErr == "" {
+		return call.ArtifactText
+	}
+	output := strings.TrimRight(call.Output, "\n")
+	if output != "" {
+		output += "\n"
+	}
+	return output + "(failed to read artifact: " + call.ArtifactErr + ")"
 }
 
 func toolOutputBranchPrefix() string { return "  └ " }

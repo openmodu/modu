@@ -229,6 +229,81 @@ func TestMessagesFromAgentEventFormatsBashToolAsSingleClaudeStyleBlock(t *testin
 	}
 }
 
+func TestMessagesFromAgentEventCarriesToolArtifactAndBatchSize(t *testing.T) {
+	msgs := messagesFromAgentEvent(types.Event{
+		Type:       types.EventTypeToolExecutionEnd,
+		ToolCallID: "call-1",
+		ToolName:   "bash",
+		BatchSize:  4,
+		Result: types.ToolResult{
+			Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "preview"}},
+			Details: map[string]any{
+				"output": map[string]any{
+					"artifactId":   "call-1",
+					"artifactPath": "/tmp/call-1.output",
+					"truncated":    true,
+				},
+			},
+		},
+	})
+	if len(msgs) != 1 {
+		t.Fatalf("messages len = %d, want 1", len(msgs))
+	}
+	got := msgs[0]
+	if got.ToolArtifactID != "call-1" || got.ToolArtifactPath != "/tmp/call-1.output" || !got.ToolTruncated || got.ToolBatchSize != 4 {
+		t.Fatalf("artifact/batch metadata not carried: %#v", got)
+	}
+}
+
+func TestRunModuTUISlashToolOutputReadsArtifact(t *testing.T) {
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       t.TempDir(),
+		AgentDir:  t.TempDir(),
+		Model:     &types.Model{ID: "test", Name: "Test", ProviderID: "test"},
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactPath := filepath.Join(t.TempDir(), "call-1.output")
+	if err := os.WriteFile(artifactPath, []byte("full artifact output\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	session.GetAgent().AppendMessage(types.ToolResultMessage{
+		Role:       types.RoleToolResult,
+		ToolCallID: "call-1",
+		ToolName:   "bash",
+		Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "preview only"}},
+		Details: map[string]any{
+			"output": map[string]any{
+				"artifactId":   "call-1",
+				"artifactPath": artifactPath,
+				"truncated":    true,
+			},
+		},
+	})
+
+	var sent []tea.Msg
+	runModuTUISlash(context.Background(), "/tool-output call-1", session, session.GetModel(), CommandHooks{}, func(msg tea.Msg) {
+		sent = append(sent, msg)
+	}, nil, nil, nil)
+
+	var got *modutui.Message
+	for _, msg := range sent {
+		if appendMsg, ok := msg.(modutui.AppendMessageMsg); ok {
+			next := appendMsg.Message
+			got = &next
+			break
+		}
+	}
+	if got == nil {
+		t.Fatalf("expected AppendMessageMsg in %#v", sent)
+	}
+	if !got.Preformatted || !strings.Contains(got.Text, "full artifact output") || strings.Contains(got.Text, "preview only") {
+		t.Fatalf("/tool-output should render artifact content, got %#v", got)
+	}
+}
+
 func TestMessagesFromAgentEventFormatsReadToolLikeClaudeCode(t *testing.T) {
 	path := "/Users/ityike/Code/go/src/github.com/openmodu/modu/cmd/tuipoc2/main.go"
 	start := messagesFromAgentEvent(types.Event{

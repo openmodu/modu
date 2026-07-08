@@ -2,6 +2,8 @@ package modutui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1404,6 +1406,76 @@ func TestPOC2ExpandedToolBlockCanCollapseFromAnyRenderedLine(t *testing.T) {
 	_ = m.onPress(1, 1)
 	if m.messages[0].Expanded {
 		t.Fatal("clicking an expanded tool output line should collapse the block")
+	}
+}
+
+func TestPOC2CtrlOTogglesLatestToolAndReadsArtifact(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "call-1.output")
+	if err := os.WriteFile(path, []byte("full artifact output\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var tm tea.Model = NewModel(Options{
+		Width:  100,
+		Height: 20,
+		InitialMessages: []Message{{
+			Tool:             true,
+			ToolID:           "call-1",
+			ToolName:         "bash",
+			Summary:          "Ran 1 shell command",
+			ToolOutput:       "preview only",
+			ToolArtifactID:   "call-1",
+			ToolArtifactPath: path,
+			ToolTruncated:    true,
+			ToolDone:         true,
+		}},
+	})
+	m := tm.(Model)
+	if m.messages[0].Expanded {
+		t.Fatal("setup should start collapsed")
+	}
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: 'o', Mod: tea.ModCtrl}))
+	m = tm.(Model)
+	if !m.messages[0].Expanded {
+		t.Fatal("ctrl+o should expand latest tool")
+	}
+	rendered := ansi.Strip(m.render())
+	if !strings.Contains(rendered, "full artifact output") || strings.Contains(rendered, "preview only") {
+		t.Fatalf("expanded latest tool should render artifact, got:\n%s", rendered)
+	}
+}
+
+func TestPOC2ExpandedArtifactIsCachedAcrossRebuilds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "call-1.output")
+	if err := os.WriteFile(path, []byte("first artifact output\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var tm tea.Model = NewModel(Options{
+		Width:  100,
+		Height: 20,
+		InitialMessages: []Message{{
+			Tool:             true,
+			ToolID:           "call-1",
+			ToolName:         "bash",
+			Summary:          "Ran 1 shell command",
+			ToolOutput:       "preview only",
+			ToolArtifactID:   "call-1",
+			ToolArtifactPath: path,
+			ToolTruncated:    true,
+			ToolDone:         true,
+		}},
+	})
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: 'o', Mod: tea.ModCtrl}))
+	m := tm.(Model)
+	if !strings.Contains(ansi.Strip(m.render()), "first artifact output") {
+		t.Fatalf("expanded tool should render first artifact read, got:\n%s", ansi.Strip(m.render()))
+	}
+	if err := os.WriteFile(path, []byte("second artifact output\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.rebuild()
+	rendered := ansi.Strip(m.render())
+	if !strings.Contains(rendered, "first artifact output") || strings.Contains(rendered, "second artifact output") {
+		t.Fatalf("expanded tool should reuse cached artifact across rebuilds, got:\n%s", rendered)
 	}
 }
 
