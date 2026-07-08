@@ -101,8 +101,9 @@ func NewTrackedTool(cwd string, readState *common.FileReadState) types.Tool {
 	return &ReadTool{cwd: cwd, readState: readState}
 }
 
-func (t *ReadTool) Name() string  { return "read" }
-func (t *ReadTool) Label() string { return "Read File" }
+func (t *ReadTool) Name() string   { return "read" }
+func (t *ReadTool) Label() string  { return "Read File" }
+func (t *ReadTool) Parallel() bool { return true }
 func (t *ReadTool) Description() string {
 	return `Read a file from the local filesystem.
 

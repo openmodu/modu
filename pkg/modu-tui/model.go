@@ -2,6 +2,7 @@ package modutui
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -43,6 +44,11 @@ type pendingHumanText struct {
 	request HumanTextRequest
 	respond chan<- string
 	input   InputBlock
+}
+
+type toolArtifactCacheEntry struct {
+	text string
+	err  string
 }
 
 type Model struct {
@@ -98,6 +104,7 @@ type Model struct {
 	slashCommandsProvider func() []SlashCommand
 	slashMatches          []SlashCommand
 	slashIndex            int
+	toolArtifactCache     map[string]toolArtifactCacheEntry
 }
 
 func NewModel(options ...Options) Model {
@@ -147,6 +154,7 @@ func NewModel(options ...Options) Model {
 		slashCommands:         normalizeSlashCommands(opts.SlashCommands),
 		slashCommandsProvider: opts.SlashCommandsProvider,
 		inputHistory:          normalizeInputHistory(opts.InputHistory),
+		toolArtifactCache:     make(map[string]toolArtifactCacheEntry),
 	}
 	m.historyIdx = len(m.inputHistory)
 	for _, msg := range opts.InitialMessages {
@@ -238,6 +246,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, tea.Quit
+		case msg.String() == "ctrl+o":
+			m.resetIMEState()
+			if m.toggleLatestToolExpansion() {
+				m.rebuild()
+			}
 		case isEscKey(msg):
 			m.resetIMEState()
 			if len(m.slashMatches) > 0 {
@@ -666,6 +679,17 @@ func (m *Model) appendMessage(msg Message) bool {
 	return true
 }
 
+func (m *Model) toggleLatestToolExpansion() bool {
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		if !m.messages[i].Tool || m.messages[i].ToolNoCollapse {
+			continue
+		}
+		m.messages[i].Expanded = !m.messages[i].Expanded
+		return true
+	}
+	return false
+}
+
 func mergeToolMessage(base, update Message) Message {
 	base.Tool = true
 	if update.ToolName != "" {
@@ -682,6 +706,26 @@ func mergeToolMessage(base, update Message) Message {
 	}
 	if update.ToolOutput != "" {
 		base.ToolOutput = update.ToolOutput
+	}
+	if update.ToolArtifactID != "" {
+		base.ToolArtifactID = update.ToolArtifactID
+	}
+	if update.ToolArtifactPath != "" {
+		if base.ToolArtifactPath != "" && base.ToolArtifactPath != update.ToolArtifactPath {
+			base.ToolArtifactText = ""
+			base.ToolArtifactErr = ""
+			base.ToolArtifactRead = false
+		}
+		base.ToolArtifactPath = update.ToolArtifactPath
+	}
+	if update.ToolArtifactRead {
+		base.ToolArtifactText = update.ToolArtifactText
+		base.ToolArtifactErr = update.ToolArtifactErr
+		base.ToolArtifactRead = true
+	}
+	base.ToolTruncated = base.ToolTruncated || update.ToolTruncated
+	if update.ToolBatchSize > 0 {
+		base.ToolBatchSize = update.ToolBatchSize
 	}
 	if update.ToolCode != "" {
 		base.ToolCode = update.ToolCode
@@ -801,10 +845,40 @@ func (m *Model) jumpToBottom() {
 }
 
 func (m *Model) rebuild() {
+	m.hydrateExpandedToolArtifacts()
 	m.lines, m.gutters, m.headers = m.buildTranscript()
 	m.panelLines = m.buildPanelLines()
 	m.clampSelection()
 	m.clampScroll()
+}
+
+func (m *Model) hydrateExpandedToolArtifacts() {
+	if m.toolArtifactCache == nil {
+		m.toolArtifactCache = make(map[string]toolArtifactCacheEntry)
+	}
+	for i := range m.messages {
+		msg := &m.messages[i]
+		if !msg.Tool || msg.ToolArtifactRead {
+			continue
+		}
+		path := strings.TrimSpace(msg.ToolArtifactPath)
+		if path == "" || (!msg.Expanded && !msg.ToolNoCollapse) {
+			continue
+		}
+		entry, ok := m.toolArtifactCache[path]
+		if !ok {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				entry.err = err.Error()
+			} else {
+				entry.text = string(data)
+			}
+			m.toolArtifactCache[path] = entry
+		}
+		msg.ToolArtifactText = entry.text
+		msg.ToolArtifactErr = entry.err
+		msg.ToolArtifactRead = true
+	}
 }
 
 func (m *Model) gutterAt(li int) int {

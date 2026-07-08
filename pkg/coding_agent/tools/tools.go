@@ -12,6 +12,7 @@ import (
 	memorytool "github.com/openmodu/modu/pkg/coding_agent/tools/memory"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/planning"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/read"
+	toolresult "github.com/openmodu/modu/pkg/coding_agent/tools/toolresult"
 	webtools "github.com/openmodu/modu/pkg/coding_agent/tools/web"
 	worktreetool "github.com/openmodu/modu/pkg/coding_agent/tools/worktree"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/write"
@@ -37,6 +38,7 @@ const (
 	ValuePlanMode    = "plan_mode"
 	ValueWorktree    = "worktree"
 	ValueContext     = "context_remaining"
+	ValueArtifacts   = "artifacts"
 )
 
 type DefaultProvider struct {
@@ -53,9 +55,13 @@ func NewProvider(set ToolSet) DefaultProvider {
 
 func (p DefaultProvider) Tools(ctx types.ToolContext) []types.Tool {
 	readState := p.state()
+	artifacts, _ := ctx.Value(ValueArtifacts).(*common.ArtifactStore)
 	out := append([]types.Tool{}, ctx.BaseTools...)
 	if ctx.BaseTools == nil {
-		out = p.baseTools(ctx.Cwd, readState)
+		out = p.baseTools(ctx.Cwd, readState, artifacts)
+	}
+	if artifacts != nil && !containsTool(out, "read_tool_result") {
+		out = append(out, toolresult.NewTool(artifacts))
 	}
 	out = append(out, ctx.ExtraTools...)
 	if ctx.FeatureEnabled(FeatureMemory) {
@@ -81,6 +87,7 @@ func (p DefaultProvider) Tools(ctx types.ToolContext) []types.Tool {
 
 func (p DefaultProvider) Rebind(tool types.Tool, ctx types.ToolContext) (types.Tool, bool) {
 	readState := p.state()
+	artifacts, _ := ctx.Value(ValueArtifacts).(*common.ArtifactStore)
 	switch tool.Name() {
 	case "read":
 		return read.NewTrackedTool(ctx.Cwd, readState), true
@@ -89,17 +96,19 @@ func (p DefaultProvider) Rebind(tool types.Tool, ctx types.ToolContext) (types.T
 	case "edit":
 		return edit.NewTrackedTool(ctx.Cwd, readState), true
 	case "bash":
-		return bash.NewTool(ctx.Cwd), true
+		return bash.NewToolWithArtifacts(ctx.Cwd, artifacts), true
 	case "grep":
-		return grep.NewTool(ctx.Cwd), true
+		return grep.NewToolWithArtifacts(ctx.Cwd, artifacts), true
 	case "find":
-		return find.NewTool(ctx.Cwd), true
+		return find.NewToolWithArtifacts(ctx.Cwd, artifacts), true
 	case "ls":
-		return ls.NewTool(ctx.Cwd), true
+		return ls.NewToolWithArtifacts(ctx.Cwd, artifacts), true
 	case "web_fetch":
-		return webtools.NewFetchTool(), true
+		return webtools.NewFetchToolWithArtifacts(artifacts), true
 	case "web_search":
 		return webtools.NewSearchTool(), true
+	case "read_tool_result":
+		return toolresult.NewTool(artifacts), true
 	default:
 		return nil, false
 	}
@@ -117,7 +126,16 @@ func valueAs[T any](ctx types.ToolContext, name string) T {
 	return v
 }
 
-func (p DefaultProvider) baseTools(cwd string, readState *common.FileReadState) []types.Tool {
+func containsTool(tools []types.Tool, name string) bool {
+	for _, tool := range tools {
+		if tool.Name() == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (p DefaultProvider) baseTools(cwd string, readState *common.FileReadState, artifacts *common.ArtifactStore) []types.Tool {
 	if readState == nil {
 		readState = p.state()
 	}
@@ -125,46 +143,46 @@ func (p DefaultProvider) baseTools(cwd string, readState *common.FileReadState) 
 	case ToolSetReadOnly:
 		return []types.Tool{
 			read.NewTrackedTool(cwd, readState),
-			grep.NewTool(cwd),
-			find.NewTool(cwd),
-			ls.NewTool(cwd),
+			grep.NewToolWithArtifacts(cwd, artifacts),
+			find.NewToolWithArtifacts(cwd, artifacts),
+			ls.NewToolWithArtifacts(cwd, artifacts),
 		}
 	case ToolSetAll:
 		return []types.Tool{
 			read.NewTrackedTool(cwd, readState),
 			write.NewTrackedTool(cwd, readState),
 			edit.NewTrackedTool(cwd, readState),
-			bash.NewTool(cwd),
-			grep.NewTool(cwd),
-			find.NewTool(cwd),
-			ls.NewTool(cwd),
+			bash.NewToolWithArtifacts(cwd, artifacts),
+			grep.NewToolWithArtifacts(cwd, artifacts),
+			find.NewToolWithArtifacts(cwd, artifacts),
+			ls.NewToolWithArtifacts(cwd, artifacts),
 		}
 	default:
 		return []types.Tool{
 			read.NewTrackedTool(cwd, readState),
-			bash.NewTool(cwd),
+			bash.NewToolWithArtifacts(cwd, artifacts),
 			edit.NewTrackedTool(cwd, readState),
 			write.NewTrackedTool(cwd, readState),
-			grep.NewTool(cwd),
-			find.NewTool(cwd),
-			ls.NewTool(cwd),
+			grep.NewToolWithArtifacts(cwd, artifacts),
+			find.NewToolWithArtifacts(cwd, artifacts),
+			ls.NewToolWithArtifacts(cwd, artifacts),
 		}
 	}
 }
 
 // CodingTools returns the core coding tools: read, bash, edit, write.
 func CodingTools(cwd string) []types.Tool {
-	return NewProvider(ToolSetCoding).baseTools(cwd, nil)
+	return NewProvider(ToolSetCoding).baseTools(cwd, nil, nil)
 }
 
 // ReadOnlyTools returns read-only tools: read, grep, find, ls.
 func ReadOnlyTools(cwd string) []types.Tool {
-	return NewProvider(ToolSetReadOnly).baseTools(cwd, nil)
+	return NewProvider(ToolSetReadOnly).baseTools(cwd, nil, nil)
 }
 
 // AllTools returns all available built-in coding tools.
 func AllTools(cwd string) []types.Tool {
-	return NewProvider(ToolSetAll).baseTools(cwd, nil)
+	return NewProvider(ToolSetAll).baseTools(cwd, nil, nil)
 }
 
 // ResearchTools returns opt-in network research tools. They are not part of

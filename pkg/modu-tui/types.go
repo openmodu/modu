@@ -15,26 +15,33 @@ const (
 )
 
 type Message struct {
-	Role           Role
-	Text           string
-	Thinking       bool
-	Tool           bool
-	ToolID         string
-	ToolName       string
-	Summary        string
-	Detail         string
-	ToolInput      string
-	ToolOutput     string
-	ToolCode       string
-	ToolLanguage   string
-	ToolError      bool
-	ToolDone       bool
-	ToolNoCollapse bool
-	Expanded       bool
-	Preformatted   bool
-	Plain          bool
-	Language       string
-	Code           string
+	Role             Role
+	Text             string
+	Thinking         bool
+	Tool             bool
+	ToolID           string
+	ToolName         string
+	Summary          string
+	Detail           string
+	ToolInput        string
+	ToolOutput       string
+	ToolArtifactID   string
+	ToolArtifactPath string
+	ToolArtifactText string
+	ToolArtifactErr  string
+	ToolArtifactRead bool
+	ToolTruncated    bool
+	ToolBatchSize    int
+	ToolCode         string
+	ToolLanguage     string
+	ToolError        bool
+	ToolDone         bool
+	ToolNoCollapse   bool
+	Expanded         bool
+	Preformatted     bool
+	Plain            bool
+	Language         string
+	Code             string
 }
 
 type ToolPermissionState string
@@ -47,17 +54,24 @@ const (
 )
 
 type ToolCall struct {
-	ID         string
-	Name       string
-	Summary    string
-	Detail     string
-	Input      string
-	Output     string
-	Code       string
-	Language   string
-	Error      bool
-	Done       bool
-	NoCollapse bool
+	ID           string
+	Name         string
+	Summary      string
+	Detail       string
+	Input        string
+	Output       string
+	ArtifactID   string
+	ArtifactPath string
+	ArtifactText string
+	ArtifactErr  string
+	ArtifactRead bool
+	Truncated    bool
+	BatchSize    int
+	Code         string
+	Language     string
+	Error        bool
+	Done         bool
+	NoCollapse   bool
 }
 
 type TodoItem struct {

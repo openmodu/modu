@@ -21,6 +21,7 @@ import (
 	"github.com/openmodu/modu/pkg/coding_agent/tools/ls"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/planning"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/read"
+	toolresult "github.com/openmodu/modu/pkg/coding_agent/tools/toolresult"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/write"
 	"github.com/openmodu/modu/pkg/types"
 )
@@ -122,6 +123,10 @@ func TestReadTool(t *testing.T) {
 
 	if tool.Name() != "read" {
 		t.Fatalf("expected name 'read', got %s", tool.Name())
+	}
+	parallel, ok := tool.(interface{ Parallel() bool })
+	if !ok || !parallel.Parallel() {
+		t.Fatal("read tool should be parallel capable")
 	}
 
 	result, err := tool.Execute(context.Background(), "test-id", map[string]any{
@@ -1392,6 +1397,156 @@ func TestBashTool(t *testing.T) {
 	text := extractText(result.Content)
 	if !strings.Contains(text, "hello") || !strings.Contains(text, "world") {
 		t.Fatalf("expected hello world, got: %s", text)
+	}
+}
+
+func TestBashToolStoresTruncatedOutputArtifact(t *testing.T) {
+	dir := t.TempDir()
+	artifactDir := filepath.Join(dir, "artifacts")
+	tool := bash.NewToolWithArtifacts(dir, common.NewArtifactStore(artifactDir))
+
+	result, err := tool.Execute(context.Background(), "call-1", map[string]any{
+		"command": "yes line | head -n 2500",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	text := extractText(result.Content)
+	if !strings.Contains(text, "truncated") {
+		t.Fatalf("expected truncated preview, got: %s", text)
+	}
+	details, ok := result.Details.(map[string]any)
+	if !ok {
+		t.Fatalf("expected details map, got %T", result.Details)
+	}
+	output, ok := details["output"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected output metadata, got %#v", details["output"])
+	}
+	if output["truncated"] != true {
+		t.Fatalf("expected truncated output metadata, got %#v", output)
+	}
+	artifactPath, ok := output["artifactPath"].(string)
+	if !ok || artifactPath == "" {
+		t.Fatalf("expected artifact path, got %#v", output)
+	}
+	data, err := os.ReadFile(artifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(data), "line\n"); got != 2500 {
+		t.Fatalf("expected full raw output in artifact, got %d lines", got)
+	}
+}
+
+func TestDiscoveryToolsStoreTruncatedOutputArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("needle\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store := common.NewArtifactStore(filepath.Join(dir, "artifacts"))
+
+	cases := []struct {
+		name string
+		tool types.Tool
+		args map[string]any
+	}{
+		{name: "ls", tool: ls.NewToolWithArtifacts(dir, store), args: map[string]any{"limit": 2}},
+		{name: "find", tool: find.NewToolWithArtifacts(dir, store), args: map[string]any{"pattern": "*.txt", "limit": 2}},
+		{name: "grep", tool: grep.NewToolWithArtifacts(dir, store), args: map[string]any{"pattern": "needle", "output_mode": "files_with_matches", "limit": 2}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := tc.tool.Execute(context.Background(), tc.name+"-1", tc.args, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			details, ok := result.Details.(map[string]any)
+			if !ok {
+				t.Fatalf("expected details map, got %T", result.Details)
+			}
+			output, ok := details["output"].(map[string]any)
+			if !ok {
+				t.Fatalf("expected output metadata, got %#v", details["output"])
+			}
+			if output["truncated"] != true {
+				t.Fatalf("expected truncated output metadata, got %#v", output)
+			}
+			text := extractText(result.Content)
+			if !strings.Contains(text, "truncated") && !strings.Contains(text, "limited") {
+				t.Fatalf("expected preview to include truncation notice, got:\n%s", text)
+			}
+			previewMatches := 0
+			for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
+				if strings.Contains(text, name) {
+					previewMatches++
+				}
+			}
+			if previewMatches >= 3 {
+				t.Fatalf("preview should not include the full result set, got:\n%s", text)
+			}
+			artifactPath, ok := output["artifactPath"].(string)
+			if !ok || artifactPath == "" {
+				t.Fatalf("expected artifact path, got %#v", output)
+			}
+			data, err := os.ReadFile(artifactPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
+				if !strings.Contains(string(data), name) {
+					t.Fatalf("expected full artifact to contain %q, got:\n%s", name, data)
+				}
+			}
+		})
+	}
+}
+
+func TestReadToolResultPaginatesArtifact(t *testing.T) {
+	dir := t.TempDir()
+	store := common.NewArtifactStore(filepath.Join(dir, "artifacts"))
+	if _, err := store.Put("call-1", "output", []byte("alpha\nbravo\ncharlie\ndelta\n")); err != nil {
+		t.Fatal(err)
+	}
+	tool := toolresult.NewTool(store)
+
+	result, err := tool.Execute(context.Background(), "reader-1", map[string]any{
+		"call_id": "call-1",
+		"offset":  2,
+		"limit":   2,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := extractText(result.Content)
+	if !strings.Contains(text, "2\tbravo") || !strings.Contains(text, "3\tcharlie") {
+		t.Fatalf("expected paged artifact lines, got:\n%s", text)
+	}
+	if strings.Contains(text, "alpha") || strings.Contains(text, "delta") {
+		t.Fatalf("expected only requested page, got:\n%s", text)
+	}
+	details, ok := result.Details.(map[string]any)
+	if !ok || details["hasMore"] != true || details["returnedLines"] != 2 {
+		t.Fatalf("unexpected read_tool_result details: %#v", result.Details)
+	}
+}
+
+func TestReadToolResultRequiresPagination(t *testing.T) {
+	tool := toolresult.NewTool(common.NewArtifactStore(filepath.Join(t.TempDir(), "artifacts")))
+	result, err := tool.Execute(context.Background(), "reader-1", map[string]any{
+		"call_id": "call-1",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Fatalf("expected missing pagination to be an error, got %#v", result)
+	}
+	if text := extractText(result.Content); !strings.Contains(text, "offset is required") {
+		t.Fatalf("expected pagination error, got %q", text)
 	}
 }
 
@@ -3306,6 +3461,19 @@ func TestDefaultProviderBuildsAndRebindsTools(t *testing.T) {
 	_, ok = provider.Rebind(testUnknownTool{}, types.ToolContext{Cwd: "/tmp/b"})
 	if ok {
 		t.Fatal("expected unknown tool not to rebind")
+	}
+}
+
+func TestDefaultProviderIncludesReadToolResultWhenArtifactsConfigured(t *testing.T) {
+	provider := NewProvider(ToolSetReadOnly)
+	tools := provider.Tools(types.ToolContext{
+		Cwd: "/tmp/a",
+		Values: map[string]any{
+			ValueArtifacts: common.NewArtifactStore(filepath.Join(t.TempDir(), "artifacts")),
+		},
+	})
+	if !containsName(toolNames(tools), "read_tool_result") {
+		t.Fatalf("expected read_tool_result in provider tools, got %v", toolNames(tools))
 	}
 }
 

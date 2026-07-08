@@ -73,6 +73,48 @@ func TestToolCallBlockRendersClaudeStyleBashCall(t *testing.T) {
 	}
 }
 
+func TestToolCallBlockRendersParallelAndArtifactMeta(t *testing.T) {
+	ctx := RenderContext{ContentWidth: 100, Markdown: markdownRenderer(100)}
+	block := ToolCallBlock{
+		CollapsibleBlock: CollapsibleBlock{Summary: "Ran 1 shell command"},
+		Call: ToolCall{
+			Name:       "bash",
+			Output:     "preview only",
+			ArtifactID: "call-1",
+			Truncated:  true,
+			BatchSize:  3,
+			Done:       true,
+		},
+	}
+	first := renderedTexts(block.Render(ctx))[0]
+	for _, want := range []string{"parallel 3", "artifact call-1"} {
+		if !strings.Contains(first, want) {
+			t.Fatalf("collapsed tool summary missing %q: %q", want, first)
+		}
+	}
+}
+
+func TestToolCallBlockExpandedRendersCachedArtifact(t *testing.T) {
+	ctx := RenderContext{ContentWidth: 100, Markdown: markdownRenderer(100)}
+	block := ToolCallBlock{
+		CollapsibleBlock: CollapsibleBlock{Summary: "Ran 1 shell command", Expanded: true},
+		Call: ToolCall{
+			Name:         "bash",
+			Output:       "preview only",
+			ArtifactID:   "call-1",
+			ArtifactPath: "/tmp/call-1.output",
+			ArtifactText: "full artifact output\nline two\n",
+			ArtifactRead: true,
+			Truncated:    true,
+			Done:         true,
+		},
+	}
+	got := strings.Join(renderedTexts(block.Render(ctx)), "\n")
+	if !strings.Contains(got, "full artifact output") || strings.Contains(got, "preview only") {
+		t.Fatalf("expanded tool should render artifact instead of preview, got:\n%s", got)
+	}
+}
+
 func TestToolCallBlockRendersClaudeStyleReadCall(t *testing.T) {
 	ctx := RenderContext{ContentWidth: 100, Markdown: markdownRenderer(100)}
 	path := "cmd/tuipoc2/main.go"

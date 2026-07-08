@@ -39,11 +39,16 @@ var sedInPlacePattern = regexp.MustCompile(`^\s*sed\s+(?:.*\s)?(?:-i(?:$|[\s'".]
 
 // BashTool implements the bash command execution tool.
 type BashTool struct {
-	cwd string
+	cwd       string
+	artifacts *common.ArtifactStore
 }
 
 func NewTool(cwd string) types.Tool {
 	return &BashTool{cwd: cwd}
+}
+
+func NewToolWithArtifacts(cwd string, artifacts *common.ArtifactStore) types.Tool {
+	return &BashTool{cwd: cwd, artifacts: artifacts}
 }
 
 func (t *BashTool) Name() string  { return "bash" }
@@ -186,10 +191,13 @@ func (t *BashTool) Execute(ctx context.Context, toolCallID string, args map[stri
 
 	result := output.String()
 
-	// Truncate output
-	truncated := common.TruncateTail(result, common.TruncateOptions{
-		MaxLines: common.BashMaxLines,
-		MaxBytes: common.DefaultMaxBytes,
+	preview := common.PreviewText(result, common.TextPreviewOptions{
+		ToolCallID:    toolCallID,
+		ArtifactName:  "output",
+		ArtifactStore: t.artifacts,
+		Strategy:      common.PreviewTail,
+		MaxLines:      common.BashMaxLines,
+		MaxBytes:      common.DefaultMaxBytes,
 	})
 
 	exitCode := 0
@@ -214,14 +222,11 @@ func (t *BashTool) Execute(ctx context.Context, toolCallID string, args map[stri
 	var text string
 	if timedOut {
 		text = fmt.Sprintf("Command timed out after %s.\n", formatTimeout(timeout))
-		if truncated.Content != "" {
-			text += "Partial output:\n" + truncated.Content
+		if preview.Text != "" {
+			text += "Partial output:\n" + preview.Text
 		}
 	} else {
-		text = truncated.Content
-		if truncated.WasTruncated {
-			text = truncated.Message + text
-		}
+		text = preview.Text
 		if exitCode != 0 {
 			text += fmt.Sprintf("\n\nExit code: %d", exitCode)
 		}
@@ -231,6 +236,14 @@ func (t *BashTool) Execute(ctx context.Context, toolCallID string, args map[stri
 		text = "(no output)"
 	}
 
+	details := map[string]any{
+		"exitCode": exitCode,
+		"timedOut": timedOut,
+		"timeout":  formatTimeout(timeout),
+	}
+	for k, v := range preview.Details {
+		details[k] = v
+	}
 	return types.ToolResult{
 		Content: []types.ContentBlock{
 			&types.TextContent{
@@ -238,11 +251,7 @@ func (t *BashTool) Execute(ctx context.Context, toolCallID string, args map[stri
 				Text: text,
 			},
 		},
-		Details: map[string]any{
-			"exitCode": exitCode,
-			"timedOut": timedOut,
-			"timeout":  formatTimeout(timeout),
-		},
+		Details: details,
 	}, nil
 }
 

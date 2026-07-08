@@ -943,3 +943,31 @@ High-priority gaps identified before this round:
   just a `cron:<task_id>` session name and matching behavior text. Their
   fixtures now reject wrong-cwd sessions, preventing evidence from another
   checkout from satisfying the "run on modu itself" acceptance.
+- Started tool-call token optimization. Added session-scoped tool-result
+  artifacts plus a shared preview helper so long `bash` output stores the raw
+  text under `tool-results/<project>/sessions/<session-id>/` while only the
+  truncated preview enters `ToolResult.Content`; standard output metadata now
+  lives in `ToolResult.Details.output`. Bounded parallel tool execution with
+  `DefaultTools.MaxConcurrency` (default 4) and exposed `Event.BatchSize` for
+  TUI rendering. The TUI keeps the model preview collapsed but reads
+  `artifactPath` on expanded tool output, preserving local full-output access
+  without sending raw artifacts back to the model. Deleting a saved session
+  removes its session-scoped tool-result artifact directory.
+- Extended tool-call output artifacts to `grep`, `find`, `ls`, and
+  `web_fetch`. Direct `NewTool` callers keep the legacy inline output shape,
+  while session-injected tools store complete discovery/fetch output artifacts
+  and return bounded previews. `web_fetch` no longer places full page content
+  in `Details`; `web_search` remains intentionally unchanged because it returns
+  bounded search-result snippets rather than fetched page bodies, and `read`
+  remains intentionally unchanged because file offset/limit is the retrieval
+  mechanism. Added `docs/tool-call-output-and-parallel-plan.md` to pin V1 scope
+  and explicitly defer summary/middle preview strategies, ToolScheduler,
+  BatchIndex, and cross-batch scheduling/resource locks.
+- Closed the tool-result artifact retrieval loop. Added `read_tool_result` with
+  required `call_id`, `offset`, and `limit` arguments so the model can page
+  through truncated artifacts without reloading full raw output into context.
+  Added TUI `/tool-output <call-id>` for local full-output inspection from the
+  artifact path, bounded per-turn aggregate tool result text with
+  `DefaultTools.MaxTurnToolResultBytes`, and made parallel batches stop waiting
+  promptly when their context is canceled before queued calls acquire the
+  concurrency semaphore.

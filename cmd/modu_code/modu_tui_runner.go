@@ -844,6 +844,10 @@ func runModuTUISlash(ctx context.Context, line string, session *coding_agent.Cod
 		send(modutui.SetStatusMsg{Status: "idle"})
 	}()
 
+	if handled, text := moduTUIToolOutputSlash(session, line); handled {
+		send(modutui.AppendMessageMsg{Message: modutui.Message{Role: modutui.RoleAssistant, Text: text, Preformatted: true}})
+		return
+	}
 	if args, ok := moduTUIConfigArgs(line); ok {
 		if strings.TrimSpace(args) == "" && startConfigWizard != nil {
 			startConfigWizard()
@@ -5385,6 +5389,7 @@ func baseModuTUISlashCommands() []modutui.SlashCommand {
 		{Name: "/tree", Description: "Show conversation tree"},
 		{Name: "/fork", Description: "Fork from an entry id"},
 		{Name: "/tools", Description: "List active tools"},
+		{Name: "/tool-output", Description: "Show full local output for a tool call"},
 		{Name: "/skills", Description: "List available skills"},
 		{Name: "/prompts", Description: "List prompt templates"},
 		{Name: "/steer", Description: "Steer the active task"},
@@ -5395,6 +5400,56 @@ func baseModuTUISlashCommands() []modutui.SlashCommand {
 		{Name: "/worktree", Description: "Manage the current worktree"},
 		{Name: "/quit", Description: "Exit modu_code"},
 	}
+}
+
+func moduTUIToolOutputSlash(session *coding_agent.CodingSession, line string) (bool, string) {
+	fields := strings.Fields(line)
+	if len(fields) == 0 || fields[0] != "/tool-output" {
+		return false, ""
+	}
+	if len(fields) != 2 {
+		return true, "usage: /tool-output <call-id>"
+	}
+	out, err := moduTUIToolOutputByID(session, fields[1])
+	if err != nil {
+		return true, "error: " + err.Error()
+	}
+	return true, out
+}
+
+func moduTUIToolOutputByID(session *coding_agent.CodingSession, callID string) (string, error) {
+	callID = strings.TrimSpace(callID)
+	if callID == "" {
+		return "", errors.New("call-id is required")
+	}
+	if session == nil {
+		return "", errors.New("session is not available")
+	}
+	messages := session.GetMessages()
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg, ok := messages[i].(types.ToolResultMessage)
+		if !ok {
+			if ptr, ptrOK := messages[i].(*types.ToolResultMessage); ptrOK && ptr != nil {
+				msg = *ptr
+				ok = true
+			}
+		}
+		if !ok || msg.ToolCallID != callID {
+			continue
+		}
+		if artifact := toolArtifactInfoFromDetails(msg.Details); artifact.Path != "" {
+			data, err := os.ReadFile(artifact.Path)
+			if err != nil {
+				return "", fmt.Errorf("read artifact: %w", err)
+			}
+			return string(data), nil
+		}
+		if text := toolOutputFromContent(msg.ToolName, msg.IsError, msg.Content); text != "" {
+			return text, nil
+		}
+		return "", fmt.Errorf("tool %s has no output", callID)
+	}
+	return "", fmt.Errorf("tool call not found: %s", callID)
 }
 
 func initialTerminalSize(fd int, fallbackWidth, fallbackHeight int) (int, int) {
@@ -5549,6 +5604,7 @@ func messagesFromAgentEventWithCwd(ev types.Event, cwd string) []modutui.Message
 			Detail:         input,
 			ToolInput:      input,
 			ToolOutput:     toolPreviewOutputFromArgsWithCwd(ev.ToolName, ev.Args, cwd),
+			ToolBatchSize:  ev.BatchSize,
 			ToolCode:       toolCodeFromArgsWithCwd(ev.ToolName, ev.Args, cwd),
 			ToolLanguage:   toolLanguageFromArgsWithCwd(ev.ToolName, ev.Args, cwd),
 			ToolNoCollapse: isWriteLikeTool(ev.ToolName),
@@ -5556,18 +5612,23 @@ func messagesFromAgentEventWithCwd(ev types.Event, cwd string) []modutui.Message
 		}}
 	case types.EventTypeToolExecutionEnd:
 		output := toolOutputFromResult(ev.ToolName, ev.IsError, ev.Result)
+		artifact := toolArtifactInfoFromResult(ev.Result)
 		return []modutui.Message{{
-			Tool:           true,
-			ToolID:         ev.ToolCallID,
-			ToolName:       toolRenderName(ev.ToolName, ev.Result),
-			Summary:        toolDoneSummary(ev.ToolName, ev.IsError, output),
-			ToolOutput:     toolDisplayOutput(ev.ToolName, ev.IsError, output),
-			ToolCode:       toolCodeFromResult(ev.ToolName, output),
-			ToolLanguage:   toolLanguageFromResult(ev.ToolName),
-			ToolError:      ev.IsError,
-			ToolDone:       true,
-			ToolNoCollapse: isWriteLikeTool(ev.ToolName),
-			Expanded:       ev.IsError || isWriteLikeTool(ev.ToolName),
+			Tool:             true,
+			ToolID:           ev.ToolCallID,
+			ToolName:         toolRenderName(ev.ToolName, ev.Result),
+			Summary:          toolDoneSummary(ev.ToolName, ev.IsError, output),
+			ToolOutput:       toolDisplayOutput(ev.ToolName, ev.IsError, output),
+			ToolArtifactID:   artifact.ID,
+			ToolArtifactPath: artifact.Path,
+			ToolTruncated:    artifact.Truncated,
+			ToolBatchSize:    ev.BatchSize,
+			ToolCode:         toolCodeFromResult(ev.ToolName, output),
+			ToolLanguage:     toolLanguageFromResult(ev.ToolName),
+			ToolError:        ev.IsError,
+			ToolDone:         true,
+			ToolNoCollapse:   isWriteLikeTool(ev.ToolName),
+			Expanded:         ev.IsError || isWriteLikeTool(ev.ToolName),
 		}}
 	default:
 		return nil
@@ -5715,18 +5776,22 @@ func messageFromToolResult(msg types.ToolResultMessage) modutui.Message {
 
 func messageFromToolResultWithCwd(msg types.ToolResultMessage, cwd string) modutui.Message {
 	output := toolOutputFromContent(msg.ToolName, msg.IsError, msg.Content)
+	artifact := toolArtifactInfoFromDetails(msg.Details)
 	return modutui.Message{
-		Tool:           true,
-		ToolID:         msg.ToolCallID,
-		ToolName:       toolRenderName(msg.ToolName, nil),
-		Summary:        toolDoneSummary(msg.ToolName, msg.IsError, output),
-		ToolOutput:     toolDisplayOutput(msg.ToolName, msg.IsError, output),
-		ToolCode:       toolCodeFromResult(msg.ToolName, output),
-		ToolLanguage:   toolLanguageFromResult(msg.ToolName),
-		ToolError:      msg.IsError,
-		ToolDone:       true,
-		ToolNoCollapse: isWriteLikeTool(msg.ToolName),
-		Expanded:       msg.IsError || isWriteLikeTool(msg.ToolName),
+		Tool:             true,
+		ToolID:           msg.ToolCallID,
+		ToolName:         toolRenderName(msg.ToolName, nil),
+		Summary:          toolDoneSummary(msg.ToolName, msg.IsError, output),
+		ToolOutput:       toolDisplayOutput(msg.ToolName, msg.IsError, output),
+		ToolArtifactID:   artifact.ID,
+		ToolArtifactPath: artifact.Path,
+		ToolTruncated:    artifact.Truncated,
+		ToolCode:         toolCodeFromResult(msg.ToolName, output),
+		ToolLanguage:     toolLanguageFromResult(msg.ToolName),
+		ToolError:        msg.IsError,
+		ToolDone:         true,
+		ToolNoCollapse:   isWriteLikeTool(msg.ToolName),
+		Expanded:         msg.IsError || isWriteLikeTool(msg.ToolName),
 	}
 }
 
@@ -6267,6 +6332,38 @@ func toolResultDetails(result any) map[string]any {
 		}
 	}
 	return nil
+}
+
+type toolArtifactInfo struct {
+	ID        string
+	Path      string
+	Truncated bool
+}
+
+func toolArtifactInfoFromResult(result any) toolArtifactInfo {
+	return toolArtifactInfoFromDetails(toolResultDetails(result))
+}
+
+func toolArtifactInfoFromDetails(details any) toolArtifactInfo {
+	m, ok := details.(map[string]any)
+	if !ok {
+		return toolArtifactInfo{}
+	}
+	output, ok := m["output"].(map[string]any)
+	if !ok {
+		return toolArtifactInfo{}
+	}
+	var info toolArtifactInfo
+	if value, ok := output["artifactId"].(string); ok {
+		info.ID = value
+	}
+	if value, ok := output["artifactPath"].(string); ok {
+		info.Path = value
+	}
+	if value, ok := output["truncated"].(bool); ok {
+		info.Truncated = value
+	}
+	return info
 }
 
 func languageFromPath(path string) string {

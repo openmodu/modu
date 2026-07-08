@@ -270,17 +270,13 @@ func (s *Store) publishEvent(turnID string, ev SSEEvent) {
 	if len(e.buffer) > eventBufferCap {
 		e.buffer = e.buffer[len(e.buffer)-eventBufferCap:]
 	}
-	subs := make([]chan SSEEvent, 0, len(e.subs))
 	for _, c := range e.subs {
-		subs = append(subs, c)
-	}
-	s.mu.Unlock()
-	for _, c := range subs {
 		select {
 		case c <- ev:
 		default:
 		}
 	}
+	s.mu.Unlock()
 }
 
 // ListTurns returns turns matching the filter, newest first.

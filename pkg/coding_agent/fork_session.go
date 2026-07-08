@@ -391,7 +391,7 @@ func ensureRequestedReadOnlyTools(active []types.Tool, requested []string, cwd s
 func (cs *engine) rebindToolsToCwd(cwd string, in []types.Tool) []types.Tool {
 	out := make([]types.Tool, 0, len(in))
 	for _, tool := range in {
-		if rebound, ok := cs.toolProvider.Rebind(tool, types.ToolContext{Cwd: cwd}); ok {
+		if rebound, ok := cs.toolProvider.Rebind(tool, cs.toolContext(cwd)); ok {
 			out = append(out, rebound)
 			continue
 		}

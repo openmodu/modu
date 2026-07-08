@@ -13,6 +13,7 @@ import (
 	"github.com/openmodu/modu/pkg/coding_agent/foundation/config"
 	"github.com/openmodu/modu/pkg/coding_agent/foundation/eventbus"
 	"github.com/openmodu/modu/pkg/coding_agent/foundation/resource"
+	"github.com/openmodu/modu/pkg/coding_agent/foundation/runtimepaths"
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/prompts"
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/subagent"
@@ -28,6 +29,7 @@ import (
 	"github.com/openmodu/modu/pkg/coding_agent/services/todo"
 	"github.com/openmodu/modu/pkg/coding_agent/services/worktree"
 	"github.com/openmodu/modu/pkg/coding_agent/tools"
+	toolcommon "github.com/openmodu/modu/pkg/coding_agent/tools/common"
 	"github.com/openmodu/modu/pkg/skills"
 	"github.com/openmodu/modu/pkg/types"
 )
@@ -97,6 +99,7 @@ type engine struct {
 	model           *types.Model
 	activeTools     []types.Tool
 	toolProvider    types.ToolManager
+	artifactStore   *toolcommon.ArtifactStore
 	slashCommands   map[string]SlashCommand
 	getAPIKey       func(provider string) (string, error)
 	streamFn        types.StreamFn
@@ -185,6 +188,16 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 	memoryStore := memory.New(agentDir, opts.Cwd)
 	contextRemaining := &contextRemainingProxy{}
 
+	// Create session manager before tools so tool artifacts can be grouped by
+	// the active session id under the canonical project tool-results tree.
+	sessionMgr, err := newSessionManager(agentDir, opts.Cwd, opts.ResumeSessionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create session manager: %w", err)
+	}
+	artifactStore := toolcommon.NewArtifactStore(
+		runtimepaths.SessionToolResultsDir(agentDir, opts.Cwd, sessionMgr.SessionID()),
+	)
+
 	// Set up tools
 	toolProvider := opts.ToolProvider
 	if toolProvider == nil {
@@ -207,14 +220,9 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 			tools.ValuePlanMode:    plan.New(nil),
 			tools.ValueWorktree:    worktree.New(nil),
 			tools.ValueContext:     contextRemaining,
+			tools.ValueArtifacts:   artifactStore,
 		},
 	})
-
-	// Create session manager
-	sessionMgr, err := newSessionManager(agentDir, opts.Cwd, opts.ResumeSessionID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create session manager: %w", err)
-	}
 
 	// Create extension runner
 	extRunner := extension.NewRunner()
@@ -319,6 +327,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		model:            opts.Model,
 		activeTools:      activeTools,
 		toolProvider:     toolProvider,
+		artifactStore:    artifactStore,
 		slashCommands:    make(map[string]SlashCommand),
 		getAPIKey:        getAPIKey,
 		streamFn:         streamFn,

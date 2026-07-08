@@ -102,7 +102,7 @@ pkg/coding_agent/
 | 工具 | 功能 | 关键特性 |
 |------|------|----------|
 | `read` | 文件读取 | 行号格式化、offset/limit 分页、图片自动 base64，兼容 `file_path` alias；通过 `NewTrackedTool` 记录读取状态供 write/edit 防止脏写 |
-| `bash` | 命令执行 | 可配置超时（默认 120s）、进程组级 kill、输出尾部截断 |
+| `bash` | 命令执行 | 可配置超时（默认 120s）、进程组级 kill、输出尾部截断；截断 raw 输出保存为 session tool-result artifact |
 | `edit` | 精确编辑 | 精确字符串匹配替换、歧义检测、replace_all、CRLF 兼容 |
 | `write` | 文件写入 | 自动创建父目录、返回写入字节数 |
 | `get_context_remaining` | 上下文预算 | 返回距离自动压缩阈值还剩多少 token；自动压缩关闭或模型未知时返回 unknown / `tokens_left: null` |
@@ -365,6 +365,8 @@ type Extension interface {
 | `TruncateTail` | 保留后 N 行（bash 工具用） | 2000 行 |
 | `TruncateLine` | 单行字符截断（grep 工具用） | 500 字符 |
 
+工具返回给模型的文本只包含预算内 preview。支持 artifact 的工具（当前包括 `bash`、`grep`、`find`、`ls`、`web_fetch`）在截断时会把完整 raw 输出写入 `RuntimePaths().ToolResultsDir/sessions/<session-id>/`，并在 `ToolResult.Details.output` 写入 `truncated`、`rawBytes`、`shownBytes`、`strategy`、`artifactId` 和 `artifactPath`。TUI 展开工具输出或执行 `/tool-output <call-id>` 时可从本地 artifact 读取完整内容，不会自动把完整 raw 输出送回模型上下文。模型需要取回被截断的中段时使用 `read_tool_result(call_id, offset, limit)` 分页读取 artifact。`read` 不重复落 artifact；大文件继续通过 `offset`/`limit` 分页读取，源文件本身就是可取回内容。
+
 ### 11. 内置斜杠命令
 
 | 命令 | 功能 |
@@ -388,6 +390,7 @@ type Extension interface {
 | `/changelog` | 显示当前 git 仓库最近提交 |
 | `/settings` | 显示当前配置 |
 | `/tools` | 显示当前活跃工具 |
+| `/tool-output <call-id>` | 显示某次工具调用的完整本地 artifact 输出 |
 | `/skills` | 显示已发现 skills |
 | `/prompts` | 显示已发现 prompt templates |
 | `/help` | 显示帮助信息 |
@@ -622,6 +625,8 @@ denyTools = ["bash"]
 - `runtime/<project>/actions/<category>/latest.json`
 
 除 agent root、配置文件和 session 目录外，运行时目录按需创建：查询 `RuntimePaths()` 只返回路径，不会预创建空的 `tool-results/` 或 `runtime/` 树。
+
+长工具输出 artifact 绑定到具体 session，路径位于 `tool-results/<project>/sessions/<session-id>/`。删除该 session 文件时，对应 artifact 目录会同步删除。项目级 `tool-results/` 仍用于 subagent/workflow 等显式输出文件。
 
 其中：
 

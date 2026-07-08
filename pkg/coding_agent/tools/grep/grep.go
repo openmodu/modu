@@ -41,11 +41,16 @@ type grepOptions struct {
 
 // GrepTool implements the content search tool.
 type GrepTool struct {
-	cwd string
+	cwd       string
+	artifacts *common.ArtifactStore
 }
 
 func NewTool(cwd string) types.Tool {
 	return &GrepTool{cwd: cwd}
+}
+
+func NewToolWithArtifacts(cwd string, artifacts *common.ArtifactStore) types.Tool {
+	return &GrepTool{cwd: cwd, artifacts: artifacts}
 }
 
 func (t *GrepTool) Name() string  { return "grep" }
@@ -175,11 +180,11 @@ func (t *GrepTool) Execute(ctx context.Context, toolCallID string, args map[stri
 
 	// Try ripgrep first
 	if rgPath, err := exec.LookPath("rg"); err == nil {
-		return t.executeRipgrep(ctx, rgPath, pattern, searchPath, globPatterns, opts)
+		return t.executeRipgrep(ctx, rgPath, pattern, searchPath, globPatterns, opts, toolCallID)
 	}
 
 	// Fallback to built-in
-	return t.executeBuiltin(ctx, pattern, searchPath, globPatterns, opts)
+	return t.executeBuiltin(ctx, pattern, searchPath, globPatterns, opts, toolCallID)
 }
 
 func parseGrepOptions(args map[string]any) (grepOptions, *types.ToolResult) {
@@ -282,7 +287,7 @@ func parseGrepLimit(opts *grepOptions, limit int) {
 	opts.unlimited = false
 }
 
-func (t *GrepTool) executeRipgrep(ctx context.Context, rgPath, pattern, searchPath string, globPatterns []string, opts grepOptions) (types.ToolResult, error) {
+func (t *GrepTool) executeRipgrep(ctx context.Context, rgPath, pattern, searchPath string, globPatterns []string, opts grepOptions, toolCallID string) (types.ToolResult, error) {
 	args := []string{
 		"--color", "never",
 		"--hidden",
@@ -352,20 +357,41 @@ func (t *GrepTool) executeRipgrep(ctx context.Context, rgPath, pattern, searchPa
 		return common.ErrorResult(fmt.Sprintf("ripgrep error: %v", err)), nil
 	}
 
-	result := formatRipgrepOutput(output, searchPath, t.cwd, opts)
+	visible := formatRipgrepOutput(output, searchPath, t.cwd, opts)
+	if t.artifacts == nil {
+		return types.ToolResult{
+			Content: []types.ContentBlock{
+				&types.TextContent{Type: "text", Text: visible},
+			},
+			Details: map[string]any{
+				"path":          searchPath,
+				"matched_paths": extractMatchedPathsFromRipgrepOutput(output, searchPath),
+			},
+		}, nil
+	}
+	raw := formatRipgrepOutput(output, searchPath, t.cwd, completeGrepOptions(opts))
+	preview := common.PreviewTextFrom(raw, visible, common.TextPreviewOptions{
+		ToolCallID:    toolCallID,
+		ArtifactName:  "grep",
+		ArtifactStore: t.artifacts,
+		Strategy:      common.PreviewHead,
+		MaxLines:      grepPreviewLines(opts),
+		MaxBytes:      common.DefaultMaxBytes,
+	})
 
 	return types.ToolResult{
 		Content: []types.ContentBlock{
-			&types.TextContent{Type: "text", Text: result},
+			&types.TextContent{Type: "text", Text: preview.Text},
 		},
 		Details: map[string]any{
 			"path":          searchPath,
 			"matched_paths": extractMatchedPathsFromRipgrepOutput(output, searchPath),
+			"output":        preview.Details["output"],
 		},
 	}, nil
 }
 
-func (t *GrepTool) executeBuiltin(ctx context.Context, pattern, searchPath string, globPatterns []string, opts grepOptions) (types.ToolResult, error) {
+func (t *GrepTool) executeBuiltin(ctx context.Context, pattern, searchPath string, globPatterns []string, opts grepOptions, toolCallID string) (types.ToolResult, error) {
 	if opts.literal {
 		pattern = regexp.QuoteMeta(pattern)
 	}
@@ -493,15 +519,36 @@ func (t *GrepTool) executeBuiltin(ctx context.Context, pattern, searchPath strin
 		}, nil
 	}
 
-	text := formatBuiltinOutput(results, matchFiles, matchCounts, opts, matchCount, searchPath, t.cwd)
+	visible := formatBuiltinOutput(results, matchFiles, matchCounts, opts, matchCount, searchPath, t.cwd)
+	if t.artifacts == nil {
+		return types.ToolResult{
+			Content: []types.ContentBlock{
+				&types.TextContent{Type: "text", Text: visible},
+			},
+			Details: map[string]any{
+				"path":          searchPath,
+				"matched_paths": sortedKeys(matchFiles, 20),
+			},
+		}, nil
+	}
+	raw := formatBuiltinOutput(results, matchFiles, matchCounts, completeGrepOptions(opts), matchCount, searchPath, t.cwd)
+	preview := common.PreviewTextFrom(raw, visible, common.TextPreviewOptions{
+		ToolCallID:    toolCallID,
+		ArtifactName:  "grep",
+		ArtifactStore: t.artifacts,
+		Strategy:      common.PreviewHead,
+		MaxLines:      grepPreviewLines(opts),
+		MaxBytes:      common.DefaultMaxBytes,
+	})
 
 	return types.ToolResult{
 		Content: []types.ContentBlock{
-			&types.TextContent{Type: "text", Text: text},
+			&types.TextContent{Type: "text", Text: preview.Text},
 		},
 		Details: map[string]any{
 			"path":          searchPath,
 			"matched_paths": sortedKeys(matchFiles, 20),
+			"output":        preview.Details["output"],
 		},
 	}, nil
 }
@@ -565,6 +612,25 @@ func formatRipgrepOutput(output []byte, searchPath, cwd string, opts grepOptions
 			text += grepWindowMessage(opts)
 		}
 		return text
+	}
+}
+
+func completeGrepOptions(opts grepOptions) grepOptions {
+	opts.offset = 0
+	opts.limit = 0
+	opts.unlimited = true
+	return opts
+}
+
+func grepPreviewLines(opts grepOptions) int {
+	if opts.unlimited || opts.limit <= 0 {
+		return common.DefaultMaxLines
+	}
+	switch opts.outputMode {
+	case outputModeFilesWithMatches, outputModeCount:
+		return opts.limit + 3
+	default:
+		return opts.limit
 	}
 }
 
