@@ -32,6 +32,7 @@ type Message struct {
 	ToolArtifactRead bool
 	ToolTruncated    bool
 	ToolBatchSize    int
+	ToolBatchID      string
 	ToolCode         string
 	ToolLanguage     string
 	ToolError        bool
@@ -67,6 +68,7 @@ type ToolCall struct {
 	ArtifactRead bool
 	Truncated    bool
 	BatchSize    int
+	BatchID      string
 	Code         string
 	Language     string
 	Error        bool

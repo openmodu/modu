@@ -684,10 +684,62 @@ func (m *Model) toggleLatestToolExpansion() bool {
 		if !m.messages[i].Tool || m.messages[i].ToolNoCollapse {
 			continue
 		}
-		m.messages[i].Expanded = !m.messages[i].Expanded
+		// A batched tool folds/unfolds as one group; toggle the group's first
+		// message, whose Expanded flag is the group's collapse state.
+		gi := m.batchGroupStart(i)
+		m.messages[gi].Expanded = !m.messages[gi].Expanded
 		return true
 	}
 	return false
+}
+
+// batchGroupLen returns how many consecutive messages starting at idx belong to
+// the same parallel batch (shared non-empty ToolBatchID). Returns 1 for a
+// single (non-batched) tool or non-tool message.
+func (m *Model) batchGroupLen(idx int) int {
+	id := m.messages[idx].ToolBatchID
+	if id == "" || !m.messages[idx].Tool {
+		return 1
+	}
+	n := 1
+	for idx+n < len(m.messages) {
+		next := m.messages[idx+n]
+		if !next.Tool || next.ToolBatchID != id {
+			break
+		}
+		n++
+	}
+	return n
+}
+
+// batchGroupStart returns the index of the first message in idx's batch group,
+// or idx itself when it is not part of a batch.
+func (m *Model) batchGroupStart(idx int) int {
+	id := m.messages[idx].ToolBatchID
+	if id == "" {
+		return idx
+	}
+	for idx > 0 && m.messages[idx-1].Tool && m.messages[idx-1].ToolBatchID == id {
+		idx--
+	}
+	return idx
+}
+
+func toolGroupBlockFrom(group []Message) ToolGroupBlock {
+	calls := make([]ToolCall, 0, len(group))
+	for _, msg := range group {
+		calls = append(calls, ToolCall{
+			ID:        msg.ToolID,
+			Name:      msg.ToolName,
+			Summary:   msg.Summary,
+			Detail:    msg.Detail,
+			Input:     msg.ToolInput,
+			Error:     msg.ToolError,
+			Done:      msg.ToolDone,
+			Truncated: msg.ToolTruncated,
+		})
+	}
+	return ToolGroupBlock{Calls: calls, Expanded: group[0].Expanded}
 }
 
 func mergeToolMessage(base, update Message) Message {
@@ -726,6 +778,9 @@ func mergeToolMessage(base, update Message) Message {
 	base.ToolTruncated = base.ToolTruncated || update.ToolTruncated
 	if update.ToolBatchSize > 0 {
 		base.ToolBatchSize = update.ToolBatchSize
+	}
+	if update.ToolBatchID != "" {
+		base.ToolBatchID = update.ToolBatchID
 	}
 	if update.ToolCode != "" {
 		base.ToolCode = update.ToolCode
@@ -924,8 +979,28 @@ func (m *Model) buildTranscript() ([]string, []int, map[int]int) {
 		}
 	}
 
-	for idx, msg := range m.messages {
+	for idx := 0; idx < len(m.messages); {
+		msg := m.messages[idx]
 		startLine := len(lines)
+
+		if groupLen := m.batchGroupLen(idx); groupLen > 1 {
+			block := toolGroupBlockFrom(m.messages[idx : idx+groupLen])
+			for offset, line := range block.Render(ctx).Lines {
+				// Only the first (header) line is a header: clicking it toggles
+				// the whole group via the group's first message.
+				if offset == 0 {
+					headers[startLine] = idx
+				}
+				lines = append(lines, line.Text)
+				gutters = append(gutters, line.Gutter)
+			}
+			idx += groupLen
+			if idx < len(m.messages) {
+				addGap()
+			}
+			continue
+		}
+
 		rendered := m.blockFromMessage(msg).Render(ctx).Lines
 		for offset, line := range rendered {
 			if (msg.Tool || msg.Thinking) && !msg.ToolNoCollapse && (offset == 0 || msg.Expanded) {
@@ -934,7 +1009,8 @@ func (m *Model) buildTranscript() ([]string, []int, map[int]int) {
 			lines = append(lines, line.Text)
 			gutters = append(gutters, line.Gutter)
 		}
-		if idx < len(m.messages)-1 {
+		idx++
+		if idx < len(m.messages) {
 			addGap()
 		}
 	}
