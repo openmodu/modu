@@ -42,6 +42,10 @@ type ProviderConfig struct {
 	APIKey    string            `json:"apiKey,omitempty" toml:"apiKey,omitempty"`
 	APIKeyEnv string            `json:"apiKeyEnv,omitempty" toml:"apiKeyEnv,omitempty"`
 	Headers   map[string]string `json:"headers,omitempty" toml:"headers,omitempty"`
+	// ExtraBody holds provider-specific top-level request fields merged into
+	// every call (OpenAI extra_body). e.g. DeepSeek's thinking toggle:
+	// extraBody = { thinking = { type = "disabled" } }
+	ExtraBody map[string]any `json:"extraBody,omitempty" toml:"extraBody,omitempty"`
 }
 
 type ModelConfig struct {
@@ -805,6 +809,9 @@ func registerConfig(cfg Config) (*types.Model, func(string) (string, error)) {
 			opts := []openai.Option{openai.WithBaseURL(baseURL), openai.WithAPIKey(apiKey)}
 			if len(pc.Headers) > 0 {
 				opts = append(opts, openai.WithHeaders(pc.Headers))
+			}
+			if len(pc.ExtraBody) > 0 {
+				opts = append(opts, openai.WithExtraBody(pc.ExtraBody))
 			}
 			providers.Register(openai.New(entry.Provider, opts...))
 			registeredProviders[entry.Provider] = true

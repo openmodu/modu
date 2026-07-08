@@ -19,9 +19,10 @@ import (
 
 // Config holds configuration for an OpenAI-compatible chat completions provider.
 type Config struct {
-	baseURL string
-	apiKey  string
-	headers map[string]string
+	baseURL   string
+	apiKey    string
+	headers   map[string]string
+	extraBody map[string]any
 }
 
 // Option is a functional option for Config.
@@ -40,6 +41,14 @@ func WithAPIKey(key string) Option {
 // WithHeaders sets additional HTTP headers to include in every request.
 func WithHeaders(headers map[string]string) Option {
 	return func(c *Config) { c.headers = headers }
+}
+
+// WithExtraBody sets extra top-level fields merged into every request body.
+// This mirrors the OpenAI SDK's extra_body: provider-specific knobs such as
+// DeepSeek's {"thinking": {"type": "disabled"}} or {"reasoning_effort": "..."}
+// that have no first-class field in ChatRequest.
+func WithExtraBody(extra map[string]any) Option {
+	return func(c *Config) { c.extraBody = extra }
 }
 
 type openAIProvider struct {
@@ -482,6 +491,16 @@ func (p *openAIProvider) buildBody(req *providers.ChatRequest, stream bool) ([]b
 	}
 	if req.MaxTokens != nil {
 		payload["max_tokens"] = *req.MaxTokens
+	}
+	// Merge provider-specific extra body fields (e.g. DeepSeek's thinking
+	// toggle). Structural keys are protected so a stray config value can't
+	// corrupt the request shape.
+	for k, v := range p.config.extraBody {
+		switch k {
+		case "model", "messages", "stream", "stream_options":
+			continue
+		}
+		payload[k] = v
 	}
 	return json.Marshal(payload)
 }
