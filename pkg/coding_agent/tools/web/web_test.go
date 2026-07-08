@@ -5,11 +5,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/go-rod/rod/lib/launcher"
+	"github.com/openmodu/modu/pkg/coding_agent/tools/common"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -32,6 +34,47 @@ func TestWebFetchReturnsVisibleHTMLText(t *testing.T) {
 	}
 	if strings.Contains(text, "ignore()") || strings.Contains(text, ".x{}") || strings.Contains(text, "Noise link") {
 		t.Fatalf("expected script/style/nav text to be removed:\n%s", text)
+	}
+}
+
+func TestWebFetchStoresTruncatedArtifactWithoutFullContentDetails(t *testing.T) {
+	body := "<html><body><main>" + strings.Repeat("<p>long body text</p>", 5000) + "</main></body></html>"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+
+	tool := NewFetchToolWithArtifacts(common.NewArtifactStore(filepath.Join(t.TempDir(), "artifacts")))
+	result, err := tool.Execute(context.Background(), "fetch-1", map[string]any{"url": server.URL}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	details, ok := result.Details.(map[string]any)
+	if !ok {
+		t.Fatalf("expected details map, got %T", result.Details)
+	}
+	if _, ok := details["content"]; ok {
+		t.Fatalf("fetch details should not include full content: %#v", details)
+	}
+	output, ok := details["output"].(map[string]any)
+	if !ok || output["truncated"] != true {
+		t.Fatalf("expected truncated output metadata, got %#v", details["output"])
+	}
+	text := extractText(result.Content)
+	if strings.Count(text, "long body text") >= strings.Count(body, "long body text") {
+		t.Fatalf("preview should not contain full fetched body, got %d repeated body chunks", strings.Count(text, "long body text"))
+	}
+	artifactPath, ok := output["artifactPath"].(string)
+	if !ok || artifactPath == "" {
+		t.Fatalf("expected artifact path, got %#v", output)
+	}
+	data, err := os.ReadFile(artifactPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "long body text") {
+		t.Fatalf("expected artifact to contain fetched body, got %d bytes", len(data))
 	}
 }
 

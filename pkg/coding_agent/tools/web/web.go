@@ -45,7 +45,8 @@ type HTTPClient interface {
 }
 
 type FetchTool struct {
-	client HTTPClient
+	client    HTTPClient
+	artifacts *common.ArtifactStore
 }
 
 type FetchOptions struct {
@@ -73,6 +74,10 @@ type FetchPage struct {
 
 func NewFetchTool() types.Tool {
 	return &FetchTool{client: &http.Client{Timeout: 15 * time.Second}}
+}
+
+func NewFetchToolWithArtifacts(artifacts *common.ArtifactStore) types.Tool {
+	return &FetchTool{client: &http.Client{Timeout: 15 * time.Second}, artifacts: artifacts}
 }
 
 func (t *FetchTool) Name() string  { return "web_fetch" }
@@ -121,7 +126,16 @@ func (t *FetchTool) Execute(ctx context.Context, toolCallID string, args map[str
 	if err != nil {
 		return common.ErrorResult(err.Error()), nil
 	}
-	return textResult(formatFetchText(page), page), nil
+	rawText := formatFetchText(page)
+	preview := common.PreviewText(rawText, common.TextPreviewOptions{
+		ToolCallID:    toolCallID,
+		ArtifactName:  "web-fetch",
+		ArtifactStore: t.artifacts,
+		Strategy:      common.PreviewHead,
+		MaxLines:      common.DefaultMaxLines,
+		MaxBytes:      common.DefaultMaxBytes,
+	})
+	return textResult(preview.Text, fetchDetails(page, preview.Details["output"])), nil
 }
 
 func Fetch(ctx context.Context, client HTTPClient, target string, opts FetchOptions) (*FetchPage, error) {
@@ -349,6 +363,27 @@ func formatFetchText(page *FetchPage) string {
 		fmt.Fprintf(&b, "\n\n... (truncated after %d bytes)", page.Bytes)
 	}
 	return b.String()
+}
+
+func fetchDetails(page *FetchPage, output any) map[string]any {
+	if page == nil {
+		return map[string]any{"output": output}
+	}
+	return map[string]any{
+		"url":           page.URL,
+		"status":        page.Status,
+		"content_type":  page.ContentType,
+		"bytes":         page.Bytes,
+		"truncated":     page.Truncated,
+		"rendered_html": page.RenderedHTML,
+		"extracted":     page.Extracted,
+		"title":         page.Title,
+		"author":        page.Author,
+		"date":          page.Date,
+		"site_name":     page.SiteName,
+		"description":   page.Description,
+		"output":        output,
+	}
 }
 
 type SearchTool struct {

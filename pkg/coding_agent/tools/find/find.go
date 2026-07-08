@@ -21,11 +21,16 @@ var vcsDirectoriesToExclude = []string{".git", ".svn", ".hg", ".bzr", ".jj", ".s
 
 // FindTool implements the file search tool using glob patterns.
 type FindTool struct {
-	cwd string
+	cwd       string
+	artifacts *common.ArtifactStore
 }
 
 func NewTool(cwd string) types.Tool {
 	return &FindTool{cwd: cwd}
+}
+
+func NewToolWithArtifacts(cwd string, artifacts *common.ArtifactStore) types.Tool {
+	return &FindTool{cwd: cwd, artifacts: artifacts}
 }
 
 func (t *FindTool) Name() string  { return "find" }
@@ -97,11 +102,11 @@ func (t *FindTool) Execute(ctx context.Context, toolCallID string, args map[stri
 
 	// Try fd first
 	if fdPath, err := exec.LookPath("fd"); err == nil {
-		return t.executeFd(ctx, fdPath, pattern, searchPath, limit)
+		return t.executeFd(ctx, fdPath, pattern, searchPath, limit, toolCallID)
 	}
 
 	// Fallback to built-in
-	return t.executeBuiltin(ctx, pattern, searchPath, limit)
+	return t.executeBuiltin(ctx, pattern, searchPath, limit, toolCallID)
 }
 
 func semanticFindIntegerSchema() []map[string]any {
@@ -143,7 +148,7 @@ func extractFindBaseDirectory(pattern string) (string, string) {
 	return staticPrefix[:lastSepIndex], pattern[lastSepIndex+1:]
 }
 
-func (t *FindTool) executeFd(ctx context.Context, fdPath, pattern, searchPath string, limit int) (types.ToolResult, error) {
+func (t *FindTool) executeFd(ctx context.Context, fdPath, pattern, searchPath string, limit int, toolCallID string) (types.ToolResult, error) {
 	args := []string{
 		"--type", "f",
 		"--color", "never",
@@ -168,7 +173,7 @@ func (t *FindTool) executeFd(ctx context.Context, fdPath, pattern, searchPath st
 			}, nil
 		}
 		// fd might not support all options, fall back
-		return t.executeBuiltin(ctx, pattern, searchPath, limit)
+		return t.executeBuiltin(ctx, pattern, searchPath, limit, toolCallID)
 	}
 
 	result := strings.TrimSpace(string(output))
@@ -199,7 +204,7 @@ func (t *FindTool) executeFd(ctx context.Context, fdPath, pattern, searchPath st
 		})
 	}
 
-	return findResult(searchPath, matches, limit), nil
+	return findResult(searchPath, matches, limit, toolCallID, t.artifacts), nil
 }
 
 type fileMatch struct {
@@ -208,7 +213,7 @@ type fileMatch struct {
 	mtime int64
 }
 
-func findResult(searchPath string, matches []fileMatch, limit int) types.ToolResult {
+func findResult(searchPath string, matches []fileMatch, limit int, toolCallID string, artifacts *common.ArtifactStore) types.ToolResult {
 	if len(matches) == 0 {
 		return types.ToolResult{
 			Content: []types.ContentBlock{
@@ -230,11 +235,6 @@ func findResult(searchPath string, matches []fileMatch, limit int) types.ToolRes
 		return matches[i].mtime > matches[j].mtime
 	})
 
-	truncated := len(matches) > limit
-	if truncated {
-		matches = matches[:limit]
-	}
-
 	lines := make([]string, 0, len(matches))
 	matchedPaths := make([]string, 0, min(len(matches), 20))
 	for _, match := range matches {
@@ -243,10 +243,40 @@ func findResult(searchPath string, matches []fileMatch, limit int) types.ToolRes
 			matchedPaths = append(matchedPaths, match.abs)
 		}
 	}
+	if artifacts == nil {
+		truncated := len(matches) > limit
+		if truncated {
+			lines = lines[:limit]
+		}
+		text := strings.Join(lines, "\n")
+		if truncated {
+			text += "\n\n" + truncatedMessage
+		}
+		return types.ToolResult{
+			Content: []types.ContentBlock{
+				&types.TextContent{Type: "text", Text: text},
+			},
+			Details: map[string]any{
+				"path":          searchPath,
+				"matched_paths": matchedPaths,
+			},
+		}
+	}
 
-	text := strings.Join(lines, "\n")
-	if truncated {
-		text += "\n\n" + truncatedMessage
+	preview := common.PreviewText(strings.Join(lines, "\n"), common.TextPreviewOptions{
+		ToolCallID:    toolCallID,
+		ArtifactName:  "find",
+		ArtifactStore: artifacts,
+		Strategy:      common.PreviewHead,
+		MaxLines:      limit,
+		MaxBytes:      common.DefaultMaxBytes,
+	})
+	text := preview.Text
+	if meta, ok := preview.Details["output"].(map[string]any); ok {
+		meta["totalMatches"] = len(matches)
+	}
+	if text == "" {
+		text = "No files found"
 	}
 
 	return types.ToolResult{
@@ -256,11 +286,12 @@ func findResult(searchPath string, matches []fileMatch, limit int) types.ToolRes
 		Details: map[string]any{
 			"path":          searchPath,
 			"matched_paths": matchedPaths,
+			"output":        preview.Details["output"],
 		},
 	}
 }
 
-func (t *FindTool) executeBuiltin(ctx context.Context, pattern, searchPath string, limit int) (types.ToolResult, error) {
+func (t *FindTool) executeBuiltin(ctx context.Context, pattern, searchPath string, limit int, toolCallID string) (types.ToolResult, error) {
 	var results []fileMatch
 	skipDirs := findVCSDirSet()
 
@@ -306,7 +337,7 @@ func (t *FindTool) executeBuiltin(ctx context.Context, pattern, searchPath strin
 		}, nil
 	}
 
-	return findResult(searchPath, results, limit), nil
+	return findResult(searchPath, results, limit, toolCallID, t.artifacts), nil
 }
 
 func displayFindPath(path, cwd string) string {

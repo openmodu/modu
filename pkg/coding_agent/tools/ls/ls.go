@@ -16,11 +16,16 @@ const defaultLsLimit = 500
 
 // LsTool implements the directory listing tool.
 type LsTool struct {
-	cwd string
+	cwd       string
+	artifacts *common.ArtifactStore
 }
 
 func NewTool(cwd string) types.Tool {
 	return &LsTool{cwd: cwd}
+}
+
+func NewToolWithArtifacts(cwd string, artifacts *common.ArtifactStore) types.Tool {
+	return &LsTool{cwd: cwd, artifacts: artifacts}
 }
 
 func (t *LsTool) Name() string  { return "ls" }
@@ -111,16 +116,41 @@ func (t *LsTool) Execute(ctx context.Context, toolCallID string, args map[string
 		return strings.ToLower(names[i]) < strings.ToLower(names[j])
 	})
 
-	truncated := false
 	totalNames := len(names)
-	if len(names) > limit {
-		names = names[:limit]
-		truncated = true
+	if t.artifacts == nil {
+		truncated := false
+		if len(names) > limit {
+			names = names[:limit]
+			truncated = true
+		}
+		text := strings.Join(names, "\n")
+		if truncated {
+			text += fmt.Sprintf("\n\n... (%d entries total, showing first %d)", totalNames, limit)
+		}
+		if text == "" {
+			text = "(empty directory)"
+		}
+		return types.ToolResult{
+			Content: []types.ContentBlock{
+				&types.TextContent{Type: "text", Text: text},
+			},
+			Details: map[string]any{
+				"path": dirPath,
+			},
+		}, nil
 	}
 
-	text := strings.Join(names, "\n")
-	if truncated {
-		text += fmt.Sprintf("\n\n... (%d entries total, showing first %d)", totalNames, limit)
+	preview := common.PreviewText(strings.Join(names, "\n"), common.TextPreviewOptions{
+		ToolCallID:    toolCallID,
+		ArtifactName:  "ls",
+		ArtifactStore: t.artifacts,
+		Strategy:      common.PreviewHead,
+		MaxLines:      limit,
+		MaxBytes:      common.DefaultMaxBytes,
+	})
+	text := preview.Text
+	if meta, ok := preview.Details["output"].(map[string]any); ok {
+		meta["totalEntries"] = totalNames
 	}
 
 	if text == "" {
@@ -132,7 +162,8 @@ func (t *LsTool) Execute(ctx context.Context, toolCallID string, args map[string
 			&types.TextContent{Type: "text", Text: text},
 		},
 		Details: map[string]any{
-			"path": dirPath,
+			"path":   dirPath,
+			"output": preview.Details["output"],
 		},
 	}, nil
 }
