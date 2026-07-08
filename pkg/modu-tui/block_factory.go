@@ -22,6 +22,7 @@ func defaultBlockFromMessage(m Message) Block {
 			ArtifactRead: m.ToolArtifactRead,
 			Truncated:    m.ToolTruncated,
 			BatchSize:    m.ToolBatchSize,
+			BatchID:      m.ToolBatchID,
 			Code:         m.ToolCode,
 			Language:     m.ToolLanguage,
 			Error:        m.ToolError,

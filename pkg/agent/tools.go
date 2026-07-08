@@ -73,15 +73,22 @@ func (d DefaultTools) Execute(ctx context.Context, input types.ToolInput) (types
 func runToolBatch(ctx context.Context, input types.ToolInput, calls []types.ToolCallContent, maxConcurrency int) []types.ToolResultMessage {
 	parallel := len(calls) > 1
 	batchSize := len(calls)
+	// A parallel batch shares one id so the TUI can fold its tool calls into a
+	// single collapsible group. The first call id is unique per batch, so it
+	// makes a stable, deterministic batch key without any RNG/clock.
+	batchID := ""
+	if parallel {
+		batchID = "batch-" + calls[0].ID
+	}
 	out := make([]types.ToolResultMessage, len(calls))
 	prepared := make([]preparedCall, len(calls))
 	for i, call := range calls {
 		prepared[i] = prepareToolCall(input, call)
-		input.Events.Emit(types.Event{Type: types.EventTypeToolExecutionStart, ToolCallID: call.ID, ToolName: call.Name, Args: call.Arguments, Parallel: parallel, BatchSize: batchSize})
+		input.Events.Emit(types.Event{Type: types.EventTypeToolExecutionStart, ToolCallID: call.ID, ToolName: call.Name, Args: call.Arguments, Parallel: parallel, BatchSize: batchSize, BatchID: batchID})
 	}
 
 	runOne := func(i int) {
-		out[i] = executePreparedCall(ctx, input, calls[i], prepared[i], parallel, batchSize)
+		out[i] = executePreparedCall(ctx, input, calls[i], prepared[i], parallel, batchSize, batchID)
 	}
 	if parallel {
 		var wg sync.WaitGroup
@@ -96,12 +103,12 @@ func runToolBatch(ctx context.Context, input types.ToolInput, calls []types.Tool
 				select {
 				case sem <- struct{}{}:
 				case <-ctx.Done():
-					out[i] = executePreparedCall(ctx, input, calls[i], preparedCall{denyMsg: ctx.Err().Error()}, parallel, batchSize)
+					out[i] = executePreparedCall(ctx, input, calls[i], preparedCall{denyMsg: ctx.Err().Error()}, parallel, batchSize, batchID)
 					return
 				}
 				defer func() { <-sem }()
 				if err := ctx.Err(); err != nil {
-					out[i] = executePreparedCall(ctx, input, calls[i], preparedCall{denyMsg: err.Error()}, parallel, batchSize)
+					out[i] = executePreparedCall(ctx, input, calls[i], preparedCall{denyMsg: err.Error()}, parallel, batchSize, batchID)
 					return
 				}
 				runOne(i)
@@ -158,7 +165,7 @@ func prepareToolCall(input types.ToolInput, call types.ToolCallContent) prepared
 	return preparedCall{tool: tool, args: args}
 }
 
-func executePreparedCall(ctx context.Context, input types.ToolInput, call types.ToolCallContent, prepared preparedCall, parallel bool, batchSize int) types.ToolResultMessage {
+func executePreparedCall(ctx context.Context, input types.ToolInput, call types.ToolCallContent, prepared preparedCall, parallel bool, batchSize int, batchID string) types.ToolResultMessage {
 	result := types.ToolResult{}
 	isError := false
 	if prepared.denyMsg != "" {
@@ -166,7 +173,7 @@ func executePreparedCall(ctx context.Context, input types.ToolInput, call types.
 		isError = true
 	} else {
 		r, err := prepared.tool.Execute(ctx, call.ID, prepared.args, func(partial types.ToolResult) {
-			input.Events.Emit(types.Event{Type: types.EventTypeToolExecutionUpdate, ToolCallID: call.ID, ToolName: call.Name, Args: call.Arguments, Partial: partial, Parallel: parallel, BatchSize: batchSize})
+			input.Events.Emit(types.Event{Type: types.EventTypeToolExecutionUpdate, ToolCallID: call.ID, ToolName: call.Name, Args: call.Arguments, Partial: partial, Parallel: parallel, BatchSize: batchSize, BatchID: batchID})
 		})
 		if err != nil {
 			r = errorToolResult(err.Error())
@@ -186,6 +193,7 @@ func executePreparedCall(ctx context.Context, input types.ToolInput, call types.
 		IsError:    isError,
 		Parallel:   parallel,
 		BatchSize:  batchSize,
+		BatchID:    batchID,
 	})
 	return types.ToolResultMessage{
 		Role:       types.RoleToolResult,
