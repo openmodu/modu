@@ -3,21 +3,37 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/openmodu/modu/pkg/types"
 )
 
-type DefaultTools struct{}
+const DefaultMaxParallelToolConcurrency = 4
+const turnBudgetTruncatedNotice = "\n[tool output truncated by turn budget]"
+const turnBudgetOmittedNotice = "[tool output omitted: turn budget exhausted]"
 
-func (DefaultTools) Execute(ctx context.Context, input types.ToolInput) (types.ToolOutput, error) {
+type DefaultTools struct {
+	MaxConcurrency         int
+	MaxTurnToolResultBytes int
+}
+
+func (d DefaultTools) maxConcurrency() int {
+	if d.MaxConcurrency <= 0 {
+		return DefaultMaxParallelToolConcurrency
+	}
+	return d.MaxConcurrency
+}
+
+func (d DefaultTools) Execute(ctx context.Context, input types.ToolInput) (types.ToolOutput, error) {
 	if input.Events == nil {
 		input.Events = discardEvents{}
 	}
 	results := make([]types.ToolResultMessage, len(input.Calls))
 	messages := make([]types.AgentMessage, 0, len(input.Calls))
 	var steering []types.AgentMessage
+	turnBudgetUsed := 0
 
 	for i := 0; i < len(input.Calls); {
 		batchEnd := i + 1
@@ -27,8 +43,11 @@ func (DefaultTools) Execute(ctx context.Context, input types.ToolInput) (types.T
 			}
 		}
 
-		batchResults := runToolBatch(ctx, input, input.Calls[i:batchEnd])
+		batchResults := runToolBatch(ctx, input, input.Calls[i:batchEnd], d.maxConcurrency())
 		for j, result := range batchResults {
+			if d.MaxTurnToolResultBytes > 0 {
+				result = applyTurnToolResultBudget(result, d.MaxTurnToolResultBytes, &turnBudgetUsed)
+			}
 			results[i+j] = result
 			messages = append(messages, result)
 		}
@@ -37,6 +56,9 @@ func (DefaultTools) Execute(ctx context.Context, input types.ToolInput) (types.T
 		if len(steering) > 0 {
 			for k := batchEnd; k < len(input.Calls); k++ {
 				result := skipToolCall(input.Calls[k], input.Events)
+				if d.MaxTurnToolResultBytes > 0 {
+					result = applyTurnToolResultBudget(result, d.MaxTurnToolResultBytes, &turnBudgetUsed)
+				}
 				results[k] = result
 				messages = append(messages, result)
 			}
@@ -48,24 +70,40 @@ func (DefaultTools) Execute(ctx context.Context, input types.ToolInput) (types.T
 	return types.ToolOutput{Messages: messages, Results: results, Steering: steering}, nil
 }
 
-func runToolBatch(ctx context.Context, input types.ToolInput, calls []types.ToolCallContent) []types.ToolResultMessage {
+func runToolBatch(ctx context.Context, input types.ToolInput, calls []types.ToolCallContent, maxConcurrency int) []types.ToolResultMessage {
 	parallel := len(calls) > 1
+	batchSize := len(calls)
 	out := make([]types.ToolResultMessage, len(calls))
 	prepared := make([]preparedCall, len(calls))
 	for i, call := range calls {
 		prepared[i] = prepareToolCall(input, call)
-		input.Events.Emit(types.Event{Type: types.EventTypeToolExecutionStart, ToolCallID: call.ID, ToolName: call.Name, Args: call.Arguments, Parallel: parallel})
+		input.Events.Emit(types.Event{Type: types.EventTypeToolExecutionStart, ToolCallID: call.ID, ToolName: call.Name, Args: call.Arguments, Parallel: parallel, BatchSize: batchSize})
 	}
 
 	runOne := func(i int) {
-		out[i] = executePreparedCall(ctx, input, calls[i], prepared[i], parallel)
+		out[i] = executePreparedCall(ctx, input, calls[i], prepared[i], parallel, batchSize)
 	}
 	if parallel {
 		var wg sync.WaitGroup
+		if maxConcurrency <= 0 {
+			maxConcurrency = DefaultMaxParallelToolConcurrency
+		}
+		sem := make(chan struct{}, maxConcurrency)
 		for i := range calls {
 			wg.Add(1)
 			go func(i int) {
 				defer wg.Done()
+				select {
+				case sem <- struct{}{}:
+				case <-ctx.Done():
+					out[i] = executePreparedCall(ctx, input, calls[i], preparedCall{denyMsg: ctx.Err().Error()}, parallel, batchSize)
+					return
+				}
+				defer func() { <-sem }()
+				if err := ctx.Err(); err != nil {
+					out[i] = executePreparedCall(ctx, input, calls[i], preparedCall{denyMsg: err.Error()}, parallel, batchSize)
+					return
+				}
 				runOne(i)
 			}(i)
 		}
@@ -120,7 +158,7 @@ func prepareToolCall(input types.ToolInput, call types.ToolCallContent) prepared
 	return preparedCall{tool: tool, args: args}
 }
 
-func executePreparedCall(ctx context.Context, input types.ToolInput, call types.ToolCallContent, prepared preparedCall, parallel bool) types.ToolResultMessage {
+func executePreparedCall(ctx context.Context, input types.ToolInput, call types.ToolCallContent, prepared preparedCall, parallel bool, batchSize int) types.ToolResultMessage {
 	result := types.ToolResult{}
 	isError := false
 	if prepared.denyMsg != "" {
@@ -128,7 +166,7 @@ func executePreparedCall(ctx context.Context, input types.ToolInput, call types.
 		isError = true
 	} else {
 		r, err := prepared.tool.Execute(ctx, call.ID, prepared.args, func(partial types.ToolResult) {
-			input.Events.Emit(types.Event{Type: types.EventTypeToolExecutionUpdate, ToolCallID: call.ID, ToolName: call.Name, Args: call.Arguments, Partial: partial, Parallel: parallel})
+			input.Events.Emit(types.Event{Type: types.EventTypeToolExecutionUpdate, ToolCallID: call.ID, ToolName: call.Name, Args: call.Arguments, Partial: partial, Parallel: parallel, BatchSize: batchSize})
 		})
 		if err != nil {
 			r = errorToolResult(err.Error())
@@ -147,6 +185,7 @@ func executePreparedCall(ctx context.Context, input types.ToolInput, call types.
 		Result:     result,
 		IsError:    isError,
 		Parallel:   parallel,
+		BatchSize:  batchSize,
 	})
 	return types.ToolResultMessage{
 		Role:       types.RoleToolResult,
@@ -183,6 +222,132 @@ func skipToolCall(call types.ToolCallContent, events types.EventSink) types.Tool
 	events.Emit(types.Event{Type: types.EventTypeMessageStart, Message: message})
 	events.Emit(types.Event{Type: types.EventTypeMessageEnd, Message: message})
 	return message
+}
+
+func applyTurnToolResultBudget(result types.ToolResultMessage, maxBytes int, used *int) types.ToolResultMessage {
+	if maxBytes <= 0 || used == nil {
+		return result
+	}
+	remaining := maxBytes - *used
+	if remaining <= 0 {
+		result.Content = []types.ContentBlock{&types.TextContent{Type: "text", Text: turnBudgetOmittedNotice}}
+		result.Details = mergeToolResultDetails(result.Details, map[string]any{
+			"turnBudgetTruncated": true,
+			"turnBudgetBytes":     maxBytes,
+		})
+		return result
+	}
+	contentBudget := remaining
+	if contentBudget > len([]byte(turnBudgetTruncatedNotice)) {
+		contentBudget -= len([]byte(turnBudgetTruncatedNotice))
+	}
+	content, keptBytes, truncated := limitContentTextBytes(result.Content, contentBudget)
+	*used += keptBytes
+	if !truncated {
+		return result
+	}
+	content = appendTurnBudgetNotice(content, remaining-keptBytes)
+	result.Content = content
+	result.Details = mergeToolResultDetails(result.Details, map[string]any{
+		"turnBudgetTruncated": true,
+		"turnBudgetBytes":     maxBytes,
+	})
+	return result
+}
+
+func appendTurnBudgetNotice(blocks []types.ContentBlock, remaining int) []types.ContentBlock {
+	notice := turnBudgetTruncatedNotice
+	if remaining > 0 && len([]byte(notice)) > remaining {
+		notice = trimUTF8Bytes(notice, remaining)
+	}
+	if notice == "" {
+		return blocks
+	}
+	for i := len(blocks) - 1; i >= 0; i-- {
+		text, ok := blocks[i].(*types.TextContent)
+		if !ok || text == nil {
+			continue
+		}
+		copyText := *text
+		copyText.Text += notice
+		out := append([]types.ContentBlock{}, blocks...)
+		out[i] = &copyText
+		return out
+	}
+	return append(blocks, &types.TextContent{Type: "text", Text: strings.TrimPrefix(notice, "\n")})
+}
+
+func limitContentTextBytes(blocks []types.ContentBlock, maxBytes int) ([]types.ContentBlock, int, bool) {
+	if maxBytes <= 0 {
+		return []types.ContentBlock{&types.TextContent{Type: "text", Text: ""}}, 0, len(blocks) > 0
+	}
+	out := make([]types.ContentBlock, 0, len(blocks))
+	used := 0
+	truncated := false
+	for _, block := range blocks {
+		text, ok := block.(*types.TextContent)
+		if !ok || text == nil {
+			out = append(out, block)
+			continue
+		}
+		remaining := maxBytes - used
+		if remaining <= 0 {
+			truncated = true
+			continue
+		}
+		if len([]byte(text.Text)) <= remaining {
+			out = append(out, text)
+			used += len([]byte(text.Text))
+			continue
+		}
+		copyText := *text
+		copyText.Text = trimUTF8Bytes(text.Text, remaining)
+		used += len([]byte(copyText.Text))
+		out = append(out, &copyText)
+		truncated = true
+	}
+	if len(out) == 0 && len(blocks) > 0 {
+		out = append(out, &types.TextContent{Type: "text", Text: ""})
+	}
+	return out, used, truncated
+}
+
+func trimUTF8Bytes(s string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len([]byte(s)) <= maxBytes {
+		return s
+	}
+	cut := 0
+	for i := range s {
+		if i > maxBytes {
+			break
+		}
+		cut = i
+	}
+	if cut == 0 {
+		for _, r := range s {
+			if len(string(r)) <= maxBytes {
+				return string(r)
+			}
+			return ""
+		}
+	}
+	return s[:cut]
+}
+
+func mergeToolResultDetails(details any, extra map[string]any) any {
+	out := map[string]any{}
+	if existing, ok := details.(map[string]any); ok {
+		for k, v := range existing {
+			out[k] = v
+		}
+	}
+	for k, v := range extra {
+		out[k] = v
+	}
+	return out
 }
 
 func findTool(tools []types.Tool, name string) types.Tool {

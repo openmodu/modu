@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -36,6 +38,81 @@ func (t *fakeTool) Execute(ctx context.Context, toolCallID string, args map[stri
 	t.executed = append(t.executed, value)
 	onUpdate(types.ToolResult{Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "partial"}}})
 	return types.ToolResult{Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "echoed: " + value}}}, nil
+}
+
+type budgetTool struct{}
+
+func (t budgetTool) Name() string        { return "budget" }
+func (t budgetTool) Label() string       { return "Budget" }
+func (t budgetTool) Description() string { return "Return text" }
+func (t budgetTool) Parameters() any     { return nil }
+func (t budgetTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate types.ToolUpdateCallback) (types.ToolResult, error) {
+	value, _ := args["value"].(string)
+	return types.ToolResult{
+		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: value}},
+		Details: map[string]any{
+			"source": toolCallID,
+		},
+	}, nil
+}
+
+type parallelDelayTool struct {
+	current int32
+	maxSeen int32
+	started chan string
+}
+
+func (t *parallelDelayTool) Name() string        { return "parallel_delay" }
+func (t *parallelDelayTool) Label() string       { return "Parallel Delay" }
+func (t *parallelDelayTool) Description() string { return "Delay and return value" }
+func (t *parallelDelayTool) Parameters() any     { return nil }
+func (t *parallelDelayTool) Parallel() bool      { return true }
+func (t *parallelDelayTool) Execute(ctx context.Context, toolCallID string, args map[string]any, onUpdate types.ToolUpdateCallback) (types.ToolResult, error) {
+	cur := atomic.AddInt32(&t.current, 1)
+	if t.started != nil {
+		select {
+		case t.started <- toolCallID:
+		default:
+		}
+	}
+	for {
+		maxSeen := atomic.LoadInt32(&t.maxSeen)
+		if cur <= maxSeen || atomic.CompareAndSwapInt32(&t.maxSeen, maxSeen, cur) {
+			break
+		}
+	}
+	defer atomic.AddInt32(&t.current, -1)
+
+	delay, _ := args["delay"].(int)
+	if delay <= 0 {
+		delay = 25
+	}
+	timer := time.NewTimer(time.Duration(delay) * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return types.ToolResult{}, ctx.Err()
+	case <-timer.C:
+	}
+	value, _ := args["value"].(string)
+	return types.ToolResult{Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: value}}}, nil
+}
+
+type eventRecorder struct {
+	mu     sync.Mutex
+	events []types.Event
+}
+
+func (r *eventRecorder) Emit(event types.Event) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, event)
+}
+
+func (r *eventRecorder) snapshot() []types.Event {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]types.Event(nil), r.events...)
 }
 
 func TestLoopReturnsAssistantMessageWithoutTools(t *testing.T) {
@@ -205,7 +282,7 @@ func TestDefaultLLMEmitsMessageEndWhenStreamClosesAfterResolve(t *testing.T) {
 func TestAgentLoopToolCalls(t *testing.T) {
 	model := &types.Model{ID: "mock", Api: "openai-responses", ProviderID: "openai"}
 	tool := &fakeTool{}
-	callIndex := 0
+	var callIndex int32
 
 	events := types.NewAgentEventStream()
 	drain(events)
@@ -213,8 +290,9 @@ func TestAgentLoopToolCalls(t *testing.T) {
 
 	streamFn := func(ctx context.Context, _ *types.Model, _ *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
 		stream := types.NewEventStream()
+		idx := atomic.AddInt32(&callIndex, 1) - 1
 		go func() {
-			if callIndex == 0 {
+			if idx == 0 {
 				msg := &types.AssistantMessage{
 					Role:       types.RoleAssistant,
 					ProviderID: model.ProviderID,
@@ -241,7 +319,6 @@ func TestAgentLoopToolCalls(t *testing.T) {
 				stream.Push(types.StreamEvent{Type: types.EventDone, Reason: "stop", Message: msg})
 				stream.Resolve(msg, nil)
 			}
-			callIndex++
 			stream.Close()
 		}()
 		return stream, nil
@@ -494,6 +571,138 @@ func TestAgentToolArgumentsValidateAgainstSchema(t *testing.T) {
 	}
 	if !output.Results[0].IsError {
 		t.Fatal("expected schema validation failure to produce an error tool result")
+	}
+}
+
+func TestDefaultToolsParallelBatchHonorsMaxConcurrencyAndResultOrder(t *testing.T) {
+	tool := &parallelDelayTool{}
+	events := &eventRecorder{}
+
+	output, err := (DefaultTools{MaxConcurrency: 2}).Execute(context.Background(), types.ToolInput{
+		Tools: []types.Tool{tool},
+		Calls: []types.ToolCallContent{
+			{Type: "toolCall", ID: "tool-1", Name: "parallel_delay", Arguments: map[string]any{"value": "first", "delay": 80}},
+			{Type: "toolCall", ID: "tool-2", Name: "parallel_delay", Arguments: map[string]any{"value": "second", "delay": 10}},
+			{Type: "toolCall", ID: "tool-3", Name: "parallel_delay", Arguments: map[string]any{"value": "third", "delay": 60}},
+			{Type: "toolCall", ID: "tool-4", Name: "parallel_delay", Arguments: map[string]any{"value": "fourth", "delay": 20}},
+		},
+		Events: events,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := atomic.LoadInt32(&tool.maxSeen); got != 2 {
+		t.Fatalf("expected max concurrency 2, got %d", got)
+	}
+	var parallelStarts int
+	for _, event := range events.snapshot() {
+		if event.Type == types.EventTypeToolExecutionStart && event.Parallel {
+			parallelStarts++
+			if event.BatchSize != 4 {
+				t.Fatalf("parallel start batch size = %d, want 4", event.BatchSize)
+			}
+		}
+	}
+	if parallelStarts != 4 {
+		t.Fatalf("expected four parallel start events, got %d", parallelStarts)
+	}
+	if len(output.Results) != 4 {
+		t.Fatalf("expected four results, got %d", len(output.Results))
+	}
+	for i, want := range []string{"first", "second", "third", "fourth"} {
+		if got := contentText(output.Results[i].Content); got != want {
+			t.Fatalf("result %d = %q, want %q", i, got, want)
+		}
+		if output.Results[i].ToolCallID != fmt.Sprintf("tool-%d", i+1) {
+			t.Fatalf("result %d has tool call id %q", i, output.Results[i].ToolCallID)
+		}
+	}
+}
+
+func TestDefaultToolsParallelBatchStopsWaitingOnContextCancel(t *testing.T) {
+	tool := &parallelDelayTool{started: make(chan string, 2)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan types.ToolOutput, 1)
+	go func() {
+		output, err := (DefaultTools{MaxConcurrency: 1}).Execute(ctx, types.ToolInput{
+			Tools: []types.Tool{tool},
+			Calls: []types.ToolCallContent{
+				{Type: "toolCall", ID: "tool-1", Name: "parallel_delay", Arguments: map[string]any{"value": "first", "delay": 2000}},
+				{Type: "toolCall", ID: "tool-2", Name: "parallel_delay", Arguments: map[string]any{"value": "second", "delay": 2000}},
+			},
+			Events: discardEvents{},
+		})
+		if err != nil {
+			t.Errorf("unexpected execute error: %v", err)
+		}
+		done <- output
+	}()
+
+	select {
+	case <-tool.started:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for first tool to start")
+	}
+	cancel()
+
+	select {
+	case output := <-done:
+		if len(output.Results) != 2 {
+			t.Fatalf("expected two results, got %d", len(output.Results))
+		}
+		for i, result := range output.Results {
+			if !result.IsError {
+				t.Fatalf("result %d should be a cancellation error", i)
+			}
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("parallel batch did not stop promptly after context cancellation")
+	}
+}
+
+func TestDefaultToolsMaxTurnToolResultBytesMarksTruncatedContent(t *testing.T) {
+	output, err := (DefaultTools{MaxTurnToolResultBytes: 80}).Execute(context.Background(), types.ToolInput{
+		Tools: []types.Tool{budgetTool{}},
+		Calls: []types.ToolCallContent{
+			{Type: "toolCall", ID: "tool-1", Name: "budget", Arguments: map[string]any{"value": "1234567890"}},
+			{Type: "toolCall", ID: "tool-2", Name: "budget", Arguments: map[string]any{"value": strings.Repeat("a", 200)}},
+		},
+		Events: discardEvents{},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := toolResultsTextBytes(output.Results); got > 80 {
+		t.Fatalf("tool result text bytes = %d, want <= 80", got)
+	}
+	if got := contentText(output.Results[0].Content); got != "1234567890" {
+		t.Fatalf("first result = %q", got)
+	}
+	if got := contentText(output.Results[1].Content); !strings.Contains(got, "tool output truncated by turn budget") {
+		t.Fatalf("second result should include visible aggregate budget marker, got %q", got)
+	}
+	details, ok := output.Results[1].Details.(map[string]any)
+	if !ok || details["turnBudgetTruncated"] != true {
+		t.Fatalf("expected turn budget truncation details, got %#v", output.Results[1].Details)
+	}
+}
+
+func TestDefaultToolsMaxTurnToolResultBytesMarksOmittedContent(t *testing.T) {
+	output, err := (DefaultTools{MaxTurnToolResultBytes: 10}).Execute(context.Background(), types.ToolInput{
+		Tools: []types.Tool{budgetTool{}},
+		Calls: []types.ToolCallContent{
+			{Type: "toolCall", ID: "tool-1", Name: "budget", Arguments: map[string]any{"value": "1234567890"}},
+			{Type: "toolCall", ID: "tool-2", Name: "budget", Arguments: map[string]any{"value": "abcdef"}},
+		},
+		Events: discardEvents{},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := contentText(output.Results[1].Content); !strings.Contains(got, "tool output omitted") {
+		t.Fatalf("second result should include visible omitted marker, got %q", got)
 	}
 }
 
@@ -914,6 +1123,27 @@ func assistantText(text string) *types.AssistantMessage {
 		Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: text}},
 		Timestamp:  time.Now().UnixMilli(),
 	}
+}
+
+func contentText(blocks []types.ContentBlock) string {
+	for _, block := range blocks {
+		if text, ok := block.(*types.TextContent); ok && text != nil {
+			return text.Text
+		}
+	}
+	return ""
+}
+
+func toolResultsTextBytes(results []types.ToolResultMessage) int {
+	total := 0
+	for _, result := range results {
+		for _, block := range result.Content {
+			if text, ok := block.(*types.TextContent); ok && text != nil {
+				total += len([]byte(text.Text))
+			}
+		}
+	}
+	return total
 }
 
 func assistantStream(model *types.Model, text string) types.EventStream {

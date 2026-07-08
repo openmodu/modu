@@ -36,6 +36,7 @@ type Event struct {
 	IsError    bool
 	Partial    any
 	Parallel   bool
+	BatchSize  int
 
 	// TaskID names the background subagent task an event belongs to when the
 	// host re-emits a child agent's events to extensions. Empty for the main
