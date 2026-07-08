@@ -1177,7 +1177,11 @@ func TestTokenkitAutoSyncScansConfiguredHomes(t *testing.T) {
 
 	waitFor(t, func() bool {
 		totals, err := tk.Totals(context.Background(), tokenkit.SummaryFilter{App: tokenkit.AppCodex})
-		return err == nil && totals.Records == 1 && totals.TotalTokens == 107
+		if err != nil || totals.Records != 1 || totals.TotalTokens != 107 {
+			return false
+		}
+		status := srv.currentTokenkitSyncStatus()
+		return status.LastFinishedAt != "" && status.LastStats[tokenkit.AppCodex].RecordsSeen == 1
 	}, 2*time.Second)
 
 	status := srv.currentTokenkitSyncStatus()
