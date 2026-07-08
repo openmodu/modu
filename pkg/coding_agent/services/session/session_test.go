@@ -462,11 +462,21 @@ func TestSessionDeleteValidatesPathAndHeader(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := mgr.FilePath()
+	artifactDir := filepath.Join(dir, "tool-results", "test_project", "sessions", mgr.SessionID())
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactDir, "call-1.output"), []byte("raw output"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := Delete(dir, path); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("expected session file deleted, stat err=%v", err)
+	}
+	if _, err := os.Stat(artifactDir); !os.IsNotExist(err) {
+		t.Fatalf("expected session tool-result artifacts deleted, stat err=%v", err)
 	}
 
 	outside := filepath.Join(t.TempDir(), "outside.jsonl")

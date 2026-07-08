@@ -43,7 +43,7 @@ func (s *engine) SwitchCwd(newCwd string) {
 func (s *engine) refreshToolsForCwd(cwd string) {
 	var updated []types.Tool
 	for _, tool := range s.activeTools {
-		if rebound, ok := s.toolProvider.Rebind(tool, types.ToolContext{Cwd: cwd}); ok {
+		if rebound, ok := s.toolProvider.Rebind(tool, s.toolContext(cwd)); ok {
 			updated = append(updated, rebound)
 			continue
 		}

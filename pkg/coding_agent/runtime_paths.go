@@ -2,7 +2,8 @@ package coding_agent
 
 import (
 	"path/filepath"
-	"strings"
+
+	"github.com/openmodu/modu/pkg/coding_agent/foundation/runtimepaths"
 )
 
 // Runtime paths derive the on-disk layout for a session under the agent dir.
@@ -36,11 +37,8 @@ func (p HarnessRuntimePaths) ToMap() map[string]any {
 }
 
 func (s *engine) RuntimePaths() HarnessRuntimePaths {
-	projectKey := strings.ReplaceAll(strings.TrimPrefix(s.cwd, "/"), "/", "_")
-	if projectKey == "" {
-		projectKey = "root"
-	}
-	toolResultsDir := filepath.Join(s.agentDir, "tool-results", projectKey)
+	projectKey := runtimepaths.ProjectKey(s.cwd)
+	toolResultsDir := runtimepaths.ProjectToolResultsDir(s.agentDir, s.cwd)
 	runtimeDir := filepath.Join(s.agentDir, "runtime", projectKey)
 	asyncSubagentRunsDir := filepath.Join(runtimeDir, "async-subagent-runs")
 

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/openmodu/modu/pkg/coding_agent/foundation/runtimepaths"
 )
 
 // Manager manages append-only session trees stored as pi-compatible JSONL.
@@ -588,20 +589,25 @@ func FindMostRecentSession(dir string) string {
 }
 
 func isValidSessionFile(path string) bool {
+	header, err := readSessionHeader(path)
+	return err == nil && header.Type == "session" && header.ID != ""
+}
+
+func readSessionHeader(path string) (Header, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return false
+		return Header{}, err
 	}
 	defer file.Close()
 	scanner := bufio.NewScanner(file)
 	if !scanner.Scan() {
-		return false
+		return Header{}, fmt.Errorf("session file is empty")
 	}
 	var header Header
 	if err := json.Unmarshal(scanner.Bytes(), &header); err != nil {
-		return false
+		return Header{}, err
 	}
-	return header.Type == "session" && header.ID != ""
+	return header, nil
 }
 
 // List returns all sessions for cwd sorted by modified time descending.
@@ -705,13 +711,21 @@ func Delete(agentDir, sessionPath string) error {
 	if !strings.HasSuffix(path, ".jsonl") {
 		return fmt.Errorf("refusing to delete non-jsonl session: %s", sessionPath)
 	}
-	if !isValidSessionFile(path) {
+	header, err := readSessionHeader(path)
+	if err != nil || header.Type != "session" || header.ID == "" {
 		return fmt.Errorf("refusing to delete invalid session file: %s", sessionPath)
 	}
 	if err := os.Remove(path); err != nil {
 		return err
 	}
+	if err := os.RemoveAll(sessionToolResultsDir(agentDir, header)); err != nil {
+		return err
+	}
 	return nil
+}
+
+func sessionToolResultsDir(agentDir string, header Header) string {
+	return runtimepaths.SessionToolResultsDir(agentDir, header.Cwd, header.ID)
 }
 
 // BuildSessionInfo reads a session file summary.
