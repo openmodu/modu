@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"github.com/openmodu/modu/pkg/agent"
+	agentconfig "github.com/openmodu/modu/pkg/coding_agent/foundation/config"
 	memsvc "github.com/openmodu/modu/pkg/coding_agent/services/memory"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/bash"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/common"
@@ -3430,6 +3433,98 @@ func TestResearchToolsAreOptInNetworkTools(t *testing.T) {
 		if !containsName(names, name) {
 			t.Fatalf("expected %s in research tools, got %v", name, names)
 		}
+	}
+}
+
+func TestResearchToolsUseWebSearchConfig(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s", r.Method)
+		}
+		if got := r.Header.Get("x-api-key"); got != "config-key" {
+			t.Fatalf("x-api-key = %q", got)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["query"] != "modu exa" || payload["type"] != "fast" {
+			t.Fatalf("unexpected payload: %#v", payload)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"results":[{"title":"Configured Exa","url":"https://example.com","highlights":["from config"]}]}`))
+	}))
+	defer server.Close()
+
+	rt := ResearchTools(types.ToolContext{
+		Values: map[string]any{
+			ValueWebSearch: agentconfig.WebSearchConfig{
+				Provider:   "exa",
+				Endpoint:   server.URL,
+				APIKey:     "config-key",
+				SearchType: "fast",
+			},
+		},
+	})
+	var search types.Tool
+	for _, tool := range rt {
+		if tool.Name() == "web_search" {
+			search = tool
+			break
+		}
+	}
+	if search == nil {
+		t.Fatalf("expected web_search in research tools, got %v", toolNames(rt))
+	}
+	result, err := search.Execute(context.Background(), "search-1", map[string]any{"query": "modu exa"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := extractText(result.Content)
+	if !strings.Contains(text, "Provider: exa") || !strings.Contains(text, "Configured Exa") || !strings.Contains(text, "from config") {
+		t.Fatalf("unexpected search result:\n%s", text)
+	}
+}
+
+func TestResearchToolsUseWebFetchConfig(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s", r.Method)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer fetch-key" {
+			t.Fatalf("authorization = %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"data":{"markdown":"# Configured Fetch","metadata":{"title":"Configured Fetch","sourceURL":"https://example.com/source"}}}`))
+	}))
+	defer server.Close()
+
+	rt := ResearchTools(types.ToolContext{
+		Values: map[string]any{
+			ValueWebFetch: agentconfig.WebFetchConfig{
+				Provider: "firecrawl",
+				Endpoint: server.URL,
+				APIKey:   "fetch-key",
+			},
+		},
+	})
+	var fetchTool types.Tool
+	for _, tool := range rt {
+		if tool.Name() == "web_fetch" {
+			fetchTool = tool
+			break
+		}
+	}
+	if fetchTool == nil {
+		t.Fatalf("expected web_fetch in research tools, got %v", toolNames(rt))
+	}
+	result, err := fetchTool.Execute(context.Background(), "fetch-1", map[string]any{"url": "https://example.com/source"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := extractText(result.Content)
+	if !strings.Contains(text, "Configured Fetch") {
+		t.Fatalf("unexpected fetch result:\n%s", text)
 	}
 }
 

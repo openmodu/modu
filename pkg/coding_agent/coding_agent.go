@@ -221,6 +221,8 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 			tools.ValueWorktree:    worktree.New(nil),
 			tools.ValueContext:     contextRemaining,
 			tools.ValueArtifacts:   artifactStore,
+			tools.ValueWebSearch:   cfg.WebSearch,
+			tools.ValueWebFetch:    cfg.WebFetch,
 		},
 	})
 
