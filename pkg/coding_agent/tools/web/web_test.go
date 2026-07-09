@@ -2,6 +2,7 @@ package webtools
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -164,6 +165,277 @@ func TestWebSearchUsesEndpointAndParsesResults(t *testing.T) {
 	for _, want := range []string{"Search results for \"modu workflow\"", "First Result", "https://example.com/one", server.URL + "/two"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected %q in search output:\n%s", want, text)
+		}
+	}
+}
+
+func TestWebSearchUsesExaEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s", r.Method)
+		}
+		if got := r.Header.Get("x-api-key"); got != "test-exa-key" {
+			t.Fatalf("x-api-key = %q", got)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if got := payload["query"]; got != "modu workflow" {
+			t.Fatalf("query = %#v", got)
+		}
+		if got := payload["numResults"]; got != float64(2) {
+			t.Fatalf("numResults = %#v", got)
+		}
+		if got := payload["type"]; got != "fast" {
+			t.Fatalf("type = %#v", got)
+		}
+		contents, _ := payload["contents"].(map[string]any)
+		if contents["highlights"] != true {
+			t.Fatalf("contents.highlights = %#v", contents["highlights"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"requestId": "req-123",
+			"resolvedSearchType": "fast",
+			"costDollars": {"total": 0},
+			"results": [
+				{
+					"title": "First Result",
+					"url": "https://example.com/one",
+					"publishedDate": "2026-07-09T00:00:00.000Z",
+					"author": "Ada",
+					"highlights": ["Primary source snippet."]
+				},
+				{
+					"title": "Second Result",
+					"url": "https://example.com/two",
+					"text": "Secondary text snippet."
+				},
+				{
+					"title": "Third Result",
+					"url": "https://example.com/three",
+					"text": "Should be capped by max_results."
+				}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	result, err := NewSearchToolWithConfig(SearchConfig{
+		Provider:   "exa",
+		Endpoint:   server.URL,
+		APIKey:     "test-exa-key",
+		SearchType: "fast",
+	}).Execute(context.Background(), "search-1", map[string]any{
+		"query":       "modu workflow",
+		"max_results": 2,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := extractText(result.Content)
+	for _, want := range []string{"Provider: exa", "First Result", "https://example.com/one", "Published: 2026-07-09T00:00:00.000Z", "Author: Ada", "Primary source snippet.", "Second Result", "Secondary text snippet."} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected %q in search output:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "Third Result") {
+		t.Fatalf("expected max_results cap, got:\n%s", text)
+	}
+	details, ok := result.Details.(map[string]any)
+	if !ok {
+		t.Fatalf("expected details map, got %T", result.Details)
+	}
+	if details["provider"] != "exa" || details["request_id"] != "req-123" {
+		t.Fatalf("unexpected details: %#v", details)
+	}
+}
+
+func TestWebSearchExaRequiresAPIKey(t *testing.T) {
+	result, err := NewExaSearchToolWithEndpoint("https://example.test/search", "").Execute(context.Background(), "search-1", map[string]any{
+		"query": "modu workflow",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := extractText(result.Content)
+	if !strings.Contains(text, "exa api key is required") {
+		t.Fatalf("unexpected result: %s", text)
+	}
+}
+
+func TestWebSearchUsesTavilyEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s", r.Method)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer tavily-key" {
+			t.Fatalf("authorization = %q", got)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["query"] != "modu workflow" || payload["max_results"] != float64(2) || payload["search_depth"] != "basic" {
+			t.Fatalf("unexpected payload: %#v", payload)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"request_id": "tvly-1",
+			"usage": {"credits": 1},
+			"results": [
+				{"title": "Tavily One", "url": "https://example.com/tavily-one", "content": "Tavily snippet."},
+				{"title": "Tavily Two", "url": "https://example.com/tavily-two", "content": "Second snippet."}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	result, err := NewSearchToolWithConfig(SearchConfig{
+		Provider:   "tavily",
+		Endpoint:   server.URL,
+		APIKey:     "tavily-key",
+		SearchType: "basic",
+	}).Execute(context.Background(), "search-1", map[string]any{"query": "modu workflow", "max_results": 2}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := extractText(result.Content)
+	for _, want := range []string{"Provider: tavily", "Tavily One", "https://example.com/tavily-one", "Tavily snippet."} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected %q in search output:\n%s", want, text)
+		}
+	}
+}
+
+func TestWebSearchUsesBraveEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("method = %s", r.Method)
+		}
+		if got := r.Header.Get("X-Subscription-Token"); got != "brave-key" {
+			t.Fatalf("X-Subscription-Token = %q", got)
+		}
+		if r.URL.Query().Get("q") != "modu workflow" || r.URL.Query().Get("count") != "2" || r.URL.Query().Get("result_filter") != "web" {
+			t.Fatalf("unexpected query: %s", r.URL.RawQuery)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"web": {
+				"results": [
+					{"title": "Brave One", "url": "https://example.com/brave-one", "description": "Brave snippet.", "age": "2026-07-09"},
+					{"title": "Brave Two", "url": "https://example.com/brave-two", "extra_snippets": ["Fallback snippet."]}
+				]
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	result, err := NewSearchToolWithConfig(SearchConfig{
+		Provider: "brave",
+		Endpoint: server.URL,
+		APIKey:   "brave-key",
+	}).Execute(context.Background(), "search-1", map[string]any{"query": "modu workflow", "max_results": 2}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := extractText(result.Content)
+	for _, want := range []string{"Provider: brave", "Brave One", "https://example.com/brave-one", "Brave snippet.", "Published: 2026-07-09", "Fallback snippet."} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected %q in search output:\n%s", want, text)
+		}
+	}
+}
+
+func TestWebSearchUsesFirecrawlEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s", r.Method)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer firecrawl-key" {
+			t.Fatalf("authorization = %q", got)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["query"] != "modu workflow" || payload["limit"] != float64(2) {
+			t.Fatalf("unexpected payload: %#v", payload)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"success": true,
+			"id": "fc-search-1",
+			"creditsUsed": 2,
+			"data": [
+				{"title": "Firecrawl One", "url": "https://example.com/fire-one", "description": "Firecrawl snippet."},
+				{"metadata": {"title": "Firecrawl Two", "sourceURL": "https://example.com/fire-two", "description": "Metadata snippet."}}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	result, err := NewSearchToolWithConfig(SearchConfig{
+		Provider: "firecrawl",
+		Endpoint: server.URL,
+		APIKey:   "firecrawl-key",
+	}).Execute(context.Background(), "search-1", map[string]any{"query": "modu workflow", "max_results": 2}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := extractText(result.Content)
+	for _, want := range []string{"Provider: firecrawl", "Firecrawl One", "https://example.com/fire-one", "Firecrawl snippet.", "Firecrawl Two", "Metadata snippet."} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected %q in search output:\n%s", want, text)
+		}
+	}
+}
+
+func TestWebFetchUsesFirecrawlScrape(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s", r.Method)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer firecrawl-key" {
+			t.Fatalf("authorization = %q", got)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["url"] != "https://example.com/source" {
+			t.Fatalf("url = %#v", payload["url"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"success": true,
+			"data": {
+				"markdown": "# Firecrawl Page\n\nClean markdown body.",
+				"metadata": {
+					"title": "Firecrawl Page",
+					"description": "Clean page",
+					"sourceURL": "https://example.com/source",
+					"contentType": "text/markdown"
+				}
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	tool := NewFetchToolWithConfig(nil, FetchConfig{
+		Provider: "firecrawl",
+		Endpoint: server.URL,
+		APIKey:   "firecrawl-key",
+	})
+	result, err := tool.Execute(context.Background(), "fetch-1", map[string]any{"url": "https://example.com/source"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := extractText(result.Content)
+	for _, want := range []string{"URL: https://example.com/source", "Title: Firecrawl Page", "# Firecrawl Page", "Clean markdown body."} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected %q in fetch output:\n%s", want, text)
 		}
 	}
 }

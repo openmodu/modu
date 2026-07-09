@@ -29,15 +29,20 @@ import (
 )
 
 const (
-	defaultFetchMaxBytes  = 2 * 1024 * 1024
-	maxFetchBytes         = 32 * 1024 * 1024
-	defaultSearchEndpoint = "https://duckduckgo.com/html/?q={query}"
-	defaultSearchMaxBytes = 128 * 1024
-	defaultSearchResults  = 5
-	maxSearchResults      = 10
-	defaultJSWait         = 2 * time.Second
-	maxJSWait             = 15 * time.Second
-	defaultFetchUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+	defaultFetchMaxBytes           = 2 * 1024 * 1024
+	maxFetchBytes                  = 32 * 1024 * 1024
+	defaultSearchEndpoint          = "https://duckduckgo.com/html/?q={query}"
+	defaultExaEndpoint             = "https://api.exa.ai/search"
+	defaultTavilyEndpoint          = "https://api.tavily.com/search"
+	defaultBraveEndpoint           = "https://api.search.brave.com/res/v1/web/search"
+	defaultFirecrawlSearchEndpoint = "https://api.firecrawl.dev/v2/search"
+	defaultFirecrawlScrapeEndpoint = "https://api.firecrawl.dev/v2/scrape"
+	defaultSearchMaxBytes          = 128 * 1024
+	defaultSearchResults           = 5
+	maxSearchResults               = 10
+	defaultJSWait                  = 2 * time.Second
+	maxJSWait                      = 15 * time.Second
+	defaultFetchUserAgent          = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 )
 
 type HTTPClient interface {
@@ -47,6 +52,14 @@ type HTTPClient interface {
 type FetchTool struct {
 	client    HTTPClient
 	artifacts *common.ArtifactStore
+	config    FetchConfig
+}
+
+type FetchConfig struct {
+	Provider  string
+	Endpoint  string
+	APIKey    string
+	APIKeyEnv string
 }
 
 type FetchOptions struct {
@@ -78,6 +91,10 @@ func NewFetchTool() types.Tool {
 
 func NewFetchToolWithArtifacts(artifacts *common.ArtifactStore) types.Tool {
 	return &FetchTool{client: &http.Client{Timeout: 15 * time.Second}, artifacts: artifacts}
+}
+
+func NewFetchToolWithConfig(artifacts *common.ArtifactStore, cfg FetchConfig) types.Tool {
+	return &FetchTool{client: &http.Client{Timeout: 15 * time.Second}, artifacts: artifacts, config: cfg}
 }
 
 func (t *FetchTool) Name() string  { return "web_fetch" }
@@ -117,12 +134,19 @@ func (t *FetchTool) Execute(ctx context.Context, toolCallID string, args map[str
 	target, _ := args["url"].(string)
 	raw, _ := args["raw"].(bool)
 	jsRender, _ := args["js_render"].(bool)
-	page, err := Fetch(ctx, t.client, target, FetchOptions{
+	opts := FetchOptions{
 		MaxBytes: boundedInt(args["max_bytes"], defaultFetchMaxBytes, maxFetchBytes),
 		Raw:      raw,
 		JSRender: jsRender,
 		JSWait:   boundedDurationMS(args["js_wait_ms"], defaultJSWait, maxJSWait),
-	})
+	}
+	var page *FetchPage
+	var err error
+	if strings.EqualFold(strings.TrimSpace(t.config.Provider), "firecrawl") {
+		page, err = FetchFirecrawl(ctx, t.client, target, t.config, opts)
+	} else {
+		page, err = Fetch(ctx, t.client, target, opts)
+	}
 	if err != nil {
 		return common.ErrorResult(err.Error()), nil
 	}
@@ -187,6 +211,88 @@ func Fetch(ctx context.Context, client HTTPClient, target string, opts FetchOpti
 		return page, nil
 	}
 	return extractPageMarkdown(page, string(body), u), nil
+}
+
+func FetchFirecrawl(ctx context.Context, client HTTPClient, target string, cfg FetchConfig, opts FetchOptions) (*FetchPage, error) {
+	u, err := validateHTTPURL(target)
+	if err != nil {
+		return nil, err
+	}
+	if client == nil {
+		client = &http.Client{Timeout: 15 * time.Second}
+	}
+	maxBytes := opts.MaxBytes
+	if maxBytes <= 0 {
+		maxBytes = defaultFetchMaxBytes
+	}
+	if maxBytes > maxFetchBytes {
+		maxBytes = maxFetchBytes
+	}
+	apiKey := providerAPIKey(cfg.APIKey, cfg.APIKeyEnv, "FIRECRAWL_API_KEY", "MODU_FIRECRAWL_API_KEY")
+	if apiKey == "" {
+		return nil, fmt.Errorf("firecrawl api key is required; set FIRECRAWL_API_KEY or settings.webFetch.apiKeyEnv")
+	}
+	endpoint := strings.TrimSpace(firstNonEmpty(cfg.Endpoint, os.Getenv("MODU_FIRECRAWL_SCRAPE_ENDPOINT")))
+	if endpoint == "" {
+		endpoint = defaultFirecrawlScrapeEndpoint
+	}
+	payload := map[string]any{
+		"url":             u.String(),
+		"formats":         []any{"markdown"},
+		"onlyMainContent": true,
+	}
+	body, status, contentType, truncated, err := postJSONWithHeaders(ctx, client, endpoint, payload, maxBytes, map[string]string{
+		"Authorization": "Bearer " + apiKey,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("firecrawl scrape failed: %w", err)
+	}
+	if statusCode(status) >= 400 {
+		return nil, fmt.Errorf("firecrawl scrape failed: %s: %s", status, common.PreviewText(string(body), common.TextPreviewOptions{MaxLines: 3, MaxBytes: 512}).Text)
+	}
+	var resp firecrawlScrapeResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("firecrawl scrape returned invalid JSON: %w", err)
+	}
+	if !resp.Success {
+		return nil, fmt.Errorf("firecrawl scrape failed: %s", firstNonEmpty(resp.Error, resp.Code, "unknown error"))
+	}
+	content := resp.Data.Markdown
+	if opts.Raw {
+		content = string(body)
+	}
+	page := &FetchPage{
+		URL:          firstNonEmpty(resp.Data.Metadata.SourceURL, resp.Data.Metadata.URL, u.String()),
+		Status:       status,
+		ContentType:  firstNonEmpty(resp.Data.Metadata.ContentType, contentType),
+		Bytes:        len(body),
+		Truncated:    truncated,
+		RenderedHTML: true,
+		Extracted:    true,
+		Title:        resp.Data.Metadata.Title,
+		Description:  resp.Data.Metadata.Description,
+		Content:      content,
+	}
+	if page.ContentType == "" {
+		page.ContentType = "text/markdown; charset=utf-8"
+	}
+	return page, nil
+}
+
+type firecrawlScrapeResponse struct {
+	Success bool `json:"success"`
+	Data    struct {
+		Markdown string `json:"markdown"`
+		Metadata struct {
+			Title       string `json:"title"`
+			Description string `json:"description"`
+			SourceURL   string `json:"sourceURL"`
+			URL         string `json:"url"`
+			ContentType string `json:"contentType"`
+		} `json:"metadata"`
+	} `json:"data"`
+	Code  string `json:"code"`
+	Error string `json:"error"`
 }
 
 func extractPageMarkdown(page *FetchPage, doc string, u *url.URL) *FetchPage {
@@ -387,12 +493,48 @@ func fetchDetails(page *FetchPage, output any) map[string]any {
 }
 
 type SearchTool struct {
-	client   HTTPClient
-	endpoint string
+	client     HTTPClient
+	endpoint   string
+	provider   string
+	apiKey     string
+	searchType string
+}
+
+type SearchConfig struct {
+	Provider   string
+	Endpoint   string
+	APIKey     string
+	APIKeyEnv  string
+	SearchType string
 }
 
 func NewSearchTool() types.Tool {
-	endpoint := strings.TrimSpace(os.Getenv("MODU_WEB_SEARCH_ENDPOINT"))
+	return NewSearchToolWithConfig(SearchConfig{})
+}
+
+func NewSearchToolWithConfig(cfg SearchConfig) types.Tool {
+	provider := strings.ToLower(strings.TrimSpace(firstNonEmpty(cfg.Provider, os.Getenv("MODU_WEB_SEARCH_PROVIDER"))))
+	apiKey := providerAPIKey(cfg.APIKey, cfg.APIKeyEnv, "MODU_EXA_API_KEY", "EXA_API_KEY")
+	if provider == "exa" || (provider == "" && apiKey != "") {
+		endpoint := strings.TrimSpace(firstNonEmpty(cfg.Endpoint, os.Getenv("MODU_EXA_SEARCH_ENDPOINT")))
+		if endpoint == "" {
+			endpoint = defaultExaEndpoint
+		}
+		searchType := strings.TrimSpace(firstNonEmpty(cfg.SearchType, os.Getenv("MODU_EXA_SEARCH_TYPE")))
+		if searchType == "" {
+			searchType = "fast"
+		}
+		return newExaSearchTool(endpoint, apiKey, searchType)
+	}
+	switch provider {
+	case "tavily":
+		return newProviderSearchTool("tavily", firstNonEmpty(cfg.Endpoint, os.Getenv("MODU_TAVILY_SEARCH_ENDPOINT"), defaultTavilyEndpoint), providerAPIKey(cfg.APIKey, cfg.APIKeyEnv, "TAVILY_API_KEY", "MODU_TAVILY_API_KEY"), firstNonEmpty(cfg.SearchType, os.Getenv("MODU_TAVILY_SEARCH_DEPTH"), "basic"))
+	case "brave":
+		return newProviderSearchTool("brave", firstNonEmpty(cfg.Endpoint, os.Getenv("MODU_BRAVE_SEARCH_ENDPOINT"), defaultBraveEndpoint), providerAPIKey(cfg.APIKey, cfg.APIKeyEnv, "BRAVE_SEARCH_API_KEY", "MODU_BRAVE_SEARCH_API_KEY"), cfg.SearchType)
+	case "firecrawl":
+		return newProviderSearchTool("firecrawl", firstNonEmpty(cfg.Endpoint, os.Getenv("MODU_FIRECRAWL_SEARCH_ENDPOINT"), defaultFirecrawlSearchEndpoint), providerAPIKey(cfg.APIKey, cfg.APIKeyEnv, "FIRECRAWL_API_KEY", "MODU_FIRECRAWL_API_KEY"), cfg.SearchType)
+	}
+	endpoint := strings.TrimSpace(firstNonEmpty(cfg.Endpoint, os.Getenv("MODU_WEB_SEARCH_ENDPOINT")))
 	if endpoint == "" {
 		endpoint = defaultSearchEndpoint
 	}
@@ -406,6 +548,37 @@ func NewSearchToolWithEndpoint(endpoint string) types.Tool {
 	return &SearchTool{
 		client:   &http.Client{Timeout: 15 * time.Second},
 		endpoint: endpoint,
+		provider: "html",
+	}
+}
+
+func NewExaSearchToolWithEndpoint(endpoint, apiKey string) types.Tool {
+	return newExaSearchTool(endpoint, apiKey, firstNonEmpty(os.Getenv("MODU_EXA_SEARCH_TYPE"), "fast"))
+}
+
+func newExaSearchTool(endpoint, apiKey, searchType string) types.Tool {
+	if strings.TrimSpace(endpoint) == "" {
+		endpoint = defaultExaEndpoint
+	}
+	if strings.TrimSpace(searchType) == "" {
+		searchType = "fast"
+	}
+	return &SearchTool{
+		client:     &http.Client{Timeout: 15 * time.Second},
+		endpoint:   endpoint,
+		provider:   "exa",
+		apiKey:     strings.TrimSpace(apiKey),
+		searchType: strings.TrimSpace(searchType),
+	}
+}
+
+func newProviderSearchTool(provider, endpoint, apiKey, searchType string) types.Tool {
+	return &SearchTool{
+		client:     &http.Client{Timeout: 15 * time.Second},
+		endpoint:   strings.TrimSpace(endpoint),
+		provider:   provider,
+		apiKey:     strings.TrimSpace(apiKey),
+		searchType: strings.TrimSpace(searchType),
 	}
 }
 
@@ -437,6 +610,16 @@ func (t *SearchTool) Execute(ctx context.Context, toolCallID string, args map[st
 		return common.ErrorResult("query is required"), nil
 	}
 	maxResults := boundedInt(args["max_results"], defaultSearchResults, maxSearchResults)
+	switch t.provider {
+	case "exa":
+		return t.executeExa(ctx, query, maxResults)
+	case "tavily":
+		return t.executeTavily(ctx, query, maxResults)
+	case "brave":
+		return t.executeBrave(ctx, query, maxResults)
+	case "firecrawl":
+		return t.executeFirecrawlSearch(ctx, query, maxResults)
+	}
 	searchURL, err := buildSearchURL(t.endpoint, query)
 	if err != nil {
 		return common.ErrorResult(fmt.Sprintf("invalid search endpoint: %v", err)), nil
@@ -478,6 +661,7 @@ func (t *SearchTool) Execute(ctx context.Context, toolCallID string, args map[st
 		})
 	}
 	return textResult(b.String(), map[string]any{
+		"provider":     "html",
 		"query":        query,
 		"status":       status,
 		"content_type": contentType,
@@ -487,9 +671,401 @@ func (t *SearchTool) Execute(ctx context.Context, toolCallID string, args map[st
 }
 
 type searchResult struct {
-	Title   string
-	URL     string
-	Snippet string
+	Title         string
+	URL           string
+	Snippet       string
+	PublishedDate string
+	Author        string
+}
+
+func (t *SearchTool) executeExa(ctx context.Context, query string, maxResults int) (types.ToolResult, error) {
+	if strings.TrimSpace(t.apiKey) == "" {
+		return common.ErrorResult("exa api key is required; set MODU_EXA_API_KEY or EXA_API_KEY"), nil
+	}
+	searchType := strings.TrimSpace(t.searchType)
+	if searchType == "" {
+		searchType = "fast"
+	}
+	payload := map[string]any{
+		"query":      query,
+		"numResults": maxResults,
+		"type":       searchType,
+		"contents": map[string]any{
+			"highlights": true,
+		},
+	}
+	body, status, contentType, truncated, err := postJSON(ctx, t.client, t.endpoint, t.apiKey, payload, defaultSearchMaxBytes)
+	if err != nil {
+		return common.ErrorResult(fmt.Sprintf("search failed: %v", err)), nil
+	}
+	if statusCode(status) >= 400 {
+		return common.ErrorResult(fmt.Sprintf("search failed: %s: %s", status, common.PreviewText(string(body), common.TextPreviewOptions{MaxLines: 3, MaxBytes: 512}).Text)), nil
+	}
+	resp, err := parseExaSearchResponse(body, maxResults)
+	if err != nil {
+		return common.ErrorResult(fmt.Sprintf("search failed: invalid exa response: %v", err)), nil
+	}
+	if len(resp.Results) == 0 {
+		return textResult(fmt.Sprintf("No search results found for %q.", query), map[string]any{
+			"provider":     "exa",
+			"query":        query,
+			"status":       status,
+			"content_type": contentType,
+			"truncated":    truncated,
+			"request_id":   resp.RequestID,
+			"search_type":  searchType,
+			"exa_type":     resp.ResolvedType,
+			"cost_dollars": resp.CostDollars,
+			"results":      []map[string]string{},
+		}), nil
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Search results for %q:\nProvider: exa\n", query)
+	for i, result := range resp.Results {
+		fmt.Fprintf(&b, "\n%d. %s\nURL: %s\n", i+1, result.Title, result.URL)
+		if result.PublishedDate != "" {
+			fmt.Fprintf(&b, "Published: %s\n", result.PublishedDate)
+		}
+		if result.Author != "" {
+			fmt.Fprintf(&b, "Author: %s\n", result.Author)
+		}
+		if result.Snippet != "" {
+			fmt.Fprintf(&b, "Snippet: %s\n", result.Snippet)
+		}
+	}
+	if truncated {
+		fmt.Fprintf(&b, "\n... (search response truncated after %d bytes)", defaultSearchMaxBytes)
+	}
+	details := make([]map[string]string, 0, len(resp.Results))
+	for _, result := range resp.Results {
+		details = append(details, map[string]string{
+			"title":          result.Title,
+			"url":            result.URL,
+			"snippet":        result.Snippet,
+			"published_date": result.PublishedDate,
+			"author":         result.Author,
+		})
+	}
+	return textResult(b.String(), map[string]any{
+		"provider":     "exa",
+		"query":        query,
+		"status":       status,
+		"content_type": contentType,
+		"truncated":    truncated,
+		"request_id":   resp.RequestID,
+		"search_type":  searchType,
+		"exa_type":     resp.ResolvedType,
+		"cost_dollars": resp.CostDollars,
+		"results":      details,
+	}), nil
+}
+
+type exaSearchResponse struct {
+	Results      []exaSearchResult `json:"results"`
+	RequestID    string            `json:"requestId"`
+	ResolvedType string            `json:"resolvedSearchType"`
+	CostDollars  map[string]any    `json:"costDollars"`
+}
+
+type exaSearchResult struct {
+	Title         string   `json:"title"`
+	URL           string   `json:"url"`
+	PublishedDate string   `json:"publishedDate"`
+	Author        string   `json:"author"`
+	Text          string   `json:"text"`
+	Summary       string   `json:"summary"`
+	Highlights    []string `json:"highlights"`
+	Snippet       string
+}
+
+func parseExaSearchResponse(body []byte, maxResults int) (exaSearchResponse, error) {
+	var resp exaSearchResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return exaSearchResponse{}, err
+	}
+	out := make([]exaSearchResult, 0, len(resp.Results))
+	seen := map[string]bool{}
+	for _, result := range resp.Results {
+		if len(out) >= maxResults {
+			break
+		}
+		result.Title = normalizeSpace(result.Title)
+		result.URL = strings.TrimSpace(result.URL)
+		if result.Title == "" || result.URL == "" || seen[result.URL] {
+			continue
+		}
+		seen[result.URL] = true
+		result.Snippet = exaSnippet(result)
+		out = append(out, result)
+	}
+	resp.Results = out
+	return resp, nil
+}
+
+func exaSnippet(result exaSearchResult) string {
+	for _, highlight := range result.Highlights {
+		if snippet := common.TruncateLine(normalizeSpace(highlight), 360); snippet != "" {
+			return snippet
+		}
+	}
+	if snippet := common.TruncateLine(normalizeSpace(result.Summary), 360); snippet != "" {
+		return snippet
+	}
+	return common.TruncateLine(normalizeSpace(result.Text), 360)
+}
+
+func (t *SearchTool) executeTavily(ctx context.Context, query string, maxResults int) (types.ToolResult, error) {
+	if strings.TrimSpace(t.apiKey) == "" {
+		return common.ErrorResult("tavily api key is required; set TAVILY_API_KEY or settings.webSearch.apiKeyEnv"), nil
+	}
+	searchDepth := firstNonEmpty(t.searchType, "basic")
+	payload := map[string]any{
+		"query":        query,
+		"max_results":  maxResults,
+		"search_depth": searchDepth,
+	}
+	body, status, contentType, truncated, err := postJSONWithHeaders(ctx, t.client, t.endpoint, payload, defaultSearchMaxBytes, map[string]string{
+		"Authorization": "Bearer " + t.apiKey,
+	})
+	if err != nil {
+		return common.ErrorResult(fmt.Sprintf("search failed: %v", err)), nil
+	}
+	if statusCode(status) >= 400 {
+		return common.ErrorResult(fmt.Sprintf("search failed: %s: %s", status, common.PreviewText(string(body), common.TextPreviewOptions{MaxLines: 3, MaxBytes: 512}).Text)), nil
+	}
+	var resp tavilySearchResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return common.ErrorResult(fmt.Sprintf("search failed: invalid tavily response: %v", err)), nil
+	}
+	results := make([]searchResult, 0, len(resp.Results))
+	seen := map[string]bool{}
+	for _, result := range resp.Results {
+		if len(results) >= maxResults {
+			break
+		}
+		title := normalizeSpace(result.Title)
+		u := strings.TrimSpace(result.URL)
+		if title == "" || u == "" || seen[u] {
+			continue
+		}
+		seen[u] = true
+		results = append(results, searchResult{
+			Title:         title,
+			URL:           u,
+			Snippet:       common.TruncateLine(normalizeSpace(result.Content), 360),
+			PublishedDate: result.PublishedDate,
+		})
+	}
+	return formatSearchResults("tavily", query, status, contentType, truncated, results, map[string]any{
+		"request_id":    resp.RequestID,
+		"response_time": resp.ResponseTime,
+		"search_depth":  searchDepth,
+		"usage":         resp.Usage,
+	}), nil
+}
+
+type tavilySearchResponse struct {
+	Results []struct {
+		Title         string `json:"title"`
+		URL           string `json:"url"`
+		Content       string `json:"content"`
+		PublishedDate string `json:"published_date"`
+	} `json:"results"`
+	ResponseTime any            `json:"response_time"`
+	RequestID    string         `json:"request_id"`
+	Usage        map[string]any `json:"usage"`
+}
+
+func (t *SearchTool) executeBrave(ctx context.Context, query string, maxResults int) (types.ToolResult, error) {
+	if strings.TrimSpace(t.apiKey) == "" {
+		return common.ErrorResult("brave api key is required; set BRAVE_SEARCH_API_KEY or settings.webSearch.apiKeyEnv"), nil
+	}
+	searchURL, err := buildBraveSearchURL(t.endpoint, query, maxResults)
+	if err != nil {
+		return common.ErrorResult(fmt.Sprintf("invalid brave search endpoint: %v", err)), nil
+	}
+	body, status, contentType, truncated, err := fetchWithHeaders(ctx, t.client, searchURL, defaultSearchMaxBytes, map[string]string{
+		"Accept":               "application/json",
+		"X-Subscription-Token": t.apiKey,
+	})
+	if err != nil {
+		return common.ErrorResult(fmt.Sprintf("search failed: %v", err)), nil
+	}
+	if statusCode(status) >= 400 {
+		return common.ErrorResult(fmt.Sprintf("search failed: %s: %s", status, common.PreviewText(string(body), common.TextPreviewOptions{MaxLines: 3, MaxBytes: 512}).Text)), nil
+	}
+	var resp braveSearchResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return common.ErrorResult(fmt.Sprintf("search failed: invalid brave response: %v", err)), nil
+	}
+	results := make([]searchResult, 0, len(resp.Web.Results))
+	seen := map[string]bool{}
+	for _, result := range resp.Web.Results {
+		if len(results) >= maxResults {
+			break
+		}
+		title := normalizeSpace(result.Title)
+		u := strings.TrimSpace(result.URL)
+		if title == "" || u == "" || seen[u] {
+			continue
+		}
+		seen[u] = true
+		snippet := result.Description
+		if snippet == "" && len(result.ExtraSnippets) > 0 {
+			snippet = result.ExtraSnippets[0]
+		}
+		results = append(results, searchResult{
+			Title:         title,
+			URL:           u,
+			Snippet:       common.TruncateLine(normalizeSpace(snippet), 360),
+			PublishedDate: result.Age,
+		})
+	}
+	return formatSearchResults("brave", query, status, contentType, truncated, results, nil), nil
+}
+
+type braveSearchResponse struct {
+	Web struct {
+		Results []struct {
+			Title         string   `json:"title"`
+			URL           string   `json:"url"`
+			Description   string   `json:"description"`
+			Age           string   `json:"age"`
+			ExtraSnippets []string `json:"extra_snippets"`
+		} `json:"results"`
+	} `json:"web"`
+}
+
+func (t *SearchTool) executeFirecrawlSearch(ctx context.Context, query string, maxResults int) (types.ToolResult, error) {
+	if strings.TrimSpace(t.apiKey) == "" {
+		return common.ErrorResult("firecrawl api key is required; set FIRECRAWL_API_KEY or settings.webSearch.apiKeyEnv"), nil
+	}
+	payload := map[string]any{
+		"query":   query,
+		"limit":   maxResults,
+		"sources": []any{"web"},
+	}
+	body, status, contentType, truncated, err := postJSONWithHeaders(ctx, t.client, t.endpoint, payload, defaultSearchMaxBytes, map[string]string{
+		"Authorization": "Bearer " + t.apiKey,
+	})
+	if err != nil {
+		return common.ErrorResult(fmt.Sprintf("search failed: %v", err)), nil
+	}
+	if statusCode(status) >= 400 {
+		return common.ErrorResult(fmt.Sprintf("search failed: %s: %s", status, common.PreviewText(string(body), common.TextPreviewOptions{MaxLines: 3, MaxBytes: 512}).Text)), nil
+	}
+	var resp firecrawlSearchResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return common.ErrorResult(fmt.Sprintf("search failed: invalid firecrawl response: %v", err)), nil
+	}
+	if !resp.Success && resp.Error != "" {
+		return common.ErrorResult("search failed: " + resp.Error), nil
+	}
+	results := make([]searchResult, 0, len(resp.Data))
+	seen := map[string]bool{}
+	for _, result := range resp.Data {
+		if len(results) >= maxResults {
+			break
+		}
+		u := firstNonEmpty(result.URL, result.Metadata.SourceURL, result.Metadata.URL)
+		title := firstNonEmpty(result.Title, result.Metadata.Title)
+		if title == "" || u == "" || seen[u] {
+			continue
+		}
+		seen[u] = true
+		results = append(results, searchResult{
+			Title:   normalizeSpace(title),
+			URL:     strings.TrimSpace(u),
+			Snippet: common.TruncateLine(normalizeSpace(firstNonEmpty(result.Description, result.Markdown, result.Metadata.Description)), 360),
+		})
+	}
+	return formatSearchResults("firecrawl", query, status, contentType, truncated, results, map[string]any{
+		"id":           resp.ID,
+		"warning":      resp.Warning,
+		"credits_used": resp.CreditsUsed,
+	}), nil
+}
+
+type firecrawlSearchResponse struct {
+	Success bool `json:"success"`
+	Data    []struct {
+		Title       string `json:"title"`
+		URL         string `json:"url"`
+		Description string `json:"description"`
+		Markdown    string `json:"markdown"`
+		Metadata    struct {
+			Title       string `json:"title"`
+			Description string `json:"description"`
+			SourceURL   string `json:"sourceURL"`
+			URL         string `json:"url"`
+		} `json:"metadata"`
+	} `json:"data"`
+	ID          string `json:"id"`
+	Warning     string `json:"warning"`
+	CreditsUsed int    `json:"creditsUsed"`
+	Error       string `json:"error"`
+}
+
+func formatSearchResults(provider, query, status, contentType string, truncated bool, results []searchResult, extra map[string]any) types.ToolResult {
+	details := map[string]any{
+		"provider":     provider,
+		"query":        query,
+		"status":       status,
+		"content_type": contentType,
+		"truncated":    truncated,
+	}
+	if extra != nil {
+		for k, v := range extra {
+			if detailValuePresent(v) {
+				details[k] = v
+			}
+		}
+	}
+	if len(results) == 0 {
+		details["results"] = []map[string]string{}
+		return textResult(fmt.Sprintf("No search results found for %q.", query), details)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Search results for %q:\n", query)
+	if provider != "html" {
+		fmt.Fprintf(&b, "Provider: %s\n", provider)
+	}
+	resultDetails := make([]map[string]string, 0, len(results))
+	for i, result := range results {
+		fmt.Fprintf(&b, "\n%d. %s\nURL: %s\n", i+1, result.Title, result.URL)
+		if result.PublishedDate != "" {
+			fmt.Fprintf(&b, "Published: %s\n", result.PublishedDate)
+		}
+		if result.Author != "" {
+			fmt.Fprintf(&b, "Author: %s\n", result.Author)
+		}
+		if result.Snippet != "" {
+			fmt.Fprintf(&b, "Snippet: %s\n", result.Snippet)
+		}
+		resultDetails = append(resultDetails, map[string]string{
+			"title":          result.Title,
+			"url":            result.URL,
+			"snippet":        result.Snippet,
+			"published_date": result.PublishedDate,
+			"author":         result.Author,
+		})
+	}
+	if truncated {
+		fmt.Fprintf(&b, "\n... (search response truncated after %d bytes)", defaultSearchMaxBytes)
+	}
+	details["results"] = resultDetails
+	return textResult(b.String(), details)
+}
+
+func detailValuePresent(v any) bool {
+	if v == nil {
+		return false
+	}
+	if s, ok := v.(string); ok {
+		return strings.TrimSpace(s) != ""
+	}
+	return true
 }
 
 func validateHTTPURL(raw string) (*url.URL, error) {
@@ -511,6 +1087,10 @@ func validateHTTPURL(raw string) (*url.URL, error) {
 }
 
 func fetch(ctx context.Context, client HTTPClient, target string, maxBytes int) ([]byte, string, string, bool, error) {
+	return fetchWithHeaders(ctx, client, target, maxBytes, nil)
+}
+
+func fetchWithHeaders(ctx context.Context, client HTTPClient, target string, maxBytes int, headers map[string]string) ([]byte, string, string, bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, "", "", false, err
@@ -518,6 +1098,11 @@ func fetch(ctx context.Context, client HTTPClient, target string, maxBytes int) 
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain,application/json;q=0.8,*/*;q=0.7")
 	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	for k, v := range headers {
+		if strings.TrimSpace(k) != "" && strings.TrimSpace(v) != "" {
+			req.Header.Set(k, v)
+		}
+	}
 	if req.URL != nil && strings.EqualFold(req.URL.Host, "mp.weixin.qq.com") {
 		req.Header.Set("Referer", "https://mp.weixin.qq.com/")
 	}
@@ -535,6 +1120,56 @@ func fetch(ctx context.Context, client HTTPClient, target string, maxBytes int) 
 		data = data[:maxBytes]
 	}
 	return data, resp.Status, resp.Header.Get("Content-Type"), truncated, nil
+}
+
+func postJSON(ctx context.Context, client HTTPClient, target, apiKey string, payload any, maxBytes int) ([]byte, string, string, bool, error) {
+	return postJSONWithHeaders(ctx, client, target, payload, maxBytes, map[string]string{"x-api-key": apiKey})
+}
+
+func postJSONWithHeaders(ctx context.Context, client HTTPClient, target string, payload any, maxBytes int, headers map[string]string) ([]byte, string, string, bool, error) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, "", "", false, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(data))
+	if err != nil {
+		return nil, "", "", false, err
+	}
+	req.Header.Set("User-Agent", defaultFetchUserAgent)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range headers {
+		if strings.TrimSpace(k) != "" && strings.TrimSpace(v) != "" {
+			req.Header.Set(k, v)
+		}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, "", "", false, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxBytes+1)))
+	if err != nil {
+		return nil, "", "", false, err
+	}
+	truncated := len(body) > maxBytes
+	if truncated {
+		body = body[:maxBytes]
+	}
+	return body, resp.Status, resp.Header.Get("Content-Type"), truncated, nil
+}
+
+func buildBraveSearchURL(endpoint, query string, maxResults int) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(endpoint))
+	if err != nil {
+		return "", err
+	}
+	q := u.Query()
+	q.Set("q", query)
+	q.Set("count", strconv.Itoa(maxResults))
+	q.Set("result_filter", "web")
+	u.RawQuery = q.Encode()
+	return u.String(), nil
 }
 
 func buildSearchURL(endpoint, query string) (string, error) {
@@ -718,6 +1353,22 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func envValue(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	return os.Getenv(name)
+}
+
+func providerAPIKey(value, envName string, fallbackEnvNames ...string) string {
+	values := []string{value, envValue(envName)}
+	for _, name := range fallbackEnvNames {
+		values = append(values, os.Getenv(name))
+	}
+	return strings.TrimSpace(firstNonEmpty(values...))
 }
 
 func stripTagsFallback(s string) string {

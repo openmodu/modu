@@ -347,10 +347,18 @@ func (cs *engine) toolsForFork(cwd string, requested []string) []types.Tool {
 	if cwd != cs.cwd {
 		tools = cs.rebindToolsToCwd(cwd, tools)
 	}
-	return ensureRequestedReadOnlyTools(tools, requested, cwd)
+	return cs.ensureRequestedReadOnlyTools(tools, requested, cwd)
 }
 
 func ensureRequestedReadOnlyTools(active []types.Tool, requested []string, cwd string) []types.Tool {
+	return ensureRequestedReadOnlyToolsWithContext(active, requested, cwd, types.ToolContext{Cwd: cwd})
+}
+
+func (cs *engine) ensureRequestedReadOnlyTools(active []types.Tool, requested []string, cwd string) []types.Tool {
+	return ensureRequestedReadOnlyToolsWithContext(active, requested, cwd, cs.toolContext(cwd))
+}
+
+func ensureRequestedReadOnlyToolsWithContext(active []types.Tool, requested []string, cwd string, ctx types.ToolContext) []types.Tool {
 	if len(requested) == 0 {
 		return active
 	}
@@ -376,7 +384,7 @@ func ensureRequestedReadOnlyTools(active []types.Tool, requested []string, cwd s
 			have[name] = true
 		}
 	}
-	for _, tool := range toolpkg.ResearchTools() {
+	for _, tool := range toolpkg.ResearchTools(ctx) {
 		name := tool.Name()
 		if want[name] && !have[name] {
 			out = append(out, tool)
