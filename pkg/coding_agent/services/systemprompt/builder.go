@@ -36,8 +36,7 @@ For non-coding tasks:
 - Answer directly when no repository inspection is needed
 - Use available tools when the request requires current machine, repository, command-line, or external information
 - Do not refuse solely because the task is not about code; only refuse when the request is unsafe or impossible with the available tools
-- If the user asks for current facts such as weather, time-sensitive data, or remote service information, use a suitable safe command or explain what access is missing
-
+	
 # Tool Use
 
 Do not use ` + "`" + `bash` + "`" + ` when a dedicated tool can do the job. Dedicated tools make tool calls easier to review and keep results compact:
