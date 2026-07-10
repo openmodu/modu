@@ -61,6 +61,15 @@ memoryTool = false
 
 [settings.permissions]
 defaultMode = "auto"
+
+[settings.webSearch]
+provider = "exa"
+apiKeyEnv = "EXA_API_KEY"
+searchType = "fast"
+
+[settings.webFetch]
+provider = "firecrawl"
+apiKeyEnv = "FIRECRAWL_API_KEY"
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -83,6 +92,12 @@ defaultMode = "auto"
 	}
 	if cfg.Permissions.DefaultMode != "auto" {
 		t.Fatalf("permissions.defaultMode = %q, want auto", cfg.Permissions.DefaultMode)
+	}
+	if cfg.WebSearch.Provider != "exa" || cfg.WebSearch.APIKeyEnv != "EXA_API_KEY" || cfg.WebSearch.SearchType != "fast" {
+		t.Fatalf("webSearch config not loaded: %#v", cfg.WebSearch)
+	}
+	if cfg.WebFetch.Provider != "firecrawl" || cfg.WebFetch.APIKeyEnv != "FIRECRAWL_API_KEY" {
+		t.Fatalf("webFetch config not loaded: %#v", cfg.WebFetch)
 	}
 }
 
@@ -127,6 +142,10 @@ func TestSaveGlobalConfigTomlOmitsDefaultsAndEmptySections(t *testing.T) {
 	cfg.DisableWorkflows = true
 	cfg.Features.MemoryTool = Ptr(false)
 	cfg.Permissions.DenyTools = []string{"bash"}
+	cfg.WebSearch.Provider = "exa"
+	cfg.WebSearch.APIKeyEnv = "EXA_API_KEY"
+	cfg.WebFetch.Provider = "firecrawl"
+	cfg.WebFetch.APIKeyEnv = "FIRECRAWL_API_KEY"
 
 	if err := Save(cfg, GlobalConfigPath(agentDir)); err != nil {
 		t.Fatal(err)
@@ -136,7 +155,7 @@ func TestSaveGlobalConfigTomlOmitsDefaultsAndEmptySections(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
-	for _, want := range []string{`[settings]`, `disableWorkflows = true`, `[settings.features]`, `memoryTool = false`, `[settings.permissions]`, `denyTools = ["bash"]`} {
+	for _, want := range []string{`[settings]`, `disableWorkflows = true`, `[settings.features]`, `memoryTool = false`, `[settings.permissions]`, `denyTools = ["bash"]`, `[settings.webSearch]`, `provider = "exa"`, `apiKeyEnv = "EXA_API_KEY"`, `[settings.webFetch]`, `provider = "firecrawl"`, `apiKeyEnv = "FIRECRAWL_API_KEY"`} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("saved config missing %q:\n%s", want, text)
 		}

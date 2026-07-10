@@ -16,6 +16,26 @@ High-priority gaps identified before this round:
 
 ## Completed In This Round
 
+- Added Exa Search API support to the opt-in `web_search` tool. Setting
+  `MODU_WEB_SEARCH_PROVIDER=exa` plus `MODU_EXA_API_KEY` or `EXA_API_KEY`
+  switches search to `POST https://api.exa.ai/search`; if an Exa key exists
+  and no provider is set, Exa is selected automatically. The integration stays
+  on the low-latency Search endpoint (`MODU_EXA_SEARCH_TYPE`, default `fast`)
+  and leaves Exa Deep/Agent APIs out of scope. Focused tests use local
+  `httptest` servers and verify JSON POST shape, API-key handling, result
+  formatting, and the missing-key error path.
+- Moved `web_search` provider selection into the normal Modu config path:
+  `~/.modu/config.toml` can now set `[settings.webSearch] provider = "exa"`,
+  `apiKeyEnv = "EXA_API_KEY"`, `endpoint`, and `searchType`. Environment
+  variables remain a compatibility fallback, while session and forked
+  workflow/subagent tool construction now pass the loaded settings through
+  `ToolContext`.
+- Added Tavily, Brave Search API, and Firecrawl Search adapters behind the
+  same `web_search` tool and `[settings.webSearch]` config shape. Added
+  Firecrawl Scrape support behind `web_fetch` via `[settings.webFetch]`
+  `provider = "firecrawl"`. Focused tests verify each provider's HTTP method,
+  auth header, request payload/query params, and normalized title/URL/snippet
+  output without calling external services.
 - Continued the loop-engineering live audit on 2026-07-04: GitHub open issues
   were empty, recent CI was green, historical failures were old Apr-May runs,
   and no real actionable triage finding existed to justify a draft PR.

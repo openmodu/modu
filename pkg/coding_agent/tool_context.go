@@ -10,5 +10,9 @@ func (s *engine) toolContext(cwd string) types.ToolContext {
 	if s != nil && s.artifactStore != nil {
 		values[tools.ValueArtifacts] = s.artifactStore
 	}
+	if s != nil && s.config != nil {
+		values[tools.ValueWebSearch] = s.config.WebSearch
+		values[tools.ValueWebFetch] = s.config.WebFetch
+	}
 	return types.ToolContext{Cwd: cwd, Values: values}
 }

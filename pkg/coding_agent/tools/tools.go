@@ -1,6 +1,7 @@
 package tools
 
 import (
+	agentconfig "github.com/openmodu/modu/pkg/coding_agent/foundation/config"
 	backendtask "github.com/openmodu/modu/pkg/coding_agent/tools/backend_task"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/bash"
 	"github.com/openmodu/modu/pkg/coding_agent/tools/common"
@@ -39,6 +40,8 @@ const (
 	ValueWorktree    = "worktree"
 	ValueContext     = "context_remaining"
 	ValueArtifacts   = "artifacts"
+	ValueWebSearch   = "web_search"
+	ValueWebFetch    = "web_fetch"
 )
 
 type DefaultProvider struct {
@@ -104,9 +107,9 @@ func (p DefaultProvider) Rebind(tool types.Tool, ctx types.ToolContext) (types.T
 	case "ls":
 		return ls.NewToolWithArtifacts(ctx.Cwd, artifacts), true
 	case "web_fetch":
-		return webtools.NewFetchToolWithArtifacts(artifacts), true
+		return newFetchTool(ctx, artifacts), true
 	case "web_search":
-		return webtools.NewSearchTool(), true
+		return newSearchTool(ctx), true
 	case "read_tool_result":
 		return toolresult.NewTool(artifacts), true
 	default:
@@ -187,9 +190,34 @@ func AllTools(cwd string) []types.Tool {
 
 // ResearchTools returns opt-in network research tools. They are not part of
 // the default coding set and must be explicitly requested by child agents.
-func ResearchTools() []types.Tool {
-	return []types.Tool{
-		webtools.NewFetchTool(),
-		webtools.NewSearchTool(),
+func ResearchTools(ctxs ...types.ToolContext) []types.Tool {
+	var ctx types.ToolContext
+	if len(ctxs) > 0 {
+		ctx = ctxs[0]
 	}
+	return []types.Tool{
+		newFetchTool(ctx, nil),
+		newSearchTool(ctx),
+	}
+}
+
+func newFetchTool(ctx types.ToolContext, artifacts *common.ArtifactStore) types.Tool {
+	cfg, _ := ctx.Value(ValueWebFetch).(agentconfig.WebFetchConfig)
+	return webtools.NewFetchToolWithConfig(artifacts, webtools.FetchConfig{
+		Provider:  cfg.Provider,
+		Endpoint:  cfg.Endpoint,
+		APIKey:    cfg.APIKey,
+		APIKeyEnv: cfg.APIKeyEnv,
+	})
+}
+
+func newSearchTool(ctx types.ToolContext) types.Tool {
+	cfg, _ := ctx.Value(ValueWebSearch).(agentconfig.WebSearchConfig)
+	return webtools.NewSearchToolWithConfig(webtools.SearchConfig{
+		Provider:   cfg.Provider,
+		Endpoint:   cfg.Endpoint,
+		APIKey:     cfg.APIKey,
+		APIKeyEnv:  cfg.APIKeyEnv,
+		SearchType: cfg.SearchType,
+	})
 }

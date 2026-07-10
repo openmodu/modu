@@ -69,6 +69,12 @@ type Config struct {
 
 	// Permissions controls host-side tool permission policy.
 	Permissions PermissionConfig `json:"permissions,omitempty" toml:"permissions,omitempty"`
+
+	// WebSearch configures the opt-in web_search research tool.
+	WebSearch WebSearchConfig `json:"webSearch,omitempty" toml:"webSearch,omitempty"`
+
+	// WebFetch configures the opt-in web_fetch research tool.
+	WebFetch WebFetchConfig `json:"webFetch,omitempty" toml:"webFetch,omitempty"`
 }
 
 type FeatureConfig struct {
@@ -85,6 +91,21 @@ type PermissionConfig struct {
 	DenyTools         []string `json:"denyTools,omitempty" toml:"denyTools,omitempty"`
 	AllowBashPrefixes []string `json:"allowBashPrefixes,omitempty" toml:"allowBashPrefixes,omitempty"`
 	DenyBashPrefixes  []string `json:"denyBashPrefixes,omitempty" toml:"denyBashPrefixes,omitempty"`
+}
+
+type WebSearchConfig struct {
+	Provider   string `json:"provider,omitempty" toml:"provider,omitempty"`
+	Endpoint   string `json:"endpoint,omitempty" toml:"endpoint,omitempty"`
+	APIKey     string `json:"apiKey,omitempty" toml:"apiKey,omitempty"`
+	APIKeyEnv  string `json:"apiKeyEnv,omitempty" toml:"apiKeyEnv,omitempty"`
+	SearchType string `json:"searchType,omitempty" toml:"searchType,omitempty"`
+}
+
+type WebFetchConfig struct {
+	Provider  string `json:"provider,omitempty" toml:"provider,omitempty"`
+	Endpoint  string `json:"endpoint,omitempty" toml:"endpoint,omitempty"`
+	APIKey    string `json:"apiKey,omitempty" toml:"apiKey,omitempty"`
+	APIKeyEnv string `json:"apiKeyEnv,omitempty" toml:"apiKeyEnv,omitempty"`
 }
 
 type HarnessConfig struct {
@@ -299,6 +320,8 @@ func CompactSettingsMap(cfg *Config) map[string]any {
 	putHarness(out, cfg.Harness, def.Harness)
 	putFeatures(out, cfg, def)
 	putPermissions(out, cfg.Permissions)
+	putWebSearch(out, cfg.WebSearch)
+	putWebFetch(out, cfg.WebFetch)
 	return out
 }
 
@@ -401,5 +424,28 @@ func putPermissions(out map[string]any, value PermissionConfig) {
 	}
 	if len(section) > 0 {
 		out["permissions"] = section
+	}
+}
+
+func putWebSearch(out map[string]any, value WebSearchConfig) {
+	section := map[string]any{}
+	putString(section, "provider", value.Provider, "")
+	putString(section, "endpoint", value.Endpoint, "")
+	putString(section, "apiKey", value.APIKey, "")
+	putString(section, "apiKeyEnv", value.APIKeyEnv, "")
+	putString(section, "searchType", value.SearchType, "")
+	if len(section) > 0 {
+		out["webSearch"] = section
+	}
+}
+
+func putWebFetch(out map[string]any, value WebFetchConfig) {
+	section := map[string]any{}
+	putString(section, "provider", value.Provider, "")
+	putString(section, "endpoint", value.Endpoint, "")
+	putString(section, "apiKey", value.APIKey, "")
+	putString(section, "apiKeyEnv", value.APIKeyEnv, "")
+	if len(section) > 0 {
+		out["webFetch"] = section
 	}
 }
