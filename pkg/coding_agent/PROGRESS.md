@@ -16,6 +16,24 @@ High-priority gaps identified before this round:
 
 ## Completed In This Round
 
+- Added Codex-style explicit-ID lookup across all cwd-specific session
+  directories. `--resume <id>`, `ResumeByID`, and TUI `/resume <prefix>` can
+  now restore project A history while invoked from project B, without creating
+  an empty project B session or parsing large JSONL transcripts during lookup.
+  Interactive resume now matches Codex's choice order: session directory A is
+  the default, current directory B is the second option, and headless resume
+  uses A. The selected cwd is propagated to the footer, runtime paths, tools,
+  project resources, memory, prompt templates, subagents, and system prompt.
+  Unit and CLI/TUI integration tests cover both choices, exact IDs, global
+  unique prefixes, ambiguity, missing IDs, path traversal rejection, restored
+  history, prompt copy/order, footer refresh, and resource rebinding. The CLI test
+  compares physical paths because macOS temp paths may spell the same directory
+  as `/var/...` and `/private/var/...`. Repository-wide `go test ./...` passes
+  every other package but still exposes the pre-existing
+  `TestDefaultSystemPromptAllowsNonCodingTasks` mismatch: that test expects the
+  removed sentence `If the user asks for current facts such as weather`, while
+  `defaultSystemPrompt` no longer contains it; this resume change does not touch
+  the system-prompt package.
 - Added Exa Search API support to the opt-in `web_search` tool. Setting
   `MODU_WEB_SEARCH_PROVIDER=exa` plus `MODU_EXA_API_KEY` or `EXA_API_KEY`
   switches search to `POST https://api.exa.ai/search`; if an Exa key exists

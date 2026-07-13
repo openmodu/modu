@@ -33,6 +33,9 @@ func (s *engine) EmitWorktreeRemoved(path string) { s.runHarnessWorktreeRemove(p
 func (s *engine) SwitchCwd(newCwd string) {
 	oldCwd := s.cwd
 	s.cwd = newCwd
+	if s.promptBuilder != nil {
+		s.promptBuilder.SetCwd(newCwd)
+	}
 	s.refreshToolsForCwd(newCwd)
 	s.refreshDynamicSystemPrompt()
 	s.runHarnessCwdChanged(oldCwd, newCwd)

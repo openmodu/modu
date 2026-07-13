@@ -219,8 +219,11 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 	})
 	sendFooter := func() {}
 
-	if !noApprove {
-		session.SetPrompter(&moduTUIPrompter{ctx: ctx, send: send})
+	session.SetPrompter(&moduTUIPrompter{ctx: ctx, send: send})
+	if noApprove {
+		// --no-approve skips only tool approval. Other interactive choices,
+		// including the cross-directory resume cwd prompt, stay available.
+		session.SetToolApprovalCallback(nil)
 	}
 	historyFile := session.InputHistoryFile()
 	inputHistory, _ := loadModuTUIInputHistory(historyFile)
@@ -897,6 +900,7 @@ func runModuTUISlash(ctx context.Context, line string, session *coding_agent.Cod
 		// leaving the screen showing the previous conversation.
 		if session.GetSessionFile() != prevSessionFile {
 			send(modutui.SetMessagesMsg{Messages: messagesFromSessionTranscript(session)})
+			send(modutui.SetFooterMsg{Footer: moduTUIFooter(session)})
 		}
 		if text := printer.Text(); text != "" {
 			send(modutui.AppendMessageMsg{Message: modutui.Message{Role: modutui.RoleAssistant, Text: text, Preformatted: true}})

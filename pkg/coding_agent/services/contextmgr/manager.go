@@ -173,6 +173,18 @@ func (m *Manager) MarkInitialContext(paths []string) {
 	}
 }
 
+// SetResources replaces the cwd-bound resource loader and resets the context
+// paths already included in the system prompt.
+func (m *Manager) SetResources(loader *resource.Loader, initialPaths []string) {
+	m.contextMu.Lock()
+	defer m.contextMu.Unlock()
+	m.deps.Resources = loader
+	m.loadedContexts = make(map[string]struct{}, len(initialPaths))
+	for _, path := range initialPaths {
+		m.loadedContexts[path] = struct{}{}
+	}
+}
+
 // Compact summarizes the conversation and replaces it with the summary.
 func (m *Manager) Compact(ctx context.Context) error {
 	_, err := m.CompactIfNeeded(ctx)

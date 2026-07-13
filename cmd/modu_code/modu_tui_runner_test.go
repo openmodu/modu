@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -3358,12 +3359,18 @@ func TestRunModuTUISlashResumeReplaysTargetHistory(t *testing.T) {
 }
 
 func TestRunModuTUISlashResumeAcceptsIDPrefix(t *testing.T) {
-	cwd := t.TempDir()
+	projectA := filepath.Join(t.TempDir(), "project-a")
+	projectB := filepath.Join(t.TempDir(), "project-b")
+	for _, dir := range []string{projectA, projectB} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
 	agentDir := t.TempDir()
-	oldPath, oldID := craftSavedSession(t, agentDir, cwd, "old-run", "prefix resume works")
+	oldPath, oldID := craftSavedSession(t, agentDir, projectA, "old-run", "prefix resume works")
 
 	current, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
-		Cwd:       cwd,
+		Cwd:       projectB,
 		AgentDir:  agentDir,
 		Model:     &types.Model{ID: "test", Name: "Test", ProviderID: "test"},
 		GetAPIKey: func(string) (string, error) { return "", nil },
@@ -3371,6 +3378,13 @@ func TestRunModuTUISlashResumeAcceptsIDPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var promptTitle string
+	var promptOptions []string
+	current.SetExtensionSelectCallback(func(title string, options []string) string {
+		promptTitle = title
+		promptOptions = append([]string(nil), options...)
+		return options[0]
+	})
 
 	var sent []tea.Msg
 	runModuTUISlash(context.Background(), "/resume "+oldID[:8], current, current.GetModel(), CommandHooks{}, func(msg tea.Msg) {
@@ -3380,16 +3394,39 @@ func TestRunModuTUISlashResumeAcceptsIDPrefix(t *testing.T) {
 	if current.GetSessionFile() != oldPath {
 		t.Fatalf("id-prefix resume did not switch: got %q, want %q", current.GetSessionFile(), oldPath)
 	}
+	if promptTitle != "Choose working directory to resume this session" {
+		t.Fatalf("prompt title = %q", promptTitle)
+	}
+	wantOptions := []string{
+		"Use session directory (" + projectA + ")",
+		"Use current directory (" + projectB + ")",
+	}
+	if !reflect.DeepEqual(promptOptions, wantOptions) {
+		t.Fatalf("prompt options = %#v, want %#v", promptOptions, wantOptions)
+	}
+	if got := current.Cwd(); got != projectA {
+		t.Fatalf("resume cwd = %q, want session cwd %q", got, projectA)
+	}
+	footerUpdated := false
+	historyReplayed := false
 	for _, msg := range sent {
+		if m, ok := msg.(modutui.SetFooterMsg); ok && m.Footer == moduTUIFooter(current) {
+			footerUpdated = true
+		}
 		if m, ok := msg.(modutui.SetMessagesMsg); ok {
 			for _, message := range m.Messages {
 				if strings.Contains(message.Text, "prefix resume works") {
-					return
+					historyReplayed = true
 				}
 			}
 		}
 	}
-	t.Fatalf("expected SetMessagesMsg with target history, got %#v", sent)
+	if !historyReplayed {
+		t.Fatalf("expected SetMessagesMsg with target history, got %#v", sent)
+	}
+	if !footerUpdated {
+		t.Fatalf("resume did not refresh footer to %q: %#v", projectA, sent)
+	}
 }
 
 func TestRunModuTUISlashNonSwitchingCommandDoesNotReplay(t *testing.T) {

@@ -142,6 +142,12 @@ func NewBuilder(cwd string) *Builder {
 	return &Builder{cwd: cwd}
 }
 
+// SetCwd updates the working directory rendered in the environment section.
+func (b *Builder) SetCwd(cwd string) *Builder {
+	b.cwd = cwd
+	return b
+}
+
 // SetCustomPrompt sets a custom base prompt (replaces the default).
 func (b *Builder) SetCustomPrompt(prompt string) *Builder {
 	b.customPrompt = prompt
@@ -157,6 +163,12 @@ func (b *Builder) SetTools(tools []types.Tool) *Builder {
 // AddContextFile adds a context file path to be loaded.
 func (b *Builder) AddContextFile(path string) *Builder {
 	b.contextFiles = append(b.contextFiles, path)
+	return b
+}
+
+// SetContextFiles replaces the context files loaded into the prompt.
+func (b *Builder) SetContextFiles(paths []string) *Builder {
+	b.contextFiles = append([]string(nil), paths...)
 	return b
 }
 

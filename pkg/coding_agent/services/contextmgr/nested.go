@@ -18,7 +18,7 @@ const (
 // file-touching tool ran. The injected message is transient and is removed by
 // PruneTransient when the agent turn ends.
 func (m *Manager) OnToolExecutionEnd(event types.Event) {
-	if m.deps.Resources == nil {
+	if m.resourceLoader() == nil {
 		return
 	}
 	switch event.ToolName {
@@ -81,9 +81,13 @@ func (m *Manager) collectNewContextFiles(paths []string) []resource.ContextFile 
 
 	// Load context files outside the lock: this involves filesystem I/O and
 	// a git subprocess, both of which are expensive to hold a mutex across.
+	loader := m.resourceLoader()
+	if loader == nil {
+		return nil
+	}
 	var candidates []resource.ContextFile
 	for _, path := range paths {
-		candidates = append(candidates, m.deps.Resources.LoadContextFilesForPath(path)...)
+		candidates = append(candidates, loader.LoadContextFilesForPath(path)...)
 	}
 
 	m.contextMu.Lock()
@@ -98,6 +102,12 @@ func (m *Manager) collectNewContextFiles(paths []string) []resource.ContextFile 
 		out = append(out, file)
 	}
 	return out
+}
+
+func (m *Manager) resourceLoader() *resource.Loader {
+	m.contextMu.Lock()
+	defer m.contextMu.Unlock()
+	return m.deps.Resources
 }
 
 func extractToolPaths(event types.Event) []string {

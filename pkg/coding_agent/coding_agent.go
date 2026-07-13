@@ -113,6 +113,8 @@ type engine struct {
 	sessionName     string
 	sessionStarted  int64
 
+	extraSubagentDirs []string
+
 	// Session components — each owns its own state behind a narrow API.
 	ctxMgr           *contextmgr.Manager // conversation window: tokens, compaction, nested context
 	contextRemaining *contextRemainingProxy
@@ -342,6 +344,8 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		taskManager:      taskMgr,
 		approvalManager:  approvalMgr,
 		contextRemaining: contextRemaining,
+
+		extraSubagentDirs: append([]string(nil), opts.ExtraSubagentDirs...),
 	}
 	cs.wireComponents()
 	if err := taskMgr.SetStorePath(cs.RuntimePaths().BackgroundTasksFile); err != nil {

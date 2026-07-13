@@ -3,12 +3,16 @@ package coding_agent
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
+	"github.com/openmodu/modu/pkg/coding_agent/foundation/runtimepaths"
 	"github.com/openmodu/modu/pkg/coding_agent/services/compaction"
 	"github.com/openmodu/modu/pkg/coding_agent/services/session"
+	toolcommon "github.com/openmodu/modu/pkg/coding_agent/tools/common"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -268,38 +272,108 @@ func (s *CodingSession) GetSessionStats() SessionStats {
 	}
 }
 
-// ResumeByID switches to a saved session in the current cwd identified by id
-// (full id or a unique prefix). Powers the `--resume <id>` CLI flag.
+// ResumeByID switches to a saved session identified by id (full id or a unique
+// prefix), including sessions created in a different cwd.
 func (s *CodingSession) ResumeByID(id string) error {
-	info, err := resolveSessionInfoByID(s.agentDir, s.cwd, id)
+	info, err := ResolveSessionInfoByID(s.agentDir, id)
 	if err != nil {
 		return err
 	}
-	return s.SwitchSession(info.Path)
+	return s.resumeSession(info.Path, info.Cwd)
+}
+
+// ResumeSession switches to a saved session file and, when its recorded cwd
+// differs, asks whether to use the session directory or the current directory.
+func (s *CodingSession) ResumeSession(sessionFile string) error {
+	header, err := session.ReadSessionHeader(sessionFile)
+	if err != nil {
+		return fmt.Errorf("read session header: %w", err)
+	}
+	return s.resumeSession(sessionFile, header.Cwd)
+}
+
+func (s *CodingSession) resumeSession(sessionFile, sessionCwd string) error {
+	newMgr, err := session.NewManagerFromFile(sessionFile)
+	if err != nil {
+		return fmt.Errorf("failed to load session: %w", err)
+	}
+
+	currentCwd := s.cwd
+	selectedCwd := currentCwd
+	if strings.TrimSpace(sessionCwd) != "" && resumeCwdsDiffer(currentCwd, sessionCwd) {
+		sessionOption := "Use session directory (" + sessionCwd + ")"
+		currentOption := "Use current directory (" + currentCwd + ")"
+		choice := s.requestExtensionSelect(
+			"Choose working directory to resume this session",
+			[]string{sessionOption, currentOption},
+		)
+		if choice == sessionOption {
+			selectedCwd = sessionCwd
+		}
+	}
+	if selectedCwd != currentCwd {
+		s.rebindProjectResources(selectedCwd)
+		s.SwitchCwd(selectedCwd)
+	}
+	return s.switchSessionManager(newMgr)
+}
+
+func resumeCwdsDiffer(currentCwd, sessionCwd string) bool {
+	currentInfo, currentErr := os.Stat(currentCwd)
+	sessionInfo, sessionErr := os.Stat(sessionCwd)
+	if currentErr == nil && sessionErr == nil {
+		return !os.SameFile(currentInfo, sessionInfo)
+	}
+	currentAbs, currentErr := filepath.Abs(currentCwd)
+	sessionAbs, sessionErr := filepath.Abs(sessionCwd)
+	if currentErr != nil || sessionErr != nil {
+		return currentCwd != sessionCwd
+	}
+	currentAbs = filepath.Clean(currentAbs)
+	sessionAbs = filepath.Clean(sessionAbs)
+	if runtime.GOOS == "windows" {
+		return !strings.EqualFold(currentAbs, sessionAbs)
+	}
+	return currentAbs != sessionAbs
+}
+
+// ResolveSessionInfoByID resolves a persisted session globally and includes
+// the cwd recorded in its header without loading the transcript.
+func ResolveSessionInfoByID(agentDir, id string) (SessionInfo, error) {
+	info, err := resolveSessionInfoByID(agentDir, id)
+	if err != nil {
+		return SessionInfo{}, err
+	}
+	header, err := session.ReadSessionHeader(info.Path)
+	if err != nil {
+		return SessionInfo{}, fmt.Errorf("read session header: %w", err)
+	}
+	info.Cwd = header.Cwd
+	return info, nil
 }
 
 func newSessionManager(agentDir, cwd, resumeID string) (*session.Manager, error) {
 	if strings.TrimSpace(resumeID) == "" {
 		return session.NewFreshManager(agentDir, cwd)
 	}
-	info, err := resolveSessionInfoByID(agentDir, cwd, resumeID)
+	info, err := resolveSessionInfoByID(agentDir, resumeID)
 	if err != nil {
 		return nil, err
 	}
 	return session.NewManagerFromFile(info.Path)
 }
 
-func resolveSessionInfoByID(agentDir, cwd, id string) (session.SessionInfo, error) {
+func resolveSessionInfoByID(agentDir, id string) (session.SessionInfo, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return session.SessionInfo{}, fmt.Errorf("session id is required")
 	}
-	// Session files are named <id>.jsonl, so id resolution is a directory
-	// listing — never a content parse. The previous implementation went
-	// through session.List, which summarizes every session file in the
-	// directory; against a multi-GB session dir that made `--resume <id>`
-	// burn ~40s before even starting.
-	info, ok, err := session.FindByIDPrefix(agentDir, cwd, id)
+	// Session files are named <id>.jsonl, so global id resolution only scans
+	// cwd directories and filenames — never session contents. The previous
+	// implementation went through session.List, which summarizes every file;
+	// against a multi-GB session dir that made `--resume <id>` burn ~40s
+	// before even starting.
+	info, ok, err := session.FindByIDPrefixAll(agentDir, id)
 	if err != nil {
 		return session.SessionInfo{}, err
 	}
@@ -333,6 +407,10 @@ func (s *CodingSession) switchSessionManager(newMgr *session.Manager) error {
 	s.sessionManager = newMgr
 	s.sessionTree = newTree
 	s.sessionName = newMgr.SessionName()
+	s.artifactStore = toolcommon.NewArtifactStore(
+		runtimepaths.SessionToolResultsDir(s.agentDir, s.cwd, newMgr.SessionID()),
+	)
+	s.refreshToolsForCwd(s.cwd)
 	s.agent.ReplaceMessages(messages)
 	s.lastSavedIndex = len(messages)
 	if s.extensions != nil {

@@ -128,7 +128,7 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		// tolerates missing files (it would "resume" onto an empty session
 		// at a bogus path), so only hand it real files.
 		if fi, statErr := os.Stat(target); statErr == nil && !fi.IsDir() {
-			if err := session.SwitchSession(target); err != nil {
+			if err := session.ResumeSession(target); err != nil {
 				r.PrintError(err)
 				return true, false
 			}
@@ -1129,7 +1129,7 @@ func PrintHelp(r Printer) {
 		"/session            — show or name the current session",
 		"/sessions [all]     — list saved sessions",
 		"/session delete <f> — delete a saved session file",
-		"/resume <file>      — switch to a saved session",
+		"/resume <file|id>   — switch to a saved session",
 		"/fork-session <file> — copy a saved session into this cwd",
 		"/tree               — show forkable messages or branch points",
 		"/fork <entry-id>    — move the session leaf to an entry",

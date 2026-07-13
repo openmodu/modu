@@ -610,6 +610,11 @@ func readSessionHeader(path string) (Header, error) {
 	return header, nil
 }
 
+// ReadSessionHeader reads only the first JSONL record of a persisted session.
+func ReadSessionHeader(path string) (Header, error) {
+	return readSessionHeader(path)
+}
+
 // List returns all sessions for cwd sorted by modified time descending.
 func List(agentDir, cwd string) ([]SessionInfo, error) {
 	dir := DefaultSessionDir(agentDir, cwd)
@@ -858,6 +863,87 @@ func FindByIDPrefix(agentDir, cwd, id string) (SessionInfo, bool, error) {
 	path := filepath.Join(dir, match)
 	info := SessionInfo{Path: path, ID: strings.TrimSuffix(match, ".jsonl")}
 	if stat, err := os.Stat(path); err == nil {
+		info.Modified = stat.ModTime()
+	}
+	return info, true, nil
+}
+
+// FindByIDPrefixAll resolves a session id (or unique prefix) across every
+// cwd-specific session directory. Like FindByIDPrefix, it only inspects
+// directory entries and filenames; session JSONL contents are not parsed.
+func FindByIDPrefixAll(agentDir, id string) (SessionInfo, bool, error) {
+	if strings.ContainsAny(id, `/\`) {
+		return SessionInfo{}, false, fmt.Errorf("invalid session id %q", id)
+	}
+	root := filepath.Join(agentDir, "sessions")
+	dirs, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return SessionInfo{}, false, nil
+		}
+		return SessionInfo{}, false, err
+	}
+
+	// Full ids are the common CLI path. Check the exact filename in each cwd
+	// directory first so that case is O(number of cwd directories), without
+	// listing every session file under them.
+	var exactPath string
+	for _, dir := range dirs {
+		if !dir.IsDir() {
+			continue
+		}
+		path := filepath.Join(root, dir.Name(), id+".jsonl")
+		stat, err := os.Stat(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return SessionInfo{}, false, err
+		}
+		if stat.IsDir() {
+			continue
+		}
+		if exactPath != "" {
+			return SessionInfo{}, false, fmt.Errorf("ambiguous session id %q", id)
+		}
+		exactPath = path
+	}
+	if exactPath != "" {
+		info := SessionInfo{Path: exactPath, ID: id}
+		if stat, err := os.Stat(exactPath); err == nil {
+			info.Modified = stat.ModTime()
+		}
+		return info, true, nil
+	}
+
+	var prefixPath string
+	for _, dir := range dirs {
+		if !dir.IsDir() {
+			continue
+		}
+		files, err := os.ReadDir(filepath.Join(root, dir.Name()))
+		if err != nil {
+			return SessionInfo{}, false, err
+		}
+		for _, file := range files {
+			if file.IsDir() || !strings.HasSuffix(file.Name(), ".jsonl") {
+				continue
+			}
+			stem := strings.TrimSuffix(file.Name(), ".jsonl")
+			if !strings.HasPrefix(stem, id) {
+				continue
+			}
+			if prefixPath != "" {
+				return SessionInfo{}, false, fmt.Errorf("ambiguous session id prefix %q", id)
+			}
+			prefixPath = filepath.Join(root, dir.Name(), file.Name())
+		}
+	}
+	if prefixPath == "" {
+		return SessionInfo{}, false, nil
+	}
+	info := SessionInfo{Path: prefixPath, ID: strings.TrimSuffix(filepath.Base(prefixPath), ".jsonl")}
+	if stat, err := os.Stat(prefixPath); err == nil {
 		info.Modified = stat.ModTime()
 	}
 	return info, true, nil

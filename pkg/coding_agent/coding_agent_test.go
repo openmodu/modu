@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/openmodu/modu/pkg/coding_agent/foundation/config"
+	"github.com/openmodu/modu/pkg/coding_agent/foundation/runtimepaths"
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
 	subagentext "github.com/openmodu/modu/pkg/coding_agent/plugins/extension/subagent"
 	workflowext "github.com/openmodu/modu/pkg/coding_agent/plugins/extension/workflow"
@@ -1838,6 +1840,11 @@ func TestResumeByID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	prompted := false
+	session.SetExtensionSelectCallback(func(_ string, options []string) string {
+		prompted = true
+		return options[0]
+	})
 
 	// Resume by full id switches to the target session file and restores its messages.
 	if err := session.ResumeByID(targetID); err != nil {
@@ -1852,6 +1859,9 @@ func TestResumeByID(t *testing.T) {
 	if msgs := session.GetMessages(); len(msgs) != 1 {
 		t.Fatalf("expected 1 restored message, got %d", len(msgs))
 	}
+	if prompted {
+		t.Fatal("same-directory resume must not prompt for cwd")
+	}
 
 	// Unique prefix resolves to the same session.
 	if err := session.ResumeByID(targetID[:8]); err != nil {
@@ -1864,6 +1874,190 @@ func TestResumeByID(t *testing.T) {
 	// Unknown id is an error.
 	if err := session.ResumeByID("does-not-exist"); err == nil {
 		t.Fatal("expected error for unknown session id")
+	}
+}
+
+func TestResumeByIDAcrossWorkingDirectories(t *testing.T) {
+	agentDir := t.TempDir()
+	projectA := filepath.Join(t.TempDir(), "project-a")
+	projectB := filepath.Join(t.TempDir(), "project-b")
+	for _, dir := range []string{projectA, projectB} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(projectA, "AGENTS.md"), []byte("project A resume instructions"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectB, "AGENTS.md"), []byte("project B current instructions"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for dir, content := range map[string]string{
+		projectA: "project A memory",
+		projectB: "project B memory",
+	} {
+		memoryDir := filepath.Join(dir, ".modu_code", "memory")
+		if err := os.MkdirAll(memoryDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(memoryDir, "MEMORY.md"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	target, err := sessionpkg.NewFreshManager(agentDir, projectA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := target.Append(sessionpkg.NewEntry(sessionpkg.EntryTypeMessage, "", sessionpkg.MessageData{
+		Role:    types.RoleUser,
+		Content: "history from project A",
+	})); err != nil {
+		t.Fatal(err)
+	}
+
+	current, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       projectB,
+		AgentDir:  agentDir,
+		Model:     newTestModel(),
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var promptTitle string
+	var promptOptions []string
+	current.SetExtensionSelectCallback(func(title string, options []string) string {
+		promptTitle = title
+		promptOptions = append([]string(nil), options...)
+		return options[0]
+	})
+	if err := current.ResumeByID(target.SessionID()[:8]); err != nil {
+		t.Fatalf("ResumeByID across cwd failed: %v", err)
+	}
+	if got := current.GetSessionFile(); got != target.FilePath() {
+		t.Fatalf("session file = %q, want %q", got, target.FilePath())
+	}
+	if promptTitle != "Choose working directory to resume this session" {
+		t.Fatalf("prompt title = %q", promptTitle)
+	}
+	wantOptions := []string{
+		"Use session directory (" + projectA + ")",
+		"Use current directory (" + projectB + ")",
+	}
+	if !reflect.DeepEqual(promptOptions, wantOptions) {
+		t.Fatalf("prompt options = %#v, want %#v", promptOptions, wantOptions)
+	}
+	if got := current.Cwd(); got != projectA {
+		t.Fatalf("resume cwd = %q, want session cwd %q", got, projectA)
+	}
+	prompt := current.GetAgent().GetState().SystemPrompt
+	if !strings.Contains(prompt, "- Working directory: "+projectA) {
+		t.Fatalf("system prompt did not switch to session cwd: %q", prompt)
+	}
+	if !strings.Contains(prompt, "project A resume instructions") || strings.Contains(prompt, "project B current instructions") {
+		t.Fatalf("system prompt did not switch project resources: %q", prompt)
+	}
+	if !strings.Contains(prompt, "project A memory") || strings.Contains(prompt, "project B memory") {
+		t.Fatalf("system prompt did not switch project memory: %q", prompt)
+	}
+	contextInfo := current.GetContextInfo()
+	if len(contextInfo.ContextFiles) != 1 || contextInfo.ContextFiles[0].Path != filepath.Join(projectA, "AGENTS.md") {
+		t.Fatalf("context files did not switch to session cwd: %#v", contextInfo.ContextFiles)
+	}
+	wantArtifactDir := runtimepaths.SessionToolResultsDir(agentDir, projectA, target.SessionID())
+	if current.artifactStore == nil || current.artifactStore.Dir != wantArtifactDir {
+		t.Fatalf("artifact store = %#v, want dir %q", current.artifactStore, wantArtifactDir)
+	}
+	for _, tool := range current.GetAgent().GetState().Tools {
+		if tool.Name() != "memo" {
+			continue
+		}
+		if _, err := tool.Execute(context.Background(), "memo-after-resume", map[string]any{
+			"operation": "record_long_term",
+			"content":   "written after resume",
+		}, nil); err != nil {
+			t.Fatal(err)
+		}
+		break
+	}
+	aMemory, err := os.ReadFile(filepath.Join(projectA, ".modu_code", "memory", "MEMORY.md"))
+	if err != nil || !strings.Contains(string(aMemory), "written after resume") {
+		t.Fatalf("session cwd memory was not updated: %q, err=%v", aMemory, err)
+	}
+	bMemory, err := os.ReadFile(filepath.Join(projectB, ".modu_code", "memory", "MEMORY.md"))
+	if err != nil || strings.Contains(string(bMemory), "written after resume") {
+		t.Fatalf("current cwd memory was unexpectedly updated: %q, err=%v", bMemory, err)
+	}
+	msgs := current.GetMessages()
+	if len(msgs) != 1 {
+		t.Fatalf("restored messages = %#v, want one message", msgs)
+	}
+}
+
+func TestResumeByIDAcrossWorkingDirectoriesCanKeepCurrentDirectory(t *testing.T) {
+	agentDir := t.TempDir()
+	projectA := filepath.Join(t.TempDir(), "project-a")
+	projectB := filepath.Join(t.TempDir(), "project-b")
+	for _, dir := range []string{projectA, projectB} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target, err := sessionpkg.NewFreshManager(agentDir, projectA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := target.Append(sessionpkg.NewEntry(sessionpkg.EntryTypeMessage, "", sessionpkg.MessageData{
+		Role:    types.RoleUser,
+		Content: "history from project A",
+	})); err != nil {
+		t.Fatal(err)
+	}
+	current, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       projectB,
+		AgentDir:  agentDir,
+		Model:     newTestModel(),
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.SetExtensionSelectCallback(func(_ string, options []string) string {
+		return options[1]
+	})
+
+	if err := current.ResumeByID(target.SessionID()); err != nil {
+		t.Fatal(err)
+	}
+	if got := current.Cwd(); got != projectB {
+		t.Fatalf("resume cwd = %q, want current cwd %q", got, projectB)
+	}
+}
+
+func TestResolveSessionInfoByIDIncludesOriginalWorkingDirectory(t *testing.T) {
+	agentDir := t.TempDir()
+	projectA := filepath.Join(t.TempDir(), "project-a")
+	if err := os.MkdirAll(projectA, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target, err := sessionpkg.NewFreshManager(agentDir, projectA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := target.Append(sessionpkg.NewEntry(sessionpkg.EntryTypeMessage, "", sessionpkg.MessageData{
+		Role:    types.RoleUser,
+		Content: "resume metadata",
+	})); err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := ResolveSessionInfoByID(agentDir, target.SessionID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Path != target.FilePath() || info.ID != target.SessionID() || info.Cwd != projectA {
+		t.Fatalf("resolved info = %#v, want path=%q id=%q cwd=%q", info, target.FilePath(), target.SessionID(), projectA)
 	}
 }
 
@@ -1904,6 +2098,51 @@ func TestNewCodingSessionResumesSessionIDWithoutCreatingExtraSession(t *testing.
 	}
 	if len(infos) != 1 {
 		t.Fatalf("expected no extra session files, got %#v", infos)
+	}
+}
+
+func TestNewCodingSessionResumesSessionIDAcrossWorkingDirectories(t *testing.T) {
+	agentDir := t.TempDir()
+	projectA := filepath.Join(t.TempDir(), "project-a")
+	projectB := filepath.Join(t.TempDir(), "project-b")
+	for _, dir := range []string{projectA, projectB} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target, err := sessionpkg.NewFreshManager(agentDir, projectA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := target.Append(sessionpkg.NewEntry(sessionpkg.EntryTypeMessage, "", sessionpkg.MessageData{
+		Role:    types.RoleUser,
+		Content: "resume target from project A",
+	})); err != nil {
+		t.Fatal(err)
+	}
+
+	resumed, err := NewCodingSession(CodingSessionOptions{
+		Cwd:             projectB,
+		AgentDir:        agentDir,
+		Model:           newTestModel(),
+		ResumeSessionID: target.SessionID(),
+		GetAPIKey:       func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatalf("resume project A session from project B: %v", err)
+	}
+	if got := resumed.GetSessionFile(); got != target.FilePath() {
+		t.Fatalf("session file = %q, want %q", got, target.FilePath())
+	}
+	if got := resumed.Cwd(); got != projectB {
+		t.Fatalf("resume changed cwd to %q, want current cwd %q", got, projectB)
+	}
+	infos, err := sessionpkg.List(agentDir, projectB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 0 {
+		t.Fatalf("resume created an extra project B session: %#v", infos)
 	}
 }
 

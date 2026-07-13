@@ -7,6 +7,9 @@ import (
 
 func (s *engine) toolContext(cwd string) types.ToolContext {
 	values := map[string]any{}
+	if s != nil && s.memoryStore != nil {
+		values[tools.ValueMemoryStore] = s.memoryStore
+	}
 	if s != nil && s.artifactStore != nil {
 		values[tools.ValueArtifacts] = s.artifactStore
 	}

@@ -112,6 +112,8 @@ func (p DefaultProvider) Rebind(tool types.Tool, ctx types.ToolContext) (types.T
 		return newSearchTool(ctx), true
 	case "read_tool_result":
 		return toolresult.NewTool(artifacts), true
+	case "memo":
+		return memorytool.NewMemoryTool(valueAs[memorytool.MemoryStore](ctx, ValueMemoryStore)), true
 	default:
 		return nil, false
 	}

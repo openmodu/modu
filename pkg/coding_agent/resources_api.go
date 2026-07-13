@@ -2,9 +2,45 @@ package coding_agent
 
 import (
 	"github.com/openmodu/modu/pkg/coding_agent/foundation/resource"
+	"github.com/openmodu/modu/pkg/coding_agent/plugins/prompts"
+	"github.com/openmodu/modu/pkg/coding_agent/plugins/subagent"
+	"github.com/openmodu/modu/pkg/coding_agent/services/memory"
 	"github.com/openmodu/modu/pkg/skills"
 	"github.com/openmodu/modu/pkg/types"
 )
+
+func (s *engine) rebindProjectResources(cwd string) {
+	loader := resource.NewLoader(s.agentDir, cwd)
+	snapshot := loader.LoadResources()
+	s.resources = loader
+
+	s.skillManager = skills.NewManager(s.agentDir, cwd)
+	s.skillManager.SetExtraPaths(skillPathRefs(snapshot.SkillPaths))
+	_ = s.skillManager.Discover()
+	s.promptManager = prompts.NewManager(s.agentDir, cwd)
+	s.promptManager.SetExtraPaths(snapshot.PromptPaths)
+	_ = s.promptManager.Discover()
+	s.memoryStore = memory.New(s.agentDir, cwd)
+
+	if s.subagentLoader == nil {
+		s.subagentLoader = subagent.NewLoader()
+	} else {
+		s.subagentLoader.Reset()
+	}
+	s.subagentLoader.Discover(s.agentDir, cwd)
+	s.subagentLoader.DiscoverExtra(s.extraSubagentDirs...)
+
+	contextPaths := make([]string, 0, len(snapshot.ContextFiles))
+	for _, file := range snapshot.ContextFiles {
+		contextPaths = append(contextPaths, file.Path)
+	}
+	if s.promptBuilder != nil {
+		s.promptBuilder.SetContextFiles(contextPaths)
+	}
+	if s.ctxMgr != nil {
+		s.ctxMgr.SetResources(loader, contextPaths)
+	}
+}
 
 // SetActiveTools sets which tools are active by name.
 func (s *engine) SetActiveTools(names []string) {

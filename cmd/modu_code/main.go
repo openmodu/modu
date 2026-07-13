@@ -88,6 +88,11 @@ func main() {
 
 	thinkingLevel := provider.ResolveThinkingLevel()
 	agentDir := coding_agent.DefaultAgentDir()
+	sessionCwd, err := resolveStartupResumeCwd(agentDir, cwd, *resumeID, interactiveMode, promptResumeCwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to resolve resume working directory: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Out is intentionally nil here: writing to stderr from the goal
 	// extension bypasses the TUI's inline-mode widget management and
@@ -105,7 +110,7 @@ func main() {
 	}
 
 	sessionOpts := coding_agent.CodingSessionOptions{
-		Cwd:               cwd,
+		Cwd:               sessionCwd,
 		AgentDir:          agentDir,
 		Model:             model,
 		ThinkingLevel:     thinkingLevel,

@@ -13,8 +13,12 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/services/session"
+	modutui "github.com/openmodu/modu/pkg/modu-tui"
 	"github.com/openmodu/modu/pkg/slash"
 	"github.com/openmodu/modu/pkg/types"
 )
@@ -24,6 +28,7 @@ func TestMain(m *testing.M) {
 	oldCommandLine := flag.CommandLine
 	oldRunTUI := runTUI
 	oldInteractiveExitOutput := interactiveExitOutput
+	oldPromptResumeCwd := promptResumeCwd
 	oldwd, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "get cwd: %v\n", err)
@@ -36,6 +41,7 @@ func TestMain(m *testing.M) {
 	flag.CommandLine = oldCommandLine
 	runTUI = oldRunTUI
 	interactiveExitOutput = oldInteractiveExitOutput
+	promptResumeCwd = oldPromptResumeCwd
 	if err := os.Chdir(oldwd); err != nil && code == 0 {
 		fmt.Fprintf(os.Stderr, "restore cwd: %v\n", err)
 		code = 1
@@ -565,6 +571,176 @@ func TestMainResumeStartsRequestedSession(t *testing.T) {
 	}
 }
 
+func TestMainResumeStartsRequestedSessionFromAnotherWorkingDirectory(t *testing.T) {
+	home := t.TempDir()
+	projectA := filepath.Join(t.TempDir(), "project-a")
+	projectB := filepath.Join(t.TempDir(), "project-b")
+	for _, dir := range []string{projectA, projectB} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", home)
+	var initOut bytes.Buffer
+	if err := runConfigCommand([]string{"init"}, &initOut, nil); err != nil {
+		t.Fatalf("runConfigCommand init: %v", err)
+	}
+	agentDir := filepath.Join(home, ".modu")
+	targetFile := writeMainTestSessionFile(t, agentDir, projectA, "target session", "resume across cwd")
+	targetMgr, err := sessionpkg.NewManagerFromFile(targetFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	setupMainTestInvocation(t, projectB, "modu_code")
+	os.Args = []string{"modu_code", "--resume", targetMgr.SessionID()}
+	prompted := false
+	promptResumeCwd = func(currentCwd, sessionCwd string) (string, error) {
+		prompted = true
+		if same, err := samePhysicalPath(currentCwd, projectB); err != nil || !same {
+			t.Fatalf("prompt current cwd = %q, want %q (same=%v, err=%v)", currentCwd, projectB, same, err)
+		}
+		if sessionCwd != projectA {
+			t.Fatalf("prompt session cwd = %q, want %q", sessionCwd, projectA)
+		}
+		return sessionCwd, nil
+	}
+
+	called := false
+	runTUI = func(ctx context.Context, resumed *coding_agent.CodingSession, model *types.Model, noApprove bool, opts RunOptions) error {
+		called = true
+		if got := resumed.GetSessionFile(); got != targetFile {
+			t.Fatalf("session file = %q, want %q", got, targetFile)
+		}
+		if got := resumed.Cwd(); got != projectA {
+			t.Fatalf("resume cwd = %q, want selected session cwd %q", got, projectA)
+		}
+		if footer := moduTUIFooter(resumed); !strings.Contains(footer, compactModuTUICwd(projectA)) {
+			t.Fatalf("footer %q does not show selected session cwd %q", footer, projectA)
+		}
+		if msgs := resumed.GetMessages(); len(msgs) != 1 {
+			t.Fatalf("expected resumed messages, got %#v", msgs)
+		}
+		return nil
+	}
+
+	main()
+	if !called {
+		t.Fatal("expected TUI runner to be called")
+	}
+	if !prompted {
+		t.Fatal("expected cross-directory resume cwd prompt")
+	}
+}
+
+func TestResolveStartupResumeCwdUsesPromptSelection(t *testing.T) {
+	agentDir := t.TempDir()
+	projectA := filepath.Join(t.TempDir(), "project-a")
+	projectB := filepath.Join(t.TempDir(), "project-b")
+	for _, dir := range []string{projectA, projectB} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	targetFile := writeMainTestSessionFile(t, agentDir, projectA, "target", "resume target")
+	target, err := sessionpkg.NewManagerFromFile(targetFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, want := range []string{projectA, projectB} {
+		prompted := false
+		got, err := resolveStartupResumeCwd(agentDir, projectB, target.SessionID(), true, func(currentCwd, sessionCwd string) (string, error) {
+			prompted = true
+			if currentCwd != projectB || sessionCwd != projectA {
+				t.Fatalf("prompt cwd pair = (%q, %q), want (%q, %q)", currentCwd, sessionCwd, projectB, projectA)
+			}
+			return want, nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !prompted || got != want {
+			t.Fatalf("selection %q: got=%q prompted=%v", want, got, prompted)
+		}
+	}
+}
+
+func TestResolveStartupResumeCwdDefaultsToSessionDirectoryWithoutPrompt(t *testing.T) {
+	agentDir := t.TempDir()
+	projectA := filepath.Join(t.TempDir(), "project-a")
+	projectB := filepath.Join(t.TempDir(), "project-b")
+	for _, dir := range []string{projectA, projectB} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	targetFile := writeMainTestSessionFile(t, agentDir, projectA, "target", "resume target")
+	target, err := sessionpkg.NewManagerFromFile(targetFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := resolveStartupResumeCwd(agentDir, projectB, target.SessionID(), false, func(string, string) (string, error) {
+		t.Fatal("headless resume must not prompt")
+		return "", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != projectA {
+		t.Fatalf("headless resume cwd = %q, want session cwd %q", got, projectA)
+	}
+}
+
+func TestResumeCwdPromptRequestMatchesCodexChoiceOrder(t *testing.T) {
+	request := resumeCwdPromptRequest("/work/current", "/work/session")
+	if request.DefaultIndex != 0 || len(request.Options) != 2 {
+		t.Fatalf("unexpected request: %#v", request)
+	}
+	if request.Options[0].Value != "/work/session" || request.Options[1].Value != "/work/current" {
+		t.Fatalf("choice order = %#v, want session then current", request.Options)
+	}
+	if !strings.Contains(request.Title, "Choose working directory") || !strings.Contains(request.Body, "Session =") || !strings.Contains(request.Body, "Current =") {
+		t.Fatalf("prompt copy does not explain choices: %#v", request)
+	}
+}
+
+func TestResumeCwdPromptModelRendersAndDefaultsToSessionDirectory(t *testing.T) {
+	request := resumeCwdPromptRequest("/work/current", "/work/session")
+	response := make(chan string, 1)
+	model := resumeCwdPromptModel{
+		inner:    modutui.NewModel(modutui.Options{Width: 100, Height: 20}),
+		request:  request,
+		response: response,
+	}
+
+	next, _ := model.Update(modutui.RequestHumanPromptMsg{Request: request, Respond: response})
+	rendered := ansi.Strip(next.(resumeCwdPromptModel).View().Content)
+	for _, want := range []string{
+		"Choose working directory to resume this session",
+		"1. Use session directory (/work/session)",
+		"2. Use current directory (/work/current)",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("resume cwd prompt missing %q:\n%s", want, rendered)
+		}
+	}
+
+	_, cmd := next.(resumeCwdPromptModel).Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if cmd != nil {
+		_ = cmd()
+	}
+	select {
+	case got := <-response:
+		if got != "/work/session" {
+			t.Fatalf("default selection = %q, want session cwd", got)
+		}
+	default:
+		t.Fatal("enter did not resolve resume cwd prompt")
+	}
+}
+
 func TestMainDoesNotStartInWorktreeByDefaultForGitRepo(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
@@ -677,6 +853,7 @@ func setupMainTestInvocation(t *testing.T, cwd string, args ...string) {
 	oldCommandLine := flag.CommandLine
 	oldRunTUI := runTUI
 	oldInteractiveExitOutput := interactiveExitOutput
+	oldPromptResumeCwd := promptResumeCwd
 	oldwd, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -686,6 +863,7 @@ func setupMainTestInvocation(t *testing.T, cwd string, args ...string) {
 		flag.CommandLine = oldCommandLine
 		runTUI = oldRunTUI
 		interactiveExitOutput = oldInteractiveExitOutput
+		promptResumeCwd = oldPromptResumeCwd
 		if err := os.Chdir(oldwd); err != nil {
 			t.Fatalf("restore cwd: %v", err)
 		}

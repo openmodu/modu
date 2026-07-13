@@ -376,6 +376,52 @@ func TestFindByIDPrefix(t *testing.T) {
 	}
 }
 
+func TestFindByIDPrefixAll(t *testing.T) {
+	agentDir := t.TempDir()
+	projectA := "/test/project-a"
+	projectB := "/test/project-b"
+	for project, names := range map[string][]string{
+		projectA: {"abc123.jsonl", "duplicate.jsonl", "exact.jsonl"},
+		projectB: {"abd456.jsonl", "duplicate.jsonl", "exact-more.jsonl"},
+	} {
+		dir := DefaultSessionDir(agentDir, project)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range names {
+			if err := os.WriteFile(filepath.Join(dir, name), nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	info, ok, err := FindByIDPrefixAll(agentDir, "abc123")
+	if err != nil || !ok || info.ID != "abc123" {
+		t.Fatalf("cross-cwd exact match: info=%#v ok=%v err=%v", info, ok, err)
+	}
+	info, ok, err = FindByIDPrefixAll(agentDir, "abd")
+	if err != nil || !ok || info.ID != "abd456" {
+		t.Fatalf("cross-cwd prefix match: info=%#v ok=%v err=%v", info, ok, err)
+	}
+	// An exact id wins even when it is also a prefix of another id.
+	info, ok, err = FindByIDPrefixAll(agentDir, "exact")
+	if err != nil || !ok || info.ID != "exact" {
+		t.Fatalf("exact over cross-cwd prefix: info=%#v ok=%v err=%v", info, ok, err)
+	}
+	if _, _, err = FindByIDPrefixAll(agentDir, "ab"); err == nil {
+		t.Fatal("expected ambiguous cross-cwd prefix error")
+	}
+	if _, _, err = FindByIDPrefixAll(agentDir, "duplicate"); err == nil {
+		t.Fatal("expected duplicate exact id error")
+	}
+	if _, ok, err = FindByIDPrefixAll(agentDir, "missing"); err != nil || ok {
+		t.Fatalf("missing id: ok=%v err=%v", ok, err)
+	}
+	if _, _, err = FindByIDPrefixAll(agentDir, "../../outside"); err == nil {
+		t.Fatal("expected path-like session id to be rejected")
+	}
+}
+
 func TestSessionManagerCreateBranchedSessionCopiesPathOnly(t *testing.T) {
 	dir := t.TempDir()
 	mgr, err := NewManager(dir, "/test/project")
