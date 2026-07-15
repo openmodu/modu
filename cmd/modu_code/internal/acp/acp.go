@@ -22,6 +22,7 @@ import (
 // Server wraps a CodingSession in the ACP JSON-RPC 2.0 stdio protocol.
 type Server struct {
 	session *coding_agent.CodingSession
+	opts    Options
 
 	outMu  sync.Mutex
 	out    *bufio.Writer
@@ -34,6 +35,11 @@ type Server struct {
 	// reverse tracks outbound RPC requests (used for permission prompts).
 	revMu   sync.Mutex
 	reverse map[int64]chan *rpcMsg
+}
+
+// Options configures ACP server behavior.
+type Options struct {
+	NoApprove bool
 }
 
 type rpcMsg struct {
@@ -52,8 +58,14 @@ type rpcError struct {
 
 // New creates an ACP server for the given session.
 func New(session *coding_agent.CodingSession) *Server {
+	return NewWithOptions(session, Options{})
+}
+
+// NewWithOptions creates an ACP server for the given session and options.
+func NewWithOptions(session *coding_agent.CodingSession, opts Options) *Server {
 	return &Server{
 		session: session,
+		opts:    opts,
 		out:     bufio.NewWriter(os.Stdout),
 		reverse: make(map[int64]chan *rpcMsg),
 	}
@@ -61,10 +73,7 @@ func New(session *coding_agent.CodingSession) *Server {
 
 // Run starts the ACP dispatch loop. Blocks until stdin closes or ctx is cancelled.
 func (s *Server) Run(ctx context.Context) error {
-	// Wire tool approval → session/request_permission reverse RPC.
-	s.session.SetToolApprovalCallback(func(toolName, toolCallID string, args map[string]any) (types.ToolApprovalDecision, error) {
-		return s.requestPermission(ctx, toolName, toolCallID, args)
-	})
+	s.configureToolApproval(ctx)
 
 	sc := bufio.NewScanner(os.Stdin)
 	sc.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
@@ -89,6 +98,17 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+func (s *Server) configureToolApproval(ctx context.Context) {
+	if s.opts.NoApprove {
+		s.session.SetToolApprovalCallback(nil)
+		return
+	}
+	// Wire tool approval -> session/request_permission reverse RPC.
+	s.session.SetToolApprovalCallback(func(toolName, toolCallID string, args map[string]any) (types.ToolApprovalDecision, error) {
+		return s.requestPermission(ctx, toolName, toolCallID, args)
+	})
 }
 
 func (s *Server) dispatch(ctx context.Context, msg *rpcMsg) {

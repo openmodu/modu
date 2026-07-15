@@ -25,6 +25,8 @@ type DoctorInfo struct {
 	BaseURLStatus      string
 	BaseURLReachable   bool
 	ContextFileCount   int
+	MCPServerCount     int
+	MCPToolCount       int
 	Problems           []string
 }
 
@@ -40,6 +42,13 @@ func (s *CodingSession) GetDoctorInfo(ctx context.Context) DoctorInfo {
 		ModelConfigPath: s.modelConfigPath,
 		APIKeyStatus:    "not checked",
 		BaseURLStatus:   "not checked",
+	}
+	if s.mcpManager != nil {
+		info.MCPServerCount = s.mcpManager.ServerCount()
+		info.MCPToolCount = len(s.mcpManager.Tools())
+	}
+	for _, warning := range s.mcpWarnings {
+		info.Problems = append(info.Problems, warning.Error())
 	}
 	if state.Model == nil {
 		info.Problems = append(info.Problems, "model is not configured")

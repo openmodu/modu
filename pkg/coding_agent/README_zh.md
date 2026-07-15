@@ -355,6 +355,37 @@ type Extension interface {
 /context
 ```
 
+### MCP Client（stdio / Streamable HTTP）
+
+`coding_agent` 会在新 session 启动时连接 `~/.modu/config.toml` 根级 `mcp_servers` 表中启用的 MCP server。`command` 选择 stdio，`url` 选择当前标准的 Streamable HTTP；两者必须且只能配置一个。完成协议初始化和 `tools/list` 后，发现到的工具会注册为 `mcp__<server>__<tool>`。例如 `docs` server 的 `search` 会暴露为 `mcp__docs__search`。工具名会归一化并限制为 64 字节的 provider-safe ASCII 名称，超长名称使用稳定 hash 后缀；归一化后冲突会导致对应 server 启动失败。
+
+主 agent 可直接调用这些工具；workflow/subagent 通过现有 `tools` allowlist 按导出名称显式转发。`/doctor` 会显示成功连接的 server/tool 数量，并报告非必需 server 的启动错误。
+
+```toml
+[mcp_servers.docs]
+command = "npx"
+args = ["-y", "@example/docs-mcp"]
+env = { DOCS_API_KEY = "replace-me" }
+required = true
+startup_timeout_sec = 10
+tool_timeout_sec = 60
+enabled_tools = ["search", "read"]
+disabled_tools = ["delete"]
+```
+
+```toml
+[mcp_servers.remote_docs]
+url = "https://example.com/mcp"
+bearer_token_env_var = "REMOTE_MCP_TOKEN"
+http_headers = { X-Region = "cn" }
+env_http_headers = { X-Tenant = "REMOTE_MCP_TENANT" }
+required = true
+```
+
+省略 `enabled` 等同于 `enabled = true`。stdio server 默认继承 session 的 cwd 和宿主环境；显式 `cwd` 的相对路径基于 session cwd 解析，`env` 覆盖同名宿主环境变量。Streamable HTTP 的 `http_headers` 提供静态 header，`env_http_headers` 从指定环境变量读取值，`bearer_token_env_var` 在变量存在时发送 `Authorization: Bearer ...`。`required = true` 的 server 初始化失败会阻止 session 启动；默认的非必需 server 失败只产生诊断警告。项目级 `.coding_agent/settings.json` 也可用 `mcpServers` 声明同样的 server 配置并按名称覆盖全局配置。
+
+Streamable HTTP 的 POST JSON/SSE 响应和可选 GET SSE 通道都由官方 SDK 按当前规范处理；这里没有启用已废弃的 legacy `HTTP+SSE` transport。当前暴露给 agent 的 MCP 能力仍是 tools；OAuth 登录、resources、prompts 和动态 `list_changed` 尚未实现。stdio 命令以当前宿主用户权限运行，远程响应和 server 返回内容都应视为不可信输入；MCP 工具仍经过现有工具审批链路。
+
 ### 10. 输出截断
 
 防止超长输出撑爆上下文：
@@ -479,8 +510,8 @@ session, _ := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
 配置按优先级加载（后者覆盖前者）：
 
 1. 内置默认值
-2. 全局配置：`~/.modu/config.toml` 的 `[settings]`
-3. 项目配置：`.coding_agent/settings.json`
+2. 全局配置：`~/.modu/config.toml` 的 `[settings]` 和根级 `[mcp_servers.*]`
+3. 项目配置：`.coding_agent/settings.json`（MCP 使用 `mcpServers`）
 4. 构造函数参数
 
 ```toml
@@ -505,6 +536,11 @@ searchType = "basic"
 [settings.webFetch]
 provider = "firecrawl"
 apiKeyEnv = "FIRECRAWL_API_KEY"
+
+[mcp_servers.docs]
+url = "https://example.com/mcp"
+bearer_token_env_var = "DOCS_MCP_TOKEN"
+required = true
 ```
 
 默认值不会写入 `config.toml`；旧的 `~/.modu/settings.json` 仍会被读取，并在没有 `[settings]` 时迁移进 `config.toml`。

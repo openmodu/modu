@@ -194,11 +194,18 @@ daily_budget_tokens: 3000000
 - `./inbox/` 目录语义(一事一文件、处理完即删)和 Read-a-Sample 纪律写进 §3.4 示例的 README
 - 单测:新增/存量区分(Chtimes 造旧文件)、PR 去重与顺序、空 cwd 不采集(`notify_test.go` 新增 2 例)
 
-### 3.6 P2 · MCP connector 支持
+### 3.6 P2 · MCP connector 支持 ✅ 已实现（2026-07-15）
 
 **问题**:视野半径受限于内置工具 + Bash/gh。接 Jira、Linear、Playwright 这类系统目前没有标准姿势。
 
-**方案**:coding_agent 增加 MCP client(stdio 起步),配置声明 server,工具动态注册进 session 工具目录;workflow child 通过现有 `tools` 白名单机制显式转发。范围大,独立立项,不阻塞前面任何一项——GitHub 生态用 `gh` CLI 已经够第一个 loop 用。
+**已落地的实现**:
+
+- 使用官方 Go SDK 实现 stdio 与 Streamable HTTP MCP client，负责初始化握手、工具分页发现、工具调用、timeout 和连接关闭；不混用已废弃的 legacy HTTP+SSE transport
+- 全局 `~/.modu/config.toml` 采用 Codex 兼容的根级 `[mcp_servers.<name>]`；项目 `.coding_agent/settings.json` 使用 `mcpServers`
+- stdio 支持 `command`、`args`、`env`、`cwd`；Streamable HTTP 支持 `url`、bearer token env、静态 header 和环境变量 header；两种 transport 共用 `enabled`、`required`、启动/调用 timeout 和工具 allow/deny filter
+- 工具以 `mcp__<server>__<tool>` 动态注册进 session 工具目录，主 agent 可直接调用；workflow/subagent child 通过现有 `tools` allowlist 显式转发
+- `/doctor` 显示已连接 server/tool 数量并报告 optional server 启动失败；required server 失败会阻止 session 启动
+- 当前验收边界是两种标准 transport 上的 tools；OAuth login、resources、prompts 和动态 `list_changed` 独立后续排期
 
 ## 4. 落地顺序与自检
 
@@ -208,7 +215,7 @@ daily_budget_tokens: 3000000
 2. ✅ §3.1 goal verifier —— 补上 say no 的门,loop 从此有 Verification 这一动(2026-07-03 完成)
 3. ✅ §3.3 reviewer 模板 —— `examples/agents/reviewer.md`,goal verifier 自动采用同名定义,一处维护(2026-07-03 完成)
 4. ✅ §3.4 morning-triage 示例 + §3.5 inbox 通知 —— 五动作端到端串起来(2026-07-03 完成;连跑两天的验收只能实跑,清单在示例 README)
-5. §3.6 MCP —— 独立排期
+5. ✅ §3.6 MCP —— stdio + Streamable HTTP tool client、session 动态注册和 child 转发完成（2026-07-15）
 
 完成后对照文章 First-Loop Checklist 六问自检:
 
@@ -219,7 +226,7 @@ daily_budget_tokens: 3000000
 - Token cap:跑歪谁叫停 —— ✅(任务三档 + `daily_budget_tokens`)
 - Human review:哪一步停下来等人 —— ✅(draft PR 永不 merge;inbox 新增条目和 PR 链接直接进完成通知;verifier 连续驳回转 paused)
 
-一句话总结:**P0 + P1 全部落地——goal 有 fresh-model 裁判(可用 reviewer.md 定制),cron 有三档断路器 + 日额度 + 人门通知,morning-triage 示例把五动作端到端串齐。唯一剩下的是 P2 的 MCP connector(独立排期),以及只能实跑的"连跑两天"验收。**
+一句话总结:**P0 + P1 + stdio/Streamable HTTP MCP tools 已落地——goal 有 fresh-model 裁判(可用 reviewer.md 定制),cron 有三档断路器 + 日额度 + 人门通知,morning-triage 示例把五动作端到端串齐；剩余的是 MCP OAuth/resources/prompts 等扩展，以及只能实跑的"连跑两天"验收。**
 
 ## 5. 测试方案
 

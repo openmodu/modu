@@ -181,7 +181,7 @@ func main() {
 	if *acpMode {
 		ctx, cancel := signalContext()
 		defer cancel()
-		if err := acp.New(session).Run(ctx); err != nil && err != context.Canceled {
+		if err := acp.NewWithOptions(session, acp.Options{NoApprove: *noApprove}).Run(ctx); err != nil && err != context.Canceled {
 			fmt.Fprintf(os.Stderr, "acp error: %v\n", err)
 			os.Exit(1)
 		}

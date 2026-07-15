@@ -962,6 +962,7 @@ func handleDoctor(ctx context.Context, session *coding_agent.CodingSession, r Pr
 		"provider registered: " + yesNo(info.ProviderRegistered),
 		"api key: " + info.APIKeyStatus,
 		fmt.Sprintf("context files: %d", info.ContextFileCount),
+		fmt.Sprintf("MCP: %d server(s), %d tool(s)", info.MCPServerCount, info.MCPToolCount),
 	}
 	if len(info.Problems) == 0 {
 		lines = append(lines, "problems: none")

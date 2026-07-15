@@ -75,6 +75,11 @@ type Config struct {
 
 	// WebFetch configures the opt-in web_fetch research tool.
 	WebFetch WebFetchConfig `json:"webFetch,omitempty" toml:"webFetch,omitempty"`
+
+	// MCPServers declares external Model Context Protocol servers. Global TOML
+	// config reads this from the Codex-compatible root [mcp_servers] table;
+	// project settings use the JSON key mcpServers.
+	MCPServers map[string]MCPServerConfig `json:"mcpServers,omitempty" toml:"-"`
 }
 
 type FeatureConfig struct {
@@ -107,6 +112,29 @@ type WebFetchConfig struct {
 	APIKey    string `json:"apiKey,omitempty" toml:"apiKey,omitempty"`
 	APIKeyEnv string `json:"apiKeyEnv,omitempty" toml:"apiKeyEnv,omitempty"`
 }
+
+// MCPServerConfig configures one standard MCP transport: command selects
+// stdio, while url selects Streamable HTTP. The two are mutually exclusive.
+type MCPServerConfig struct {
+	Command           string            `json:"command,omitempty" toml:"command,omitempty"`
+	Args              []string          `json:"args,omitempty" toml:"args,omitempty"`
+	Env               map[string]string `json:"env,omitempty" toml:"env,omitempty"`
+	Cwd               string            `json:"cwd,omitempty" toml:"cwd,omitempty"`
+	URL               string            `json:"url,omitempty" toml:"url,omitempty"`
+	BearerTokenEnvVar string            `json:"bearer_token_env_var,omitempty" toml:"bearer_token_env_var,omitempty"`
+	HTTPHeaders       map[string]string `json:"http_headers,omitempty" toml:"http_headers,omitempty"`
+	EnvHTTPHeaders    map[string]string `json:"env_http_headers,omitempty" toml:"env_http_headers,omitempty"`
+	Enabled           *bool             `json:"enabled,omitempty" toml:"enabled,omitempty"`
+	Required          bool              `json:"required,omitempty" toml:"required,omitempty"`
+	StartupTimeoutSec float64           `json:"startup_timeout_sec,omitempty" toml:"startup_timeout_sec,omitempty"`
+	ToolTimeoutSec    float64           `json:"tool_timeout_sec,omitempty" toml:"tool_timeout_sec,omitempty"`
+	EnabledTools      []string          `json:"enabled_tools,omitempty" toml:"enabled_tools,omitempty"`
+	DisabledTools     []string          `json:"disabled_tools,omitempty" toml:"disabled_tools,omitempty"`
+}
+
+// IsEnabled reports whether a server should start. Omitted enabled defaults
+// to true, matching Codex and MCP host configuration conventions.
+func (c MCPServerConfig) IsEnabled() bool { return c.Enabled == nil || *c.Enabled }
 
 type HarnessConfig struct {
 	// BlockTools denies matching tool names before execution.
@@ -241,16 +269,19 @@ func loadGlobalTOMLSettings(path string, cfg *Config) (bool, error) {
 		return false, err
 	}
 	wrapper := struct {
-		Settings Config `toml:"settings"`
+		Settings   Config                     `toml:"settings"`
+		MCPServers map[string]MCPServerConfig `toml:"mcp_servers"`
 	}{Settings: *cfg}
 	meta, err := toml.DecodeFile(path, &wrapper)
 	if err != nil {
 		return false, err
 	}
 	if !meta.IsDefined("settings") {
+		cfg.MCPServers = wrapper.MCPServers
 		return false, nil
 	}
 	*cfg = wrapper.Settings
+	cfg.MCPServers = wrapper.MCPServers
 	return true, nil
 }
 

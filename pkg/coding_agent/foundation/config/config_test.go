@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -98,6 +99,145 @@ apiKeyEnv = "FIRECRAWL_API_KEY"
 	}
 	if cfg.WebFetch.Provider != "firecrawl" || cfg.WebFetch.APIKeyEnv != "FIRECRAWL_API_KEY" {
 		t.Fatalf("webFetch config not loaded: %#v", cfg.WebFetch)
+	}
+}
+
+func TestLoadReadsRootMCPServersFromGlobalConfig(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".modu")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(GlobalConfigPath(agentDir), []byte(`version = 2
+
+[settings]
+disableWorkflows = true
+
+[mcp_servers.echo]
+command = "echo-server"
+args = ["--stdio"]
+env = { TOKEN = "secret" }
+cwd = "/tmp/mcp"
+enabled = false
+required = true
+startup_timeout_sec = 3.5
+tool_timeout_sec = 7
+enabled_tools = ["read", "search"]
+disabled_tools = ["search"]
+
+[mcp_servers.remote]
+url = "https://example.com/mcp"
+bearer_token_env_var = "REMOTE_MCP_TOKEN"
+http_headers = { X-Static = "static" }
+env_http_headers = { X-Dynamic = "REMOTE_MCP_HEADER" }
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(agentDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, ok := cfg.MCPServers["echo"]
+	if !ok {
+		t.Fatalf("root mcp_servers.echo not loaded: %#v", cfg.MCPServers)
+	}
+	if !cfg.DisableWorkflows {
+		t.Fatal("global settings were not loaded alongside root mcp_servers")
+	}
+	if server.Command != "echo-server" || !reflect.DeepEqual(server.Args, []string{"--stdio"}) {
+		t.Fatalf("unexpected MCP command config: %#v", server)
+	}
+	if server.Env["TOKEN"] != "secret" || server.Cwd != "/tmp/mcp" {
+		t.Fatalf("unexpected MCP environment config: %#v", server)
+	}
+	if server.Enabled == nil || *server.Enabled || !server.Required {
+		t.Fatalf("unexpected MCP enable/required config: %#v", server)
+	}
+	if server.StartupTimeoutSec != 3.5 || server.ToolTimeoutSec != 7 {
+		t.Fatalf("unexpected MCP timeout config: %#v", server)
+	}
+	if !reflect.DeepEqual(server.EnabledTools, []string{"read", "search"}) || !reflect.DeepEqual(server.DisabledTools, []string{"search"}) {
+		t.Fatalf("unexpected MCP tool filters: %#v", server)
+	}
+	remote, ok := cfg.MCPServers["remote"]
+	if !ok {
+		t.Fatalf("root mcp_servers.remote not loaded: %#v", cfg.MCPServers)
+	}
+	if remote.URL != "https://example.com/mcp" || remote.BearerTokenEnvVar != "REMOTE_MCP_TOKEN" {
+		t.Fatalf("unexpected remote MCP config: %#v", remote)
+	}
+	if remote.HTTPHeaders["X-Static"] != "static" || remote.EnvHTTPHeaders["X-Dynamic"] != "REMOTE_MCP_HEADER" {
+		t.Fatalf("unexpected remote MCP headers: %#v", remote)
+	}
+}
+
+func TestLoadProjectMCPServersOverrideGlobalEntry(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".modu")
+	cwd := filepath.Join(dir, "repo")
+	if err := os.MkdirAll(filepath.Join(cwd, ".coding_agent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(GlobalConfigPath(agentDir), []byte(`[mcp_servers.echo]
+command = "global-server"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ProjectSettingsPath(cwd), []byte(`{
+  "mcpServers": {
+    "echo": {"command": "project-server", "args": ["--project"]},
+    "local": {"command": "local-server"}
+  }
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(agentDir, cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.MCPServers["echo"].Command; got != "project-server" {
+		t.Fatalf("project MCP override command = %q", got)
+	}
+	if got := cfg.MCPServers["local"].Command; got != "local-server" {
+		t.Fatalf("project MCP server command = %q", got)
+	}
+}
+
+func TestSaveGlobalConfigPreservesRootMCPServers(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".modu")
+	path := GlobalConfigPath(agentDir)
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`[mcp_servers.echo]
+command = "echo-server"
+args = ["--stdio"]
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(agentDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.DisableWorkflows = true
+	if err := Save(cfg, path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, want := range []string{"[mcp_servers.echo]", `command = "echo-server"`, `args = ["--stdio"]`, "[settings]", "disableWorkflows = true"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("saved config missing %q:\n%s", want, text)
+		}
 	}
 }
 

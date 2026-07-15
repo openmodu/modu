@@ -21,6 +21,7 @@ import (
 	"github.com/openmodu/modu/pkg/coding_agent/services/bash"
 	"github.com/openmodu/modu/pkg/coding_agent/services/bgtask"
 	"github.com/openmodu/modu/pkg/coding_agent/services/contextmgr"
+	"github.com/openmodu/modu/pkg/coding_agent/services/mcpclient"
 	"github.com/openmodu/modu/pkg/coding_agent/services/memory"
 	"github.com/openmodu/modu/pkg/coding_agent/services/plan"
 	"github.com/openmodu/modu/pkg/coding_agent/services/retry"
@@ -123,6 +124,8 @@ type engine struct {
 	taskManager      *bgtask.Manager      // background async tasks
 	plan             *plan.Controller     // plan mode
 	worktree         *worktree.Controller // isolated git worktree
+	mcpManager       *mcpclient.Manager   // external MCP connections and tools
+	mcpWarnings      []error              // optional-server startup failures
 	extPrompts       extensionPrompts     // host confirm/select callbacks
 
 	// bgPromptDriver lets a host (e.g. the TUI) take over hidden extension
@@ -186,6 +189,20 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		cfg.ThinkingLevel = opts.ThinkingLevel
 	}
 
+	// Start configured MCP servers before building the agent tool catalog.
+	// Required-server failures abort session creation; optional failures remain
+	// visible through /doctor. Clean up if a later constructor step fails.
+	mcpManager, err := mcpclient.Start(context.Background(), cfg.MCPServers, mcpclient.StartOptions{Cwd: opts.Cwd})
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize MCP: %w", err)
+	}
+	mcpReady := false
+	defer func() {
+		if !mcpReady {
+			_ = mcpManager.Close()
+		}
+	}()
+
 	// Initialize memory store (global ~/.modu/memory + project <cwd>/memory)
 	memoryStore := memory.New(agentDir, opts.Cwd)
 	contextRemaining := &contextRemainingProxy{}
@@ -227,6 +244,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 			tools.ValueWebFetch:    cfg.WebFetch,
 		},
 	})
+	activeTools = append(activeTools, mcpManager.Tools()...)
 
 	// Create extension runner
 	extRunner := extension.NewRunner()
@@ -342,6 +360,8 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 		thinkingLevel:    cfg.ThinkingLevel,
 		sessionStarted:   time.Now().UnixMilli(),
 		taskManager:      taskMgr,
+		mcpManager:       mcpManager,
+		mcpWarnings:      mcpManager.Warnings(),
 		approvalManager:  approvalMgr,
 		contextRemaining: contextRemaining,
 
@@ -609,6 +629,7 @@ func NewCodingSession(opts CodingSessionOptions) (*CodingSession, error) {
 
 	sess := &CodingSession{engine: cs}
 	cs.self = sess
+	mcpReady = true
 	return sess, nil
 }
 
@@ -745,6 +766,9 @@ func (s *engine) Continue(ctx context.Context) error {
 func (s *engine) Close(reason string) {
 	if s.extensions != nil {
 		s.extensions.EmitEvent(types.Event{Type: types.EventType("session_shutdown")})
+	}
+	if s.mcpManager != nil {
+		_ = s.mcpManager.Close()
 	}
 	s.writeRuntimeState()
 	if s.sessionManager != nil {

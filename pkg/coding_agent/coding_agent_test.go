@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/openmodu/modu/pkg/coding_agent/foundation/config"
 	"github.com/openmodu/modu/pkg/coding_agent/foundation/runtimepaths"
 	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
@@ -279,6 +282,121 @@ func TestForkSessionForwardsRequestedCustomTool(t *testing.T) {
 	}
 	if !containsTool(seenTools, "mcp_lookup") || len(seenTools) != 1 {
 		t.Fatalf("expected only requested custom tool in child LLM context, got %v", seenTools)
+	}
+}
+
+func TestNewCodingSessionLoadsAndForwardsConfiguredMCPTool(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".modu")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	serverBinary := filepath.Join(t.TempDir(), "mcp-test-server")
+	build := exec.Command("go", "build", "-o", serverBinary, "./services/mcpclient/testdata/server")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build MCP test server: %v\n%s", err, output)
+	}
+	configText := fmt.Sprintf(`[mcp_servers.echo]
+command = %q
+required = true
+enabled_tools = ["echo"]
+`, serverBinary)
+	if err := os.WriteFile(config.GlobalConfigPath(agentDir), []byte(configText), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var seenTools []string
+	model := newTestModel()
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  agentDir,
+		Model:     model,
+		GetAPIKey: func(string) (string, error) { return "", nil },
+		StreamFn: func(_ context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+			seenTools = toolNamesFromDefinitions(llmCtx.Tools)
+			stream := types.NewEventStream()
+			go func() {
+				defer stream.Close()
+				msg := &types.AssistantMessage{
+					Role:       "assistant",
+					ProviderID: model.ProviderID,
+					Model:      model.ID,
+					StopReason: "stop",
+					Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "done"}},
+					Timestamp:  time.Now().UnixMilli(),
+				}
+				stream.Push(types.StreamEvent{Type: types.EventDone, Reason: "stop", Message: msg})
+				stream.Resolve(msg, nil)
+			}()
+			return stream, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close("test")
+	if names := session.GetActiveToolNames(); !containsTool(names, "mcp__echo__echo") {
+		t.Fatalf("main session tools missing configured MCP tool: %v", names)
+	}
+
+	text, err := session.forkSession(context.Background(), extension.ForkOptions{
+		Name:         "mcp-child",
+		Task:         "use MCP",
+		AllowedTools: []string{"mcp__echo__echo"},
+	})
+	if err != nil {
+		t.Fatalf("forkSession: %v", err)
+	}
+	if text != "done" || len(seenTools) != 1 || seenTools[0] != "mcp__echo__echo" {
+		t.Fatalf("MCP child forwarding: text=%q tools=%v", text, seenTools)
+	}
+	doctor := session.GetDoctorInfo(context.Background())
+	if doctor.MCPServerCount != 1 || doctor.MCPToolCount != 1 {
+		t.Fatalf("doctor MCP status: %#v", doctor)
+	}
+}
+
+func TestNewCodingSessionLoadsConfiguredStreamableHTTPTool(t *testing.T) {
+	dir := t.TempDir()
+	agentDir := filepath.Join(dir, ".modu")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	server := mcp.NewServer(&mcp.Implementation{Name: "modu-session-http-test", Version: "1.0.0"}, nil)
+	server.AddTool(&mcp.Tool{
+		Name:        "remote_echo",
+		Description: "Remote session integration tool",
+		InputSchema: map[string]any{"type": "object"},
+	}, func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "remote"}}}, nil
+	})
+	streamable := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{JSONResponse: true})
+	httpServer := httptest.NewServer(streamable)
+	t.Cleanup(httpServer.Close)
+
+	configText := fmt.Sprintf(`[mcp_servers.remote]
+url = %q
+required = true
+`, httpServer.URL)
+	if err := os.WriteFile(config.GlobalConfigPath(agentDir), []byte(configText), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  agentDir,
+		Model:     newTestModel(),
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { session.Close("test") })
+	if names := session.GetActiveToolNames(); !containsTool(names, "mcp__remote__remote_echo") {
+		t.Fatalf("main session tools missing Streamable HTTP MCP tool: %v", names)
+	}
+	doctor := session.GetDoctorInfo(context.Background())
+	if doctor.MCPServerCount != 1 || doctor.MCPToolCount != 1 {
+		t.Fatalf("doctor Streamable HTTP MCP status: %#v", doctor)
 	}
 }
 

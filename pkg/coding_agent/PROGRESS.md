@@ -16,6 +16,37 @@ High-priority gaps identified before this round:
 
 ## Completed In This Round
 
+- 2026-07-15: extended the MCP client with the current Streamable HTTP
+  transport, distinct from the deprecated legacy HTTP+SSE transport. A server
+  now selects exactly one transport with `command` (stdio) or `url`
+  (Streamable HTTP). Remote connections support Codex-compatible
+  `bearer_token_env_var`, `http_headers`, and `env_http_headers`; the official
+  SDK owns POST JSON/SSE responses and the optional standalone GET SSE channel.
+  A real `NewStreamableHTTPHandler` test verifies initialization, header and
+  bearer propagation, both POST response modes, tool discovery, and tool
+  invocation. Configured credentials are origin-bound so cross-origin HTTP
+  redirects cannot leak bearer or custom headers. Focused tests, race, vet,
+  `go run`, and diff checks pass; repository-wide tests still have only the
+  already-recorded system-prompt stale assertion. OAuth login and non-tool MCP
+  primitives remain separate follow-ups.
+- 2026-07-15: added the first MCP client slice for configured stdio tool
+  servers. Global `~/.modu/config.toml` accepts Codex-compatible root
+  `[mcp_servers.<name>]` tables, while project `.coding_agent/settings.json`
+  accepts `mcpServers`. Sessions now initialize enabled servers through the
+  official MCP Go SDK, discover paginated tools, apply allow/deny filters, and
+  expose provider-safe `mcp__<server>__<tool>` names. Required server failures
+  abort session startup; optional failures appear in `/doctor`. Tool calls
+  preserve text, image, error, structured-content, and metadata results, obey
+  per-server startup/call timeouts, and close subprocess sessions on shutdown.
+  An integration test verifies a real stdio handshake, main-session tool
+  registration, and explicit workflow/subagent allowlist forwarding. HTTP,
+  OAuth, resources, prompts, and dynamic `list_changed` remain outside this
+  first boundary. Focused tests, race tests, vet, module verification, and the
+  `modu_code` `go run` entry pass. Repository-wide `go test ./...` still reaches
+  the already-recorded `TestDefaultSystemPromptAllowsNonCodingTasks` stale
+  assertion; the same run also hit one `cmd/modu_eval` fake-agent timeout that
+  passed 3/3 when rerun alone. A second all-package run excluding only the
+  known stale-assertion package passed.
 - Added Codex-style explicit-ID lookup across all cwd-specific session
   directories. `--resume <id>`, `ResumeByID`, and TUI `/resume <prefix>` can
   now restore project A history while invoked from project B, without creating

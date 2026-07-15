@@ -145,6 +145,80 @@ func TestRequestPermissionReturnsErrorWhenParamsCannotMarshal(t *testing.T) {
 	}
 }
 
+func TestNoApproveAutoApprovesToolWithoutPermissionRPC(t *testing.T) {
+	var out bytes.Buffer
+	dir := t.TempDir()
+	model := &types.Model{ID: "test", ProviderID: "test"}
+	var toolExecuted atomic.Int64
+	var callIndex atomic.Int64
+	streamFn := func(ctx context.Context, _ *types.Model, _ *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+		stream := types.NewEventStream()
+		go func() {
+			defer stream.Close()
+			if callIndex.Add(1) == 1 {
+				msg := &types.AssistantMessage{
+					Role:       types.RoleAssistant,
+					ProviderID: model.ProviderID,
+					Model:      model.ID,
+					StopReason: "toolUse",
+					Content: []types.ContentBlock{
+						&types.ToolCallContent{Type: "toolCall", ID: "tool-1", Name: "test_tool", Arguments: map[string]any{}},
+					},
+					Timestamp: time.Now().UnixMilli(),
+				}
+				stream.Push(types.StreamEvent{Type: types.EventDone, Reason: "toolUse", Message: msg})
+				stream.Resolve(msg, nil)
+				return
+			}
+			msg := &types.AssistantMessage{
+				Role:       types.RoleAssistant,
+				ProviderID: model.ProviderID,
+				Model:      model.ID,
+				StopReason: "stop",
+				Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "done"}},
+				Timestamp:  time.Now().UnixMilli(),
+			}
+			stream.Push(types.StreamEvent{Type: types.EventDone, Reason: "stop", Message: msg})
+			stream.Resolve(msg, nil)
+		}()
+		return stream, nil
+	}
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  filepath.Join(dir, ".modu"),
+		Model:     model,
+		Tools:     []types.Tool{testACPTool{executed: &toolExecuted}},
+		GetAPIKey: func(string) (string, error) { return "", nil },
+		StreamFn:  streamFn,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close("test")
+	s := &Server{
+		session:         session,
+		opts:            Options{NoApprove: true},
+		out:             bufio.NewWriter(&out),
+		reverse:         make(map[int64]chan *rpcMsg),
+		activeSessionID: "modu-sess-1",
+	}
+	s.configureToolApproval(context.Background())
+
+	id := int64(11)
+	params := mustJSON(t, map[string]any{
+		"sessionId": "modu-sess-1",
+		"prompt":    []map[string]string{{"type": "text", "text": "run tool"}},
+	})
+	s.handlePrompt(context.Background(), id, &rpcMsg{ID: &id, Params: params})
+
+	if got := toolExecuted.Load(); got != 1 {
+		t.Fatalf("tool executions = %d, want 1; output=%s", got, out.String())
+	}
+	if strings.Contains(out.String(), "session/request_permission") {
+		t.Fatalf("no-approve sent permission RPC:\n%s", out.String())
+	}
+}
+
 func TestReplySendsErrorFrameWhenResultCannotMarshal(t *testing.T) {
 	var out bytes.Buffer
 	s := testACPServer(&out)
@@ -270,6 +344,21 @@ func testACPServer(out *bytes.Buffer) *Server {
 		out:     bufio.NewWriter(out),
 		reverse: make(map[int64]chan *rpcMsg),
 	}
+}
+
+type testACPTool struct {
+	executed *atomic.Int64
+}
+
+func (t testACPTool) Name() string        { return "test_tool" }
+func (t testACPTool) Label() string       { return "Test tool" }
+func (t testACPTool) Description() string { return "Test ACP approval tool" }
+func (t testACPTool) Parameters() any     { return map[string]any{"type": "object"} }
+func (t testACPTool) Execute(context.Context, string, map[string]any, types.ToolUpdateCallback) (types.ToolResult, error) {
+	t.executed.Add(1)
+	return types.ToolResult{
+		Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "ok"}},
+	}, nil
 }
 
 func mustJSON(t *testing.T, v any) json.RawMessage {

@@ -5,6 +5,15 @@ enough to implement, verify, and commit independently.
 
 ## Done
 
+- 2026-07-15: added Streamable HTTP MCP servers through a Codex-compatible
+  `url` configuration, including bearer-token, static-header, and
+  environment-backed-header support. This uses the current Streamable HTTP
+  transport and does not enable the deprecated legacy HTTP+SSE client.
+- 2026-07-15: connected configured stdio MCP tool servers to every new
+  `modu_code` coding session. Discovered tools are available to the main agent,
+  can be explicitly forwarded to workflow/subagent children, and are counted
+  by `/doctor`; required-server startup failures stop session creation while
+  optional failures remain diagnostic warnings.
 - 2026-07-02: added Feishu bot support for `modu_code`: configuration is stored
   under `~/.modu/channels/feishu/config.toml` or read from
   `MODU_FEISHU_APP_ID` / `MODU_FEISHU_APP_SECRET`, `/feishu` can save app
