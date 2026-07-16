@@ -22,6 +22,7 @@ import (
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	modutui "github.com/openmodu/modu/pkg/modu-tui"
 	"github.com/openmodu/modu/pkg/slash"
+	"github.com/openmodu/modu/pkg/tgbot"
 	"github.com/openmodu/modu/pkg/types"
 )
 
@@ -194,6 +195,7 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		}()
 	}
 	configWizard := newModuTUIConfigWizard(opts.CommandHooks, send)
+	channelWizard := newModuTUIChannelWizard(opts.CommandHooks, send)
 	markForegroundRunStart := func() {
 		foregroundMu.Lock()
 		foregroundRuns++
@@ -475,6 +477,10 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 					safeGo("config wizard", func() { configWizard.Start(ctx) })
 					return
 				}
+				if isModuTUIChannelCommand(line) {
+					safeGo("channel wizard", func() { channelWizard.Start(ctx) })
+					return
+				}
 				if args, ok := moduTUIModelArgs(line); ok && strings.TrimSpace(args) == "" {
 					safeGo("model selector", func() { runModuTUIModelSelect(ctx, session, send) })
 					return
@@ -553,6 +559,9 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 	safeGo("feishu bot startup", func() {
 		startModuTUIFeishuBot(ctx, session, &promptMu, send)
 	})
+	safeGo("telegram bot startup", func() {
+		startModuTUITelegramBot(ctx, session, &promptMu, send)
+	})
 	refreshDone := make(chan struct{})
 	defer close(refreshDone)
 	safeGo("workflow panel refresh", func() {
@@ -621,10 +630,40 @@ func startModuTUIFeishuBot(ctx context.Context, session *coding_agent.CodingSess
 	feishu.RuntimeLogf("bot start requested")
 }
 
+func startModuTUITelegramBot(ctx context.Context, session *coding_agent.CodingSession, promptMu *sync.Mutex, send func(tea.Msg)) {
+	printer := &moduTUIChannelPrinter{send: send, channel: "telegram"}
+	token, err := moduTUITelegramToken()
+	if err != nil {
+		printer.PrintError(fmt.Errorf("telegram config: %w", err))
+		return
+	}
+	if token == "" {
+		return
+	}
+	attachDir := filepath.Join(os.TempDir(), "modu_code_tg")
+	if _, err := tgbot.Start(ctx, token, attachDir, session, printer, promptMu, nil); err != nil {
+		printer.PrintError(err)
+	}
+}
+
+func moduTUITelegramToken() (string, error) {
+	token := strings.TrimSpace(os.Getenv("MOMS_TG_TOKEN"))
+	cfg, err := tgbot.LoadConfig()
+	if err != nil {
+		return "", err
+	}
+	if configured := strings.TrimSpace(cfg.Token); configured != "" {
+		token = configured
+	}
+	return token, nil
+}
+
 type moduTUIChannelPrinter struct {
 	send    func(tea.Msg)
 	channel string
 }
+
+func (p *moduTUIChannelPrinter) ClearLine() {}
 
 func (p *moduTUIChannelPrinter) PrintUser(text string) {
 	if p == nil || p.send == nil || strings.TrimSpace(text) == "" {
@@ -929,6 +968,10 @@ func moduTUIConfigArgs(line string) (string, bool) {
 		return strings.TrimSpace(rest), true
 	}
 	return "", false
+}
+
+func isModuTUIChannelCommand(line string) bool {
+	return strings.TrimSpace(line) == "/channel"
 }
 
 func moduTUIModelArgs(line string) (string, bool) {
@@ -5383,6 +5426,7 @@ func baseModuTUISlashCommands() []modutui.SlashCommand {
 		{Name: "/help", Description: "Show available commands"},
 		{Name: "/clear", Description: "Clear the current session"},
 		{Name: "/config", Description: "Configure providers and models"},
+		{Name: "/channel", Description: "Configure Telegram or Feishu"},
 		{Name: "/model", Description: "Switch the active model"},
 		{Name: "/workflows", Description: "Show workflow cockpit"},
 		{Name: "/compact", Description: "Manually trigger context compaction"},

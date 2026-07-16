@@ -5,6 +5,11 @@ enough to implement, verify, and commit independently.
 
 ## Done
 
+- 2026-07-16: added a single interactive `/channel` configuration flow for
+  Telegram and Feishu. Telegram tokens and Feishu app secrets use masked TUI
+  input, Feishu chat allowlists accept comma/space-separated IDs or `-` for all
+  authorized chats, legacy `/telegram` and `/feishu` slash entry points were
+  removed, and configured Telegram bots start again in the default modu TUI.
 - 2026-07-15: added Streamable HTTP MCP servers through a Codex-compatible
   `url` configuration, including bearer-token, static-header, and
   environment-backed-header support. This uses the current Streamable HTTP
@@ -16,9 +21,9 @@ enough to implement, verify, and commit independently.
   optional failures remain diagnostic warnings.
 - 2026-07-02: added Feishu bot support for `modu_code`: configuration is stored
   under `~/.modu/channels/feishu/config.toml` or read from
-  `MODU_FEISHU_APP_ID` / `MODU_FEISHU_APP_SECRET`, `/feishu` can save app
-  credentials and chat allowlists, and the default `modu-tui` runner starts a
-  Feishu `pkg/channels.Channel` through the generic channel/CodingSession bridge.
+  `MODU_FEISHU_APP_ID` / `MODU_FEISHU_APP_SECRET`, and the default `modu-tui`
+  runner starts a Feishu `pkg/channels.Channel` through the generic
+  channel/CodingSession bridge.
 - 2026-07-03: deduplicated inbound channel events in the generic
   channel/CodingSession bridge by channel, chat ID, and platform message ID, and
   dispatch Feishu message handlers asynchronously so the WebSocket event
@@ -1318,3 +1323,9 @@ enough to implement, verify, and commit independently.
   `add` and `update` inject a natural-language cron management turn. Verified
   with `go test ./pkg/cron/... ./pkg/coding_agent/plugins/extension/cron` and
   `go test ./pkg/slash ./pkg/coding_agent ./cmd/modu_code ./pkg/tui`.
+- 2026-07-16: `go test ./cmd/modu_code ./pkg/slash ./pkg/tui
+  ./pkg/channels/... ./pkg/tgbot` and `go run ./cmd/modu_code config path`
+  passed for interactive `/channel` configuration and Telegram startup
+  restoration. `go test ./...` still has the unrelated existing
+  `TestDefaultSystemPromptAllowsNonCodingTasks` failure because its expected
+  weather guidance is absent from the current default system prompt.

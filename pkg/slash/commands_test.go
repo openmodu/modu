@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openmodu/modu/pkg/channels/feishu"
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	sessionpkg "github.com/openmodu/modu/pkg/coding_agent/services/session"
 	"github.com/openmodu/modu/pkg/providers"
@@ -220,40 +219,6 @@ func TestHandlePromptsListsPromptTemplates(t *testing.T) {
 	}
 }
 
-func TestHandleFeishuSavesAppAndChats(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	printer := &capturePrinter{}
-	handled, exit := Handle(context.Background(), "/feishu app cli_a secret_a", nil, printer, nil)
-	if !handled || exit {
-		t.Fatalf("expected /feishu app handled without exit, handled=%v exit=%v", handled, exit)
-	}
-	cfg, err := feishu.LoadConfig()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.AppID != "cli_a" || cfg.AppSecret != "secret_a" {
-		t.Fatalf("app config = %+v", cfg)
-	}
-	if out := printer.String(); !strings.Contains(out, "Feishu app config saved") {
-		t.Fatalf("expected save output, got:\n%s", out)
-	}
-
-	printer = &capturePrinter{}
-	handled, exit = Handle(context.Background(), "/feishu chats oc_a oc_b oc_a", nil, printer, nil)
-	if !handled || exit {
-		t.Fatalf("expected /feishu chats handled without exit, handled=%v exit=%v", handled, exit)
-	}
-	cfg, err = feishu.LoadConfig()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Join(cfg.ChatIDs, ",") != "oc_a,oc_b" {
-		t.Fatalf("chat IDs = %#v", cfg.ChatIDs)
-	}
-}
-
 func TestHandlePromptsEmptyShowsConcreteExample(t *testing.T) {
 	cwd := t.TempDir()
 	agentDir := filepath.Join(cwd, ".coding_agent")
@@ -316,6 +281,15 @@ func TestHandleLeavesTUIOnlyCommandsUnhandled(t *testing.T) {
 				t.Fatalf("expected %s to be left to TUI, handled=%v exit=%v output=%q", cmd, handled, exit, printer.String())
 			}
 		})
+	}
+}
+
+func TestHandleLeavesChannelConfigurationToTUI(t *testing.T) {
+	for _, line := range []string{"/channel", "/telegram", "/feishu"} {
+		handled, exit := Handle(context.Background(), line, nil, &capturePrinter{}, nil)
+		if handled || exit {
+			t.Fatalf("%s = handled %v exit %v, want TUI-owned/unhandled", line, handled, exit)
+		}
 	}
 }
 

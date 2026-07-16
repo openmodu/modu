@@ -229,9 +229,11 @@ func main() {
 		ConfigUse: func(target string) (string, error) {
 			return configUseModel(target, session)
 		},
-		ConfigRemove:     configRemoveModel,
-		ConfigWorkflows:  func() (string, error) { return configToggleWorkflows(session) },
-		SaveScopedModels: provider.SetScopedModelIDs,
+		ConfigRemove:      configRemoveModel,
+		ConfigWorkflows:   func() (string, error) { return configToggleWorkflows(session) },
+		SaveScopedModels:  provider.SetScopedModelIDs,
+		ConfigureTelegram: configureTelegramChannel,
+		ConfigureFeishu:   configureFeishuChannel,
 	}}
 	if missingProvider {
 		runOpts.StartupNotice = missingProviderStartupNotice()

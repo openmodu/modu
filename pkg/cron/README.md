@@ -28,7 +28,7 @@ cron 没有自己的 model/provider 配置——任务运行时用的是 `modu_c
 - `/cron rm <UUID>`：不走 agent，直接按 UUID 删除任务
 - `/cron update <自然语言需求>`：进入 agent 自然语言交互，由 agent 调用 `cron_update` 修改任务
 - **交互式**：也可以在同一个正在跑调度器的 `modu_code` 会话里直接说"每天早上 8 点跑 git log 看看昨晚有啥提交"，builtin `cron` 扩展给这个 session 注册了 `cron_add` / `cron_list` / `cron_remove` / `cron_update` 工具，agent 直接调用改 `tasks.yaml`
-- **Telegram**：如果配了 `MOMS_TG_TOKEN`（或 `/telegram` 配置）启用了 modu_code 自带的 Telegram bot,同一份工具在那边一样能用——不需要 cron 自己再起一个 bot
+- **Telegram**：如果配了 `MOMS_TG_TOKEN`（或通过 `/channel` 配置）启用了 modu_code 自带的 Telegram bot,同一份工具在那边一样能用——不需要 cron 自己再起一个 bot
 
 调度器运行中会自动热加载新配置（fsnotify）；跨进程并发写 `tasks.yaml`（比如你同时开了两个 `modu_code` 会话）由 `<config>.lock` 上的 flock + 原子写（temp+rename）保护。
 
