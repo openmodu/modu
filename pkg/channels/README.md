@@ -55,7 +55,11 @@ without waiting for the agent run to finish. Outbound Markdown passed through
 `RespondInThread` or the compatibility `feishu.SendText` helper is converted to
 Feishu `post` rich text: headings, paragraphs, lists, quotes, code blocks, task
 items, tables, and links are represented without leaking raw Markdown syntax.
-Interactive working-state cards keep their existing card format.
+Before dispatching an accepted inbound message, the bot adds Feishu's
+`StatusFlashOfInspiration` ("Flash of inspiration") reaction to the original
+message. Reaction failures are diagnostic only and do not drop the message.
+The app needs either the `im:message` or `im:message.reactions:write_only`
+permission. Interactive working-state cards keep their existing card format.
 
 ## Usage
 

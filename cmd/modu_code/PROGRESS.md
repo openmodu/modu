@@ -5,6 +5,10 @@ enough to implement, verify, and commit independently.
 
 ## Done
 
+- 2026-07-17: Feishu now acknowledges each accepted inbound message with the
+  `StatusFlashOfInspiration` ("灵光一闪") reaction before dispatching it to the
+  channel handler. Reaction API failures are logged without blocking the user
+  message from reaching the agent.
 - 2026-07-16: converted Feishu channel replies and standalone notifications
   from raw Markdown text messages into Feishu `post` rich text. The conversion
   preserves readable headings, lists, quotes, code blocks, task items, tables,

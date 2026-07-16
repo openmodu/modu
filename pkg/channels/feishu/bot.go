@@ -21,6 +21,8 @@ import (
 	"github.com/openmodu/modu/pkg/types"
 )
 
+const flashOfInspirationEmojiType = "StatusFlashOfInspiration"
+
 // Bot is the Feishu (Lark) bot that receives messages via WebSocket long connection.
 // It handles the Feishu protocol only — all business logic is delegated via callbacks.
 type Bot struct {
@@ -180,6 +182,11 @@ func (b *Bot) handleMessageEvent(ctx context.Context, event *larkim.P2MessageRec
 		chatType = *msg.ChatType
 	}
 	b.debug("message event accepted: chat_id=%s chat_type=%s message_id=%s message_type=%s text_len=%d", chatID, chatType, messageID, messageType, len(text))
+	if messageID != "" {
+		if err := b.acknowledgeMessage(ctx, messageID); err != nil {
+			b.debug("message reaction failed: chat_id=%s message_id=%s err=%v", chatID, messageID, err)
+		}
+	}
 
 	// Stop command.
 	if strings.EqualFold(strings.TrimSpace(text), "stop") {
@@ -257,6 +264,30 @@ func (b *Bot) chatIDToInt64(chatID string) int64 {
 	id := int64(h.Sum64() >> 1) // ensure non-negative
 	b.chatIDMap.Store(chatID, id)
 	return id
+}
+
+// acknowledgeMessage marks an accepted inbound message before dispatching it
+// to the channel handler.
+func (b *Bot) acknowledgeMessage(ctx context.Context, messageID string) error {
+	if strings.TrimSpace(messageID) == "" {
+		return fmt.Errorf("feishu acknowledgeMessage: empty message_id")
+	}
+	resp, err := b.client.Im.MessageReaction.Create(ctx,
+		larkim.NewCreateMessageReactionReqBuilder().
+			MessageId(messageID).
+			Body(larkim.NewCreateMessageReactionReqBodyBuilder().
+				ReactionType(larkim.NewEmojiBuilder().
+					EmojiType(flashOfInspirationEmojiType).
+					Build()).
+				Build()).
+			Build())
+	if err != nil {
+		return fmt.Errorf("feishu acknowledgeMessage: %w", err)
+	}
+	if !resp.Success() {
+		return fmt.Errorf("feishu acknowledgeMessage: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+	return nil
 }
 
 // SendText sends one Markdown-aware Feishu rich-text message using app
