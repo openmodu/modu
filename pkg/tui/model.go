@@ -110,7 +110,6 @@ var uiSlashCommands = []slashCommandDef{
 	{"/clone", "clone current session point"},
 	{"/hotkeys", "show keyboard shortcuts"},
 	{"/reload", "reload resources"},
-	{"/telegram", "Telegram bot config"},
 }
 
 // matchSlashCommands returns all suggestions whose Name has the given prefix.

@@ -10,6 +10,8 @@ type CommandHooks struct {
 	ConfigRemove      func(target string) (string, error)
 	ConfigWorkflows   func() (string, error)
 	SaveScopedModels  func(ids []string) error
+	ConfigureTelegram func(TelegramChannelInput) (string, error)
+	ConfigureFeishu   func(FeishuChannelInput) (string, error)
 }
 
 type RunOptions struct {
@@ -49,4 +51,14 @@ type ConfigProviderInput struct {
 	BaseURL   string
 	APIKey    string
 	APIKeyEnv string
+}
+
+type TelegramChannelInput struct {
+	Token string
+}
+
+type FeishuChannelInput struct {
+	AppID     string
+	AppSecret string
+	ChatIDs   []string
 }

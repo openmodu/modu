@@ -662,9 +662,25 @@ func TestModuTUISlashCommandsIncludeBaseAndSessionCommands(t *testing.T) {
 		}
 		seen[cmd.Name] = true
 	}
-	for _, want := range []string{"/help", "/clear", "/config", "/model", "/tokens", "/compact"} {
+	for _, want := range []string{"/help", "/clear", "/config", "/channel", "/model", "/tokens", "/compact"} {
 		if !seen[want] {
 			t.Fatalf("missing slash command %q in %#v", want, commands)
+		}
+	}
+	for _, unwanted := range []string{"/telegram", "/feishu"} {
+		if seen[unwanted] {
+			t.Fatalf("unexpected legacy slash command %q in %#v", unwanted, commands)
+		}
+	}
+}
+
+func TestIsModuTUIChannelCommandOnlyAcceptsExactCommand(t *testing.T) {
+	if !isModuTUIChannelCommand("  /channel  ") {
+		t.Fatal("expected exact /channel command")
+	}
+	for _, line := range []string{"/channel telegram", "/channels", "/telegram", "/feishu"} {
+		if isModuTUIChannelCommand(line) {
+			t.Fatalf("unexpected channel command match for %q", line)
 		}
 	}
 }
@@ -972,7 +988,7 @@ func TestRunModuTUISlashSendsPreformattedHelpOutput(t *testing.T) {
 	if !got.Preformatted {
 		t.Fatalf("slash help output should be preformatted: %#v", got)
 	}
-	for _, want := range []string{"Help", "/help, /h", "/quit, /exit", "tool approval"} {
+	for _, want := range []string{"Help", "/help, /h", "/quit, /exit", "/channel", "tool approval"} {
 		if !strings.Contains(got.Text, want) {
 			t.Fatalf("help output missing %q:\n%s", want, got.Text)
 		}

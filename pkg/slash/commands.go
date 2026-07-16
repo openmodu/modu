@@ -12,9 +12,6 @@ import (
 
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
 	"github.com/openmodu/modu/pkg/types"
-
-	"github.com/openmodu/modu/pkg/channels/feishu"
-	"github.com/openmodu/modu/pkg/tgbot"
 )
 
 // Printer is implemented by the caller (TUI or stdout) to surface command output.
@@ -483,22 +480,6 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 			}
 			r.PrintInfo(l)
 		}
-		return true, false
-
-	case "telegram":
-		arg := ""
-		if len(parts) > 1 {
-			arg = strings.TrimSpace(parts[1])
-		}
-		handleTelegram(arg, r)
-		return true, false
-
-	case "feishu":
-		arg := ""
-		if len(parts) > 1 {
-			arg = strings.TrimSpace(parts[1])
-		}
-		handleFeishu(arg, r)
 		return true, false
 
 	default:
@@ -975,146 +956,6 @@ func handleDoctor(ctx context.Context, session *coding_agent.CodingSession, r Pr
 	r.PrintSection("Doctor", lines)
 }
 
-func handleTelegram(arg string, r Printer) {
-	configPath := tgbot.ConfigPath()
-
-	if strings.HasPrefix(arg, "token ") {
-		token := strings.TrimSpace(strings.TrimPrefix(arg, "token "))
-		if token == "" {
-			r.PrintInfo("usage: /telegram token <bot_token>")
-			return
-		}
-		cfg, err := tgbot.LoadConfig()
-		if err != nil {
-			cfg = &tgbot.Config{}
-		}
-		cfg.Token = token
-		if err := tgbot.SaveConfig(cfg); err != nil {
-			r.PrintError(fmt.Errorf("save telegram config: %w", err))
-			return
-		}
-		r.PrintInfo("Telegram token saved to " + configPath)
-		r.PrintInfo("Restart modu_code to start the bot.")
-		return
-	}
-
-	cfg, err := tgbot.LoadConfig()
-	if err != nil {
-		r.PrintInfo("telegram config: " + configPath)
-		r.PrintError(fmt.Errorf("read config: %w", err))
-		return
-	}
-
-	r.PrintInfo("telegram config: " + configPath)
-	if cfg.Token != "" {
-		masked := cfg.Token
-		if len(masked) > 8 {
-			masked = masked[:4] + strings.Repeat("*", len(masked)-8) + masked[len(masked)-4:]
-		}
-		r.PrintInfo("  token: " + masked + "  (set)")
-	} else {
-		r.PrintInfo("  token: (not set)")
-		r.PrintInfo("  set with: /telegram token <bot_token>")
-	}
-	r.PrintInfo("  start: automatic on modu_code startup when a token is set")
-}
-
-func handleFeishu(arg string, r Printer) {
-	configPath := feishu.ConfigPath()
-
-	if strings.HasPrefix(arg, "app ") {
-		fields := strings.Fields(strings.TrimSpace(strings.TrimPrefix(arg, "app ")))
-		if len(fields) != 2 {
-			r.PrintInfo("usage: /feishu app <app_id> <app_secret>")
-			return
-		}
-		cfg, err := feishu.LoadConfig()
-		if err != nil {
-			cfg = &feishu.Config{}
-		}
-		cfg.AppID = fields[0]
-		cfg.AppSecret = fields[1]
-		if err := feishu.SaveConfig(cfg); err != nil {
-			r.PrintError(fmt.Errorf("save feishu config: %w", err))
-			return
-		}
-		r.PrintInfo("Feishu app config saved to " + configPath)
-		r.PrintInfo("Restart modu_code to start the bot.")
-		return
-	}
-
-	if strings.HasPrefix(arg, "chats ") || strings.HasPrefix(arg, "chat ") {
-		_, value, _ := strings.Cut(arg, " ")
-		fields := strings.Fields(value)
-		if len(fields) == 0 {
-			r.PrintInfo("usage: /feishu chats <chat_id> [chat_id...]")
-			return
-		}
-		cfg, err := feishu.LoadConfig()
-		if err != nil {
-			cfg = &feishu.Config{}
-		}
-		cfg.ChatIDs = fields
-		if err := feishu.SaveConfig(cfg); err != nil {
-			r.PrintError(fmt.Errorf("save feishu config: %w", err))
-			return
-		}
-		r.PrintInfo("Feishu chat allowlist saved to " + configPath)
-		r.PrintInfo("Restart modu_code to apply chat changes.")
-		return
-	}
-
-	if arg == "clear-chats" || arg == "clear-chat" {
-		cfg, err := feishu.LoadConfig()
-		if err != nil {
-			cfg = &feishu.Config{}
-		}
-		cfg.ChatIDs = nil
-		if err := feishu.SaveConfig(cfg); err != nil {
-			r.PrintError(fmt.Errorf("save feishu config: %w", err))
-			return
-		}
-		r.PrintInfo("Feishu chat allowlist cleared.")
-		r.PrintInfo("Restart modu_code to apply chat changes.")
-		return
-	}
-
-	cfg, err := feishu.LoadConfig()
-	if err != nil {
-		r.PrintInfo("feishu config: " + configPath)
-		r.PrintError(fmt.Errorf("read config: %w", err))
-		return
-	}
-
-	r.PrintInfo("feishu config: " + configPath)
-	if cfg.AppID != "" {
-		r.PrintInfo("  appID: " + cfg.AppID + "  (set)")
-	} else {
-		r.PrintInfo("  appID: (not set)")
-	}
-	if cfg.AppSecret != "" {
-		r.PrintInfo("  appSecret: " + maskSecret(cfg.AppSecret) + "  (set)")
-	} else {
-		r.PrintInfo("  appSecret: (not set)")
-	}
-	if len(cfg.ChatIDs) > 0 {
-		r.PrintInfo("  chatIDs: " + strings.Join(cfg.ChatIDs, ", "))
-	} else {
-		r.PrintInfo("  chatIDs: (all authorized chats)")
-	}
-	r.PrintInfo("  env: " + feishu.EnvAppID + ", " + feishu.EnvAppSecret + ", " + feishu.EnvChatIDs)
-	r.PrintInfo("  set with: /feishu app <app_id> <app_secret>")
-	r.PrintInfo("  optional allowlist: /feishu chats <chat_id> [chat_id...]")
-	r.PrintInfo("  start: automatic on modu_code startup when appID/appSecret are set")
-}
-
-func maskSecret(s string) string {
-	if len(s) <= 8 {
-		return strings.Repeat("*", len(s))
-	}
-	return s[:4] + strings.Repeat("*", len(s)-8) + s[len(s)-4:]
-}
-
 func PrintHelp(r Printer) {
 	lines := []string{
 		"/help, /h           — show this help",
@@ -1122,6 +963,7 @@ func PrintHelp(r Printer) {
 		"/clear              — clear the screen",
 		"/config             — configure providers and models",
 		"/config validate    — validate model config",
+		"/channel            — configure Telegram or Feishu",
 		"/model              — show or switch model",
 		"/model list         — list configured models",
 		"/compact            — compact the conversation context",
@@ -1147,11 +989,6 @@ func PrintHelp(r Printer) {
 		"/worktree [status|list|diff|cleanup|on|off] — inspect, diff, clean, or toggle isolated worktree mode",
 		"/skills             — list available skills",
 		"/prompts            — list available prompt templates",
-		"/feishu             — show Feishu bot config",
-		"/feishu app <id> <secret> — set Feishu app credentials",
-		"/feishu chats <ids> — restrict Feishu chats",
-		"/telegram           — show Telegram bot config",
-		"/telegram token <t> — set Telegram bot token",
 		"",
 		"keys",
 		"ctrl+j         — insert newline",
