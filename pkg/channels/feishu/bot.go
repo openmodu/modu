@@ -187,7 +187,7 @@ func (b *Bot) handleMessageEvent(ctx context.Context, event *larkim.P2MessageRec
 		if handler := b.abortHandler(); handler != nil {
 			handler(chatInt64)
 		}
-		b.sendText(ctx, chatID, "已停止。") //nolint:errcheck
+		b.sendPost(ctx, chatID, "已停止。") //nolint:errcheck
 		return nil
 	}
 
@@ -259,35 +259,37 @@ func (b *Bot) chatIDToInt64(chatID string) int64 {
 	return id
 }
 
-// sendText sends a plain text message to a Feishu chat_id.
-// SendText sends one plain-text message to a Feishu chat using app
-// credentials, without starting the inbound websocket bot. Intended for
-// fire-and-forget outbound notifications (e.g. modu_cron task completion).
+// SendText sends one Markdown-aware Feishu rich-text message using app
+// credentials, without starting the inbound websocket bot. The name is kept
+// for compatibility with outbound notification callers.
 func SendText(ctx context.Context, appID, appSecret, chatID, text string) error {
 	b, err := NewBot(appID, appSecret, nil, nil)
 	if err != nil {
 		return err
 	}
-	_, err = b.sendText(ctx, chatID, text)
+	_, err = b.sendPost(ctx, chatID, text)
 	return err
 }
 
-func (b *Bot) sendText(ctx context.Context, chatID, text string) (string, error) {
-	content, _ := json.Marshal(map[string]string{"text": text})
+func (b *Bot) sendPost(ctx context.Context, chatID, text string) (string, error) {
+	content, err := buildPostContent(text)
+	if err != nil {
+		return "", fmt.Errorf("feishu sendPost: build content: %w", err)
+	}
 	resp, err := b.client.Im.Message.Create(ctx,
 		larkim.NewCreateMessageReqBuilder().
 			ReceiveIdType("chat_id").
 			Body(larkim.NewCreateMessageReqBodyBuilder().
 				ReceiveId(chatID).
-				MsgType("text").
-				Content(string(content)).
+				MsgType("post").
+				Content(content).
 				Build()).
 			Build())
 	if err != nil {
-		return "", fmt.Errorf("feishu sendText: %w", err)
+		return "", fmt.Errorf("feishu sendPost: %w", err)
 	}
 	if !resp.Success() {
-		return "", fmt.Errorf("feishu sendText: code=%d msg=%s", resp.Code, resp.Msg)
+		return "", fmt.Errorf("feishu sendPost: code=%d msg=%s", resp.Code, resp.Msg)
 	}
 	if resp.Data != nil && resp.Data.MessageId != nil {
 		return *resp.Data.MessageId, nil
@@ -295,27 +297,30 @@ func (b *Bot) sendText(ctx context.Context, chatID, text string) (string, error)
 	return "", nil
 }
 
-// replyText replies to the original Feishu message. This is preferable for
-// inbound event handling because it works naturally in p2p, group, and thread
-// contexts.
-func (b *Bot) replyText(ctx context.Context, messageID, text string) (string, error) {
+// replyPost replies to the original Feishu message with structured rich text.
+// This is preferable for inbound event handling because it works naturally in
+// p2p, group, and thread contexts.
+func (b *Bot) replyPost(ctx context.Context, messageID, text string) (string, error) {
 	if strings.TrimSpace(messageID) == "" {
-		return "", fmt.Errorf("feishu replyText: empty message_id")
+		return "", fmt.Errorf("feishu replyPost: empty message_id")
 	}
-	content, _ := json.Marshal(map[string]string{"text": text})
+	content, err := buildPostContent(text)
+	if err != nil {
+		return "", fmt.Errorf("feishu replyPost: build content: %w", err)
+	}
 	resp, err := b.client.Im.Message.Reply(ctx,
 		larkim.NewReplyMessageReqBuilder().
 			MessageId(messageID).
 			Body(larkim.NewReplyMessageReqBodyBuilder().
-				MsgType("text").
-				Content(string(content)).
+				MsgType("post").
+				Content(content).
 				Build()).
 			Build())
 	if err != nil {
-		return "", fmt.Errorf("feishu replyText: %w", err)
+		return "", fmt.Errorf("feishu replyPost: %w", err)
 	}
 	if !resp.Success() {
-		return "", fmt.Errorf("feishu replyText: code=%d msg=%s", resp.Code, resp.Msg)
+		return "", fmt.Errorf("feishu replyPost: code=%d msg=%s", resp.Code, resp.Msg)
 	}
 	if resp.Data != nil && resp.Data.MessageId != nil {
 		return *resp.Data.MessageId, nil
@@ -470,13 +475,13 @@ func (c *feishuContext) ReplaceMessage(text string) error {
 
 func (c *feishuContext) RespondInThread(text string) error {
 	if strings.TrimSpace(c.messageID) != "" {
-		if _, err := c.bot.replyText(context.Background(), c.messageID, text); err == nil {
+		if _, err := c.bot.replyPost(context.Background(), c.messageID, text); err == nil {
 			return nil
 		} else {
-			c.bot.debug("replyText failed, fallback to sendText: chat_id=%s message_id=%s err=%v", c.chatID, c.messageID, err)
+			c.bot.debug("replyPost failed, fallback to sendPost: chat_id=%s message_id=%s err=%v", c.chatID, c.messageID, err)
 		}
 	}
-	_, err := c.bot.sendText(context.Background(), c.chatID, text)
+	_, err := c.bot.sendPost(context.Background(), c.chatID, text)
 	return err
 }
 
