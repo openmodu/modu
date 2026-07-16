@@ -51,7 +51,11 @@ Implementation of the Feishu Bot API. The WebSocket bot accepts private and
 group chat events. Call `SetAllowedChatIDs` when the host application needs to
 restrict inbound messages to specific Feishu chat IDs. Message handlers are
 dispatched asynchronously so the Feishu event callback can acknowledge delivery
-without waiting for the agent run to finish.
+without waiting for the agent run to finish. Outbound Markdown passed through
+`RespondInThread` or the compatibility `feishu.SendText` helper is converted to
+Feishu `post` rich text: headings, paragraphs, lists, quotes, code blocks, task
+items, tables, and links are represented without leaking raw Markdown syntax.
+Interactive working-state cards keep their existing card format.
 
 ## Usage
 

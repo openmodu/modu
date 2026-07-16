@@ -5,6 +5,11 @@ enough to implement, verify, and commit independently.
 
 ## Done
 
+- 2026-07-16: converted Feishu channel replies and standalone notifications
+  from raw Markdown text messages into Feishu `post` rich text. The conversion
+  preserves readable headings, lists, quotes, code blocks, task items, tables,
+  and clickable HTTP(S)/email links inside `pkg/channels/feishu`; the generic
+  channel bridge and `coding_agent` remain unchanged.
 - 2026-07-16: added a single interactive `/channel` configuration flow for
   Telegram and Feishu. Telegram tokens and Feishu app secrets use masked TUI
   input, Feishu chat allowlists accept comma/space-separated IDs or `-` for all

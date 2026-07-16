@@ -48,7 +48,10 @@ Telegram Bot API 的实现。
 ### 飞书 (Feishu/Lark)
 飞书机器人 API 的实现。WebSocket bot 支持私聊和群聊事件；宿主应用需要限制
 入口时可调用 `SetAllowedChatIDs` 指定允许的飞书 chat_id。消息 handler 会异步派发，
-让飞书事件回调不用等待 agent 执行完成即可确认投递。
+让飞书事件回调不用等待 agent 执行完成即可确认投递。通过 `RespondInThread` 或兼容
+接口 `feishu.SendText` 发送的 Markdown 会转换为飞书 `post` 富文本；标题、段落、
+列表、引用、代码块、任务项、表格和链接不会再以原始 Markdown 标记显示。“处理中”
+等交互卡片仍保持原有卡片格式。
 
 ## 使用
 
