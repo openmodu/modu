@@ -1,24 +1,22 @@
-# Modu Shared Types
+# Shared Agent contracts
 
-`pkg/types` owns shared data contracts used across providers, agent runtime,
-tools, events, and host applications.
+`pkg/types` defines the data and interface contracts shared by Providers, the Agent loop, tools, events, and host applications. It contains no Agent control flow or concrete tool implementation; runtime behavior belongs in `pkg/agent`.
 
-Agent-facing definitions such as `Config`, `AgentContext`, `State`, `Event`,
-`Tool`, `ToolResult`, `ToolApprovalDecision`, `RuntimeHooks`, and loop input /
-output structs live here so every package can reuse the same Go type identity.
-`pkg/agent` owns runtime behaviour such as `Agent`, `Loop`, `DefaultLLM`, and
-`DefaultTools`; callers should import this package directly for shared
-contracts.
+Import this package when two components must share the same Go type identity for `Config`, `AgentContext`, `State`, `Event`, `Tool`, `ToolResult`, `ToolApprovalDecision`, `RuntimeHooks`, or loop input and output values.
 
-File ownership:
+## File ownership
 
-- `messages.go`: conversation message shapes and roles.
-- `content.go`: message content blocks.
-- `usage.go`: token/cost usage accounting.
-- `model.go`: model, provider, reasoning, and provider-compat metadata.
-- `stream.go`: assistant streaming event contracts.
-- `agent_config.go`: agent configuration, stream callback, and runtime hooks.
-- `agent_loop.go`: LLM/tool execution interfaces and loop input/output.
-- `tool.go`: tool interfaces, tool execution input/output, and approval.
-- `agent_state.go`: agent state, status, interrupts, and resume decisions.
-- `agent_event.go`: agent runtime events and event stream.
+| File | Contracts |
+|---|---|
+| `messages.go` | Conversation messages and roles |
+| `content.go` | Text, thinking, Tool Call, and other content blocks |
+| `usage.go` | Token and cost accounting |
+| `model.go` | Models, Providers, reasoning settings, and compatibility metadata |
+| `stream.go` | Assistant stream events and `EventStream` |
+| `agent_config.go` | Agent configuration, stream callback, and `RuntimeHooks` |
+| `agent_loop.go` | LLM and tool execution interfaces plus loop input and output |
+| `tool.go` | Tool contracts, execution values, JSON Schema, and approval |
+| `agent_state.go` | State, status, interrupts, and resume decisions |
+| `agent_event.go` | Runtime events, `EventSink`, and event stream |
+
+Keep behavior out of this package unless it is required to preserve or interpret one of these contracts. `pkg/agent` supplies `Agent`, `Loop`, `DefaultLLM`, and `DefaultTools`.

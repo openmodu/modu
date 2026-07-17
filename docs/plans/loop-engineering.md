@@ -1,101 +1,105 @@
-# modu_code 实现 Loop Engineering 的设计方案
+# modu_code Loop Engineering 设计与验收记录
 
-> 本文回答一个问题:**modu 要成为一个能承载 loop 的 harness,哪些已经有了,哪些还要做。**
-> 状态标记:✅ 已完成 · 🟡 部分完成 · ❌ 待做
+本文回答一个问题：modu 要承载可长期运行的 loop，已经具备哪些能力，还缺哪些验收证据。它既是设计方案，也是按日期追加的真机验证记录。
 
-## 1. 文章核心框架(一页纸)
+状态标记：`[完成]`、`[部分完成]`、`[待做]`。
 
-Loop engineering 是 prompt → context → harness 之上的第四层:人从循环里撤出来,改去设计那个循环。loop 比 harness 多三个动词:**runs on a timer(定时自己醒)、spawns helpers(自己派 sub-agent)、feeds itself(这一轮的产出是下一轮的输入)**。
+## 1. 判断框架
 
-一次 turn 的五动作,砍掉任何一个就长出对应的 loop 病:
+Loop engineering 位于 prompt、context 和 harness 之上：人不再逐轮派发任务，而是设计一个能定时启动、派生子 Agent、复用上一轮结果的循环。
 
-- **Discovery(找活)** — 缺了 = Blind loop,人还在每天派活
-- **Handoff(派活+隔离)** — 缺了 = Tangled loop,多个 agent 改同一目录
-- **Verification(会 say no 的门)** — 缺了 = Nodding loop,自己给自己点头
-- **Persistence(记下)** — 缺了 = Amnesiac loop,每天从头来
-- **Scheduling(定下一轮)** — 缺了 = Manual loop,demo 完就停
+一个可持续运行的 loop 必须包含五个动作：
 
-支撑五动作的六部件:**Automations(调度)、Worktrees(隔离)、Skills(项目知识,还 intent debt)、Connectors(接外部系统)、Sub-agents(generator/evaluator 分离)、Memory(磁盘上的跨轮状态)**。
+- **Discovery（发现任务）**：缺失后仍需人工每天派活。
+- **Handoff（分派与隔离）**：缺失后多个 Agent 会修改同一工作目录。
+- **Verification（独立验收）**：缺失后执行者会自行批准结果。
+- **Persistence（保存状态）**：缺失后每轮都要重新发现和判断。
+- **Scheduling（安排下一轮）**：缺失后只能运行一次演示。
 
-三条纪律,缺一不可:
+这五个动作分别依赖 Automations、Worktrees、Skills、Connectors、Sub-agents 和 Memory。判断实现是否可用时，再加三条硬约束：
 
-- **Cap Before You Ship**:per-run budget / daily budget / max retries 三档断路器,在 loop 第一次自己跑之前装好
-- **Keep One Door Open(人门)**:PR 永不 auto-merge、不确定的进 inbox、每天读一个 sample
-- **Maker-checker**:停止条件由独立 fresh model 判断,不是 generator 自己说"差不多了"。文章原话:"把一个独立 evaluator 调教成挑剔,比把 generator 调教成自我批判容易得多"
+- 单次预算、每日预算和最大重试次数必须在第一次自动运行前生效。
+- PR 不自动合并；不确定项进入 inbox，并由人定期抽样。
+- 停止条件由独立 evaluator 判断，不能由 generator 自行确认。
 
-关键区分:`/loop` 是按 interval 重跑(没有停止判断);`/goal` 是跑到条件被**另一个模型**判定为 true 才停。混了这两个,你以为装了 verification,其实只装了 scheduling。
+`/loop` 按间隔重复执行，不判断目标是否完成；`/goal` 在独立模型确认条件成立后停止。混用二者，只能得到定时执行，得不到独立验收。
 
-## 2. modu 现状映射:六部件逐项盘点
+## 2. 六项能力盘点
 
-### 2.1 Automations / Scheduling — ✅ 完成(含断路器)
+### 2.1 Automations / Scheduling — [完成，含断路器]
 
-已完成:
+已完成：
 
-- `pkg/cron`(入口 `modu_code cron`):daemon + CLI 双形态,robfig/cron 六字段表达式,`on_overlap: skip|queue|kill` 并发策略,连续 overlap 告警
-- 配置热加载(fsnotify + SIGHUP,失败回滚保留旧调度器)
-- `cron_add` / `cron_list` / `cron_remove` 三个 agent 工具,支持自然语言建任务——通过 builtin `cron` 扩展挂进任意 modu_code session(交互式或 modu_code 自带的 Telegram bot),没有 cron 专属的 CLI/bot 实现
-- 每个 tick 独立 `CodingSession`,精简 NDJSON 运行日志(`run_end` 保证落盘,可靠的"tick 结束"标记)
-- 完成通知 channels:webhook / telegram / feishu_webhook,成败都推送,含状态、耗时、日志路径、最后一段 assistant 文本
-- `modu_code -p "<prompt>"` print 模式 + `-json` NDJSON 输出:云端调度(GitHub Actions cron)可以直接用,机器关着也能跑
+- `pkg/cron` 使用 robfig/cron 六字段表达式，支持 `on_overlap: skip|queue|kill`，连续重叠会告警。
+- 配置支持 fsnotify 热加载；加载失败时继续使用旧调度器。
+- `cron_add`、`cron_list`、`cron_remove` 通过内置 `cron` 扩展注册到交互会话和渠道会话，不再维护独立的 cron CLI 或机器人。
+- 每个 tick 创建独立 `CodingSession`；NDJSON 日志以 `run_end` 作为运行结束标记。
+- webhook、Telegram、Feishu webhook 和 Feishu bot 可发送成功或失败通知，内容包含状态、耗时、日志路径和最后一段 Assistant 文本。
+- `modu_code -p "<prompt>" -json` 可由 GitHub Actions 等外部调度器执行。
 
-~~待做~~ ✅ 已补齐(见 §3.2):per-run timeout / token cap / max retries + 全局日额度已实现,cron 任务跑歪时有三档断路器叫停。
+原缺口已补齐（见 §3.2）：已实现单次运行超时、Token 上限、最大重试次数和全局日额度，失控任务会被三档断路器终止。
 
-补充(2026-07-03 追加):cron 与 coding_agent 已打通双向——① `config`/`crontools`/`scheduler` 提升到 `pkg/cron/`,新增 builtin `cron` 扩展,modu_code 会话内可直接用 `cron_add`/`cron_list`/`cron_remove` 管理任务表(flock + 原子写防跨进程写坏,daemon fsnotify 热加载接住改动);② modu_cron 每个 tick 的 session 现在加载 builtin 扩展(goal/subagent/workflow),cron 任务可以 `create_goal` 长跑并由 §3.1 的 verifier 裁判完成,extensions.yaml 坏了降级为无扩展继续跑。执行面(常驻调度)仍需要独立 daemon 进程——TUI session 是短命进程,"running while you sleep" 需要常驻;再进一步:连独立的 `modu_code cron` 命令/进程都删了——调度器现在**跑在 `modu_code` 正常交互式 TUI 进程里**(`cmd/modu_code/main.go` 启动 TUI 前起一个 goroutine 直接调 `pkg/cron.RunScheduler(ctx, cfgPath)`,ctx 随 TUI 退出而取消;`-p`/`-rpc`/`-acp` 这类一次性或外部客户端驱动的模式不启动它,避免在不预期场合悄悄花 token)。这意味着"loop 自己醒来"现在等价于"你开着一个 `modu_code` 会话"——想要真正人不在也能跑,得让某台机器上一直挂一个 `modu_code`(tmux/screen)。cron 自己那份重复的 env-only provider 删了——`cmd/modu_code/internal/provider` 提升为共享的 `pkg/provider`,cron 任务直接用 `modu_code` 当前激活的 model,不再有第二套模型配置源。CLI 的 `add`/`init`/`list`/`logs`/`rm`/`run` 六个子命令、cron 专属的 Telegram 入站轮询(`telegram_inbound.go`)、以及 `pkg/cron/cli` 这个包本身全删了——task 的增删查没有 CLI 或独立 Telegram bot 存在的必要,`cron` 扩展已经把 cron_add/cron_list/cron_remove 挂进任何 modu_code session(交互式或 modu_code 自带的 Telegram bot),配置文件缺失时调度器也能以零任务起步;`logs` 直接读 `~/.modu/cron/logs/<id>/*.log`(NDJSON,cat/jq 即可)。调度器自身的 log.Printf 输出重定向到 `~/.modu/cron/daemon.log`,不会打进终端糊掉 bubbletea 界面。每次 cron 运行现在还会把完整 session 记录(不是精简 NDJSON,是像交互式会话一样存进 `~/.modu/sessions/` 的那份)按 `cron:<task_id>` 命名,可以在 session 列表/`--resume` 里按任务 id 找到对应的运行历史。通知渠道另支持 `feishu_bot` 类型(飞书应用机器人,凭据自动复用 `~/.modu/channels/feishu/config.toml`)。
+当前调度器运行在普通 `modu_code` 交互式 TUI 进程中，TUI 退出时随 context 取消；`-p`、`-rpc`、`-acp` 等一次性或外部驱动模式不会启动调度器。因此“无人值守”要求至少有一台机器通过 tmux、screen 或服务管理器持续运行 `modu_code`。
 
-补充(2026-07-03 再追加):`tasks.yaml` 现在有一等 `goal:` 字段。cron tick 开始时 runner 直接创建 session goal,再发送 `prompt`;无头 runner 接管 hidden continuation,直到 `update_goal(status=complete)` 被 verifier PASS、goal paused/budgetLimited,或 timeout/token cap 打断。这样 Scheduling 和 Verification 不再靠 prompt 自觉拼接:调度器负责建目标,goal 扩展负责续跑和裁判,cap 负责停止失控 run。2026-07-04 再补一刀可观测性:`run_start` 现在记录 `trigger`、`timezone`、`has_goal`、去空白后的 `goal` 文本和 `goal_verifier`,自然调度器为 `scheduler`,手动 harness/bootstrap 为 `manual`;声明 `goal:` 的任务在 `run_end` 记录 `goal_status`。goal 扩展不可用记为 `status=goal_unavailable`;goal paused / budgetLimited 分别记为 `status=goal_paused` / `status=goal_budget_limited`;三者都作为断路器不触发 `max_retries`,避免 verifier 连续拒绝或配置错误后被 cron 当 transient error 重跑。task 级 `timezone:` 现在会转换为 robfig cron 的 `CRON_TZ=...`,本仓库实跑的 morning-triage 和 A 股任务都 pin 到 `Asia/Shanghai`,避免换机器后 weekday/早盘时间漂移。两工作日自然 cron 验收的硬标准(人工核对日志即可,不需要脚本):两条**不同日期**的 log,`run_start` 为 `trigger:"scheduler"`、`timezone:"Asia/Shanghai"`、`has_goal:true`、`goal_verifier:true`,`run_end` 为 `goal_status:"complete"`;每条 log 的 session_id 能连回名为 `cron:<task_id>` 的完整 session;每条 run 的日期出现在 `state/triage.md` 且同一 finding 不从 closed/done 回退到 open。
+cron tick 会加载 goal、subagent 和 workflow 扩展。`tasks.yaml` 的 `goal:` 字段由 runner 直接转成 session goal；无头 runner 继续执行 hidden continuation，直到 verifier 接受完成状态、goal 进入 paused/budgetLimited，或超时与 Token 上限终止运行。扩展配置损坏时，本轮降级为不加载扩展。
 
-### 2.2 Worktrees / Handoff — ✅ 基本完成
+任务表通过 flock 和原子写避免跨进程损坏，fsnotify 负责接收变更。完整 session 以 `cron:<task_id>` 命名并写入 `~/.modu/sessions/`；精简运行日志写入 `~/.modu/cron/logs/<id>/`，调度器自身日志写入 `~/.modu/cron/daemon.log`。
 
-已完成:
+自然调度验收要求连续两个工作日各有一份日志：`run_start` 必须包含 `trigger:"scheduler"`、`timezone:"Asia/Shanghai"`、`has_goal:true`、`goal_verifier:true`，`run_end` 必须包含 `goal_status:"complete"`；每个 `session_id` 都能定位到完整 session；`state/triage.md` 中同一 finding 不能从 closed/done 回退到 open。
 
-- `modu_code -worktree`:启动即进隔离 worktree
-- `enter_worktree` / `exit_worktree` 工具(`pkg/coding_agent/tools/worktree`):agent 自己能开/退 worktree
-- workflow 插件里子 agent 可传 `isolation: "worktree"`,并行 fan-out 物理隔离
-- workflow 运行时并发默认 4、钳制上限 16,单次 workflow 最多 fork 1000 child——并行上限(MAX_PARALLEL)这一课已经装好
+### 2.2 Worktrees / Handoff — [基本完成]
 
-待做:无硬缺口。"每条 finding 一个 worktree" 是 skill/workflow 脚本层的写法约定,harness 能力已备齐(§3.4 的示例 skill 会演示)。
+已完成：
 
-### 2.3 Skills / Discovery — ✅ 完成
+- `modu_code -worktree` 启动后进入隔离 worktree。
+- `enter_worktree` 和 `exit_worktree` 允许 Agent 自行创建或退出 worktree。
+- workflow 子 Agent 可设置 `isolation: "worktree"`，并行分支使用不同目录。
+- workflow 默认并发数为 4，上限为 16；单次 workflow 最多创建 1000 个 child。
 
-已完成:
+边界：“每条 finding 使用一个 worktree”仍是 skill 或 workflow 层的约定，harness 不会自动替任务选择隔离粒度。
 
-- `pkg/skills`:SKILL.md 发现(frontmatter 解析、多路径、ignore 规则),按 Agent Skills 规范以 XML 注入 system prompt
-- slash 命令没有内置模板时回落到同名 skill——`modu_code -p "/morning-triage"` 就是 "automation 触发一个 skill,而不是一坨粘进 cron 的 prompt"(文章 L1 的核心要求),cron 任务的 `prompt` 字段写 `/skill-name` 即可
+### 2.3 Skills / Discovery — [完成]
 
-待做:无 harness 缺口。Discovery 的 Read/Judge/Write/Stop 段是每个 loop 自己的 SKILL.md 内容,属于用户侧;§3.4 提供参考实现。
+已完成：
 
-### 2.4 Connectors — 🟡 自有渠道完成,MCP 缺失
+- `pkg/skills` 负责发现 SKILL.md，解析 frontmatter、多路径和 ignore 规则，并按 Agent Skills 规范注入 system prompt。
+- slash 命令找不到内置模板时会回落到同名 skill。cron 的 `prompt` 可直接填写 `/skill-name`，例如 `modu_code -p "/morning-triage"`。
 
-已完成:
+边界：Discovery 的 Read、Judge、Write、Stop 规则属于每个 loop 自己的 SKILL.md；§3.4 只提供参考实现。
 
-- `pkg/channels`(feishu / telegram 双实现 + bridge):入站消息、出站通知,modu_cron 的通知就走这套
-- web_fetch / web_search 工具(可被 workflow child 显式请求)
+### 2.4 Connectors — [完成]
 
-待做(见 §3.6):没有 MCP client。文章里 connector 的角色是"决定 loop 的视野半径"(读 Jira、开 Linear ticket、Playwright 点页面)。目前等价能力靠 Bash + `gh` CLI 能覆盖 GitHub 一系(开 PR、读 issue、读 CI),所以 MCP 是 P2 增强而非阻塞项。
+已完成：
 
-### 2.5 Sub-agents / Verification — ✅ 完成(verifier 门已装)
+- `pkg/channels` 提供 Feishu、Telegram 和 bridge，用于入站消息与出站通知。
+- workflow child 可显式请求 `web_fetch` 和 `web_search`。
+- MCP client 支持 stdio 和 Streamable HTTP，session 可动态注册工具并转发给 child（见 §3.6）。
 
-已完成:
+边界：外部系统是否可用仍取决于对应 MCP server、认证信息和网络权限；Bash 与 `gh` CLI 只覆盖 GitHub 一类场景，不能替代通用 connector。
 
-- `pkg/coding_agent/plugins/subagent`:markdown 定义 sub-agent(frontmatter 支持 `tools` 白名单、`disallowed_tools`、`model` 覆盖、`isolation`、`max_turns`、`memory_scope`、`permission_mode`),body 即 system prompt——**换一个 model 当 evaluator** 的能力已经在了
-- workflow 插件:`agent()` / `parallel()` / `pipeline()`,child 可传 `schema`(JSON Schema 校验返回值,失败重试一次)——结构化 VERDICT 输出的机制已备
-- `/goal`:隐藏续跑(agent_end 后自动注入 continuation)、token budget(`StartWithBudget` / `StatusBudgetLimited`)、审计式完成 prompt(要求逐条对照 objective 找证据,禁止拿 proxy signal 当完成)
+### 2.5 Sub-agents / Verification — [完成：已接入 verifier]
 
-~~核心缺口~~ ✅ 已补齐(见 §3.1):goal 的完成判定原先是 generator 自判——正是文章批判的 Nodding Loop 结构。现在 `update_goal(status=complete)` 会先过一个独立 fresh-context verifier(maker-checker),REJECT 带理由驳回、连续驳回转 paused 交人。
+已完成：
 
-### 2.6 Memory / Persistence — ✅ 完成
+- `pkg/coding_agent/plugins/subagent` 使用 Markdown 定义子 Agent。frontmatter 支持工具白名单、`disallowed_tools`、模型覆盖、隔离方式、最大轮数、memory scope 和 permission mode；正文作为 system prompt。
+- workflow 插件提供 `agent()`、`parallel()` 和 `pipeline()`；child 可通过 `schema` 校验 JSON Schema，并在失败后重试一次。
+- `/goal` 支持隐藏续跑、Token 预算和证据式完成检查。
 
-已完成:
+原核心缺口已补齐（见 §3.1）：goal 不再由 generator 自行判定完成。`update_goal(status=complete)` 会先经过独立、全新上下文的 verifier；拒绝结果必须给出理由，连续拒绝后转为 paused 并交给人工处理。
 
-- `pkg/coding_agent/services/memory` + `tools/memory`:持久 memory,`memory_scope` 支持 user/project 双域,sub-agent 和 workflow child 都能声明
-- session 持久化 + `pkg/runtime` checkpoint journal(事件溯源,可回退/恢复/重入)
-- 运行日志落盘(modu_cron NDJSON)
+### 2.6 Memory / Persistence — [完成]
 
-待做:无 harness 缺口。loop 专属的 `./state/triage.md`、`./inbox/` 是仓库文件,由 skill 读写,memory ≠ context 的界线 harness 已经画对(memory 在磁盘,context 每轮重建)。
+已完成：
 
-## 3. 待做项设计(按优先级)
+- `pkg/coding_agent/services/memory` 与 `tools/memory` 保存持久记忆；`memory_scope` 支持 user 和 project，sub-agent 与 workflow child 均可声明。
+- session 持久化与 `pkg/runtime` checkpoint journal 支持事件回溯、恢复和重入。
+- modu cron 运行日志使用 NDJSON 落盘。
 
-### 3.1 P0 · Goal 独立裁判(maker-checker)——补上"会 say no 的门" ✅ 已实现(2026-07-03)
+边界：`./state/triage.md` 和 `./inbox/` 由具体 skill 读写。memory 保存在磁盘，context 每轮重建，二者不能互相替代。
+
+## 3. 实现与验收记录
+
+### 3.1 P0 · Goal 独立裁判（maker-checker）— [2026-07-03 完成]
 
 **问题**:`update_goal complete` 原先无条件生效,五动作里 Verification 这一动等于没装。这是五反例里最贵的 Nodding loop,也是文章 `/goal` 定义的本义("停止条件由 fresh model 判定")。
 
@@ -127,7 +131,7 @@ Loop engineering 是 prompt → context → harness 之上的第四层:人从循
 
 **验收(已过)**:单测覆盖 REJECT 后 goal 仍 active 且错误含 reasons、连续驳回转 paused、resume 清零、PASS 完成、fail-open、不可解析驳回、禁用时不 fork(`verifier_test.go`,10 个用例全绿)。
 
-### 3.2 P0 · modu_cron 三档 cap——Cap Before You Ship ✅ 已实现(2026-07-03)
+### 3.2 P0 · modu_cron 三档上限 — [2026-07-03 完成]
 
 **问题**:cron 任务原先没有任何断路器(仅调度器里一个写死的 30 分钟超时)。一个 bug 让 agent 整夜空转,唯一的发现方式是第二天看账单——文章四债务里的 token blowout,原文定性:"cap 不是省钱,是把开放性风险变成有界风险"。
 
@@ -158,7 +162,7 @@ daily_budget_tokens: 3000000
 
 **验收(已过)**:单测覆盖字段解析/round-trip、EffectiveTimeout 回退、ValidateCaps、台账累加与 31 天裁剪、超日额度拒跑且 run_end 状态可区分、重试只发生在 plain error、ctx 取消停止重试(config/runlog/runner 三包全绿)。留一条实测项:配好真实 model 后,用一个死循环 prompt 验证三档至少一档能打断(見 README「三档 cap」节)。
 
-### 3.3 P1 · Evaluator sub-agent 约定 + 内置模板 ✅ 已实现(2026-07-03)
+### 3.3 P1 · Evaluator sub-agent 约定与内置模板 — [2026-07-03 完成]
 
 **问题**:sub-agent 机制齐了,但仓库里没有一份"reviewer 长什么样"的参考,用户从零写容易漏掉 ASSUME BROKEN / execute-don't-read / VERDICT 三要素。
 
@@ -168,7 +172,7 @@ daily_budget_tokens: 3000000
 - **与 §3.1 真打通**(不止文案层面):goal verifier 在 fork 前会查找名为 `reviewer` 的 subagent 定义——找到就用它的 body 当 system prompt(VERDICT JSON 契约会重新附加,保证解析不坏)、用它的 `model` 当默认模型(显式 verifier config 的 model 优先);工具沙箱**不**从定义取,verifier 永远保持自己的 read+bash 白名单。没有定义时回退内置 prompt,完全向后兼容。一份 `reviewer.md` 同时定制 workflow 里的 review agent 和 goal 裁判——一处维护
 - 验收调整:modu 的 workflow `agent()` 没有按定义名解析的选项(那是设计时的假设,实际 API 是 prompt + tools/schema),所以 workflow 侧的 reviewer 用法是同一契约的内联 prompt + `schema: VERDICT`(见 §3.4 的 triage-fixes 脚本);"跑通一次真实 REJECT" 由 goal 侧单测覆盖(自定义 reviewer 定义被采用、契约被附加、model 优先级、沙箱不变,`verifier_test.go` 新增 2 例)
 
-### 3.4 P1 · 示例 loop:morning-triage 参考实现 ✅ 已实现(2026-07-03)
+### 3.4 P1 · `morning-triage` 参考实现 — [2026-07-03 完成]
 
 **问题**:六部件都在,但没有一个把五动作串起来的端到端样例。文章的态度:第一个 loop 要"小到不像一个系统"。
 
@@ -182,7 +186,7 @@ daily_budget_tokens: 3000000
 
 **验证**:三份模板都过了真实解析器——SKILL.md 经 `pkg/skills` Manager 发现且内容完整、reviewer.md 经 `subagent.ParseDefinition`(tools/max_turns 正确)、workflow 脚本经 goja 按 runtime 同款包裹编译通过。文章 L4 那条"连跑两天"的验收只能实跑:第二天 state/inbox 延续、通知里只出现当天新增条目(检查方法已写进示例 README)。
 
-### 3.5 P1 · 人门收口:inbox 约定 + 通知带上"待人审"清单 ✅ 已实现(2026-07-03)
+### 3.5 P1 · 人工入口：inbox 约定与待审通知 — [2026-07-03 完成]
 
 **问题**:人门的三种形态里,通知已有、PR 不 merge 靠 Stop 段约定,但"不确定的进 inbox 等人"原先没有任何呈现——inbox 文件写了也没人知道。
 
@@ -194,7 +198,7 @@ daily_budget_tokens: 3000000
 - `./inbox/` 目录语义(一事一文件、处理完即删)和 Read-a-Sample 纪律写进 §3.4 示例的 README
 - 单测:新增/存量区分(Chtimes 造旧文件)、PR 去重与顺序、空 cwd 不采集(`notify_test.go` 新增 2 例)
 
-### 3.6 P2 · MCP connector 支持 ✅ 已实现（2026-07-15）
+### 3.6 P2 · MCP connector 支持 — [2026-07-15 完成]
 
 **问题**:视野半径受限于内置工具 + Bash/gh。接 Jira、Linear、Playwright 这类系统目前没有标准姿势。
 
@@ -211,20 +215,20 @@ daily_budget_tokens: 3000000
 
 实施顺序(每步都留在"能跑"状态,遵循文章"先证明它能停掉一个坏 agent,才赢得跑更多 agent 的权利"):
 
-1. ✅ §3.2 cron caps —— 先装断路器,后面所有实验都有保险丝(2026-07-03 完成)
-2. ✅ §3.1 goal verifier —— 补上 say no 的门,loop 从此有 Verification 这一动(2026-07-03 完成)
-3. ✅ §3.3 reviewer 模板 —— `examples/agents/reviewer.md`,goal verifier 自动采用同名定义,一处维护(2026-07-03 完成)
-4. ✅ §3.4 morning-triage 示例 + §3.5 inbox 通知 —— 五动作端到端串起来(2026-07-03 完成;连跑两天的验收只能实跑,清单在示例 README)
-5. ✅ §3.6 MCP —— stdio + Streamable HTTP tool client、session 动态注册和 child 转发完成（2026-07-15）
+1. `[完成]` §3.2 cron caps：先接入断路器，再执行后续实验（2026-07-03）。
+2. `[完成]` §3.1 goal verifier：补上独立拒绝机制（2026-07-03）。
+3. `[完成]` §3.3 reviewer 模板：`examples/agents/reviewer.md` 与 goal verifier 共用定义（2026-07-03）。
+4. `[完成]` §3.4 morning-triage 示例与 §3.5 inbox 通知：五个动作已串联；连续两天验收仍需按示例 README 实跑（2026-07-03）。
+5. `[完成]` §3.6 MCP：stdio、Streamable HTTP tool client、session 动态注册和 child 转发已完成（2026-07-15）。
 
 完成后对照文章 First-Loop Checklist 六问自检:
 
-- Discovery source:skill 按 timer 读 CI/issues/commits/inbox —— ✅(`examples/loops/morning-triage`)
-- State file:`./state/triage.md` 磁盘跨轮记忆 —— ✅(skill 的 Write 段,commit 回 repo)
-- Evaluator:会 say no 的独立 check —— ✅(extensions.yaml 开 `verifier.enabled`;reviewer.md 可定制)
-- Isolation:每个并行 agent 自己的 worktree —— ✅(triage-fixes 每 finding 一个 worktree)
-- Token cap:跑歪谁叫停 —— ✅(任务三档 + `daily_budget_tokens`)
-- Human review:哪一步停下来等人 —— ✅(draft PR 永不 merge;inbox 新增条目和 PR 链接直接进完成通知;verifier 连续驳回转 paused)
+- Discovery source：skill 按 timer 读取 CI、issues、commits 和 inbox，见 `examples/loops/morning-triage`。
+- State file：`./state/triage.md` 保存跨轮状态，由 skill 的 Write 阶段提交回仓库。
+- Evaluator：在 `extensions.yaml` 启用 `verifier.enabled`，并可通过 `reviewer.md` 定制独立检查。
+- Isolation：`triage-fixes` 为每个 finding 创建独立 worktree。
+- Token cap：任务级三档限制与 `daily_budget_tokens` 共同终止失控任务。
+- Human review：draft PR 不自动合并；新增 inbox 条目和 PR 链接进入完成通知；verifier 连续拒绝后转为 paused。
 
 一句话总结:**P0 + P1 + stdio/Streamable HTTP MCP tools 已落地——goal 有 fresh-model 裁判(可用 reviewer.md 定制),cron 有三档断路器 + 日额度 + 人门通知,morning-triage 示例把五动作端到端串齐；剩余的是 MCP OAuth/resources/prompts 等扩展，以及只能实跑的"连跑两天"验收。**
 
@@ -263,13 +267,13 @@ go test ./pkg/cron/... ./pkg/coding_agent/plugins/extension/goal/ ./pkg/coding_a
 - 说:"现在有哪些 cron 任务?" → agent 调 `cron_list`,列出 morning-market-daily 和 morning-triage。
 - 说:"加一个测试任务 loop-smoke:每 30 秒跑一次,goal 是 state/loop-smoke.md 存在且最后一行是本次运行的时间戳,prompt 是'读 state/loop-smoke.md(它是你之前几轮的记忆),用 date 追加一行当前时间戳,然后读回确认',超时 3 分钟,单次最多 15 万 token,不要通知"。
 - 看:daemon.log 出现 `config file changed, reloading...` → `reloaded: 3 task(s)`。
-- 判定:说话建任务 + 热加载 ✅。(`cron_add` 支持 goal/timezone;cap 三件套 agent 会用 Edit 直接补进 task.yaml——也是合法路径,热加载同样接住。)
+- 判定：通过。`cron_add` 支持 goal 和 timezone；Agent 也可直接编辑 `task.yaml` 补充三档限制，热加载会接收两种修改。
 
 **Case 2 · goal loop 核心链路(等 2-3 轮,约 2 分钟)**
 
 - 什么都不用说,等。每 ~30 秒一轮。
 - 看(另一终端):`ls ~/.modu/cron/logs/loop-smoke/`;最新文件第一行应含 `"trigger":"scheduler"`、`"has_goal":true`、`"goal_verifier":true`;最后一行应是 `"status":"ok"` + `"goal_status":"complete"`;仓库里 `state/loop-smoke.md` 每轮多一行。
-- 判定:Scheduling→Goal→Verifier→State 全链路 ✅,feeds itself ✅。(参考值:单轮 12-22 秒、约 7 万 token 含 verifier。)
+- 判定：Scheduling → Goal → Verifier → State 全链路通过，并能将本轮输出作为下一轮输入。参考值：单轮 12～22 秒，约 7 万 Token（含 verifier）。
 
 **Case 3 · verifier 会说不(决定性,约 1 分钟)**
 
@@ -277,7 +281,7 @@ go test ./pkg/cron/... ./pkg/coding_agent/plugins/extension/goal/ ./pkg/coding_a
 - 看:工具返回 `update_goal rejected by the independent goal verifier (reject 1/3)... 文件不存在`;通知区出现 `goal: verifier REJECT (1/3)`。
 - 加分:让它再谎报两次 → 第 3 次后 goal 转 paused + 通知(人门)。
 - 收尾:说"清掉这个 goal"。
-- 判定:maker-checker 门真的会驳回,且带具体理由 ✅。这同时满足文章的验尸检查(evaluator 至少真 REJECT 过一次)。
+- 判定：maker-checker 会驳回不成立的完成声明，并返回具体理由；evaluator 已在真实用例中至少拒绝过一次。
 
 **Case 4 · 三档断路器(约 5 分钟;4a/4b 可同时挂,4c 最后做)**
 
@@ -319,14 +323,14 @@ tail -1 "$(ls -t ~/.modu/cron/logs/cap-timeout/*.log | head -1)"
 
 - 第 1 轮后看飞书:消息应包含 task/status/耗时/摘要,以及 `inbox: 1 new item(s) waiting for you: tui-test.md`。
 - 什么都不做,等第 2 轮:新的飞书消息**不应再有** inbox 那行(文件还在磁盘上,但不是本轮新增)。
-- 判定:门送到人眼前,且只报当天新增、不重复轰炸 ✅。
+- 判定：待审项会送达人工入口，并且只报告当天新增内容。
 
 **Case 6 · session 按 job id 关联(半分钟)**
 
 - TUI 里输入 `/sessions`(注意带 s;`/session` 是另一个命令)→ 列表里应出现名为 **cron:loop-smoke** 的会话(每轮 tick 一条,名字相同)。
 - 想看内容:`/resume <id 或唯一前缀>`(文件路径也行)切进去——**屏幕会立刻回放目标会话的完整历史**(与启动时 `--resume` 相同的渲染):goal 创建、agent 干活、`update_goal` 被 verifier 放行/驳回的现场。看完用 `/resume <原会话id>` 切回来(自己的会话也在 `/sessions` 列表里)。
 - 传错 id 会明确报错且不切换(旧版会静默"切"到一个空会话——已修)。
-- 判定:每次 cron run 都能按任务 id 找到并完整回放 session ✅。
+- 判定：每次 cron run 都能按任务 ID 找到并完整回放 session。
 
 **Case 7 · 清理 + 收尾**
 
@@ -342,14 +346,14 @@ tail -1 "$(ls -t ~/.modu/cron/logs/cap-timeout/*.log | head -1)"
 
 用无头 harness 直接驱动 `pkg/cron.RunScheduler` + `modu_code -p`,以上阶段已实跑一遍:
 
-- **调度器**:3 任务并发 tick、fsnotify 热加载、75s 干净退出 ✅;运行日志/台账落 `~/.modu/cron/logs/` ✅
-- **token cap**:`status:"token_cap"`,`10372 tokens >= cap 2000`,每轮精确切断 ✅
-- **timeout**:`status:"timeout"`,15s 整切断 ✅。注:用 `sleep` 造慢任务测不出来——agent 会把 sleep 丢后台,bash 工具还自带"前台 sleep≥2s 直接拒绝"的防呆,要用真计算(python 忙等)才能撞线
-- **日额度**:`status:"budget_exceeded"`,0ms 拒跑、不建 session、channel 收到告警 ✅
-- **inbox 人门**:run 内写 `./inbox/test-item.md`,完成通知带 `inbox: 1 new item(s)` ✅(飞书实收)
-- **goal verifier PASS**:真目标(写文件)完成,update_goal 通过 ✅
-- **goal verifier REJECT(决定性)**:令 agent 谎报完成(不建文件直接 complete),update_goal 被驳回——`rejected by the independent goal verifier (reject 1/3)`,理由精确指出"文件不存在" ✅。maker-checker 门真机工作
-- **cron `goal:` smoke(2026-07-03 本分支追加)**:用真实 `runner.Execute` + 当前 active model 跑临时任务,runner 先建 goal,agent 在临时 cwd 写 `smoke.txt`,goal verifier PASS 后 `run_end status=ok`;同一任务在 `max_tokens_per_run=30000` 时先被 `status=token_cap` 切断,把 cap 和 PASS 两条路径都撞了一遍 ✅。注意:token 订阅覆盖 hidden continuation,但 slim NDJSON 的后续 hidden turn 可观测性还需单独加强;验收以 `run_end status`、goal 状态和完整 session 为准。
+- **调度器**：3 个任务并发 tick，fsnotify 热加载，75 秒内干净退出；运行日志写入 `~/.modu/cron/logs/`。
+- **Token 上限**：返回 `status:"token_cap"` 和 `10372 tokens >= cap 2000`，能在每轮精确切断。
+- **超时**：返回 `status:"timeout"`，15 秒时切断。不能用 `sleep` 构造慢任务：Agent 会将它放到后台，bash 工具也会拒绝前台运行 2 秒以上的 sleep；测试需改用真实计算负载。
+- **日额度**：返回 `status:"budget_exceeded"`，0 毫秒拒绝执行，不创建 session，并向 channel 发送告警。
+- **人工入口**：运行中写入 `./inbox/test-item.md` 后，飞书完成通知包含 `inbox: 1 new item(s)`。
+- **goal verifier PASS**：写文件的真实目标完成后，`update_goal` 通过。
+- **goal verifier REJECT**：让 Agent 在未创建文件时声明完成，`update_goal` 返回 `rejected by the independent goal verifier (reject 1/3)`，理由明确指出文件不存在。
+- **cron `goal:` smoke（2026-07-03）**：真实 `runner.Execute` 先创建 goal，Agent 在临时目录写入 `smoke.txt`，verifier 通过后记录 `run_end status=ok`。同一任务设置 `max_tokens_per_run=30000` 后返回 `status=token_cap`。Token 订阅覆盖 hidden continuation，但 slim NDJSON 对后续 hidden turn 的可观测性仍需加强；验收以 `run_end status`、goal 状态和完整 session 为准。
 - **morning-triage day-1 bootstrap(2026-07-03 本仓库实跑)**:已把 `examples/loops/morning-triage` 装到本仓库 `.coding_agent/` 和 `~/.modu/cron/task.yaml`,手动跑 `go run ./cmd/modu_code -p "/morning-triage" -json`;agent 扫 CI/issues/commits 后生成并提交 `state/triage.md`,提交为 `84cd1f3 triage: 2026-07-03`,完整 session 为 `~/.modu/sessions/--Users-ityike-Code-go-src-github.com-openmodu-modu--/b3c3a69b-18ed-437e-b295-46cf71ffa357.jsonl`。这只证明 day-1 loop 行为和 state 写入,还不替代两天 cron 验收;第二天需看 `~/.modu/cron/logs/morning-triage/` 的 ok log 以及 `state/triage.md` 是否读回昨天状态。
 - **morning-triage day-2 cron runner(2026-07-04 本仓库实跑)**:用真实 `runner.Execute` 执行同一 `~/.modu/cron/task.yaml` 里的 `morning-triage` 任务(不改工作日 cron 表;7 月 4 日是周六,自然 cron 不会触发),runner 先创建 `goal:` 再跑 `/morning-triage`;`state/triage.md` 读回 2026-07-03 状态并追加 2026-07-04 行,提交为 `32bab63 triage: 2026-07-04`,cron slim log 为 `~/.modu/cron/logs/morning-triage/2026-07-04T00-05-49.155932000+08-00.log`,最后一行为 `run_end status=ok tokens=115149`,完整 session 为 `~/.modu/sessions/--Users-ityike-Code-go-src-github.com-openmodu-modu--/0edac18e-498d-4fa9-aa69-ffd7ad81ef5c.jsonl`。day-1 手动 + day-2 runner 的状态延续已由上述 commit 与 state/triage.md 证明;更硬的"两条自然 cron log"仍需两个工作日常驻 `modu_code`。
 - **loop smoke fast canary(2026-07-04 本仓库实跑)**:为快速证明 Scheduling→Goal→Verifier→State 链路,临时向 live `~/.modu/cron/task.yaml` 加入 `loop-smoke-fast`(`*/30 * * * * *`,无通知,不提交),目标是写 `state/loop-smoke.md`、读回确认、`update_goal(status=complete)`。第一轮因 `max_tokens_per_run=50000` 触发 `token_cap`,证明 cap 生效;调到 200000 后,真实 scheduler tick `2026-07-04T10-21-30.022243000+08-00.log` 跑通:`trigger=scheduler`、`timezone=Asia/Shanghai`、`has_goal=true`、`goal_verifier=true`、写入并读回 `2026-07-04 10:21:32 CST`、`run_end status=ok goal_status=complete`,完整 session 为 `~/.modu/sessions/--Users-ityike-Code-go-src-github.com-openmodu-modu--/97530e33-ac05-4273-809d-e2d42b697641.jsonl`。随后已删除临时 task 和 `state/loop-smoke.md`,scheduler reload 回 2 个正式任务。该 canary 证明链路可快速自醒并由 verifier 完成,但不替代 morning-triage 两工作日验收或交易日 A 股 watchlist 验收。**这也是今后推荐的快速功能验证法**(简单、短、高频,不占用真实任务):在 modu_code 里说一句加个 30 秒一轮、goal 为"state 文件末行是本轮时间戳"的临时任务,看两三轮 `run_end goal_status=complete` + state 文件逐轮增长即可,验完删掉——做法已写进示例 README「快速功能验证」一节。
@@ -363,4 +367,4 @@ tail -1 "$(ls -t ~/.modu/cron/logs/cap-timeout/*.log | head -1)"
 - **scheduler armed(2026-07-04)**:用 detached tmux 会话 `modu-loop-cron` 挂着本仓库 `modu_code`,daemon log 显示 `loaded 2 task(s)` 与 `cron scheduler started`——自然 cron 有机会触发的前提就是这个会话活着。注意两个人工检查点:改了 Go 代码要重启这个会话(否则自然 tick 跑旧代码);改了 task prompt 看一眼 daemon.log 有没有 `config file changed, reloading`。
 - **验收脚本已整体移除(2026-07-05,按用户决定)**:07-04 期间 examples 下累积了 17 个 verify-*.sh(readiness/next-run/canary/contract/live/fixtures/final gate)。这违背了 modu_code 的使用形态——用户的操作面应该是"跟 modu_code 说话",不是维护一套 shell 验收面;而且脚本本身变成了需要 fixtures 自测的第二套系统(loop 在给自己的检查器写检查器,正是文章警告的过度建设)。已全部删除。验证职责重新划分:代码行为 → Go 测试(`go test ./pkg/cron/... ./pkg/.../goal/`);链路连通 → 示例 README「快速功能验证」的短高频临时任务(几分钟,聊天建/聊天删);长期质量 → 上面那些人工可核对的日志/state/commit 证据标准 + Read-a-Sample 纪律。
 - **顺手抓到并修掉一个真 bug**:并发 tick 各自调 `provider.Resolve()` 写全局 `providers.Models` map → fatal concurrent map writes(commit 5910069 加锁修复)。另发现一个**预存在**的流式管道 data race(openai `readSSE` 写 in-flight message vs `pkg/agent.collectAssistantMessage` 读,任何流式会话都有,与 loop 改动无关)——待独立修复
-- **`goal:` 字段快速功能验证(2026-07-05,deepseek-v4-flash)**:按 README「快速功能验证」的做法,隔离 scratch 配置跑 `loop-smoke`(`@every 20s`,goal="state/loop-smoke.md 末行是本轮时间戳"):100 秒内 4 轮,每轮 `run_start` 带 `has_goal:true`/`goal_verifier:true`,每轮 `run_end` 为 `status:"ok"` + `goal_status:"complete"`(runner 建 goal → agent 干活 → verifier 独立 PASS),state 文件逐轮各增一行(feeds itself),单轮 12-22 秒、约 7 万 token(含 verifier)。Scheduling→Goal→Verifier→State 全链路用短高频任务几分钟验完,不需要动任何真实任务 ✅
+- **`goal:` 字段快速验证（2026-07-05，deepseek-v4-flash）**：按示例 README 的方法，在隔离配置中运行 `loop-smoke`（`@every 20s`，goal 为“`state/loop-smoke.md` 末行是本轮时间戳”）。100 秒内执行 4 轮；每轮 `run_start` 包含 `has_goal:true` 和 `goal_verifier:true`，`run_end` 为 `status:"ok"`、`goal_status:"complete"`；state 文件每轮增加一行。单轮耗时 12～22 秒，约 7 万 Token（含 verifier）。这个短任务能在几分钟内验证 Scheduling → Goal → Verifier → State，不影响正式任务。

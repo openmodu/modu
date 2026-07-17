@@ -1,97 +1,97 @@
-# providers
+[English](README.md) | [中文](README_zh.md)
 
-Unified multi-provider streaming LLM interface.
+# LLM providers
 
-## Overview
+`pkg/providers` defines common Chat and streaming request contracts, plus a process-wide Provider registry. Protocol implementations live in subpackages; this package does not normalize every vendor feature into one lowest-common-denominator option set.
 
-`pkg/providers` provides a standardized interface for interacting with various LLM providers (OpenAI, Anthropic, DeepSeek, Ollama, etc.). It handles the complexities of different API formats and provides a consistent streaming event interface.
-
-## Core Interface: Provider
+## Provider contract
 
 ```go
 type Provider interface {
 	ID() string
-	Stream(ctx context.Context, model *types.Model, llmCtx *types.LLMContext, opts *types.SimpleStreamOptions) (stream.Stream, error)
+	Stream(ctx context.Context, req *ChatRequest) (types.EventStream, error)
+	Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, error)
 }
 ```
 
-## Quick Start
+`Chat` returns one completed response. `Stream` returns an event stream that the caller must consume until it closes.
 
-### Register and Use
+## Register and call a Provider
 
 ```go
 import (
-    "github.com/openmodu/modu/pkg/providers"
-    "github.com/openmodu/modu/pkg/types"
+	"context"
+	"fmt"
+	"os"
+
+	"github.com/openmodu/modu/pkg/providers"
+	"github.com/openmodu/modu/pkg/providers/openai"
 )
 
-// Register a provider
-providers.Register(providers.NewOpenAIChatCompletionsProvider("openai",
-    providers.WithBaseURL("https://api.openai.com/v1"),
-    providers.WithAPIKey(os.Getenv("OPENAI_API_KEY")),
-))
-
-// Use the default registry to stream
-model := &types.Model{ID: "gpt-4o", ProviderID: "openai"}
-llmCtx := &types.LLMContext{
-    Messages: []types.AgentMessage{types.UserMessage{Role: "user", Content: "Hello"}},
-}
-
-stream, err := providers.StreamDefault(ctx, model, llmCtx, nil)
-if err != nil {
-    log.Fatal(err)
-}
-
-for ev := range stream.Events() {
-    if ev.Type == "text_delta" {
-        fmt.Print(ev.Delta)
-    }
-}
-```
-
-## Supported Providers
-
-| Provider | Constructor | Description |
-|----------|-------------|-------------|
-| OpenAI | `NewOpenAIChatCompletionsProvider` | Supports any OpenAI-compatible API |
-| Anthropic | `NewOpenAIChatCompletionsProvider` | Via compatibility layer |
-| DeepSeek | `NewDeepSeekProvider` | Dedicated DeepSeek support |
-| Ollama | `NewOpenAIChatCompletionsProvider` | Local models via Ollama |
-
-## Built-in Providers
-
-### OpenAI-compatible
-```go
-p := providers.NewOpenAIChatCompletionsProvider("id",
-    providers.WithBaseURL("..."),
-    providers.WithAPIKey("..."),
+p := openai.New(
+	"openai",
+	openai.WithBaseURL("https://api.openai.com/v1"),
+	openai.WithAPIKey(os.Getenv("OPENAI_API_KEY")),
 )
-```
-
-### DeepSeek
-```go
-p := providers.NewDeepSeekProvider(apiKey)
-```
-
-## Registry
-
-The global registry allows you to manage multiple providers and select them by ID:
-
-```go
 providers.Register(p)
-provider, err := providers.Get("openai")
+
+registered, ok := providers.Get("openai")
+if !ok {
+	return fmt.Errorf("provider not registered")
+}
+
+response, err := registered.Chat(context.Background(), &providers.ChatRequest{
+	Model: "gpt-4o",
+	Messages: []providers.Message{
+		{Role: providers.RoleUser, Content: "Hello"},
+	},
+})
 ```
 
-## Package Structure
+Registering the same ID again replaces the previous Provider. `List` returns all registered Providers in unspecified order.
 
+## Implementations
+
+| Endpoint | Constructor | Boundary |
+|---|---|---|
+| OpenAI-compatible APIs | `openai.New(id, options...)` | Requires `WithBaseURL`; supports API key, headers, and extra request fields |
+| Anthropic Messages API | `anthropic.New(apiKey, model)` | Uses the dedicated Anthropic protocol |
+| DeepSeek | `deepseek.New(apiKey)` | Uses DeepSeek's OpenAI-compatible endpoint; empty key falls back to `DEEPSEEK_API_KEY` |
+| Gemini | `gemini.New(ctx, apiKey, id, model)` | Uses the Google Gen AI SDK and returns an error when the key is empty |
+
+Ollama and LM Studio use `openai.New` with their local OpenAI-compatible base URL.
+
+## Stream a response
+
+```go
+events, err := registered.Stream(ctx, &providers.ChatRequest{
+	Model: "gpt-4o",
+	Messages: []providers.Message{
+		{Role: providers.RoleUser, Content: "Hello"},
+	},
+})
+if err != nil {
+	return err
+}
+
+for event := range events.Events() {
+	if event.Type == "text_delta" {
+		fmt.Print(event.Delta)
+	}
+}
 ```
+
+## Layout
+
+```text
 pkg/providers/
-├── provider.go         # Core interface
-├── registry.go         # Global provider registry
-├── provider_types.go   # Options and types
-├── sse.go              # Shared SSE data scanner for streaming providers
-├── models.go           # Model definitions and helpers
-├── openai/             # OpenAI-compatible implementation
-├── anthropic/          # Anthropic implementation
-└── deepseek/           # DeepSeek implementation
+├── provider.go       # Provider interface
+├── provider_types.go # Requests, responses, messages, tools, and usage
+├── registry.go       # Process-wide registry
+├── models.go         # Model metadata registry
+├── sse.go            # Shared SSE scanner
+├── openai/           # OpenAI-compatible implementation
+├── anthropic/        # Anthropic Messages implementation
+├── deepseek/         # DeepSeek constructor
+└── gemini/           # Gemini implementation
 ```

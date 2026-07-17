@@ -6,30 +6,22 @@
 
 <h1 align="center">Modu（毛肚）</h1>
 
-<p align="center">
-  <strong>🚀 快捷高效搭建 Agent 应用的 Go 基础设施工具库</strong>
-</p>
+Modu 是用于构建 Agent 应用的 Go 工具库，提供 Agent 循环、LLM Provider 适配、工具执行、多 Agent 协作、消息通道、定时调度和终端 UI 组件。应用仍需自行定义 Prompt、工具、持久化策略和部署方式。
 
-<p align="center">
-  <em>模块化、事件驱动的多 Agent 协作框架</em>
-</p>
+## 环境要求
 
----
+- [`go.mod`](go.mod) 声明的 Go 1.26.2 或更高版本
+- LLM 服务，例如 Ollama、LM Studio、OpenAI、Anthropic、DeepSeek、Gemini 或其他 OpenAI 兼容 API
 
-## 📦 安装
+## 安装
 
 ```bash
 go get github.com/openmodu/modu
 ```
 
-## 🚀 快速开始
+## 最简 Agent
 
-### 前置条件
-
-- Go 1.21+
-- LLM 服务（如 [Ollama](https://ollama.ai)、[LM Studio](https://lmstudio.ai) 或任意 OpenAI 兼容 API）
-
-### 最简示例
+下面的示例注册一个 Ollama 服务，执行一次 Prompt，并输出 Assistant 文本：
 
 ```go
 package main
@@ -46,7 +38,6 @@ import (
 )
 
 func main() {
-	// 1. 注册 LLM Provider
 	providers.Register(openai.New(
 		"ollama",
 		openai.WithBaseURL("http://localhost:11434/v1"),
@@ -58,7 +49,6 @@ func main() {
 		ProviderID: "ollama",
 	}
 
-	// 2. 创建 Agent
 	a := agent.NewAgent(types.Config{
 		InitialState: &types.State{
 			SystemPrompt: "You are a helpful assistant.",
@@ -66,149 +56,80 @@ func main() {
 		},
 	})
 
-	// 3. 发送 Prompt
-	err := a.Prompt(context.Background(), "法国的首都是哪里？")
-	if err != nil {
+	if err := a.Prompt(context.Background(), "法国的首都是哪里？"); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
-	// 4. 获取响应
-	state := a.GetState()
-	for _, msg := range state.Messages {
-		if assistant, ok := msg.(types.AssistantMessage); ok {
-			for _, c := range assistant.Content {
-				if tc, ok := c.(*types.TextContent); ok {
-					fmt.Println(tc.Text)
-				}
+	for _, message := range a.GetState().Messages {
+		assistant, ok := message.(types.AssistantMessage)
+		if !ok {
+			continue
+		}
+		for _, content := range assistant.Content {
+			if text, ok := content.(*types.TextContent); ok {
+				fmt.Println(text.Text)
 			}
 		}
 	}
 }
 ```
 
-### 运行示例
+## 运行示例
 
 ```bash
-# 基础 Agent 演示
+# 基础 Agent
 go run ./examples/agent_demo
 
 # 带文件工具的编程 Agent
 go run ./examples/coding_agent
 
-# 多 Agent 协作
+# 由协调者组织的多 Agent 协作
 go run ./examples/agent_teams
 ```
 
-## 🗂 项目结构
+## 协作模式
 
-```
-modu/
-├── pkg/                    # 核心工具库
-│   ├── agent/              # 通用 Agent 引擎（事件驱动、工具）
-│   ├── coding_agent/       # 高级编程 Agent（会话、技能、压缩）
-│   ├── mailbox/            # Agent Teams 通信基础设施
-│   ├── moms/               # Telegram 智能机器人（mom 的 Go/TG 移植版）
-│   ├── channels/           # 消息通道接口（Telegram、飞书）
-│   ├── providers/          # 多提供商 LLM 流式接口抽象
-│   ├── skills/             # Agent 技能加载与注册表
-│   ├── tui/                # 终端用户界面库
-│   ├── types/              # 共享类型定义
-│   ├── env/                # 环境变量加载器
-│   ├── stream/             # 流处理工具
-│   └── utils/              # 通用工具函数
-```
+Modu 在同一套 mailbox 和 task 模型上提供两种多 Agent 模式：
 
-## 📚 核心模块
+| 模式 | 适用场景 | 执行规则 |
+|---|---|---|
+| Agent Teams | 工作包含明确角色，并由一个协调者负责 | 协调者分派任务并汇总结果 |
+| Adversarial Validation | 队列任务的结果必须经过独立检查 | Worker 提交结果，Validator 决定通过或重试 |
 
-## 🤝 协作模式
+运行 `go run ./examples/agent_teams` 可查看第一种模式；任务队列和验证机制见 [mailbox 文档](pkg/mailbox/README_zh.md)。
 
-Modu 现在基于同一套 mailbox/task 模型支持两种多 Agent 执行模式：
+## 模块
 
-| 模式 | 适用场景 | 核心机制 |
-|------|------|------|
-| Agent Teams | 有明确协调者的角色化协作 | 由 orchestrator 向指定 agent 分派任务并汇总结果 |
-| Adversarial Validation | 对队列任务结果增加质量把关 | worker 先提交结果，再由独立 validator 打分并决定通过或重试 |
+| 模块 | 职责 | 文档 |
+|---|---|---|
+| `pkg/agent` | 有状态 Agent 门面和依赖倒置的执行循环 | [README](pkg/agent/README_zh.md) |
+| `pkg/coding_agent` | 会话、上下文压缩、Skill 和编程工具 | [README](pkg/coding_agent/README_zh.md) |
+| `pkg/mailbox` | Agent 注册、消息、项目、任务和结果验证 | [README](pkg/mailbox/README_zh.md) |
+| `pkg/channels` | Telegram、飞书通道接口及 Bridge | [README](pkg/channels/README_zh.md) |
+| `pkg/providers` | 流式和非流式 LLM Provider | [README](pkg/providers/README_zh.md) |
+| `pkg/runtime` | `pkg/agent` 的检查点、恢复和回退 | [README](pkg/runtime/README.md) |
+| `pkg/cron` | 在交互式 `modu_code` 中运行定时 Agent 任务 | [README](pkg/cron/README.md) |
+| `pkg/modu-tui` | 可复用的 Bubble Tea v2 Agent 对话界面 | [README](pkg/modu-tui/README.md) |
+| `pkg/env` | `.env` 文件加载和环境变量读取 | [README](pkg/env/README_zh.md) |
+| `pkg/tokenkit` | 本地编程 Agent 用量和 Codex 状态数据 | [README](pkg/tokenkit/README.md) |
+| `pkg/types` | 消息、工具、事件、模型和循环的公共契约 | [README](pkg/types/README.md) |
 
-相关示例：
+[文档索引](docs/README.md)收录使用指南、架构、参考、计划和文章。源码旁的 README 仍作为各包的最短入口。
 
-- `go run ./examples/agent_teams`
+## LLM Provider
 
-### pkg/mailbox — Agent Teams 通信基础设施
+注册 Provider 时，其 ID 必须与 `types.Model.ProviderID` 一致：
 
-用于多 Agent 协作的完整通信层：Agent 注册、点对点消息、任务/项目生命周期、队列任务操作、对抗式验证以及实时仪表盘。
+| 服务 | 构造函数 |
+|---|---|
+| OpenAI 兼容 API、Ollama、LM Studio | `openai.New(id, openai.WithBaseURL(url), openai.WithAPIKey(key))` |
+| Anthropic Messages API | `anthropic.New(apiKey, model)` |
+| DeepSeek | `deepseek.New(apiKey)` |
+| Gemini | `gemini.New(ctx, apiKey, id, model)` |
 
-📖 [详细文档](pkg/mailbox/README_zh.md)
+请求结构、注册表、Chat 和流式调用示例见 [`pkg/providers`](pkg/providers/README_zh.md)。
 
----
+## 许可证
 
-### pkg/agent — Agent 引擎
-
-通用的有状态 Agent 核心，支持工具调用和事件流。
-
-📖 [详细文档](pkg/agent/README_zh.md)
-
----
-
-### pkg/coding_agent — 编程 Agent
-
-在 `pkg/agent` 基础上增加了会话管理、技能加载、上下文压缩。内置工具：bash、read、write、edit、grep、find、ls。
-
-📖 [详细文档](pkg/coding_agent/README_zh.md)
-
----
-
-### pkg/moms — Telegram 机器人
-
-基于 `pkg/agent` 构建的 Telegram 智能机器人，是 pi-mono mom Slack 机器人的 Go/Telegram 移植版本。支持 bash 执行、文件操作、技能、定时事件和跨会话记忆。
-
-📖 [详细文档](pkg/moms/README_zh.md) | 📦 [示例代码](examples/moms/main.go)
-
----
-
-### pkg/channels — 消息通道
-
-Telegram、飞书等消息平台的统一接口。
-
-📖 [详细文档](pkg/channels/README_zh.md)
-
----
-
-### pkg/providers — LLM Provider 层
-
-统一的多提供商流式 LLM 接口。
-
-📖 [详细文档](pkg/providers/README_zh.md)
-
----
-
-### pkg/tui — 终端用户界面
-
-终端用户界面渲染和输入处理库。
-
-📖 [详细文档](pkg/tui/README_zh.md)
-
----
-
-### pkg/env — 环境变量加载器
-
-📖 [详细文档](pkg/env/README_zh.md)
-
----
-
-## 🔧 支持的 LLM Providers
-
-通过 `providers.NewOpenAIChatCompletionsProvider` 或专用构造函数注册。
-
-| Provider | 注册方法 |
-|----------|----------|
-| Anthropic (Claude) | `providers.NewOpenAIChatCompletionsProvider("anthropic", providers.WithBaseURL("https://api.anthropic.com"))` |
-| OpenAI (GPT / o-series) | `providers.NewOpenAIChatCompletionsProvider("openai", providers.WithBaseURL("https://api.openai.com/v1"))` |
-| DeepSeek | `providers.NewDeepSeekProvider(apiKey)` |
-| Ollama（本地） | `providers.NewOpenAIChatCompletionsProvider("ollama", providers.WithBaseURL("http://localhost:11434/v1"))` |
-| LM Studio（本地） | `providers.NewOpenAIChatCompletionsProvider("lmstudio", providers.WithBaseURL("http://localhost:1234/v1"))` |
-| 任何兼容 OpenAI 的接口 | `providers.NewOpenAIChatCompletionsProvider(id, providers.WithBaseURL(url))` |
-
-## 📄 许可证
-
-MIT License
+MIT

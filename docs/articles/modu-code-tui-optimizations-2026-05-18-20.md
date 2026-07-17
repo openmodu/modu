@@ -1,12 +1,12 @@
-# modu_code TUI optimization notes, 2026-05-18 to 2026-05-20
+# modu_code TUI changes, 2026-05-18 to 2026-05-20
 
-This document summarizes the modu_code TUI work that landed on `main` through merge commit `611e031` (`Merge pull request #27 from openmodu/refactor/align-tools-extensions`).
+This record explains the modu_code TUI changes that landed on `main` through merge commit `611e031` (`Merge pull request #27 from openmodu/refactor/align-tools-extensions`). It connects each user-visible behavior to its implementation and tests.
 
 The review window is from `2026-05-18 00:00` to `2026-05-20 23:59` Asia/Shanghai. In that window, the coding-agent/TUI related surface changed by roughly `55 files`, `8232 insertions`, and `546 deletions` across `pkg/tui`, `pkg/slash`, `pkg/coding_agent`, and `cmd/modu_code`.
 
-## Executive summary
+## Outcome
 
-The TUI improved because the work was not one cosmetic change. It filled several missing product loops at the same time:
+The change set completed several previously disconnected interaction paths:
 
 - The input area became closer to a real coding-agent terminal: visible block cursor, `❯` prompt, multiline editing, command/file completion, shell shortcuts, and compact status lines.
 - Session management moved from command-only behavior to an interactive flow: pick, search, resume, fork, branch, rename, delete, and inspect session trees.
@@ -256,15 +256,15 @@ Additional coverage was added in:
 - `pkg/coding_agent/coding_agent_test.go`
 - `cmd/modu_code/main_test.go`
 
-## Why the experience now feels much better
+## Why the changes matter
 
-Before this work, modu_code had many capabilities behind slash commands or backend APIs, but the TUI did not expose them as smooth local loops. The recent optimization changed that in three ways:
+Before this work, modu_code exposed many capabilities only through slash commands or backend APIs. The change set made them usable from three direct interaction paths:
 
 1. The default input loop is faster: cursor, completion, shell, file refs, retry, and status feedback all happen in place.
 2. Long-running coding-agent concepts are visible: sessions, trees, plan state, worktrees, resources, and settings have dedicated UI instead of hidden command output.
 3. The transcript is easier to scan: prompt blocks, approval prompts, tool output, section rows, and activity/status lines now have clear hierarchy and bounded noise.
 
-That combination is why the perceived improvement is larger than any single commit suggests.
+The result comes from these paths working together, not from one rendering change.
 
 ## Commit index
 

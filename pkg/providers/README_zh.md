@@ -1,97 +1,97 @@
-# providers
+[English](README.md) | [中文](README_zh.md)
 
-统一的多提供商流式 LLM 接口。
+# LLM Provider
 
-## 概述
+`pkg/providers` 定义统一的 Chat、流式请求契约和进程级 Provider 注册表。各协议的实现位于子包；本包不会把所有厂商特性压缩成一组最小公共选项。
 
-`pkg/providers` 提供了一个标准化的接口，用于与各种 LLM 提供商（OpenAI、Anthropic、DeepSeek、Ollama 等）进行交互。它处理了不同 API 格式的复杂性，并提供了一致的流式事件接口。
-
-## 核心接口: Provider
+## Provider 契约
 
 ```go
 type Provider interface {
 	ID() string
-	Stream(ctx context.Context, model *types.Model, llmCtx *types.LLMContext, opts *types.SimpleStreamOptions) (stream.Stream, error)
+	Stream(ctx context.Context, req *ChatRequest) (types.EventStream, error)
+	Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, error)
 }
 ```
 
-## 快速开始
+`Chat` 返回一条完整响应。`Stream` 返回事件流，调用方必须持续消费，直到流关闭。
 
-### 注册并使用
+## 注册并调用 Provider
 
 ```go
 import (
-    "github.com/openmodu/modu/pkg/providers"
-    "github.com/openmodu/modu/pkg/types"
+	"context"
+	"fmt"
+	"os"
+
+	"github.com/openmodu/modu/pkg/providers"
+	"github.com/openmodu/modu/pkg/providers/openai"
 )
 
-// 注册一个提供商
-providers.Register(providers.NewOpenAIChatCompletionsProvider("openai",
-    providers.WithBaseURL("https://api.openai.com/v1"),
-    providers.WithAPIKey(os.Getenv("OPENAI_API_KEY")),
-))
-
-// 使用默认注册表进行流式传输
-model := &types.Model{ID: "gpt-4o", ProviderID: "openai"}
-llmCtx := &types.LLMContext{
-    Messages: []types.AgentMessage{types.UserMessage{Role: "user", Content: "Hello"}},
-}
-
-stream, err := providers.StreamDefault(ctx, model, llmCtx, nil)
-if err != nil {
-    log.Fatal(err)
-}
-
-for ev := range stream.Events() {
-    if ev.Type == "text_delta" {
-        fmt.Print(ev.Delta)
-    }
-}
-```
-
-## 支持的提供商
-
-| 提供商 | 构造函数 | 说明 |
-|----------|-------------|-------------|
-| OpenAI | `NewOpenAIChatCompletionsProvider` | 支持任何兼容 OpenAI 的 API |
-| Anthropic | `NewOpenAIChatCompletionsProvider` | 通过兼容层支持 |
-| DeepSeek | `NewDeepSeekProvider` | 专门的 DeepSeek 支持 |
-| Ollama | `NewOpenAIChatCompletionsProvider` | 通过 Ollama 支持本地模型 |
-
-## 内置提供商
-
-### 兼容 OpenAI 的提供商
-```go
-p := providers.NewOpenAIChatCompletionsProvider("id",
-    providers.WithBaseURL("..."),
-    providers.WithAPIKey("..."),
+p := openai.New(
+	"openai",
+	openai.WithBaseURL("https://api.openai.com/v1"),
+	openai.WithAPIKey(os.Getenv("OPENAI_API_KEY")),
 )
-```
-
-### DeepSeek
-```go
-p := providers.NewDeepSeekProvider(apiKey)
-```
-
-## 注册表
-
-全局注册表允许您管理多个提供商并按 ID 进行选择：
-
-```go
 providers.Register(p)
-provider, err := providers.Get("openai")
+
+registered, ok := providers.Get("openai")
+if !ok {
+	return fmt.Errorf("provider not registered")
+}
+
+response, err := registered.Chat(context.Background(), &providers.ChatRequest{
+	Model: "gpt-4o",
+	Messages: []providers.Message{
+		{Role: providers.RoleUser, Content: "Hello"},
+	},
+})
 ```
 
-## 目录结构
+重复注册同一 ID 会替换原 Provider。`List` 返回全部已注册 Provider，不保证顺序。
 
+## 实现
+
+| 服务 | 构造函数 | 边界 |
+|---|---|---|
+| OpenAI 兼容 API | `openai.New(id, options...)` | 必须设置 `WithBaseURL`；支持 API Key、自定义 Header 和额外请求字段 |
+| Anthropic Messages API | `anthropic.New(apiKey, model)` | 使用独立的 Anthropic 协议 |
+| DeepSeek | `deepseek.New(apiKey)` | 使用 DeepSeek 的 OpenAI 兼容端点；Key 为空时读取 `DEEPSEEK_API_KEY` |
+| Gemini | `gemini.New(ctx, apiKey, id, model)` | 使用 Google Gen AI SDK；Key 为空时返回错误 |
+
+Ollama 和 LM Studio 使用 `openai.New`，并传入各自的本地 OpenAI 兼容地址。
+
+## 流式响应
+
+```go
+events, err := registered.Stream(ctx, &providers.ChatRequest{
+	Model: "gpt-4o",
+	Messages: []providers.Message{
+		{Role: providers.RoleUser, Content: "Hello"},
+	},
+})
+if err != nil {
+	return err
+}
+
+for event := range events.Events() {
+	if event.Type == "text_delta" {
+		fmt.Print(event.Delta)
+	}
+}
 ```
+
+## 目录
+
+```text
 pkg/providers/
-├── provider.go         # 核心接口
-├── registry.go         # 全局提供商注册表
-├── provider_types.go   # 选项和类型
-├── sse.go              # 流式 provider 复用的 SSE data 扫描器
-├── models.go           # 模型定义和辅助函数
-├── openai/             # 兼容 OpenAI 的实现
-├── anthropic/          # Anthropic 实现
-└── deepseek/           # DeepSeek 实现
+├── provider.go       # Provider 接口
+├── provider_types.go # 请求、响应、消息、工具和用量
+├── registry.go       # 进程级注册表
+├── models.go         # 模型元数据注册表
+├── sse.go            # 共用 SSE 扫描器
+├── openai/           # OpenAI 兼容实现
+├── anthropic/        # Anthropic Messages 实现
+├── deepseek/         # DeepSeek 构造函数
+└── gemini/           # Gemini 实现
 ```

@@ -1,68 +1,72 @@
-# Modu Agent Core
+[English](README.md) | [中文](README_zh.md)
 
-This package contains the modular agent kernel. The previous V1 implementation
-has been replaced by the V2 dependency-inversion design at the stable
-`github.com/openmodu/modu/pkg/agent` import path.
+# Agent core
 
-The split is intentionally small:
+`pkg/agent` runs a ReAct-style agent loop and exposes a stateful `Agent` facade. It owns execution behavior, queues, events, interrupts, and resume handling; shared contracts such as messages, configuration, tools, and state remain in `pkg/types`, while concrete tools belong in host packages.
 
-- `Loop`: owns the ReAct control flow.
-- `LLM`: turns an `AgentContext` into one assistant message.
-- `Tools`: executes tool calls and returns tool-result messages.
-- `ToolManager`: supplies and rebinds tool sets for host runtimes.
+## Dependency boundary
 
-Shared public contracts such as `Config`, `AgentContext`, `State`, `Event`,
-`Tool`, and `ToolResult` are defined in `pkg/types`. `pkg/agent` owns runtime
-behaviour such as `Agent`, `Loop`, `DefaultLLM`, and `DefaultTools`; callers use
-`types.*` directly for shared contracts.
+| Component | Responsibility |
+|---|---|
+| `Loop` | Runs the control flow and depends only on `LLM` and `Tools` |
+| `LLM` | Converts an `AgentContext` into one Assistant message |
+| `Tools` | Executes tool calls and returns tool-result messages |
+| `ToolManager` | Supplies and rebinds tool sets for host runtimes |
+| `RuntimeHooks` | Injects queue polling, approval, and max-step resume behavior |
+| `EventSink` | Receives execution events; `EventStream` is the default implementation |
 
-`Loop` depends only on the `LLM` and `Tools` interfaces. Provider streaming,
-retry, tool approval, tool execution, and parallel tool batches live behind
-those interfaces instead of inside the loop.
+Provider streaming, retries, schema validation, approvals, execution, and parallel tool batches stay behind these interfaces. `pkg/agent` defines the boundary; packages such as `pkg/coding_agent/tools` provide concrete implementations.
 
-Host applications build concrete tool sets through `ToolProvider` /
-`ToolManager` from this package. The agent kernel defines the dependency
-boundary; packages such as `pkg/coding_agent/tools` provide concrete managers.
+## Run the loop directly
 
-Runtime-only behaviour is supplied through `RuntimeHooks`, not public `Config`.
-This keeps queue polling, tool approval, and max-step resume handling out of the
-configuration object callers persist or pass around.
-
-Events are emitted through the small `EventSink` interface. `EventStream` is the
-default sink, but tests and alternate runtimes can use a recorder without
-draining channels.
-
-`Agent` is a thin stateful facade over `Loop`. It owns state, subscriptions,
-prompt helpers, steering/follow-up queues, and interrupt resume state, while
-the execution path still goes through the inverted `Loop -> LLM/Tools`
-dependencies.
+Use `Loop` when the host owns state and wants explicit input and output:
 
 ```go
 loop := agent.NewLoop(agent.DefaultLLM{}, agent.DefaultTools{})
 events := agent.NewEventStream()
 
 result, err := loop.Run(ctx, types.LoopInput{
-    Prompts: []types.AgentMessage{userMessage},
-    Context: types.AgentContext{Tools: []types.Tool{tool}},
-    Config:  types.Config{Model: model, StreamFn: streamFn},
-    Runtime: types.RuntimeHooks{},
-    Events:  events,
+	Prompts: []types.AgentMessage{userMessage},
+	Context: types.AgentContext{Tools: []types.Tool{tool}},
+	Config:  types.Config{Model: model, StreamFn: streamFn},
+	Runtime: types.RuntimeHooks{},
+	Events:  events,
 })
 ```
 
-The default implementations provide these behaviours:
+## Use the stateful facade
 
-- transient LLM errors retry with exponential backoff
-- nil `StreamFn` uses `StreamDefault`, which looks up the provider by
-  `model.ProviderID`
-- nil `ConvertToLLM` filters messages to provider-compatible roles
-- `DefaultLLM` emits assistant start/end events even when a stream closes after
-  resolving the final message without an explicit done event
-- tool arguments are validated against JSON schema before execution
-- tool calls can run in parallel when tools implement `ParallelTool`
-- the stateful `Agent` appends an assistant error message when execution fails
-- `Agent` supports `Steer`, `FollowUp`, `Continue`, queue inspection,
-  and one-at-a-time/all queue consumption modes
-- `Agent` supports tool-approval and max-step interrupts through `Resume`
-- `Agent.Abort` cancels the active loop context and records an aborted assistant
-  error message
+Use `Agent` when the package should own state, subscriptions, Prompt helpers, steering and follow-up queues, and interrupt state:
+
+```go
+a := agent.NewAgent(types.Config{
+	InitialState: &types.State{
+		SystemPrompt:  "You are a helpful assistant.",
+		Model:         model,
+		ThinkingLevel: types.ThinkingLevelOff,
+		Tools:         []types.Tool{weatherTool},
+	},
+	StreamFn: streamFn,
+})
+
+unsubscribe := a.Subscribe(func(event types.Event) {
+	// Handle the event.
+})
+defer unsubscribe()
+
+err := a.Prompt(ctx, "Hello")
+```
+
+## Default behavior
+
+- Transient LLM errors use exponential-backoff retries.
+- A nil `StreamFn` uses `StreamDefault`, which resolves the Provider through `model.ProviderID`.
+- A nil `ConvertToLLM` removes roles that the Provider cannot consume.
+- Tool arguments are checked against JSON Schema before execution.
+- Tools implementing `ParallelTool` may run in parallel.
+- `Agent` appends an Assistant error message when execution fails.
+- `Steer`, `FollowUp`, `Continue`, queue inspection, and one-or-all queue consumption are available on `Agent`.
+- Tool-approval and max-step interrupts resume through `Resume`.
+- `Abort` cancels the active loop and records an aborted Assistant error message.
+
+This package does not provide sessions, persistence, or a built-in tool catalog. Use `pkg/coding_agent` for coding sessions and `pkg/runtime` for checkpoint-based recovery.
