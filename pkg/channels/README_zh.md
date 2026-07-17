@@ -51,7 +51,10 @@ Telegram Bot API 的实现。
 让飞书事件回调不用等待 agent 执行完成即可确认投递。通过 `RespondInThread` 或兼容
 接口 `feishu.SendText` 发送的 Markdown 会转换为飞书 `post` 富文本；标题、段落、
 列表、引用、代码块、任务项、表格和链接不会再以原始 Markdown 标记显示。“处理中”
-等交互卡片仍保持原有卡片格式。
+等交互卡片仍保持原有卡片格式。每条允许接收的入站消息在派发给 handler 前，会先在
+原消息上添加“灵光一闪”（`StatusFlashOfInspiration`）表情回复；添加失败只记录诊断
+日志，不会丢弃消息。飞书应用需要具备 `im:message` 或
+`im:message.reactions:write_only` 权限之一。
 
 ## 使用
 
