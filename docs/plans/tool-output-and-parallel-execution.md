@@ -1,6 +1,8 @@
 # Tool Call Output and Parallel Execution Plan
 
-## V1 Scope
+Version 1 keeps model context bounded while preserving complete tool output on disk. Parallel execution stays opt-in, uses a fixed concurrency limit, and returns results in the model's original call order.
+
+## Version 1 contract
 
 - Model context receives a bounded preview, not full large tool output.
 - Full raw output is stored under the canonical runtime tool-results tree:
@@ -17,7 +19,7 @@
 - Slow parallel batches respect context cancellation while waiting for the
   concurrency semaphore.
 
-## V1 Tool Coverage
+## Tool coverage
 
 - `bash`: stores full combined command output when the preview is truncated.
 - `grep`: stores the complete formatted result artifact while preserving the
@@ -33,14 +35,14 @@
 - `read_tool_result`: reads a required `offset`/`limit` page from a previous
   truncated tool-result artifact by original `call_id`.
 
-## TUI Coverage
+## TUI behavior
 
 - Collapsed tool output shows the model-visible preview.
 - Expanded tool output and `/tool-output <call-id>` read local artifact files
   when `ToolResult.Details.output.artifactPath` is available.
 - TUI displays parallel batch size using `Event.BatchSize`.
 
-## Explicitly out of scope (v1)
+## Out of scope
 
 - `middle` and LLM `summary` preview strategies.
 - A separate `ToolScheduler` abstraction.

@@ -1,154 +1,89 @@
-# pkg/modu-tui
+# Agent transcript TUI
 
-`modutui` packages the Bubble Tea v2 fullscreen transcript viewport used by
-`cmd/tuipoc2`.
+`pkg/modu-tui` provides the Bubble Tea v2 full-screen transcript and input shell used by `cmd/tuipoc2`. It renders messages and host-owned state, but it does not create coding-agent sessions, execute commands, or choose Agent policy; those responsibilities stay in higher-level packages such as `cmd/modu_code`.
 
-It owns only the reusable UI shell:
+The import path contains `modu-tui`; the Go package name is `modutui`.
 
-- rendered transcript viewport with fixed bottom input
-- mouse wheel and PageUp/PageDown scrolling
-- every rendered terminal row is padded to the current width so shorter frames
-  clear content left by previous scroll frames
-- `Jump to bottom` is shown once in a fixed row above the input when scrolled
-  away from the bottom, avoiding repeated viewport overlays on mobile terminals
-- drag selection with local clipboard plus OSC52 copy; SSH/tmux/screen sessions
-  emit passthrough OSC52 so the local terminal can update the user's clipboard
-- independent input, text, markdown, collapsible, tool-call, and code blocks
-- bottom input history supports Up/Down navigation, keeps a temporary draft,
-  and caps retained entries at 100 with a `History n/total` hint on the top
-  input rule
-- fixed bottom cards are rendered through `CardBlock`, so approval and slash
-  command popups share one heavy-border card style
-- bottom popups are height-budgeted during terminal resize so the fixed input
-  row and cursor remain visible before optional slash/jump detail rows
-- active todos can be supplied through `Options.Todos` and updated with
-  `SetTodosMsg`; `normalizeTodos` filters empty content and validates status
-  before rendering; outstanding items render as a fixed card above the input;
-  the todo panel respects resize budget (`todoPanelHeight/todoPanelLines`) and
-  is hidden when an approval panel is active
-- `Options.DisableMouse` disables terminal mouse reporting for SSH/mobile
-  clients that can flood the event loop with touch-motion sequences
-- `Options.ArrowKeysScroll` lets Up/Down scroll the transcript when the input is
-  empty and there is no input history to navigate, matching mobile SSH clients
-  that translate swipe gestures into arrows without breaking prompt history
-- selection auto-scroll has a missing-release guard so mobile SSH clients that
-  drop mouse release events cannot leave a permanent 30ms redraw loop running
-- slash commands can be supplied through `Options.SlashCommands` or refreshed
-  on demand with `Options.SlashCommandsProvider`; typing `/` opens a bottom card
-  with filtered command matches, `Tab` completes, and `Enter` dispatches
-  through `Hooks.SlashCommand`; the leading slash command token in the input is
-  highlighted separately from its arguments, and the slash picker does not
-  trigger the away-from-bottom jump hint unless the user was already scrolled
-  away from the bottom
-- tool-call messages with the same `ToolID` are merged into a single block so
-  call/start/result updates do not scatter through the transcript
-- Read-style tool calls render with a compact `Read N lines` result summary
-  instead of dumping file content inline
-- expanded tool-call blocks use a green leading tool marker without a container
-  background and render as `ToolName(input args)` followed by a two-space
-  indented `└ output` line; empty output renders as `no content data`, and
-  long input args wrap onto `  │ ` continuation lines before the output branch;
-  wrapped output/code/diff lines use four-space indentation instead of
-  truncating long content
-- collapsed tool-call summaries render as two-space indented summary text only,
-  while every rendered line of an expanded tool-call block can be clicked to collapse it
-- tool-call messages can set `ToolNoCollapse`, `ToolCode`, and `ToolLanguage`
-  to render a permanently expanded syntax-highlighted code/diff block; callers
-  can include line numbers and nearby context in `ToolCode`; diff blocks render
-  after the `└ output` line, indent their body by four spaces, use
-  red/green/gray per-line backgrounds with syntax highlighting applied to the
-  code portion of each line, and infer the highlighting language from the tool
-  input file extension
-- markdown inline code renders without Glamour's default red foreground and
-  dark background so status text such as commit hashes stays readable
-- assistant messages marked `Preformatted` render through `TextBlock` instead
-  of Markdown so command output such as `/help` keeps its line layout
-- messages marked `Plain` render without the usual user/assistant marker, for
-  status rows such as `✓ Completed (...)`
-- assistant thinking messages render through `ThinkingBlock` as one collapsed
-  block that can be expanded independently from the final assistant reply
-- optional simulated streaming reply for demos and integration experiments
-- the fixed bottom area separates agent status above the input from a caller
-  supplied `Options.Footer` below the input for context/model/cwd metadata, with
-  a blank row separating transcript/panels from the agent status line
-- the away-from-bottom jump hint renders in the agent status row, and the input
-  area grows up to five rows as long text soft-wraps or hard newlines are typed
+## Create a model
 
-Call `NewModel(Options{...})` to create a Bubble Tea v2 model. The directory is
-named `modu-tui` for the import path; the Go package name is `modutui`.
+```go
+model := modutui.NewModel(modutui.Options{
+	Width:  120,
+	Height: 35,
+	Hooks: modutui.Hooks{
+		SubmitMessage: func(event modutui.SubmitEvent) {
+			// Route prompt, follow-up, or steering input to the host runtime.
+		},
+		Interrupt: func() {
+			// Cancel the host's active run.
+		},
+	},
+})
+```
 
-Component layout:
+`NewModel()` also works without options and uses a 120×35 initial size. Bubble Tea window-size messages replace those dimensions at runtime.
 
-- `block.go` defines the common `Block` interface and render result types.
-- `InputBlock` owns text editing, caret positioning, collapsed paste tokens, and
-  cursor-local replacement used by mobile SSH IME preedit coalescing.
-- `Block` is the extension interface: every block is a struct with
-  `Render(RenderContext) BlockRender`.
-- `text_block.go` and `markdown_block.go` render user/assistant transcript content;
-  markdown tables are rendered by `table_block.go` with bordered table blocks.
-- `thinking_block.go` renders assistant thinking as a collapsed block.
-- `collapsible_block.go` owns generic expand/collapse rendering.
-- `tool_call_block.go` embeds `CollapsibleBlock` for command/tool output and can
-  render permission state from `Hooks.ToolPermission`.
-- `card_block.go` owns reusable heavy-border card rendering for fixed bottom
-  panels and future popup-style blocks.
-- `todo_block.go` renders active todo items from `Options.Todos` as a fixed
-  card above the input; completed-only or empty lists are hidden, and
-  `SetTodosMsg` refreshes the card after host state changes; `normalizeTodos`
-  filters empty content and validates status before rendering.
-- `slash_command_block.go` renders slash command suggestions as an independent
-  bottom card.
-- `approval_block.go` renders a pending tool approval request as a fixed panel
-  above the bottom input area. Hosts send `RequestToolApprovalMsg` with a
-  response channel; the model handles `y/a/n/d/esc` and returns a
-  `ToolApprovalDecision`. Approval panels show a compact command preview and
-  grouped allow/deny shortcuts inside a high-contrast heavy border.
-- `code_block.go` owns fenced-code rendering and syntax highlighting via Glamour.
-- `block_factory.go` maps `Message` values to block structs.
-- `Options.BlockFactories` lets callers register custom `Message -> Block`
-  mapping before the default mapping runs.
-- `Options.InfoCardLines` lets callers provide a non-message startup card for
-  model/session/context information on a fresh screen.
-- `Options.Footer` and `SetFooterMsg` render a fixed bottom metadata row below
-  the input, separate from the agent status shown above the input.
-- `Hooks.Interrupt` lets callers handle `Esc` while the model is busy or
-  streaming; approval panels keep their own `Esc` deny behavior.
-- `Esc` and `Ctrl+C` are matched by normalized key code and raw control text so
-  SSH/mobile clients can interrupt or quit even when their key names differ.
-- `Hooks.SubmitMessage` lets host applications receive typed submissions with
-  prompt, follow-up, or steer intent. `Hooks.Submit` remains as a simple text
-  fallback for callers that do not need submit kinds.
-- `Options.InputHistory` seeds input history and `Hooks.InputHistoryChanged`
-  lets hosts persist the trimmed history list after each submission.
-- `Options.Todos` seeds the internal todo snapshot; the fixed todo card is only
-  shown while the model is busy/streaming after a current-run `SetTodosMsg`.
-  Completed-only, empty, idle, or previous-run todo lists are hidden;
-  `normalizeTodos` validates and normalizes the provided items before use.
-- `Hooks.SlashCommand` lets host applications route selected or typed slash
-  commands without sending them as normal prompts.
-- `Hooks.ToolApprovalDecision` lets host applications observe approval decisions.
-- `AppendMessageMsg`, `SetStatusMsg`, `SetFooterMsg`, and `SetBusyMsg` let host
-  applications feed external session events into the model without coupling
-  this package to a specific agent runtime. `SetStatusMsg.TransientFor` can be
-  set for completion/error notices that should disappear automatically.
-- `SetPanelMsg` opens a host-owned, scrollable main-view panel for richer TUI
-  surfaces such as workflow cockpits. The panel replaces the transcript
-  viewport until the user closes it with Esc, q, or Ctrl+C; `RefreshPanelMsg`
-  updates a matching open panel while preserving selection/scroll state, and
-  `ClearPanelMsg` can close a matching panel programmatically. Panels may
-  include selectable rows; Up/Down changes selection, Enter emits
-  `Hooks.PanelAction`, manual close emits `Hooks.PanelClosed`, and
-  `Panel.Shortcuts` can map single-key actions such as `p` or `x` into the same
-  `Hooks.PanelAction` path without requiring a row selection. Panel titles use
-  a distinct title color, plain section headings use a secondary color, obvious
-  markdown blocks inside `Panel.Lines` are rendered only when `Panel.Markdown`
-  is true, and default panel footers use ASCII key names to avoid terminal glyph
-  issues.
-- `RequestHumanPromptMsg` renders a blocking human-in-the-loop choice card for
-  host prompts such as confirm/select/plan approval; numeric keys choose
-  options and Enter/Esc use the configured default.
-- `Model` owns spacing between transcript blocks; individual blocks do not add
-  their own trailing blank lines. The default block gap is one blank line.
+## What the model owns
 
-This package intentionally does not know about coding-agent sessions or command
-execution. Those stay in higher-level packages such as `cmd/modu_code`.
+### Transcript and scrolling
+
+- A scrollable transcript above a fixed input area; mouse wheel and PageUp/PageDown move the viewport.
+- A single jump-to-bottom hint appears in the Agent status row when new content arrives off-screen.
+- Every rendered row is padded to the current width, preventing shorter frames from leaving stale terminal content.
+- Drag selection copies through the local clipboard and OSC52. SSH, tmux, and screen sessions use passthrough OSC52.
+- `DisableMouse` turns off terminal mouse reporting. `ArrowKeysScroll` lets Up/Down scroll when input and history navigation are both empty.
+
+### Input and host hooks
+
+- Input grows from one to five rows and keeps up to 100 history entries. Up/Down traverses history without discarding the current draft.
+- `Hooks.SubmitMessage` receives `SubmitKindPrompt`, `SubmitKindFollowUp`, or `SubmitKindSteer`. `Hooks.Submit` is the text-only fallback.
+- `Hooks.Interrupt` receives Esc while the model is busy or streaming. Ctrl+C remains the quit path.
+- `Options.SlashCommands` or `SlashCommandsProvider` supplies command suggestions. Tab completes; Enter dispatches through `Hooks.SlashCommand`.
+- `Options.InputHistory` seeds history; `Hooks.InputHistoryChanged` lets the host persist the normalized list.
+
+### Message blocks
+
+- Text, Markdown, tables, fenced code, thinking, Tool Calls, and host-defined blocks render independently.
+- Tool messages with the same `ToolID` merge into one block. Expanded blocks wrap input, output, code, and diffs instead of truncating them.
+- Read-style results show `Read N lines` rather than dumping file contents.
+- `ToolNoCollapse`, `ToolCode`, and `ToolLanguage` keep code or diffs expanded with syntax highlighting.
+- `Preformatted` messages preserve line layout. `Plain` messages omit user and Assistant markers.
+- `Options.BlockFactories` can map a `Message` to a custom `Block` before the built-in factory runs.
+
+### Fixed panels and cards
+
+- `CardBlock` provides one border style for approval, slash-command, todo, and human-input cards.
+- `RequestToolApprovalMsg` opens a blocking approval card and returns allow/deny decisions through its response channel. `Hooks.ToolApprovalDecision` observes the result.
+- `RequestHumanPromptMsg` and `RequestHumanTextMsg` collect host-requested choices or text.
+- `SetTodosMsg` updates the current run's active todos. Empty, completed-only, idle, and previous-run lists remain hidden; approval cards take precedence when vertical space is limited.
+- `SetPanelMsg`, `RefreshPanelMsg`, and `ClearPanelMsg` manage a host-owned main-view panel. Rows, shortcuts, `Hooks.PanelAction`, and `Hooks.PanelClosed` handle interaction.
+
+### Host updates
+
+The host feeds runtime state into the model with Bubble Tea messages:
+
+| Message | Effect |
+|---|---|
+| `AppendMessageMsg` | Append one transcript message |
+| `SetMessagesMsg` | Replace the transcript, for example after session resume |
+| `ClearMessagesMsg` | Clear the transcript |
+| `SetStatusMsg` | Update Agent status; `TransientFor` clears a temporary notice |
+| `SetFooterMsg` | Update model, context, or working-directory metadata below input |
+| `SetBusyMsg` | Mark the host runtime busy or idle |
+| `SetTodosMsg` | Replace current todo state |
+| `SetPanelMsg` / `RefreshPanelMsg` / `ClearPanelMsg` | Open, update, or close a host panel |
+
+## Component map
+
+| Component | Responsibility |
+|---|---|
+| `InputBlock` | Editing, cursor placement, paste tokens, and IME replacement |
+| `TextBlock` / `MarkdownBlock` / `TableBlock` | Transcript text and tables |
+| `ThinkingBlock` | Independently collapsible reasoning content |
+| `ToolCallBlock` / `ToolGroupBlock` | Tool state, output, code, diffs, and batching |
+| `CodeBlock` | Fenced code and syntax highlighting |
+| `CardBlock` | Shared fixed-card rendering |
+| `TodoBlock` / `SlashCommandBlock` / `ApprovalBlock` | Fixed interaction cards |
+| `Block` / `BlockRender` | Extension contract for custom message rendering |
+
+`Model` owns spacing between transcript blocks. Individual blocks should not add trailing blank lines; the default gap is one blank row.

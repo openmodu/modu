@@ -1,22 +1,10 @@
 # modu_eval
 
-`modu_eval` runs LLM-backed eval tests and displays the generated `evals.jsonl`.
+`modu_eval` 运行 LLM 评测、检查通过率，并查看生成的 `evals.jsonl`。确定性行为应优先使用普通 Go 测试；只有语义质量无法精确断言时才使用评分模型。
 
-It is intended for behavior that is hard to assert with exact strings, such as
-agent answer quality, tool-use quality, summary quality, or coding-agent output
-quality.
+## 启动
 
-## Concepts
-
-- **Eval test**: a normal Go test that only runs when `GOEVALS=1` is set.
-- **Model under test**: the provider/model that produces the output being evaluated.
-- **Rubric**: a natural-language grading rule.
-- **Grader model**: an LLM that checks whether the output satisfies each rubric.
-- **`evals.jsonl`**: one JSON object per rubric result, written at the module root.
-
-## Run
-
-Run an eval and open the interactive viewer:
+运行评测并打开结果界面：
 
 ```bash
 GOEVALS=1 \
@@ -26,7 +14,7 @@ EVAL_MODEL=qwen/qwen3.6-35b-a3b \
 go run ./cmd/modu_eval run -v ./pkg/agent -run Eval
 ```
 
-Run in CI-style mode:
+CI 中使用 `check`；Go 测试失败或通过率低于阈值时，命令返回非零状态：
 
 ```bash
 GOEVALS=1 \
@@ -36,276 +24,19 @@ EVAL_MODEL=qwen/qwen3.6-35b-a3b \
 go run ./cmd/modu_eval check -v ./pkg/agent -run Eval
 ```
 
-`check` exits non-zero if `go test` failed or any test's pass rate is below the
-threshold. The threshold defaults to `1.0` (every run of every test must pass).
-For probabilistic evals, run each several times (`GOEVALS=5`), write them with
-`LLMRubricSoft` (records but does not fail the test), and tolerate flakiness:
-
-```bash
-GOEVALS=5 ... go run ./cmd/modu_eval check --min-pass-rate 0.8 -run Eval
-```
-
-View an existing result file:
-
-```bash
-go run ./cmd/modu_eval view -f evals.jsonl
-```
-
-Print a plain text report instead of opening the TUI:
-
-```bash
-go run ./cmd/modu_eval view --plain -f evals.jsonl
-```
-
-Generate a GitHub-style comment:
-
-```bash
-go run ./cmd/modu_eval comment -v ./pkg/agent -run Eval
-```
-
-This writes `comment.md`.
-
-## Agent Task Runner
-
-`modu_eval agent` runs PinchBench-style markdown tasks against `modu_code` in
-print mode. This is separate from the Go-test eval mode above: it materializes a
-temporary workspace, sends the task prompt to a local coding-agent process, runs
-deterministic checks, and writes one `result.json` per task.
-
-Default command under test:
-
-```bash
-go run ./cmd/modu_code --no-approve --json -p "<task prompt>"
-```
-
-Run the bundled smoke task:
-
-```bash
-go run ./cmd/modu_eval agent eval/tasks/modu_code --keep-going
-```
-
-When stdout is a terminal, `modu_eval` opens an interactive TUI while the agent
-eval run is executing. The TUI starts with pending tasks, marks the active task
-as running, and refreshes the core metrics as each result is written. It focuses
-on the run-level metrics that matter for golden sets: task pass rate, check pass
-rate, average task time, category breakdown, grading-type breakdown, and per-task
-failure details. Disable it in automation:
-
-```bash
-go run ./cmd/modu_eval agent --tui=false eval/tasks/modu_code --keep-going
-```
-
-Use an installed `modu_code` binary instead of `go run`:
-
-```bash
-go run ./cmd/modu_eval agent \
-  --agent modu_code \
-  --agent-arg --no-approve \
-  eval/tasks/modu_code
-```
-
-Results are written under `eval/results/modu-code-<timestamp>/` by default.
-Each task gets a `result.json` with stdout/stderr, parsed assistant text, tool
-calls from JSON output, workspace snapshot, check results, and scores. With
-`--summary` enabled, the run also writes `summary.md`.
-
-Task files are markdown with YAML frontmatter:
-
-```markdown
----
-id: edit_readme
-name: edit README
-timeout_seconds: 120
-workspace_files:
-  - path: "README.md"
-    content: |
-      # Demo
-checks:
-  - name: assistant responded
-    type: assistant_responded
-  - name: readme updated
-    type: file_contains
-    path: "README.md"
-    value: "Usage"
----
-
-## Prompt
-
-Update README.md with a Usage section.
-```
-
-Supported deterministic check types:
-
-- `assistant_responded`
-- `output_contains`, `output_not_contains`, `output_regex`
-- `tool_called` (requires JSON output)
-- `file_exists`, `file_contains`, `file_not_contains`, `file_regex`
-- `command_succeeds` with `command: ["go", "test", "./..."]`
-
-If the agent cannot write directly to the local workspace, it may return files
-using markdown fences such as:
-
-````markdown
-```file path="relative/path.ext"
-content
-```
-````
-
-The runner extracts those artifacts into the workspace before grading.
-
-## Agent Result TUI
-
-`modu_eval agent` opens the result TUI by default only in an interactive terminal.
-It renders the task queue immediately and updates after every completed task.
-
-Keys:
-
-```text
-up/down or j/k     Move through task results
-enter              Open task detail view
-esc                Return to summary view
-f                  Toggle failures-only filter
-q or ctrl+c        Quit after the run completes
-```
-
-The summary view shows core golden-set metrics and a task table. The detail view
-shows check results, failure reason, assistant output, tool calls, workspace, and
-source task path.
-
-## Environment
-
-Main model:
-
-```text
-EVAL_PROVIDER      Provider id. Supports comma-separated values. Default: lmstudio
-EVAL_BASE_URL      OpenAI-compatible base URL. Default depends on provider.
-EVAL_API_KEY       API key for the eval provider.
-EVAL_MODEL         Model under test. Required.
-```
-
-Provider-specific overrides are also supported:
-
-```text
-EVAL_OPENAI_BASE_URL
-EVAL_OPENAI_API_KEY
-EVAL_OPENAI_MODEL
-EVAL_LMSTUDIO_BASE_URL
-EVAL_LMSTUDIO_MODEL
-```
-
-Grader model:
-
-```text
-GRADER_PROVIDER    Grader provider. Defaults to the eval provider.
-GRADER_BASE_URL    Grader OpenAI-compatible base URL.
-GRADER_API_KEY     Grader API key.
-GRADER_MODEL       Grader model. Defaults to EVAL_MODEL.
-```
-
-If `GRADER_*` is not set, the grader reuses the eval provider/model. For more
-stable results, use a stronger grader model than the model under test.
-
-## TUI
-
-`run` and `view` open the TUI by default.
-
-Keys:
-
-```text
-up/down or j/k     Move through rubric results
-enter              Open detail view
-esc                Return to list view
-f                  Toggle failures-only filter
-q or ctrl+c        Quit
-```
-
-The detail view shows provider, grader, rubric, output, reasoning, and score.
-
-## Writing an Eval
-
-Eval tests live beside the package they evaluate. Name them with `Eval` so they
-can be selected with `-run Eval`.
-
-Example:
-
-```go
-func TestBasicAgentResponseEval(t *testing.T) {
-	evals.Run(t, "basic chinese factual answer", func(e *evals.EvalT) {
-		providers.Register(e.Provider)
-
-		a := agent.NewAgent(types.Config{
-			InitialState: &types.State{
-				SystemPrompt: "你是一个简洁、准确的中文助手。",
-				Model:        e.Model,
-			},
-		})
-
-		if err := a.Prompt(context.Background(), "请用中文回答：法国的首都是哪里？"); err != nil {
-			e.Fatalf("prompt agent: %v", err)
-		}
-
-		output := evals.LastAssistantText(a.GetState().Messages)
-		if output == "" {
-			e.Fatal("expected non-empty assistant output")
-		}
-
-		evals.LLMRubricT(e, "回答使用中文", output)
-		evals.LLMRubricT(e, "回答明确指出法国首都是巴黎", output)
-		evals.LLMRubricT(e, "回答没有声称法国首都是其他城市", output)
-	})
-}
-```
-
-Guidelines:
-
-- Use normal Go assertions for deterministic behavior.
-- Use rubrics for semantic quality that exact string assertions cannot capture.
-- Keep rubrics specific and independently checkable.
-- Prefer several narrow rubrics over one broad rubric.
-- Do not rely only on the model saying it used a tool; assert real side effects
-  or recorded tool calls when tool usage matters.
-
-### Deterministic assertions
-
-Besides `LLMRubricT`, `pkg/evals` provides deterministic checks that record a
-pass/fail row without spending a grader-LLM call. Prefer them whenever a check
-can be made exactly:
-
-```go
-evals.ContainsT(e, "巴黎", output)          // substring present
-evals.NotContainsT(e, "伦敦", output)        // substring absent
-evals.RegexpT(e, `^\d{4}-\d{2}-\d{2}$`, out) // matches pattern
-evals.ToolCalledT(e, a.GetState().Messages, "read") // agent really called a tool
-```
-
-`ToolCalledT` inspects recorded tool calls (`evals.ToolCalls` /
-`evals.ToolCalled` / `evals.ToolCallNames` are also exported), so it verifies
-real tool usage rather than the model's prose.
-
-### Flaky rubrics
-
-`LLMRubricT` fails the test on a miss. For probabilistic rubrics that you want to
-gate on an aggregate pass rate instead, use `LLMRubricSoft`, which records the
-result and returns the verdict without failing the test:
-
-```go
-evals.LLMRubricSoft(e, "回答明确指出法国首都是巴黎", output)
-```
-
-Run with `GOEVALS=N` and gate via `modu_eval check --min-pass-rate`. A rubric
-passes only when the grader returns `pass=true` and `score >= 0.6`.
-
-## Examples
-
-- `pkg/agent/agent_eval_test.go`: a basic factual-answer rubric eval.
-- `pkg/agent/tool_eval_test.go`: tool-calling evals (assert the agent actually
-  invokes a tool with `ToolCalledT` and grounds its answer in the result).
-- `pkg/coding_agent/coding_eval_test.go`: coding evals that drive a real
-  `CodingSession` in a temp dir and assert real side effects (file written/
-  edited, valid Go) plus a rubric on the generated code.
-
-## Files
-
-- `pkg/evals`: test harness, provider setup, rubric grading, JSONL recording.
-- `cmd/modu_eval`: CLI, TUI viewer, CI summary, comment generation.
-- `evals.jsonl`: generated result file at the module root.
+## 常用命令与参数
+
+| 命令或参数 | 用途 |
+|---|---|
+| `run [go test 参数]` | 运行评测并打开 TUI |
+| `check [go test 参数]` | 运行评测，输出适合 CI 的摘要 |
+| `check --min-pass-rate 0.8 ...` | 把每个测试的最低通过率设为 `0.8`；默认 `1.0` |
+| `view -f evals.jsonl` | 查看已有结果 |
+| `view --plain --output` | 输出包含结果摘录的纯文本报告 |
+| `comment [go test 参数]` | 生成 `comment.md` |
+| `agent <任务文件或目录>` | 对本地编码 Agent 运行 Markdown 任务集 |
+| `agent --tui=false ...` | 在自动化环境中关闭交互界面 |
+
+## 详细文档
+
+环境变量、rubric、确定性断言、Agent 任务格式、结果目录和 TUI 操作见 [`docs/guides/modu-eval.md`](../../docs/guides/modu-eval.md)。

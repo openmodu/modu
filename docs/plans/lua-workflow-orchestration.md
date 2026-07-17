@@ -1,10 +1,10 @@
-# Lua Workflow Orchestration Plan
+# Lua Workflow 编排方案与兼容状态
 
-目标：在 `modu code` 中实现一个 Lua 版 `workflow` tool，用脚本完成动态多 agent 编排。功能目标对齐 `pi-dynamic-workflows` 的 workflow runtime，但脚本语言从 JavaScript 换成 Lua，执行底座复用 modu 已有的 `ExtensionAPI.ForkSession`、subagent child event、worktree isolation、工具权限和 runtime snapshot。
+`modu code` 使用 Lua `workflow` 工具编排动态多 Agent 任务。脚本层对齐 `pi-dynamic-workflows` 的运行时语义，执行层复用 `ExtensionAPI.ForkSession`、子 Agent 事件、worktree 隔离、工具权限和运行快照。
 
-这不是临时 MVP。实现必须按阶段落地，每个阶段都要有可重复的单元测试和真实 case 验证，确认后再进入下一阶段。
+本文同时记录目标接口、阶段验收、当前实现和兼容差异。后续里程碑必须先通过可重复测试和真实用例，再进入下一阶段。
 
-## Reference Behavior
+## 对齐基准
 
 对齐基准来自 `pi-dynamic-workflows` 和 Claude Code 官方 dynamic workflows 文档：
 
@@ -30,7 +30,7 @@ Claude Code 官方 dynamic workflows 的完整基准还包括：
 
 这些能力不是 `pi-dynamic-workflows` prototype 已完整实现的范围。`pi-dynamic-workflows` README 也明确其当前只实现 core primitive（script、subagents、parallel/pipeline、phases、abort、structured output），尚未实现 persisted/resumable runs 或 `/workflows` manager。
 
-## Proposed Lua Surface
+## Lua 接口
 
 Lua 脚本可使用以下全局函数和对象：
 
@@ -293,7 +293,7 @@ Scope:
 - Record exact validation commands and observed results.
 - Add a short compatibility note explaining the Lua surface relative to `pi-dynamic-workflows`.
 
-## Acceptance Rule
+## 验收规则
 
 Do not merge a later milestone before the current milestone has:
 
@@ -303,7 +303,7 @@ Do not merge a later milestone before the current milestone has:
 - documentation updates for any public surface added,
 - progress log entries with the exact commands used for validation.
 
-## Compatibility Status
+## 当前兼容状态
 
 Current implementation status on branch `feat/lua-workflow`:
 
@@ -334,7 +334,7 @@ Intentional differences from `pi-dynamic-workflows`:
 - `schema` / structured-output capture is prompt-and-validate based with one corrective retry; it is not yet a host-level terminating tool.
 - The host forks children from the parent session's tool catalog. When `tools` is omitted, the child inherits the current main-agent visible tool allowlist. When `tools` is non-empty, the child receives only the named tools present in the parent session catalog, which covers session-connected/custom/MCP-style tools; default `modu_code` coding sessions also keep `grep`, `find`, `ls`, `web_search`, and `web_fetch` opt-in for the parent model but can explicitly provide those read-only discovery or network research tools to workflow children.
 
-## Claude Code Parity Backlog
+## Claude Code 对齐清单
 
 Current parity audit sources:
 

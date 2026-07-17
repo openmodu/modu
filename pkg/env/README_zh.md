@@ -1,112 +1,63 @@
-# env
+[English](README.md) | [中文](README_zh.md)
 
-轻量级环境变量加载库，支持从 `.env` 文件读取配置。采用 Functional Options 模式，使用简洁灵活。
+# 环境变量
 
-## 安装
+`pkg/env` 把 `.env` 文件中的 `KEY=VALUE` 写入当前进程，并封装常用的 `os.Getenv` 操作。默认忽略不存在的文件，也不覆盖进程中已有的环境变量；只有设置 `WithOverride` 才会覆盖。
+
+## 加载文件
 
 ```go
 import "github.com/openmodu/modu/pkg/env"
+
+if err := env.Load(); err != nil {
+	return err
+}
 ```
 
-## 快速开始
+`Load()` 默认读取当前目录的 `.env`。下面的选项用于修改路径和失败行为：
 
 ```go
-// 加载当前目录的 .env 文件
-env.Load()
-
-// 获取环境变量
-apiKey := env.Get("API_KEY")
-port := env.GetDefault("PORT", "8080")
-```
-
-## 使用示例
-
-### 基础用法
-
-```go
-// 默认加载 .env（不覆盖已有变量）
-env.Load()
-
-// 加载指定文件
-env.Load(env.WithFile(".env.local"))
-
-// 从指定目录加载
-env.Load(env.WithDir("/etc/myapp"))
-
-// 覆盖已有环境变量
-env.Load(env.WithOverride())
-
-// 文件必须存在
-env.Load(env.WithRequired())
-```
-
-### 组合选项
-
-```go
-env.Load(
-    env.WithFile(".env.production"),
-    env.WithDir("/etc/myapp"),
-    env.WithOverride(),
-    env.WithRequired(),
+err := env.Load(
+	env.WithDir("/etc/myapp"),
+	env.WithFile(".env.production"),
+	env.WithOverride(),
+	env.WithRequired(),
 )
 ```
 
-### 获取变量
+| 选项 | 行为 |
+|---|---|
+| `WithFile(name)` | 使用 `name`，不再读取 `.env` |
+| `WithDir(dir)` | 从 `dir` 下查找文件 |
+| `WithOverride()` | 覆盖进程中已有的变量 |
+| `WithRequired()` | 文件不存在时返回错误 |
+
+只有当配置错误必须终止进程时，才在启动阶段使用 `MustLoad`：
 
 ```go
-// 获取，不存在返回空字符串
-value := env.Get("KEY")
-
-// 带默认值
-port := env.GetDefault("PORT", "8080")
-
-// 必须存在，否则返回 error
-secret, err := env.GetRequired("SECRET")
-
-// 必须存在，否则 panic
-token := env.MustGet("TOKEN")
-```
-
-### Panic 版本
-
-```go
-// 加载失败则 panic
 env.MustLoad(env.WithRequired())
 ```
 
-## 选项列表
+## 读取和设置变量
 
-| 选项 | 说明 |
-|------|------|
-| `WithFile(name)` | 指定文件名（默认 `.env`）|
-| `WithDir(dir)` | 指定目录 |
-| `WithOverride()` | 覆盖已有环境变量 |
-| `WithRequired()` | 文件必须存在，否则报错 |
+```go
+apiKey := env.Get("API_KEY")                    // 未设置时返回空字符串。
+port := env.GetDefault("PORT", "8080")        // 未设置或为空时返回默认值。
+secret, err := env.GetRequired("SECRET")       // 未设置或为空时返回错误。
+token := env.MustGet("TOKEN")                  // 未设置或为空时 panic。
+err = env.Set("LOG_LEVEL", "debug")           // 调用 os.Setenv。
+```
 
-## .env 文件格式
+## 文件格式
 
-```env
-# 注释
+```dotenv
+# 忽略注释和空行。
 API_KEY=your-api-key
 export DB_URL=postgres://localhost/db
 
-# 支持引号
 MESSAGE="Hello World"
 NAME='Single Quotes'
-
-# 支持转义
 MULTILINE="Line1\nLine2"
 ```
 
-## API
-
-| 函数 | 说明 |
-|------|------|
-| `Load(opts...)` | 加载环境变量 |
-| `MustLoad(opts...)` | 加载，失败 panic |
-| `Get(key)` | 获取变量 |
-| `GetDefault(key, def)` | 带默认值获取 |
-| `GetRequired(key)` | 必须存在 |
-| `MustGet(key)` | 必须存在，否则 panic |
-| `Set(key, value)` | 设置变量 |
-
+解析器支持可选的 `export` 前缀、单引号或双引号值，以及双引号内的转义字符。它不是 Shell，不要依赖命令替换或 Shell 变量展开。

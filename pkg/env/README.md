@@ -1,111 +1,63 @@
-# env
+[English](README.md) | [中文](README_zh.md)
 
-A lightweight environment variable loading library that supports reading configuration from `.env` files. It uses the Functional Options pattern for a concise and flexible API.
+# Environment variables
 
-## Installation
+`pkg/env` loads `KEY=VALUE` pairs from a `.env` file into the current process and wraps common `os.Getenv` operations. Missing files are ignored by default, and existing environment variables are preserved unless `WithOverride` is set.
+
+## Load a file
 
 ```go
 import "github.com/openmodu/modu/pkg/env"
+
+if err := env.Load(); err != nil {
+	return err
+}
 ```
 
-## Quick Start
+`Load()` reads `.env` from the current directory. Options can change the path and failure behavior:
 
 ```go
-// Load .env file from the current directory
-env.Load()
-
-// Get environment variables
-apiKey := env.Get("API_KEY")
-port := env.GetDefault("PORT", "8080")
-```
-
-## Usage Examples
-
-### Basic Usage
-
-```go
-// Default: Load .env (does not override existing variables)
-env.Load()
-
-// Load a specific file
-env.Load(env.WithFile(".env.local"))
-
-// Load from a specific directory
-env.Load(env.WithDir("/etc/myapp"))
-
-// Override existing environment variables
-env.Load(env.WithOverride())
-
-// Require the file to exist
-env.Load(env.WithRequired())
-```
-
-### Combined Options
-
-```go
-env.Load(
-    env.WithFile(".env.production"),
-    env.WithDir("/etc/myapp"),
-    env.WithOverride(),
-    env.WithRequired(),
+err := env.Load(
+	env.WithDir("/etc/myapp"),
+	env.WithFile(".env.production"),
+	env.WithOverride(),
+	env.WithRequired(),
 )
 ```
 
-### Retrieving Variables
+| Option | Effect |
+|---|---|
+| `WithFile(name)` | Use `name` instead of `.env` |
+| `WithDir(dir)` | Resolve the file below `dir` |
+| `WithOverride()` | Replace variables already present in the process |
+| `WithRequired()` | Return an error when the file does not exist |
+
+Use `MustLoad` only during startup when a configuration error should terminate the process:
 
 ```go
-// Get, returns an empty string if it doesn't exist
-value := env.Get("KEY")
-
-// Get with a default value
-port := env.GetDefault("PORT", "8080")
-
-// Must exist, otherwise returns an error
-secret, err := env.GetRequired("SECRET")
-
-// Must exist, otherwise panic
-token := env.MustGet("TOKEN")
-```
-
-### Panic Versions
-
-```go
-// Panic if loading fails (e.g., file not found with WithRequired)
 env.MustLoad(env.WithRequired())
 ```
 
-## Options List
+## Read and set variables
 
-| Option | Description |
-|------|------|
-| `WithFile(name)` | Specify the filename (default: `.env`) |
-| `WithDir(dir)` | Specify the directory |
-| `WithOverride()` | Override existing environment variables |
-| `WithRequired()` | The file must exist, otherwise an error is returned |
+```go
+apiKey := env.Get("API_KEY")                    // Empty string when unset.
+port := env.GetDefault("PORT", "8080")        // Default when unset or empty.
+secret, err := env.GetRequired("SECRET")       // Error when unset or empty.
+token := env.MustGet("TOKEN")                  // Panic when unset or empty.
+err = env.Set("LOG_LEVEL", "debug")           // Delegates to os.Setenv.
+```
 
-## .env File Format
+## File format
 
-```env
-# Comment
+```dotenv
+# Comments and blank lines are ignored.
 API_KEY=your-api-key
 export DB_URL=postgres://localhost/db
 
-# Quoted values
 MESSAGE="Hello World"
 NAME='Single Quotes'
-
-# Escaped characters
 MULTILINE="Line1\nLine2"
 ```
 
-## API
-
-| Function | Description |
-|------|------|
-| `Load(opts...)` | Load environment variables |
-| `MustLoad(opts...)` | Load, panic on failure |
-| `Get(key)` | Get variable |
-| `GetDefault(key, def)` | Get with default value |
-| `GetRequired(key)` | Must exist, returns error if not |
-| `MustGet(key)` | Must exist, panic if not |
-| `Set(key, value)` | Set variable |
+The parser accepts an optional `export` prefix, single- or double-quoted values, and escaped characters in double-quoted values. It is a `.env` loader, not a shell: do not rely on command substitution or shell expansion.

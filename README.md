@@ -6,30 +6,22 @@
 
 <h1 align="center">Modu</h1>
 
-<p align="center">
-  <strong>🚀 A Fast and Efficient Go Infrastructure Toolkit for Building Agent Applications</strong>
-</p>
+Modu is a Go toolkit for building agent applications. It provides an agent loop, LLM provider adapters, tool execution, multi-agent coordination, messaging channels, scheduling, and terminal UI components; applications still own their prompts, tools, persistence policy, and deployment.
 
-<p align="center">
-  <em>Modular, Event-Driven Multi-Agent Collaboration Framework</em>
-</p>
+## Requirements
 
----
+- Go 1.26.2 or later, as declared in [`go.mod`](go.mod)
+- An LLM endpoint such as Ollama, LM Studio, OpenAI, Anthropic, DeepSeek, Gemini, or another OpenAI-compatible API
 
-## 📦 Installation
+## Install
 
 ```bash
 go get github.com/openmodu/modu
 ```
 
-## 🚀 Quick Start
+## Minimal agent
 
-### Prerequisites
-
-- Go 1.21+
-- An LLM service (e.g., [Ollama](https://ollama.ai), [LM Studio](https://lmstudio.ai), or any OpenAI-compatible API)
-
-### Minimal Example
+The example below registers an Ollama endpoint, runs one prompt, and prints assistant text:
 
 ```go
 package main
@@ -46,7 +38,6 @@ import (
 )
 
 func main() {
-	// 1. Register LLM provider
 	providers.Register(openai.New(
 		"ollama",
 		openai.WithBaseURL("http://localhost:11434/v1"),
@@ -58,7 +49,6 @@ func main() {
 		ProviderID: "ollama",
 	}
 
-	// 2. Create agent with tools
 	a := agent.NewAgent(types.Config{
 		InitialState: &types.State{
 			SystemPrompt: "You are a helpful assistant.",
@@ -66,149 +56,80 @@ func main() {
 		},
 	})
 
-	// 3. Send a prompt
-	err := a.Prompt(context.Background(), "What is the capital of France?")
-	if err != nil {
+	if err := a.Prompt(context.Background(), "What is the capital of France?"); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
-	// 4. Get response
-	state := a.GetState()
-	for _, msg := range state.Messages {
-		if assistant, ok := msg.(types.AssistantMessage); ok {
-			for _, c := range assistant.Content {
-				if tc, ok := c.(*types.TextContent); ok {
-					fmt.Println(tc.Text)
-				}
+	for _, message := range a.GetState().Messages {
+		assistant, ok := message.(types.AssistantMessage)
+		if !ok {
+			continue
+		}
+		for _, content := range assistant.Content {
+			if text, ok := content.(*types.TextContent); ok {
+				fmt.Println(text.Text)
 			}
 		}
 	}
 }
 ```
 
-### Run Examples
+## Run examples
 
 ```bash
-# Basic agent demo
+# Basic agent
 go run ./examples/agent_demo
 
 # Coding agent with file tools
 go run ./examples/coding_agent
 
-# Multi-agent teams
+# Coordinator-led multi-agent work
 go run ./examples/agent_teams
 ```
 
-## 🗂 Project Structure
+## Collaboration patterns
 
-```
-modu/
-├── pkg/                    # Core toolkits
-│   ├── agent/              # Generic Agent engine (event-driven, tools)
-│   ├── coding_agent/       # Advanced programming Agent (sessions, skills, compression)
-│   ├── mailbox/            # Agent Teams communication infrastructure
-│   ├── moms/               # Telegram smart bot (Go/TG port of mom)
-│   ├── channels/           # Messaging channel interfaces (Telegram, Feishu)
-│   ├── providers/          # Multi-provider LLM streaming interface abstraction
-│   ├── skills/             # Agent skills loading and registry
-│   ├── tui/                # Terminal user interface library
-│   ├── types/              # Shared type definitions
-│   ├── env/                # Environment variable loader
-│   ├── stream/             # Streaming utilities
-│   └── utils/              # General utility functions
-```
+Modu supports two multi-agent patterns on the same mailbox and task model:
 
-## 📚 Core Modules
+| Pattern | Use it when | Execution rule |
+|---|---|---|
+| Agent Teams | Work has named roles and one coordinator | The coordinator assigns tasks and combines results |
+| Adversarial Validation | A queued result must pass an independent check | A worker submits; a validator accepts or requests a retry |
 
-## 🤝 Collaboration Patterns
+Run `go run ./examples/agent_teams` for the first pattern. See the [mailbox documentation](pkg/mailbox/README.md) for task queues and validation.
 
-Modu currently supports two distinct multi-agent execution patterns on top of the same mailbox/task model:
+## Modules
 
-| Pattern | Best for | Core idea |
-|------|------|------|
-| Agent Teams | Role-based collaboration with a clear coordinator | One orchestrator assigns work to named agents and aggregates results |
-| Adversarial Validation | Quality control for queue-based execution | A worker submits a result, then a separate validator agent scores it and can trigger retries |
+| Module | Responsibility | Documentation |
+|---|---|---|
+| `pkg/agent` | Stateful agent facade and dependency-inverted loop | [README](pkg/agent/README.md) |
+| `pkg/coding_agent` | Sessions, context compression, skills, and coding tools | [README](pkg/coding_agent/README.md) |
+| `pkg/mailbox` | Agent registration, messaging, projects, tasks, and validation | [README](pkg/mailbox/README.md) |
+| `pkg/channels` | Telegram and Feishu channel interfaces and bridges | [README](pkg/channels/README.md) |
+| `pkg/providers` | Streaming and non-streaming LLM providers | [README](pkg/providers/README.md) |
+| `pkg/runtime` | Checkpoint, resume, and rewind around `pkg/agent` | [README](pkg/runtime/README.md) |
+| `pkg/cron` | Scheduled coding-agent runs inside interactive `modu_code` | [README](pkg/cron/README.md) |
+| `pkg/modu-tui` | Reusable Bubble Tea v2 agent transcript UI | [README](pkg/modu-tui/README.md) |
+| `pkg/env` | `.env` loading and environment access | [README](pkg/env/README.md) |
+| `pkg/tokenkit` | Local coding-agent usage and Codex status data | [README](pkg/tokenkit/README.md) |
+| `pkg/types` | Shared messages, tools, events, models, and loop contracts | [README](pkg/types/README.md) |
 
-Related examples:
+The [documentation index](docs/README.md) covers guides, architecture, references, plans, and articles. README files beside source code remain the shortest entry point for each package.
 
-- `go run ./examples/agent_teams`
+## LLM providers
 
-### pkg/mailbox — Agent Teams Communication Infrastructure
+Register each provider under an ID that matches `types.Model.ProviderID`:
 
-Complete communication layer for multi-agent collaboration: agent registration, point-to-point messaging, task/project lifecycle, queue-based task operations, adversarial validation, and real-time dashboard.
+| Endpoint | Constructor |
+|---|---|
+| OpenAI-compatible APIs, Ollama, LM Studio | `openai.New(id, openai.WithBaseURL(url), openai.WithAPIKey(key))` |
+| Anthropic Messages API | `anthropic.New(apiKey, model)` |
+| DeepSeek | `deepseek.New(apiKey)` |
+| Gemini | `gemini.New(ctx, apiKey, id, model)` |
 
-📖 [Detailed Documentation](pkg/mailbox/README.md)
+See [`pkg/providers`](pkg/providers/README.md) for request, registry, chat, and streaming examples.
 
----
+## License
 
-### pkg/agent — Agent Engine
-
-Generic, stateful Agent core with tool calling and event streaming.
-
-📖 [Detailed Documentation](pkg/agent/README.md)
-
----
-
-### pkg/coding_agent — Programming Agent
-
-Builds on `pkg/agent` with session management, skill loading, context compression. Built-in tools: bash, read, write, edit, grep, find, ls.
-
-📖 [Detailed Documentation](pkg/coding_agent/README.md)
-
----
-
-### pkg/moms — Telegram Bot
-
-Telegram bot based on `pkg/agent`, a Go/Telegram port of the pi-mono mom Slack bot. Supports bash execution, file operations, skills, scheduled events, and cross-session memory.
-
-📖 [Detailed Documentation](pkg/moms/README.md) | 📦 [Example Code](examples/moms/main.go)
-
----
-
-### pkg/channels — Messaging Channels
-
-Unified interface for messaging platforms like Telegram and Feishu.
-
-📖 [Detailed Documentation](pkg/channels/README.md)
-
----
-
-### pkg/providers — LLM Provider Layer
-
-Unified multi-provider streaming LLM interface.
-
-📖 [Detailed Documentation](pkg/providers/README.md)
-
----
-
-### pkg/tui — Terminal User Interface
-
-Terminal user interface rendering and input handling library.
-
-📖 [Detailed Documentation](pkg/tui/README.md)
-
----
-
-### pkg/env — Environment Loader
-
-📖 [Detailed Documentation](pkg/env/README.md)
-
----
-
-## 🔧 Supported LLM Providers
-
-Registered via `providers.NewOpenAIChatCompletionsProvider` or dedicated constructors.
-
-| Provider | Register Method |
-|----------|----------|
-| Anthropic (Claude) | `providers.NewOpenAIChatCompletionsProvider("anthropic", providers.WithBaseURL("https://api.anthropic.com"))` |
-| OpenAI (GPT / o-series) | `providers.NewOpenAIChatCompletionsProvider("openai", providers.WithBaseURL("https://api.openai.com/v1"))` |
-| DeepSeek | `providers.NewDeepSeekProvider(apiKey)` |
-| Ollama (Local) | `providers.NewOpenAIChatCompletionsProvider("ollama", providers.WithBaseURL("http://localhost:11434/v1"))` |
-| LM Studio (Local) | `providers.NewOpenAIChatCompletionsProvider("lmstudio", providers.WithBaseURL("http://localhost:1234/v1"))` |
-| Any OpenAI-compatible interface | `providers.NewOpenAIChatCompletionsProvider(id, providers.WithBaseURL(url))` |
-
-## 📄 License
-
-MIT License
+MIT

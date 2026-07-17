@@ -1,47 +1,42 @@
-# acp_e2e — end-to-end smoke test for `cmd/acp-gateway`
+# ACP Gateway mock Agent
 
-Runs the gateway against a scripted mock ACP agent — no LLM API key, no
-network. Good enough to catch regressions across the full chain: HTTP →
-mailbox-style task queue → `pkg/acp` (manager → client → process) → ACP
-subprocess → bridge → SSE.
+`examples/acp_e2e` contains a deterministic ACP subprocess for testing `cmd/acp-gateway` without an LLM key or external network access. The mock Agent is reusable, but the repository does not currently provide an automated end-to-end harness for the Gateway's Project / Session / Turn API.
 
-## Run
+## Current API boundary
 
-```bash
-bash examples/acp_e2e/test_e2e.sh
+The current Gateway exposes projects, sessions, and turns:
+
+```text
+POST /api/projects
+POST /api/sessions
+POST /api/sessions/{sessionId}/turns
+GET  /api/sessions/{sessionId}/turns/{turnId}/stream
+POST /api/sessions/{sessionId}/turns/{turnId}/approve
 ```
 
-The script builds two binaries into a tempdir, starts the gateway on
-`127.0.0.1:17080` (override via `PORT=...`), and drives it with `curl`.
+Package and Handler tests cover the individual components. Do not describe the current repository as having automated ACP Gateway E2E coverage until a harness drives these routes through a real Gateway process.
 
-## What it covers
+## Required end-to-end coverage
 
-| Case | What it proves |
+| Case | Required assertion |
 |---|---|
-| `/healthz` | gateway boots, no auth required |
-| `/api/agents` | manager sees the configured mock agent |
-| POST + stream (case 1) | text chunks land as SSE `text_delta`; final status=completed; `result` concatenation works |
-| permission flow (case 2) | mock agent fires `session/request_permission` → gateway surfaces a `permission` SSE frame → `POST /approve` forwards the `optionId` back → prompt resumes |
-| auth enforcement (case 3) | `/api/agents` without Bearer → 401 |
+| `/healthz` | Gateway starts and health checks require no authentication |
+| `/api/agents` | Manager lists the configured mock Agent |
+| Prompt and stream | Text chunks arrive as SSE `text_delta` events and the final text is `Hello, world` |
+| Permission | `session/request_permission` becomes an SSE `permission` event; approving `optionId=allow` resumes the turn |
+| Authentication | `/api/agents` without a Bearer token returns HTTP 401 |
 
-## Mock agent
+## Mock Agent behavior
 
-`mock_acp_agent/` is a small Go binary that speaks the same LDJSON
-JSON-RPC 2.0 stdio protocol as `@zed-industries/claude-code-acp`, but
-with deterministic behavior:
+`mock_acp_agent/` is a Go binary that speaks the LDJSON JSON-RPC 2.0 protocol used by `@zed-industries/claude-code-acp`:
 
-- prompt containing `"permission"` → reverse `session/request_permission`
-  before replying; result text reflects the user's outcome
-- prompt containing `"error"` → `session/prompt` returns `-32603`
-- any other prompt → three text chunks (`Hello`, `, `, `world`) + `end_turn`
+- A Prompt containing `permission` sends `session/request_permission` before completing; the response reflects the selected option.
+- A Prompt containing `error` returns JSON-RPC error `-32603` from `session/prompt`.
+- Any other Prompt emits three text chunks—`Hello`, `, `, and `world`—then `end_turn`.
 
-This lets us exercise the full client stack without depending on Anthropic
-credentials or `npx`.
+This isolates Gateway, ACP process, Bridge, permission, and SSE behavior from Anthropic credentials and `npx`. It does not test a real Agent package, model response, or network service.
 
-## Manual verification with the real agent
-
-The real `@zed-industries/claude-code-acp` requires `ANTHROPIC_API_KEY`.
-To smoke-test against it:
+## Start the Gateway with a real Claude ACP Agent
 
 ```bash
 export ANTHROPIC_API_KEY=sk-...
@@ -61,13 +56,7 @@ cat > /tmp/acp.config.json <<'JSON'
 }
 JSON
 
-go run ./cmd/acp-gateway -config /tmp/acp.config.json &
-
-curl -sf -H "Authorization: Bearer $MODU_ACP_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"agent":"claude","prompt":"list files in cwd","cwd":"/tmp"}' \
-  http://localhost:7080/api/tasks
+go run ./cmd/acp-gateway -config /tmp/acp.config.json
 ```
 
-Stream the response via `curl -N -H "Authorization: Bearer $MODU_ACP_TOKEN"
-http://localhost:7080/api/tasks/<id>/stream`.
+The real Agent path requires network access, `npx`, and a valid `ANTHROPIC_API_KEY`. All API routes except `/` and `/healthz` require `Authorization: Bearer $MODU_ACP_TOKEN`.

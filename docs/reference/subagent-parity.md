@@ -1,14 +1,10 @@
-# Subagent extension — pi-subagents parity tracker
+# Subagent extension: pi-subagents parity tracker
 
-This file tracks how `pkg/coding_agent/extension/subagent` lines up against the
-TypeScript reference at `github.com/openmodu/pi-subagents`. The high-level
-project log lives in `pkg/coding_agent/PROGRESS.md`; this file is the
-subagent-specific subset, organized by capability area with file pointers into
-pi-subagents so the next iteration has an unambiguous source of truth.
+The Go subagent extension supports the main `pi-subagents` execution and management paths, but it does not have full parity. This page separates implemented behavior from partial and intentionally deferred work so callers can decide whether a missing capability blocks their use case.
 
-The reference snapshot is the `pi-subagents` tree at this repo's local clone
-(`/Users/ityike/Code/go/src/github.com/openmodu/pi-subagents`), aligned to pi
-`SubagentParams` in `src/extension/schemas.ts` and `src/shared/types.ts`.
+The implementation lives in `pkg/coding_agent/plugins/extension/subagent`. The comparison target is [`openmodu/pi-subagents`](https://github.com/openmodu/pi-subagents), especially `SubagentParams` in `src/extension/schemas.ts` and the contracts in `src/shared/types.ts`. The repository-wide development log remains in `pkg/coding_agent/PROGRESS.md`; the [Coding Agent reference](coding-agent.md) covers the surrounding session system.
+
+Treat this page as a compatibility ledger, not an API guarantee. A capability listed as partial can preserve the common execution path while omitting delivery guarantees, host UI, or a control surface.
 
 ## What's done
 
@@ -141,7 +137,7 @@ The reference snapshot is the `pi-subagents` tree at this repo's local clone
 - Slash commands: `/run`, `/parallel`, `/chain`, `/subagents-doctor`.
 
 ### Tests
-- `pkg/coding_agent/extension/subagent/subagent_test.go` covers all of the
+- `pkg/coding_agent/plugins/extension/subagent/subagent_test.go` covers all of the
   above (per-call overrides, parallel concurrency, chain `{previous}` flow,
   chain parallel groups, `count`, `concurrency` validation, `cwd` forwarding
   across modes, output file-only, reads/progress placement, async overrides,
@@ -236,18 +232,19 @@ that want edit-then-confirm can still approximate this by:
 Needs a host-level session sharing pipeline (Gist API client + auth).
 Out of scope.
 
-## Done as MVP, full pi parity deferred
+## Partial implementations kept as MVPs
 
 The features below are intentionally MVPs — they cover the common case
 without porting pi's full implementation:
 
 - **H.intercom**: file-based inbox + auto-attach; no pub/sub bus.
 - **I.clarify**: preview + confirm; no in-line edit.
-- **G.control**: clock-based timers + routing; no turn/token/tool-attempt
-  triggers and no async-channel sink.
+- **G.control**: batch async runs support clock, turn, token, and failed-tool
+  thresholds; single-mode background runs still lack the counter-trigger entry
+  point, and `notifyChannels: "async"` has no host task-record sink.
 
-Anything in this section that grows a stronger use case can be promoted
-to "what's done" without needing the full pi-subagents rewrite.
+Promote an item to "What's done" only after the missing delivery or control
+semantics are implemented and covered by the extension tests.
 
 ## Explicitly deferred / out of scope
 

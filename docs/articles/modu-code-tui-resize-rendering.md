@@ -1,14 +1,14 @@
-# modu_code TUI 渲染层深潜：内联渲染、终端 reflow 与 resize 重影的根治
+# modu_code TUI resize 重影：终端 reflow 与内联渲染
 
-> 本文记录 modu_code 内联 TUI（`pkg/tui`）渲染层的一次彻底重构。重点不在功能，而在**底层技术原理**：终端到底是怎么画字符的、为什么"调整窗口大小"会让界面层层重影、以及我们最终为什么走上了"全屏自绘"这条路。
+modu_code 的内联 TUI 曾在窗口缩放后重复绘制输入框、状态行和工具输出。根因不是单个光标计算错误，而是终端 reflow 改变了物理行数，渲染器仍按缩放前的逻辑行数移动光标。
 >
-> 涉及的核心提交：`3f96073`（迁移 bubbletea v2）、`063dfcb`（增量提交滚动区）、`173689c`（resize 时整屏重绘）、`2343478`（输入框边框 + 自适应分隔线）、`9f8bac2`（diff 渲染器转正、删除旧路径）。
+> 涉及的核心提交：`3f96073`（迁移 bubbletea v2）、`063dfcb`（增量提交滚动区）、`173689c`（resize 时整屏重绘）、`2343478`（输入框边框与自适应分隔线）、`9f8bac2`（diff 渲染器转正并删除旧路径）。
 
 ---
 
-## 0. 一句话结论
+## 0. 结论
 
-让一个**保留终端原生 scrollback（历史回滚）**的内联 TUI 在 **resize 时不重影**，本质上是个不可能只靠"相对光标增量刷新"模型解决的问题。最终方案是：稳定尺寸下仍用 diff 增量刷新活动区；resize 时在 `paint()` 层 `HardClear()` 清屏和 scrollback，再从 `b.model.blocks` 重新渲染 transcript；同时用**增量提交（incremental commit）**把已完成的内容主动推进原生 scrollback，避免活动区无限长高。
+只靠相对光标增量刷新，无法同时保证内联 TUI 保留原生 scrollback 且在 resize 后不重影。当前方案在尺寸稳定时用 diff 刷新活动区；收到 resize 后，在 `paint()` 层调用 `HardClear()` 清除屏幕和 scrollback，再从 `b.model.blocks` 重建 transcript。已完成内容通过增量提交进入原生 scrollback，活动区不会随会话持续增高。
 
 ---
 
@@ -200,7 +200,7 @@ tmux -L test capture-pane -p -S -N          # 含 scrollback 一起抓
 
 ---
 
-## 7. 收尾：diff 渲染器转正
+## 7. 最终渲染路径
 
 `MODU_TUI_DIFF` 灰度开关在 A/B 充分后移除（`9f8bac2`），diff 渲染器成为唯一路径。删掉了整条旧的非 diff 渲染链（`pkg/tui` 净 −181 行）：`useDiff`/`inline` 这两个永远为 true 的字段、非内联的 `RunBubbleTeaWithOptions`、整套 `renderInlineView`/`renderTranscript`/`renderHeader` 机器、`tea.Println` 分支（现在一切都入队 scrollback）、假光标逻辑（现在是真硬件光标 `PlaceCaret`）。`viewString()` 重新定义为活动帧快照（`fullScreenLines` join），`View()` 仅为满足 tea.Model 接口和测试保留——`WithoutRenderer` 下永不被调。
 
