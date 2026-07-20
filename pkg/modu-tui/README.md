@@ -47,6 +47,9 @@ model := modutui.NewModel(modutui.Options{
 - Tool messages with the same `ToolID` merge into one block. Expanded blocks wrap input, output, code, and diffs instead of truncating them.
 - Read-style results show `Read N lines` rather than dumping file contents.
 - `ToolNoCollapse`, `ToolCode`, and `ToolLanguage` keep code or diffs expanded with syntax highlighting.
+- Numbered write previews keep the line-number gutter outside the syntax lexer and use a four-column outer indent; selection metadata excludes the indent, line number, and separator from copied source. Idempotent existing-file writes infer the source language from the file path instead of treating full-file content as a diff.
+- New-file numbered previews paint every source row with the added green background while preserving syntax foreground colors. Existing unchanged files remain untinted, and existing-file diffs keep green/red/gray per-row backgrounds.
+- Numbered Update diff rows also mark their layout indent, change marker, and line number as non-copyable gutter, so dragging across changed rows copies source without `+`/`-` or file line numbers.
 - `Preformatted` messages preserve line layout. `Plain` messages omit user and Assistant markers.
 - `Options.BlockFactories` can map a `Message` to a custom `Block` before the built-in factory runs.
 

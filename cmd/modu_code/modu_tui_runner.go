@@ -6082,6 +6082,9 @@ func toolPreviewOutputFromArgsWithCwd(toolName string, args any, cwd string) str
 		}
 		if oldContent, ok := previewFileContentFromArgs(args, cwd); ok {
 			added, removed := changedLineCounts(oldContent, content)
+			if added == 0 && removed == 0 {
+				return "No changes"
+			}
 			return fmt.Sprintf("Added %d lines, removed %d lines", added, removed)
 		}
 		lines := countContentLines(content)
@@ -6112,7 +6115,10 @@ func toolCodeFromArgsWithCwd(toolName string, args any, cwd string) string {
 		if diff := contextualEditDiffFromArgs(args, oldText, newText, cwd); diff != "" {
 			return diff
 		}
-		return simpleEditDiff(oldText, newText)
+		// Without the target file we cannot show truthful file line numbers.
+		// Successful edit results carry the tool-generated numbered diff and
+		// will populate the block when execution completes.
+		return ""
 	}
 	return ""
 }
@@ -6147,17 +6153,6 @@ func toolLanguageFromArgsWithCwd(toolName string, args any, cwd string) string {
 		return languageFromPath(path)
 	}
 	return ""
-}
-
-func simpleEditDiff(oldText, newText string) string {
-	var lines []string
-	for _, line := range splitContentLines(oldText) {
-		lines = append(lines, "- "+line)
-	}
-	for _, line := range splitContentLines(newText) {
-		lines = append(lines, "+ "+line)
-	}
-	return strings.Join(lines, "\n")
 }
 
 func editDiffFromOutput(output string) string {

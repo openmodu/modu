@@ -49,7 +49,7 @@ func (b ToolCallBlock) Render(ctx RenderContext) BlockRender {
 		out.Add(line, 0)
 	}
 	for _, line := range toolOutputLines(ctx, b.Call) {
-		out.Add(toolExpandedLine(ctx.ContentWidth, line), 0)
+		out.Add(toolExpandedLine(ctx.ContentWidth, line.Text), line.Gutter)
 	}
 	return out
 }
@@ -121,19 +121,45 @@ func toolInvocationLine(call ToolCall) string {
 	return name + "(" + input + ")"
 }
 
-func toolOutputLines(ctx RenderContext, call ToolCall) []string {
+func toolOutputLines(ctx RenderContext, call ToolCall) []RenderedLine {
 	output := strings.TrimRight(toolDisplayOutput(call), "\n")
-	var lines []string
+	var lines []RenderedLine
 	if strings.TrimSpace(output) == "" {
-		lines = append(lines, toolOutputBranchPrefix()+"no content data")
+		lines = append(lines, RenderedLine{Text: toolOutputBranchPrefix() + "no content data"})
 	} else {
-		lines = append(lines, wrappedToolOutputLines(ctx.ContentWidth, output)...)
+		for _, line := range wrappedToolOutputLines(ctx.ContentWidth, output) {
+			lines = append(lines, RenderedLine{Text: line})
+		}
 	}
 
+	codeIndent := toolOutputIndent()
+	numberedCodeGutter := numberedToolCodeGutterWidth(call.Code)
+	if numberedCodeGutter > 0 {
+		codeIndent = toolNumberedCodeIndent()
+	}
 	codeCtx := ctx
-	codeCtx.ContentWidth = max(1, ctx.ContentWidth-toolOutputIndentWidth())
+	codeCtx.ContentWidth = max(1, ctx.ContentWidth-lipgloss.Width(codeIndent))
 	for _, line := range toolCodeLines(codeCtx, call) {
-		lines = append(lines, toolOutputIndent()+toolCodeLine(codeCtx.ContentWidth, line))
+		renderedCode := toolCodeLine(codeCtx.ContentWidth, line)
+		if numberedCodeGutter > 0 && !strings.EqualFold(strings.TrimSpace(call.Language), "diff") {
+			// A numbered full-file preview with a source language is a newly
+			// created file. Paint the complete row as added while preserving
+			// Chroma's foreground colors inside the green background.
+			renderedCode = ansiBackground(renderedCode, "22")
+		}
+		gutter := 0
+		if numberedCodeGutter > 0 {
+			gutter = lipgloss.Width(codeIndent) + numberedCodeGutter
+		} else if strings.EqualFold(strings.TrimSpace(call.Language), "diff") {
+			// Diff rows put the +/- marker and optional line number before
+			// source. Treat that whole display prefix as selection gutter so
+			// copying an Update preview yields source text only.
+			gutter = lipgloss.Width(codeIndent) + toolDiffCodeGutterWidth(line)
+		}
+		lines = append(lines, RenderedLine{
+			Text:   codeIndent + renderedCode,
+			Gutter: gutter,
+		})
 	}
 
 	return lines
@@ -160,7 +186,7 @@ func toolOutputBranchPrefix() string { return "  └ " }
 
 func toolOutputIndent() string { return "    " }
 
-func toolOutputIndentWidth() int { return lipgloss.Width(toolOutputIndent()) }
+func toolNumberedCodeIndent() string { return "    " }
 
 func toolHeaderContinuationPrefix() string { return "  │ " }
 
@@ -258,6 +284,15 @@ func toolCodeLines(ctx RenderContext, call ToolCall) []string {
 		return nil
 	}
 	lang := strings.TrimSpace(call.Language)
+	if source, ok := splitNumberedToolCode(code); ok {
+		// Existing-file writes are labelled as diff by the host. When there is
+		// no actual diff (for example, an idempotent write), the preview falls
+		// back to numbered full-file content and must use the file's language.
+		if strings.EqualFold(lang, "diff") {
+			lang = toolDiffSourceLanguage(call.Input)
+		}
+		return renderNumberedToolCode(ctx.ContentWidth, source, lang)
+	}
 	if strings.EqualFold(lang, "diff") {
 		return toolDiffCodeLines(ctx.ContentWidth, code, call.Input)
 	}
@@ -269,6 +304,66 @@ func toolCodeLines(ctx RenderContext, call ToolCall) []string {
 		}
 	}
 	return strings.Split(body, "\n")
+}
+
+func numberedToolCodeGutterWidth(code string) int {
+	source, ok := splitNumberedToolCode(strings.TrimRight(code, "\n"))
+	if !ok {
+		return 0
+	}
+	return len(fmt.Sprintf("%d", len(source))) + 2
+}
+
+// splitNumberedToolCode removes the gutter produced by numberedContent. The
+// source must be separated before syntax highlighting; otherwise Chroma treats
+// line numbers as source tokens and a multiline string can color subsequent
+// gutters as string content.
+func splitNumberedToolCode(code string) ([]string, bool) {
+	if code == "" {
+		return nil, false
+	}
+	lines := strings.Split(code, "\n")
+	lineNumberWidth := len(fmt.Sprintf("%d", len(lines)))
+	source := make([]string, 0, len(lines))
+	for i, line := range lines {
+		prefix := fmt.Sprintf("%*d  ", lineNumberWidth, i+1)
+		if !strings.HasPrefix(line, prefix) {
+			return nil, false
+		}
+		source = append(source, strings.TrimPrefix(line, prefix))
+	}
+	return source, true
+}
+
+func renderNumberedToolCode(width int, source []string, lang string) []string {
+	width = max(1, width)
+	if len(source) == 0 {
+		return nil
+	}
+	lineNumberWidth := len(fmt.Sprintf("%d", len(source)))
+	gutterWidth := lineNumberWidth + 2
+	codeWidth := max(1, width-gutterWidth)
+
+	highlighted := strings.Split(highlightCodeFragment(strings.Join(source, "\n"), lang), "\n")
+	if len(highlighted) != len(source) {
+		highlighted = source
+	}
+
+	var out []string
+	for i, line := range highlighted {
+		segments := strings.Split(ansi.Hardwrap(line, codeWidth, false), "\n")
+		if len(segments) == 0 {
+			segments = []string{""}
+		}
+		for segmentIndex, segment := range segments {
+			gutter := strings.Repeat(" ", gutterWidth)
+			if segmentIndex == 0 {
+				gutter = fmt.Sprintf("%*d  ", lineNumberWidth, i+1)
+			}
+			out = append(out, dimStyle.Render(gutter)+segment)
+		}
+	}
+	return out
 }
 
 func toolDiffCodeLines(width int, code, input string) []string {
@@ -321,6 +416,18 @@ func ansiBackground(line, color string) string {
 }
 
 var toolDiffNumberedLineRE = regexp.MustCompile(`^([ +-]\s+\d+\s\s)(.*)$`)
+
+func toolDiffCodeGutterWidth(line string) int {
+	plain := ansi.Strip(line)
+	if matches := toolDiffNumberedLineRE.FindStringSubmatch(plain); len(matches) == 3 {
+		return ansi.StringWidth(matches[1])
+	}
+	if (strings.HasPrefix(plain, "- ") && !strings.HasPrefix(plain, "--- ")) ||
+		(strings.HasPrefix(plain, "+ ") && !strings.HasPrefix(plain, "+++ ")) {
+		return 2
+	}
+	return 0
+}
 
 func highlightDiffCodeLine(line, lang string) string {
 	if strings.TrimSpace(lang) == "" {

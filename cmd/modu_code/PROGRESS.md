@@ -1338,3 +1338,27 @@ enough to implement, verify, and commit independently.
   restoration. `go test ./...` still has the unrelated existing
   `TestDefaultSystemPromptAllowsNonCodingTasks` failure because its expected
   weather guidance is absent from the current default system prompt.
+- 2026-07-20: fixed numbered write-preview rendering in `pkg/modu-tui`.
+  Line numbers now render in a separate gutter before source is passed to
+  Chroma, preventing multiline strings from coloring the gutter. Numbered code
+  uses an exact four-column outer indent without stacking Glamour's code-block
+  margin. A follow-up fixes idempotent existing-file writes: their numbered
+  full-file fallback now wins over the `diff` label and infers Python or other
+  source languages from the path. Added a Python multiline-string regression
+  test. `go test ./pkg/modu-tui`, the focused write-event tests in
+  `./cmd/modu_code`, and `go run ./cmd/modu_code -h` passed. The full
+  `go test ./cmd/modu_code` run still fails independently in
+  `TestResumeCwdPromptModelRendersAndDefaultsToSessionDirectory` because Enter
+  does not resolve the prompt; the focused rerun reproduces that failure.
+  Idempotent writes now summarize as `No changes` instead of the misleading
+  `Added 0 lines, removed 0 lines`.
+  Numbered previews now mark the four-column indent, dynamic line-number width,
+  and two-column separator as a non-copyable selection gutter, so copied text
+  contains source only while the transcript still displays aligned line numbers.
+  Update diffs now apply the same rule to their change marker and file line
+  number. When an edit preview cannot read the target file, it waits for the
+  successful tool result's numbered diff instead of briefly rendering an
+  unnumbered `- old` / `+ new` fallback.
+  New-file writes now tint every numbered source row with the added green
+  background while retaining syntax foreground colors. Existing idempotent
+  full-file previews remain untinted, and existing diffs keep per-row colors.

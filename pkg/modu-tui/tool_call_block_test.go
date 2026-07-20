@@ -174,6 +174,155 @@ func TestToolCallBlockRendersNoCollapseCode(t *testing.T) {
 	}
 }
 
+func TestToolCallBlockRendersNumberedCodeWithSeparateGutter(t *testing.T) {
+	ctx := RenderContext{ContentWidth: 80, Markdown: markdownRenderer(80)}
+	code := strings.Join([]string{
+		` 1  #!/usr/bin/env python3`,
+		` 2  """`,
+		` 3  Rider Follow 报告生成器`,
+		` 4  Usage:`,
+		` 5    python3 rider_report.py`,
+		` 6  """`,
+		` 7  `,
+		` 8  import argparse`,
+		` 9  import csv`,
+		`10  import json`,
+		`11  `,
+		`12  def fetch_rider_data():`,
+	}, "\n")
+	block := ToolCallBlock{
+		Call: ToolCall{
+			Name:   "write",
+			Input:  "/tmp/rider_report.py",
+			Output: "Wrote 12 lines",
+			Code:   code,
+			// Existing-file writes are marked diff even when an idempotent write
+			// falls back to a numbered full-file preview.
+			Language:   "diff",
+			NoCollapse: true,
+		},
+	}
+
+	rendered := block.Render(ctx)
+	var docstringLine, usageCommandLine, importLine string
+	var docstringGutter int
+	for _, line := range rendered.Lines {
+		plain := ansi.Strip(line.Text)
+		switch {
+		case strings.Contains(plain, "Rider Follow"):
+			docstringLine = line.Text
+			docstringGutter = line.Gutter
+			if !strings.HasPrefix(plain, "     3  Rider Follow") {
+				t.Fatalf("numbered code should use a four-space outer indent and a separate gutter, got %q", plain)
+			}
+		case strings.Contains(plain, "python3 rider_report.py"):
+			usageCommandLine = line.Text
+		case strings.Contains(plain, "import argparse"):
+			importLine = line.Text
+		}
+	}
+	if docstringLine == "" || usageCommandLine == "" || importLine == "" {
+		t.Fatalf("numbered Python render missing expected lines:\n%s", strings.Join(renderedTexts(rendered), "\n"))
+	}
+	if docstringGutter != 8 {
+		t.Fatalf("numbered code selection gutter = %d, want 4 indent + 2 digits + 2 separators", docstringGutter)
+	}
+	numberEnd := strings.Index(docstringLine, "3  ") + len("3  ")
+	sourceStart := strings.Index(docstringLine, "Rider Follow")
+	if numberEnd < len("3  ") || sourceStart <= numberEnd || !strings.Contains(docstringLine[numberEnd:sourceStart], "\x1b[") {
+		t.Fatalf("line-number gutter should end its style before highlighted source: %q", docstringLine)
+	}
+	if !strings.Contains(importLine, "\x1b[") {
+		t.Fatalf("Python source should retain syntax highlighting: %q", importLine)
+	}
+	if strings.Contains(docstringLine, "\x1b[48;5;22m") {
+		t.Fatalf("idempotent existing-file preview should not use added background: %q", docstringLine)
+	}
+	commandStart := strings.Index(usageCommandLine, "python3") + len("python3")
+	commandEnd := strings.Index(usageCommandLine, ".py") + len(".py")
+	if commandStart < len("python3") || commandEnd <= commandStart || strings.Contains(usageCommandLine[commandStart:commandEnd], "\x1b[") {
+		t.Fatalf("multiline docstring body was incorrectly highlighted as Python code: %q", usageCommandLine)
+	}
+
+	source, ok := splitNumberedToolCode(code)
+	if !ok || source[2] != "Rider Follow 报告生成器" || source[7] != "import argparse" {
+		t.Fatalf("split numbered source = %#v, %v", source, ok)
+	}
+}
+
+func TestToolCallBlockRendersNewFileContentWithAddedBackground(t *testing.T) {
+	ctx := RenderContext{ContentWidth: 80, Markdown: markdownRenderer(80)}
+	block := ToolCallBlock{
+		Call: ToolCall{
+			Name:       "write",
+			Input:      "main.go",
+			Output:     "Wrote 2 lines, 32 bytes",
+			Code:       "1  package main\n2  func main() {}",
+			Language:   "go",
+			NoCollapse: true,
+		},
+	}
+
+	rendered := block.Render(ctx)
+	codeLines := 0
+	for _, line := range rendered.Lines {
+		plain := ansi.Strip(line.Text)
+		if strings.Contains(plain, "package main") || strings.Contains(plain, "func main()") {
+			codeLines++
+			if !strings.Contains(line.Text, "\x1b[48;5;22m") {
+				t.Fatalf("new-file source row should use added background: %q", line.Text)
+			}
+		}
+	}
+	if codeLines != 2 {
+		t.Fatalf("new-file code lines = %d, want 2", codeLines)
+	}
+}
+
+func TestSelectedTextOmitsNumberedToolCodeGutter(t *testing.T) {
+	m := NewModel(Options{
+		Width:  80,
+		Height: 12,
+		InitialMessages: []Message{{
+			Tool:           true,
+			ToolName:       "write",
+			ToolInput:      "main.go",
+			ToolOutput:     "Wrote 2 lines, 32 bytes",
+			ToolCode:       "1  package main\n2  func main() {}",
+			ToolLanguage:   "go",
+			ToolNoCollapse: true,
+			Expanded:       true,
+		}},
+	})
+
+	first, last := -1, -1
+	for i, line := range m.lines {
+		plain := ansi.Strip(line)
+		switch {
+		case strings.Contains(plain, "package main"):
+			first = i
+		case strings.Contains(plain, "func main()"):
+			last = i
+		}
+	}
+	if first < 0 || last < 0 {
+		t.Fatalf("numbered code lines missing from transcript: %#v", m.lines)
+	}
+	if got, want := m.gutterAt(first), 7; got != want {
+		t.Fatalf("one-digit numbered code gutter = %d, want %d", got, want)
+	}
+
+	m.selStart = cell{line: first, col: 0}
+	m.selEnd = cell{line: last, col: m.gutterAt(last) + len("func main() {}")}
+	selected := strings.Split(m.selectedText(), "\n")
+	for i := range selected {
+		selected[i] = strings.TrimRight(selected[i], " ")
+	}
+	if got, want := strings.Join(selected, "\n"), "package main\nfunc main() {}"; got != want {
+		t.Fatalf("selected numbered code = %q, want %q", got, want)
+	}
+}
+
 func TestToolCallBlockRendersDiffWithLineNumbersAndBackground(t *testing.T) {
 	ctx := RenderContext{ContentWidth: 96, Markdown: markdownRenderer(96)}
 	block := ToolCallBlock{
@@ -190,6 +339,9 @@ func TestToolCallBlockRendersDiffWithLineNumbersAndBackground(t *testing.T) {
 	var rawLines []string
 	for _, line := range rendered.Lines {
 		rawLines = append(rawLines, line.Text)
+		if strings.Contains(ansi.Strip(line.Text), "if oldValue {") && line.Gutter != 10 {
+			t.Fatalf("numbered diff selection gutter = %d, want 4 indent + 6 marker/number columns", line.Gutter)
+		}
 	}
 	raw := strings.Join(rawLines, "\n")
 	stripped := ansi.Strip(raw)
@@ -207,6 +359,50 @@ func TestToolCallBlockRendersDiffWithLineNumbersAndBackground(t *testing.T) {
 	}
 	if !strings.Contains(raw, "\x1b[38;5;") {
 		t.Fatalf("diff code should preserve syntax foreground ANSI, got:\n%q", raw)
+	}
+}
+
+func TestSelectedTextOmitsUpdateDiffMarkersAndLineNumbers(t *testing.T) {
+	m := NewModel(Options{
+		Width:  80,
+		Height: 12,
+		InitialMessages: []Message{{
+			Tool:           true,
+			ToolName:       "update",
+			ToolInput:      "main.go",
+			ToolOutput:     "Added 1 lines, removed 1 lines",
+			ToolCode:       "@@ -12,1 +12,1 @@\n- 12  if oldValue {\n+ 12  if newValue {",
+			ToolLanguage:   "diff",
+			ToolNoCollapse: true,
+			Expanded:       true,
+		}},
+	})
+
+	first, last := -1, -1
+	for i, line := range m.lines {
+		plain := ansi.Strip(line)
+		switch {
+		case strings.Contains(plain, "if oldValue {"):
+			first = i
+		case strings.Contains(plain, "if newValue {"):
+			last = i
+		}
+	}
+	if first < 0 || last < 0 {
+		t.Fatalf("update diff lines missing from transcript: %#v", m.lines)
+	}
+	if got, want := m.gutterAt(first), 10; got != want {
+		t.Fatalf("update diff gutter = %d, want %d", got, want)
+	}
+
+	m.selStart = cell{line: first, col: 0}
+	m.selEnd = cell{line: last, col: m.gutterAt(last) + len("if newValue {")}
+	selected := strings.Split(m.selectedText(), "\n")
+	for i := range selected {
+		selected[i] = strings.TrimRight(selected[i], " ")
+	}
+	if got, want := strings.Join(selected, "\n"), "if oldValue {\nif newValue {"; got != want {
+		t.Fatalf("selected update code = %q, want %q", got, want)
 	}
 }
 

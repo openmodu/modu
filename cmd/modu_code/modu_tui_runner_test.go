@@ -471,6 +471,39 @@ func TestMessagesFromAgentEventFormatsExistingWriteAsUpdateDiff(t *testing.T) {
 	}
 }
 
+func TestMessagesFromAgentEventFormatsIdempotentWriteAsNumberedFullFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "report.py")
+	content := "\"\"\"\nUsage:\n  python3 report.py\n\"\"\"\n\nimport argparse\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	start := messagesFromAgentEvent(types.Event{
+		Type:       types.EventTypeToolExecutionStart,
+		ToolCallID: "call-1",
+		ToolName:   "write",
+		Args: map[string]any{
+			"path":    path,
+			"content": content,
+		},
+	})
+	if len(start) != 1 {
+		t.Fatalf("start messages len = %d, want 1", len(start))
+	}
+	got := start[0]
+	if got.ToolName != "update" || got.ToolLanguage != "diff" || got.ToolOutput != "No changes" {
+		t.Fatalf("unexpected idempotent write message: %#v", got)
+	}
+	for _, want := range []string{`1  """`, "3    python3 report.py", "6  import argparse"} {
+		if !strings.Contains(got.ToolCode, want) {
+			t.Fatalf("idempotent write should fall back to numbered full-file code, missing %q: %#v", want, got)
+		}
+	}
+	if strings.Contains(got.ToolCode, "@@ ") {
+		t.Fatalf("idempotent write should not synthesize an empty diff: %#v", got)
+	}
+}
+
 func TestMessagesFromAgentEventUsesSessionCwdForRelativeUpdateDiff(t *testing.T) {
 	cwd := t.TempDir()
 	if err := os.WriteFile(filepath.Join(cwd, "main.go"), []byte("before\nold\nafter\n"), 0o644); err != nil {
@@ -545,6 +578,25 @@ func TestMessagesFromAgentEventFormatsEditToolAsExpandedDiffBlock(t *testing.T) 
 	}
 	if end[0].ToolOutput != "" || end[0].ToolLanguage != "diff" {
 		t.Fatalf("edit end should hide raw success text and keep diff language: %#v", end[0])
+	}
+}
+
+func TestMessagesFromAgentEventDoesNotShowUnnumberedEditFallback(t *testing.T) {
+	start := messagesFromAgentEvent(types.Event{
+		Type:       types.EventTypeToolExecutionStart,
+		ToolCallID: "call-1",
+		ToolName:   "edit",
+		Args: map[string]any{
+			"path":     filepath.Join(t.TempDir(), "missing.go"),
+			"old_text": "old\n",
+			"new_text": "new\n",
+		},
+	})
+	if len(start) != 1 {
+		t.Fatalf("start messages len = %d, want 1", len(start))
+	}
+	if got := start[0]; got.ToolCode != "" || got.ToolLanguage != "diff" {
+		t.Fatalf("edit without file context should wait for the numbered result diff: %#v", got)
 	}
 }
 
