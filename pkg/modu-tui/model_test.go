@@ -911,6 +911,77 @@ func TestPOC2SubmitHookReceivesEnteredText(t *testing.T) {
 	}
 }
 
+func TestPOC2CtrlVPastesClipboardImageAndSubmitsAttachment(t *testing.T) {
+	var submitted SubmitEvent
+	var tm tea.Model = NewModel(Options{
+		Width:  50,
+		Height: 10,
+		Hooks: Hooks{
+			ReadClipboardImages: func() ([]ImageAttachment, error) {
+				return []ImageAttachment{{
+					Name:     "clipboard.png",
+					MimeType: "image/png",
+					Data:     []byte("png"),
+				}}, nil
+			},
+			SubmitMessage: func(event SubmitEvent) {
+				submitted = event
+			},
+		},
+	})
+
+	var cmd tea.Cmd
+	tm, cmd = tm.Update(tea.KeyPressMsg(tea.Key{Code: 'v', Mod: tea.ModCtrl}))
+	if cmd == nil {
+		t.Fatal("ctrl+v should return an asynchronous clipboard command")
+	}
+	tm, _ = tm.Update(cmd())
+	m := tm.(Model)
+	if got := ansi.Strip(m.render()); !strings.Contains(got, "[Image #1]") {
+		t.Fatalf("input should render the pasted image attachment:\n%s", got)
+	}
+
+	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	m = tm.(Model)
+	if submitted.Text != "" || len(submitted.Images) != 1 || submitted.Images[0].MimeType != "image/png" {
+		t.Fatalf("submitted event = %#v", submitted)
+	}
+	if len(m.messages) != 1 || m.messages[0].Text != "[Image #1]" {
+		t.Fatalf("transcript should show the image label, got %#v", m.messages)
+	}
+	if len(m.input.ImageAttachments()) != 0 {
+		t.Fatalf("input attachments should reset after submit: %#v", m.input.ImageAttachments())
+	}
+}
+
+func TestPOC2PastedImagePathBecomesAttachment(t *testing.T) {
+	var resolved string
+	var tm tea.Model = NewModel(Options{
+		Hooks: Hooks{
+			ResolvePastedImages: func(value string) ([]ImageAttachment, bool, error) {
+				resolved = value
+				return []ImageAttachment{{
+					Name:     "screen shot.png",
+					MimeType: "image/png",
+					Data:     []byte("png"),
+				}}, true, nil
+			},
+		},
+	})
+
+	tm, _ = tm.Update(tea.PasteMsg{Content: `/tmp/screen\ shot.png `})
+	m := tm.(Model)
+	if resolved != `/tmp/screen\ shot.png ` {
+		t.Fatalf("resolver input = %q", resolved)
+	}
+	if got := m.input.ImageAttachments(); len(got) != 1 || got[0].Name != "screen shot.png" {
+		t.Fatalf("resolved attachments = %#v", got)
+	}
+	if strings.Contains(m.input.ExpandedValue(), "/tmp/") {
+		t.Fatalf("resolved image path should not remain as prompt text: %q", m.input.ExpandedValue())
+	}
+}
+
 func TestPOC2SubmitMessageReportsPromptFollowUpAndSteer(t *testing.T) {
 	tests := []struct {
 		name string

@@ -10,7 +10,10 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-const pasteTokenBase rune = 0xE000
+const (
+	pasteTokenBase rune = 0xE000
+	imageTokenBase rune = 0xF000
+)
 
 type inputPaste struct {
 	Content string
@@ -21,6 +24,7 @@ type InputBlock struct {
 	Value  string
 	Cursor int
 	Pastes []inputPaste
+	Images []ImageAttachment
 }
 
 func (b *InputBlock) Len() int { return len([]rune(b.Value)) }
@@ -29,6 +33,7 @@ func (b *InputBlock) Reset() {
 	b.Value = ""
 	b.Cursor = 0
 	b.Pastes = nil
+	b.Images = nil
 }
 
 func (b *InputBlock) Insert(s string) {
@@ -71,6 +76,13 @@ func (b *InputBlock) InsertPaste(content string) {
 	b.insertRune(pasteTokenBase + rune(idx))
 }
 
+func (b *InputBlock) InsertImage(image ImageAttachment) {
+	idx := len(b.Images)
+	image.Data = append([]byte(nil), image.Data...)
+	b.Images = append(b.Images, image)
+	b.insertRune(imageTokenBase + rune(idx))
+}
+
 func (b *InputBlock) insertRune(r rune) {
 	rs := []rune(b.Value)
 	b.Cursor = clamp(b.Cursor, 0, len(rs))
@@ -92,9 +104,7 @@ func (b *InputBlock) Backspace() {
 	if b.Cursor == 0 {
 		return
 	}
-	r := []rune(b.Value)
-	b.Value = string(append(r[:b.Cursor-1], r[b.Cursor:]...))
-	b.Cursor--
+	b.deleteRuneAt(b.Cursor - 1)
 }
 
 func (b *InputBlock) DeleteWordBackward() {
@@ -135,11 +145,56 @@ func (b *InputBlock) DeleteForward() {
 	if b.Cursor >= len(r) {
 		return
 	}
-	b.Value = string(append(r[:b.Cursor], r[b.Cursor+1:]...))
+	b.deleteRuneAt(b.Cursor)
+}
+
+func (b *InputBlock) deleteRuneAt(position int) {
+	runes := []rune(b.Value)
+	if position < 0 || position >= len(runes) {
+		return
+	}
+	removed := runes[position]
+	runes = append(runes[:position], runes[position+1:]...)
+	if idx, ok := imageTokenIndex(removed, len(b.Images)); ok {
+		b.Images = append(b.Images[:idx], b.Images[idx+1:]...)
+		for i, r := range runes {
+			if imageIdx, isImage := imageTokenIndex(r, len(b.Images)+1); isImage && imageIdx > idx {
+				runes[i] = imageTokenBase + rune(imageIdx-1)
+			}
+		}
+	}
+	b.Value = string(runes)
+	if position < b.Cursor {
+		b.Cursor--
+	}
 }
 
 func (b InputBlock) ExpandedValue() string {
 	return b.expandTokens(b.Value)
+}
+
+// DisplayValue expands pasted text and renders image tokens as attachment
+// labels. It is suitable for the transcript after a prompt is submitted.
+func (b InputBlock) DisplayValue() string {
+	return b.expandInputTokens(b.Value, func(p inputPaste) string {
+		return p.Content
+	}, func(idx int, _ ImageAttachment) string {
+		return imageLabel(idx)
+	})
+}
+
+// ImageAttachments returns only images whose tokens are still present in the
+// input, in prompt order. Deleting a token therefore removes that attachment.
+func (b InputBlock) ImageAttachments() []ImageAttachment {
+	var images []ImageAttachment
+	for _, r := range b.Value {
+		if idx, ok := imageTokenIndex(r, len(b.Images)); ok {
+			image := b.Images[idx]
+			image.Data = append([]byte(nil), image.Data...)
+			images = append(images, image)
+		}
+	}
+	return images
 }
 
 type inputVisualLine struct {
@@ -310,25 +365,33 @@ func inputSlashCommandEnd(runes []rune) int {
 }
 
 func (b InputBlock) expandLabels(value string) string {
-	return b.expandPasteTokens(value, func(p inputPaste) string {
+	return b.expandInputTokens(value, func(p inputPaste) string {
 		return p.Label
+	}, func(idx int, _ ImageAttachment) string {
+		return imageLabel(idx)
 	})
 }
 
 func (b InputBlock) expandTokens(value string) string {
-	return b.expandPasteTokens(value, func(p inputPaste) string {
+	return b.expandInputTokens(value, func(p inputPaste) string {
 		return p.Content
+	}, func(_ int, _ ImageAttachment) string {
+		return ""
 	})
 }
 
-func (b InputBlock) expandPasteTokens(value string, replace func(inputPaste) string) string {
-	if len(b.Pastes) == 0 {
+func (b InputBlock) expandInputTokens(value string, replacePaste func(inputPaste) string, replaceImage func(int, ImageAttachment) string) string {
+	if len(b.Pastes) == 0 && len(b.Images) == 0 {
 		return value
 	}
 	var out strings.Builder
 	for _, r := range value {
 		if idx, ok := pasteTokenIndex(r, len(b.Pastes)); ok {
-			out.WriteString(replace(b.Pastes[idx]))
+			out.WriteString(replacePaste(b.Pastes[idx]))
+			continue
+		}
+		if idx, ok := imageTokenIndex(r, len(b.Images)); ok {
+			out.WriteString(replaceImage(idx, b.Images[idx]))
 			continue
 		}
 		out.WriteRune(r)
@@ -342,6 +405,18 @@ func pasteTokenIndex(r rune, total int) (int, bool) {
 		return 0, false
 	}
 	return idx, true
+}
+
+func imageTokenIndex(r rune, total int) (int, bool) {
+	idx := int(r - imageTokenBase)
+	if idx < 0 || idx >= total {
+		return 0, false
+	}
+	return idx, true
+}
+
+func imageLabel(idx int) string {
+	return fmt.Sprintf("[Image #%d]", idx+1)
 }
 
 func shouldCollapsePaste(content string) bool {

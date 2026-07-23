@@ -207,6 +207,7 @@ TUI 中输入 `/config` 打开配置页面，目前提供 `Active Model` 和 `Pr
 |------|------|
 | `Enter` | 提交消息；任务运行中提交为 follow-up 队列 |
 | `Shift+Enter` | 任务运行中 steer 当前任务，打断当前轮并切到新指令 |
+| `Ctrl+V` | 从系统剪贴板附加图片 |
 | `ctrl+c` | 输入框有内容时清空输入；空输入时中断当前请求 / 退出 |
 | `ctrl+d` | 退出（输入框为空时） |
 | `ctrl+l` | 清屏 |
@@ -217,6 +218,16 @@ TUI 中输入 `/config` 打开配置页面，目前提供 `Active Model` 和 `Pr
 | `ctrl+j` | 在输入框插入换行 |
 
 输入 `/` 打开轻量命令选择器：方向键选择，`Tab` 补全，`Enter` 执行。
+
+### 图片输入
+
+按 `Ctrl+V` 读取系统剪贴板中的图片。不要用 `Command+V`：终端会把它当作普通文本粘贴。也可以把图片文件拖进终端，或粘贴一个只包含图片路径的字符串。输入框用 `[Image #1]`、`[Image #2]` 表示附件，不在终端内渲染缩略图。
+
+图片附件和文字共用光标编辑。将光标移到附件标记后按 `Backspace`，或移到标记前按 `Delete`，即可移除对应图片。允许只提交图片，也允许在任务运行时把图片作为 follow-up 或 steer 消息提交。
+
+支持 PNG、JPEG、GIF、WebP，单张上限 5 MB。Linux 的剪贴板读取依赖 `wl-paste` 或 `xclip`；图片路径拖入不需要这两个程序。当前模型显式声明只接受文本，或配置启用了 `blockImages` 时，提交会返回错误。
+
+图片内容以 base64 写入 session，因此恢复会话时不要求原始图片文件仍然存在。OpenAI-compatible、Anthropic 和 Gemini provider 会分别转换为各自的多模态请求格式。
 
 任务运行中继续输入普通消息并按 Enter，会把消息加入 follow-up 队列，在当前任务结束后自动执行。运行中按 Shift+Enter，或输入 `/steer <message>` / `/s <message>`，把消息加入 steer 队列并中断当前轮，随后按新方向继续。也可以 `/followup <message>` / `/f <message>` 显式排队下一条 follow-up。`/queue` 查看等待队列。
 

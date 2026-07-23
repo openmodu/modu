@@ -18,6 +18,10 @@ type autoScrollTickMsg struct{}
 type statusExpireMsg struct {
 	status string
 }
+type clipboardImagesMsg struct {
+	images []ImageAttachment
+	err    error
+}
 
 const maxInputHistory = 100
 
@@ -172,14 +176,16 @@ func (m Model) Lines() []string {
 
 func (m *Model) submitInput(steer bool) tea.Cmd {
 	v := strings.TrimSpace(m.input.ExpandedValue())
-	if v == "" {
+	images := m.input.ImageAttachments()
+	if v == "" && len(images) == 0 {
 		return nil
 	}
-	if len(m.slashMatches) > 0 && !steer {
+	if len(m.slashMatches) > 0 && len(images) == 0 && !steer {
 		v = m.slashMatches[clamp(m.slashIndex, 0, len(m.slashMatches)-1)].Name
 	}
 
 	trimmed := strings.TrimSpace(v)
+	display := strings.TrimSpace(m.input.DisplayValue())
 	kind := SubmitKindPrompt
 	if m.streaming || m.busy {
 		if steer {
@@ -189,7 +195,7 @@ func (m *Model) submitInput(steer bool) tea.Cmd {
 		}
 	}
 
-	m.messages = append(m.messages, Message{Role: RoleUser, Text: v})
+	m.messages = append(m.messages, Message{Role: RoleUser, Text: display})
 	m.appendInputHistory(v)
 	m.input.Reset()
 	m.historyIdx = len(m.inputHistory)
@@ -199,12 +205,12 @@ func (m *Model) submitInput(steer bool) tea.Cmd {
 	m.follow = true
 	m.unseen = 0
 	m.rebuild()
-	if strings.HasPrefix(trimmed, "/") && m.hooks.SlashCommand != nil {
+	if len(images) == 0 && strings.HasPrefix(trimmed, "/") && m.hooks.SlashCommand != nil {
 		m.hooks.SlashCommand(v)
 		return nil
 	}
 	if m.hooks.SubmitMessage != nil {
-		m.hooks.SubmitMessage(SubmitEvent{Text: v, Kind: kind})
+		m.hooks.SubmitMessage(SubmitEvent{Text: v, Images: images, Kind: kind})
 	} else if m.hooks.Submit != nil {
 		m.hooks.Submit(v)
 	}
@@ -246,6 +252,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, tea.Quit
+		case isCtrlVKey(msg) && m.hooks.ReadClipboardImages != nil:
+			m.resetIMEState()
+			read := m.hooks.ReadClipboardImages
+			return m, func() tea.Msg {
+				images, err := read()
+				return clipboardImagesMsg{images: images, err: err}
+			}
 		case msg.String() == "ctrl+o":
 			m.resetIMEState()
 			if m.toggleLatestToolExpansion() {
@@ -346,9 +359,43 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.resetIMEState()
+		if m.hooks.ResolvePastedImages != nil {
+			images, handled, err := m.hooks.ResolvePastedImages(msg.Content)
+			if handled {
+				if err != nil {
+					m.status = "image paste failed: " + err.Error()
+					return m, nil
+				}
+				for _, image := range images {
+					m.input.InsertImage(image)
+				}
+				m.status = fmt.Sprintf("attached %d image(s)", len(images))
+				m.clearHistorySelection()
+				m.clearSlashMatches()
+				m.rebuild()
+				return m, nil
+			}
+		}
 		m.input.InsertPaste(msg.Content)
 		m.clearHistorySelection()
 		m.updateSlashMatches()
+
+	case clipboardImagesMsg:
+		if msg.err != nil {
+			m.status = "image paste failed: " + msg.err.Error()
+			return m, nil
+		}
+		if len(msg.images) == 0 {
+			m.status = "clipboard has no supported image"
+			return m, nil
+		}
+		for _, image := range msg.images {
+			m.input.InsertImage(image)
+		}
+		m.status = fmt.Sprintf("attached %d image(s)", len(msg.images))
+		m.clearHistorySelection()
+		m.clearSlashMatches()
+		m.rebuild()
 
 	case tea.MouseWheelMsg:
 		switch msg.Button {
@@ -2246,6 +2293,11 @@ func isCtrlCKey(msg tea.KeyPressMsg) bool {
 func isCtrlWKey(msg tea.KeyPressMsg) bool {
 	key := msg.Key()
 	return msg.String() == "ctrl+w" || key.Text == "\x17" || (key.Code == 'w' && key.Mod.Contains(tea.ModCtrl))
+}
+
+func isCtrlVKey(msg tea.KeyPressMsg) bool {
+	key := msg.Key()
+	return msg.String() == "ctrl+v" || key.Text == "\x16" || (key.Code == 'v' && key.Mod.Contains(tea.ModCtrl))
 }
 
 func isEscKey(msg tea.KeyPressMsg) bool {

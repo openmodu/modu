@@ -3018,6 +3018,92 @@ func newTestSession(t *testing.T, model *types.Model) *CodingSession {
 	return session
 }
 
+func TestCodingSessionPromptWithImagesPreservesMultimodalUserMessage(t *testing.T) {
+	dir := t.TempDir()
+	model := newTestModel()
+	var captured types.UserMessage
+	streamFn := func(_ context.Context, _ *types.Model, llmCtx *types.LLMContext, _ *types.SimpleStreamOptions) (types.EventStream, error) {
+		for _, message := range llmCtx.Messages {
+			if user, ok := message.(types.UserMessage); ok {
+				captured = user
+			}
+		}
+		stream := types.NewEventStream()
+		go func() {
+			defer stream.Close()
+			reply := &types.AssistantMessage{
+				Role:       types.RoleAssistant,
+				Content:    []types.ContentBlock{&types.TextContent{Type: "text", Text: "ok"}},
+				StopReason: "stop",
+				Timestamp:  time.Now().UnixMilli(),
+			}
+			stream.Push(types.StreamEvent{Type: types.EventDone, Reason: "stop", Message: reply})
+			stream.Resolve(reply, nil)
+		}()
+		return stream, nil
+	}
+	session, err := NewCodingSession(CodingSessionOptions{
+		Cwd:       dir,
+		AgentDir:  filepath.Join(dir, ".coding_agent"),
+		Model:     model,
+		GetAPIKey: func(string) (string, error) { return "", nil },
+		StreamFn:  streamFn,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close("test")
+
+	images := []types.ImageContent{{Type: "image", MimeType: "image/png", Data: "cG5n"}}
+	if err := session.PromptWithImages(context.Background(), "inspect this", images); err != nil {
+		t.Fatal(err)
+	}
+
+	blocks, ok := captured.Content.([]types.ContentBlock)
+	if !ok || len(blocks) != 2 {
+		t.Fatalf("captured user content = %#v", captured.Content)
+	}
+	text, textOK := blocks[0].(*types.TextContent)
+	image, imageOK := blocks[1].(*types.ImageContent)
+	if !textOK || text.Text != "inspect this" || !imageOK || image.MimeType != "image/png" || image.Data != "cG5n" {
+		t.Fatalf("captured blocks = %#v", blocks)
+	}
+
+	messages := session.GetMessages()
+	user, ok := messages[0].(types.UserMessage)
+	if !ok {
+		t.Fatalf("persisted first message = %#v", messages[0])
+	}
+	if persisted, ok := user.Content.([]types.ContentBlock); !ok || len(persisted) != 2 {
+		t.Fatalf("persisted user content = %#v", user.Content)
+	}
+
+	resumed, err := NewCodingSession(CodingSessionOptions{
+		Cwd:             dir,
+		AgentDir:        filepath.Join(dir, ".coding_agent"),
+		Model:           model,
+		GetAPIKey:       func(string) (string, error) { return "", nil },
+		StreamFn:        streamFn,
+		ResumeSessionID: session.GetSessionID(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resumed.Close("test")
+	resumedUser, ok := resumed.GetMessages()[0].(types.UserMessage)
+	if !ok {
+		t.Fatalf("resumed first message = %#v", resumed.GetMessages()[0])
+	}
+	resumedBlocks, ok := resumedUser.Content.([]types.ContentBlock)
+	if !ok || len(resumedBlocks) != 2 {
+		t.Fatalf("resumed user content = %#v", resumedUser.Content)
+	}
+	resumedImage, ok := resumedBlocks[1].(*types.ImageContent)
+	if !ok || resumedImage.Data != "cG5n" || resumedImage.MimeType != "image/png" {
+		t.Fatalf("resumed image = %#v", resumedBlocks[1])
+	}
+}
+
 func TestPromptUsageTracksLatestContextWindowNotCumulativeSpend(t *testing.T) {
 	dir := t.TempDir()
 	model := newTestModelWithContext(10000)

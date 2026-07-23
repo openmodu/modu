@@ -1,11 +1,44 @@
 package agent
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/openmodu/modu/pkg/providers"
 	"github.com/openmodu/modu/pkg/types"
 )
+
+func TestBuildChatRequestEncodesImageBlocksAsOpenAIDataURLs(t *testing.T) {
+	req := buildChatRequest(&types.Model{ID: "test-model"}, &types.LLMContext{
+		Messages: []types.AgentMessage{
+			types.UserMessage{Role: types.RoleUser, Content: []types.ContentBlock{
+				&types.TextContent{Type: "text", Text: "inspect"},
+				&types.ImageContent{Type: "image", MimeType: "image/png", Data: "cG5n"},
+			}},
+		},
+	}, &types.SimpleStreamOptions{})
+
+	raw, err := json.Marshal(req.Messages[0].Content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parts []struct {
+		Type     string `json:"type"`
+		Text     string `json:"text"`
+		ImageURL struct {
+			URL string `json:"url"`
+		} `json:"image_url"`
+	}
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		t.Fatal(err)
+	}
+	if len(parts) != 2 || parts[0].Type != "text" || parts[0].Text != "inspect" {
+		t.Fatalf("parts = %#v", parts)
+	}
+	if parts[1].Type != "image_url" || parts[1].ImageURL.URL != "data:image/png;base64,cG5n" {
+		t.Fatalf("image part = %#v", parts[1])
+	}
+}
 
 func TestBuildChatRequestDropsUnknownToolCalls(t *testing.T) {
 	req := buildChatRequest(&types.Model{ID: "test-model"}, &types.LLMContext{

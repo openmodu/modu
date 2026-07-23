@@ -749,6 +749,76 @@ func (s *engine) Prompt(ctx context.Context, text string) error {
 	return nil
 }
 
+// PromptWithImages sends a multimodal user message and starts processing.
+// Images are already base64 encoded so the same message can be persisted and
+// adapted to the active provider without retaining host-specific file paths.
+func (s *engine) PromptWithImages(ctx context.Context, text string, images []types.ImageContent) error {
+	if len(images) == 0 {
+		return s.Prompt(ctx, text)
+	}
+	if err := s.validateImageInput(images); err != nil {
+		return err
+	}
+	if s.agent.GetState().IsStreaming {
+		return fmt.Errorf("agent is already processing")
+	}
+
+	msg := userMessageWithImages(text, images)
+	_ = s.sessionManager.Append(session.NewEntry(session.EntryTypeMessage, "", session.MessageData{
+		Role:    types.RoleUser,
+		Content: msg.Content,
+	}))
+	s.refreshDynamicSystemPrompt()
+	if err := s.agent.Prompt(ctx, msg); err != nil {
+		return err
+	}
+	s.ctxMgr.MaybeAutoCompact(ctx)
+	return nil
+}
+
+func (s *engine) validateImageInput(images []types.ImageContent) error {
+	if s.config != nil && s.config.BlockImages {
+		return fmt.Errorf("image input is disabled by blockImages")
+	}
+	if s.model != nil && len(s.model.Input) > 0 {
+		supported := false
+		for _, input := range s.model.Input {
+			if input == "image" {
+				supported = true
+				break
+			}
+		}
+		if !supported {
+			return fmt.Errorf("model %q does not support image input", s.model.ID)
+		}
+	}
+	for i, image := range images {
+		if image.Data == "" || !strings.HasPrefix(image.MimeType, "image/") {
+			return fmt.Errorf("image %d has invalid content", i+1)
+		}
+	}
+	return nil
+}
+
+func userMessageWithImages(text string, images []types.ImageContent) types.UserMessage {
+	content := make([]types.ContentBlock, 0, len(images)+1)
+	if text != "" {
+		content = append(content, &types.TextContent{Type: "text", Text: text})
+	}
+	for i := range images {
+		image := images[i]
+		if image.Type == "" {
+			image.Type = "image"
+		}
+		content = append(content, &image)
+	}
+	return types.UserMessage{
+		Role:      types.RoleUser,
+		Content:   content,
+		Timestamp: time.Now().UnixMilli(),
+	}
+}
+
 // Continue resumes queued steering/follow-up work and applies the same
 // post-turn maintenance as Prompt.
 func (s *engine) Continue(ctx context.Context) error {
@@ -785,6 +855,19 @@ func (s *engine) Steer(text string) {
 	s.agent.Steer(msg)
 }
 
+// SteerWithImages injects a high-priority multimodal message during processing.
+func (s *engine) SteerWithImages(text string, images []types.ImageContent) error {
+	if len(images) == 0 {
+		s.Steer(text)
+		return nil
+	}
+	if err := s.validateImageInput(images); err != nil {
+		return err
+	}
+	s.agent.Steer(userMessageWithImages(text, images))
+	return nil
+}
+
 // FollowUp queues a message for processing after the current task.
 func (s *engine) FollowUp(text string) {
 	msg := types.UserMessage{
@@ -792,6 +875,19 @@ func (s *engine) FollowUp(text string) {
 		Content: text,
 	}
 	s.agent.FollowUp(msg)
+}
+
+// FollowUpWithImages queues a multimodal message after the current task.
+func (s *engine) FollowUpWithImages(text string, images []types.ImageContent) error {
+	if len(images) == 0 {
+		s.FollowUp(text)
+		return nil
+	}
+	if err := s.validateImageInput(images); err != nil {
+		return err
+	}
+	s.agent.FollowUp(userMessageWithImages(text, images))
+	return nil
 }
 
 // Subscribe registers an event listener. Returns an unsubscribe function.

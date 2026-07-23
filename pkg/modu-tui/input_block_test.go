@@ -130,3 +130,41 @@ func TestInputBlockShortPasteKeepsExistingSingleLineBehavior(t *testing.T) {
 		t.Fatalf("short paste should not use collapsed expansion: %q vs %q", got, input.Value)
 	}
 }
+
+func TestInputBlockImageAttachmentsRenderAndDeleteLikeInputTokens(t *testing.T) {
+	var input InputBlock
+	input.Insert("compare ")
+	input.InsertImage(ImageAttachment{Name: "first.png", MimeType: "image/png", Data: []byte("one")})
+	input.Insert(" with ")
+	input.InsertImage(ImageAttachment{Name: "second.jpg", MimeType: "image/jpeg", Data: []byte("two")})
+
+	lines, _, _ := input.Render(80, maxInputRows)
+	rendered := ansi.Strip(strings.Join(lines, "\n"))
+	if !strings.Contains(rendered, "[Image #1]") || !strings.Contains(rendered, "[Image #2]") {
+		t.Fatalf("rendered input should contain image attachment labels:\n%s", rendered)
+	}
+	if got, want := input.ExpandedValue(), "compare  with "; got != want {
+		t.Fatalf("expanded text = %q, want %q", got, want)
+	}
+	if got := input.DisplayValue(); got != "compare [Image #1] with [Image #2]" {
+		t.Fatalf("display value = %q", got)
+	}
+	if got := input.ImageAttachments(); len(got) != 2 || got[0].Name != "first.png" || got[1].Name != "second.jpg" {
+		t.Fatalf("image attachments = %#v", got)
+	}
+
+	input.Backspace()
+	if got := input.ImageAttachments(); len(got) != 1 || got[0].Name != "first.png" {
+		t.Fatalf("backspace should remove the image token at the cursor, got %#v", got)
+	}
+	if strings.Contains(input.DisplayValue(), "[Image #2]") {
+		t.Fatalf("deleted image label still appears in display value: %q", input.DisplayValue())
+	}
+
+	input.MoveHome()
+	input.Cursor = len([]rune("compare ")) + 1
+	input.Backspace()
+	if got := input.ImageAttachments(); len(got) != 0 {
+		t.Fatalf("removing the first image should leave no attachments, got %#v", got)
+	}
+}

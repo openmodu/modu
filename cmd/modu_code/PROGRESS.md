@@ -5,6 +5,13 @@ enough to implement, verify, and commit independently.
 
 ## Done
 
+- 2026-07-23: added Claude Code-style image attachments to the interactive TUI.
+  Ctrl+V reads an image from the system clipboard, pasted or dragged image
+  paths become `[Image #N]` input tokens, Backspace/Delete removes attachments,
+  and text, image-only, follow-up, and steer submissions preserve image blocks
+  in session history. PNG, JPEG, GIF, and WebP files are limited to 5 MB each;
+  OpenAI-compatible, Anthropic, and Gemini providers now receive their native
+  multimodal request shapes.
 - 2026-07-17: Feishu now acknowledges each accepted inbound message with the
   `StatusFlashOfInspiration` ("灵光一闪") reaction before dispatching it to the
   channel handler. Reaction API failures are logged without blocking the user

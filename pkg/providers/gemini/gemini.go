@@ -137,10 +137,25 @@ func messagesToContents(msgs []providers.Message) []*genai.Content {
 		switch v := m.Content.(type) {
 		case string:
 			text = v
-		case fmt.Stringer:
-			text = v.String()
 		default:
-			text = fmt.Sprintf("%v", v)
+			parts, multipart, err := providers.ParseContentParts(v)
+			if multipart && err == nil {
+				genaiParts := make([]*genai.Part, 0, len(parts))
+				for _, part := range parts {
+					if part.MIMEType == "" {
+						genaiParts = append(genaiParts, genai.NewPartFromText(part.Text))
+						continue
+					}
+					genaiParts = append(genaiParts, genai.NewPartFromBytes(part.Data, part.MIMEType))
+				}
+				out = append(out, genai.NewContentFromParts(genaiParts, role))
+				continue
+			}
+			if stringer, ok := v.(fmt.Stringer); ok {
+				text = stringer.String()
+			} else {
+				text = fmt.Sprintf("%v", v)
+			}
 		}
 		out = append(out, genai.NewContentFromText(text, role))
 	}

@@ -49,6 +49,18 @@ func main() {
 
 The caller must register the model provider before creating the session. `Cwd` determines which files tools can resolve and which project-level configuration and resources are discovered. Tool calls can modify that working tree, so the host must apply an approval policy appropriate to its environment.
 
+Multimodal hosts can call `PromptWithImages`. `ImageContent.Data` is base64 content, not a file path; the session persists it and the provider adapter converts it to the active protocol:
+
+```go
+err := session.PromptWithImages(context.Background(), "Explain this screenshot", []types.ImageContent{{
+	Type:     "image",
+	MimeType: "image/png",
+	Data:     base64.StdEncoding.EncodeToString(pngBytes),
+}})
+```
+
+Use `FollowUpWithImages` or `SteerWithImages` while a task is active. These methods reject images when the model explicitly lacks image input support or configuration enables `blockImages`.
+
 ## Documentation
 
 - [Detailed reference](../../docs/reference/coding-agent.md) — features, tools, configuration, runtime files, and request flow. This document is currently maintained in Chinese.

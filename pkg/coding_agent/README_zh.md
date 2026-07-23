@@ -49,6 +49,18 @@ func main() {
 
 创建会话前必须注册模型 Provider。`Cwd` 决定工具解析文件的基准目录，也决定项目配置和资源的发现范围。工具可能修改该工作区，宿主必须根据运行环境配置审批策略。
 
+多模态宿主可以调用 `PromptWithImages`。`ImageContent.Data` 使用 base64，不是文件路径；会话会保存图片内容，provider adapter 再转换成目标协议：
+
+```go
+err := session.PromptWithImages(context.Background(), "解释这张截图", []types.ImageContent{{
+	Type:     "image",
+	MimeType: "image/png",
+	Data:     base64.StdEncoding.EncodeToString(pngBytes),
+}})
+```
+
+任务运行中使用 `FollowUpWithImages` 或 `SteerWithImages`。模型显式声明不支持图片，或配置启用 `blockImages` 时，这三个入口会返回错误。
+
 ## 文档
 
 - [详细参考](../../docs/reference/coding-agent.md)：功能、工具、配置、运行时文件和请求流程。
