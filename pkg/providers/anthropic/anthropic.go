@@ -4,6 +4,7 @@ package anthropic
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -193,12 +194,35 @@ func (p *anthropicProvider) buildBody(req *providers.ChatRequest, model string, 
 			continue // system handled separately below
 		}
 		role := string(m.Role)
-		var content string
+		var content any
 		switch v := m.Content.(type) {
 		case string:
 			content = v
 		default:
-			content = fmt.Sprintf("%v", v)
+			parts, multipart, err := providers.ParseContentParts(v)
+			if err != nil {
+				return nil, fmt.Errorf("anthropic: convert message content: %w", err)
+			}
+			if !multipart {
+				content = fmt.Sprintf("%v", v)
+				break
+			}
+			blocks := make([]map[string]any, 0, len(parts))
+			for _, part := range parts {
+				if part.MIMEType == "" {
+					blocks = append(blocks, map[string]any{"type": "text", "text": part.Text})
+					continue
+				}
+				blocks = append(blocks, map[string]any{
+					"type": "image",
+					"source": map[string]any{
+						"type":       "base64",
+						"media_type": part.MIMEType,
+						"data":       base64.StdEncoding.EncodeToString(part.Data),
+					},
+				})
+			}
+			content = blocks
 		}
 		msgs = append(msgs, map[string]any{"role": role, "content": content})
 	}

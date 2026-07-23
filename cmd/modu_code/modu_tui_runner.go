@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -314,9 +315,9 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 			}
 		})
 	}
-	runPrompt := func(text string) {
+	runPromptWithImages := func(text string, images []types.ImageContent) {
 		runAgentLoop(func(ctx context.Context) error {
-			return session.Prompt(ctx, text)
+			return session.PromptWithImages(ctx, text, images)
 		})
 	}
 	// Drive hidden extension turns (goal continuations injected while idle)
@@ -326,7 +327,7 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		runAgentLoop(run)
 		return true
 	})
-	queueFollowUp := func(text string, requireActive bool) {
+	queueFollowUp := func(text string, images []types.ImageContent, requireActive bool) {
 		// Same hazard as interruptPrompt/queueSteer: invoked synchronously from
 		// the Model.Update loop (submit / slash hooks), where send (program.Send)
 		// blocks the event loop when the message channel is full — readily so
@@ -337,14 +338,17 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 				return
 			}
 			if !isPromptActive() {
-				runPrompt(text)
+				runPromptWithImages(text, images)
 				return
 			}
-			session.FollowUp(text)
+			if err := session.FollowUpWithImages(text, images); err != nil {
+				send(modutui.SetStatusMsg{Status: "error: " + err.Error(), TransientFor: moduTUITerminalStatusTTL})
+				return
+			}
 			send(modutui.SetStatusMsg{Status: "queued"})
 		})
 	}
-	queueSteer := func(text string, requireActive bool) {
+	queueSteer := func(text string, images []types.ImageContent, requireActive bool) {
 		// Same hazard as interruptPrompt: this runs synchronously from the
 		// Model.Update loop (submit / slash hooks), and session.Abort plus send
 		// (program.Send) would block the event loop when the message channel is
@@ -357,10 +361,13 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 				return
 			}
 			if !isPromptActive() {
-				runPrompt(text)
+				runPromptWithImages(text, images)
 				return
 			}
-			session.Steer(text)
+			if err := session.SteerWithImages(text, images); err != nil {
+				send(modutui.SetStatusMsg{Status: "error: " + err.Error(), TransientFor: moduTUITerminalStatusTTL})
+				return
+			}
 			promptMu.Lock()
 			cancel := currentCancel
 			continueQueuedAfterCancel = true
@@ -374,16 +381,17 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		})
 	}
 	submit := func(ev modutui.SubmitEvent) {
-		if configWizard.HandleInput(ctx, ev.Text) {
+		if len(ev.Images) == 0 && configWizard.HandleInput(ctx, ev.Text) {
 			return
 		}
+		images := moduTUIImages(ev.Images)
 		switch ev.Kind {
 		case modutui.SubmitKindFollowUp:
-			queueFollowUp(ev.Text, false)
+			queueFollowUp(ev.Text, images, false)
 		case modutui.SubmitKindSteer:
-			queueSteer(ev.Text, false)
+			queueSteer(ev.Text, images, false)
 		default:
-			runPrompt(ev.Text)
+			runPromptWithImages(ev.Text, images)
 		}
 	}
 
@@ -406,6 +414,10 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 		DisableMouse:    mouseDisabled,
 		ArrowKeysScroll: arrowKeysScroll,
 		Hooks: modutui.Hooks{
+			ReadClipboardImages: readModuTUIClipboardImages,
+			ResolvePastedImages: func(content string) ([]modutui.ImageAttachment, bool, error) {
+				return resolveModuTUIPastedImages(session.Cwd(), content)
+			},
 			InputHistoryChanged: func(history []string) {
 				_ = saveModuTUIInputHistory(historyFile, history)
 			},
@@ -467,9 +479,9 @@ func runModuTUI(ctx context.Context, session *coding_agent.CodingSession, model 
 						return
 					}
 					if kind == modutui.SubmitKindSteer {
-						queueSteer(text, true)
+						queueSteer(text, nil, true)
 					} else {
-						queueFollowUp(text, true)
+						queueFollowUp(text, nil, true)
 					}
 					return
 				}
@@ -6672,8 +6684,21 @@ func contentText(content any) string {
 	}
 }
 
+func moduTUIImages(attachments []modutui.ImageAttachment) []types.ImageContent {
+	images := make([]types.ImageContent, 0, len(attachments))
+	for _, attachment := range attachments {
+		images = append(images, types.ImageContent{
+			Type:     "image",
+			MimeType: attachment.MimeType,
+			Data:     base64.StdEncoding.EncodeToString(attachment.Data),
+		})
+	}
+	return images
+}
+
 func contentBlocksText(blocks []types.ContentBlock) string {
 	parts := make([]string, 0, len(blocks))
+	imageIndex := 0
 	for _, block := range blocks {
 		switch b := block.(type) {
 		case *types.TextContent:
@@ -6683,6 +6708,11 @@ func contentBlocksText(blocks []types.ContentBlock) string {
 		case *types.ThinkingContent:
 			if b != nil && b.Thinking != "" {
 				parts = append(parts, b.Thinking)
+			}
+		case *types.ImageContent:
+			if b != nil {
+				imageIndex++
+				parts = append(parts, fmt.Sprintf("[Image #%d]", imageIndex))
 			}
 		}
 	}

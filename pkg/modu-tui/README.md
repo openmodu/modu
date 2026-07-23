@@ -36,7 +36,8 @@ model := modutui.NewModel(modutui.Options{
 ### Input and host hooks
 
 - Input grows from one to five rows and keeps up to 100 history entries. Up/Down traverses history without discarding the current draft.
-- `Hooks.SubmitMessage` receives `SubmitKindPrompt`, `SubmitKindFollowUp`, or `SubmitKindSteer`. `Hooks.Submit` is the text-only fallback.
+- `Hooks.SubmitMessage` receives text plus referenced `ImageAttachment` values with `SubmitKindPrompt`, `SubmitKindFollowUp`, or `SubmitKindSteer`. `Hooks.Submit` is the text-only fallback.
+- Ctrl+V calls `Hooks.ReadClipboardImages` asynchronously. `Hooks.ResolvePastedImages` lets the host turn pasted or dragged file paths into attachments. The input renders `[Image #N]` tokens; Backspace/Delete removes the referenced attachment before submission.
 - `Hooks.Interrupt` receives Esc while the model is busy or streaming. Ctrl+C remains the quit path.
 - `Options.SlashCommands` or `SlashCommandsProvider` supplies command suggestions. Tab completes; Enter dispatches through `Hooks.SlashCommand`.
 - `Options.InputHistory` seeds history; `Hooks.InputHistoryChanged` lets the host persist the normalized list.
@@ -80,7 +81,7 @@ The host feeds runtime state into the model with Bubble Tea messages:
 
 | Component | Responsibility |
 |---|---|
-| `InputBlock` | Editing, cursor placement, paste tokens, and IME replacement |
+| `InputBlock` | Editing, cursor placement, pasted-text/image tokens, and IME replacement |
 | `TextBlock` / `MarkdownBlock` / `TableBlock` | Transcript text and tables |
 | `ThinkingBlock` | Independently collapsible reasoning content |
 | `ToolCallBlock` / `ToolGroupBlock` | Tool state, output, code, diffs, and batching |

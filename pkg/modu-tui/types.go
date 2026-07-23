@@ -5,7 +5,7 @@ package modutui
 
 import "time"
 
-const DefaultStatusHint = "拖拽选择→复制 · 点 ▸ 折叠 · Enter 发送 · 滚轮滚动 · ctrl+End 到底 · Ctrl+C 退出"
+const DefaultStatusHint = "Ctrl+V/拖入图片 · 拖拽选择→复制 · Enter 发送 · 滚轮滚动 · ctrl+End 到底 · Ctrl+C 退出"
 
 type Role int
 
@@ -134,8 +134,17 @@ const (
 )
 
 type SubmitEvent struct {
-	Text string
-	Kind SubmitKind
+	Text   string
+	Images []ImageAttachment
+	Kind   SubmitKind
+}
+
+// ImageAttachment is an image held by the input until the user submits it.
+// Data contains the encoded file bytes (PNG, JPEG, GIF, or WebP), not base64.
+type ImageAttachment struct {
+	Name     string
+	MimeType string
+	Data     []byte
 }
 
 type Hooks struct {
@@ -148,6 +157,8 @@ type Hooks struct {
 	Interrupt            func()
 	Submit               func(text string)
 	SubmitMessage        func(SubmitEvent)
+	ReadClipboardImages  func() ([]ImageAttachment, error)
+	ResolvePastedImages  func(content string) ([]ImageAttachment, bool, error)
 }
 
 type MessageBlockFactory func(Message) (Block, bool)
