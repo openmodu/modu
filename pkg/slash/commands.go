@@ -26,52 +26,132 @@ type Clearer interface {
 	ClearScreen()
 }
 
-// Handle processes built-in /commands. Returns (handled, shouldExit).
-func Handle(ctx context.Context, line string, session *coding_agent.CodingSession, r Printer, model *types.Model) (bool, bool) {
-	if !strings.HasPrefix(line, "/") {
-		return false, false
+type CommandDefinition struct {
+	Name        string
+	Aliases     []string
+	Description string
+	operation   commandOperation
+}
+
+type commandOperation uint8
+
+const (
+	commandQuit commandOperation = iota + 1
+	commandClear
+	commandModel
+	commandCompact
+	commandTokens
+	commandContext
+	commandSession
+	commandName
+	commandSessions
+	commandResume
+	commandForkSession
+	commandTree
+	commandFork
+	commandClone
+	commandBranchSession
+	commandExport
+	commandCopy
+	commandChangelog
+	commandDoctor
+	commandReload
+	commandTools
+	commandAllow
+	commandAgents
+	commandTodos
+	commandTasks
+	commandPlan
+	commandWorktree
+	commandSkills
+	commandPrompts
+)
+
+// CommandDefinitions is the canonical metadata for built-in slash commands.
+// Hosts use it to build their own command registry, help, and completion UI.
+func CommandDefinitions() []CommandDefinition {
+	return []CommandDefinition{
+		{Name: "/quit", Aliases: []string{"/exit", "/q"}, Description: "Exit modu_code", operation: commandQuit},
+		{Name: "/clear", Aliases: []string{"/new"}, Description: "Clear the current session", operation: commandClear},
+		{Name: "/model", Description: "Show, list, or switch the active model", operation: commandModel},
+		{Name: "/compact", Description: "Manually trigger context compaction", operation: commandCompact},
+		{Name: "/tokens", Description: "Show token usage", operation: commandTokens},
+		{Name: "/context", Description: "Show loaded context", operation: commandContext},
+		{Name: "/session", Description: "Show, name, or delete a session", operation: commandSession},
+		{Name: "/name", Description: "Set the current session name", operation: commandName},
+		{Name: "/sessions", Description: "List or delete saved sessions", operation: commandSessions},
+		{Name: "/resume", Description: "Switch to a saved session", operation: commandResume},
+		{Name: "/fork-session", Description: "Copy a saved session into this cwd", operation: commandForkSession},
+		{Name: "/tree", Description: "Show conversation branches", operation: commandTree},
+		{Name: "/fork", Description: "Move the session leaf to an entry", operation: commandFork},
+		{Name: "/clone", Description: "Clone the current session", operation: commandClone},
+		{Name: "/branch-session", Description: "Create a branched session from an entry", operation: commandBranchSession},
+		{Name: "/export", Description: "Export the session to HTML", operation: commandExport},
+		{Name: "/copy", Description: "Copy the last assistant message", operation: commandCopy},
+		{Name: "/changelog", Description: "Show recent git commits", operation: commandChangelog},
+		{Name: "/doctor", Description: "Show runtime diagnostics", operation: commandDoctor},
+		{Name: "/reload", Description: "Reload skills, prompts, and other resources", operation: commandReload},
+		{Name: "/tools", Description: "List active tools", operation: commandTools},
+		{Name: "/allow", Description: "Clear a stored deny decision for a tool", operation: commandAllow},
+		{Name: "/agents", Description: "List discovered subagents", operation: commandAgents},
+		{Name: "/todos", Description: "Show the current todo list", operation: commandTodos},
+		{Name: "/tasks", Description: "Show background subagent tasks", operation: commandTasks},
+		{Name: "/plan", Description: "Inspect or update plan mode", operation: commandPlan},
+		{Name: "/worktree", Description: "Inspect or manage the current worktree", operation: commandWorktree},
+		{Name: "/skills", Description: "List available skills", operation: commandSkills},
+		{Name: "/prompts", Description: "List available prompt templates", operation: commandPrompts},
 	}
+}
 
-	parts := strings.SplitN(line[1:], " ", 2)
-	cmd := strings.ToLower(parts[0])
+// Execute runs this definition after a host registry has resolved it.
+// invokedName preserves alias-specific behavior such as /new versus /clear.
+func (d CommandDefinition) Execute(ctx context.Context, invokedName, args string, session *coding_agent.CodingSession, r Printer, model *types.Model) bool {
+	invokedName = strings.ToLower(strings.TrimSpace(invokedName))
+	parts := []string{strings.TrimPrefix(d.Name, "/")}
+	if args = strings.TrimSpace(args); args != "" {
+		parts = append(parts, args)
+	}
+	if d.operation == 0 {
+		r.PrintError(fmt.Errorf("command %s has no operation", d.Name))
+		return false
+	}
+	return executeCommand(ctx, d.operation, invokedName, parts, session, r, model)
+}
 
-	switch cmd {
-	case "quit", "exit", "q":
+func executeCommand(ctx context.Context, operation commandOperation, invokedName string, parts []string, session *coding_agent.CodingSession, r Printer, model *types.Model) bool {
+	switch operation {
+	case commandQuit:
 		r.PrintInfo("bye!")
-		return true, true
+		return true
 
-	case "help", "h":
-		PrintHelp(r)
-		return true, false
-
-	case "clear", "new":
+	case commandClear:
 		if err := session.ClearConversation(); err != nil {
 			r.PrintError(fmt.Errorf("clear session: %w", err))
 		} else {
-			if cmd == "new" {
+			if invokedName == "/new" {
 				r.PrintInfo("new session")
 			} else {
 				r.PrintInfo("session cleared")
 			}
 		}
-		if cmd == "clear" {
+		if invokedName != "/new" {
 			if clearer, ok := r.(Clearer); ok {
 				clearer.ClearScreen()
 			} else {
 				fmt.Print("\033[2J\033[H")
 			}
 		}
-		return true, false
+		return false
 
-	case "model":
+	case commandModel:
 		arg := ""
 		if len(parts) > 1 {
 			arg = strings.TrimSpace(parts[1])
 		}
 		handleModel(arg, session, r, model)
-		return true, false
+		return false
 
-	case "compact":
+	case commandCompact:
 		r.PrintInfo("compacting context…")
 		changed, err := session.CompactIfNeeded(ctx)
 		if err != nil {
@@ -81,22 +161,22 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		} else {
 			r.PrintInfo("context compacted")
 		}
-		return true, false
+		return false
 
-	case "tokens":
+	case commandTokens:
 		stats := session.GetSessionStats()
 		r.PrintInfo(fmt.Sprintf("tokens used this session: %d", stats.TotalTokens))
-		return true, false
+		return false
 
-	case "context":
+	case commandContext:
 		handleContext(session, r)
-		return true, false
+		return false
 
-	case "session":
+	case commandSession:
 		handleSession(parts, session, r)
-		return true, false
+		return false
 
-	case "name":
+	case commandName:
 		arg := ""
 		if len(parts) > 1 {
 			arg = strings.TrimSpace(parts[1])
@@ -107,16 +187,16 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		} else {
 			r.PrintInfo("session name: " + arg)
 		}
-		return true, false
+		return false
 
-	case "sessions":
+	case commandSessions:
 		handleSessions(parts, session, r)
-		return true, false
+		return false
 
-	case "resume":
+	case commandResume:
 		if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
 			r.PrintInfo("usage: /resume <session-file | session-id-prefix>")
-			return true, false
+			return false
 		}
 		target := strings.TrimSpace(parts[1])
 		// Accept both a session file path and a session id (or unique
@@ -127,19 +207,19 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		if fi, statErr := os.Stat(target); statErr == nil && !fi.IsDir() {
 			if err := session.ResumeSession(target); err != nil {
 				r.PrintError(err)
-				return true, false
+				return false
 			}
 		} else if err := session.ResumeByID(target); err != nil {
 			r.PrintError(fmt.Errorf("resume %q: %v", target, err))
-			return true, false
+			return false
 		}
 		r.PrintInfo("resumed session: " + session.GetSessionFile())
-		return true, false
+		return false
 
-	case "fork-session":
+	case commandForkSession:
 		if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
 			r.PrintInfo("usage: /fork-session <session-file>")
-			return true, false
+			return false
 		}
 		path := strings.TrimSpace(parts[1])
 		if err := session.ForkFromSession(path); err != nil {
@@ -147,16 +227,16 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		} else {
 			r.PrintInfo("forked session: " + session.GetSessionFile())
 		}
-		return true, false
+		return false
 
-	case "tree":
+	case commandTree:
 		handleTree(session, r)
-		return true, false
+		return false
 
-	case "fork":
+	case commandFork:
 		if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
 			r.PrintInfo("usage: /fork <entry-id>")
-			return true, false
+			return false
 		}
 		entryID := strings.TrimSpace(parts[1])
 		if err := session.Fork(entryID); err != nil {
@@ -164,13 +244,13 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		} else {
 			r.PrintInfo("forked from entry: " + entryID)
 		}
-		return true, false
+		return false
 
-	case "clone":
+	case commandClone:
 		leafID := session.GetSessionLeafID()
 		if leafID == "" {
 			r.PrintInfo("nothing to clone")
-			return true, false
+			return false
 		}
 		path, err := session.CreateBranchedSession(leafID)
 		if err != nil {
@@ -178,12 +258,12 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		} else {
 			r.PrintInfo("cloned session: " + path)
 		}
-		return true, false
+		return false
 
-	case "branch-session":
+	case commandBranchSession:
 		if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
 			r.PrintInfo("usage: /branch-session <entry-id>")
-			return true, false
+			return false
 		}
 		path, err := session.CreateBranchedSession(strings.TrimSpace(parts[1]))
 		if err != nil {
@@ -191,9 +271,9 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		} else {
 			r.PrintInfo("created branched session: " + path)
 		}
-		return true, false
+		return false
 
-	case "export":
+	case commandExport:
 		path := ""
 		if len(parts) > 1 {
 			path = strings.TrimSpace(parts[1])
@@ -204,50 +284,50 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		} else {
 			r.PrintInfo("exported session: " + path)
 		}
-		return true, false
+		return false
 
-	case "copy":
+	case commandCopy:
 		text := strings.TrimSpace(session.GetLastAssistantText())
 		if text == "" {
 			r.PrintInfo("no assistant message to copy")
-			return true, false
+			return false
 		}
 		if err := copyTextToClipboard(text); err != nil {
 			r.PrintError(err)
 		} else {
 			r.PrintInfo("copied last assistant message")
 		}
-		return true, false
+		return false
 
-	case "changelog":
+	case commandChangelog:
 		handleChangelog(session, r)
-		return true, false
+		return false
 
-	case "doctor":
+	case commandDoctor:
 		handleDoctor(ctx, session, r)
-		return true, false
+		return false
 
-	case "reload":
+	case commandReload:
 		session.ReloadResources()
 		r.PrintInfo("reloaded resources")
-		return true, false
+		return false
 
-	case "tools":
+	case commandTools:
 		names := session.GetActiveToolNames()
 		r.PrintInfo("active tools: " + strings.Join(names, ", "))
-		return true, false
+		return false
 
-	case "allow":
+	case commandAllow:
 		if len(parts) < 2 || strings.TrimSpace(parts[1]) == "" {
 			r.PrintInfo("usage: /allow <tool>  — clear deny decision so the tool is asked again")
-			return true, false
+			return false
 		}
 		toolName := strings.TrimSpace(parts[1])
 		session.ClearToolDecision(toolName)
 		r.PrintInfo(fmt.Sprintf("cleared decision for %q — will ask again on next call", toolName))
-		return true, false
+		return false
 
-	case "agents":
+	case commandAgents:
 		subagents := session.GetSubagents()
 		sort.Slice(subagents, func(i, j int) bool { return subagents[i].Name < subagents[j].Name })
 		if len(subagents) == 0 {
@@ -263,26 +343,26 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 				r.PrintInfo(line)
 			}
 		}
-		return true, false
+		return false
 
-	case "todos":
+	case commandTodos:
 		todos := session.GetTodos()
 		if len(todos) == 0 {
 			r.PrintInfo("no todos")
-			return true, false
+			return false
 		}
 		r.PrintInfo(fmt.Sprintf("todos (%d):", len(todos)))
 		for i, todo := range todos {
 			r.PrintInfo(fmt.Sprintf("  %d. [%s] %s", i+1, todo.Status, todo.Content))
 		}
-		return true, false
+		return false
 
-	case "tasks":
+	case commandTasks:
 		tasks := session.GetBackgroundTasks()
 		sort.Slice(tasks, func(i, j int) bool { return tasks[i].CreatedAt < tasks[j].CreatedAt })
 		if len(tasks) == 0 {
 			r.PrintInfo("no background tasks")
-			return true, false
+			return false
 		}
 		r.PrintInfo(fmt.Sprintf("background tasks (%d):", len(tasks)))
 		for _, task := range tasks {
@@ -292,9 +372,9 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 			}
 			r.PrintInfo(l)
 		}
-		return true, false
+		return false
 
-	case "plan":
+	case commandPlan:
 		arg := ""
 		if len(parts) > 1 {
 			arg = strings.TrimSpace(parts[1])
@@ -319,7 +399,7 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 			status := session.PlanStatus()
 			if !status.PlanExists {
 				r.PrintInfo("no latest plan")
-				return true, false
+				return false
 			}
 			content := strings.TrimSpace(status.LatestPlan)
 			if content == "" {
@@ -336,7 +416,7 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 			revisions := session.ListPlanRevisions()
 			if len(revisions) == 0 {
 				r.PrintInfo("no plan revisions")
-				return true, false
+				return false
 			}
 			lines := make([]string, 0, len(revisions))
 			for i, revision := range revisions {
@@ -349,9 +429,9 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		default:
 			r.PrintInfo("usage: /plan [status|show|history|clear|on|off]")
 		}
-		return true, false
+		return false
 
-	case "worktree":
+	case commandWorktree:
 		arg := ""
 		if len(parts) > 1 {
 			arg = strings.TrimSpace(parts[1])
@@ -391,7 +471,7 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 			worktrees := session.ListManagedWorktrees()
 			if len(worktrees) == 0 {
 				r.PrintInfo("no managed worktrees")
-				return true, false
+				return false
 			}
 			lines := make([]string, 0, len(worktrees))
 			for _, wt := range worktrees {
@@ -406,11 +486,11 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 			removed, err := session.CleanupManagedWorktrees()
 			if err != nil {
 				r.PrintError(err)
-				return true, false
+				return false
 			}
 			if len(removed) == 0 {
 				r.PrintInfo("no inactive managed worktrees to cleanup")
-				return true, false
+				return false
 			}
 			lines := make([]string, 0, len(removed))
 			for _, wt := range removed {
@@ -421,13 +501,13 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 			diff, err := session.ActiveWorktreeDiff()
 			if err != nil {
 				r.PrintError(err)
-				return true, false
+				return false
 			}
 			lines := []string{"path: " + diff.Path}
 			if diff.Stat == "" && diff.NameStatus == "" && diff.Patch == "" {
 				lines = append(lines, "no changes")
 				r.PrintSection("Worktree diff", lines)
-				return true, false
+				return false
 			}
 			if diff.Stat != "" {
 				lines = append(lines, "stat:", diff.Stat)
@@ -442,13 +522,13 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 		default:
 			r.PrintInfo("usage: /worktree [status|list|diff|cleanup|on|off]")
 		}
-		return true, false
+		return false
 
-	case "skills":
+	case commandSkills:
 		skills := session.GetSkills()
 		if len(skills) == 0 {
 			r.PrintInfo("no skills found")
-			return true, false
+			return false
 		}
 		r.PrintInfo(fmt.Sprintf("available skills (%d):", len(skills)))
 		for _, s := range skills {
@@ -461,13 +541,13 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 			}
 			r.PrintInfo(l)
 		}
-		return true, false
+		return false
 
-	case "prompts":
+	case commandPrompts:
 		prompts := session.GetPromptTemplates()
 		if len(prompts) == 0 {
 			printNoPromptTemplatesFound(r)
-			return true, false
+			return false
 		}
 		r.PrintInfo(fmt.Sprintf("available prompt templates (%d):", len(prompts)))
 		for _, p := range prompts {
@@ -480,10 +560,11 @@ func Handle(ctx context.Context, line string, session *coding_agent.CodingSessio
 			}
 			r.PrintInfo(l)
 		}
-		return true, false
+		return false
 
 	default:
-		return false, false
+		r.PrintError(fmt.Errorf("unknown built-in operation: %d", operation))
+		return false
 	}
 }
 
@@ -954,56 +1035,4 @@ func handleDoctor(ctx context.Context, session *coding_agent.CodingSession, r Pr
 		}
 	}
 	r.PrintSection("Doctor", lines)
-}
-
-func PrintHelp(r Printer) {
-	lines := []string{
-		"/help, /h           — show this help",
-		"/quit, /exit        — exit",
-		"/clear              — clear the screen",
-		"/config             — configure providers and models",
-		"/config validate    — validate model config",
-		"/channel            — configure Telegram or Feishu",
-		"/model              — show or switch model",
-		"/model list         — list configured models",
-		"/compact            — compact the conversation context",
-		"/tokens             — show total token usage",
-		"/context            — show current prompt/context sources",
-		"/session            — show or name the current session",
-		"/sessions [all]     — list saved sessions",
-		"/session delete <f> — delete a saved session file",
-		"/resume <file|id>   — switch to a saved session",
-		"/fork-session <file> — copy a saved session into this cwd",
-		"/tree               — show forkable messages or branch points",
-		"/fork <entry-id>    — move the session leaf to an entry",
-		"/export [file]      — export the session to HTML",
-		"/copy               — copy the last assistant message",
-		"/changelog          — show recent git commits",
-		"/doctor             — show runtime diagnostics",
-		"/tools              — list active tools",
-		"/allow <tool>       — clear always-deny so the tool is asked again",
-		"/agents             — list discovered subagents",
-		"/todos              — show current todo list",
-		"/tasks              — show background subagent tasks",
-		"/plan [status|show|history|clear|on|off] — inspect, show, clear, or toggle plan mode",
-		"/worktree [status|list|diff|cleanup|on|off] — inspect, diff, clean, or toggle isolated worktree mode",
-		"/skills             — list available skills",
-		"/prompts            — list available prompt templates",
-		"",
-		"keys",
-		"ctrl+j         — insert newline",
-		"ctrl+l         — clear conversation buffer",
-		"ctrl+o         — toggle expanded tool output",
-		"ctrl+c         — interrupt running query / exit when idle",
-		"esc            — interrupt running query / dismiss suggestions",
-		"tab            — autocomplete slash command",
-		"↑ / ↓          — history (or navigate slash suggestions)",
-		"",
-		"tool approval",
-		"y              — allow once",
-		"a              — always allow this tool",
-		"n / ESC        — deny once",
-		"d              — always deny this tool",
-	}
-	r.PrintSection("Help", lines)
 }

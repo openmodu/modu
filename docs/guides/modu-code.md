@@ -145,7 +145,10 @@ contextWindow = 1000000
 
 `providers` 只描述连接方式，`models` 只描述可选模型；`active` 是默认模型，`scopedModels` 是模型循环范围，`roles` 预留给 summary/dispatcher 等专用模型。`contextWindow` 可显式覆盖模型上下文窗口；未配置时，内置厂商会按当前厂商最大窗口补默认值。
 
-运行中输入 `/model` 打开模型选择器：方向键选择、`Enter` 确认、`Esc` 取消，也可以用 `/model <query>` 带初始搜索。切换后写回 `active`，下次启动继续使用；如果实际切到了另一个模型，会清空旧对话上下文并明确提示。
+运行中输入 `/model` 打开模型选择器：方向键选择、`Enter` 确认、`Esc`
+取消。`/model list` 列出模型，`/model <name>` 或
+`/model <provider> <model-id>` 也可以直接切换。切换后写回 `active`，下次
+启动继续使用；如果实际切到了另一个模型，会清空旧对话上下文并明确提示。
 
 配置辅助命令（非交互）：
 
@@ -155,7 +158,10 @@ go run ./cmd/modu_code config init         # 生成示例配置
 go run ./cmd/modu_code config init --force # 覆盖已有配置
 ```
 
-TUI 中输入 `/config` 打开配置页面，目前提供 `Active Model` 和 `Provider` 两个入口，二级页面用 `Esc` 返回。`Provider` 会先打开和模型选择器一致的可搜索列表，可选已有/预设 provider，或选 `Custom OpenAI-compatible` 配置自定义源；保存后自动请求 `<baseUrl>/models`，把返回的模型写入 `models` 配置。
+TUI 中输入 `/config` 打开 provider 配置流程，可选 DeepSeek、LMStudio、
+Ollama 或 `Custom OpenAI-Compatible`，再统一填写密钥方式和 base URL；
+密钥输入不会进入 transcript。查看或切换模型使用 `/model`。这些流程与
+`/channel` 共用同一种 choice/text Flow 数据，不再各自维护输入状态机。
 
 ---
 

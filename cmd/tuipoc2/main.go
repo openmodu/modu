@@ -33,15 +33,22 @@ func main() {
 		Width:       120,
 		Height:      35,
 		StreamReply: cannedReply,
-		InitialMessages: []modutui.Message{
+		InitialEntries: []modutui.Entry{
 			{
 				Role: modutui.RoleAssistant,
-				Text: "POC v2: 全屏 viewport 架构,跑在 bubbletea v2(charm.land)。自研滚动区 + 输入框,不依赖 bubbles。Enter 发送会模拟含表格的流式回复。",
+				Nodes: []modutui.Node{modutui.MarkdownNode{
+					Text: "POC v2: 全屏 viewport 架构,跑在 bubbletea v2(charm.land)。自研滚动区 + 输入框,不依赖 bubbles。Enter 发送会模拟含表格的流式回复。",
+				}},
 			},
 			{
-				Tool:    true,
-				Summary: "Ran 1 shell command",
-				Detail:  "$ go test ./cmd/tuipoc2/\nok  github.com/openmodu/modu/cmd/tuipoc2  0.4s\n\n点这一行可展开/折叠。",
+				Role: modutui.RoleAssistant,
+				Nodes: []modutui.Node{modutui.ToolNode{Call: modutui.ToolCall{
+					ID:      "poc-command",
+					Name:    "bash",
+					Summary: "Ran 1 shell command",
+					Detail:  "$ go test ./cmd/tuipoc2/\nok  github.com/openmodu/modu/cmd/tuipoc2  0.4s\n\n点这一行可展开/折叠。",
+					Done:    true,
+				}}},
 			},
 		},
 	}

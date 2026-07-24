@@ -27,6 +27,7 @@
 
 - [ACP 集成架构](architecture/acp.md)：Gateway、项目、会话和 ACP 适配层的职责边界。
 - [Coding Agent 架构](architecture/coding-agent.md)：包结构、依赖方向和请求执行路径。
+- [modu TUI 封装与业务拆分](architecture/modu-tui.md)：UI 内核、Intent/Client 边界、状态拆分和 `modu_code` 迁移顺序。
 - [Mailbox Agent System](architecture/mailbox-agent-system.md)：协议、Hub、持久化和跨进程协作设计。
 
 ## 方案与验收记录

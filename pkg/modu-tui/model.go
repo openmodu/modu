@@ -2,7 +2,6 @@ package modutui
 
 import (
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +20,24 @@ type statusExpireMsg struct {
 type clipboardImagesMsg struct {
 	images []ImageAttachment
 	err    error
+}
+type pastedImagesResolvedMsg struct {
+	content string
+	images  []ImageAttachment
+	handled bool
+	err     error
+}
+type slashCommandsLoadedMsg struct {
+	commands []SlashCommand
+}
+type toolPermissionResolvedMsg struct {
+	toolID     string
+	permission ToolPermissionState
+}
+type toolArtifactLoadedMsg struct {
+	path string
+	text string
+	err  string
 }
 
 const maxInputHistory = 100
@@ -58,57 +75,15 @@ type toolArtifactCacheEntry struct {
 type Model struct {
 	width, height int
 
-	messages      []Message
-	lines         []string    // rendered transcript lines (the viewport's content)
-	gutters       []int       // per-line leading decoration width to skip on select/copy
-	headers       map[int]int // tool-header line index -> Message index
-	yOffset       int         // top visible transcript line
-	panel         *Panel
-	panelLines    []string
-	panelRowLines []int
-	panelOffset   int
-	panelSelected int
-	follow        bool // stick to the bottom
-	unseen        int  // messages appended while the user is away from bottom
-	input         InputBlock
-	inputHistory  []string
-	historyIdx    int
-	historyHold   string
-	imeTail       string
-	imeActive     bool
-	streaming     bool
-	streamRunes   []rune
-	streamIdx     int
-	streamReply   string
-	busy          bool
-	approval      *pendingApproval
-	humanPrompt   *pendingHumanPrompt
-	humanText     *pendingHumanText
-	todos         []TodoItem
-	todosCurrent  bool
+	transcriptModel
+	composerModel
+	overlayModel
+	chromeModel
 
-	selecting             bool
-	selStart, selEnd      cell
-	dragCol               int
-	autoScroll            int  // edge auto-scroll direction during drag: -1 up, +1 down, 0 none
-	autoScrolling         bool // a tick loop is currently live
-	autoScrollTicks       int
-	status                string
-	statusExpiresAt       time.Time
-	statusExpiresText     string
-	statusHint            string
-	footer                string
-	infoCardLines         []string
-	disableMouse          bool
-	arrowKeysScroll       bool
-	hooks                 Hooks
-	blockFactories        []MessageBlockFactory
-	blockGap              int
-	slashCommands         []SlashCommand
-	slashCommandsProvider func() []SlashCommand
-	slashMatches          []SlashCommand
-	slashIndex            int
-	toolArtifactCache     map[string]toolArtifactCacheEntry
+	disableMouse  bool
+	services      Services
+	intentHandler func(Intent)
+	initCmds      []tea.Cmd
 }
 
 func NewModel(options ...Options) Model {
@@ -120,7 +95,10 @@ func NewModel(options ...Options) Model {
 		if options[0].Height > 0 {
 			opts.Height = options[0].Height
 		}
-		opts.InitialMessages = append([]Message(nil), options[0].InitialMessages...)
+		opts.InitialEntries = make([]Entry, len(options[0].InitialEntries))
+		for i := range options[0].InitialEntries {
+			opts.InitialEntries[i] = cloneEntry(options[0].InitialEntries[i])
+		}
 		opts.InputHistory = append([]string(nil), options[0].InputHistory...)
 		opts.Todos = append([]TodoItem(nil), options[0].Todos...)
 		opts.StreamReply = options[0].StreamReply
@@ -128,10 +106,10 @@ func NewModel(options ...Options) Model {
 		opts.InfoCardLines = append([]string(nil), options[0].InfoCardLines...)
 		opts.DisableMouse = options[0].DisableMouse
 		opts.ArrowKeysScroll = options[0].ArrowKeysScroll
-		opts.Hooks = options[0].Hooks
-		opts.BlockFactories = append([]MessageBlockFactory(nil), options[0].BlockFactories...)
+		opts.Services = options[0].Services
+		opts.IntentHandler = options[0].IntentHandler
+		opts.BlockFactories = append([]EntryBlockFactory(nil), options[0].BlockFactories...)
 		opts.SlashCommands = append([]SlashCommand(nil), options[0].SlashCommands...)
-		opts.SlashCommandsProvider = options[0].SlashCommandsProvider
 		if options[0].BlockGap > 0 {
 			opts.BlockGap = options[0].BlockGap
 		}
@@ -140,35 +118,50 @@ func NewModel(options ...Options) Model {
 		}
 	}
 	m := Model{
-		width:                 opts.Width,
-		height:                opts.Height,
-		follow:                true,
-		selStart:              cell{line: -1},
-		selEnd:                cell{line: -1},
-		streamReply:           opts.StreamReply,
-		statusHint:            opts.StatusHint,
-		footer:                opts.Footer,
-		infoCardLines:         cleanInfoCardLines(opts.InfoCardLines),
-		todos:                 normalizeTodos(opts.Todos),
-		disableMouse:          opts.DisableMouse,
-		arrowKeysScroll:       opts.ArrowKeysScroll,
-		hooks:                 opts.Hooks,
-		blockFactories:        opts.BlockFactories,
-		blockGap:              opts.BlockGap,
-		slashCommands:         normalizeSlashCommands(opts.SlashCommands),
-		slashCommandsProvider: opts.SlashCommandsProvider,
-		inputHistory:          normalizeInputHistory(opts.InputHistory),
-		toolArtifactCache:     make(map[string]toolArtifactCacheEntry),
+		width:  opts.Width,
+		height: opts.Height,
+		transcriptModel: transcriptModel{
+			follow:              true,
+			selStart:            cell{line: -1},
+			selEnd:              cell{line: -1},
+			infoCardLines:       cleanInfoCardLines(opts.InfoCardLines),
+			blockFactories:      opts.BlockFactories,
+			blockGap:            opts.BlockGap,
+			toolArtifactCache:   make(map[string]toolArtifactCacheEntry),
+			toolArtifactLoading: make(map[string]bool),
+			loadToolArtifact:    opts.Services.LoadToolArtifact,
+		},
+		composerModel: composerModel{
+			arrowKeysScroll:       opts.ArrowKeysScroll,
+			slashCommands:         normalizeSlashCommands(opts.SlashCommands),
+			slashCommandsProvider: opts.Services.SlashCommands,
+			inputHistory:          normalizeInputHistory(opts.InputHistory),
+		},
+		chromeModel: chromeModel{
+			streamReply: opts.StreamReply,
+			statusHint:  opts.StatusHint,
+			footer:      opts.Footer,
+			todos:       normalizeTodos(opts.Todos),
+		},
+		disableMouse:  opts.DisableMouse,
+		services:      opts.Services,
+		intentHandler: opts.IntentHandler,
 	}
 	m.historyIdx = len(m.inputHistory)
-	for _, msg := range opts.InitialMessages {
-		m.appendMessage(msg)
+	for _, entry := range opts.InitialEntries {
+		m.appendEntry(entry)
 	}
+	for _, entry := range m.entries {
+		if cmd := m.toolPermissionCmd(entry); cmd != nil {
+			m.initCmds = append(m.initCmds, cmd)
+		}
+	}
+	m.initCmds = append(m.initCmds, m.loadExpandedToolArtifactsCmd())
 	m.rebuild()
 	return m
 }
 
-func (m Model) Init() tea.Cmd { return nil }
+func (m Model) Init() tea.Cmd { return batchCmds(m.initCmds...) }
 
 func (m Model) Lines() []string {
 	return append([]string(nil), m.lines...)
@@ -195,8 +188,11 @@ func (m *Model) submitInput(steer bool) tea.Cmd {
 		}
 	}
 
-	m.messages = append(m.messages, Message{Role: RoleUser, Text: display})
-	m.appendInputHistory(v)
+	m.entries = append(m.entries, Entry{
+		Role:  RoleUser,
+		Nodes: []Node{TextNode{Text: display}},
+	})
+	historyCmd := m.appendInputHistory(v)
 	m.input.Reset()
 	m.historyIdx = len(m.inputHistory)
 	m.historyHold = ""
@@ -205,21 +201,87 @@ func (m *Model) submitInput(steer bool) tea.Cmd {
 	m.follow = true
 	m.unseen = 0
 	m.rebuild()
-	if len(images) == 0 && strings.HasPrefix(trimmed, "/") && m.hooks.SlashCommand != nil {
-		m.hooks.SlashCommand(v)
-		return nil
+	if len(images) == 0 && strings.HasPrefix(trimmed, "/") {
+		return batchCmds(historyCmd, m.emitIntent(SlashCommandIntent{Line: v}))
 	}
-	if m.hooks.SubmitMessage != nil {
-		m.hooks.SubmitMessage(SubmitEvent{Text: v, Images: images, Kind: kind})
-	} else if m.hooks.Submit != nil {
-		m.hooks.Submit(v)
-	}
+	submitCmd := m.emitIntent(SubmitIntent{Event: SubmitEvent{Text: v, Images: images, Kind: kind}})
 	if kind == SubmitKindPrompt && m.streamReply != "" {
 		m.startStream()
 		m.rebuild()
-		return m.tick()
+		return batchCmds(historyCmd, submitCmd, m.tick())
 	}
-	return nil
+	return batchCmds(historyCmd, submitCmd)
+}
+
+func (m Model) emitIntent(intent Intent) tea.Cmd {
+	return intentCmd(m.intentHandler, intent)
+}
+
+func (m Model) handlesIntent(intent Intent) bool {
+	return m.intentHandler != nil
+}
+
+func (m Model) toolPermissionCmd(entry Entry) tea.Cmd {
+	node, _, ok := toolNodeFromEntry(entry)
+	if !ok || node.Call.ID == "" || node.Permission != ToolPermissionUnknown || m.services.ToolPermission == nil {
+		return nil
+	}
+	for _, current := range m.entries {
+		currentNode, _, currentOK := toolNodeFromEntry(current)
+		if currentOK && currentNode.Call.ID == node.Call.ID && currentNode.Permission != ToolPermissionUnknown {
+			return nil
+		}
+	}
+	resolve := m.services.ToolPermission
+	return func() tea.Msg {
+		return toolPermissionResolvedMsg{toolID: node.Call.ID, permission: resolve(node.Call)}
+	}
+}
+
+func (m *Model) loadExpandedToolArtifactsCmd() tea.Cmd {
+	if m.loadToolArtifact == nil {
+		return nil
+	}
+	if m.toolArtifactCache == nil {
+		m.toolArtifactCache = make(map[string]toolArtifactCacheEntry)
+	}
+	if m.toolArtifactLoading == nil {
+		m.toolArtifactLoading = make(map[string]bool)
+	}
+	var cmds []tea.Cmd
+	queued := make(map[string]bool)
+	for _, entry := range m.entries {
+		node, _, ok := toolNodeFromEntry(entry)
+		if !ok {
+			continue
+		}
+		path := strings.TrimSpace(node.Call.ArtifactPath)
+		if node.Call.ArtifactRead || path == "" || (!node.Expanded && !node.Call.NoCollapse) || queued[path] {
+			continue
+		}
+		queued[path] = true
+		if entry, ok := m.toolArtifactCache[path]; ok {
+			entry := entry
+			cmds = append(cmds, func() tea.Msg {
+				return toolArtifactLoadedMsg{path: path, text: entry.text, err: entry.err}
+			})
+			continue
+		}
+		if m.toolArtifactLoading[path] {
+			continue
+		}
+		m.toolArtifactLoading[path] = true
+		load := m.loadToolArtifact
+		cmds = append(cmds, func() tea.Msg {
+			text, err := load(path)
+			errText := ""
+			if err != nil {
+				errText = err.Error()
+			}
+			return toolArtifactLoadedMsg{path: path, text: text, err: errText}
+		})
+	}
+	return batchCmds(cmds...)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -252,9 +314,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, tea.Quit
-		case isCtrlVKey(msg) && m.hooks.ReadClipboardImages != nil:
+		case isCtrlVKey(msg) && m.services.ReadClipboardImages != nil:
 			m.resetIMEState()
-			read := m.hooks.ReadClipboardImages
+			read := m.services.ReadClipboardImages
 			return m, func() tea.Msg {
 				images, err := read()
 				return clipboardImagesMsg{images: images, err: err}
@@ -263,6 +325,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.resetIMEState()
 			if m.toggleLatestToolExpansion() {
 				m.rebuild()
+				return m, m.loadExpandedToolArtifactsCmd()
 			}
 		case isEscKey(msg):
 			m.resetIMEState()
@@ -270,9 +333,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.clearSlashMatches()
 			} else if m.streaming || m.busy {
 				m.status = "interrupting"
-				if m.hooks.Interrupt != nil {
-					m.hooks.Interrupt()
-				}
+				return m, m.emitIntent(InterruptIntent{})
 			}
 		case msg.String() == "ctrl+end":
 			m.resetIMEState()
@@ -287,7 +348,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.resetIMEState()
 			m.input.InsertNewline()
 			m.clearHistorySelection()
-			m.updateSlashMatches()
+			return m, m.refreshSlashMatches()
 		case msg.String() == "shift+enter":
 			m.resetIMEState()
 			if cmd := m.submitInput(true); cmd != nil {
@@ -314,17 +375,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.resetIMEState()
 			m.input.Backspace()
 			m.clearHistorySelection()
-			m.updateSlashMatches()
+			return m, m.refreshSlashMatches()
 		case isCtrlWKey(msg):
 			m.resetIMEState()
 			m.input.DeleteWordBackward()
 			m.clearHistorySelection()
-			m.updateSlashMatches()
+			return m, m.refreshSlashMatches()
 		case msg.Code == tea.KeyDelete:
 			m.resetIMEState()
 			m.input.DeleteForward()
 			m.clearHistorySelection()
-			m.updateSlashMatches()
+			return m, m.refreshSlashMatches()
 		case msg.Code == tea.KeyTab:
 			m.resetIMEState()
 			m.completeSlashMatch()
@@ -335,7 +396,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if m.shouldArrowKeyScroll() {
 				m.scroll(-3)
 			} else {
-				m.navigateInputHistory(-1)
+				return m, m.navigateInputHistory(-1)
 			}
 		case msg.Code == tea.KeyDown:
 			m.resetIMEState()
@@ -344,12 +405,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if m.shouldArrowKeyScroll() {
 				m.scroll(3)
 			} else {
-				m.navigateInputHistory(1)
+				return m, m.navigateInputHistory(1)
 			}
 		case msg.Text != "":
 			m.insertKeyText(msg.Text)
 			m.clearHistorySelection()
-			m.updateSlashMatches()
+			return m, m.refreshSlashMatches()
 		}
 
 	case tea.PasteMsg:
@@ -359,26 +420,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.resetIMEState()
-		if m.hooks.ResolvePastedImages != nil {
-			images, handled, err := m.hooks.ResolvePastedImages(msg.Content)
-			if handled {
-				if err != nil {
-					m.status = "image paste failed: " + err.Error()
-					return m, nil
-				}
-				for _, image := range images {
-					m.input.InsertImage(image)
-				}
-				m.status = fmt.Sprintf("attached %d image(s)", len(images))
-				m.clearHistorySelection()
-				m.clearSlashMatches()
-				m.rebuild()
-				return m, nil
+		if m.services.ResolvePastedImages != nil {
+			resolve := m.services.ResolvePastedImages
+			content := msg.Content
+			return m, func() tea.Msg {
+				images, handled, err := resolve(content)
+				return pastedImagesResolvedMsg{content: content, images: images, handled: handled, err: err}
 			}
 		}
-		m.input.InsertPaste(msg.Content)
+		return m, m.insertPastedText(msg.Content)
+
+	case pastedImagesResolvedMsg:
+		if !msg.handled {
+			return m, m.insertPastedText(msg.content)
+		}
+		if msg.err != nil {
+			m.status = "image paste failed: " + msg.err.Error()
+			return m, nil
+		}
+		for _, image := range msg.images {
+			m.input.InsertImage(image)
+		}
+		m.status = fmt.Sprintf("attached %d image(s)", len(msg.images))
 		m.clearHistorySelection()
+		m.clearSlashMatches()
+		m.rebuild()
+		return m, nil
+
+	case slashCommandsLoadedMsg:
+		m.slashCommands = normalizeSlashCommands(msg.commands)
 		m.updateSlashMatches()
+		m.rebuild()
+		return m, nil
 
 	case clipboardImagesMsg:
 		if msg.err != nil {
@@ -396,6 +469,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clearHistorySelection()
 		m.clearSlashMatches()
 		m.rebuild()
+
+	case clipboardCopyResultMsg:
+		m.status = fmt.Sprintf("✓ copied %d chars (%s)", msg.chars, msg.how)
+		if msg.needsOSC52 {
+			// OSC52 has no acknowledgement. Keep the terminal-native selection
+			// fallback visible when a multiplexer or terminal drops it.
+			m.status += " · no clipboard? Shift+drag to copy via terminal"
+			return m, tea.Batch(tea.SetClipboard(msg.text), tea.Raw(msg.osc52String))
+		}
+		return m, nil
 
 	case tea.MouseWheelMsg:
 		switch msg.Button {
@@ -455,33 +538,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case AppendMessageMsg:
-		wasAtBottom := m.atBottom()
-		added := m.appendMessage(msg.Message)
-		m.rebuild()
-		if wasAtBottom || m.follow {
-			m.follow = true
-			m.unseen = 0
-			m.clampScroll()
-		} else {
-			m.follow = false
-			if added {
-				m.unseen++
-			}
-			m.clampScroll()
-		}
-
-	case SetStatusMsg:
-		m.status = msg.Status
-		m.statusExpiresAt = time.Time{}
-		m.statusExpiresText = ""
-		if msg.Status != "" && msg.TransientFor > 0 {
-			m.statusExpiresAt = time.Now().Add(msg.TransientFor)
-			m.statusExpiresText = msg.Status
-			return m, tea.Tick(msg.TransientFor, func(time.Time) tea.Msg {
-				return statusExpireMsg{status: msg.Status}
-			})
-		}
+	case UpdateMsg:
+		return m.applyHostUpdate(msg.Update)
 
 	case statusExpireMsg:
 		if m.status == msg.status && m.status == m.statusExpiresText && !m.statusExpiresAt.IsZero() && !time.Now().Before(m.statusExpiresAt) {
@@ -490,96 +548,53 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusExpiresText = ""
 		}
 
-	case SetFooterMsg:
-		m.footer = msg.Footer
-
-	case SetBusyMsg:
-		if msg.Busy != m.busy {
-			m.todosCurrent = false
+	case toolPermissionResolvedMsg:
+		if msg.toolID == "" {
+			return m, nil
 		}
-		m.busy = msg.Busy
-		m.clampScroll()
-
-	case SetTodosMsg:
-		m.todos = normalizeTodos(msg.Todos)
-		m.todosCurrent = (m.busy || m.streaming) && hasOutstandingTodos(m.todos)
-		m.clampScroll()
-
-	case ClearMessagesMsg:
-		m.messages = nil
-		m.clearSelection()
-		m.follow = true
-		m.unseen = 0
-		m.rebuild()
-
-	case SetMessagesMsg:
-		m.messages = nil
-		m.clearSelection()
-		for _, message := range msg.Messages {
-			m.appendMessage(message)
+		changed := false
+		for i := range m.entries {
+			node, nodeIndex, ok := toolNodeFromEntry(m.entries[i])
+			if ok && node.Call.ID == msg.toolID {
+				node.Permission = msg.permission
+				setEntryToolNode(&m.entries[i], nodeIndex, node)
+				changed = true
+			}
 		}
-		m.follow = true
-		m.unseen = 0
-		m.rebuild()
-		m.clampScroll()
-
-	case SetPanelMsg:
-		panel := normalizePanel(msg.Panel)
-		m.panel = &panel
-		m.panelOffset = 0
-		m.panelSelected = clamp(panel.Selected, 0, max(0, len(panel.Rows)-1))
-		m.clearSlashMatches()
-		m.clearSelection()
-		m.rebuild()
-		m.ensurePanelSelectionVisible()
-		m.rebuild()
-
-	case RefreshPanelMsg:
-		panel := normalizePanel(msg.Panel)
-		if m.panel == nil || m.panel.ID != panel.ID {
-			m.panel = &panel
-			m.panelOffset = 0
-			m.panelSelected = clamp(panel.Selected, 0, max(0, len(panel.Rows)-1))
-		} else {
-			selected := preserveRowSelection(m.panel.Rows, m.panelSelected, panel.Rows)
-			offset := m.panelOffset
-			m.panel = &panel
-			m.panelSelected = selected
-			m.panelOffset = offset
-		}
-		m.clearSlashMatches()
-		m.clearSelection()
-		m.rebuild()
-		m.ensurePanelSelectionVisible()
-		m.rebuild()
-
-	case ClearPanelMsg:
-		if m.panel != nil && (msg.ID == "" || msg.ID == m.panel.ID) {
-			m.panel = nil
-			m.panelLines = nil
-			m.panelRowLines = nil
-			m.panelOffset = 0
-			m.panelSelected = 0
+		if changed {
 			m.rebuild()
 		}
+		return m, nil
+
+	case toolArtifactLoadedMsg:
+		delete(m.toolArtifactLoading, msg.path)
+		entry := toolArtifactCacheEntry{text: msg.text, err: msg.err}
+		m.toolArtifactCache[msg.path] = entry
+		changed := false
+		for i := range m.entries {
+			node, nodeIndex, ok := toolNodeFromEntry(m.entries[i])
+			if ok && node.Call.ArtifactPath == msg.path {
+				node.Call.ArtifactText = entry.text
+				node.Call.ArtifactErr = entry.err
+				node.Call.ArtifactRead = true
+				setEntryToolNode(&m.entries[i], nodeIndex, node)
+				changed = true
+			}
+		}
+		if changed {
+			m.rebuild()
+		}
+		return m, nil
 
 	case RequestToolApprovalMsg:
-		m.approval = &pendingApproval{request: msg.Request, respond: msg.Respond}
-		m.panel = nil
-		m.panelLines = nil
-		m.panelRowLines = nil
-		m.panelOffset = 0
-		m.panelSelected = 0
-		m.humanPrompt = nil
-		m.humanText = nil
+		m.overlayModel.openApproval(pendingApproval{request: msg.Request, respond: msg.Respond})
 		m.clearSlashMatches()
 		m.follow = true
 		m.unseen = 0
 		m.rebuild()
 
 	case CancelToolApprovalMsg:
-		if m.approval != nil && (msg.ID == "" || msg.ID == m.approval.request.ID) {
-			m.approval = nil
+		if m.overlayModel.cancelApproval(msg.ID) {
 			m.rebuild()
 		}
 
@@ -589,22 +604,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if selected < 0 && len(req.Options) > 0 {
 			selected = 0
 		}
-		m.humanPrompt = &pendingHumanPrompt{request: req, respond: msg.Respond, selected: selected}
-		m.approval = nil
-		m.panel = nil
-		m.panelLines = nil
-		m.panelRowLines = nil
-		m.panelOffset = 0
-		m.panelSelected = 0
-		m.humanText = nil
+		m.overlayModel.openHumanPrompt(pendingHumanPrompt{request: req, respond: msg.Respond, selected: selected})
 		m.clearSlashMatches()
 		m.follow = true
 		m.unseen = 0
 		m.rebuild()
 
 	case CancelHumanPromptMsg:
-		if m.humanPrompt != nil && (msg.ID == "" || msg.ID == m.humanPrompt.request.ID) {
-			m.humanPrompt = nil
+		if m.overlayModel.cancelHumanPrompt(msg.ID) {
 			m.rebuild()
 		}
 
@@ -614,27 +621,143 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if req.Default != "" {
 			input.Insert(req.Default)
 		}
-		m.humanText = &pendingHumanText{request: req, respond: msg.Respond, input: input}
-		m.approval = nil
-		m.humanPrompt = nil
-		m.panel = nil
-		m.panelLines = nil
-		m.panelRowLines = nil
-		m.panelOffset = 0
-		m.panelSelected = 0
+		m.overlayModel.openHumanText(pendingHumanText{request: req, respond: msg.Respond, input: input})
 		m.clearSlashMatches()
 		m.follow = true
 		m.unseen = 0
 		m.rebuild()
 
 	case CancelHumanTextMsg:
-		if m.humanText != nil && (msg.ID == "" || msg.ID == m.humanText.request.ID) {
-			m.humanText = nil
+		if m.overlayModel.cancelHumanText(msg.ID) {
 			m.rebuild()
 		}
 	}
 
 	return m, nil
+}
+
+func (m Model) applyHostUpdate(update Update) (tea.Model, tea.Cmd) {
+	switch update := update.(type) {
+	case AppendEntryUpdate:
+		return m.appendHostEntry(update.Entry)
+	case UpsertEntryUpdate:
+		wasAtBottom := m.atBottom()
+		added := m.upsertEntry(update.Entry)
+		m.rebuild()
+		if wasAtBottom || m.follow {
+			m.follow = true
+			m.unseen = 0
+		} else if added {
+			m.unseen++
+		}
+		m.clampScroll()
+		return m, nil
+	case RemoveEntryUpdate:
+		if m.removeEntry(update.ID) {
+			m.rebuild()
+			m.clampScroll()
+		}
+		return m, nil
+	case ReplaceEntriesUpdate:
+		m.entries = nil
+		m.clearSelection()
+		for _, entry := range update.Entries {
+			m.appendEntry(entry)
+		}
+		m.follow = true
+		m.unseen = 0
+		m.rebuild()
+		m.clampScroll()
+		return m, nil
+	case ClearEntriesUpdate:
+		m.entries = nil
+		m.clearSelection()
+		m.follow = true
+		m.unseen = 0
+		m.rebuild()
+		return m, nil
+	case SetTodoListUpdate:
+		m.todos = normalizeTodos(update.Items)
+		m.todosCurrent = (m.busy || m.streaming) && hasOutstandingTodos(m.todos)
+		m.clampScroll()
+		return m, nil
+	case ShowPanelUpdate:
+		m.openHostPanel(update.Panel, false)
+		return m, nil
+	case RefreshPanelUpdate:
+		m.openHostPanel(update.Panel, true)
+		return m, nil
+	case ClosePanelUpdate:
+		if m.overlayModel.closePanel(update.ID) {
+			m.rebuild()
+		}
+		return m, nil
+	case SetStatusUpdate:
+		m.status = update.Status
+		m.statusExpiresAt = time.Time{}
+		m.statusExpiresText = ""
+		if update.Status != "" && update.TTL > 0 {
+			m.statusExpiresAt = time.Now().Add(update.TTL)
+			m.statusExpiresText = update.Status
+			return m, tea.Tick(update.TTL, func(time.Time) tea.Msg {
+				return statusExpireMsg{status: update.Status}
+			})
+		}
+		return m, nil
+	case SetBusyUpdate:
+		if update.Busy != m.busy {
+			m.todosCurrent = false
+		}
+		m.busy = update.Busy
+		m.clampScroll()
+		return m, nil
+	case SetFooterUpdate:
+		m.footer = update.Footer
+		return m, nil
+	default:
+		return m, nil
+	}
+}
+
+func (m Model) appendHostEntry(entry Entry) (tea.Model, tea.Cmd) {
+	entry = cloneEntry(entry)
+	wasAtBottom := m.atBottom()
+	added := m.appendEntry(entry)
+	m.rebuild()
+	if wasAtBottom || m.follow {
+		m.follow = true
+		m.unseen = 0
+		m.clampScroll()
+	} else {
+		m.follow = false
+		if added {
+			m.unseen++
+		}
+		m.clampScroll()
+	}
+	return m, batchCmds(m.toolPermissionCmd(entry), m.loadExpandedToolArtifactsCmd())
+}
+
+func (m *Model) openHostPanel(panel Panel, refresh bool) {
+	panel = normalizePanel(panel)
+	if refresh {
+		m.overlayModel.refreshPanel(panel)
+	} else {
+		m.overlayModel.openPanel(panel)
+	}
+	m.clearSlashMatches()
+	m.clearSelection()
+	m.rebuild()
+	m.ensurePanelSelectionVisible()
+	m.rebuild()
+}
+
+func (m *Model) insertPastedText(content string) tea.Cmd {
+	m.input.InsertPaste(content)
+	m.clearHistorySelection()
+	cmd := m.refreshSlashMatches()
+	m.rebuild()
+	return cmd
 }
 
 func (m *Model) insertKeyText(text string) {
@@ -713,28 +836,61 @@ func containsHan(s string) bool {
 	return false
 }
 
-func (m *Model) appendMessage(msg Message) bool {
-	if msg.Tool && msg.ToolID != "" {
-		for i := range m.messages {
-			if m.messages[i].Tool && m.messages[i].ToolID == msg.ToolID {
-				m.messages[i] = mergeToolMessage(m.messages[i], msg)
+func (m *Model) appendEntry(entry Entry) bool {
+	entry = normalizeEntry(entry)
+	node, _, isTool := toolNodeFromEntry(entry)
+	if isTool && node.Call.ID != "" {
+		for i := range m.entries {
+			current, nodeIndex, ok := toolNodeFromEntry(m.entries[i])
+			if ok && current.Call.ID == node.Call.ID {
+				setEntryToolNode(&m.entries[i], nodeIndex, mergeToolNode(current, node))
 				return false
 			}
 		}
 	}
-	m.messages = append(m.messages, msg)
+	m.entries = append(m.entries, entry)
 	return true
 }
 
+func (m *Model) upsertEntry(entry Entry) bool {
+	entry = normalizeEntry(entry)
+	if entry.ID != "" {
+		for i := range m.entries {
+			if m.entries[i].ID == entry.ID {
+				m.entries[i] = entry
+				return false
+			}
+		}
+	}
+	return m.appendEntry(entry)
+}
+
+func (m *Model) removeEntry(id string) bool {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return false
+	}
+	for i := range m.entries {
+		if m.entries[i].ID != id {
+			continue
+		}
+		copy(m.entries[i:], m.entries[i+1:])
+		m.entries = m.entries[:len(m.entries)-1]
+		return true
+	}
+	return false
+}
+
 func (m *Model) toggleLatestToolExpansion() bool {
-	for i := len(m.messages) - 1; i >= 0; i-- {
-		if !m.messages[i].Tool || m.messages[i].ToolNoCollapse {
+	for i := len(m.entries) - 1; i >= 0; i-- {
+		node, _, ok := toolNodeFromEntry(m.entries[i])
+		if !ok || node.Call.NoCollapse {
 			continue
 		}
 		// A batched tool folds/unfolds as one group; toggle the group's first
 		// message, whose Expanded flag is the group's collapse state.
 		gi := m.batchGroupStart(i)
-		m.messages[gi].Expanded = !m.messages[gi].Expanded
+		setEntryExpanded(&m.entries[gi], !entryExpanded(m.entries[gi]))
 		return true
 	}
 	return false
@@ -744,14 +900,15 @@ func (m *Model) toggleLatestToolExpansion() bool {
 // the same parallel batch (shared non-empty ToolBatchID). Returns 1 for a
 // single (non-batched) tool or non-tool message.
 func (m *Model) batchGroupLen(idx int) int {
-	id := m.messages[idx].ToolBatchID
-	if id == "" || !m.messages[idx].Tool {
+	node, _, ok := toolNodeFromEntry(m.entries[idx])
+	if !ok || node.Call.BatchID == "" {
 		return 1
 	}
+	id := node.Call.BatchID
 	n := 1
-	for idx+n < len(m.messages) {
-		next := m.messages[idx+n]
-		if !next.Tool || next.ToolBatchID != id {
+	for idx+n < len(m.entries) {
+		next, _, nextOK := toolNodeFromEntry(m.entries[idx+n])
+		if !nextOK || next.Call.BatchID != id {
 			break
 		}
 		n++
@@ -762,84 +919,95 @@ func (m *Model) batchGroupLen(idx int) int {
 // batchGroupStart returns the index of the first message in idx's batch group,
 // or idx itself when it is not part of a batch.
 func (m *Model) batchGroupStart(idx int) int {
-	id := m.messages[idx].ToolBatchID
-	if id == "" {
+	node, _, ok := toolNodeFromEntry(m.entries[idx])
+	if !ok || node.Call.BatchID == "" {
 		return idx
 	}
-	for idx > 0 && m.messages[idx-1].Tool && m.messages[idx-1].ToolBatchID == id {
+	id := node.Call.BatchID
+	for idx > 0 {
+		previous, _, previousOK := toolNodeFromEntry(m.entries[idx-1])
+		if !previousOK || previous.Call.BatchID != id {
+			break
+		}
 		idx--
 	}
 	return idx
 }
 
-func toolGroupBlockFrom(group []Message) ToolGroupBlock {
+func toolGroupBlockFrom(group []Entry) ToolGroupBlock {
 	calls := make([]ToolCall, 0, len(group))
-	for _, msg := range group {
-		calls = append(calls, ToolCall{
-			ID:        msg.ToolID,
-			Name:      msg.ToolName,
-			Summary:   msg.Summary,
-			Detail:    msg.Detail,
-			Input:     msg.ToolInput,
-			Error:     msg.ToolError,
-			Done:      msg.ToolDone,
-			Truncated: msg.ToolTruncated,
-		})
+	for _, entry := range group {
+		node, _, ok := toolNodeFromEntry(entry)
+		if ok {
+			calls = append(calls, node.Call)
+		}
 	}
-	return ToolGroupBlock{Calls: calls, Expanded: group[0].Expanded}
+	return ToolGroupBlock{Calls: calls, Expanded: entryExpanded(group[0])}
 }
 
-func mergeToolMessage(base, update Message) Message {
-	base.Tool = true
-	if update.ToolName != "" {
-		base.ToolName = update.ToolName
+func mergeToolNode(base, update ToolNode) ToolNode {
+	if update.Call.Name != "" {
+		base.Call.Name = update.Call.Name
 	}
-	if update.Summary != "" && (!base.ToolDone || update.ToolDone) {
-		base.Summary = update.Summary
+	if update.Call.Summary != "" && (!base.Call.Done || update.Call.Done) {
+		base.Call.Summary = update.Call.Summary
 	}
-	if update.Detail != "" {
-		base.Detail = update.Detail
+	if update.Call.Detail != "" {
+		base.Call.Detail = update.Call.Detail
 	}
-	if update.ToolInput != "" {
-		base.ToolInput = update.ToolInput
+	if update.Call.Input != "" {
+		base.Call.Input = update.Call.Input
 	}
-	if update.ToolOutput != "" {
-		base.ToolOutput = update.ToolOutput
+	if update.Call.Output != "" {
+		base.Call.Output = update.Call.Output
 	}
-	if update.ToolArtifactID != "" {
-		base.ToolArtifactID = update.ToolArtifactID
+	if update.Permission != ToolPermissionUnknown {
+		base.Permission = update.Permission
 	}
-	if update.ToolArtifactPath != "" {
-		if base.ToolArtifactPath != "" && base.ToolArtifactPath != update.ToolArtifactPath {
-			base.ToolArtifactText = ""
-			base.ToolArtifactErr = ""
-			base.ToolArtifactRead = false
+	if update.Call.ArtifactID != "" {
+		base.Call.ArtifactID = update.Call.ArtifactID
+	}
+	if update.Call.ArtifactPath != "" {
+		if base.Call.ArtifactPath != "" && base.Call.ArtifactPath != update.Call.ArtifactPath {
+			base.Call.ArtifactText = ""
+			base.Call.ArtifactErr = ""
+			base.Call.ArtifactRead = false
 		}
-		base.ToolArtifactPath = update.ToolArtifactPath
+		base.Call.ArtifactPath = update.Call.ArtifactPath
 	}
-	if update.ToolArtifactRead {
-		base.ToolArtifactText = update.ToolArtifactText
-		base.ToolArtifactErr = update.ToolArtifactErr
-		base.ToolArtifactRead = true
+	if update.Call.ArtifactRead {
+		base.Call.ArtifactText = update.Call.ArtifactText
+		base.Call.ArtifactErr = update.Call.ArtifactErr
+		base.Call.ArtifactRead = true
 	}
-	base.ToolTruncated = base.ToolTruncated || update.ToolTruncated
-	if update.ToolBatchSize > 0 {
-		base.ToolBatchSize = update.ToolBatchSize
+	base.Call.Truncated = base.Call.Truncated || update.Call.Truncated
+	if update.Call.BatchSize > 0 {
+		base.Call.BatchSize = update.Call.BatchSize
 	}
-	if update.ToolBatchID != "" {
-		base.ToolBatchID = update.ToolBatchID
+	if update.Call.BatchID != "" {
+		base.Call.BatchID = update.Call.BatchID
 	}
-	if update.ToolCode != "" {
-		base.ToolCode = update.ToolCode
+	if update.Call.Code != "" {
+		base.Call.Code = update.Call.Code
 	}
-	if update.ToolLanguage != "" {
-		base.ToolLanguage = update.ToolLanguage
+	if update.Call.Language != "" {
+		base.Call.Language = update.Call.Language
 	}
-	base.ToolError = base.ToolError || update.ToolError
-	base.ToolDone = base.ToolDone || update.ToolDone
-	base.ToolNoCollapse = base.ToolNoCollapse || update.ToolNoCollapse
+	base.Call.Error = base.Call.Error || update.Call.Error
+	base.Call.Done = base.Call.Done || update.Call.Done
+	base.Call.NoCollapse = base.Call.NoCollapse || update.Call.NoCollapse
 	base.Expanded = base.Expanded || update.Expanded
 	return base
+}
+
+func normalizeEntry(entry Entry) Entry {
+	entry = cloneEntry(entry)
+	if entry.ID == "" {
+		if node, _, ok := toolNodeFromEntry(entry); ok {
+			entry.ID = strings.TrimSpace(node.Call.ID)
+		}
+	}
+	return entry
 }
 
 func (m Model) View() tea.View {
@@ -947,40 +1115,10 @@ func (m *Model) jumpToBottom() {
 }
 
 func (m *Model) rebuild() {
-	m.hydrateExpandedToolArtifacts()
 	m.lines, m.gutters, m.headers = m.buildTranscript()
 	m.panelLines = m.buildPanelLines()
 	m.clampSelection()
 	m.clampScroll()
-}
-
-func (m *Model) hydrateExpandedToolArtifacts() {
-	if m.toolArtifactCache == nil {
-		m.toolArtifactCache = make(map[string]toolArtifactCacheEntry)
-	}
-	for i := range m.messages {
-		msg := &m.messages[i]
-		if !msg.Tool || msg.ToolArtifactRead {
-			continue
-		}
-		path := strings.TrimSpace(msg.ToolArtifactPath)
-		if path == "" || (!msg.Expanded && !msg.ToolNoCollapse) {
-			continue
-		}
-		entry, ok := m.toolArtifactCache[path]
-		if !ok {
-			data, err := os.ReadFile(path)
-			if err != nil {
-				entry.err = err.Error()
-			} else {
-				entry.text = string(data)
-			}
-			m.toolArtifactCache[path] = entry
-		}
-		msg.ToolArtifactText = entry.text
-		msg.ToolArtifactErr = entry.err
-		msg.ToolArtifactRead = true
-	}
 }
 
 func (m *Model) gutterAt(li int) int {
@@ -1005,7 +1143,7 @@ func (m *Model) clampScroll() {
 func (m *Model) buildTranscript() ([]string, []int, map[int]int) {
 	width := max(m.width, 1)
 	contentWidth := max(1, width-2)
-	ctx := RenderContext{ContentWidth: contentWidth, Markdown: markdownRenderer(contentWidth), Hooks: m.hooks}
+	ctx := RenderContext{ContentWidth: contentWidth, Markdown: markdownRenderer(contentWidth)}
 	var lines []string
 	var gutters []int
 	headers := map[int]int{}
@@ -1021,17 +1159,17 @@ func (m *Model) buildTranscript() ([]string, []int, map[int]int) {
 			lines = append(lines, line)
 			gutters = append(gutters, 0)
 		}
-		if len(m.messages) > 0 || m.streaming {
+		if len(m.entries) > 0 || m.streaming {
 			addGap()
 		}
 	}
 
-	for idx := 0; idx < len(m.messages); {
-		msg := m.messages[idx]
+	for idx := 0; idx < len(m.entries); {
+		entry := m.entries[idx]
 		startLine := len(lines)
 
 		if groupLen := m.batchGroupLen(idx); groupLen > 1 {
-			block := toolGroupBlockFrom(m.messages[idx : idx+groupLen])
+			block := toolGroupBlockFrom(m.entries[idx : idx+groupLen])
 			for offset, line := range block.Render(ctx).Lines {
 				// Only the first (header) line is a header: clicking it toggles
 				// the whole group via the group's first message.
@@ -1042,22 +1180,25 @@ func (m *Model) buildTranscript() ([]string, []int, map[int]int) {
 				gutters = append(gutters, line.Gutter)
 			}
 			idx += groupLen
-			if idx < len(m.messages) {
+			if idx < len(m.entries) {
 				addGap()
 			}
 			continue
 		}
 
-		rendered := m.blockFromMessage(msg).Render(ctx).Lines
+		rendered := m.blockFromEntry(entry).Render(ctx).Lines
+		tool, _, hasTool := toolNodeFromEntry(entry)
+		_, _, hasThinking := thinkingNodeFromEntry(entry)
+		expanded := entryExpanded(entry)
 		for offset, line := range rendered {
-			if (msg.Tool || msg.Thinking) && !msg.ToolNoCollapse && (offset == 0 || msg.Expanded) {
+			if (hasThinking || hasTool) && !tool.Call.NoCollapse && (offset == 0 || expanded) {
 				headers[startLine+offset] = idx
 			}
 			lines = append(lines, line.Text)
 			gutters = append(gutters, line.Gutter)
 		}
 		idx++
-		if idx < len(m.messages) {
+		if idx < len(m.entries) {
 			addGap()
 		}
 	}
@@ -1334,13 +1475,13 @@ func panelRowLine(row PanelRow, idx, selected, width int) string {
 	return line
 }
 
-func (m *Model) blockFromMessage(msg Message) Block {
+func (m *Model) blockFromEntry(entry Entry) Block {
 	for _, factory := range m.blockFactories {
-		if block, ok := factory(msg); ok {
+		if block, ok := factory(entry); ok {
 			return block
 		}
 	}
-	return defaultBlockFromMessage(msg)
+	return defaultBlockFromEntry(entry)
 }
 
 func (m *Model) render() string {
@@ -1547,10 +1688,18 @@ func (m *Model) todoPanelLines() []string {
 	return (TodoBlock{Items: m.todos, MaxRows: maxRows}).RenderWidth(m.width)
 }
 
-func (m *Model) updateSlashMatches() {
-	if m.slashCommandsProvider != nil {
-		m.slashCommands = normalizeSlashCommands(m.slashCommandsProvider())
+func (m *Model) refreshSlashMatches() tea.Cmd {
+	if m.slashCommandsProvider == nil {
+		m.updateSlashMatches()
+		return nil
 	}
+	provider := m.slashCommandsProvider
+	return func() tea.Msg {
+		return slashCommandsLoadedMsg{commands: provider()}
+	}
+}
+
+func (m *Model) updateSlashMatches() {
 	matches := matchSlashCommands(m.input.Value, m.slashCommands)
 	if len(matches) == 0 {
 		m.clearSlashMatches()
@@ -1584,23 +1733,21 @@ func (m *Model) shouldArrowKeyScroll() bool {
 	return m.arrowKeysScroll && strings.TrimSpace(m.input.ExpandedValue()) == "" && len(m.inputHistory) == 0
 }
 
-func (m *Model) appendInputHistory(line string) {
+func (m *Model) appendInputHistory(line string) tea.Cmd {
 	line = strings.TrimSpace(line)
 	if line == "" {
-		return
+		return nil
 	}
 	m.inputHistory = append(m.inputHistory, line)
 	m.inputHistory = trimInputHistory(m.inputHistory)
 	m.historyIdx = len(m.inputHistory)
 	m.historyHold = ""
-	if m.hooks.InputHistoryChanged != nil {
-		m.hooks.InputHistoryChanged(append([]string(nil), m.inputHistory...))
-	}
+	return m.emitIntent(InputHistoryChangedIntent{History: append([]string(nil), m.inputHistory...)})
 }
 
-func (m *Model) navigateInputHistory(delta int) {
+func (m *Model) navigateInputHistory(delta int) tea.Cmd {
 	if len(m.inputHistory) == 0 {
-		return
+		return nil
 	}
 	if m.historyIdx == len(m.inputHistory) {
 		m.historyHold = m.input.ExpandedValue()
@@ -1614,7 +1761,7 @@ func (m *Model) navigateInputHistory(delta int) {
 		m.input.Pastes = nil
 	}
 	m.input.Cursor = m.input.Len()
-	m.updateSlashMatches()
+	return m.refreshSlashMatches()
 }
 
 func (m *Model) clearHistorySelection() {
@@ -1988,11 +2135,13 @@ func normalizePanel(panel Panel) Panel {
 		panel.Rows[i].Detail = strings.TrimSpace(panel.Rows[i].Detail)
 		panel.Rows[i].Value = strings.TrimSpace(panel.Rows[i].Value)
 		panel.Rows[i].Command = strings.TrimSpace(panel.Rows[i].Command)
+		panel.Rows[i].Action.ID = strings.TrimSpace(panel.Rows[i].Action.ID)
 	}
 	for i := range panel.Shortcuts {
 		panel.Shortcuts[i].Key = strings.TrimSpace(panel.Shortcuts[i].Key)
 		panel.Shortcuts[i].Label = strings.TrimSpace(panel.Shortcuts[i].Label)
 		panel.Shortcuts[i].Command = strings.TrimSpace(panel.Shortcuts[i].Command)
+		panel.Shortcuts[i].Action.ID = strings.TrimSpace(panel.Shortcuts[i].Action.ID)
 	}
 	panel.Selected = clamp(panel.Selected, 0, max(0, len(panel.Rows)-1))
 	return panel
@@ -2006,10 +2155,7 @@ func (m Model) handlePanelKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		m.closePanel()
 		m.rebuild()
-		if panelID != "" && m.hooks.PanelClosed != nil {
-			m.hooks.PanelClosed(panelID)
-		}
-		return m, nil
+		return m, m.emitIntent(PanelClosedIntent{PanelID: panelID})
 	}
 	if m.panel != nil && len(m.panel.Shortcuts) > 0 {
 		if shortcut, ok := panelShortcutForKey(m.panel.Shortcuts, msg); ok {
@@ -2019,14 +2165,17 @@ func (m Model) handlePanelKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				Row: PanelRow{
 					Label:   shortcut.Label,
 					Command: shortcut.Command,
+					Action:  shortcut.Action,
 				},
 				Command: strings.TrimSpace(shortcut.Command),
+				Action:  shortcut.Action,
 			}
-			// Leave the panel showing until the hook replaces or clears it via
-			// Set/Refresh/ClearPanelMsg — closing eagerly here forces a render
+			// Leave the panel showing until the host replaces or clears it via
+			// panel updates — closing eagerly here forces a render
 			// with no panel in between, which flickers on every navigation.
-			if m.hooks.PanelAction != nil {
-				m.hooks.PanelAction(action)
+			intent := PanelActionIntent{Action: action}
+			if m.handlesIntent(intent) {
+				return m, m.emitIntent(intent)
 			} else {
 				m.closePanel()
 				m.rebuild()
@@ -2053,11 +2202,13 @@ func (m Model) handlePanelKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				Index:   m.panelSelected,
 				Row:     row,
 				Command: strings.TrimSpace(row.Command),
+				Action:  row.Action,
 			}
 			// See the shortcut case above: don't close eagerly, or every
 			// drill-down flickers through a no-panel frame.
-			if m.hooks.PanelAction != nil {
-				m.hooks.PanelAction(action)
+			intent := PanelActionIntent{Action: action}
+			if m.handlesIntent(intent) {
+				return m, m.emitIntent(intent)
 			} else {
 				m.closePanel()
 				m.rebuild()
@@ -2089,7 +2240,8 @@ func panelShortcutForKey(shortcuts []PanelShortcut, msg tea.KeyPressMsg) (PanelS
 		return PanelShortcut{}, false
 	}
 	for _, shortcut := range shortcuts {
-		if strings.EqualFold(strings.TrimSpace(shortcut.Key), text) && strings.TrimSpace(shortcut.Command) != "" {
+		if strings.EqualFold(strings.TrimSpace(shortcut.Key), text) &&
+			(strings.TrimSpace(shortcut.Command) != "" || strings.TrimSpace(shortcut.Action.ID) != "") {
 			return shortcut, true
 		}
 	}
@@ -2097,11 +2249,7 @@ func panelShortcutForKey(shortcuts []PanelShortcut, msg tea.KeyPressMsg) (PanelS
 }
 
 func (m *Model) closePanel() {
-	m.panel = nil
-	m.panelLines = nil
-	m.panelRowLines = nil
-	m.panelOffset = 0
-	m.panelSelected = 0
+	m.overlayModel.closePanel("")
 }
 
 func (m *Model) ensurePanelSelectionVisible() {
@@ -2125,17 +2273,17 @@ func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	if isEscKey(msg) {
-		return m.resolveApproval(ToolApprovalDeny), nil
+		return m.resolveApproval(ToolApprovalDeny)
 	}
 	switch msg.String() {
 	case "y", "Y":
-		return m.resolveApproval(ToolApprovalAllow), nil
+		return m.resolveApproval(ToolApprovalAllow)
 	case "a", "A":
-		return m.resolveApproval(ToolApprovalAllowAlways), nil
+		return m.resolveApproval(ToolApprovalAllowAlways)
 	case "n", "N":
-		return m.resolveApproval(ToolApprovalDeny), nil
+		return m.resolveApproval(ToolApprovalDeny)
 	case "d", "D":
-		return m.resolveApproval(ToolApprovalDenyAlways), nil
+		return m.resolveApproval(ToolApprovalDenyAlways)
 	}
 	return m, nil
 }
@@ -2145,7 +2293,7 @@ func (m Model) handleHumanPromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	if isEscKey(msg) {
-		return m.resolveHumanPrompt(m.defaultHumanPromptValue()), nil
+		return m.resolveHumanPrompt(m.defaultHumanPromptValue())
 	}
 	if m.humanPrompt != nil && len(m.humanPrompt.request.Options) > 0 {
 		switch msg.String() {
@@ -2162,12 +2310,12 @@ func (m Model) handleHumanPromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	if msg.Code == tea.KeyEnter {
-		return m.resolveHumanPrompt(m.selectedHumanPromptValue()), nil
+		return m.resolveHumanPrompt(m.selectedHumanPromptValue())
 	}
 	if idx, ok := humanPromptOptionIndex(msg); ok && m.humanPrompt != nil {
 		options := m.humanPrompt.request.Options
 		if idx >= 0 && idx < len(options) {
-			return m.resolveHumanPrompt(options[idx].Value), nil
+			return m.resolveHumanPrompt(options[idx].Value)
 		}
 	}
 	return m, nil
@@ -2198,7 +2346,7 @@ func (m Model) handleHumanTextKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	if isEscKey(msg) {
-		return m.resolveHumanText(""), nil
+		return m.resolveHumanText("")
 	}
 	switch {
 	case msg.Code == tea.KeyEnter:
@@ -2208,7 +2356,7 @@ func (m Model) handleHumanTextKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.rebuild()
 			return m, nil
 		}
-		return m.resolveHumanText(value), nil
+		return m.resolveHumanText(value)
 	case msg.Code == tea.KeyLeft, msg.String() == "ctrl+b":
 		m.humanText.input.MoveLeft()
 	case msg.Code == tea.KeyRight, msg.String() == "ctrl+f":
@@ -2230,17 +2378,11 @@ func (m Model) handleHumanTextKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) resolveHumanText(value string) Model {
+func (m Model) resolveHumanText(value string) (tea.Model, tea.Cmd) {
 	if m.humanText == nil {
-		return m
+		return m, nil
 	}
 	prompt := m.humanText
-	if prompt.respond != nil {
-		select {
-		case prompt.respond <- value:
-		default:
-		}
-	}
 	m.humanText = nil
 	if strings.TrimSpace(value) == "" {
 		m.status = "input cancelled"
@@ -2248,7 +2390,7 @@ func (m Model) resolveHumanText(value string) Model {
 		m.status = "input received"
 	}
 	m.rebuild()
-	return m
+	return m, responseCmd(prompt.respond, value)
 }
 
 func humanPromptOptionIndex(msg tea.KeyPressMsg) (int, bool) {
@@ -2305,35 +2447,26 @@ func isEscKey(msg tea.KeyPressMsg) bool {
 	return msg.String() == "esc" || key.Text == "\x1b" || key.Code == tea.KeyEsc || key.Code == tea.KeyEscape || (key.Code == '[' && key.Mod.Contains(tea.ModCtrl))
 }
 
-func (m Model) resolveApproval(decision ToolApprovalDecision) Model {
+func (m Model) resolveApproval(decision ToolApprovalDecision) (tea.Model, tea.Cmd) {
 	if m.approval == nil {
-		return m
+		return m, nil
 	}
 	approval := m.approval
-	if approval.respond != nil {
-		go func() {
-			approval.respond <- decision
-		}()
-	}
-	if m.hooks.ToolApprovalDecision != nil {
-		m.hooks.ToolApprovalDecision(ToolApprovalResult{Request: approval.request, Decision: decision})
-	}
+	result := ToolApprovalResult{Request: approval.request, Decision: decision}
 	m.status = "approval: " + string(decision)
 	m.approval = nil
 	m.rebuild()
-	return m
+	return m, batchCmds(
+		responseCmd(approval.respond, decision),
+		m.emitIntent(ToolApprovalDecisionIntent{Result: result}),
+	)
 }
 
-func (m Model) resolveHumanPrompt(value string) Model {
+func (m Model) resolveHumanPrompt(value string) (tea.Model, tea.Cmd) {
 	if m.humanPrompt == nil {
-		return m
+		return m, nil
 	}
 	prompt := m.humanPrompt
-	if prompt.respond != nil {
-		go func() {
-			prompt.respond <- value
-		}()
-	}
 	if value == "" {
 		m.status = "input cancelled"
 	} else {
@@ -2341,7 +2474,7 @@ func (m Model) resolveHumanPrompt(value string) Model {
 	}
 	m.humanPrompt = nil
 	m.rebuild()
-	return m
+	return m, responseCmd(prompt.respond, value)
 }
 
 func (m *Model) startStream() {
@@ -2353,7 +2486,10 @@ func (m *Model) startStream() {
 func (m *Model) finishStream() {
 	m.streaming = false
 	m.todosCurrent = false
-	m.messages = append(m.messages, Message{Role: RoleAssistant, Text: m.streamReply})
+	m.entries = append(m.entries, Entry{
+		Role:  RoleAssistant,
+		Nodes: []Node{MarkdownNode{Text: m.streamReply}},
+	})
 	m.streamRunes, m.streamIdx = nil, 0
 }
 

@@ -7,16 +7,17 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-func TestCustomBlockFactoryOverridesMessageRendering(t *testing.T) {
+func TestCustomBlockFactoryOverridesEntryRendering(t *testing.T) {
 	m := NewModel(Options{
 		Width:  40,
 		Height: 8,
-		InitialMessages: []Message{
-			{Role: RoleAssistant, Text: "original"},
+		InitialEntries: []Entry{
+			{Role: RoleAssistant, Nodes: []Node{TextNode{Text: "original"}}},
 		},
-		BlockFactories: []MessageBlockFactory{
-			func(msg Message) (Block, bool) {
-				return TextBlock{Marker: "X ", Text: "factory " + msg.Text}, true
+		BlockFactories: []EntryBlockFactory{
+			func(entry Entry) (Block, bool) {
+				text := entry.Nodes[0].(TextNode).Text
+				return TextBlock{Marker: "X ", Text: "factory " + text}, true
 			},
 		},
 	})
@@ -32,12 +33,12 @@ func TestDefaultAssistantMarkerIsWhite(t *testing.T) {
 	}
 }
 
-func TestPlainMessageRendersWithoutMarker(t *testing.T) {
+func TestPlainEntryRendersWithoutMarker(t *testing.T) {
 	m := NewModel(Options{
 		Width:  40,
 		Height: 8,
-		InitialMessages: []Message{
-			{Role: RoleAssistant, Text: "✓ Completed (2s)", Preformatted: true, Plain: true},
+		InitialEntries: []Entry{
+			{Role: RoleAssistant, Nodes: []Node{TextNode{Text: "✓ Completed (2s)"}}, Plain: true},
 		},
 	})
 	got := strings.Join(m.Lines(), "\n")

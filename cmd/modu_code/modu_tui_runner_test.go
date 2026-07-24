@@ -20,8 +20,152 @@ import (
 	"github.com/openmodu/modu/pkg/types"
 )
 
+type presentedEntry struct {
+	ID               string
+	Role             modutui.Role
+	Text             string
+	Nodes            []modutui.Node
+	Thinking         bool
+	Tool             bool
+	ToolID           string
+	ToolName         string
+	Summary          string
+	Detail           string
+	ToolInput        string
+	ToolOutput       string
+	ToolArtifactID   string
+	ToolArtifactPath string
+	ToolTruncated    bool
+	ToolBatchSize    int
+	ToolBatchID      string
+	ToolCode         string
+	ToolLanguage     string
+	ToolError        bool
+	ToolDone         bool
+	ToolNoCollapse   bool
+	Expanded         bool
+	Preformatted     bool
+	Plain            bool
+}
+
+func presentedMessagesFromAgentMessage(message types.AgentMessage, cwd ...string) []presentedEntry {
+	path := ""
+	if len(cwd) > 0 {
+		path = cwd[0]
+	}
+	return presentedMessagesFromEntries(newModuTUIEventPresenter().AgentMessage(message, path))
+}
+
+func presentedMessagesFromAgentEvent(event types.Event, cwd ...string) []presentedEntry {
+	path := ""
+	if len(cwd) > 0 {
+		path = cwd[0]
+	}
+	return presentedMessagesFromEntries(newModuTUIEventPresenter().AgentEvent(event, path))
+}
+
+func presentedMessageFromSessionEvent(event coding_agent.SessionEvent) (presentedEntry, bool) {
+	entry, ok := newModuTUIEventPresenter().SessionEvent(event)
+	if !ok {
+		return presentedEntry{}, false
+	}
+	messages := presentedMessagesFromEntries([]modutui.Entry{entry})
+	return messages[0], true
+}
+
+func presentedMessagesFromEntries(entries []modutui.Entry) []presentedEntry {
+	out := make([]presentedEntry, 0, len(entries))
+	for _, entry := range entries {
+		message := presentedEntry{ID: entry.ID, Role: entry.Role, Plain: entry.Plain, Nodes: entry.Nodes}
+		if len(entry.Nodes) == 1 {
+			switch node := entry.Nodes[0].(type) {
+			case modutui.TextNode:
+				message.Text = node.Text
+				message.Preformatted = true
+			case modutui.MarkdownNode:
+				message.Text = node.Text
+			case modutui.ThinkingNode:
+				message.Text = node.Text
+				message.Thinking = true
+				message.Expanded = node.Expanded
+			case modutui.ToolNode:
+				call := node.Call
+				message.Tool = true
+				message.ToolID = call.ID
+				message.ToolName = call.Name
+				message.Summary = call.Summary
+				message.Detail = call.Detail
+				message.ToolInput = call.Input
+				message.ToolOutput = call.Output
+				message.ToolArtifactID = call.ArtifactID
+				message.ToolArtifactPath = call.ArtifactPath
+				message.ToolTruncated = call.Truncated
+				message.ToolBatchSize = call.BatchSize
+				message.ToolBatchID = call.BatchID
+				message.ToolCode = call.Code
+				message.ToolLanguage = call.Language
+				message.ToolError = call.Error
+				message.ToolDone = call.Done
+				message.ToolNoCollapse = call.NoCollapse
+				message.Expanded = node.Expanded
+			}
+		}
+		out = append(out, message)
+	}
+	return out
+}
+
+func moduTUIStandardUpdate(message tea.Msg) (modutui.Update, bool) {
+	envelope, ok := message.(modutui.UpdateMsg)
+	if !ok {
+		return nil, false
+	}
+	return envelope.Update, true
+}
+
+func moduTUIAppendedMessage(message tea.Msg) (presentedEntry, bool) {
+	update, ok := moduTUIStandardUpdate(message)
+	if !ok {
+		return presentedEntry{}, false
+	}
+	appendUpdate, ok := update.(modutui.AppendEntryUpdate)
+	if !ok {
+		return presentedEntry{}, false
+	}
+	messages := presentedMessagesFromEntries([]modutui.Entry{appendUpdate.Entry})
+	return messages[0], true
+}
+
+func executeModuTUITestCommand(
+	t *testing.T,
+	ctx context.Context,
+	line string,
+	session *coding_agent.CodingSession,
+	model *types.Model,
+	hooks CommandHooks,
+	client modutui.Client,
+	keepAgentBusy func() bool,
+	startConfigWizard func(),
+	startModelSelect func(),
+) {
+	t.Helper()
+	executor, err := newModuTUICommandExecutor(moduTUICommandExecutorOptions{
+		Session:          session,
+		Model:            model,
+		Hooks:            hooks,
+		Client:           client,
+		KeepAgentBusy:    keepAgentBusy,
+		StartConfig:      startConfigWizard,
+		StartModelSelect: startModelSelect,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor.Execute(ctx, line)
+}
+
 func TestMessagesFromAssistantMessageIncludesTextAndToolCall(t *testing.T) {
-	messages := messagesFromAgentMessage(types.AssistantMessage{
+	messages := presentedMessagesFromAgentMessage(types.AssistantMessage{
 		Role: types.RoleAssistant,
 		Content: []types.ContentBlock{
 			&types.TextContent{Type: "text", Text: "hello"},
@@ -41,7 +185,7 @@ func TestMessagesFromAssistantMessageIncludesTextAndToolCall(t *testing.T) {
 }
 
 func TestMessagesFromAssistantMessageGroupsThinkingAtTop(t *testing.T) {
-	messages := messagesFromAgentMessage(types.AssistantMessage{
+	messages := presentedMessagesFromAgentMessage(types.AssistantMessage{
 		Role: types.RoleAssistant,
 		Content: []types.ContentBlock{
 			&types.TextContent{Type: "text", Text: "final answer"},
@@ -76,7 +220,7 @@ func TestMessagesFromAgentEventSkipsUserMessageEnd(t *testing.T) {
 			Content: "hello",
 		},
 	}
-	if got := messagesFromAgentEvent(user); len(got) != 0 {
+	if got := presentedMessagesFromAgentEvent(user); len(got) != 0 {
 		t.Fatalf("user message_end should not render because submit already appended it: %#v", got)
 	}
 
@@ -87,9 +231,57 @@ func TestMessagesFromAgentEventSkipsUserMessageEnd(t *testing.T) {
 			Content: []types.ContentBlock{&types.TextContent{Type: "text", Text: "reply"}},
 		},
 	}
-	got := messagesFromAgentEvent(assistant)
+	got := presentedMessagesFromAgentEvent(assistant)
 	if len(got) != 1 || got[0].Text != "reply" {
 		t.Fatalf("assistant message_end should render, got %#v", got)
+	}
+}
+
+func TestModuTUITranscriptEntriesUseEventPresenterForThinkingAndTools(t *testing.T) {
+	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
+		Cwd:       t.TempDir(),
+		AgentDir:  t.TempDir(),
+		Model:     &types.Model{ID: "test", Name: "Test", ProviderID: "test"},
+		GetAPIKey: func(string) (string, error) { return "", nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.GetAgent().AppendMessage(types.AssistantMessage{
+		Role: types.RoleAssistant,
+		Content: []types.ContentBlock{
+			&types.ThinkingContent{Type: "thinking", Thinking: "inspect"},
+			&types.ToolCallContent{
+				Type:      "toolCall",
+				ID:        "call-1",
+				Name:      "read",
+				Arguments: map[string]any{"path": "main.go"},
+			},
+		},
+	})
+	session.GetAgent().AppendMessage(types.ToolResultMessage{
+		Role:       types.RoleToolResult,
+		ToolCallID: "call-1",
+		ToolName:   "read",
+		Content: []types.ContentBlock{
+			&types.TextContent{Type: "text", Text: "1\tpackage main\n"},
+		},
+	})
+
+	entries := moduTUITranscriptEntries(session, newModuTUIEventPresenter())
+	if len(entries) != 3 {
+		t.Fatalf("entries = %#v", entries)
+	}
+	if _, ok := entries[0].Nodes[0].(modutui.ThinkingNode); !ok {
+		t.Fatalf("thinking entry = %#v", entries[0])
+	}
+	start, ok := entries[1].Nodes[0].(modutui.ToolNode)
+	if !ok || entries[1].ID != "call-1" || start.Call.Name != "read" || start.Call.Done {
+		t.Fatalf("tool start entry = %#v", entries[1])
+	}
+	end, ok := entries[2].Nodes[0].(modutui.ToolNode)
+	if !ok || entries[2].ID != "call-1" || !end.Call.Done || end.Call.Summary != "Read 1 line" {
+		t.Fatalf("tool result entry = %#v", entries[2])
 	}
 }
 
@@ -99,10 +291,10 @@ func (fakeDebounceTimer) Stop() bool { return true }
 
 func TestModuTUIAgentDurationTrackerEmitsSingleTotalAcrossRounds(t *testing.T) {
 	now := time.Unix(100, 0)
-	var emitted []modutui.Message
+	var emitted []modutui.Entry
 	tracker := newModuTUIAgentDurationTracker(
 		func() time.Time { return now },
-		func(msg modutui.Message) { emitted = append(emitted, msg) },
+		func(entry modutui.Entry) { emitted = append(emitted, entry) },
 	)
 	var pending func()
 	tracker.schedule = func(_ time.Duration, f func()) moduTUIDebounceTimer {
@@ -146,11 +338,15 @@ func TestModuTUIAgentDurationTrackerEmitsSingleTotalAcrossRounds(t *testing.T) {
 	if len(emitted) != 1 {
 		t.Fatalf("want one completion message, got %d: %#v", len(emitted), emitted)
 	}
-	msg := emitted[0]
-	if msg.Role != modutui.RoleAssistant || !msg.Preformatted || !msg.Plain {
-		t.Fatalf("completion message should be assistant preformatted plain text: %#v", msg)
+	entry := emitted[0]
+	if entry.Role != modutui.RoleAssistant || !entry.Plain {
+		t.Fatalf("completion message should be assistant plain text: %#v", entry)
 	}
-	if got, want := msg.Text, "✓ Completed (1min 07s)"; got != want {
+	node, ok := entry.Nodes[0].(modutui.TextNode)
+	if !ok {
+		t.Fatalf("completion node = %T, want TextNode", entry.Nodes[0])
+	}
+	if got, want := node.Text, "✓ Completed (1min 07s)"; got != want {
 		t.Fatalf("completion text = %q, want %q", got, want)
 	}
 
@@ -177,7 +373,7 @@ func TestFormatModuTUIActivityDuration(t *testing.T) {
 }
 
 func TestMessageFromSessionEventIncludesPermissionDenied(t *testing.T) {
-	msg, ok := messageFromSessionEvent(coding_agent.SessionEvent{
+	msg, ok := presentedMessageFromSessionEvent(coding_agent.SessionEvent{
 		Type:     coding_agent.SessionEventPermissionDeny,
 		ToolName: "bash",
 		Reason:   "dangerous command",
@@ -191,7 +387,7 @@ func TestMessageFromSessionEventIncludesPermissionDenied(t *testing.T) {
 }
 
 func TestMessageFromSessionEventIncludesContextCompactDivider(t *testing.T) {
-	msg, ok := messageFromSessionEvent(coding_agent.SessionEvent{
+	msg, ok := presentedMessageFromSessionEvent(coding_agent.SessionEvent{
 		Type: coding_agent.SessionEventCompactionDone,
 	})
 	if !ok {
@@ -203,7 +399,7 @@ func TestMessageFromSessionEventIncludesContextCompactDivider(t *testing.T) {
 }
 
 func TestMessagesFromAgentEventFormatsBashToolAsSingleClaudeStyleBlock(t *testing.T) {
-	start := messagesFromAgentEvent(types.Event{
+	start := presentedMessagesFromAgentEvent(types.Event{
 		Type:       types.EventTypeToolExecutionStart,
 		ToolCallID: "call-1",
 		ToolName:   "bash",
@@ -216,7 +412,7 @@ func TestMessagesFromAgentEventFormatsBashToolAsSingleClaudeStyleBlock(t *testin
 		t.Fatalf("unexpected start message: %#v", got)
 	}
 
-	end := messagesFromAgentEvent(types.Event{
+	end := presentedMessagesFromAgentEvent(types.Event{
 		Type:       types.EventTypeToolExecutionEnd,
 		ToolCallID: "call-1",
 		ToolName:   "bash",
@@ -231,7 +427,7 @@ func TestMessagesFromAgentEventFormatsBashToolAsSingleClaudeStyleBlock(t *testin
 }
 
 func TestMessagesFromAgentEventCarriesToolArtifactAndBatchSize(t *testing.T) {
-	msgs := messagesFromAgentEvent(types.Event{
+	msgs := presentedMessagesFromAgentEvent(types.Event{
 		Type:       types.EventTypeToolExecutionEnd,
 		ToolCallID: "call-1",
 		ToolName:   "bash",
@@ -285,20 +481,20 @@ func TestRunModuTUISlashToolOutputReadsArtifact(t *testing.T) {
 	})
 
 	var sent []tea.Msg
-	runModuTUISlash(context.Background(), "/tool-output call-1", session, session.GetModel(), CommandHooks{}, func(msg tea.Msg) {
+	executeModuTUITestCommand(t, context.Background(), "/tool-output call-1", session, session.GetModel(), CommandHooks{}, newModuTUIClient(func(msg tea.Msg) {
 		sent = append(sent, msg)
-	}, nil, nil, nil)
+	}), nil, nil, nil)
 
-	var got *modutui.Message
+	var got *presentedEntry
 	for _, msg := range sent {
-		if appendMsg, ok := msg.(modutui.AppendMessageMsg); ok {
-			next := appendMsg.Message
+		if appended, ok := moduTUIAppendedMessage(msg); ok {
+			next := appended
 			got = &next
 			break
 		}
 	}
 	if got == nil {
-		t.Fatalf("expected AppendMessageMsg in %#v", sent)
+		t.Fatalf("expected AppendEntryUpdate in %#v", sent)
 	}
 	if !got.Preformatted || !strings.Contains(got.Text, "full artifact output") || strings.Contains(got.Text, "preview only") {
 		t.Fatalf("/tool-output should render artifact content, got %#v", got)
@@ -307,7 +503,7 @@ func TestRunModuTUISlashToolOutputReadsArtifact(t *testing.T) {
 
 func TestMessagesFromAgentEventFormatsReadToolLikeClaudeCode(t *testing.T) {
 	path := "/Users/ityike/Code/go/src/github.com/openmodu/modu/cmd/tuipoc2/main.go"
-	start := messagesFromAgentEvent(types.Event{
+	start := presentedMessagesFromAgentEvent(types.Event{
 		Type:       types.EventTypeToolExecutionStart,
 		ToolCallID: "call-1",
 		ToolName:   "read",
@@ -327,7 +523,7 @@ func TestMessagesFromAgentEventFormatsReadToolLikeClaudeCode(t *testing.T) {
 		t.Fatalf("read start summary = %q, want %q", got, want)
 	}
 
-	end := messagesFromAgentEvent(types.Event{
+	end := presentedMessagesFromAgentEvent(types.Event{
 		Type:       types.EventTypeToolExecutionEnd,
 		ToolCallID: "call-1",
 		ToolName:   "read",
@@ -403,7 +599,7 @@ func TestToolSummariesForReadSearchAndListTools(t *testing.T) {
 
 func TestMessagesFromAgentEventFormatsWriteToolAsExpandedCodeBlock(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "main.go")
-	start := messagesFromAgentEvent(types.Event{
+	start := presentedMessagesFromAgentEvent(types.Event{
 		Type:       types.EventTypeToolExecutionStart,
 		ToolCallID: "call-1",
 		ToolName:   "write",
@@ -425,7 +621,7 @@ func TestMessagesFromAgentEventFormatsWriteToolAsExpandedCodeBlock(t *testing.T)
 		t.Fatalf("write code should include line numbers: %#v", start[0])
 	}
 
-	end := messagesFromAgentEvent(types.Event{
+	end := presentedMessagesFromAgentEvent(types.Event{
 		Type:       types.EventTypeToolExecutionEnd,
 		ToolCallID: "call-1",
 		ToolName:   "write",
@@ -448,7 +644,7 @@ func TestMessagesFromAgentEventFormatsExistingWriteAsUpdateDiff(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	start := messagesFromAgentEvent(types.Event{
+	start := presentedMessagesFromAgentEvent(types.Event{
 		Type:       types.EventTypeToolExecutionStart,
 		ToolCallID: "call-1",
 		ToolName:   "write",
@@ -478,7 +674,7 @@ func TestMessagesFromAgentEventFormatsIdempotentWriteAsNumberedFullFile(t *testi
 		t.Fatal(err)
 	}
 
-	start := messagesFromAgentEvent(types.Event{
+	start := presentedMessagesFromAgentEvent(types.Event{
 		Type:       types.EventTypeToolExecutionStart,
 		ToolCallID: "call-1",
 		ToolName:   "write",
@@ -510,7 +706,7 @@ func TestMessagesFromAgentEventUsesSessionCwdForRelativeUpdateDiff(t *testing.T)
 		t.Fatal(err)
 	}
 
-	start := messagesFromAgentEventWithCwd(types.Event{
+	start := presentedMessagesFromAgentEvent(types.Event{
 		Type:       types.EventTypeToolExecutionStart,
 		ToolCallID: "call-1",
 		ToolName:   "edit",
@@ -536,7 +732,7 @@ func TestMessagesFromAgentEventFormatsEditToolAsExpandedDiffBlock(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	start := messagesFromAgentEvent(types.Event{
+	start := presentedMessagesFromAgentEvent(types.Event{
 		Type:       types.EventTypeToolExecutionStart,
 		ToolCallID: "call-1",
 		ToolName:   "edit",
@@ -559,7 +755,7 @@ func TestMessagesFromAgentEventFormatsEditToolAsExpandedDiffBlock(t *testing.T) 
 		}
 	}
 
-	end := messagesFromAgentEvent(types.Event{
+	end := presentedMessagesFromAgentEvent(types.Event{
 		Type:       types.EventTypeToolExecutionEnd,
 		ToolCallID: "call-1",
 		ToolName:   "edit",
@@ -582,7 +778,7 @@ func TestMessagesFromAgentEventFormatsEditToolAsExpandedDiffBlock(t *testing.T) 
 }
 
 func TestMessagesFromAgentEventDoesNotShowUnnumberedEditFallback(t *testing.T) {
-	start := messagesFromAgentEvent(types.Event{
+	start := presentedMessagesFromAgentEvent(types.Event{
 		Type:       types.EventTypeToolExecutionStart,
 		ToolCallID: "call-1",
 		ToolName:   "edit",
@@ -625,14 +821,14 @@ func TestModuTUIPrompterApproveToolUsesModuTUIRequest(t *testing.T) {
 	requests := make(chan modutui.RequestToolApprovalMsg, 1)
 	prompter := &moduTUIPrompter{
 		ctx: context.Background(),
-		send: func(msg tea.Msg) {
+		client: newModuTUIClient(func(msg tea.Msg) {
 			req, ok := msg.(modutui.RequestToolApprovalMsg)
 			if !ok {
 				t.Fatalf("unexpected message type %T", msg)
 			}
 			requests <- req
 			req.Respond <- modutui.ToolApprovalAllowAlways
-		},
+		}),
 	}
 
 	decision, err := prompter.ApproveTool("bash", "call-1", map[string]any{"command": "go test ./..."})
@@ -652,14 +848,14 @@ func TestModuTUIPrompterSelectUsesHumanPromptCard(t *testing.T) {
 	requests := make(chan modutui.RequestHumanPromptMsg, 1)
 	prompter := &moduTUIPrompter{
 		ctx: context.Background(),
-		send: func(msg tea.Msg) {
+		client: newModuTUIClient(func(msg tea.Msg) {
 			req, ok := msg.(modutui.RequestHumanPromptMsg)
 			if !ok {
 				t.Fatalf("unexpected message type %T", msg)
 			}
 			requests <- req
 			req.Respond <- "2 commits"
-		},
+		}),
 	}
 
 	got := prompter.Select("Choose commit shape", []string{"2 commits", "1 commit"})
@@ -676,14 +872,14 @@ func TestModuTUIPrompterConfirmUsesHumanPromptCard(t *testing.T) {
 	requests := make(chan modutui.RequestHumanPromptMsg, 1)
 	prompter := &moduTUIPrompter{
 		ctx: context.Background(),
-		send: func(msg tea.Msg) {
+		client: newModuTUIClient(func(msg tea.Msg) {
 			req, ok := msg.(modutui.RequestHumanPromptMsg)
 			if !ok {
 				t.Fatalf("unexpected message type %T", msg)
 			}
 			requests <- req
 			req.Respond <- "no"
-		},
+		}),
 	}
 
 	if got := prompter.Confirm("Overwrite?", "file exists", true); got {
@@ -706,7 +902,11 @@ func TestModuTUISlashCommandsIncludeBaseAndSessionCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	commands := moduTUISlashCommands(session)
+	executor, err := newModuTUICommandExecutor(moduTUICommandExecutorOptions{Session: session})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commands := executor.Suggestions()
 	seen := map[string]bool{}
 	for _, cmd := range commands {
 		if seen[cmd.Name] {
@@ -722,17 +922,6 @@ func TestModuTUISlashCommandsIncludeBaseAndSessionCommands(t *testing.T) {
 	for _, unwanted := range []string{"/telegram", "/feishu"} {
 		if seen[unwanted] {
 			t.Fatalf("unexpected legacy slash command %q in %#v", unwanted, commands)
-		}
-	}
-}
-
-func TestIsModuTUIChannelCommandOnlyAcceptsExactCommand(t *testing.T) {
-	if !isModuTUIChannelCommand("  /channel  ") {
-		t.Fatal("expected exact /channel command")
-	}
-	for _, line := range []string{"/channel telegram", "/channels", "/telegram", "/feishu"} {
-		if isModuTUIChannelCommand(line) {
-			t.Fatalf("unexpected channel command match for %q", line)
 		}
 	}
 }
@@ -768,36 +957,16 @@ func TestMessagesFromSessionTranscriptRestoresCompactionDivider(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	messages := messagesFromSessionTranscript(session)
-	for _, msg := range messages {
-		if msg.Text == moduTUIContextCompactDivider {
+	entries := moduTUITranscriptEntries(session, newModuTUIEventPresenter())
+	for _, entry := range entries {
+		if len(entry.Nodes) != 1 {
+			continue
+		}
+		if node, ok := entry.Nodes[0].(modutui.TextNode); ok && node.Text == moduTUIContextCompactDivider {
 			return
 		}
 	}
-	t.Fatalf("expected compact divider in transcript: %#v", messages)
-}
-
-func TestModuTUIQueueCommandParsesSteerAndFollowUp(t *testing.T) {
-	tests := []struct {
-		line     string
-		wantKind modutui.SubmitKind
-		wantText string
-		wantOK   bool
-	}{
-		{line: "/steer change direction", wantKind: modutui.SubmitKindSteer, wantText: "change direction", wantOK: true},
-		{line: "/s quick", wantKind: modutui.SubmitKindSteer, wantText: "quick", wantOK: true},
-		{line: "/followup next", wantKind: modutui.SubmitKindFollowUp, wantText: "next", wantOK: true},
-		{line: "/f later", wantKind: modutui.SubmitKindFollowUp, wantText: "later", wantOK: true},
-		{line: "/model list", wantOK: false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.line, func(t *testing.T) {
-			gotKind, gotText, gotOK := moduTUIQueueCommand(tt.line)
-			if gotOK != tt.wantOK || gotKind != tt.wantKind || gotText != tt.wantText {
-				t.Fatalf("moduTUIQueueCommand(%q) = %q, %q, %v; want %q, %q, %v", tt.line, gotKind, gotText, gotOK, tt.wantKind, tt.wantText, tt.wantOK)
-			}
-		})
-	}
+	t.Fatalf("expected compact divider in transcript: %#v", entries)
 }
 
 func TestModuTUIInputHistoryPersistenceTrimsTo100(t *testing.T) {
@@ -992,19 +1161,26 @@ func TestModuTUISlashPrinterCapturesSectionsAndClear(t *testing.T) {
 	if !printer.clear {
 		t.Fatal("expected clear flag")
 	}
-	text := printer.Text()
-	for _, want := range []string{"alpha", "Beta", "one", "two", "error: context canceled"} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("printer text missing %q:\n%s", want, text)
-		}
+	entry, ok := printer.Entry()
+	if !ok {
+		t.Fatal("expected structured slash entry")
+	}
+	if entry.Role != modutui.RoleAssistant {
+		t.Fatalf("entry role = %v, want assistant", entry.Role)
+	}
+	if len(entry.Nodes) != 4 {
+		t.Fatalf("entry nodes = %#v, want four structured nodes", entry.Nodes)
+	}
+	if _, ok := entry.Nodes[2].(modutui.ListNode); !ok {
+		t.Fatalf("section body node = %T, want modutui.ListNode", entry.Nodes[2])
 	}
 }
 
 func joinedModuTUIAppendMessages(messages []tea.Msg) string {
 	var parts []string
 	for _, msg := range messages {
-		if appendMsg, ok := msg.(modutui.AppendMessageMsg); ok {
-			parts = append(parts, appendMsg.Message.Text)
+		if appended, ok := moduTUIAppendedMessage(msg); ok {
+			parts = append(parts, appended.Text)
 		}
 	}
 	return strings.Join(parts, "\n")
@@ -1022,25 +1198,25 @@ func TestRunModuTUISlashSendsPreformattedHelpOutput(t *testing.T) {
 	}
 
 	var messages []tea.Msg
-	runModuTUISlash(context.Background(), "/help", session, session.GetModel(), CommandHooks{}, func(msg tea.Msg) {
+	executeModuTUITestCommand(t, context.Background(), "/help", session, session.GetModel(), CommandHooks{}, newModuTUIClient(func(msg tea.Msg) {
 		messages = append(messages, msg)
-	}, nil, nil, nil)
+	}), nil, nil, nil)
 
-	var got *modutui.Message
+	var got *presentedEntry
 	for _, msg := range messages {
-		if appendMsg, ok := msg.(modutui.AppendMessageMsg); ok {
-			next := appendMsg.Message
+		if appended, ok := moduTUIAppendedMessage(msg); ok {
+			next := appended
 			got = &next
 			break
 		}
 	}
 	if got == nil {
-		t.Fatalf("expected AppendMessageMsg in %#v", messages)
+		t.Fatalf("expected AppendEntryUpdate in %#v", messages)
 	}
 	if !got.Preformatted {
 		t.Fatalf("slash help output should be preformatted: %#v", got)
 	}
-	for _, want := range []string{"Help", "/help, /h", "/quit, /exit", "/channel", "tool approval"} {
+	for _, want := range []string{"Help", "/help, /h", "/quit, /exit", "/channel", "/branch-session", "/tool-output", "tool approval"} {
 		if !strings.Contains(got.Text, want) {
 			t.Fatalf("help output missing %q:\n%s", want, got.Text)
 		}
@@ -1060,7 +1236,7 @@ func TestRunModuTUISlashRoutesConfigHook(t *testing.T) {
 
 	called := false
 	var messages []tea.Msg
-	runModuTUISlash(context.Background(), "/config validate", session, session.GetModel(), CommandHooks{
+	executeModuTUITestCommand(t, context.Background(), "/config validate", session, session.GetModel(), CommandHooks{
 		Config: func(args string) (string, error) {
 			called = true
 			if args != "validate" {
@@ -1068,23 +1244,23 @@ func TestRunModuTUISlashRoutesConfigHook(t *testing.T) {
 			}
 			return "config: test\nstatus: missing", nil
 		},
-	}, func(msg tea.Msg) {
+	}, newModuTUIClient(func(msg tea.Msg) {
 		messages = append(messages, msg)
-	}, nil, nil, nil)
+	}), nil, nil, nil)
 
 	if !called {
 		t.Fatal("expected config hook to be called")
 	}
-	var got *modutui.Message
+	var got *presentedEntry
 	for _, msg := range messages {
-		if appendMsg, ok := msg.(modutui.AppendMessageMsg); ok {
-			next := appendMsg.Message
+		if appended, ok := moduTUIAppendedMessage(msg); ok {
+			next := appended
 			got = &next
 			break
 		}
 	}
 	if got == nil {
-		t.Fatalf("expected AppendMessageMsg in %#v", messages)
+		t.Fatalf("expected AppendEntryUpdate in %#v", messages)
 	}
 	if !got.Preformatted || !strings.Contains(got.Text, "status: missing") {
 		t.Fatalf("unexpected config output: %#v", got)
@@ -1107,12 +1283,12 @@ func TestRunModuTUISlashExactConfigStartsWizard(t *testing.T) {
 
 	started := false
 	configCalled := false
-	runModuTUISlash(context.Background(), "/config", session, session.GetModel(), CommandHooks{
+	executeModuTUITestCommand(t, context.Background(), "/config", session, session.GetModel(), CommandHooks{
 		Config: func(args string) (string, error) {
 			configCalled = true
 			return "should not be called", nil
 		},
-	}, func(msg tea.Msg) {}, nil, func() {
+	}, newModuTUIClient(func(msg tea.Msg) {}), nil, func() {
 		started = true
 	}, nil)
 
@@ -1136,7 +1312,7 @@ func TestRunModuTUISlashExactModelStartsSelector(t *testing.T) {
 	}
 
 	started := false
-	runModuTUISlash(context.Background(), "/model", session, session.GetModel(), CommandHooks{}, func(msg tea.Msg) {}, nil, nil, func() {
+	executeModuTUITestCommand(t, context.Background(), "/model", session, session.GetModel(), CommandHooks{}, newModuTUIClient(func(msg tea.Msg) {}), nil, nil, func() {
 		started = true
 	})
 
@@ -1146,7 +1322,7 @@ func TestRunModuTUISlashExactModelStartsSelector(t *testing.T) {
 }
 
 func TestModuTUIWorkflowCockpitShowsOrchestrationMap(t *testing.T) {
-	text := moduTUIWorkflowCockpitTextFromStates(map[string]any{
+	snapshot, available := decodeModuTUIWorkflowSnapshot(map[string]any{
 		"workflow": map[string]any{
 			"runningCount":   1,
 			"completedCount": 2,
@@ -1200,6 +1376,7 @@ func TestModuTUIWorkflowCockpitShowsOrchestrationMap(t *testing.T) {
 			},
 		},
 	})
+	text := moduTUIWorkflowCockpitTextFromSnapshot(snapshot, available)
 
 	for _, want := range []string{
 		"Workflow Cockpit",
@@ -1240,7 +1417,7 @@ func TestModuTUIWorkflowCockpitShowsOrchestrationMap(t *testing.T) {
 }
 
 func TestModuTUIWorkflowCockpitRowsOpenFeedForRuns(t *testing.T) {
-	rows := moduTUIWorkflowCockpitRowsFromStates(map[string]any{
+	snapshot, available := decodeModuTUIWorkflowSnapshot(map[string]any{
 		"workflow": map[string]any{
 			"runs": []map[string]any{{
 				"id":           "run-2",
@@ -1260,6 +1437,10 @@ func TestModuTUIWorkflowCockpitRowsOpenFeedForRuns(t *testing.T) {
 			}},
 		},
 	})
+	if !available {
+		t.Fatal("expected workflow snapshot")
+	}
+	rows := moduTUIWorkflowCockpitRowsFromSnapshot(snapshot)
 
 	if len(rows) != 2 {
 		t.Fatalf("rows = %#v", rows)
@@ -3112,20 +3293,24 @@ func TestRunModuTUISlashExactWorkflowsShowsCockpit(t *testing.T) {
 	}
 
 	var messages []tea.Msg
-	runModuTUISlash(context.Background(), "/workflows", session, session.GetModel(), CommandHooks{}, func(msg tea.Msg) {
+	executeModuTUITestCommand(t, context.Background(), "/workflows", session, session.GetModel(), CommandHooks{}, newModuTUIClient(func(msg tea.Msg) {
 		messages = append(messages, msg)
-	}, nil, nil, nil)
+	}), nil, nil, nil)
 
 	var got *modutui.Panel
 	for _, msg := range messages {
-		if panelMsg, ok := msg.(modutui.SetPanelMsg); ok {
-			next := panelMsg.Panel
+		if update, ok := moduTUIStandardUpdate(msg); ok {
+			panelUpdate, ok := update.(modutui.ShowPanelUpdate)
+			if !ok {
+				continue
+			}
+			next := panelUpdate.Panel
 			got = &next
 			break
 		}
 	}
 	if got == nil {
-		t.Fatalf("expected SetPanelMsg in %#v", messages)
+		t.Fatalf("expected ShowPanelUpdate in %#v", messages)
 	}
 	if got.Title != "Workflow Cockpit" || !strings.Contains(strings.Join(got.Lines, "\n"), "overview") {
 		t.Fatalf("unexpected workflows cockpit output: %#v", got)
@@ -3149,12 +3334,12 @@ func TestRunModuTUIModelSelectSwitchesModel(t *testing.T) {
 	var messages []tea.Msg
 	done := make(chan struct{})
 	go func() {
-		runModuTUIModelSelect(context.Background(), session, func(msg tea.Msg) {
+		runModuTUIModelSelect(context.Background(), session, newModuTUIClient(func(msg tea.Msg) {
 			messages = append(messages, msg)
 			if prompt, ok := msg.(modutui.RequestHumanPromptMsg); ok {
 				prompt.Respond <- "openai/gpt-4o"
 			}
-		})
+		}))
 		close(done)
 	}()
 	select {
@@ -3198,7 +3383,7 @@ func TestModuTUIConfigWizardProviderFlow(t *testing.T) {
 			saved = input
 			return "saved provider: " + input.Provider, nil
 		},
-	}, func(msg tea.Msg) {
+	}, newModuTUIClient(func(msg tea.Msg) {
 		messages = append(messages, msg)
 		if prompt, ok := msg.(modutui.RequestHumanPromptMsg); ok {
 			prompts = append(prompts, prompt.Request)
@@ -3218,7 +3403,7 @@ func TestModuTUIConfigWizardProviderFlow(t *testing.T) {
 			textResponses = textResponses[1:]
 			prompt.Respond <- next
 		}
-	})
+	}))
 
 	done := make(chan struct{})
 	go func() {
@@ -3230,13 +3415,10 @@ func TestModuTUIConfigWizardProviderFlow(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("wizard did not finish provider card selection")
 	}
-	wizard.handleInput(context.Background(), "-")
-	wizard.handleInput(context.Background(), "-")
-
 	if len(prompts) < 2 {
 		t.Fatalf("expected top and provider prompts, got %#v", prompts)
 	}
-	if prompts[0].Title != "Config" || len(prompts[0].Options) != 2 || prompts[0].Options[0].Label != "Setup with provider or add model manually" || prompts[0].Options[1].Label != "Show config status" {
+	if prompts[0].Title != "Config" || len(prompts[0].Options) != 2 || prompts[0].Options[0].Label != "Setup provider" || prompts[0].Options[1].Label != "Show config status" {
 		t.Fatalf("unexpected config menu prompt: %#v", prompts[0])
 	}
 	if prompts[1].Title != "Config: provider" || len(prompts[1].Options) != 4 {
@@ -3269,39 +3451,6 @@ func TestModuTUIConfigWizardProviderFlow(t *testing.T) {
 	}
 }
 
-func TestModuTUIConfigWizardHandleInputReportsActive(t *testing.T) {
-	done := make(chan struct{})
-	wizard := newModuTUIConfigWizard(CommandHooks{}, func(msg tea.Msg) {})
-	wizard.mu.Lock()
-	wizard.active = true
-	wizard.step = "menu"
-	wizard.mu.Unlock()
-
-	if !wizard.HandleInput(context.Background(), "q") {
-		t.Fatal("expected active wizard to handle input")
-	}
-	go func() {
-		for {
-			wizard.mu.Lock()
-			active := wizard.active
-			wizard.mu.Unlock()
-			if !active {
-				close(done)
-				return
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
-	}()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("wizard did not handle cancel input")
-	}
-	if wizard.HandleInput(context.Background(), "hello") {
-		t.Fatal("inactive wizard should not handle input")
-	}
-}
-
 func TestRunModuTUISlashDoesNotResetStatusWhenAgentRunStarted(t *testing.T) {
 	session, err := coding_agent.NewCodingSession(coding_agent.CodingSessionOptions{
 		Cwd:       t.TempDir(),
@@ -3314,18 +3463,22 @@ func TestRunModuTUISlashDoesNotResetStatusWhenAgentRunStarted(t *testing.T) {
 	}
 
 	var messages []tea.Msg
-	runModuTUISlash(context.Background(), "/help", session, session.GetModel(), CommandHooks{}, func(msg tea.Msg) {
+	executeModuTUITestCommand(t, context.Background(), "/help", session, session.GetModel(), CommandHooks{}, newModuTUIClient(func(msg tea.Msg) {
 		messages = append(messages, msg)
-	}, func() bool { return true }, nil, nil)
+	}), func() bool { return true }, nil, nil)
 
 	for _, msg := range messages {
-		switch msg := msg.(type) {
-		case modutui.SetBusyMsg:
-			if !msg.Busy {
+		update, ok := moduTUIStandardUpdate(msg)
+		if !ok {
+			continue
+		}
+		switch update := update.(type) {
+		case modutui.SetBusyUpdate:
+			if !update.Busy {
 				t.Fatalf("slash cleanup should not clear busy while agent run is active: %#v", messages)
 			}
-		case modutui.SetStatusMsg:
-			if msg.Status == "idle" {
+		case modutui.SetStatusUpdate:
+			if update.Status == "idle" {
 				t.Fatalf("slash cleanup should not reset status to idle while agent run is active: %#v", messages)
 			}
 		}
@@ -3386,9 +3539,9 @@ func TestRunModuTUISlashResumeReplaysTargetHistory(t *testing.T) {
 	prevFile := current.GetSessionFile()
 
 	var sent []tea.Msg
-	runModuTUISlash(context.Background(), "/resume "+oldPath, current, current.GetModel(), CommandHooks{}, func(msg tea.Msg) {
+	executeModuTUITestCommand(t, context.Background(), "/resume "+oldPath, current, current.GetModel(), CommandHooks{}, newModuTUIClient(func(msg tea.Msg) {
 		sent = append(sent, msg)
-	}, nil, nil, nil)
+	}), nil, nil, nil)
 
 	if current.GetSessionFile() != oldPath {
 		t.Fatalf("session not switched: got %q, want %q", current.GetSessionFile(), oldPath)
@@ -3396,30 +3549,35 @@ func TestRunModuTUISlashResumeReplaysTargetHistory(t *testing.T) {
 	if current.GetSessionFile() == prevFile {
 		t.Fatal("session file unchanged")
 	}
-	var replay *modutui.SetMessagesMsg
+	var replay *modutui.ReplaceEntriesUpdate
 	confirmed := false
 	for _, msg := range sent {
-		switch m := msg.(type) {
-		case modutui.SetMessagesMsg:
-			next := m
+		update, ok := moduTUIStandardUpdate(msg)
+		if !ok {
+			continue
+		}
+		switch update := update.(type) {
+		case modutui.ReplaceEntriesUpdate:
+			next := update
 			replay = &next
-		case modutui.AppendMessageMsg:
-			if strings.Contains(m.Message.Text, "resumed session: "+oldPath) {
+		case modutui.AppendEntryUpdate:
+			message := presentedMessagesFromEntries([]modutui.Entry{update.Entry})[0]
+			if strings.Contains(message.Text, "resumed session: "+oldPath) {
 				confirmed = true
 			}
 		}
 	}
 	if replay == nil {
-		t.Fatalf("expected SetMessagesMsg replaying target history, got %#v", sent)
+		t.Fatalf("expected ReplaceEntriesUpdate replaying target history, got %#v", sent)
 	}
 	found := false
-	for _, m := range replay.Messages {
-		if strings.Contains(m.Text, "hello from the old session") {
+	for _, message := range presentedMessagesFromEntries(replay.Entries) {
+		if strings.Contains(message.Text, "hello from the old session") {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("replayed history missing old session content: %#v", replay.Messages)
+		t.Fatalf("replayed history missing old session content: %#v", replay.Entries)
 	}
 	if !confirmed {
 		t.Fatalf("missing resumed-session confirmation in %#v", sent)
@@ -3455,9 +3613,9 @@ func TestRunModuTUISlashResumeAcceptsIDPrefix(t *testing.T) {
 	})
 
 	var sent []tea.Msg
-	runModuTUISlash(context.Background(), "/resume "+oldID[:8], current, current.GetModel(), CommandHooks{}, func(msg tea.Msg) {
+	executeModuTUITestCommand(t, context.Background(), "/resume "+oldID[:8], current, current.GetModel(), CommandHooks{}, newModuTUIClient(func(msg tea.Msg) {
 		sent = append(sent, msg)
-	}, nil, nil, nil)
+	}), nil, nil, nil)
 
 	if current.GetSessionFile() != oldPath {
 		t.Fatalf("id-prefix resume did not switch: got %q, want %q", current.GetSessionFile(), oldPath)
@@ -3478,11 +3636,15 @@ func TestRunModuTUISlashResumeAcceptsIDPrefix(t *testing.T) {
 	footerUpdated := false
 	historyReplayed := false
 	for _, msg := range sent {
-		if m, ok := msg.(modutui.SetFooterMsg); ok && m.Footer == moduTUIFooter(current) {
+		update, ok := moduTUIStandardUpdate(msg)
+		if !ok {
+			continue
+		}
+		if footer, ok := update.(modutui.SetFooterUpdate); ok && footer.Footer == moduTUIFooter(current) {
 			footerUpdated = true
 		}
-		if m, ok := msg.(modutui.SetMessagesMsg); ok {
-			for _, message := range m.Messages {
+		if replacement, ok := update.(modutui.ReplaceEntriesUpdate); ok {
+			for _, message := range presentedMessagesFromEntries(replacement.Entries) {
 				if strings.Contains(message.Text, "prefix resume works") {
 					historyReplayed = true
 				}
@@ -3490,7 +3652,7 @@ func TestRunModuTUISlashResumeAcceptsIDPrefix(t *testing.T) {
 		}
 	}
 	if !historyReplayed {
-		t.Fatalf("expected SetMessagesMsg with target history, got %#v", sent)
+		t.Fatalf("expected ReplaceEntriesUpdate with target history, got %#v", sent)
 	}
 	if !footerUpdated {
 		t.Fatalf("resume did not refresh footer to %q: %#v", projectA, sent)
@@ -3508,11 +3670,14 @@ func TestRunModuTUISlashNonSwitchingCommandDoesNotReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	var sent []tea.Msg
-	runModuTUISlash(context.Background(), "/help", current, current.GetModel(), CommandHooks{}, func(msg tea.Msg) {
+	executeModuTUITestCommand(t, context.Background(), "/help", current, current.GetModel(), CommandHooks{}, newModuTUIClient(func(msg tea.Msg) {
 		sent = append(sent, msg)
-	}, nil, nil, nil)
+	}), nil, nil, nil)
 	for _, msg := range sent {
-		if _, ok := msg.(modutui.SetMessagesMsg); ok {
+		if update, ok := moduTUIStandardUpdate(msg); ok {
+			if _, replacing := update.(modutui.ReplaceEntriesUpdate); !replacing {
+				continue
+			}
 			t.Fatalf("non-switching command must not replay history: %#v", sent)
 		}
 	}
@@ -3531,9 +3696,9 @@ func TestRunModuTUISlashResumeRejectsUnknownTarget(t *testing.T) {
 	prevFile := current.GetSessionFile()
 
 	var sent []tea.Msg
-	runModuTUISlash(context.Background(), "/resume definitely-not-a-session", current, current.GetModel(), CommandHooks{}, func(msg tea.Msg) {
+	executeModuTUITestCommand(t, context.Background(), "/resume definitely-not-a-session", current, current.GetModel(), CommandHooks{}, newModuTUIClient(func(msg tea.Msg) {
 		sent = append(sent, msg)
-	}, nil, nil, nil)
+	}), nil, nil, nil)
 
 	// The old behavior silently "resumed" onto an empty session at a bogus
 	// relative path; now an unknown target must fail loudly and not switch.
@@ -3542,14 +3707,41 @@ func TestRunModuTUISlashResumeRejectsUnknownTarget(t *testing.T) {
 	}
 	errSeen := false
 	for _, msg := range sent {
-		if _, ok := msg.(modutui.SetMessagesMsg); ok {
-			t.Fatalf("no history replay expected on failed resume: %#v", sent)
+		if update, ok := moduTUIStandardUpdate(msg); ok {
+			if _, replacing := update.(modutui.ReplaceEntriesUpdate); replacing {
+				t.Fatalf("no history replay expected on failed resume: %#v", sent)
+			}
 		}
-		if m, ok := msg.(modutui.AppendMessageMsg); ok && strings.Contains(m.Message.Text, "definitely-not-a-session") {
+		if message, ok := moduTUIAppendedMessage(msg); ok && strings.Contains(message.Text, "definitely-not-a-session") {
 			errSeen = true
 		}
 	}
 	if !errSeen {
 		t.Fatalf("expected an error message naming the target, got %#v", sent)
+	}
+}
+
+func TestModuTUIWorkflowStructuredControlAction(t *testing.T) {
+	command, runID, status, ok := moduTUIWorkflowControlAction(modutui.PanelAction{
+		Action: moduTUIWorkflowControlActionValue("pause", "run-123"),
+	})
+	if !ok {
+		t.Fatal("structured workflow control action was not handled")
+	}
+	if command != "/workflows pause run-123" || runID != "run-123" || status != "workflow pause requested" {
+		t.Fatalf("structured control result = %q %q %q", command, runID, status)
+	}
+}
+
+func TestModuTUIWorkflowStructuredNavigationAction(t *testing.T) {
+	panel, ok := moduTUIWorkflowPanelAction(nil, modutui.PanelAction{
+		PanelID: moduTUIWorkflowRunDetailPanelID,
+		Action:  moduTUIWorkflowNavigationAction("back", ""),
+	})
+	if !ok {
+		t.Fatal("structured workflow navigation action was not handled")
+	}
+	if panel.ID != moduTUIWorkflowCockpitPanelID {
+		t.Fatalf("navigation panel = %#v", panel)
 	}
 }

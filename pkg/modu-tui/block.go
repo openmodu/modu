@@ -16,7 +16,6 @@ type MarkdownRenderer interface {
 type RenderContext struct {
 	ContentWidth int
 	Markdown     MarkdownRenderer
-	Hooks        Hooks
 }
 
 type Block interface {

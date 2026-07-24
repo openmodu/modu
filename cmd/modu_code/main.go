@@ -218,20 +218,10 @@ func main() {
 		Config: func(args string) (string, error) {
 			return runConfigHook(args, session)
 		},
-		ConfigModels:    configModelEntries,
 		ConfigProviders: configProviderEntries,
-		ConfigAdd: func(input ConfigModelInput) (string, error) {
-			return configAddModel(input, session)
-		},
 		ConfigSetProvider: func(input ConfigProviderInput) (string, error) {
 			return configSetProvider(input, session)
 		},
-		ConfigUse: func(target string) (string, error) {
-			return configUseModel(target, session)
-		},
-		ConfigRemove:      configRemoveModel,
-		ConfigWorkflows:   func() (string, error) { return configToggleWorkflows(session) },
-		SaveScopedModels:  provider.SetScopedModelIDs,
 		ConfigureTelegram: configureTelegramChannel,
 		ConfigureFeishu:   configureFeishuChannel,
 	}}

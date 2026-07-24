@@ -71,7 +71,7 @@ func TestDefaultSystemPromptAllowsNonCodingTasks(t *testing.T) {
 	for _, want := range []string{
 		"you can also answer general questions and perform safe non-coding tasks",
 		"Do not refuse solely because the task is not about code",
-		"If the user asks for current facts such as weather",
+		"Use available tools when the request requires current machine, repository, command-line, or external information",
 		"Use `bash` for builds, tests, linters, package managers, git inspection, and other terminal operations that genuinely require a shell",
 		"For coding or repository tasks, follow this sequence",
 	} {

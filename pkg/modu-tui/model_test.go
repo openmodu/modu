@@ -13,6 +13,85 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+func testTextEntry(role Role, text string) Entry {
+	return Entry{Role: role, Nodes: []Node{TextNode{Text: text}}}
+}
+
+func testMarkdownEntry(role Role, text string) Entry {
+	return Entry{Role: role, Nodes: []Node{MarkdownNode{Text: text}}}
+}
+
+func testToolEntry(call ToolCall, permission ToolPermissionState, expanded bool) Entry {
+	return Entry{
+		ID:   call.ID,
+		Role: RoleAssistant,
+		Nodes: []Node{ToolNode{
+			Call:       call,
+			Permission: permission,
+			Expanded:   expanded,
+		}},
+	}
+}
+
+func testEntryText(entry Entry) string {
+	if len(entry.Nodes) == 0 {
+		return ""
+	}
+	switch node := entry.Nodes[0].(type) {
+	case TextNode:
+		return node.Text
+	case MarkdownNode:
+		return node.Text
+	default:
+		return ""
+	}
+}
+
+type testIntentCallbacks struct {
+	submit       func(SubmitEvent)
+	interrupt    func()
+	approval     func(ToolApprovalResult)
+	panelAction  func(PanelAction)
+	panelClosed  func(string)
+	history      func([]string)
+	slashCommand func(string)
+}
+
+func testIntentHandler(callbacks testIntentCallbacks) func(Intent) {
+	return func(intent Intent) {
+		switch intent := intent.(type) {
+		case SubmitIntent:
+			if callbacks.submit != nil {
+				callbacks.submit(intent.Event)
+			}
+		case InterruptIntent:
+			if callbacks.interrupt != nil {
+				callbacks.interrupt()
+			}
+		case ToolApprovalDecisionIntent:
+			if callbacks.approval != nil {
+				callbacks.approval(intent.Result)
+			}
+		case PanelActionIntent:
+			if callbacks.panelAction != nil {
+				callbacks.panelAction(intent.Action)
+			}
+		case PanelClosedIntent:
+			if callbacks.panelClosed != nil {
+				callbacks.panelClosed(intent.PanelID)
+			}
+		case InputHistoryChangedIntent:
+			if callbacks.history != nil {
+				callbacks.history(intent.History)
+			}
+		case SlashCommandIntent:
+			if callbacks.slashCommand != nil {
+				callbacks.slashCommand(intent.Line)
+			}
+		}
+	}
+}
+
 func TestPOC2MultilineInputAltEnterAndAutoHeight(t *testing.T) {
 	var tm tea.Model = NewModel(Options{Width: 40, Height: 20})
 	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: 'a', Text: "a"}))
@@ -80,7 +159,7 @@ func TestPOC2PageKeysScrollViewport(t *testing.T) {
 
 	m := tm.(Model)
 	for range 60 {
-		m.messages = append(m.messages, Message{Role: RoleAssistant, Text: "history line"})
+		m.entries = append(m.entries, testTextEntry(RoleAssistant, "history line"))
 	}
 	m.follow = true
 	m.rebuild()
@@ -109,7 +188,7 @@ func TestPOC2ResizeClampsSelection(t *testing.T) {
 	m := NewModel()
 	m.width, m.height = 80, 12
 	for range 20 {
-		m.messages = append(m.messages, Message{Role: RoleAssistant, Text: "history line"})
+		m.entries = append(m.entries, testTextEntry(RoleAssistant, "history line"))
 	}
 	m.rebuild()
 	if len(m.lines) == 0 {
@@ -118,7 +197,7 @@ func TestPOC2ResizeClampsSelection(t *testing.T) {
 
 	m.selStart = cell{line: 0, col: 0}
 	m.selEnd = cell{line: len(m.lines) + 50, col: 999}
-	m.messages = []Message{{Role: RoleAssistant, Text: "short"}}
+	m.entries = []Entry{testTextEntry(RoleAssistant, "short")}
 	m.width, m.height = 20, 8
 	m.rebuild()
 
@@ -149,9 +228,9 @@ func TestPOC2CopySelectionUsesOSC52OverSSH(t *testing.T) {
 	t.Cleanup(func() { writeLocalClipboard = oldWrite })
 
 	m := NewModel(Options{
-		Width:           40,
-		Height:          8,
-		InitialMessages: []Message{{Role: RoleAssistant, Text: "copy me"}},
+		Width:          40,
+		Height:         8,
+		InitialEntries: []Entry{testTextEntry(RoleAssistant, "copy me")},
 	})
 	m.selStart = cell{line: 0, col: 2}
 	m.selEnd = cell{line: 0, col: 9}
@@ -160,7 +239,9 @@ func TestPOC2CopySelectionUsesOSC52OverSSH(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("copySelection should return an OSC52 command over SSH")
 	}
-	raw, hasSetClipboard := copyCommandMessages(cmd)
+	tm, finalCmd := m.Update(cmd())
+	m = tm.(Model)
+	raw, hasSetClipboard := copyCommandMessages(finalCmd)
 	if !strings.Contains(raw, "\x1b]52;c;") || !strings.HasSuffix(raw, "\x07") {
 		t.Fatalf("raw clipboard sequence should be OSC52, got %q", raw)
 	}
@@ -218,9 +299,9 @@ func TestPOC2CopySelectionUsesOSC52InsideTmuxWithoutSSHEnv(t *testing.T) {
 	t.Cleanup(func() { writeLocalClipboard = oldWrite })
 
 	m := NewModel(Options{
-		Width:           40,
-		Height:          8,
-		InitialMessages: []Message{{Role: RoleAssistant, Text: "copy me"}},
+		Width:          40,
+		Height:         8,
+		InitialEntries: []Entry{testTextEntry(RoleAssistant, "copy me")},
 	})
 	m.selStart = cell{line: 0, col: 2}
 	m.selEnd = cell{line: 0, col: 9}
@@ -229,7 +310,9 @@ func TestPOC2CopySelectionUsesOSC52InsideTmuxWithoutSSHEnv(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("copySelection should still try OSC52 inside tmux even without SSH env vars")
 	}
-	raw, _ := copyCommandMessages(cmd)
+	tm, finalCmd := m.Update(cmd())
+	m = tm.(Model)
+	raw, _ := copyCommandMessages(finalCmd)
 	if !strings.Contains(raw, "\x1bPtmux;") || !strings.Contains(raw, "52;c;") {
 		t.Fatalf("expected tmux-wrapped OSC52 sequence, got %q", raw)
 	}
@@ -249,15 +332,21 @@ func TestPOC2CopySelectionUsesLocalClipboardWithoutOSC52WhenLocalSucceeds(t *tes
 	t.Cleanup(func() { writeLocalClipboard = oldWrite })
 
 	m := NewModel(Options{
-		Width:           40,
-		Height:          8,
-		InitialMessages: []Message{{Role: RoleAssistant, Text: "copy me"}},
+		Width:          40,
+		Height:         8,
+		InitialEntries: []Entry{testTextEntry(RoleAssistant, "copy me")},
 	})
 	m.selStart = cell{line: 0, col: 2}
 	m.selEnd = cell{line: 0, col: 9}
 
-	if cmd := m.copySelection(); cmd != nil {
-		t.Fatalf("local successful clipboard copy should not emit OSC52 command, got %#v", cmd())
+	cmd := m.copySelection()
+	if cmd == nil {
+		t.Fatal("local clipboard copy should execute outside Update")
+	}
+	tm, finalCmd := m.Update(cmd())
+	m = tm.(Model)
+	if finalCmd != nil {
+		t.Fatalf("local successful clipboard copy should not emit OSC52 command, got %#v", finalCmd())
 	}
 	if !strings.Contains(m.status, "(clipboard)") {
 		t.Fatalf("copy status should report local clipboard path, got %q", m.status)
@@ -267,9 +356,9 @@ func TestPOC2CopySelectionUsesLocalClipboardWithoutOSC52WhenLocalSucceeds(t *tes
 func TestPOC2RenderConstrainsLineWidths(t *testing.T) {
 	m := NewModel()
 	m.width, m.height = 24, 8
-	m.messages = []Message{
-		{Role: RoleUser, Text: strings.Repeat("a", 120)},
-		{Tool: true, Summary: strings.Repeat("tool", 30), Detail: strings.Repeat("detail", 30), Expanded: true},
+	m.entries = []Entry{
+		testTextEntry(RoleUser, strings.Repeat("a", 120)),
+		testToolEntry(ToolCall{Summary: strings.Repeat("tool", 30), Detail: strings.Repeat("detail", 30)}, ToolPermissionUnknown, true),
 	}
 	m.input.Value = strings.Repeat("input", 30)
 	m.input.Cursor = m.input.Len()
@@ -286,8 +375,8 @@ func TestPOC2RenderPadsEveryLineToTerminalWidth(t *testing.T) {
 	m := NewModel(Options{
 		Width:  32,
 		Height: 10,
-		InitialMessages: []Message{
-			{Role: RoleAssistant, Text: "short"},
+		InitialEntries: []Entry{
+			testMarkdownEntry(RoleAssistant, "short"),
 		},
 	})
 
@@ -352,17 +441,17 @@ func TestPOC2EscInterruptsRunningAgent(t *testing.T) {
 			var tm tea.Model = NewModel(Options{
 				Width:  40,
 				Height: 8,
-				Hooks: Hooks{Interrupt: func() {
+				IntentHandler: testIntentHandler(testIntentCallbacks{interrupt: func() {
 					interrupted = true
-				}},
+				}}),
 			})
 			m := tm.(Model)
 			m.busy = true
 
-			tm, _ = m.Update(tea.KeyPressMsg(tc.key))
+			tm = updateAndRunImmediate(t, m, tea.KeyPressMsg(tc.key))
 			m = tm.(Model)
 			if !interrupted {
-				t.Fatal("esc should call interrupt hook while busy")
+				t.Fatal("esc should emit interrupt intent while busy")
 			}
 			if got, want := m.status, "interrupting"; got != want {
 				t.Fatalf("status = %q, want %q", got, want)
@@ -420,7 +509,7 @@ func TestPOC2ApprovalEscDeniesWithSSHKeyShape(t *testing.T) {
 		Respond: decisions,
 	})
 
-	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: '[', Mod: tea.ModCtrl}))
+	tm = updateAndRunImmediate(t, tm, tea.KeyPressMsg(tea.Key{Code: '[', Mod: tea.ModCtrl}))
 	if tm.(Model).approval != nil {
 		t.Fatal("approval should clear after esc")
 	}
@@ -456,6 +545,36 @@ func requireQuitCmd(t *testing.T, cmd tea.Cmd) {
 	}
 }
 
+func updateAndRunImmediate(t *testing.T, model tea.Model, msg tea.Msg) tea.Model {
+	t.Helper()
+	next, cmd := model.Update(msg)
+	return runImmediateCmd(t, next, cmd)
+}
+
+func runImmediateCmd(t *testing.T, model tea.Model, cmd tea.Cmd) tea.Model {
+	t.Helper()
+	queue := []tea.Cmd{cmd}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		if current == nil {
+			continue
+		}
+		msg := current()
+		if msg == nil {
+			continue
+		}
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			queue = append(queue, batch...)
+			continue
+		}
+		var nextCmd tea.Cmd
+		model, nextCmd = model.Update(msg)
+		queue = append(queue, nextCmd)
+	}
+	return model
+}
+
 func copyCommandMessages(cmd tea.Cmd) (raw string, hasSetClipboard bool) {
 	msg := cmd()
 	batch, ok := msg.(tea.BatchMsg)
@@ -485,9 +604,9 @@ func TestPOC2InfoCardStaysAtTopAfterFirstMessage(t *testing.T) {
 		Width:         48,
 		Height:        12,
 		InfoCardLines: []string{"modu_code", "model: Test", "commands: type /"},
-		Hooks: Hooks{Submit: func(text string) {
-			submitted = text
-		}},
+		IntentHandler: testIntentHandler(testIntentCallbacks{submit: func(event SubmitEvent) {
+			submitted = event.Text
+		}}),
 	})
 
 	m := tm.(Model)
@@ -500,7 +619,7 @@ func TestPOC2InfoCardStaysAtTopAfterFirstMessage(t *testing.T) {
 
 	tm, _ = m.Update(tea.KeyPressMsg(tea.Key{Text: "h", Code: 'h'}))
 	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: "i", Code: 'i'}))
-	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	tm = updateAndRunImmediate(t, tm, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = tm.(Model)
 
 	if got, want := submitted, "hi"; got != want {
@@ -580,11 +699,10 @@ func TestPOC2PreformattedAssistantMessagePreservesSlashHelpLines(t *testing.T) {
 	m := NewModel(Options{
 		Width:  72,
 		Height: 12,
-		InitialMessages: []Message{{
-			Role:         RoleAssistant,
-			Text:         "Help\n/help, /h           — show this help\n/quit, /exit        — exit\n\nkeys\nctrl+j         — insert newline",
-			Preformatted: true,
-		}},
+		InitialEntries: []Entry{testTextEntry(
+			RoleAssistant,
+			"Help\n/help, /h           — show this help\n/quit, /exit        — exit\n\nkeys\nctrl+j         — insert newline",
+		)},
 	})
 
 	rendered := ansi.Strip(m.render())
@@ -608,10 +726,9 @@ func TestPOC2ThinkingBlockIsCollapsedAndClickable(t *testing.T) {
 	m := NewModel(Options{
 		Width:  72,
 		Height: 10,
-		InitialMessages: []Message{{
-			Role:     RoleAssistant,
-			Text:     "reasoning detail",
-			Thinking: true,
+		InitialEntries: []Entry{{
+			Role:  RoleAssistant,
+			Nodes: []Node{ThinkingNode{Text: "reasoning detail"}},
 		}},
 	})
 	rendered := ansi.Strip(m.render())
@@ -649,7 +766,7 @@ func TestPOC2JumpHintSharesAgentStatusRow(t *testing.T) {
 	m := NewModel(Options{Width: 72, Height: 8})
 	m.busy = true
 	for i := 0; i < 20; i++ {
-		m.messages = append(m.messages, Message{Role: RoleAssistant, Text: "history"})
+		m.entries = append(m.entries, testTextEntry(RoleAssistant, "history"))
 	}
 	m.rebuild()
 	m.scroll(-2)
@@ -681,19 +798,19 @@ func TestPOC2JumpHintShowsNewMessageCountWithCtrlEnd(t *testing.T) {
 	var tm tea.Model = NewModel(Options{Width: 72, Height: 8})
 	m := tm.(Model)
 	for i := 0; i < 20; i++ {
-		m.messages = append(m.messages, Message{Role: RoleAssistant, Text: "history"})
+		m.entries = append(m.entries, testTextEntry(RoleAssistant, "history"))
 	}
 	m.rebuild()
 	m.scroll(-2)
 
-	tm, _ = m.Update(AppendMessageMsg{Message: Message{Role: RoleAssistant, Text: "one"}})
+	tm, _ = m.Update(UpdateMsg{Update: AppendEntryUpdate{Entry: testTextEntry(RoleAssistant, "one")}})
 	m = tm.(Model)
 	rendered := ansi.Strip(m.render())
 	if !strings.Contains(rendered, "Have 1 new message (ctrl+End) ↓") {
 		t.Fatalf("new message hint should include count and ctrl+End:\n%s", rendered)
 	}
 
-	tm, _ = m.Update(AppendMessageMsg{Message: Message{Role: RoleAssistant, Text: "two"}})
+	tm, _ = m.Update(UpdateMsg{Update: AppendEntryUpdate{Entry: testTextEntry(RoleAssistant, "two")}})
 	m = tm.(Model)
 	rendered = ansi.Strip(m.render())
 	if !strings.Contains(rendered, "Have 2 new messages (ctrl+End) ↓") {
@@ -705,26 +822,24 @@ func TestPOC2MergedToolUpdateDoesNotIncrementNewMessageCount(t *testing.T) {
 	var tm tea.Model = NewModel(Options{Width: 72, Height: 8})
 	m := tm.(Model)
 	for i := 0; i < 20; i++ {
-		m.messages = append(m.messages, Message{Role: RoleAssistant, Text: "history"})
+		m.entries = append(m.entries, testTextEntry(RoleAssistant, "history"))
 	}
-	m.messages = append(m.messages, Message{
-		Tool:      true,
-		ToolID:    "call-1",
-		ToolName:  "bash",
-		Summary:   "Running shell command",
-		ToolInput: "go test ./pkg/modu-tui",
-	})
+	m.entries = append(m.entries, testToolEntry(ToolCall{
+		ID:      "call-1",
+		Name:    "bash",
+		Summary: "Running shell command",
+		Input:   "go test ./pkg/modu-tui",
+	}, ToolPermissionUnknown, false))
 	m.rebuild()
 	m.scroll(-2)
 
-	tm, _ = m.Update(AppendMessageMsg{Message: Message{
-		Tool:       true,
-		ToolID:     "call-1",
-		ToolName:   "bash",
-		Summary:    "Ran 1 shell command",
-		ToolOutput: "ok",
-		ToolDone:   true,
-	}})
+	tm, _ = m.Update(UpdateMsg{Update: AppendEntryUpdate{Entry: testToolEntry(ToolCall{
+		ID:      "call-1",
+		Name:    "bash",
+		Summary: "Ran 1 shell command",
+		Output:  "ok",
+		Done:    true,
+	}, ToolPermissionUnknown, false)}})
 	m = tm.(Model)
 	rendered := ansi.Strip(m.render())
 	if strings.Contains(rendered, "Have 1 new message") {
@@ -738,7 +853,7 @@ func TestPOC2MergedToolUpdateDoesNotIncrementNewMessageCount(t *testing.T) {
 func TestPOC2JumpRowClickScrollsToBottom(t *testing.T) {
 	m := NewModel(Options{Width: 72, Height: 8})
 	for i := 0; i < 20; i++ {
-		m.messages = append(m.messages, Message{Role: RoleAssistant, Text: "history"})
+		m.entries = append(m.entries, testTextEntry(RoleAssistant, "history"))
 	}
 	m.rebuild()
 	m.scroll(-2)
@@ -817,9 +932,9 @@ func TestPOC2AddsGapBetweenBlocks(t *testing.T) {
 	m := NewModel(Options{
 		Width:  40,
 		Height: 12,
-		InitialMessages: []Message{
-			{Role: RoleUser, Text: "alpha"},
-			{Role: RoleUser, Text: "beta"},
+		InitialEntries: []Entry{
+			testTextEntry(RoleUser, "alpha"),
+			testTextEntry(RoleUser, "beta"),
 		},
 	})
 	lines := m.Lines()
@@ -864,9 +979,9 @@ func TestPOC2LargePasteCollapsesInInputAndSubmitsExpandedText(t *testing.T) {
 	var tm tea.Model = NewModel(Options{
 		Width:  72,
 		Height: 10,
-		Hooks: Hooks{Submit: func(text string) {
-			submitted = text
-		}},
+		IntentHandler: testIntentHandler(testIntentCallbacks{submit: func(event SubmitEvent) {
+			submitted = event.Text
+		}}),
 	})
 	tm, _ = tm.Update(tea.PasteMsg{Content: pasted})
 
@@ -879,25 +994,25 @@ func TestPOC2LargePasteCollapsesInInputAndSubmitsExpandedText(t *testing.T) {
 		t.Fatalf("large paste content should not be expanded in the input:\n%s", rendered)
 	}
 
-	tm, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	tm = updateAndRunImmediate(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = tm.(Model)
 	if got := submitted; got != pasted {
 		t.Fatalf("submitted paste = %q, want %q", got, pasted)
 	}
-	if len(m.messages) != 1 || m.messages[0].Text != pasted {
-		t.Fatalf("transcript message should keep the expanded paste: %#v", m.messages)
+	if len(m.entries) != 1 || testEntryText(m.entries[0]) != pasted {
+		t.Fatalf("transcript message should keep the expanded paste: %#v", m.entries)
 	}
 }
 
 func TestPOC2SubmitHookReceivesEnteredText(t *testing.T) {
 	var submitted string
 	var tm tea.Model = NewModel(Options{
-		Hooks: Hooks{Submit: func(text string) {
-			submitted = text
-		}},
+		IntentHandler: testIntentHandler(testIntentCallbacks{submit: func(event SubmitEvent) {
+			submitted = event.Text
+		}}),
 	})
 	tm, _ = tm.Update(tea.PasteMsg{Content: "hello"})
-	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	tm = updateAndRunImmediate(t, tm, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 
 	m := tm.(Model)
 	if got, want := submitted, "hello"; got != want {
@@ -906,8 +1021,8 @@ func TestPOC2SubmitHookReceivesEnteredText(t *testing.T) {
 	if got := m.input.Value; got != "" {
 		t.Fatalf("input should reset after submit, got %q", got)
 	}
-	if len(m.messages) != 1 || m.messages[0].Role != RoleUser || m.messages[0].Text != "hello" {
-		t.Fatalf("submitted message not appended: %#v", m.messages)
+	if len(m.entries) != 1 || m.entries[0].Role != RoleUser || testEntryText(m.entries[0]) != "hello" {
+		t.Fatalf("submitted message not appended: %#v", m.entries)
 	}
 }
 
@@ -916,7 +1031,7 @@ func TestPOC2CtrlVPastesClipboardImageAndSubmitsAttachment(t *testing.T) {
 	var tm tea.Model = NewModel(Options{
 		Width:  50,
 		Height: 10,
-		Hooks: Hooks{
+		Services: Services{
 			ReadClipboardImages: func() ([]ImageAttachment, error) {
 				return []ImageAttachment{{
 					Name:     "clipboard.png",
@@ -924,10 +1039,10 @@ func TestPOC2CtrlVPastesClipboardImageAndSubmitsAttachment(t *testing.T) {
 					Data:     []byte("png"),
 				}}, nil
 			},
-			SubmitMessage: func(event SubmitEvent) {
-				submitted = event
-			},
 		},
+		IntentHandler: testIntentHandler(testIntentCallbacks{submit: func(event SubmitEvent) {
+			submitted = event
+		}}),
 	})
 
 	var cmd tea.Cmd
@@ -941,13 +1056,13 @@ func TestPOC2CtrlVPastesClipboardImageAndSubmitsAttachment(t *testing.T) {
 		t.Fatalf("input should render the pasted image attachment:\n%s", got)
 	}
 
-	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	tm = updateAndRunImmediate(t, tm, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = tm.(Model)
 	if submitted.Text != "" || len(submitted.Images) != 1 || submitted.Images[0].MimeType != "image/png" {
 		t.Fatalf("submitted event = %#v", submitted)
 	}
-	if len(m.messages) != 1 || m.messages[0].Text != "[Image #1]" {
-		t.Fatalf("transcript should show the image label, got %#v", m.messages)
+	if len(m.entries) != 1 || testEntryText(m.entries[0]) != "[Image #1]" {
+		t.Fatalf("transcript should show the image label, got %#v", m.entries)
 	}
 	if len(m.input.ImageAttachments()) != 0 {
 		t.Fatalf("input attachments should reset after submit: %#v", m.input.ImageAttachments())
@@ -957,7 +1072,7 @@ func TestPOC2CtrlVPastesClipboardImageAndSubmitsAttachment(t *testing.T) {
 func TestPOC2PastedImagePathBecomesAttachment(t *testing.T) {
 	var resolved string
 	var tm tea.Model = NewModel(Options{
-		Hooks: Hooks{
+		Services: Services{
 			ResolvePastedImages: func(value string) ([]ImageAttachment, bool, error) {
 				resolved = value
 				return []ImageAttachment{{
@@ -969,7 +1084,7 @@ func TestPOC2PastedImagePathBecomesAttachment(t *testing.T) {
 		},
 	})
 
-	tm, _ = tm.Update(tea.PasteMsg{Content: `/tmp/screen\ shot.png `})
+	tm = updateAndRunImmediate(t, tm, tea.PasteMsg{Content: `/tmp/screen\ shot.png `})
 	m := tm.(Model)
 	if resolved != `/tmp/screen\ shot.png ` {
 		t.Fatalf("resolver input = %q", resolved)
@@ -999,15 +1114,15 @@ func TestPOC2SubmitMessageReportsPromptFollowUpAndSteer(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var got SubmitEvent
 			var tm tea.Model = NewModel(Options{
-				Hooks: Hooks{SubmitMessage: func(ev SubmitEvent) {
+				IntentHandler: testIntentHandler(testIntentCallbacks{submit: func(ev SubmitEvent) {
 					got = ev
-				}},
+				}}),
 			})
 			if tt.busy {
-				tm, _ = tm.Update(SetBusyMsg{Busy: true})
+				tm, _ = tm.Update(UpdateMsg{Update: SetBusyUpdate{Busy: true}})
 			}
 			tm, _ = tm.Update(tea.PasteMsg{Content: "next instruction"})
-			tm, _ = tm.Update(tea.KeyPressMsg(tt.key))
+			tm = updateAndRunImmediate(t, tm, tea.KeyPressMsg(tt.key))
 
 			if got.Text != "next instruction" || got.Kind != tt.want {
 				t.Fatalf("submit event = %#v, want text %q kind %q", got, "next instruction", tt.want)
@@ -1065,7 +1180,7 @@ func TestPOC2ArrowKeysScrollWhenConfiguredAndInputEmpty(t *testing.T) {
 	})
 	m := tm.(Model)
 	for i := 0; i < 30; i++ {
-		m.messages = append(m.messages, Message{Role: RoleAssistant, Text: "history line"})
+		m.entries = append(m.entries, testTextEntry(RoleAssistant, "history line"))
 	}
 	m.rebuild()
 	before := m.yOffset
@@ -1092,7 +1207,7 @@ func TestPOC2ArrowKeysPreferHistoryWhenConfiguredAndHistoryExists(t *testing.T) 
 	})
 	m := tm.(Model)
 	for i := 0; i < 30; i++ {
-		m.messages = append(m.messages, Message{Role: RoleAssistant, Text: "history line"})
+		m.entries = append(m.entries, testTextEntry(RoleAssistant, "history line"))
 	}
 	m.rebuild()
 	before := m.yOffset
@@ -1132,14 +1247,14 @@ func TestPOC2InputHistoryKeepsMostRecent100AndSavesOnSubmit(t *testing.T) {
 	var submitted string
 	var tm tea.Model = NewModel(Options{
 		InputHistory: history,
-		Hooks: Hooks{
-			InputHistoryChanged: func(history []string) {
+		IntentHandler: testIntentHandler(testIntentCallbacks{
+			history: func(history []string) {
 				saved = append([]string(nil), history...)
 			},
-			Submit: func(text string) {
-				submitted = text
+			submit: func(event SubmitEvent) {
+				submitted = event.Text
 			},
-		},
+		}),
 	})
 	m := tm.(Model)
 	if got, want := len(m.inputHistory), 100; got != want {
@@ -1157,7 +1272,7 @@ func TestPOC2InputHistoryKeepsMostRecent100AndSavesOnSubmit(t *testing.T) {
 	m = tm.(Model)
 
 	tm, _ = m.Update(tea.PasteMsg{Content: "new prompt"})
-	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	tm = updateAndRunImmediate(t, tm, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	m = tm.(Model)
 	if got, want := submitted, "new prompt"; got != want {
 		t.Fatalf("submitted = %q, want %q", got, want)
@@ -1179,7 +1294,7 @@ func TestPOC2SlashPickerCompletesCommandWithTab(t *testing.T) {
 		Height:        10,
 		SlashCommands: []SlashCommand{{Name: "/help", Description: "Show help"}},
 	})
-	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: "/", Code: '/'}))
+	tm = updateAndRunImmediate(t, tm, tea.KeyPressMsg(tea.Key{Text: "/", Code: '/'}))
 	m := tm.(Model)
 	if got := ansi.Strip(m.render()); !strings.Contains(got, "/help") || !strings.Contains(got, "┏") {
 		t.Fatalf("slash picker not rendered:\n%s", got)
@@ -1200,13 +1315,15 @@ func TestPOC2SlashPickerRefreshesCommandsFromProvider(t *testing.T) {
 	var tm tea.Model = NewModel(Options{
 		Width:  50,
 		Height: 10,
-		SlashCommandsProvider: func() []SlashCommand {
-			return commands
+		Services: Services{
+			SlashCommands: func() []SlashCommand {
+				return commands
+			},
 		},
 	})
 	commands = []SlashCommand{{Name: "/fresh", Description: "Fresh command"}}
 
-	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: "/", Code: '/'}))
+	tm = updateAndRunImmediate(t, tm, tea.KeyPressMsg(tea.Key{Text: "/", Code: '/'}))
 	m := tm.(Model)
 	rendered := ansi.Strip(m.render())
 	if !strings.Contains(rendered, "/fresh") {
@@ -1225,7 +1342,7 @@ func TestPOC2SlashPickerDoesNotShowJumpHintAtBottom(t *testing.T) {
 	})
 	m := tm.(Model)
 	for i := 0; i < 20; i++ {
-		m.messages = append(m.messages, Message{Role: RoleAssistant, Text: "history"})
+		m.entries = append(m.entries, testTextEntry(RoleAssistant, "history"))
 	}
 	m.rebuild()
 	if !m.atBottom() {
@@ -1251,7 +1368,7 @@ func TestPOC2SlashPickerKeepsJumpHintWhenAwayFromBottom(t *testing.T) {
 	})
 	m := tm.(Model)
 	for i := 0; i < 20; i++ {
-		m.messages = append(m.messages, Message{Role: RoleAssistant, Text: "history"})
+		m.entries = append(m.entries, testTextEntry(RoleAssistant, "history"))
 	}
 	m.rebuild()
 	m.scroll(-2)
@@ -1313,7 +1430,7 @@ func TestPOC2ViewCanDisableMouseReporting(t *testing.T) {
 func TestPOC2AutoScrollStopsWhenMouseReleaseIsMissing(t *testing.T) {
 	m := NewModel(Options{Width: 40, Height: 8})
 	for i := 0; i < 30; i++ {
-		m.messages = append(m.messages, Message{Role: RoleAssistant, Text: "history line"})
+		m.entries = append(m.entries, testTextEntry(RoleAssistant, "history line"))
 	}
 	m.rebuild()
 	if cmd := m.onPress(1, 0); cmd != nil {
@@ -1347,17 +1464,17 @@ func TestPOC2SlashCommandHookReceivesSelectedCommand(t *testing.T) {
 		Width:         50,
 		Height:        10,
 		SlashCommands: []SlashCommand{{Name: "/help", Description: "Show help"}},
-		Hooks: Hooks{
-			Submit: func(text string) {
-				submitted = text
+		IntentHandler: testIntentHandler(testIntentCallbacks{
+			submit: func(event SubmitEvent) {
+				submitted = event.Text
 			},
-			SlashCommand: func(line string) {
+			slashCommand: func(line string) {
 				slashLine = line
 			},
-		},
+		}),
 	})
 	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: "/", Code: '/'}))
-	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	tm = updateAndRunImmediate(t, tm, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 
 	if got, want := slashLine, "/help"; got != want {
 		t.Fatalf("slash command line = %q, want %q", got, want)
@@ -1399,8 +1516,8 @@ func TestPOC2ResizeKeepsApprovalInputAndCursorVisible(t *testing.T) {
 
 func TestPOC2AcceptsExternalMessagesAndBusyState(t *testing.T) {
 	var tm tea.Model = NewModel(Options{Width: 40, Height: 8})
-	tm, _ = tm.Update(AppendMessageMsg{Message: Message{Role: RoleAssistant, Text: "external reply"}})
-	tm, _ = tm.Update(SetBusyMsg{Busy: true})
+	tm, _ = tm.Update(UpdateMsg{Update: AppendEntryUpdate{Entry: testMarkdownEntry(RoleAssistant, "external reply")}})
+	tm, _ = tm.Update(UpdateMsg{Update: SetBusyUpdate{Busy: true}})
 
 	m := tm.(Model)
 	if got := strings.Join(m.Lines(), "\n"); !strings.Contains(ansi.Strip(got), "external reply") {
@@ -1413,27 +1530,22 @@ func TestPOC2AcceptsExternalMessagesAndBusyState(t *testing.T) {
 
 func TestPOC2MergesToolMessagesByToolID(t *testing.T) {
 	var tm tea.Model = NewModel(Options{Width: 80, Height: 18})
-	tm, _ = tm.Update(AppendMessageMsg{Message: Message{
-		Tool:      true,
-		ToolID:    "call-1",
-		ToolName:  "bash",
-		Summary:   "Running shell command",
-		ToolInput: "go test ./...",
-	}})
-	tm, _ = tm.Update(AppendMessageMsg{Message: Message{
-		Tool:       true,
-		ToolID:     "call-1",
-		ToolName:   "bash",
-		Summary:    "Ran 1 shell command",
-		ToolOutput: "ok ./pkg/modu-tui",
-		ToolDone:   true,
-	}})
+	tm, _ = tm.Update(UpdateMsg{Update: AppendEntryUpdate{Entry: testToolEntry(ToolCall{
+		ID: "call-1", Name: "bash", Summary: "Running shell command", Input: "go test ./...",
+	}, ToolPermissionUnknown, false)}})
+	tm, _ = tm.Update(UpdateMsg{Update: AppendEntryUpdate{Entry: testToolEntry(ToolCall{
+		ID: "call-1", Name: "bash", Summary: "Ran 1 shell command", Output: "ok ./pkg/modu-tui", Done: true,
+	}, ToolPermissionUnknown, false)}})
 
 	m := tm.(Model)
-	if len(m.messages) != 1 {
-		t.Fatalf("tool messages should merge into one block, got %d: %#v", len(m.messages), m.messages)
+	if len(m.entries) != 1 {
+		t.Fatalf("tool messages should merge into one block, got %d: %#v", len(m.entries), m.entries)
 	}
-	if got := m.messages[0].Summary; got != "Ran 1 shell command" {
+	node, _, ok := toolNodeFromEntry(m.entries[0])
+	if !ok {
+		t.Fatal("merged entry missing ToolNode")
+	}
+	if got := node.Call.Summary; got != "Ran 1 shell command" {
 		t.Fatalf("merged summary = %q, want Ran 1 shell command", got)
 	}
 }
@@ -1442,13 +1554,13 @@ func TestPOC2InitialToolMessagesAreMerged(t *testing.T) {
 	m := NewModel(Options{
 		Width:  80,
 		Height: 12,
-		InitialMessages: []Message{
-			{Tool: true, ToolID: "call-1", ToolName: "bash", Summary: "Running shell command", ToolInput: "git diff --stat"},
-			{Tool: true, ToolID: "call-1", ToolName: "bash", Summary: "Ran 1 shell command", ToolOutput: "1 file changed", ToolDone: true},
+		InitialEntries: []Entry{
+			testToolEntry(ToolCall{ID: "call-1", Name: "bash", Summary: "Running shell command", Input: "git diff --stat"}, ToolPermissionUnknown, false),
+			testToolEntry(ToolCall{ID: "call-1", Name: "bash", Summary: "Ran 1 shell command", Output: "1 file changed", Done: true}, ToolPermissionUnknown, false),
 		},
 	})
-	if len(m.messages) != 1 {
-		t.Fatalf("initial tool messages should merge into one block, got %d: %#v", len(m.messages), m.messages)
+	if len(m.entries) != 1 {
+		t.Fatalf("initial tool messages should merge into one block, got %d: %#v", len(m.entries), m.entries)
 	}
 }
 
@@ -1456,18 +1568,12 @@ func TestPOC2ExpandedToolBlockCanCollapseFromAnyRenderedLine(t *testing.T) {
 	m := NewModel(Options{
 		Width:  80,
 		Height: 12,
-		InitialMessages: []Message{{
-			Tool:       true,
-			ToolID:     "call-1",
-			ToolName:   "bash",
-			Summary:    "Ran 1 shell command",
-			ToolInput:  "go test ./pkg/modu-tui",
-			ToolOutput: "ok ./pkg/modu-tui",
-			ToolDone:   true,
-			Expanded:   true,
-		}},
+		InitialEntries: []Entry{testToolEntry(ToolCall{
+			ID: "call-1", Name: "bash", Summary: "Ran 1 shell command",
+			Input: "go test ./pkg/modu-tui", Output: "ok ./pkg/modu-tui", Done: true,
+		}, ToolPermissionUnknown, true)},
 	})
-	if !m.messages[0].Expanded {
+	if !entryExpanded(m.entries[0]) {
 		t.Fatal("setup should start expanded")
 	}
 	if _, ok := m.headers[1]; !ok {
@@ -1475,7 +1581,7 @@ func TestPOC2ExpandedToolBlockCanCollapseFromAnyRenderedLine(t *testing.T) {
 	}
 
 	_ = m.onPress(1, 1)
-	if m.messages[0].Expanded {
+	if entryExpanded(m.entries[0]) {
 		t.Fatal("clicking an expanded tool output line should collapse the block")
 	}
 }
@@ -1488,25 +1594,23 @@ func TestPOC2CtrlOTogglesLatestToolAndReadsArtifact(t *testing.T) {
 	var tm tea.Model = NewModel(Options{
 		Width:  100,
 		Height: 20,
-		InitialMessages: []Message{{
-			Tool:             true,
-			ToolID:           "call-1",
-			ToolName:         "bash",
-			Summary:          "Ran 1 shell command",
-			ToolOutput:       "preview only",
-			ToolArtifactID:   "call-1",
-			ToolArtifactPath: path,
-			ToolTruncated:    true,
-			ToolDone:         true,
+		InitialEntries: []Entry{testToolEntry(ToolCall{
+			ID: "call-1", Name: "bash", Summary: "Ran 1 shell command",
+			Output: "preview only", ArtifactID: "call-1", ArtifactPath: path,
+			Truncated: true, Done: true,
+		}, ToolPermissionUnknown, false)},
+		Services: Services{LoadToolArtifact: func(path string) (string, error) {
+			data, err := os.ReadFile(path)
+			return string(data), err
 		}},
 	})
 	m := tm.(Model)
-	if m.messages[0].Expanded {
+	if entryExpanded(m.entries[0]) {
 		t.Fatal("setup should start collapsed")
 	}
-	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: 'o', Mod: tea.ModCtrl}))
+	tm = updateAndRunImmediate(t, tm, tea.KeyPressMsg(tea.Key{Code: 'o', Mod: tea.ModCtrl}))
 	m = tm.(Model)
-	if !m.messages[0].Expanded {
+	if !entryExpanded(m.entries[0]) {
 		t.Fatal("ctrl+o should expand latest tool")
 	}
 	rendered := ansi.Strip(m.render())
@@ -1523,19 +1627,17 @@ func TestPOC2ExpandedArtifactIsCachedAcrossRebuilds(t *testing.T) {
 	var tm tea.Model = NewModel(Options{
 		Width:  100,
 		Height: 20,
-		InitialMessages: []Message{{
-			Tool:             true,
-			ToolID:           "call-1",
-			ToolName:         "bash",
-			Summary:          "Ran 1 shell command",
-			ToolOutput:       "preview only",
-			ToolArtifactID:   "call-1",
-			ToolArtifactPath: path,
-			ToolTruncated:    true,
-			ToolDone:         true,
+		InitialEntries: []Entry{testToolEntry(ToolCall{
+			ID: "call-1", Name: "bash", Summary: "Ran 1 shell command",
+			Output: "preview only", ArtifactID: "call-1", ArtifactPath: path,
+			Truncated: true, Done: true,
+		}, ToolPermissionUnknown, false)},
+		Services: Services{LoadToolArtifact: func(path string) (string, error) {
+			data, err := os.ReadFile(path)
+			return string(data), err
 		}},
 	})
-	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: 'o', Mod: tea.ModCtrl}))
+	tm = updateAndRunImmediate(t, tm, tea.KeyPressMsg(tea.Key{Code: 'o', Mod: tea.ModCtrl}))
 	m := tm.(Model)
 	if !strings.Contains(ansi.Strip(m.render()), "first artifact output") {
 		t.Fatalf("expanded tool should render first artifact read, got:\n%s", ansi.Strip(m.render()))
@@ -1556,9 +1658,9 @@ func TestPOC2ToolApprovalResolvesFromKeyboard(t *testing.T) {
 	var tm tea.Model = NewModel(Options{
 		Width:  80,
 		Height: 12,
-		Hooks: Hooks{ToolApprovalDecision: func(result ToolApprovalResult) {
+		IntentHandler: testIntentHandler(testIntentCallbacks{approval: func(result ToolApprovalResult) {
 			results <- result
-		}},
+		}}),
 	})
 	tm, _ = tm.Update(RequestToolApprovalMsg{
 		Request: ToolApprovalRequest{
@@ -1581,7 +1683,7 @@ func TestPOC2ToolApprovalResolvesFromKeyboard(t *testing.T) {
 		t.Fatalf("approval should not be part of transcript lines:\n%s", got)
 	}
 
-	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: "a", Code: 'a'}))
+	tm = updateAndRunImmediate(t, tm, tea.KeyPressMsg(tea.Key{Text: "a", Code: 'a'}))
 	resolved := tm.(Model)
 	if resolved.approval != nil {
 		t.Fatal("approval should clear after decision")
@@ -1597,10 +1699,10 @@ func TestPOC2ToolApprovalResolvesFromKeyboard(t *testing.T) {
 	select {
 	case got := <-results:
 		if got.Request.ID != "call-1" || got.Decision != ToolApprovalAllowAlways {
-			t.Fatalf("hook result = %#v", got)
+			t.Fatalf("intent result = %#v", got)
 		}
 	default:
-		t.Fatal("expected approval hook result")
+		t.Fatal("expected approval intent result")
 	}
 }
 
@@ -1637,7 +1739,7 @@ func TestPOC2HumanPromptResolvesFromKeyboard(t *testing.T) {
 		t.Fatalf("expected down key to select second option, got %#v", moved.humanPrompt)
 	}
 
-	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	tm = updateAndRunImmediate(t, tm, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	resolved := tm.(Model)
 	if resolved.humanPrompt != nil {
 		t.Fatal("human prompt should clear after response")
@@ -1653,11 +1755,10 @@ func TestPOC2HumanPromptResolvesFromKeyboard(t *testing.T) {
 }
 
 func TestPOC2PanelRendersScrollableMainViewAndCloses(t *testing.T) {
-	var tm tea.Model = NewModel(Options{Width: 60, Height: 12, InitialMessages: []Message{{
-		Role: RoleAssistant,
-		Text: "transcript stays behind panel",
-	}}})
-	tm, _ = tm.Update(SetPanelMsg{Panel: Panel{
+	var tm tea.Model = NewModel(Options{Width: 60, Height: 12, InitialEntries: []Entry{
+		testMarkdownEntry(RoleAssistant, "transcript stays behind panel"),
+	}})
+	tm, _ = tm.Update(UpdateMsg{Update: ShowPanelUpdate{Panel: Panel{
 		ID:       "workflow",
 		Title:    "Workflow Cockpit",
 		Subtitle: "completed 1  running 0",
@@ -1674,7 +1775,7 @@ func TestPOC2PanelRendersScrollableMainViewAndCloses(t *testing.T) {
 			"run nine",
 		},
 		Footer: "[esc/q] close",
-	}})
+	}}})
 
 	open := tm.(Model)
 	rendered := ansi.Strip(open.render())
@@ -1708,20 +1809,20 @@ func TestPOC2PanelRowsSelectAndEmitAction(t *testing.T) {
 	var tm tea.Model = NewModel(Options{
 		Width:  72,
 		Height: 12,
-		Hooks: Hooks{
-			PanelAction: func(action PanelAction) {
+		IntentHandler: testIntentHandler(testIntentCallbacks{
+			panelAction: func(action PanelAction) {
 				actions <- action
 			},
-		},
+		}),
 	})
-	tm, _ = tm.Update(SetPanelMsg{Panel: Panel{
+	tm, _ = tm.Update(UpdateMsg{Update: ShowPanelUpdate{Panel: Panel{
 		ID:    "workflow",
 		Title: "Workflow Cockpit",
 		Rows: []PanelRow{
 			{Label: "run one [completed]", Detail: "5/5 · 1min", Value: "run-one", Command: "/workflows show run-one"},
 			{Label: "run two [running]", Detail: "2/5 · Research", Value: "run-two", Command: "/workflows show run-two"},
 		},
-	}})
+	}}})
 	open := tm.(Model)
 	if open.panelSelected != 0 {
 		t.Fatalf("panelSelected = %d, want 0", open.panelSelected)
@@ -1741,10 +1842,10 @@ func TestPOC2PanelRowsSelectAndEmitAction(t *testing.T) {
 	if selected.panelSelected != 1 {
 		t.Fatalf("panelSelected = %d, want 1", selected.panelSelected)
 	}
-	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	tm = updateAndRunImmediate(t, tm, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	afterEnter := tm.(Model)
 	if afterEnter.panel == nil {
-		t.Fatal("panel should stay open until the hook replaces or clears it, to avoid a no-panel flicker frame")
+		t.Fatal("panel should stay open until the host replaces or clears it, to avoid a no-panel flicker frame")
 	}
 	select {
 	case action := <-actions:
@@ -1758,7 +1859,7 @@ func TestPOC2PanelRowsSelectAndEmitAction(t *testing.T) {
 
 func TestPOC2PanelStylesTitleAndRendersMarkdownBlocks(t *testing.T) {
 	var tm tea.Model = NewModel(Options{Width: 72, Height: 16})
-	tm, _ = tm.Update(SetPanelMsg{Panel: Panel{
+	tm, _ = tm.Update(UpdateMsg{Update: ShowPanelUpdate{Panel: Panel{
 		ID:       "workflow-result",
 		Title:    "Workflow Result",
 		Markdown: true,
@@ -1771,7 +1872,7 @@ func TestPOC2PanelStylesTitleAndRendersMarkdownBlocks(t *testing.T) {
 			"- watch policy headlines",
 		},
 		Rows: []PanelRow{{Label: "Back", Command: "back"}},
-	}})
+	}}})
 
 	model := tm.(Model)
 	rendered := model.render()
@@ -1794,7 +1895,7 @@ func TestPOC2PanelStylesTitleAndRendersMarkdownBlocks(t *testing.T) {
 
 func TestPOC2PanelRendersMarkdownParagraphsAndFencedCode(t *testing.T) {
 	var tm tea.Model = NewModel(Options{Width: 80, Height: 18})
-	tm, _ = tm.Update(SetPanelMsg{Panel: Panel{
+	tm, _ = tm.Update(UpdateMsg{Update: ShowPanelUpdate{Panel: Panel{
 		ID:       "workflow-result",
 		Title:    "Workflow Result",
 		Markdown: true,
@@ -1808,7 +1909,7 @@ func TestPOC2PanelRendersMarkdownParagraphsAndFencedCode(t *testing.T) {
 			"func main() {}",
 			"```",
 		},
-	}})
+	}}})
 
 	model := tm.(Model)
 	stripped := ansi.Strip(model.render())
@@ -1826,7 +1927,7 @@ func TestPOC2PanelRendersMarkdownParagraphsAndFencedCode(t *testing.T) {
 
 func TestPOC2PanelDoesNotRenderMarkdownByDefault(t *testing.T) {
 	var tm tea.Model = NewModel(Options{Width: 80, Height: 18})
-	tm, _ = tm.Update(SetPanelMsg{Panel: Panel{
+	tm, _ = tm.Update(UpdateMsg{Update: ShowPanelUpdate{Panel: Panel{
 		ID:    "workflow-script",
 		Title: "Workflow Script",
 		Lines: []string{
@@ -1836,7 +1937,7 @@ func TestPOC2PanelDoesNotRenderMarkdownByDefault(t *testing.T) {
 			"result code block",
 			"```",
 		},
-	}})
+	}}})
 
 	model := tm.(Model)
 	stripped := ansi.Strip(model.render())
@@ -1852,13 +1953,13 @@ func TestPOC2PanelShortcutEmitsAction(t *testing.T) {
 	var tm tea.Model = NewModel(Options{
 		Width:  72,
 		Height: 12,
-		Hooks: Hooks{
-			PanelAction: func(action PanelAction) {
+		IntentHandler: testIntentHandler(testIntentCallbacks{
+			panelAction: func(action PanelAction) {
 				actions <- action
 			},
-		},
+		}),
 	})
-	tm, _ = tm.Update(SetPanelMsg{Panel: Panel{
+	tm, _ = tm.Update(UpdateMsg{Update: ShowPanelUpdate{Panel: Panel{
 		ID:    "workflow-run",
 		Title: "Workflow Run",
 		Rows: []PanelRow{
@@ -1869,8 +1970,8 @@ func TestPOC2PanelShortcutEmitsAction(t *testing.T) {
 			Label:   "Stop",
 			Command: "workflow-panel:control:stop:run-1",
 		}},
-	}})
-	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: "x", Code: 'x'}))
+	}}})
+	tm = updateAndRunImmediate(t, tm, tea.KeyPressMsg(tea.Key{Text: "x", Code: 'x'}))
 
 	select {
 	case action := <-actions:
@@ -1881,7 +1982,7 @@ func TestPOC2PanelShortcutEmitsAction(t *testing.T) {
 		t.Fatal("expected shortcut action")
 	}
 	if tm.(Model).panel == nil {
-		t.Fatal("panel should stay open until the hook replaces or clears it, to avoid a no-panel flicker frame")
+		t.Fatal("panel should stay open until the host replaces or clears it, to avoid a no-panel flicker frame")
 	}
 }
 
@@ -1890,27 +1991,27 @@ func TestPOC2PanelRefreshPreservesSelectionAndCloseHook(t *testing.T) {
 	var tm tea.Model = NewModel(Options{
 		Width:  72,
 		Height: 12,
-		Hooks: Hooks{
-			PanelClosed: func(panelID string) {
+		IntentHandler: testIntentHandler(testIntentCallbacks{
+			panelClosed: func(panelID string) {
 				closed <- panelID
 			},
-		},
+		}),
 	})
-	tm, _ = tm.Update(SetPanelMsg{Panel: Panel{
+	tm, _ = tm.Update(UpdateMsg{Update: ShowPanelUpdate{Panel: Panel{
 		ID:    "workflow",
 		Title: "Workflow Cockpit",
 		Rows: []PanelRow{
 			{Label: "run one", Value: "run-one"},
 			{Label: "run two", Value: "run-two"},
 		},
-	}})
+	}}})
 	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
 	selected := tm.(Model)
 	if selected.panelSelected != 1 {
 		t.Fatalf("panelSelected before refresh = %d, want 1", selected.panelSelected)
 	}
 
-	tm, _ = tm.Update(RefreshPanelMsg{Panel: Panel{
+	tm, _ = tm.Update(UpdateMsg{Update: RefreshPanelUpdate{Panel: Panel{
 		ID:    "workflow",
 		Title: "Workflow Cockpit",
 		Rows: []PanelRow{
@@ -1918,7 +2019,7 @@ func TestPOC2PanelRefreshPreservesSelectionAndCloseHook(t *testing.T) {
 			{Label: "run two [running]", Value: "run-two"},
 			{Label: "run three [queued]", Value: "run-three"},
 		},
-	}})
+	}}})
 	refreshed := tm.(Model)
 	if refreshed.panelSelected != 1 {
 		t.Fatalf("panelSelected after refresh = %d, want 1", refreshed.panelSelected)
@@ -1928,7 +2029,7 @@ func TestPOC2PanelRefreshPreservesSelectionAndCloseHook(t *testing.T) {
 		t.Fatalf("refreshed panel content missing updated row:\n%s", rendered)
 	}
 
-	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Text: "q"}))
+	tm = updateAndRunImmediate(t, tm, tea.KeyPressMsg(tea.Key{Text: "q"}))
 	if tm.(Model).panel != nil {
 		t.Fatal("panel should close after q")
 	}
@@ -1938,7 +2039,7 @@ func TestPOC2PanelRefreshPreservesSelectionAndCloseHook(t *testing.T) {
 			t.Fatalf("closed panel id = %q, want workflow", panelID)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("expected panel close hook")
+		t.Fatal("expected panel close intent")
 	}
 }
 
@@ -1948,11 +2049,11 @@ func TestPOC2PanelSelectionStaysVisible(t *testing.T) {
 		rows = append(rows, PanelRow{Label: fmt.Sprintf("run-%02d", i+1), Command: fmt.Sprintf("/workflows show run-%02d", i+1)})
 	}
 	var tm tea.Model = NewModel(Options{Width: 60, Height: 10})
-	tm, _ = tm.Update(SetPanelMsg{Panel: Panel{
+	tm, _ = tm.Update(UpdateMsg{Update: ShowPanelUpdate{Panel: Panel{
 		ID:    "workflow",
 		Title: "Workflow Cockpit",
 		Rows:  rows,
-	}})
+	}}})
 	for i := 0; i < 12; i++ {
 		tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
 	}
@@ -1994,7 +2095,7 @@ func TestPOC2HumanTextSecretInputMasksAndResolves(t *testing.T) {
 		t.Fatalf("secret prompt missing masked value/actions:\n%s", rendered)
 	}
 
-	tm, _ = tm.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	tm = updateAndRunImmediate(t, tm, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	resolved := tm.(Model)
 	if resolved.humanText != nil {
 		t.Fatal("human text prompt should clear after response")
@@ -2013,8 +2114,8 @@ func TestPOC2ToolApprovalPanelIsFixedAboveInput(t *testing.T) {
 	var tm tea.Model = NewModel(Options{
 		Width:  50,
 		Height: 12,
-		InitialMessages: []Message{
-			{Role: RoleAssistant, Text: strings.Repeat("history\n", 12)},
+		InitialEntries: []Entry{
+			testTextEntry(RoleAssistant, strings.Repeat("history\n", 12)),
 		},
 	})
 	tm, _ = tm.Update(RequestToolApprovalMsg{
@@ -2056,19 +2157,19 @@ func TestPOC2TodoPanelRendersAboveInput(t *testing.T) {
 	var tm tea.Model = NewModel(Options{
 		Width:  50,
 		Height: 12,
-		InitialMessages: []Message{
-			{Role: RoleAssistant, Text: strings.Repeat("history\n", 12)},
+		InitialEntries: []Entry{
+			testTextEntry(RoleAssistant, strings.Repeat("history\n", 12)),
 		},
 		Todos: []TodoItem{
 			{Content: "first step", Status: "in_progress"},
 			{Content: "second step", Status: "pending"},
 		},
 	})
-	tm, _ = tm.Update(SetBusyMsg{Busy: true})
-	tm, _ = tm.Update(SetTodosMsg{Todos: []TodoItem{
+	tm, _ = tm.Update(UpdateMsg{Update: SetBusyUpdate{Busy: true}})
+	tm, _ = tm.Update(UpdateMsg{Update: SetTodoListUpdate{Items: []TodoItem{
 		{Content: "first step", Status: "in_progress"},
 		{Content: "second step", Status: "pending"},
-	}})
+	}}})
 	m := tm.(Model)
 
 	rendered := strings.Split(ansi.Strip(m.render()), "\n")
@@ -2109,30 +2210,30 @@ func TestPOC2TodoPanelIgnoresStaleTodosOnNewRun(t *testing.T) {
 		Height: 10,
 		Todos:  []TodoItem{{Content: "old task", Status: "pending"}},
 	})
-	tm, _ = tm.Update(SetBusyMsg{Busy: true})
+	tm, _ = tm.Update(UpdateMsg{Update: SetBusyUpdate{Busy: true}})
 
 	m := tm.(Model)
 	if got := ansi.Strip(m.render()); strings.Contains(got, "Todos") || strings.Contains(got, "old task") {
-		t.Fatalf("new run should not show stale todos before current SetTodosMsg:\n%s", got)
+		t.Fatalf("new run should not show stale todos before current SetTodoListUpdate:\n%s", got)
 	}
 
-	tm, _ = tm.Update(SetTodosMsg{Todos: []TodoItem{{Content: "current task", Status: "pending"}}})
+	tm, _ = tm.Update(UpdateMsg{Update: SetTodoListUpdate{Items: []TodoItem{{Content: "current task", Status: "pending"}}}})
 	m = tm.(Model)
 	if got := ansi.Strip(m.render()); !strings.Contains(got, "current task") {
 		t.Fatalf("current-run todo update should show panel:\n%s", got)
 	}
 }
 
-func TestPOC2SetTodosMsgUpdatesTodoPanel(t *testing.T) {
+func TestPOC2SetTodoListUpdateUpdatesTodoPanel(t *testing.T) {
 	var tm tea.Model = NewModel(Options{Width: 50, Height: 10})
-	tm, _ = tm.Update(SetBusyMsg{Busy: true})
-	tm, _ = tm.Update(SetTodosMsg{Todos: []TodoItem{{Content: "new task", Status: "pending"}}})
+	tm, _ = tm.Update(UpdateMsg{Update: SetBusyUpdate{Busy: true}})
+	tm, _ = tm.Update(UpdateMsg{Update: SetTodoListUpdate{Items: []TodoItem{{Content: "new task", Status: "pending"}}}})
 	m := tm.(Model)
 	if got := ansi.Strip(m.render()); !strings.Contains(got, "new task") {
-		t.Fatalf("expected todo panel after SetTodosMsg:\n%s", got)
+		t.Fatalf("expected todo panel after SetTodoListUpdate:\n%s", got)
 	}
 
-	tm, _ = tm.Update(SetTodosMsg{Todos: []TodoItem{{Content: "new task", Status: "completed"}}})
+	tm, _ = tm.Update(UpdateMsg{Update: SetTodoListUpdate{Items: []TodoItem{{Content: "new task", Status: "completed"}}}})
 	m = tm.(Model)
 	if got := ansi.Strip(m.render()); strings.Contains(got, "new task") || strings.Contains(got, "Todos") {
 		t.Fatalf("completed-only todos should hide panel:\n%s", got)
@@ -2142,7 +2243,7 @@ func TestPOC2SetTodosMsgUpdatesTodoPanel(t *testing.T) {
 func TestPOC2TransientStatusExpiresWithoutClearingNewStatus(t *testing.T) {
 	var tm tea.Model = NewModel()
 	var cmd tea.Cmd
-	tm, cmd = tm.Update(SetStatusMsg{Status: "✓ Completed 1s", TransientFor: time.Second})
+	tm, cmd = tm.Update(UpdateMsg{Update: SetStatusUpdate{Status: "✓ Completed 1s", TTL: time.Second}})
 	if cmd == nil {
 		t.Fatal("transient status should schedule an expiry command")
 	}
@@ -2151,14 +2252,14 @@ func TestPOC2TransientStatusExpiresWithoutClearingNewStatus(t *testing.T) {
 		t.Fatalf("status = %q", got)
 	}
 
-	tm, _ = tm.Update(SetStatusMsg{Status: "running"})
+	tm, _ = tm.Update(UpdateMsg{Update: SetStatusUpdate{Status: "running"}})
 	tm, _ = tm.Update(statusExpireMsg{status: "✓ Completed 1s"})
 	m = tm.(Model)
 	if got := m.status; got != "running" {
 		t.Fatalf("old transient expiry should not clear new status, got %q", got)
 	}
 
-	tm, _ = tm.Update(SetStatusMsg{Status: "done", TransientFor: time.Second})
+	tm, _ = tm.Update(UpdateMsg{Update: SetStatusUpdate{Status: "done", TTL: time.Second}})
 	m = tm.(Model)
 	m.statusExpiresAt = time.Now().Add(-time.Millisecond)
 	tm = m
@@ -2186,22 +2287,22 @@ func TestPOC2ToolApprovalBlocksInputEditing(t *testing.T) {
 	}
 }
 
-func TestSetMessagesMsgReplacesTranscript(t *testing.T) {
-	var tm tea.Model = NewModel(Options{Width: 72, Height: 12, InitialMessages: []Message{
-		{Role: RoleUser, Text: "old conversation"},
-		{Role: RoleAssistant, Text: "old reply"},
+func TestReplaceEntriesUpdateReplacesTranscript(t *testing.T) {
+	var tm tea.Model = NewModel(Options{Width: 72, Height: 12, InitialEntries: []Entry{
+		testTextEntry(RoleUser, "old conversation"),
+		testMarkdownEntry(RoleAssistant, "old reply"),
 	}})
 	m := tm.(Model)
 
-	tm, _ = m.Update(SetMessagesMsg{Messages: []Message{
-		{Role: RoleUser, Text: "resumed question"},
-		{Role: RoleAssistant, Text: "resumed answer"},
-	}})
+	tm, _ = m.Update(UpdateMsg{Update: ReplaceEntriesUpdate{Entries: []Entry{
+		testTextEntry(RoleUser, "resumed question"),
+		testMarkdownEntry(RoleAssistant, "resumed answer"),
+	}}})
 	m = tm.(Model)
 
 	rendered := ansi.Strip(m.render())
 	if strings.Contains(rendered, "old conversation") || strings.Contains(rendered, "old reply") {
-		t.Fatalf("old transcript should be gone after SetMessagesMsg:\n%s", rendered)
+		t.Fatalf("old transcript should be gone after ReplaceEntriesUpdate:\n%s", rendered)
 	}
 	for _, want := range []string{"resumed question", "resumed answer"} {
 		if !strings.Contains(rendered, want) {

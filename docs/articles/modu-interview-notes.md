@@ -24,7 +24,7 @@ Agent 能力
   pkg/providers · pkg/provider · pkg/acp
         │
 公共契约和界面
-  pkg/types · pkg/stream · pkg/modu-tui · pkg/tui
+  pkg/types · pkg/stream · pkg/modu-tui
 ```
 
 这不是编译依赖图，而是讲解顺序。真正的依赖关系以 `go list -deps` 和各包 import 为准。

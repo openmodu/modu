@@ -57,9 +57,13 @@ func TestBuildTranscriptFoldsBatchIntoOneLine(t *testing.T) {
 	m := &mv
 	m.blockGap = 0
 	batch := "batch-x"
-	m.appendMessage(Message{Tool: true, ToolID: "1", ToolName: "read", Summary: "Read a.txt", ToolDone: true, ToolBatchSize: 3, ToolBatchID: batch})
-	m.appendMessage(Message{Tool: true, ToolID: "2", ToolName: "read", Summary: "Read b.txt", ToolDone: true, ToolBatchSize: 3, ToolBatchID: batch})
-	m.appendMessage(Message{Tool: true, ToolID: "3", ToolName: "read", Summary: "Read c.txt", ToolDone: true, ToolBatchSize: 3, ToolBatchID: batch})
+	for _, call := range []ToolCall{
+		{ID: "1", Name: "read", Summary: "Read a.txt", Done: true, BatchSize: 3, BatchID: batch},
+		{ID: "2", Name: "read", Summary: "Read b.txt", Done: true, BatchSize: 3, BatchID: batch},
+		{ID: "3", Name: "read", Summary: "Read c.txt", Done: true, BatchSize: 3, BatchID: batch},
+	} {
+		m.appendEntry(Entry{Role: RoleAssistant, Nodes: []Node{ToolNode{Call: call}}})
+	}
 
 	lines, _, _ := m.buildTranscript()
 	joined := ansi.Strip(strings.Join(lines, "\n"))

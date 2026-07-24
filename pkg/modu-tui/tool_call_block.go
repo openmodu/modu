@@ -22,9 +22,6 @@ type ToolCallBlock struct {
 
 func (b ToolCallBlock) Render(ctx RenderContext) BlockRender {
 	permission := b.Permission
-	if permission == ToolPermissionUnknown && ctx.Hooks.ToolPermission != nil {
-		permission = ctx.Hooks.ToolPermission(b.Call)
-	}
 	if strings.TrimSpace(b.Call.Name) == "" && b.Call.Input == "" && b.Call.Output == "" && b.Call.Code == "" {
 		block := b.CollapsibleBlock
 		if permission != ToolPermissionUnknown {

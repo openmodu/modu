@@ -20,7 +20,7 @@ func TestModuTUIChannelWizardConfiguresTelegramWithSecretInput(t *testing.T) {
 			saved = input
 			return "Telegram channel configured", nil
 		},
-	}, func(msg tea.Msg) {
+	}, newModuTUIClient(func(msg tea.Msg) {
 		messages = append(messages, msg)
 		switch req := msg.(type) {
 		case modutui.RequestHumanPromptMsg:
@@ -30,7 +30,7 @@ func TestModuTUIChannelWizardConfiguresTelegramWithSecretInput(t *testing.T) {
 			textPrompts = append(textPrompts, req.Request)
 			req.Respond <- "telegram-secret"
 		}
-	})
+	}))
 
 	wizard.Start(context.Background())
 
@@ -57,7 +57,7 @@ func TestModuTUIChannelWizardConfiguresFeishu(t *testing.T) {
 			saved = input
 			return "Feishu channel configured", nil
 		},
-	}, func(msg tea.Msg) {
+	}, newModuTUIClient(func(msg tea.Msg) {
 		switch req := msg.(type) {
 		case modutui.RequestHumanPromptMsg:
 			req.Respond <- "feishu"
@@ -70,7 +70,7 @@ func TestModuTUIChannelWizardConfiguresFeishu(t *testing.T) {
 			responses = responses[1:]
 			req.Respond <- next
 		}
-	})
+	}))
 
 	wizard.Start(context.Background())
 
@@ -96,11 +96,11 @@ func TestModuTUIChannelWizardCancelDoesNotSave(t *testing.T) {
 			called = true
 			return "", nil
 		},
-	}, func(msg tea.Msg) {
+	}, newModuTUIClient(func(msg tea.Msg) {
 		if req, ok := msg.(modutui.RequestHumanPromptMsg); ok {
 			req.Respond <- ""
 		}
-	})
+	}))
 
 	wizard.Start(context.Background())
 	if called {
