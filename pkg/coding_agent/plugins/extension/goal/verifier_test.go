@@ -178,6 +178,24 @@ func TestUpdateGoalVerifierPassCompletes(t *testing.T) {
 	if !ok || g.Status != StatusComplete {
 		t.Fatalf("goal should be complete, got %+v", g)
 	}
+
+	// The verifier start must be announced before its verdict so the user
+	// understands why a goal-verifier subagent is running after the claim.
+	startIdx, verdictIdx := -1, -1
+	for i, notice := range api.notices {
+		if startIdx == -1 && strings.Contains(notice, "running an independent verifier") {
+			startIdx = i
+		}
+		if verdictIdx == -1 && strings.Contains(notice, "verifier PASS") {
+			verdictIdx = i
+		}
+	}
+	if startIdx == -1 {
+		t.Fatalf("missing verifier start announcement, got %#v", api.notices)
+	}
+	if verdictIdx == -1 || startIdx >= verdictIdx {
+		t.Fatalf("start announcement should precede the verdict; start=%d verdict=%d (%#v)", startIdx, verdictIdx, api.notices)
+	}
 }
 
 func TestUpdateGoalVerifierPausesAfterMaxRejects(t *testing.T) {

@@ -271,6 +271,11 @@ func (e *Extension) verifyCompletion(ctx context.Context) (string, bool) {
 			model = customModel
 		}
 	}
+	// Announce the check up front. Otherwise the completion claim is followed
+	// by an unexplained goal-verifier subagent, and the goal's completion
+	// message only lands after that child finishes — which reads as the goal
+	// finishing, stalling, then finishing again.
+	e.tell("goal: completion claimed — running an independent verifier before marking it done…")
 	out, err := e.api.ForkSession(ctx, extension.ForkOptions{
 		Name:         "goal-verifier",
 		SystemPrompt: sysPrompt,
