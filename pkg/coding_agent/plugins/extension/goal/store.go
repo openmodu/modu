@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -69,8 +70,12 @@ type Goal struct {
 }
 
 type goalFile struct {
-	Version int   `json:"version"`
-	Goal    *Goal `json:"goal"`
+	Version int     `json:"version"`
+	Goals   []*Goal `json:"goals,omitempty"`
+	Focused string  `json:"focused,omitempty"`
+	// Goal is the legacy single-goal field. It is read for migration from
+	// pre-list stores and never written; new stores use Goals + Focused.
+	Goal *Goal `json:"goal,omitempty"`
 }
 
 type accountingMode string
@@ -82,12 +87,15 @@ const (
 	accountActiveOrStopped  accountingMode = "activeOrStopped"
 )
 
-// Store holds the current Goal. Without a ref provider it is purely in-memory,
-// which keeps unit tests and embedded SDK users lightweight. With a ref
-// provider every operation reads and writes a session-scoped JSON file.
+// Store holds the session's goals. At most one goal is focused (the pointer
+// that Current/Pause/Resume/accounting act on); the rest are parked. Without a
+// ref provider it is purely in-memory, which keeps unit tests and embedded SDK
+// users lightweight. With a ref provider every operation reads and writes a
+// session-scoped JSON file.
 type Store struct {
 	mu          sync.Mutex
-	current     *Goal
+	goals       []*Goal
+	focusedID   string
 	refProvider func() StoreRef
 }
 
@@ -504,6 +512,71 @@ func FormatGoalForUser(g *Goal) string {
 	return b.String()
 }
 
+// formatGoalList renders the goal list with a focus marker, status icon,
+// objective preview and token usage — one line per goal.
+func formatGoalList(goals []Goal, focused string) string {
+	var b strings.Builder
+	b.WriteString("goals:")
+	for i, g := range goals {
+		marker := "  "
+		if g.ID == focused {
+			marker = "▶ "
+		}
+		tokens := formatTokensCompact(g.TokensUsed)
+		if g.TokenBudget != nil {
+			tokens += "/" + formatTokensCompact(*g.TokenBudget)
+		}
+		fmt.Fprintf(&b, "\n%s%d. %s %s  (%s)", marker, i+1, goalStatusIcon(g.Status),
+			goalObjectivePreview(g.Objective, 56), tokens)
+	}
+	return b.String()
+}
+
+func goalObjectivePreview(objective string, limit int) string {
+	objective = strings.TrimSpace(strings.Join(strings.Fields(objective), " "))
+	runes := []rune(objective)
+	if limit <= 0 || len(runes) <= limit {
+		return objective
+	}
+	if limit <= 1 {
+		return string(runes[:limit])
+	}
+	return string(runes[:limit-1]) + "…"
+}
+
+// resolveGoalRef maps a user reference — a 1-based list position or an exact /
+// unique-prefix id — to a goal id.
+func resolveGoalRef(goals []Goal, args string) (string, error) {
+	ref := strings.TrimSpace(args)
+	if ref == "" {
+		return "", fmt.Errorf("goal: usage: /goal-focus <number|id>")
+	}
+	if n, err := strconv.Atoi(ref); err == nil {
+		if n < 1 || n > len(goals) {
+			return "", fmt.Errorf("goal: no goal #%d (have %d)", n, len(goals))
+		}
+		return goals[n-1].ID, nil
+	}
+	for _, g := range goals {
+		if g.ID == ref {
+			return g.ID, nil
+		}
+	}
+	match := ""
+	for _, g := range goals {
+		if strings.HasPrefix(g.ID, ref) {
+			if match != "" {
+				return "", fmt.Errorf("goal: %q matches multiple goals", ref)
+			}
+			match = g.ID
+		}
+	}
+	if match == "" {
+		return "", fmt.Errorf("goal: no goal matching %q", ref)
+	}
+	return match, nil
+}
+
 // goalMetricLabel renders an aligned, indented label column so the metric
 // values line up under one another.
 func goalMetricLabel(label string) string {
@@ -559,50 +632,228 @@ func goalUsageSummary(g Goal) string {
 	return strings.Join(parts, " ")
 }
 
-func (s *Store) readLocked() (*Goal, error) {
+// List returns every goal (value copies) and the focused goal's id.
+func (s *Store) List() ([]Goal, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	goals, focused, err := s.readCollectionLocked()
+	if err != nil {
+		return nil, "", err
+	}
+	out := make([]Goal, 0, len(goals))
+	for _, g := range goals {
+		out = append(out, *g)
+	}
+	return out, focused, nil
+}
+
+// AddGoal appends a new active goal and focuses it, parking any previously
+// active goal. It backs /goal <objective> so goals accumulate instead of
+// replacing one another.
+func (s *Store) AddGoal(objective string, tokenBudget *int) (Goal, error) {
+	objective, err := validateObjective(objective)
+	if err != nil {
+		return Goal{}, err
+	}
+	if err := validateTokenBudget(tokenBudget); err != nil {
+		return Goal{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := nowSeconds()
+	g := &Goal{
+		ID:            uuid.NewString(),
+		ThreadID:      s.threadIDLocked(),
+		Objective:     objective,
+		Status:        StatusActive,
+		TokenBudget:   cloneIntPtr(tokenBudget),
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		LastStartedAt: &now,
+	}
+	g.Status = statusAfterBudgetLimit(g.Status, g.TokensUsed, g.TokenBudget)
+	if g.Status != StatusActive {
+		g.LastStartedAt = nil
+	}
+	if err := s.writeLocked(g); err != nil {
+		return Goal{}, err
+	}
+	return *g, nil
+}
+
+// Focus switches the focused goal to id and resumes it, parking any other
+// active goal. Returns ErrNoGoal when id is not present.
+func (s *Store) Focus(id string) (Goal, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	goals, _, err := s.readCollectionLocked()
+	if err != nil {
+		return Goal{}, err
+	}
+	target := findGoal(goals, id)
+	if target == nil {
+		return Goal{}, ErrNoGoal
+	}
+	now := nowSeconds()
+	previousStatus := target.Status
+	nextStatus := statusAfterExplicitStatusUpdate(target.Status, StatusActive, target.TokensUsed, target.TokenBudget)
+	target.Status = nextStatus
+	target.UpdatedAt = now
+	if nextStatus == StatusActive {
+		if previousStatus != StatusActive {
+			target.LastStartedAt = &now
+			target.VerifierRejects = 0
+		}
+	} else {
+		target.LastStartedAt = nil
+	}
+	if nextStatus != StatusComplete {
+		target.CompletedAt = nil
+	}
+	if err := s.writeLocked(target); err != nil {
+		return Goal{}, err
+	}
+	return *target, nil
+}
+
+// readCollectionLocked returns every goal plus the focused id, migrating a
+// legacy single-goal store to the list shape on read.
+func (s *Store) readCollectionLocked() ([]*Goal, string, error) {
 	ref, ok := s.refLocked()
 	if !ok {
-		return cloneGoalPtr(s.current), nil
+		return cloneGoals(s.goals), s.focusedID, nil
 	}
 	raw, err := os.ReadFile(GoalFilePath(ref))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
+			return nil, "", nil
 		}
-		return nil, err
+		return nil, "", err
 	}
 	var file goalFile
 	if err := json.Unmarshal(raw, &file); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if file.Version != storeVersion {
-		return nil, fmt.Errorf("goal: unsupported store version %d", file.Version)
+		return nil, "", fmt.Errorf("goal: unsupported store version %d", file.Version)
 	}
-	if file.Goal != nil {
-		if err := validateGoalFields(file.Goal); err != nil {
-			return nil, err
+	goals := file.Goals
+	focused := file.Focused
+	if goals == nil && file.Goal != nil {
+		// Legacy single-goal store: the one goal is the focused goal.
+		goals = []*Goal{file.Goal}
+		focused = file.Goal.ID
+	}
+	for _, g := range goals {
+		if err := validateGoalFields(g); err != nil {
+			return nil, "", err
 		}
 	}
-	return cloneGoalPtr(file.Goal), nil
+	return cloneGoals(goals), focused, nil
 }
 
-func (s *Store) writeLocked(goal *Goal) error {
+func (s *Store) writeCollectionLocked(goals []*Goal, focused string) error {
 	ref, ok := s.refLocked()
 	if !ok {
-		s.current = cloneGoalPtr(goal)
+		s.goals = cloneGoals(goals)
+		s.focusedID = focused
 		return nil
 	}
 	if err := os.MkdirAll(ref.BaseDir, 0o755); err != nil {
 		return err
 	}
-	if goal != nil && goal.ThreadID == "" {
-		goal.ThreadID = ref.ThreadID
+	for _, g := range goals {
+		if g != nil && g.ThreadID == "" {
+			g.ThreadID = ref.ThreadID
+		}
 	}
-	data, err := json.MarshalIndent(goalFile{Version: storeVersion, Goal: goal}, "", "  ")
+	data, err := json.MarshalIndent(goalFile{Version: storeVersion, Goals: goals, Focused: focused}, "", "  ")
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(GoalFilePath(ref), append(data, '\n'), 0o600)
+}
+
+// readLocked returns the focused goal, or nil when no goal is focused. It is
+// the compatibility surface every single-goal operation reads through.
+func (s *Store) readLocked() (*Goal, error) {
+	goals, focused, err := s.readCollectionLocked()
+	if err != nil {
+		return nil, err
+	}
+	return findGoal(goals, focused), nil
+}
+
+// writeLocked persists a mutated focused goal. A nil goal clears the focused
+// goal (leaving any others parked). Otherwise the goal is upserted by ID and
+// becomes the focused goal; if it is active, any other active goal is demoted
+// to paused so at most one goal is ever active.
+func (s *Store) writeLocked(goal *Goal) error {
+	goals, focused, err := s.readCollectionLocked()
+	if err != nil {
+		return err
+	}
+	if goal == nil {
+		goals = removeGoal(goals, focused)
+		return s.writeCollectionLocked(goals, "")
+	}
+	goals = upsertGoal(goals, goal)
+	if goal.Status == StatusActive {
+		for _, g := range goals {
+			if g.ID != goal.ID && g.Status == StatusActive {
+				g.Status = StatusPaused
+				g.LastStartedAt = nil
+				g.UpdatedAt = goal.UpdatedAt
+			}
+		}
+	}
+	return s.writeCollectionLocked(goals, goal.ID)
+}
+
+func findGoal(goals []*Goal, id string) *Goal {
+	if id == "" {
+		return nil
+	}
+	for _, g := range goals {
+		if g != nil && g.ID == id {
+			return cloneGoalPtr(g)
+		}
+	}
+	return nil
+}
+
+func upsertGoal(goals []*Goal, goal *Goal) []*Goal {
+	for i, g := range goals {
+		if g != nil && g.ID == goal.ID {
+			goals[i] = cloneGoalPtr(goal)
+			return goals
+		}
+	}
+	return append(goals, cloneGoalPtr(goal))
+}
+
+func removeGoal(goals []*Goal, id string) []*Goal {
+	if id == "" {
+		return goals
+	}
+	out := goals[:0]
+	for _, g := range goals {
+		if g != nil && g.ID != id {
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
+func cloneGoals(goals []*Goal) []*Goal {
+	if goals == nil {
+		return nil
+	}
+	out := make([]*Goal, 0, len(goals))
+	for _, g := range goals {
+		out = append(out, cloneGoalPtr(g))
+	}
+	return out
 }
 
 func (s *Store) refLocked() (StoreRef, bool) {

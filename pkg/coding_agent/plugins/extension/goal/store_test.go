@@ -1,6 +1,7 @@
 package goal
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"strings"
@@ -9,6 +10,112 @@ import (
 
 	"github.com/openmodu/modu/pkg/types"
 )
+
+func TestAddGoalParksPreviousActive(t *testing.T) {
+	s := NewStore()
+	first, err := s.Start("first")
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	second, err := s.AddGoal("second", nil)
+	if err != nil {
+		t.Fatalf("AddGoal: %v", err)
+	}
+
+	goals, focused, err := s.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(goals) != 2 {
+		t.Fatalf("want 2 goals, got %d", len(goals))
+	}
+	if focused != second.ID {
+		t.Errorf("focused = %s, want new goal %s", focused, second.ID)
+	}
+	if second.Status != StatusActive {
+		t.Errorf("new goal status = %q, want active", second.Status)
+	}
+	for _, g := range goals {
+		if g.ID == first.ID && g.Status != StatusPaused {
+			t.Errorf("previous active goal should be parked, got %q", g.Status)
+		}
+	}
+}
+
+func TestFocusSwitchesActiveGoal(t *testing.T) {
+	s := NewStore()
+	first, _ := s.Start("first")
+	second, _ := s.AddGoal("second", nil)
+
+	got, err := s.Focus(first.ID)
+	if err != nil {
+		t.Fatalf("Focus: %v", err)
+	}
+	if got.Status != StatusActive {
+		t.Errorf("focused goal status = %q, want active", got.Status)
+	}
+	current, _ := s.Current()
+	if current.ID != first.ID {
+		t.Errorf("Current().ID = %s, want %s", current.ID, first.ID)
+	}
+	goals, _, _ := s.List()
+	for _, g := range goals {
+		if g.ID == second.ID && g.Status == StatusActive {
+			t.Error("previously active goal should be parked after refocus")
+		}
+	}
+
+	if _, err := s.Focus("no-such-id"); !errors.Is(err, ErrNoGoal) {
+		t.Errorf("Focus(unknown) err = %v, want ErrNoGoal", err)
+	}
+}
+
+func TestLegacySingleGoalFileMigrates(t *testing.T) {
+	dir := t.TempDir()
+	ref := StoreRef{BaseDir: dir, ThreadID: "legacy"}
+	legacy := goalFile{Version: storeVersion, Goal: &Goal{
+		ID:        "legacy-goal",
+		ThreadID:  "legacy",
+		Objective: "ported from single-goal store",
+		Status:    StatusActive,
+		CreatedAt: 1,
+		UpdatedAt: 1,
+	}}
+	data, _ := json.MarshalIndent(legacy, "", "  ")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(GoalFilePath(ref), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s := NewStore()
+	s.SetRefProvider(func() StoreRef { return ref })
+	got, ok := s.Current()
+	if !ok || got.ID != "legacy-goal" {
+		t.Fatalf("legacy goal not migrated as focused: %+v ok=%v", got, ok)
+	}
+	goals, focused, _ := s.List()
+	if len(goals) != 1 || focused != "legacy-goal" {
+		t.Fatalf("legacy migration: goals=%d focused=%q", len(goals), focused)
+	}
+}
+
+func TestResolveGoalRef(t *testing.T) {
+	goals := []Goal{{ID: "abc123"}, {ID: "def456"}}
+	if id, err := resolveGoalRef(goals, "2"); err != nil || id != "def456" {
+		t.Errorf("index ref = %q, %v; want def456", id, err)
+	}
+	if id, err := resolveGoalRef(goals, "abc"); err != nil || id != "abc123" {
+		t.Errorf("prefix ref = %q, %v; want abc123", id, err)
+	}
+	if _, err := resolveGoalRef(goals, "9"); err == nil {
+		t.Error("out-of-range index should error")
+	}
+	if _, err := resolveGoalRef(goals, "zzz"); err == nil {
+		t.Error("unknown ref should error")
+	}
+}
 
 func TestStartRejectsEmpty(t *testing.T) {
 	_, err := NewStore().Start("")
@@ -198,7 +305,7 @@ func TestGoalUsageSummaryMatchesPiGoal(t *testing.T) {
 
 func TestFormatGoalForUserMatchesPiGoalCompletedTimestamp(t *testing.T) {
 	completed := int64(1714525200)
-	s := &Store{current: &Goal{
+	focused := &Goal{
 		ID:              "goal-local-time",
 		Objective:       "check timezone",
 		Status:          StatusComplete,
@@ -206,7 +313,8 @@ func TestFormatGoalForUserMatchesPiGoalCompletedTimestamp(t *testing.T) {
 		UpdatedAt:       completed,
 		CompletedAt:     &completed,
 		TimeUsedSeconds: 3600,
-	}}
+	}
+	s := &Store{goals: []*Goal{focused}, focusedID: focused.ID}
 	got := s.Summary()
 	if strings.Contains(got, "Started:") {
 		t.Fatalf("pi-goal format should not include Started, got:\n%s", got)

@@ -20,8 +20,6 @@ const (
 	extensionSubagentChildUsage = "subagent_child_usage"
 	goalContinuationType        = "pi-goal-continuation"
 	goalBudgetLimitType         = "pi-goal-budget-limit"
-	replaceGoalChoice           = "Replace current goal"
-	cancelReplaceChoice         = "Cancel"
 	resumeGoalChoice            = "Resume goal"
 	leaveGoalPausedChoice       = "Leave paused"
 )
@@ -163,6 +161,19 @@ func (e *Extension) RuntimeState() any {
 	if g.CompletedAt != nil {
 		state["completedAt"] = *g.CompletedAt
 	}
+	if all, focused, err := e.store.List(); err == nil && len(all) > 1 {
+		items := make([]map[string]any, 0, len(all))
+		for _, item := range all {
+			items = append(items, map[string]any{
+				"id":         item.ID,
+				"objective":  item.Objective,
+				"status":     item.Status,
+				"focused":    item.ID == focused,
+				"tokensUsed": item.TokensUsed,
+			})
+		}
+		state["goals"] = items
+	}
 	return state
 }
 
@@ -194,6 +205,8 @@ func (e *Extension) Init(api extension.ExtensionAPI) error {
 	api.RegisterCommand("goal-resume", "Resume a paused goal and inject one continuation immediately", e.cmdResume)
 	api.RegisterCommand("goal-cancel", "Clear the current goal", e.cmdClear)
 	api.RegisterCommand("goal-status", "Print the current goal's status", e.cmdStatus)
+	api.RegisterCommand("goal-list", "List all goals in this session", e.cmdList)
+	api.RegisterCommand("goal-focus", "Switch the focused goal: /goal-focus <number|id>", e.cmdFocus)
 	api.RegisterCommand("goal-watch", "Toggle goal indicator in the statusbar: /goal-watch [on|off]", e.cmdWatch)
 
 	api.RegisterTool(&createGoalTool{store: e.store, onCreate: e.beginAgentGoalAccounting})
@@ -233,25 +246,73 @@ func (e *Extension) cmdGoal(args string) error {
 }
 
 func (e *Extension) cmdSetObjective(objective string) error {
-	if current, ok, err := e.store.CurrentErr(); err != nil {
+	current, hasCurrent, err := e.store.CurrentErr()
+	if err != nil {
 		return err
-	} else if ok {
-		if e.api.Select(fmt.Sprintf("Replace goal?\nNew objective: %s", objective), []string{replaceGoalChoice, cancelReplaceChoice}) != replaceGoalChoice {
-			e.tell("Goal unchanged")
-			return nil
-		}
-		if current.Status == StatusActive {
-			e.accountCurrentAgentTurn(types.AgentUsage{}, false)
-		}
 	}
-	g, err := e.store.ReplaceObjective(objective, nil)
+	// Re-issuing the focused goal's own objective resumes it in place rather
+	// than creating a duplicate.
+	if hasCurrent && strings.TrimSpace(current.Objective) == strings.TrimSpace(objective) {
+		g, err := e.store.ReplaceObjective(objective, nil)
+		if err != nil {
+			return err
+		}
+		if g.Status == StatusActive {
+			e.beginAgentGoalAccounting(g)
+		}
+		e.tell(formatGoalActionFeedback(g))
+		return e.queueGoalContinuation(g)
+	}
+	// A new objective adds another goal and focuses it; the previously active
+	// goal is parked (the store demotes it), so flush its accounting first.
+	if hasCurrent && current.Status == StatusActive {
+		e.accountCurrentAgentTurn(types.AgentUsage{}, false)
+		e.stopAgentGoalAccounting(current.ID)
+	}
+	g, err := e.store.AddGoal(objective, nil)
 	if err != nil {
 		return err
 	}
 	if g.Status == StatusActive {
 		e.beginAgentGoalAccounting(g)
-	} else {
-		e.stopAgentGoalAccounting(g.ID)
+	}
+	e.tell(formatGoalActionFeedback(g))
+	return e.queueGoalContinuation(g)
+}
+
+func (e *Extension) cmdList(string) error {
+	goals, focused, err := e.store.List()
+	if err != nil {
+		return err
+	}
+	if len(goals) == 0 {
+		e.tell(goalUsage + "\nNo goals are set.")
+		return nil
+	}
+	e.tell(formatGoalList(goals, focused))
+	return nil
+}
+
+func (e *Extension) cmdFocus(args string) error {
+	goals, _, err := e.store.List()
+	if err != nil {
+		return err
+	}
+	id, err := resolveGoalRef(goals, args)
+	if err != nil {
+		return err
+	}
+	// Flush the outgoing focused goal's accounting before switching.
+	if current, ok, _ := e.store.CurrentErr(); ok && current.Status == StatusActive && current.ID != id {
+		e.accountCurrentAgentTurn(types.AgentUsage{}, false)
+		e.stopAgentGoalAccounting(current.ID)
+	}
+	g, err := e.store.Focus(id)
+	if err != nil {
+		return err
+	}
+	if g.Status == StatusActive {
+		e.beginAgentGoalAccounting(g)
 	}
 	e.tell(formatGoalActionFeedback(g))
 	return e.queueGoalContinuation(g)
