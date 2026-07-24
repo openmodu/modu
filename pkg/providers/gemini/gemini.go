@@ -54,14 +54,23 @@ func (p *geminiProvider) Chat(ctx context.Context, req *providers.ChatRequest) (
 		return nil, fmt.Errorf("gemini: %w", err)
 	}
 	text := resp.Text()
-	return &providers.ChatResponse{
+	out := &providers.ChatResponse{
 		ID:    p.id,
 		Model: model,
 		Message: providers.Message{
 			Role:    providers.RoleAssistant,
 			Content: text,
 		},
-	}, nil
+	}
+	if u := resp.UsageMetadata; u != nil {
+		out.Usage = providers.Usage{
+			PromptTokens:     int(u.PromptTokenCount),
+			CompletionTokens: int(u.CandidatesTokenCount) + int(u.ThoughtsTokenCount),
+			TotalTokens:      int(u.TotalTokenCount),
+			CacheReadTokens:  int(u.CachedContentTokenCount),
+		}
+	}
+	return out, nil
 }
 
 func (p *geminiProvider) Stream(ctx context.Context, req *providers.ChatRequest) (types.EventStream, error) {
@@ -88,6 +97,7 @@ func (p *geminiProvider) stream(ctx context.Context, model string, contents []*g
 
 	var buf strings.Builder
 	started := false
+	var usage *genai.GenerateContentResponseUsageMetadata
 
 	for resp, err := range p.client.Models.GenerateContentStream(ctx, model, contents, nil) {
 		if err != nil {
@@ -95,6 +105,12 @@ func (p *geminiProvider) stream(ctx context.Context, model string, contents []*g
 			stream.Push(types.StreamEvent{Type: types.EventError, Error: err})
 			stream.Resolve(partial, err)
 			return
+		}
+		// UsageMetadata arrives cumulatively; the last non-nil chunk holds the
+		// final counts. Capture it before the empty-text skip below, since the
+		// usage-only trailer chunk carries no text.
+		if resp.UsageMetadata != nil {
+			usage = resp.UsageMetadata
 		}
 		delta := resp.Text()
 		if delta == "" {
@@ -119,6 +135,19 @@ func (p *geminiProvider) stream(ctx context.Context, model string, contents []*g
 			Content:      buf.String(),
 			Partial:      partial,
 		})
+	}
+
+	if usage != nil {
+		// PromptTokenCount includes the cached content, so subtract it to keep
+		// Input as the fresh prompt and report reuse under CacheRead. Thoughts
+		// tokens are billed as output, so fold them into Output.
+		cacheRead := int(usage.CachedContentTokenCount)
+		partial.Usage = types.AgentUsage{
+			Input:       max(int(usage.PromptTokenCount)-cacheRead, 0),
+			Output:      int(usage.CandidatesTokenCount) + int(usage.ThoughtsTokenCount),
+			CacheRead:   cacheRead,
+			TotalTokens: int(usage.TotalTokenCount),
+		}
 	}
 
 	partial.StopReason = "end_turn"

@@ -90,6 +90,44 @@ func TestLifecyclePauseResumeComplete(t *testing.T) {
 	}
 }
 
+func TestAccountUsageSplitsBreakdownAndExcludesCacheFromBudget(t *testing.T) {
+	s := NewStore()
+	budget := 500
+	g, err := s.StartWithBudget("ship it", &budget)
+	if err != nil {
+		t.Fatalf("StartWithBudget: %v", err)
+	}
+
+	usage := types.AgentUsage{Input: 100, Output: 40, CacheRead: 900, CacheWrite: 10}
+	if _, _, err := s.AccountUsage(usage, 0, false, g.ID); err != nil {
+		t.Fatalf("AccountUsage: %v", err)
+	}
+	if _, _, err := s.AccountUsage(usage, 0, false, g.ID); err != nil {
+		t.Fatalf("AccountUsage: %v", err)
+	}
+
+	got, _ := s.Current()
+	// Budget counter is fresh Input+Output only: (100+40)*2 = 280. The 900
+	// cache-read tokens per turn must not burn budget, so status stays active
+	// well under the 500 budget instead of blowing past it.
+	if got.TokensUsed != 280 {
+		t.Errorf("TokensUsed = %d, want 280", got.TokensUsed)
+	}
+	if got.Status != StatusActive {
+		t.Errorf("Status = %q, want active (cache must not count toward budget)", got.Status)
+	}
+	if got.InputTokens != 200 || got.OutputTokens != 80 {
+		t.Errorf("input/output = %d/%d, want 200/80", got.InputTokens, got.OutputTokens)
+	}
+	if got.CacheReadTokens != 1800 || got.CacheWriteTokens != 20 {
+		t.Errorf("cache read/write = %d/%d, want 1800/20", got.CacheReadTokens, got.CacheWriteTokens)
+	}
+
+	if split := goalTokenSplit(&got); !strings.Contains(split, "cache ") || !strings.Contains(split, "in ") {
+		t.Errorf("split = %q, want in + cache", split)
+	}
+}
+
 func TestCancelClearsStore(t *testing.T) {
 	s := NewStore()
 	s.Start("draft a PR")
@@ -133,10 +171,10 @@ func TestSummaryWithAndWithoutGoal(t *testing.T) {
 	}
 	summary := s.Summary()
 	for _, want := range []string{
-		"Objective: ship modu_cron v1",
-		"Status: active",
-		"Time used: 1m",
-		"Tokens used: 1.2K/2.5K",
+		"● active",
+		"ship modu_cron v1",
+		"1.2K / 2.5K",
+		"(49%)",
 	} {
 		if !strings.Contains(summary, want) {
 			t.Errorf("Summary missing %q:\n%s", want, summary)
@@ -173,8 +211,11 @@ func TestFormatGoalForUserMatchesPiGoalCompletedTimestamp(t *testing.T) {
 	if strings.Contains(got, "Started:") {
 		t.Fatalf("pi-goal format should not include Started, got:\n%s", got)
 	}
-	if want := "Completed at: 2024-05-01T01:00:00Z"; !strings.Contains(got, want) {
-		t.Fatalf("expected summary to contain %q, got:\n%s", want, got)
+	if want := "2024-05-01T01:00:00Z"; !strings.Contains(got, want) {
+		t.Fatalf("expected summary to contain completion timestamp %q, got:\n%s", want, got)
+	}
+	if !strings.Contains(got, "✓ complete") {
+		t.Fatalf("expected completed goal to lead with ✓ complete, got:\n%s", got)
 	}
 }
 

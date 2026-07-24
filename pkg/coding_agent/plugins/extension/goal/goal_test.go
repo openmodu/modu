@@ -430,10 +430,10 @@ func TestUpdateGoalCompleteStopsLoop(t *testing.T) {
 	}
 	foundCompleteNotice := false
 	for _, notice := range api.notices {
-		// formatGoalActionFeedback emits "Goal complete\n<FormatGoalForUser>"
-		// so the status label and the objective land on separate lines —
+		// formatGoalActionFeedback emits FormatGoalForUser, whose header leads
+		// with the status icon+label and puts the objective on its own line —
 		// match each independently rather than wedging a fixed separator.
-		if strings.Contains(notice, "Goal complete") && strings.Contains(notice, "compile success") {
+		if strings.Contains(notice, "✓ complete") && strings.Contains(notice, "compile success") {
 			foundCompleteNotice = true
 			break
 		}
@@ -576,7 +576,7 @@ func TestRuntimeStateExposesIndicator(t *testing.T) {
 	if state["status"] != StatusActive {
 		t.Fatalf("status = %v, want active", state["status"])
 	}
-	if got, _ := state["indicator"].(string); !strings.HasPrefix(got, "goal ") {
+	if got, _ := state["indicator"].(string); !strings.HasPrefix(got, "● goal ") {
 		t.Fatalf("indicator missing pursuing text: %q", got)
 	}
 
@@ -584,7 +584,7 @@ func TestRuntimeStateExposesIndicator(t *testing.T) {
 		t.Fatalf("/goal-pause: %v", err)
 	}
 	state, _ = ext.RuntimeState().(map[string]any)
-	if got, _ := state["indicator"].(string); got != "goal paused" {
+	if got, _ := state["indicator"].(string); got != "⏸ goal paused" {
 		t.Fatalf("paused indicator mismatch: %q", got)
 	}
 }
@@ -654,15 +654,15 @@ func TestGoalWatchRejectsBadArgs(t *testing.T) {
 func TestGoalIndicatorTextMatchesPiGoalFooter(t *testing.T) {
 	budget := 50_000
 	active := Goal{Status: StatusActive, TokenBudget: &budget, TokensUsed: 63_876}
-	if got, want := goalIndicatorText(active), "goal 63.9K/50K"; got != want {
+	if got, want := goalIndicatorText(active), "● goal 63.9K/50K"; got != want {
 		t.Fatalf("active budget indicator = %q, want %q", got, want)
 	}
 	limited := Goal{Status: StatusBudgetLimited, TokenBudget: &budget, TokensUsed: 63_876}
-	if got, want := goalIndicatorText(limited), "goal limited 63.9K/50K"; got != want {
+	if got, want := goalIndicatorText(limited), "⚠ goal limited 63.9K/50K"; got != want {
 		t.Fatalf("budget-limited indicator = %q, want %q", got, want)
 	}
 	abandoned := Goal{Status: StatusBudgetLimited}
-	if got, want := goalIndicatorText(abandoned), "goal limited"; got != want {
+	if got, want := goalIndicatorText(abandoned), "⚠ goal limited"; got != want {
 		t.Fatalf("budget-limited without budget indicator = %q, want %q", got, want)
 	}
 }
@@ -675,7 +675,7 @@ func TestSlashGoalNotifiesHost(t *testing.T) {
 	if len(api.notices) == 0 {
 		t.Fatal("expected host notification")
 	}
-	if got := api.notices[len(api.notices)-1]; !strings.Contains(got, "goal: Goal active") ||
+	if got := api.notices[len(api.notices)-1]; !strings.Contains(got, "● active") ||
 		!strings.Contains(got, "notify the tui") {
 		t.Fatalf("notification mismatch: %q", got)
 	}

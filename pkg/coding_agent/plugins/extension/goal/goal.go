@@ -136,17 +136,21 @@ func (e *Extension) RuntimeState() any {
 		}
 	}
 	state := map[string]any{
-		"active":          g.Status == StatusActive,
-		"watching":        watching,
-		"id":              g.ID,
-		"threadId":        g.ThreadID,
-		"objective":       g.Objective,
-		"status":          g.Status,
-		"tokensUsed":      g.TokensUsed,
-		"timeUsedSeconds": g.TimeUsedSeconds,
-		"createdAt":       g.CreatedAt,
-		"updatedAt":       g.UpdatedAt,
-		"indicator":       goalIndicatorText(g),
+		"active":           g.Status == StatusActive,
+		"watching":         watching,
+		"id":               g.ID,
+		"threadId":         g.ThreadID,
+		"objective":        g.Objective,
+		"status":           g.Status,
+		"tokensUsed":       g.TokensUsed,
+		"inputTokens":      g.InputTokens,
+		"outputTokens":     g.OutputTokens,
+		"cacheReadTokens":  g.CacheReadTokens,
+		"cacheWriteTokens": g.CacheWriteTokens,
+		"timeUsedSeconds":  g.TimeUsedSeconds,
+		"createdAt":        g.CreatedAt,
+		"updatedAt":        g.UpdatedAt,
+		"indicator":        goalIndicatorText(g),
 	}
 	if g.TokenBudget != nil {
 		state["tokenBudget"] = *g.TokenBudget
@@ -663,6 +667,23 @@ func collectUsage(messages []types.AgentMessage) types.AgentUsage {
 	return out
 }
 
+// goalStatusIcon returns a single-width status glyph for the detail view and
+// any other beautified surface.
+func goalStatusIcon(status Status) string {
+	switch status {
+	case StatusActive:
+		return "●"
+	case StatusPaused:
+		return "⏸"
+	case StatusBudgetLimited:
+		return "⚠"
+	case StatusComplete:
+		return "✓"
+	default:
+		return "•"
+	}
+}
+
 func goalStatusLabel(status Status) string {
 	switch status {
 	case StatusActive:
@@ -679,35 +700,36 @@ func goalStatusLabel(status Status) string {
 }
 
 func goalIndicatorText(g Goal) string {
+	icon := goalStatusIcon(g.Status)
 	switch g.Status {
 	case StatusActive:
 		if g.TokenBudget != nil {
-			return fmt.Sprintf("goal %s/%s", formatTokensCompact(g.TokensUsed), formatTokensCompact(*g.TokenBudget))
+			return fmt.Sprintf("%s goal %s/%s", icon, formatTokensCompact(g.TokensUsed), formatTokensCompact(*g.TokenBudget))
 		}
-		return "goal " + formatElapsed(g.TimeUsedSeconds)
+		return icon + " goal " + formatElapsed(g.TimeUsedSeconds)
 	case StatusPaused:
-		return "goal paused"
+		return icon + " goal paused"
 	case StatusBudgetLimited:
 		if g.TokenBudget != nil {
-			return fmt.Sprintf("goal limited %s/%s", formatTokensCompact(g.TokensUsed), formatTokensCompact(*g.TokenBudget))
+			return fmt.Sprintf("%s goal limited %s/%s", icon, formatTokensCompact(g.TokensUsed), formatTokensCompact(*g.TokenBudget))
 		}
-		return "goal limited"
+		return icon + " goal limited"
 	case StatusComplete:
 		if g.TokenBudget != nil {
-			return fmt.Sprintf("goal done %s", formatTokensCompact(g.TokensUsed))
+			return fmt.Sprintf("%s goal done %s", icon, formatTokensCompact(g.TokensUsed))
 		}
-		return "goal done " + formatElapsed(g.TimeUsedSeconds)
+		return icon + " goal done " + formatElapsed(g.TimeUsedSeconds)
 	default:
 		return string(g.Status)
 	}
 }
 
 // formatGoalActionFeedback assembles the slash-command echo / host
-// notification body. Mirrors pi-goal's "Goal <label>\n<formatGoalForTool>"
-// pattern so callers see the full state (Status / Time used / Tokens used /
-// Completed at) — not just an objective preview.
+// notification body. The FormatGoalForUser header already leads with the
+// status icon and label, so callers see the full state (status / tokens /
+// time / completion) without a duplicate "Goal <status>" prefix.
 func formatGoalActionFeedback(g Goal) string {
-	return fmt.Sprintf("Goal %s\n%s", goalStatusLabel(g.Status), FormatGoalForUser(&g))
+	return FormatGoalForUser(&g)
 }
 
 func (e *Extension) tell(msg string) {
