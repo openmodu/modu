@@ -157,12 +157,8 @@ func (r *Runtime) Run(run func(context.Context) error) {
 
 		nextRun := run
 		for {
-			promptCtx, cancel := context.WithCancel(r.ctx)
 			started := r.now()
-			promptID := r.beginPrompt(cancel)
-			err := nextRun(promptCtx)
-			steeringCancel := r.finishPrompt(promptID, err)
-			cancel()
+			err, steeringCancel := r.runTurn(nextRun)
 
 			if r.session.HasQueuedMessages() && (err == nil || steeringCancel) {
 				r.client.SetStatus("running", 0)
@@ -174,6 +170,21 @@ func (r *Runtime) Run(run func(context.Context) error) {
 			return
 		}
 	})
+}
+
+// runTurn executes one agent turn with its own cancellable context. The
+// deferred cleanup releases the context and clears prompt state even if run
+// panics, so a panic cannot leave IsPromptActive stuck true; the panic then
+// propagates to the agent-loop recovery in Go.
+func (r *Runtime) runTurn(run func(context.Context) error) (err error, steeringCancel bool) {
+	promptCtx, cancel := context.WithCancel(r.ctx)
+	promptID := r.beginPrompt(cancel)
+	defer func() {
+		steeringCancel = r.finishPrompt(promptID, err)
+		cancel()
+	}()
+	err = run(promptCtx)
+	return
 }
 
 func (r *Runtime) QueueFollowUp(text string, images []types.ImageContent, requireActive bool) {
@@ -216,7 +227,9 @@ func (r *Runtime) QueueSteer(text string, images []types.ImageContent, requireAc
 		}
 		r.promptMu.Lock()
 		cancel := r.currentCancel
-		r.continueQueuedAfterCancel = true
+		if cancel != nil {
+			r.continueQueuedAfterCancel = true
+		}
 		r.promptMu.Unlock()
 		if cancel != nil {
 			cancel()

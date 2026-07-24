@@ -222,6 +222,30 @@ func TestRuntimeRejectsRequiredQueueWhenIdle(t *testing.T) {
 	}
 }
 
+func TestRuntimeRunPanicClearsPromptState(t *testing.T) {
+	session := newRuntimeSessionStub()
+	runtime, err := NewRuntime(RuntimeOptions{
+		Context:           context.Background(),
+		Session:           session,
+		Client:            modutui.NewClient(func(any) {}),
+		TerminalStatusTTL: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runtime.Run(func(context.Context) error {
+		panic("boom")
+	})
+
+	waitRuntimeCondition(t, func() bool {
+		return !runtime.IsForegroundRunActive()
+	})
+	if runtime.IsPromptActive() {
+		t.Fatal("IsPromptActive stuck true after panicking run")
+	}
+}
+
 func waitRuntimeSignal(t *testing.T, signal <-chan struct{}) {
 	t.Helper()
 	select {
