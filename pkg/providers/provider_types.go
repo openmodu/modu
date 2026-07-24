@@ -58,9 +58,15 @@ type ChatRequest struct {
 
 // Usage token 用量
 type Usage struct {
+	// PromptTokens is the raw input count as reported by the API and, like the
+	// OpenAI/Anthropic/Gemini originals, still includes any cache-hit tokens.
+	// CacheReadTokens / CacheWriteTokens are the cached subset broken out for
+	// consumers that want to separate fresh input from reuse.
 	PromptTokens     int `json:"prompt_tokens"`
 	CompletionTokens int `json:"completion_tokens"`
 	TotalTokens      int `json:"total_tokens"`
+	CacheReadTokens  int `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
 }
 
 // ChatResponse 最终响应（非流式直接返回 / 流式 Result() 返回）

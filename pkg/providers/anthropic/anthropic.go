@@ -28,6 +28,15 @@ type anthropicProvider struct {
 	model   string
 }
 
+// anthropicUsage mirrors the Messages API usage object. input_tokens already
+// excludes the cached portions, which are reported separately.
+type anthropicUsage struct {
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+}
+
 // New creates an Anthropic provider.
 func New(apiKey, model string) providers.Provider {
 	if model == "" {
@@ -68,8 +77,9 @@ func (p *anthropicProvider) Chat(ctx context.Context, req *providers.ChatRequest
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
-		StopReason string `json:"stop_reason"`
-		Model      string `json:"model"`
+		StopReason string         `json:"stop_reason"`
+		Model      string         `json:"model"`
+		Usage      anthropicUsage `json:"usage"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("anthropic: decode: %w", err)
@@ -80,10 +90,20 @@ func (p *anthropicProvider) Chat(ctx context.Context, req *providers.ChatRequest
 			sb.WriteString(b.Text)
 		}
 	}
+	// input_tokens excludes the cached portions, so add them back to keep
+	// PromptTokens the total input while reporting the cached subset.
+	promptTokens := raw.Usage.InputTokens + raw.Usage.CacheReadInputTokens + raw.Usage.CacheCreationInputTokens
 	return &providers.ChatResponse{
 		Model:        raw.Model,
 		Message:      providers.Message{Role: providers.RoleAssistant, Content: sb.String()},
 		FinishReason: raw.StopReason,
+		Usage: providers.Usage{
+			PromptTokens:     promptTokens,
+			CompletionTokens: raw.Usage.OutputTokens,
+			TotalTokens:      promptTokens + raw.Usage.OutputTokens,
+			CacheReadTokens:  raw.Usage.CacheReadInputTokens,
+			CacheWriteTokens: raw.Usage.CacheCreationInputTokens,
+		},
 	}, nil
 }
 
@@ -127,12 +147,16 @@ func (p *anthropicProvider) readSSE(body io.ReadCloser, model string, stream *ty
 
 	if err := providers.ScanSSEData(body, func(data string) bool {
 		var ev struct {
-			Type  string `json:"type"`
+			Type    string `json:"type"`
+			Message *struct {
+				Usage *anthropicUsage `json:"usage"`
+			} `json:"message"`
 			Delta *struct {
 				Type       string `json:"type"`
 				Text       string `json:"text"`
 				StopReason string `json:"stop_reason"`
 			} `json:"delta"`
+			Usage *anthropicUsage `json:"usage"`
 			Error *struct {
 				Message string `json:"message"`
 			} `json:"error"`
@@ -142,6 +166,17 @@ func (p *anthropicProvider) readSSE(body io.ReadCloser, model string, stream *ty
 		}
 
 		switch ev.Type {
+		case "message_start":
+			// message_start carries the input side: fresh input_tokens plus
+			// the cache-hit and cache-creation counts, which Anthropic already
+			// reports separately from input_tokens.
+			if ev.Message != nil && ev.Message.Usage != nil {
+				u := ev.Message.Usage
+				partial.Usage.Input = u.InputTokens
+				partial.Usage.CacheRead = u.CacheReadInputTokens
+				partial.Usage.CacheWrite = u.CacheCreationInputTokens
+				partial.Usage.Output = u.OutputTokens
+			}
 		case "content_block_start":
 			if !started {
 				started = true
@@ -160,6 +195,10 @@ func (p *anthropicProvider) readSSE(body io.ReadCloser, model string, stream *ty
 		case "message_delta":
 			if ev.Delta != nil && ev.Delta.StopReason != "" {
 				partial.StopReason = types.StopReason(ev.Delta.StopReason)
+			}
+			// message_delta carries the final cumulative output_tokens.
+			if ev.Usage != nil && ev.Usage.OutputTokens > 0 {
+				partial.Usage.Output = ev.Usage.OutputTokens
 			}
 		case "error":
 			if ev.Error != nil {
@@ -183,6 +222,8 @@ func (p *anthropicProvider) readSSE(body io.ReadCloser, model string, stream *ty
 	if partial.StopReason == "" {
 		partial.StopReason = "end_turn"
 	}
+	partial.Usage.TotalTokens = partial.Usage.Input + partial.Usage.Output +
+		partial.Usage.CacheRead + partial.Usage.CacheWrite
 	stream.Push(types.StreamEvent{Type: types.EventDone, Reason: partial.StopReason, Message: partial})
 	stream.Resolve(partial, nil)
 }

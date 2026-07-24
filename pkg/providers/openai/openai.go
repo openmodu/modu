@@ -95,9 +95,12 @@ func (p *openAIProvider) Chat(ctx context.Context, req *providers.ChatRequest) (
 		ID    string `json:"id"`
 		Model string `json:"model"`
 		Usage struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-			TotalTokens      int `json:"total_tokens"`
+			PromptTokens        int `json:"prompt_tokens"`
+			CompletionTokens    int `json:"completion_tokens"`
+			TotalTokens         int `json:"total_tokens"`
+			PromptTokensDetails struct {
+				CachedTokens int `json:"cached_tokens"`
+			} `json:"prompt_tokens_details"`
 		} `json:"usage"`
 		Choices []struct {
 			Message      providers.Message `json:"message"`
@@ -114,6 +117,7 @@ func (p *openAIProvider) Chat(ctx context.Context, req *providers.ChatRequest) (
 			PromptTokens:     raw.Usage.PromptTokens,
 			CompletionTokens: raw.Usage.CompletionTokens,
 			TotalTokens:      raw.Usage.TotalTokens,
+			CacheReadTokens:  raw.Usage.PromptTokensDetails.CachedTokens,
 		},
 	}
 	if len(raw.Choices) > 0 {
