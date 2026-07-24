@@ -5,6 +5,148 @@ enough to implement, verify, and commit independently.
 
 ## Done
 
+- 2026-07-24: completed the TUI business split. `runModuTUI` now contains
+  226 lines of startup wiring; workflow lifecycle, event subscriptions,
+  channel startup, prompter, duration, history/footer, tool-output, and content
+  conversion live in focused host modules. The former 4,228-line workflow file
+  is split into routing, panels, insights, details, and typed state decoding;
+  the former 868-line tool presenter is split into presenter, diff, and data
+  mapping. Built-in slash commands now emit standard `Entry/Node` values
+  directly instead of collecting `[]string` and joining them into one text
+  block. Dead TUI wrappers and the unused approval notifier were removed.
+  Validation passed with focused race tests, `go vet`, `deadcode`, full
+  `go test ./...`, CLI help startup, and a PTY smoke test covering startup,
+  input, streaming, and clean terminal restoration.
+
+- 2026-07-23: unified config, channel, and model interactions behind one
+  data-driven `internal/tui.Flow` protocol. A flow is a list of standard
+  choice/text steps and returns one `FlowResult{ID, Values}`; business code
+  converts that result into provider, Telegram, Feishu, or model actions. The
+  obsolete config input state machine and runner input interception were
+  deleted, and model selection moved out of the runner.
+  All static slash commands now have executable handlers in one
+  `CommandRegistry`; names, aliases, descriptions, dispatch, completion, and
+  `/help` consume that registry. Runtime extension, skill, and prompt-template
+  commands use the same registry's dynamic resolver. The nil-handler
+  compatibility entries, `executeLegacy`, exported `slash.Handle`, hard-coded
+  `slash.PrintHelp`, and the second string command switch were removed; each
+  built-in definition now owns its executable operation. Unused
+  model/add/use/remove/workflow/scoped-model hook fields and their dead
+  adapters were removed with the old config state machine.
+  At that stage, `modu_tui_runner.go` was about 1,100 lines; the 2026-07-24
+  extraction reduced it to 226.
+
+- 2026-07-23: standardized all `modu_code` host-to-TUI updates. Runtime errors,
+  panic notices, duration completion rows, transcript entries, todos, status,
+  footer, and workflow panels now use `Entry/Node/Update`. The old transcript
+  structure, Hooks API, initial-data API, and concrete Bubble Tea update
+  messages were removed from the kernel and its tests. Every semantic `Client`
+  method now enters `Client.Apply`,
+  defensively copies its data, and crosses the Bubble Tea adapter in one
+  `UpdateMsg` envelope. `tuipoc2` now seeds `InitialEntries` as the reference
+  host example. Targeted race tests, `go vet`, CLI startup, and
+  `git diff --check` pass. Full `go test ./...` has only the unrelated existing
+  `TestDefaultSystemPromptAllowsNonCodingTasks` assertion failure.
+
+- 2026-07-23: extracted WorkflowView from the TUI runner. Workflow slash
+  routing, panel construction, structured actions, runtime-state conversion,
+  cockpit/feed/map/agent views, and selection logic now live in
+  `tui_workflow_view.go`; `modu_tui_runner.go` dropped from about 5,400 to about
+  1,200 lines. A single typed snapshot decoder now normalizes workflow counts,
+  indicator, runs, phases, agents, and tool calls. Cockpit rendering,
+  shortcuts, run lookup, selected rows, and runtime fingerprints consume that
+  snapshot instead of repeatedly parsing `state["runs"]`. Decoder tests cover
+  mixed JSON/runtime scalar and collection shapes plus missing state.
+  Validation: targeted race tests and `go vet` for `pkg/modu-tui`,
+  `cmd/modu_code/internal/tui`, and `cmd/modu_code` pass; CLI startup and
+  `git diff --check` pass. Full `go test ./...` still has only the unrelated
+  `TestDefaultSystemPromptAllowsNonCodingTasks` assertion failure.
+
+- 2026-07-23: extracted the concrete ToolPresenter into
+  `tui_tool_presenter.go`. Live tool start/end events, assistant ToolCall
+  content, and restored ToolResult messages now map directly to the same
+  standard ToolNode.
+  Tool summaries, artifact metadata, code language, local write/edit diff, and
+  file preview helpers moved out of the runner with no behavior changes.
+  Direct tests cover stable call IDs across start/end, restored artifacts, and
+  cwd-relative edit previews. Validation: targeted race tests and `go vet` for
+  `pkg/modu-tui`, `cmd/modu_code/internal/tui`, and `cmd/modu_code` pass; CLI
+  startup and `git diff --check` pass. Full `go test ./...` still has only the
+  unrelated `TestDefaultSystemPromptAllowsNonCodingTasks` assertion failure.
+
+- 2026-07-23: unified restored transcript presentation with the live
+  EventPresenter. Startup restore and `/resume` now rebuild standard `Entry`
+  values and send `InitialEntries` or `ReplaceEntriesUpdate`; assistant text,
+  thinking, tool calls, tool results, images, and compaction dividers therefore
+  use the same mapping as live events. The duplicate history conversion
+  functions were removed.
+  Validation: targeted race tests and `go vet` for `pkg/modu-tui`,
+  `cmd/modu_code/internal/tui`, and `cmd/modu_code` pass; CLI startup and
+  `git diff --check` pass. Full `go test ./...` still has only the unrelated
+  `TestDefaultSystemPromptAllowsNonCodingTasks` assertion failure.
+
+- 2026-07-23: extracted live Agent and Session event presentation into
+  `internal/tui.EventPresenter`. Event ordering and user-message suppression
+  now produce standard `Entry` values with Markdown, Thinking, and Tool nodes;
+  the runner subscriptions only append those entries. Tool-specific summaries,
+  local diff previews, and artifacts remain behind a `ToolNodePresenter`
+  interface so they can move independently without changing event routing.
+  The duplicate Agent/Session event switches were removed from the runner, and
+  tests now exercise the new presenter path.
+  Validation: targeted race tests and `go vet` for `pkg/modu-tui`,
+  `cmd/modu_code/internal/tui`, and `cmd/modu_code` pass; CLI startup and
+  `git diff --check` pass. Full `go test ./...` still has only the unrelated
+  `TestDefaultSystemPromptAllowsNonCodingTasks` assertion failure.
+
+- 2026-07-23: extracted the interactive foreground Runtime and product
+  CommandRegistry from `runModuTUI`. Runtime now owns prompt/continue turns,
+  follow-up and steer queues, cancellation, foreground busy state, completion
+  status, and asynchronous panic reporting behind a small session adapter.
+  Product command names, aliases, descriptions, suggestions, and handlers now
+  share one registry; the old runner-specific `/s` and `/f` parsers were
+  removed, while commands still implemented by `pkg/slash` remain explicit
+  compatibility entries. Runtime and registry unit tests cover continuation,
+  steer cancellation, idle queue rejection, alias dispatch, deduplication, and
+  duplicate identity rejection. Validation: targeted race tests and `go vet`
+  for `pkg/modu-tui`, `cmd/modu_code/internal/tui`, and `cmd/modu_code` pass;
+  `go run ./cmd/modu_code --help`, boundary searches, and `git diff --check`
+  pass. Full `go test ./...` still has only the previously recorded unrelated
+  `TestDefaultSystemPromptAllowsNonCodingTasks` assertion failure.
+
+- 2026-07-23: added the standard TUI presentation protocol above the first
+  Client slice. `Entry` composes typed Text, Markdown, Code, Thinking, Tool,
+  Table, List, KeyValue, and Progress nodes; stable IDs support append, upsert,
+  remove, and replace operations through one `Update` protocol. Panel rows and shortcuts
+  now carry structured Action IDs and payloads. `internal/tui.Presenter` is
+  used by Dialog, slash output, model selection, and channel output, while
+  workflow navigation and control actions use typed payloads with legacy
+  commands retained for compatibility.
+  Validation: `go test -race ./pkg/modu-tui ./cmd/modu_code/internal/tui
+  ./cmd/modu_code`, targeted `go vet`, `go run ./cmd/modu_code --help`,
+  boundary searches, and `git diff --check` pass. Full `go test ./...` still
+  has only the previously recorded unrelated systemprompt assertion failure.
+
+- 2026-07-23: landed the first `modu-tui` encapsulation slice. The reusable
+  kernel now emits typed intents, schedules clipboard/paste/permission/artifact
+  I/O through services, exposes a host Client, and groups Model state into
+  transcript/composer/overlay/chrome ownership. `modu_code` now routes intents
+  through `internal/tui.IntentRouter` and shares `internal/tui.Dialog` across
+  config/channel flows; model selection, prompting, slash execution, and
+  channel output also use the Client. Bubble Tea send signatures remain only
+  at the runtime adapter, and the unused legacy `pkg/tui` package was removed.
+  Validation: `go test -race ./pkg/modu-tui ./cmd/modu_code/internal/tui
+  ./cmd/modu_code`, `go run ./cmd/modu_code --help`, architecture-boundary
+  searches, and `git diff --check` pass. `go test ./...` reaches one unrelated
+  existing failure in `pkg/coding_agent/services/systemprompt`:
+  `TestDefaultSystemPromptAllowsNonCodingTasks` expects a removed weather
+  sentence in the default prompt; the TUI change does not modify that package.
+
+- 2026-07-23: documented the `pkg/modu-tui` encapsulation boundary and the
+  staged `modu_code` TUI split. The design fixes `pkg/modu-tui` as the only UI
+  kernel, requires typed intents and a host facade before business extraction,
+  separates transcript/composer/overlay/chrome state ownership, and keeps the
+  unused legacy `pkg/tui` out of the target architecture.
+
 - 2026-07-23: added Claude Code-style image attachments to the interactive TUI.
   Ctrl+V reads an image from the system clipboard, pasted or dragged image
   paths become `[Image #N]` input tokens, Backspace/Delete removes attachments,
@@ -52,7 +194,7 @@ enough to implement, verify, and commit independently.
 - 2026-06-30: limited the `modu-tui` todo card to current active runs. A todo
   snapshot restored from the session or left uncompleted after a finished goal
   no longer appears in the fixed bottom area; the card only renders while the
-  model is busy/streaming after a current-run `SetTodosMsg`.
+  model is busy/streaming after a current-run `SetTodoListUpdate`.
 - 2026-06-30: restored session token usage after `--resume` by rebuilding
   context-manager usage from persisted assistant message usage, so the fixed
   footer ctx counter and `/session` stats no longer reset to zero on restart.
@@ -1000,12 +1142,12 @@ enough to implement, verify, and commit independently.
   result/script tails are present.
 - 2026-06-30: started the Claude-Code-style dynamic workflow TUI surface for the
   newer `modu-tui` runner. `pkg/modu-tui` now has a host-owned scrollable
-  `SetPanelMsg`/`ClearPanelMsg` main-view panel, exact `/workflows` opens the
+  `ShowPanelUpdate`/`ClosePanelUpdate` main-view panel, exact `/workflows` opens the
   workflow cockpit in that panel instead of appending transcript text, and
   workflow `RuntimeState()` now merges persisted runs with live registry state
   so the cockpit and `/workflows list` no longer disagree after a restart.
 - 2026-06-30: made the `modu-tui` panel selectable. Panels can now render
-  host-owned rows, use ↑/↓ to move selection, and emit `Hooks.PanelAction` on
+  host-owned rows, use ↑/↓ to move selection, and emit `PanelActionIntent` on
   Enter. The `/workflows` cockpit uses this to list recent workflow runs as
   selectable rows; pressing Enter closes the panel and opens
   `/workflows show <run-id>` for the selected run.
@@ -1037,8 +1179,8 @@ enough to implement, verify, and commit independently.
 - 2026-06-30: made workflow panels live-refresh while they are open. The
   `modu_code` runner now tracks the current workflow cockpit/detail/agent/result
   panel, polls the workflow runtime-state fingerprint, and sends
-  `RefreshPanelMsg` when the state changes. `pkg/modu-tui` preserves the
-  selected row and scroll offset on same-panel refreshes, and `Hooks.PanelClosed`
+  `RefreshPanelUpdate` when the state changes. `pkg/modu-tui` preserves the
+  selected row and scroll offset on same-panel refreshes, and `PanelClosedIntent`
   stops refreshing when the user closes the panel.
 - 2026-06-30: added phase-level workflow drill-down. `Workflow Run` panels now
   expose each orchestration phase as a selectable row before the global
@@ -1277,7 +1419,7 @@ enough to implement, verify, and commit independently.
 - 2026-07-01: made workflow tool/session updates refresh the current workflow
   panel in place when possible. If the user is looking at Cockpit, Map, Phase,
   Agent, Result, Script, or Feed for the same run, incoming live updates now
-  send `RefreshPanelMsg` for that view instead of forcing the UI back to Feed.
+  send `RefreshPanelUpdate` for that view instead of forcing the UI back to Feed.
 - 2026-07-01: added a topology section to `Workflow Map`. The map now starts
   with numbered phase nodes, phase-to-phase path edges, and compact per-phase
   agent lanes before the detailed tree, so users can read the workflow

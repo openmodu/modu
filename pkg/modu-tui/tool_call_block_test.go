@@ -283,15 +283,16 @@ func TestSelectedTextOmitsNumberedToolCodeGutter(t *testing.T) {
 	m := NewModel(Options{
 		Width:  80,
 		Height: 12,
-		InitialMessages: []Message{{
-			Tool:           true,
-			ToolName:       "write",
-			ToolInput:      "main.go",
-			ToolOutput:     "Wrote 2 lines, 32 bytes",
-			ToolCode:       "1  package main\n2  func main() {}",
-			ToolLanguage:   "go",
-			ToolNoCollapse: true,
-			Expanded:       true,
+		InitialEntries: []Entry{{
+			Role: RoleAssistant,
+			Nodes: []Node{ToolNode{Call: ToolCall{
+				Name:       "write",
+				Input:      "main.go",
+				Output:     "Wrote 2 lines, 32 bytes",
+				Code:       "1  package main\n2  func main() {}",
+				Language:   "go",
+				NoCollapse: true,
+			}, Expanded: true}},
 		}},
 	})
 
@@ -366,15 +367,16 @@ func TestSelectedTextOmitsUpdateDiffMarkersAndLineNumbers(t *testing.T) {
 	m := NewModel(Options{
 		Width:  80,
 		Height: 12,
-		InitialMessages: []Message{{
-			Tool:           true,
-			ToolName:       "update",
-			ToolInput:      "main.go",
-			ToolOutput:     "Added 1 lines, removed 1 lines",
-			ToolCode:       "@@ -12,1 +12,1 @@\n- 12  if oldValue {\n+ 12  if newValue {",
-			ToolLanguage:   "diff",
-			ToolNoCollapse: true,
-			Expanded:       true,
+		InitialEntries: []Entry{{
+			Role: RoleAssistant,
+			Nodes: []Node{ToolNode{Call: ToolCall{
+				Name:       "update",
+				Input:      "main.go",
+				Output:     "Added 1 lines, removed 1 lines",
+				Code:       "@@ -12,1 +12,1 @@\n- 12  if oldValue {\n+ 12  if newValue {",
+				Language:   "diff",
+				NoCollapse: true,
+			}, Expanded: true}},
 		}},
 	})
 
@@ -451,44 +453,38 @@ func TestPOC2NoCollapseToolBlockIsNotClickable(t *testing.T) {
 	m := NewModel(Options{
 		Width:  80,
 		Height: 12,
-		InitialMessages: []Message{{
-			Tool:           true,
-			ToolID:         "call-1",
-			ToolName:       "update",
-			ToolInput:      "main.go",
-			ToolOutput:     "Added 1 lines, removed 1 lines",
-			ToolCode:       "- old\n+ new",
-			ToolLanguage:   "diff",
-			ToolNoCollapse: true,
-			Expanded:       true,
+		InitialEntries: []Entry{{
+			Role: RoleAssistant,
+			Nodes: []Node{ToolNode{Call: ToolCall{
+				ID:         "call-1",
+				Name:       "update",
+				Input:      "main.go",
+				Output:     "Added 1 lines, removed 1 lines",
+				Code:       "- old\n+ new",
+				Language:   "diff",
+				NoCollapse: true,
+			}, Expanded: true}},
 		}},
 	})
 	if len(m.headers) != 0 {
 		t.Fatalf("no-collapse tool should not register clickable headers: %#v", m.headers)
 	}
-	before := m.messages[0].Expanded
+	before := entryExpanded(m.entries[0])
 	_ = m.onPress(1, 1)
-	if m.messages[0].Expanded != before {
+	if entryExpanded(m.entries[0]) != before {
 		t.Fatal("no-collapse tool should not toggle expanded state")
 	}
 }
 
-func TestToolPermissionHookIsUsedByToolBlock(t *testing.T) {
+func TestToolPermissionStateIsRenderedByToolBlock(t *testing.T) {
 	ctx := RenderContext{
 		ContentWidth: 60,
 		Markdown:     markdownRenderer(60),
-		Hooks: Hooks{
-			ToolPermission: func(call ToolCall) ToolPermissionState {
-				if call.Name != "bash" {
-					t.Fatalf("tool hook got call name %q, want bash", call.Name)
-				}
-				return ToolPermissionPending
-			},
-		},
 	}
 	block := ToolCallBlock{
 		CollapsibleBlock: CollapsibleBlock{Summary: "Run shell", Detail: "go test"},
 		Call:             ToolCall{Name: "bash"},
+		Permission:       ToolPermissionPending,
 	}
 	got := strings.Join(renderedTexts(block.Render(ctx)), "\n")
 	if !strings.Contains(got, "permission pending") {

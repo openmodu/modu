@@ -3,8 +3,6 @@
 // tool blocks, and optional simulated streaming.
 package modutui
 
-import "time"
-
 const DefaultStatusHint = "Ctrl+V/拖入图片 · 拖拽选择→复制 · Enter 发送 · 滚轮滚动 · ctrl+End 到底 · Ctrl+C 退出"
 
 type Role int
@@ -13,37 +11,6 @@ const (
 	RoleUser Role = iota
 	RoleAssistant
 )
-
-type Message struct {
-	Role             Role
-	Text             string
-	Thinking         bool
-	Tool             bool
-	ToolID           string
-	ToolName         string
-	Summary          string
-	Detail           string
-	ToolInput        string
-	ToolOutput       string
-	ToolArtifactID   string
-	ToolArtifactPath string
-	ToolArtifactText string
-	ToolArtifactErr  string
-	ToolArtifactRead bool
-	ToolTruncated    bool
-	ToolBatchSize    int
-	ToolBatchID      string
-	ToolCode         string
-	ToolLanguage     string
-	ToolError        bool
-	ToolDone         bool
-	ToolNoCollapse   bool
-	Expanded         bool
-	Preformatted     bool
-	Plain            bool
-	Language         string
-	Code             string
-}
 
 type ToolPermissionState string
 
@@ -147,21 +114,17 @@ type ImageAttachment struct {
 	Data     []byte
 }
 
-type Hooks struct {
-	ToolPermission       func(ToolCall) ToolPermissionState
-	ToolApprovalDecision func(ToolApprovalResult)
-	InputHistoryChanged  func([]string)
-	PanelAction          func(PanelAction)
-	PanelClosed          func(panelID string)
-	SlashCommand         func(line string)
-	Interrupt            func()
-	Submit               func(text string)
-	SubmitMessage        func(SubmitEvent)
-	ReadClipboardImages  func() ([]ImageAttachment, error)
-	ResolvePastedImages  func(content string) ([]ImageAttachment, bool, error)
+// Services contains host-owned queries and IO. Model.Update schedules every
+// service call through tea.Cmd; rendering never calls a service.
+type Services struct {
+	ToolPermission      func(ToolCall) ToolPermissionState
+	ReadClipboardImages func() ([]ImageAttachment, error)
+	ResolvePastedImages func(content string) ([]ImageAttachment, bool, error)
+	SlashCommands       func() []SlashCommand
+	LoadToolArtifact    func(path string) (string, error)
 }
 
-type MessageBlockFactory func(Message) (Block, bool)
+type EntryBlockFactory func(Entry) (Block, bool)
 
 type SlashCommand struct {
 	Name        string
@@ -178,7 +141,7 @@ type Panel struct {
 	Selected  int
 	Footer    string
 	Markdown  bool
-	// Meta is opaque to modutui: it round-trips through Set/RefreshPanelMsg
+	// Meta is opaque to modutui: it round-trips through panel updates
 	// unchanged so a caller can stash its own stable panel identity (e.g. which
 	// entity a panel is showing) instead of having to recover it later by
 	// parsing rendered Rows.
@@ -189,6 +152,7 @@ type PanelShortcut struct {
 	Key     string
 	Label   string
 	Command string
+	Action  Action
 }
 
 type PanelRow struct {
@@ -196,6 +160,7 @@ type PanelRow struct {
 	Detail  string
 	Value   string
 	Command string
+	Action  Action
 }
 
 type PanelAction struct {
@@ -203,68 +168,26 @@ type PanelAction struct {
 	Index   int
 	Row     PanelRow
 	Command string
+	Action  Action
 }
 
 type Options struct {
-	Width                 int
-	Height                int
-	InitialMessages       []Message
-	InputHistory          []string
-	Todos                 []TodoItem
-	StreamReply           string
-	StatusHint            string
-	Footer                string
-	InfoCardLines         []string
-	DisableMouse          bool
-	ArrowKeysScroll       bool
-	Hooks                 Hooks
-	BlockFactories        []MessageBlockFactory
-	BlockGap              int
-	SlashCommands         []SlashCommand
-	SlashCommandsProvider func() []SlashCommand
-}
-
-type AppendMessageMsg struct {
-	Message Message
-}
-
-type SetStatusMsg struct {
-	Status       string
-	TransientFor time.Duration
-}
-
-type SetFooterMsg struct {
-	Footer string
-}
-
-type SetBusyMsg struct {
-	Busy bool
-}
-
-type SetTodosMsg struct {
-	Todos []TodoItem
-}
-
-type ClearMessagesMsg struct{}
-
-// SetMessagesMsg replaces the whole conversation transcript in one shot —
-// the runtime equivalent of Options.InitialMessages. Used when the host
-// switches the underlying session (e.g. /resume) and needs the screen to
-// show the new session's history instead of a blind one-line confirmation.
-type SetMessagesMsg struct {
-	Messages []Message
-}
-
-type SetPanelMsg struct {
-	Panel Panel
-}
-
-type RefreshPanelMsg struct {
-	Panel Panel
-}
-
-type ClearPanelMsg struct {
-	ID string
+	Width           int
+	Height          int
+	InitialEntries  []Entry
+	InputHistory    []string
+	Todos           []TodoItem
+	StreamReply     string
+	StatusHint      string
+	Footer          string
+	InfoCardLines   []string
+	DisableMouse    bool
+	ArrowKeysScroll bool
+	Services        Services
+	IntentHandler   func(Intent)
+	BlockFactories  []EntryBlockFactory
+	BlockGap        int
+	SlashCommands   []SlashCommand
 }
 
 type RequestToolApprovalMsg struct {

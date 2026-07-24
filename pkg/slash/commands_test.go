@@ -38,6 +38,45 @@ func (p *capturePrinter) String() string {
 	return strings.Join(p.lines, "\n")
 }
 
+func handleLine(ctx context.Context, line string, session *coding_agent.CodingSession, printer Printer, model *types.Model) (bool, bool) {
+	line = strings.TrimSpace(line)
+	name, args, ok := strings.Cut(line, " ")
+	if !ok {
+		name = line
+		args = ""
+	}
+	for _, definition := range CommandDefinitions() {
+		names := append([]string{definition.Name}, definition.Aliases...)
+		for _, candidate := range names {
+			if strings.EqualFold(candidate, name) {
+				return true, definition.Execute(ctx, name, args, session, printer, model)
+			}
+		}
+	}
+	return false, false
+}
+
+func TestCommandDefinitionsOwnUniqueOperations(t *testing.T) {
+	names := make(map[string]struct{})
+	operations := make(map[commandOperation]string)
+	for _, definition := range CommandDefinitions() {
+		if definition.operation == 0 {
+			t.Fatalf("command %q has no operation", definition.Name)
+		}
+		for _, name := range append([]string{definition.Name}, definition.Aliases...) {
+			name = strings.ToLower(name)
+			if _, ok := names[name]; ok {
+				t.Fatalf("duplicate command identity %q", name)
+			}
+			names[name] = struct{}{}
+		}
+		if existing, ok := operations[definition.operation]; ok {
+			t.Fatalf("commands %q and %q share operation %d", existing, definition.Name, definition.operation)
+		}
+		operations[definition.operation] = definition.Name
+	}
+}
+
 func TestHandleContextShowsPromptSources(t *testing.T) {
 	cwd := t.TempDir()
 	agentDir := filepath.Join(cwd, ".coding_agent")
@@ -61,7 +100,7 @@ func TestHandleContextShowsPromptSources(t *testing.T) {
 	}
 
 	printer := &capturePrinter{}
-	handled, exit := Handle(context.Background(), "/context", session, printer, model)
+	handled, exit := handleLine(context.Background(), "/context", session, printer, model)
 
 	if !handled || exit {
 		t.Fatalf("expected /context to be handled without exit, handled=%v exit=%v", handled, exit)
@@ -106,7 +145,7 @@ func TestHandleContextShowsDisabledMemory(t *testing.T) {
 	}
 
 	printer := &capturePrinter{}
-	handled, exit := Handle(context.Background(), "/context", session, printer, model)
+	handled, exit := handleLine(context.Background(), "/context", session, printer, model)
 
 	if !handled || exit {
 		t.Fatalf("expected /context to be handled without exit, handled=%v exit=%v", handled, exit)
@@ -138,7 +177,7 @@ func TestHandleContextShowsMemorySummaryMode(t *testing.T) {
 	}
 
 	printer := &capturePrinter{}
-	handled, exit := Handle(context.Background(), "/context", session, printer, model)
+	handled, exit := handleLine(context.Background(), "/context", session, printer, model)
 
 	if !handled || exit {
 		t.Fatalf("expected /context to be handled without exit, handled=%v exit=%v", handled, exit)
@@ -162,7 +201,7 @@ func TestHandleCompactReportsNoop(t *testing.T) {
 	}
 
 	printer := &capturePrinter{}
-	handled, exit := Handle(context.Background(), "/compact", session, printer, model)
+	handled, exit := handleLine(context.Background(), "/compact", session, printer, model)
 
 	if !handled || exit {
 		t.Fatalf("expected /compact to be handled without exit, handled=%v exit=%v", handled, exit)
@@ -202,7 +241,7 @@ func TestHandlePromptsListsPromptTemplates(t *testing.T) {
 	}
 
 	printer := &capturePrinter{}
-	handled, exit := Handle(context.Background(), "/prompts", session, printer, model)
+	handled, exit := handleLine(context.Background(), "/prompts", session, printer, model)
 
 	if !handled || exit {
 		t.Fatalf("expected /prompts to be handled without exit, handled=%v exit=%v", handled, exit)
@@ -238,7 +277,7 @@ func TestHandlePromptsEmptyShowsConcreteExample(t *testing.T) {
 	}
 
 	printer := &capturePrinter{}
-	handled, exit := Handle(context.Background(), "/prompts", session, printer, model)
+	handled, exit := handleLine(context.Background(), "/prompts", session, printer, model)
 
 	if !handled || exit {
 		t.Fatalf("expected /prompts to be handled without exit, handled=%v exit=%v", handled, exit)
@@ -276,7 +315,7 @@ func TestHandleLeavesTUIOnlyCommandsUnhandled(t *testing.T) {
 	for _, cmd := range []string{"/settings", "/scoped-models", "/retry", "/hotkeys"} {
 		t.Run(cmd, func(t *testing.T) {
 			printer := &capturePrinter{}
-			handled, exit := Handle(context.Background(), cmd, session, printer, model)
+			handled, exit := handleLine(context.Background(), cmd, session, printer, model)
 			if handled || exit {
 				t.Fatalf("expected %s to be left to TUI, handled=%v exit=%v output=%q", cmd, handled, exit, printer.String())
 			}
@@ -286,7 +325,7 @@ func TestHandleLeavesTUIOnlyCommandsUnhandled(t *testing.T) {
 
 func TestHandleLeavesChannelConfigurationToTUI(t *testing.T) {
 	for _, line := range []string{"/channel", "/telegram", "/feishu"} {
-		handled, exit := Handle(context.Background(), line, nil, &capturePrinter{}, nil)
+		handled, exit := handleLine(context.Background(), line, nil, &capturePrinter{}, nil)
 		if handled || exit {
 			t.Fatalf("%s = handled %v exit %v, want TUI-owned/unhandled", line, handled, exit)
 		}
@@ -312,7 +351,7 @@ func TestHandleSessionCommands(t *testing.T) {
 	}
 
 	printer := &capturePrinter{}
-	handled, exit := Handle(context.Background(), "/session name demo", session, printer, model)
+	handled, exit := handleLine(context.Background(), "/session name demo", session, printer, model)
 	if !handled || exit {
 		t.Fatalf("expected /session name to be handled without exit, handled=%v exit=%v", handled, exit)
 	}
@@ -321,7 +360,7 @@ func TestHandleSessionCommands(t *testing.T) {
 	}
 
 	printer = &capturePrinter{}
-	handled, exit = Handle(context.Background(), "/session", session, printer, model)
+	handled, exit = handleLine(context.Background(), "/session", session, printer, model)
 	if !handled || exit {
 		t.Fatalf("expected /session to be handled without exit, handled=%v exit=%v", handled, exit)
 	}
@@ -346,7 +385,7 @@ func TestHandleSessionCommands(t *testing.T) {
 	}
 
 	printer = &capturePrinter{}
-	handled, exit = Handle(context.Background(), "/sessions", session, printer, model)
+	handled, exit = handleLine(context.Background(), "/sessions", session, printer, model)
 	if !handled || exit {
 		t.Fatalf("expected /sessions to be handled without exit, handled=%v exit=%v", handled, exit)
 	}
@@ -363,7 +402,7 @@ func TestHandleSessionCommands(t *testing.T) {
 	}
 	otherPath := other.FilePath()
 	printer = &capturePrinter{}
-	handled, exit = Handle(context.Background(), "/sessions delete "+otherPath, session, printer, model)
+	handled, exit = handleLine(context.Background(), "/sessions delete "+otherPath, session, printer, model)
 	if !handled || exit {
 		t.Fatalf("expected /sessions delete to be handled without exit, handled=%v exit=%v", handled, exit)
 	}
@@ -372,7 +411,7 @@ func TestHandleSessionCommands(t *testing.T) {
 	}
 
 	printer = &capturePrinter{}
-	handled, exit = Handle(context.Background(), "/session delete "+session.GetSessionFile(), session, printer, model)
+	handled, exit = handleLine(context.Background(), "/session delete "+session.GetSessionFile(), session, printer, model)
 	if !handled || exit {
 		t.Fatalf("expected /session delete active to be handled without exit, handled=%v exit=%v", handled, exit)
 	}
@@ -405,7 +444,7 @@ func TestHandleWorktreeStatusShowsLifecycle(t *testing.T) {
 	}
 
 	printer := &capturePrinter{}
-	handled, exit := Handle(context.Background(), "/worktree status", session, printer, model)
+	handled, exit := handleLine(context.Background(), "/worktree status", session, printer, model)
 	if !handled || exit {
 		t.Fatalf("expected /worktree status handled without exit, handled=%v exit=%v", handled, exit)
 	}
@@ -414,7 +453,7 @@ func TestHandleWorktreeStatusShowsLifecycle(t *testing.T) {
 	}
 
 	printer = &capturePrinter{}
-	handled, exit = Handle(context.Background(), "/worktree on", session, printer, model)
+	handled, exit = handleLine(context.Background(), "/worktree on", session, printer, model)
 	if !handled || exit {
 		t.Fatalf("expected /worktree on handled without exit, handled=%v exit=%v", handled, exit)
 	}
@@ -424,7 +463,7 @@ func TestHandleWorktreeStatusShowsLifecycle(t *testing.T) {
 	}
 
 	printer = &capturePrinter{}
-	handled, exit = Handle(context.Background(), "/worktree status", session, printer, model)
+	handled, exit = handleLine(context.Background(), "/worktree status", session, printer, model)
 	if !handled || exit {
 		t.Fatalf("expected active /worktree status handled without exit, handled=%v exit=%v", handled, exit)
 	}
@@ -443,7 +482,7 @@ func TestHandleWorktreeStatusShowsLifecycle(t *testing.T) {
 	}
 
 	printer = &capturePrinter{}
-	handled, exit = Handle(context.Background(), "/worktree list", session, printer, model)
+	handled, exit = handleLine(context.Background(), "/worktree list", session, printer, model)
 	if !handled || exit {
 		t.Fatalf("expected /worktree list handled without exit, handled=%v exit=%v", handled, exit)
 	}
@@ -462,7 +501,7 @@ func TestHandleWorktreeStatusShowsLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	printer = &capturePrinter{}
-	handled, exit = Handle(context.Background(), "/worktree cleanup", session, printer, model)
+	handled, exit = handleLine(context.Background(), "/worktree cleanup", session, printer, model)
 	if !handled || exit {
 		t.Fatalf("expected /worktree cleanup handled without exit, handled=%v exit=%v", handled, exit)
 	}
@@ -481,7 +520,7 @@ func TestHandleWorktreeStatusShowsLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	printer = &capturePrinter{}
-	handled, exit = Handle(context.Background(), "/worktree diff", session, printer, model)
+	handled, exit = handleLine(context.Background(), "/worktree diff", session, printer, model)
 	if !handled || exit {
 		t.Fatalf("expected /worktree diff handled without exit, handled=%v exit=%v", handled, exit)
 	}
@@ -518,7 +557,7 @@ func TestHandlePlanStatusShowsArtifactAndTodos(t *testing.T) {
 	session.ExitPlanMode("approved slash plan", []string{"first", "second"})
 
 	printer := &capturePrinter{}
-	handled, exit := Handle(context.Background(), "/plan status", session, printer, model)
+	handled, exit := handleLine(context.Background(), "/plan status", session, printer, model)
 	if !handled || exit {
 		t.Fatalf("expected /plan status handled without exit, handled=%v exit=%v", handled, exit)
 	}
@@ -536,7 +575,7 @@ func TestHandlePlanStatusShowsArtifactAndTodos(t *testing.T) {
 	}
 
 	printer = &capturePrinter{}
-	handled, exit = Handle(context.Background(), "/plan show", session, printer, model)
+	handled, exit = handleLine(context.Background(), "/plan show", session, printer, model)
 	if !handled || exit {
 		t.Fatalf("expected /plan show handled without exit, handled=%v exit=%v", handled, exit)
 	}
@@ -546,7 +585,7 @@ func TestHandlePlanStatusShowsArtifactAndTodos(t *testing.T) {
 	}
 
 	printer = &capturePrinter{}
-	handled, exit = Handle(context.Background(), "/plan history", session, printer, model)
+	handled, exit = handleLine(context.Background(), "/plan history", session, printer, model)
 	if !handled || exit {
 		t.Fatalf("expected /plan history handled without exit, handled=%v exit=%v", handled, exit)
 	}
@@ -556,7 +595,7 @@ func TestHandlePlanStatusShowsArtifactAndTodos(t *testing.T) {
 	}
 
 	printer = &capturePrinter{}
-	handled, exit = Handle(context.Background(), "/plan clear", session, printer, model)
+	handled, exit = handleLine(context.Background(), "/plan clear", session, printer, model)
 	if !handled || exit {
 		t.Fatalf("expected /plan clear handled without exit, handled=%v exit=%v", handled, exit)
 	}
@@ -607,7 +646,7 @@ func TestHandleTreeAndForkCommands(t *testing.T) {
 	}
 
 	printer := &capturePrinter{}
-	handled, exit := Handle(context.Background(), "/tree", session, printer, model)
+	handled, exit := handleLine(context.Background(), "/tree", session, printer, model)
 	if !handled || exit {
 		t.Fatalf("expected /tree to be handled without exit, handled=%v exit=%v", handled, exit)
 	}
@@ -621,7 +660,7 @@ func TestHandleTreeAndForkCommands(t *testing.T) {
 		t.Fatalf("expected one fork message, got %#v", msgs)
 	}
 	printer = &capturePrinter{}
-	handled, exit = Handle(context.Background(), "/fork "+msgs[0].EntryID, session, printer, model)
+	handled, exit = handleLine(context.Background(), "/fork "+msgs[0].EntryID, session, printer, model)
 	if !handled || exit {
 		t.Fatalf("expected /fork to be handled without exit, handled=%v exit=%v", handled, exit)
 	}
@@ -645,7 +684,7 @@ func TestHandleExportCommand(t *testing.T) {
 	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "export this"})
 
 	printer := &capturePrinter{}
-	handled, exit := Handle(context.Background(), "/export exports/session.html", session, printer, model)
+	handled, exit := handleLine(context.Background(), "/export exports/session.html", session, printer, model)
 	if !handled || exit {
 		t.Fatalf("expected /export to be handled without exit, handled=%v exit=%v", handled, exit)
 	}
@@ -688,7 +727,7 @@ func TestHandleCopyCommand(t *testing.T) {
 	}
 
 	printer := &capturePrinter{}
-	handled, exit := Handle(context.Background(), "/copy", session, printer, model)
+	handled, exit := handleLine(context.Background(), "/copy", session, printer, model)
 	if !handled || exit {
 		t.Fatalf("expected /copy to be handled without exit, handled=%v exit=%v", handled, exit)
 	}
@@ -722,7 +761,7 @@ func TestHandleChangelogCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	printer := &capturePrinter{}
-	handled, exit := Handle(context.Background(), "/changelog", session, printer, model)
+	handled, exit := handleLine(context.Background(), "/changelog", session, printer, model)
 	if !handled || exit {
 		t.Fatalf("expected /changelog to be handled without exit, handled=%v exit=%v", handled, exit)
 	}
@@ -766,7 +805,7 @@ func TestHandleDoctorShowsDiagnostics(t *testing.T) {
 	}
 
 	printer := &capturePrinter{}
-	handled, exit := Handle(context.Background(), "/doctor", session, printer, model)
+	handled, exit := handleLine(context.Background(), "/doctor", session, printer, model)
 
 	if !handled || exit {
 		t.Fatalf("expected /doctor to be handled without exit, handled=%v exit=%v", handled, exit)
@@ -812,7 +851,7 @@ func TestHandleDoctorReportsUnreachableBaseURL(t *testing.T) {
 	}
 
 	printer := &capturePrinter{}
-	handled, exit := Handle(context.Background(), "/doctor", session, printer, model)
+	handled, exit := handleLine(context.Background(), "/doctor", session, printer, model)
 
 	if !handled || exit {
 		t.Fatalf("expected /doctor to be handled without exit, handled=%v exit=%v", handled, exit)
@@ -849,7 +888,7 @@ func TestHandleModelSwitchReportsClearedContext(t *testing.T) {
 	session.GetAgent().AppendMessage(types.UserMessage{Role: "user", Content: "old context"})
 
 	printer := &capturePrinter{}
-	handled, exit := Handle(context.Background(), "/model Slash Model B", session, printer, session.GetModel())
+	handled, exit := handleLine(context.Background(), "/model Slash Model B", session, printer, session.GetModel())
 
 	if !handled || exit {
 		t.Fatalf("expected /model to be handled without exit, handled=%v exit=%v", handled, exit)

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	coding_agent "github.com/openmodu/modu/pkg/coding_agent"
-	agentconfig "github.com/openmodu/modu/pkg/coding_agent/foundation/config"
 	"github.com/openmodu/modu/pkg/provider"
 )
 
@@ -38,37 +37,6 @@ func runConfigHook(args string, session *coding_agent.CodingSession) (string, er
 	return out.String(), err
 }
 
-func configModelEntries() ([]ConfigModelEntry, error) {
-	cfg, exists, err := provider.LoadConfigFile()
-	if err != nil {
-		return nil, err
-	}
-	if !exists {
-		return nil, nil
-	}
-	out := make([]ConfigModelEntry, 0, len(cfg.Models))
-	for _, model := range cfg.Models {
-		out = append(out, ConfigModelEntry{
-			Name:        model.Name,
-			Description: model.Description,
-			Provider:    model.Provider,
-			Model:       model.Model,
-			BaseURL:     cfg.Providers[model.Provider].BaseURL,
-			Active:      provider.ModelMatchesTarget(model, cfg.Active),
-		})
-	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Active != out[j].Active {
-			return out[i].Active
-		}
-		if out[i].Provider == out[j].Provider {
-			return out[i].Model < out[j].Model
-		}
-		return out[i].Provider < out[j].Provider
-	})
-	return out, nil
-}
-
 func configProviderEntries() ([]ConfigProviderEntry, error) {
 	cfg, exists, err := provider.LoadConfigFile()
 	if err != nil {
@@ -85,7 +53,6 @@ func configProviderEntries() ([]ConfigProviderEntry, error) {
 			Name:      name,
 			Type:      pc.Type,
 			BaseURL:   pc.BaseURL,
-			APIKeySet: pc.APIKey != "",
 			APIKeyEnv: pc.APIKeyEnv,
 		})
 	}
@@ -109,29 +76,6 @@ func configProviderPresetEntries(seen map[string]bool) []ConfigProviderEntry {
 		out = append(out, preset)
 	}
 	return out
-}
-
-func configAddModel(input ConfigModelInput, session *coding_agent.CodingSession) (string, error) {
-	entry := provider.ModelConfig{
-		Name:        input.Name,
-		Description: input.Description,
-		Provider:    input.Provider,
-		Model:       input.Model,
-		BaseURL:     input.BaseURL,
-		APIKey:      input.APIKey,
-	}
-	created, err := provider.UpsertModelConfig(entry)
-	if err != nil {
-		return "", err
-	}
-	action := "updated"
-	if created {
-		action = "added"
-	}
-	var out bytes.Buffer
-	fmt.Fprintf(&out, "%s model: %s\nconfig: %s\n", action, entry.Name, provider.ConfigPath())
-	appendConfigSessionSync(&out, session)
-	return out.String(), nil
 }
 
 func configSetProvider(input ConfigProviderInput, session *coding_agent.CodingSession) (string, error) {
@@ -175,63 +119,6 @@ func appendConfigSessionSync(out io.Writer, session *coding_agent.CodingSession)
 	}
 	session.SetModel(model)
 	fmt.Fprintln(out, "current session: switched")
-}
-
-func configUseModel(target string, session *coding_agent.CodingSession) (string, error) {
-	model, err := provider.SetActiveModel(target)
-	if err != nil {
-		return "", err
-	}
-	var out bytes.Buffer
-	fmt.Fprintf(&out, "active: %s\n", modelLabel(model))
-	fmt.Fprintf(&out, "config: %s\n", provider.ConfigPath())
-	if session != nil {
-		if switchErr := session.SetModelByName(target); switchErr != nil {
-			fmt.Fprintf(&out, "current session: unchanged (%v)\n", switchErr)
-		} else {
-			fmt.Fprintln(&out, "current session: switched")
-		}
-	}
-	return out.String(), nil
-}
-
-func configRemoveModel(target string) (string, error) {
-	model, err := provider.RemoveModelConfig(target)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("removed model: %s\nconfig: %s\n", modelLabel(model), provider.ConfigPath()), nil
-}
-
-func configToggleWorkflows(session *coding_agent.CodingSession) (string, error) {
-	agentDir := coding_agent.DefaultAgentDir()
-	path := agentconfig.GlobalConfigPath(agentDir)
-	cfg, err := agentconfig.Load(agentDir, "")
-	if err != nil {
-		return "", fmt.Errorf("read settings %s: %w", path, err)
-	}
-
-	nextDisabled := !cfg.DisableWorkflows
-	cfg.DisableWorkflows = nextDisabled
-	if err := agentconfig.Save(cfg, path); err != nil {
-		return "", err
-	}
-	if session != nil {
-		session.SetWorkflowsDisabled(nextDisabled)
-	}
-
-	state := "enabled"
-	if nextDisabled {
-		state = "disabled"
-	}
-	var out bytes.Buffer
-	fmt.Fprintf(&out, "dynamic workflows: %s\nsettings: %s\n", state, path)
-	if nextDisabled {
-		fmt.Fprintln(&out, "current session: workflow tool and commands removed")
-	} else {
-		fmt.Fprintln(&out, "current session: restart or start a new session to register workflow commands")
-	}
-	return out.String(), nil
 }
 
 func runConfigCommand(args []string, stdout, stderr io.Writer) error {

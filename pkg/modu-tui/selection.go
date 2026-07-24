@@ -1,7 +1,6 @@
 package modutui
 
 import (
-	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -13,6 +12,14 @@ import (
 )
 
 var writeLocalClipboard = clipboard.WriteAll
+
+type clipboardCopyResultMsg struct {
+	chars       int
+	how         string
+	needsOSC52  bool
+	text        string
+	osc52String string
+}
 
 func (m *Model) lineWidth(li int) int {
 	if li < 0 || li >= len(m.lines) {
@@ -73,10 +80,10 @@ func (m *Model) onPress(x, y int) tea.Cmd {
 	}
 	if y >= 0 && y < h {
 		if idx, ok := m.headers[m.yOffset+y]; ok {
-			m.messages[idx].Expanded = !m.messages[idx].Expanded
+			setEntryExpanded(&m.entries[idx], !entryExpanded(m.entries[idx]))
 			m.clearSelection()
 			m.rebuild()
-			return nil
+			return m.loadExpandedToolArtifactsCmd()
 		}
 		m.selecting = true
 		m.follow = false
@@ -122,26 +129,24 @@ func (m *Model) copySelection() tea.Cmd {
 	if text == "" {
 		return nil
 	}
-	localOK := writeLocalClipboard(text) == nil
-	needsOSC52 := isRemoteSession() || !localOK
-	how := "clipboard"
-	if needsOSC52 {
-		how = "OSC52"
-		if localOK {
-			how = "local+OSC52"
+	return func() tea.Msg {
+		localOK := writeLocalClipboard(text) == nil
+		needsOSC52 := isRemoteSession() || !localOK
+		how := "clipboard"
+		if needsOSC52 {
+			how = "OSC52"
+			if localOK {
+				how = "local+OSC52"
+			}
+		}
+		return clipboardCopyResultMsg{
+			chars:       len([]rune(text)),
+			how:         how,
+			needsOSC52:  needsOSC52,
+			text:        text,
+			osc52String: clipboardSequence(text),
 		}
 	}
-	m.status = fmt.Sprintf("✓ copied %d chars (%s)", len([]rune(text)), how)
-	if needsOSC52 {
-		// An OSC52 write carries no acknowledgement: when the terminal or a
-		// multiplexer in between drops it (tmux without allow-passthrough,
-		// terminals without OSC52 support/permission) the copy silently
-		// vanishes. Point at the terminal-native escape hatch so the user
-		// isn't stranded.
-		m.status += " · no clipboard? Shift+drag to copy via terminal"
-		return tea.Batch(tea.SetClipboard(text), tea.Raw(clipboardSequence(text)))
-	}
-	return nil
 }
 
 func isRemoteSession() bool {

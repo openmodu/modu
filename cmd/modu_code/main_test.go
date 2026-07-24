@@ -142,42 +142,6 @@ func TestRunConfigCommandInitAndValidate(t *testing.T) {
 	}
 }
 
-func TestConfigToggleWorkflowsWritesSettings(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	out, err := configToggleWorkflows(nil)
-	if err != nil {
-		t.Fatalf("configToggleWorkflows disable: %v", err)
-	}
-	path := filepath.Join(home, ".modu", "config.toml")
-	if !strings.Contains(out, "dynamic workflows: disabled") || !strings.Contains(out, path) {
-		t.Fatalf("unexpected disable output:\n%s", out)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(data), "[settings]") || !strings.Contains(string(data), "disableWorkflows = true") {
-		t.Fatalf("expected disableWorkflows true in config.toml settings:\n%s", string(data))
-	}
-
-	out, err = configToggleWorkflows(nil)
-	if err != nil {
-		t.Fatalf("configToggleWorkflows enable: %v", err)
-	}
-	if !strings.Contains(out, "dynamic workflows: enabled") || !strings.Contains(out, "restart or start a new session") {
-		t.Fatalf("unexpected enable output:\n%s", out)
-	}
-	data, err = os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(data), `"disableWorkflows": true`) {
-		t.Fatalf("expected disableWorkflows not true in settings:\n%s", string(data))
-	}
-}
-
 func TestRunConfigCommandAddListUseAndRemove(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -375,7 +339,7 @@ func TestMainStartsTUIWhenProviderMissing(t *testing.T) {
 		if !strings.Contains(opts.StartupNotice, "/config") || !strings.Contains(opts.StartupNotice, filepath.Join(home, ".modu", "config.toml")) {
 			t.Fatalf("expected startup notice to guide /config, got:\n%s", opts.StartupNotice)
 		}
-		if opts.CommandHooks.ConfigProviders == nil || opts.CommandHooks.ConfigSetProvider == nil || opts.CommandHooks.ConfigUse == nil {
+		if opts.CommandHooks.ConfigProviders == nil || opts.CommandHooks.ConfigSetProvider == nil {
 			t.Fatalf("expected config hooks for first-run setup: %#v", opts.CommandHooks)
 		}
 		return nil
@@ -421,10 +385,20 @@ func TestMainTUISessionFlows(t *testing.T) {
 		printer := &mainCapturePrinter{}
 		runSlash := func(line string) {
 			t.Helper()
-			handled, exit := slash.Handle(ctx, line, session, printer, model)
-			if !handled || exit {
-				t.Fatalf("slash %q handled=%v exit=%v output=%s", line, handled, exit, printer.String())
+			name, args, _ := strings.Cut(strings.TrimSpace(line), " ")
+			for _, definition := range slash.CommandDefinitions() {
+				names := append([]string{definition.Name}, definition.Aliases...)
+				for _, candidate := range names {
+					if candidate != name {
+						continue
+					}
+					if exit := definition.Execute(ctx, name, args, session, printer, model); exit {
+						t.Fatalf("slash %q unexpectedly exited; output=%s", line, printer.String())
+					}
+					return
+				}
 			}
+			t.Fatalf("slash %q is not defined", line)
 		}
 
 		runSlash("/sessions all")
