@@ -700,24 +700,25 @@ func goalStatusLabel(status Status) string {
 }
 
 func goalIndicatorText(g Goal) string {
+	icon := goalStatusIcon(g.Status)
 	switch g.Status {
 	case StatusActive:
 		if g.TokenBudget != nil {
-			return fmt.Sprintf("goal %s/%s", formatTokensCompact(g.TokensUsed), formatTokensCompact(*g.TokenBudget))
+			return fmt.Sprintf("%s goal %s/%s", icon, formatTokensCompact(g.TokensUsed), formatTokensCompact(*g.TokenBudget))
 		}
-		return "goal " + formatElapsed(g.TimeUsedSeconds)
+		return icon + " goal " + formatElapsed(g.TimeUsedSeconds)
 	case StatusPaused:
-		return "goal paused"
+		return icon + " goal paused"
 	case StatusBudgetLimited:
 		if g.TokenBudget != nil {
-			return fmt.Sprintf("goal limited %s/%s", formatTokensCompact(g.TokensUsed), formatTokensCompact(*g.TokenBudget))
+			return fmt.Sprintf("%s goal limited %s/%s", icon, formatTokensCompact(g.TokensUsed), formatTokensCompact(*g.TokenBudget))
 		}
-		return "goal limited"
+		return icon + " goal limited"
 	case StatusComplete:
 		if g.TokenBudget != nil {
-			return fmt.Sprintf("goal done %s", formatTokensCompact(g.TokensUsed))
+			return fmt.Sprintf("%s goal done %s", icon, formatTokensCompact(g.TokensUsed))
 		}
-		return "goal done " + formatElapsed(g.TimeUsedSeconds)
+		return icon + " goal done " + formatElapsed(g.TimeUsedSeconds)
 	default:
 		return string(g.Status)
 	}
