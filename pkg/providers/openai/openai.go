@@ -227,9 +227,12 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *types.EventStreamIm
 			ID    string `json:"id"`
 			Model string `json:"model"`
 			Usage *struct {
-				PromptTokens     int `json:"prompt_tokens"`
-				CompletionTokens int `json:"completion_tokens"`
-				TotalTokens      int `json:"total_tokens"`
+				PromptTokens        int `json:"prompt_tokens"`
+				CompletionTokens    int `json:"completion_tokens"`
+				TotalTokens         int `json:"total_tokens"`
+				PromptTokensDetails struct {
+					CachedTokens int `json:"cached_tokens"`
+				} `json:"prompt_tokens_details"`
 			} `json:"usage"`
 			Choices []struct {
 				FinishReason string `json:"finish_reason"`
@@ -273,9 +276,17 @@ func (p *openAIProvider) readSSE(body io.ReadCloser, stream *types.EventStreamIm
 			partial.Model = chunk.Model
 		}
 		if chunk.Usage != nil {
+			// prompt_tokens counts the whole input including any cache-hit
+			// tokens, so subtract the cached portion to keep Input as the
+			// fresh (billed-as-new) input and report the reuse under
+			// CacheRead. Without this the same context is counted as new
+			// input on every step and continuation turn.
+			cached := chunk.Usage.PromptTokensDetails.CachedTokens
+			input := max(chunk.Usage.PromptTokens-cached, 0)
 			partial.Usage = types.AgentUsage{
-				Input:       chunk.Usage.PromptTokens,
+				Input:       input,
 				Output:      chunk.Usage.CompletionTokens,
+				CacheRead:   cached,
 				TotalTokens: chunk.Usage.TotalTokens,
 			}
 		}

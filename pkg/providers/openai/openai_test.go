@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -48,6 +49,40 @@ func TestLMStudio_Chat(t *testing.T) {
 	t.Logf("response: %s", resp.Message.Content)
 	t.Logf("usage: prompt=%d completion=%d total=%d",
 		resp.Usage.PromptTokens, resp.Usage.CompletionTokens, resp.Usage.TotalTokens)
+}
+
+func TestReadSSESplitsCachedPromptTokens(t *testing.T) {
+	sse := `data: {"choices":[{"delta":{"content":"hi"}}]}
+
+data: {"choices":[{"finish_reason":"stop","delta":{}}],"usage":{"prompt_tokens":1000,"completion_tokens":50,"total_tokens":1050,"prompt_tokens_details":{"cached_tokens":900}}}
+
+data: [DONE]
+
+`
+	p := &openAIProvider{id: "test"}
+	stream := types.NewEventStream()
+	go p.readSSE(io.NopCloser(strings.NewReader(sse)), stream)
+	go func() {
+		for range stream.Events() {
+		}
+	}()
+
+	msg, err := stream.Result()
+	if err != nil {
+		t.Fatalf("Result error: %v", err)
+	}
+	// prompt_tokens (1000) includes the 900 cache-hit tokens; Input must be
+	// the fresh remainder and CacheRead must carry the reused portion so the
+	// same context is not re-counted as new input each turn.
+	if msg.Usage.Input != 100 {
+		t.Errorf("Input = %d, want 100", msg.Usage.Input)
+	}
+	if msg.Usage.CacheRead != 900 {
+		t.Errorf("CacheRead = %d, want 900", msg.Usage.CacheRead)
+	}
+	if msg.Usage.Output != 50 {
+		t.Errorf("Output = %d, want 50", msg.Usage.Output)
+	}
 }
 
 func TestRequestWithoutReasoninglessAssistant(t *testing.T) {

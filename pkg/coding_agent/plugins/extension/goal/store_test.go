@@ -90,6 +90,44 @@ func TestLifecyclePauseResumeComplete(t *testing.T) {
 	}
 }
 
+func TestAccountUsageSplitsBreakdownAndExcludesCacheFromBudget(t *testing.T) {
+	s := NewStore()
+	budget := 500
+	g, err := s.StartWithBudget("ship it", &budget)
+	if err != nil {
+		t.Fatalf("StartWithBudget: %v", err)
+	}
+
+	usage := types.AgentUsage{Input: 100, Output: 40, CacheRead: 900, CacheWrite: 10}
+	if _, _, err := s.AccountUsage(usage, 0, false, g.ID); err != nil {
+		t.Fatalf("AccountUsage: %v", err)
+	}
+	if _, _, err := s.AccountUsage(usage, 0, false, g.ID); err != nil {
+		t.Fatalf("AccountUsage: %v", err)
+	}
+
+	got, _ := s.Current()
+	// Budget counter is fresh Input+Output only: (100+40)*2 = 280. The 900
+	// cache-read tokens per turn must not burn budget, so status stays active
+	// well under the 500 budget instead of blowing past it.
+	if got.TokensUsed != 280 {
+		t.Errorf("TokensUsed = %d, want 280", got.TokensUsed)
+	}
+	if got.Status != StatusActive {
+		t.Errorf("Status = %q, want active (cache must not count toward budget)", got.Status)
+	}
+	if got.InputTokens != 200 || got.OutputTokens != 80 {
+		t.Errorf("input/output = %d/%d, want 200/80", got.InputTokens, got.OutputTokens)
+	}
+	if got.CacheReadTokens != 1800 || got.CacheWriteTokens != 20 {
+		t.Errorf("cache read/write = %d/%d, want 1800/20", got.CacheReadTokens, got.CacheWriteTokens)
+	}
+
+	if line := goalTokenBreakdownLine(&got); !strings.Contains(line, "cache read") || !strings.Contains(line, "input") {
+		t.Errorf("breakdown line = %q, want input + cache read", line)
+	}
+}
+
 func TestCancelClearsStore(t *testing.T) {
 	s := NewStore()
 	s.Start("draft a PR")

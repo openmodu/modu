@@ -136,17 +136,21 @@ func (e *Extension) RuntimeState() any {
 		}
 	}
 	state := map[string]any{
-		"active":          g.Status == StatusActive,
-		"watching":        watching,
-		"id":              g.ID,
-		"threadId":        g.ThreadID,
-		"objective":       g.Objective,
-		"status":          g.Status,
-		"tokensUsed":      g.TokensUsed,
-		"timeUsedSeconds": g.TimeUsedSeconds,
-		"createdAt":       g.CreatedAt,
-		"updatedAt":       g.UpdatedAt,
-		"indicator":       goalIndicatorText(g),
+		"active":           g.Status == StatusActive,
+		"watching":         watching,
+		"id":               g.ID,
+		"threadId":         g.ThreadID,
+		"objective":        g.Objective,
+		"status":           g.Status,
+		"tokensUsed":       g.TokensUsed,
+		"inputTokens":      g.InputTokens,
+		"outputTokens":     g.OutputTokens,
+		"cacheReadTokens":  g.CacheReadTokens,
+		"cacheWriteTokens": g.CacheWriteTokens,
+		"timeUsedSeconds":  g.TimeUsedSeconds,
+		"createdAt":        g.CreatedAt,
+		"updatedAt":        g.UpdatedAt,
+		"indicator":        goalIndicatorText(g),
 	}
 	if g.TokenBudget != nil {
 		state["tokenBudget"] = *g.TokenBudget

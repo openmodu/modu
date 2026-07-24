@@ -44,17 +44,24 @@ type StoreRef struct {
 // Goal is one persistent objective the agent is driving toward. Timestamps are
 // Unix seconds so the on-disk shape stays close to pi-goal.
 type Goal struct {
-	ID              string `json:"id"`
-	ThreadID        string `json:"threadId"`
-	Objective       string `json:"objective"`
-	Status          Status `json:"status"`
-	TokenBudget     *int   `json:"tokenBudget,omitempty"`
-	TokensUsed      int    `json:"tokensUsed"`
-	TimeUsedSeconds int64  `json:"timeUsedSeconds"`
-	CreatedAt       int64  `json:"createdAt"`
-	UpdatedAt       int64  `json:"updatedAt"`
-	LastStartedAt   *int64 `json:"lastStartedAt,omitempty"`
-	CompletedAt     *int64 `json:"completedAt,omitempty"`
+	ID          string `json:"id"`
+	ThreadID    string `json:"threadId"`
+	Objective   string `json:"objective"`
+	Status      Status `json:"status"`
+	TokenBudget *int   `json:"tokenBudget,omitempty"`
+	// TokensUsed is the budget counter: fresh Input + Output, excluding
+	// cache reads/writes. The breakdown fields below are display-only
+	// accumulators and are not compared against TokenBudget.
+	TokensUsed       int    `json:"tokensUsed"`
+	InputTokens      int    `json:"inputTokens,omitempty"`
+	OutputTokens     int    `json:"outputTokens,omitempty"`
+	CacheReadTokens  int    `json:"cacheReadTokens,omitempty"`
+	CacheWriteTokens int    `json:"cacheWriteTokens,omitempty"`
+	TimeUsedSeconds  int64  `json:"timeUsedSeconds"`
+	CreatedAt        int64  `json:"createdAt"`
+	UpdatedAt        int64  `json:"updatedAt"`
+	LastStartedAt    *int64 `json:"lastStartedAt,omitempty"`
+	CompletedAt      *int64 `json:"completedAt,omitempty"`
 	// VerifierRejects counts consecutive completion claims the independent
 	// goal verifier has rejected. Reset whenever the goal (re)enters active
 	// via an explicit status update, so a user resume grants a fresh round.
@@ -417,6 +424,10 @@ func (s *Store) accountUsage(usage types.AgentUsage, elapsedSeconds int64, mode 
 		elapsedSeconds = 0
 	}
 	current.TokensUsed += tokenDelta(usage)
+	current.InputTokens += max(usage.Input, 0)
+	current.OutputTokens += max(usage.Output, 0)
+	current.CacheReadTokens += max(usage.CacheRead, 0)
+	current.CacheWriteTokens += max(usage.CacheWrite, 0)
 	current.TimeUsedSeconds += elapsedSeconds
 	current.UpdatedAt = nowSeconds()
 	current.Status = statusAfterAccounting(current.Status, current.TokensUsed, current.TokenBudget, mode)
@@ -471,10 +482,33 @@ func FormatGoalForUser(g *Goal) string {
 	}
 	out := fmt.Sprintf("Objective: %s\nStatus: %s\nTime used: %s\nTokens used: %s",
 		g.Objective, goalStatusLabel(g.Status), formatElapsed(g.TimeUsedSeconds), tokens)
+	if line := goalTokenBreakdownLine(g); line != "" {
+		out += "\n" + line
+	}
 	if g.CompletedAt != nil && *g.CompletedAt != 0 {
 		out += "\nCompleted at: " + time.Unix(*g.CompletedAt, 0).UTC().Format(time.RFC3339)
 	}
 	return out
+}
+
+// goalTokenBreakdownLine renders the input/output/cache split for display.
+// Returns "" when nothing has been accounted yet (e.g. goals created before
+// the breakdown fields existed, whose accumulators read back as zero).
+func goalTokenBreakdownLine(g *Goal) string {
+	if g.InputTokens == 0 && g.OutputTokens == 0 && g.CacheReadTokens == 0 && g.CacheWriteTokens == 0 {
+		return ""
+	}
+	parts := []string{
+		"input " + formatTokensCompact(g.InputTokens),
+		"output " + formatTokensCompact(g.OutputTokens),
+	}
+	if g.CacheReadTokens > 0 {
+		parts = append(parts, "cache read "+formatTokensCompact(g.CacheReadTokens))
+	}
+	if g.CacheWriteTokens > 0 {
+		parts = append(parts, "cache write "+formatTokensCompact(g.CacheWriteTokens))
+	}
+	return "Breakdown: " + strings.Join(parts, ", ")
 }
 
 func goalUsageSummary(g Goal) string {
