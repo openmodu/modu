@@ -76,6 +76,9 @@ func (e *Extension) Init(api extension.ExtensionAPI) error {
 	e.staleTaskIDs = reconcileStaleTasks(api)
 	e.batchTasks = newBatchTaskRegistry()
 	e.childActivity = newChildActivityRegistry()
+	// After a resume the live child-event stream is gone, so rebuild each
+	// prior subagent's activity tally from its persisted session file.
+	e.childActivity.rebuildFromTasks(api.BackgroundTasks())
 	e.controlCounters = newControlCounterRegistry()
 	api.On("subagent_child_event", e.onChildEvent)
 	api.RegisterCommand("run", "Run one subagent: /run <agent> [task]", e.cmdRun)
