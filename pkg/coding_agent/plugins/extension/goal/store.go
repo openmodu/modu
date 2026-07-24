@@ -476,39 +476,76 @@ func FormatGoalForUser(g *Goal) string {
 	if g == nil {
 		return "No active goal is set."
 	}
-	tokens := formatTokensCompact(g.TokensUsed)
-	if g.TokenBudget != nil {
-		tokens += "/" + formatTokensCompact(*g.TokenBudget)
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s %s", goalStatusIcon(g.Status), goalStatusLabel(g.Status))
+	if g.Objective != "" {
+		fmt.Fprintf(&b, "\n  %s", g.Objective)
 	}
-	out := fmt.Sprintf("Objective: %s\nStatus: %s\nTime used: %s\nTokens used: %s",
-		g.Objective, goalStatusLabel(g.Status), formatElapsed(g.TimeUsedSeconds), tokens)
-	if line := goalTokenBreakdownLine(g); line != "" {
-		out += "\n" + line
+	b.WriteString("\n")
+
+	if g.TokenBudget != nil {
+		pct := 0
+		if *g.TokenBudget > 0 {
+			pct = int(math.Round(100 * float64(g.TokensUsed) / float64(*g.TokenBudget)))
+		}
+		fmt.Fprintf(&b, "\n%s%s  %s / %s  (%d%%)", goalMetricLabel("Tokens"),
+			goalProgressBar(g.TokensUsed, *g.TokenBudget),
+			formatTokensCompact(g.TokensUsed), formatTokensCompact(*g.TokenBudget), pct)
+	} else {
+		fmt.Fprintf(&b, "\n%s%s", goalMetricLabel("Tokens"), formatTokensCompact(g.TokensUsed))
+	}
+	fmt.Fprintf(&b, "\n%s%s", goalMetricLabel("Time"), formatElapsed(g.TimeUsedSeconds))
+	if split := goalTokenSplit(g); split != "" {
+		fmt.Fprintf(&b, "\n%s%s", goalMetricLabel("Split"), split)
 	}
 	if g.CompletedAt != nil && *g.CompletedAt != 0 {
-		out += "\nCompleted at: " + time.Unix(*g.CompletedAt, 0).UTC().Format(time.RFC3339)
+		fmt.Fprintf(&b, "\n%s%s", goalMetricLabel("Done"), time.Unix(*g.CompletedAt, 0).UTC().Format(time.RFC3339))
 	}
-	return out
+	return b.String()
 }
 
-// goalTokenBreakdownLine renders the input/output/cache split for display.
-// Returns "" when nothing has been accounted yet (e.g. goals created before
-// the breakdown fields existed, whose accumulators read back as zero).
-func goalTokenBreakdownLine(g *Goal) string {
+// goalMetricLabel renders an aligned, indented label column so the metric
+// values line up under one another.
+func goalMetricLabel(label string) string {
+	return fmt.Sprintf("  %-6s  ", label)
+}
+
+// goalProgressBar renders a fixed-width usage bar. It clamps at full so an
+// over-budget (limited) goal still shows a solid bar rather than overflowing.
+func goalProgressBar(used, budget int) string {
+	const cells = 10
+	filled := 0
+	if budget > 0 {
+		filled = int(math.Round(float64(cells) * float64(used) / float64(budget)))
+	}
+	if filled < 0 {
+		filled = 0
+	}
+	if filled > cells {
+		filled = cells
+	}
+	return "[" + strings.Repeat("█", filled) + strings.Repeat("░", cells-filled) + "]"
+}
+
+// goalTokenSplit renders the input/output/cache breakdown as a compact
+// dot-separated value. Returns "" when nothing has been accounted yet (e.g.
+// goals created before the breakdown fields existed, whose accumulators read
+// back as zero).
+func goalTokenSplit(g *Goal) string {
 	if g.InputTokens == 0 && g.OutputTokens == 0 && g.CacheReadTokens == 0 && g.CacheWriteTokens == 0 {
 		return ""
 	}
 	parts := []string{
-		"input " + formatTokensCompact(g.InputTokens),
-		"output " + formatTokensCompact(g.OutputTokens),
+		"in " + formatTokensCompact(g.InputTokens),
+		"out " + formatTokensCompact(g.OutputTokens),
 	}
 	if g.CacheReadTokens > 0 {
-		parts = append(parts, "cache read "+formatTokensCompact(g.CacheReadTokens))
+		parts = append(parts, "cache "+formatTokensCompact(g.CacheReadTokens))
 	}
 	if g.CacheWriteTokens > 0 {
-		parts = append(parts, "cache write "+formatTokensCompact(g.CacheWriteTokens))
+		parts = append(parts, "cache-w "+formatTokensCompact(g.CacheWriteTokens))
 	}
-	return "Breakdown: " + strings.Join(parts, ", ")
+	return strings.Join(parts, " · ")
 }
 
 func goalUsageSummary(g Goal) string {

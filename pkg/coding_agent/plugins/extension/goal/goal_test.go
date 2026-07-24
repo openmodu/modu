@@ -430,10 +430,10 @@ func TestUpdateGoalCompleteStopsLoop(t *testing.T) {
 	}
 	foundCompleteNotice := false
 	for _, notice := range api.notices {
-		// formatGoalActionFeedback emits "Goal complete\n<FormatGoalForUser>"
-		// so the status label and the objective land on separate lines —
+		// formatGoalActionFeedback emits FormatGoalForUser, whose header leads
+		// with the status icon+label and puts the objective on its own line —
 		// match each independently rather than wedging a fixed separator.
-		if strings.Contains(notice, "Goal complete") && strings.Contains(notice, "compile success") {
+		if strings.Contains(notice, "✓ complete") && strings.Contains(notice, "compile success") {
 			foundCompleteNotice = true
 			break
 		}
@@ -675,7 +675,7 @@ func TestSlashGoalNotifiesHost(t *testing.T) {
 	if len(api.notices) == 0 {
 		t.Fatal("expected host notification")
 	}
-	if got := api.notices[len(api.notices)-1]; !strings.Contains(got, "goal: Goal active") ||
+	if got := api.notices[len(api.notices)-1]; !strings.Contains(got, "● active") ||
 		!strings.Contains(got, "notify the tui") {
 		t.Fatalf("notification mismatch: %q", got)
 	}

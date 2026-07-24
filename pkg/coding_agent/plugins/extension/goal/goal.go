@@ -667,6 +667,23 @@ func collectUsage(messages []types.AgentMessage) types.AgentUsage {
 	return out
 }
 
+// goalStatusIcon returns a single-width status glyph for the detail view and
+// any other beautified surface.
+func goalStatusIcon(status Status) string {
+	switch status {
+	case StatusActive:
+		return "●"
+	case StatusPaused:
+		return "⏸"
+	case StatusBudgetLimited:
+		return "⚠"
+	case StatusComplete:
+		return "✓"
+	default:
+		return "•"
+	}
+}
+
 func goalStatusLabel(status Status) string {
 	switch status {
 	case StatusActive:
@@ -707,11 +724,11 @@ func goalIndicatorText(g Goal) string {
 }
 
 // formatGoalActionFeedback assembles the slash-command echo / host
-// notification body. Mirrors pi-goal's "Goal <label>\n<formatGoalForTool>"
-// pattern so callers see the full state (Status / Time used / Tokens used /
-// Completed at) — not just an objective preview.
+// notification body. The FormatGoalForUser header already leads with the
+// status icon and label, so callers see the full state (status / tokens /
+// time / completion) without a duplicate "Goal <status>" prefix.
 func formatGoalActionFeedback(g Goal) string {
-	return fmt.Sprintf("Goal %s\n%s", goalStatusLabel(g.Status), FormatGoalForUser(&g))
+	return FormatGoalForUser(&g)
 }
 
 func (e *Extension) tell(msg string) {

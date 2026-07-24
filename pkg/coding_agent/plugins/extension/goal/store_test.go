@@ -123,8 +123,8 @@ func TestAccountUsageSplitsBreakdownAndExcludesCacheFromBudget(t *testing.T) {
 		t.Errorf("cache read/write = %d/%d, want 1800/20", got.CacheReadTokens, got.CacheWriteTokens)
 	}
 
-	if line := goalTokenBreakdownLine(&got); !strings.Contains(line, "cache read") || !strings.Contains(line, "input") {
-		t.Errorf("breakdown line = %q, want input + cache read", line)
+	if split := goalTokenSplit(&got); !strings.Contains(split, "cache ") || !strings.Contains(split, "in ") {
+		t.Errorf("split = %q, want in + cache", split)
 	}
 }
 
@@ -171,10 +171,10 @@ func TestSummaryWithAndWithoutGoal(t *testing.T) {
 	}
 	summary := s.Summary()
 	for _, want := range []string{
-		"Objective: ship modu_cron v1",
-		"Status: active",
-		"Time used: 1m",
-		"Tokens used: 1.2K/2.5K",
+		"● active",
+		"ship modu_cron v1",
+		"1.2K / 2.5K",
+		"(49%)",
 	} {
 		if !strings.Contains(summary, want) {
 			t.Errorf("Summary missing %q:\n%s", want, summary)
@@ -211,8 +211,11 @@ func TestFormatGoalForUserMatchesPiGoalCompletedTimestamp(t *testing.T) {
 	if strings.Contains(got, "Started:") {
 		t.Fatalf("pi-goal format should not include Started, got:\n%s", got)
 	}
-	if want := "Completed at: 2024-05-01T01:00:00Z"; !strings.Contains(got, want) {
-		t.Fatalf("expected summary to contain %q, got:\n%s", want, got)
+	if want := "2024-05-01T01:00:00Z"; !strings.Contains(got, want) {
+		t.Fatalf("expected summary to contain completion timestamp %q, got:\n%s", want, got)
+	}
+	if !strings.Contains(got, "✓ complete") {
+		t.Fatalf("expected completed goal to lead with ✓ complete, got:\n%s", got)
 	}
 }
 
