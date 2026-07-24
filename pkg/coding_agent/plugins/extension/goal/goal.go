@@ -39,6 +39,10 @@ type Extension struct {
 	agentTurnInProgress     bool
 	completedThisTurnGoalID string
 	lastSessionStartReason  string
+	// verifiedGoalID marks the goal whose completion the independent verifier
+	// most recently confirmed, so the user-facing completion message can note
+	// it was checked. Consumed (cleared) when that goal's completion prints.
+	verifiedGoalID string
 	// pendingChildUsage accumulates token usage reported by subagent
 	// (ForkSession) children during the current agent turn. It is folded
 	// into the turn's own usage at agent_end so a goal's budget reflects
@@ -461,7 +465,7 @@ func (e *Extension) onAgentEnd(event types.Event) {
 	}
 	if includeComplete && g.Status == StatusComplete {
 		e.clearAgentGoalAccounting()
-		e.tell(formatGoalActionFeedback(g))
+		e.tell(e.completionFeedback(g))
 		return
 	}
 	if g.Status == StatusActive {
@@ -522,6 +526,35 @@ func (e *Extension) apiHasPendingMessages() bool {
 		return false
 	}
 	return e.api.HasPendingMessages()
+}
+
+// markGoalVerified records that the independent verifier confirmed this
+// goal's completion, so the completion message can say so.
+func (e *Extension) markGoalVerified(id string) {
+	e.mu.Lock()
+	e.verifiedGoalID = id
+	e.mu.Unlock()
+}
+
+// takeGoalVerified reports (and clears) whether id was just verified.
+func (e *Extension) takeGoalVerified(id string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.verifiedGoalID != "" && e.verifiedGoalID == id {
+		e.verifiedGoalID = ""
+		return true
+	}
+	return false
+}
+
+// completionFeedback is the user-facing completion message, noting the
+// independent verifier's verdict when it gated this completion.
+func (e *Extension) completionFeedback(g Goal) string {
+	msg := formatGoalActionFeedback(g)
+	if e.takeGoalVerified(g.ID) {
+		msg += "\n✓ Passed an independent completion check"
+	}
+	return msg
 }
 
 func (e *Extension) beginAgentGoalAccounting(g Goal) {

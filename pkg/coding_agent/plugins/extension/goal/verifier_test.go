@@ -198,6 +198,34 @@ func TestUpdateGoalVerifierPassCompletes(t *testing.T) {
 	}
 }
 
+func TestVerifierPassAddsVerifiedNoteToCompletion(t *testing.T) {
+	e, api, tool := newVerifierExtension(t, map[string]any{"enabled": true})
+	api.fork = func(context.Context, extension.ForkOptions) (string, error) {
+		return `{"verdict":"PASS","reasons":[]}`, nil
+	}
+	active, _ := e.store.Current()
+	e.mu.Lock()
+	e.agentTurnInProgress = true
+	e.agentGoalID = active.ID
+	e.mu.Unlock()
+
+	if _, err := tool.Execute(context.Background(), "tc", map[string]any{"status": "complete"}, nil); err != nil {
+		t.Fatalf("update_goal: %v", err)
+	}
+	api.fireAgentEnd()
+
+	found := false
+	for _, notice := range api.notices {
+		if strings.Contains(notice, "Passed an independent completion check") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("completion message should note independent verification, got %#v", api.notices)
+	}
+}
+
 func TestUpdateGoalVerifierPausesAfterMaxRejects(t *testing.T) {
 	e, api, tool := newVerifierExtension(t, map[string]any{"enabled": true, "max_rejects": 2})
 	api.fork = func(context.Context, extension.ForkOptions) (string, error) {

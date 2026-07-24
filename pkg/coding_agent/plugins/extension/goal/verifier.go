@@ -292,6 +292,7 @@ func (e *Extension) verifyCompletion(ctx context.Context) (string, bool) {
 
 	verdict, parsed := parseVerifierVerdict(out)
 	if parsed && verdict.Verdict == "PASS" {
+		e.markGoalVerified(g.ID)
 		e.tell("goal: verifier PASS — completion confirmed by independent check")
 		return "", false
 	}
