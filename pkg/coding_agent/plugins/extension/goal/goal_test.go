@@ -503,29 +503,39 @@ func TestGoalObjectiveReplacesExistingGoal(t *testing.T) {
 	}
 }
 
-func TestGoalObjectiveReplacementCanBeRejected(t *testing.T) {
+func TestGoalSecondObjectiveAddsAndFocuses(t *testing.T) {
 	ext, api := initialized(t)
 	if err := api.runCommand(t, "goal", "first"); err != nil {
 		t.Fatalf("first /goal: %v", err)
 	}
-	api.selectQ = []string{cancelReplaceChoice}
-	before := api.sentCount()
 	if err := api.runCommand(t, "goal", "second"); err != nil {
-		t.Fatalf("second /goal rejection should not error: %v", err)
+		t.Fatalf("second /goal: %v", err)
 	}
-	g, _ := ext.store.Current()
-	if g.Objective != "first" {
-		t.Fatalf("goal should remain unchanged, got %q", g.Objective)
+
+	// Both goals persist; the new objective is focused and active, the old one
+	// is parked (paused) so only one goal is active at a time.
+	goals, focused, err := ext.store.List()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if api.sentCount() != before {
-		t.Fatalf("rejected replacement should not queue continuation: got %d want %d", api.sentCount(), before)
+	if len(goals) != 2 {
+		t.Fatalf("want 2 goals, got %d: %#v", len(goals), goals)
 	}
-	if len(api.selects) != 1 || !strings.Contains(api.selects[0], "Replace goal?") {
-		t.Fatalf("replacement should ask for selection, got %#v", api.selects)
+	current, _ := ext.store.Current()
+	if current.Objective != "second" || current.ID != focused {
+		t.Fatalf("focused goal should be 'second', got %q (focused=%s)", current.Objective, focused)
 	}
-	if !strings.Contains(api.selects[0], "New objective: second") ||
-		strings.Contains(api.selects[0], "Current:") {
-		t.Fatalf("replacement prompt should match pi-goal, got %#v", api.selects)
+	if current.Status != StatusActive {
+		t.Fatalf("focused goal should be active, got %q", current.Status)
+	}
+	activeCount := 0
+	for _, g := range goals {
+		if g.Status == StatusActive {
+			activeCount++
+		}
+	}
+	if activeCount != 1 {
+		t.Fatalf("exactly one goal should be active, got %d", activeCount)
 	}
 }
 
