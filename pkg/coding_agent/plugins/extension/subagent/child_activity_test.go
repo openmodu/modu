@@ -1,10 +1,57 @@
 package subagent
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/openmodu/modu/pkg/coding_agent/plugins/extension"
 	"github.com/openmodu/modu/pkg/types"
 )
+
+func TestChildActivityRebuildFromTasks(t *testing.T) {
+	dir := t.TempDir()
+	sessionFile := filepath.Join(dir, "session.jsonl")
+	// Two assistant turns (120 + 30 tokens) and one failed tool result.
+	lines := `{"role":"user","content":[]}
+{"role":"assistant","usage":{"input":100,"output":20}}
+{"role":"tool","toolName":"bash","isError":true}
+{"role":"assistant","usage":{"input":25,"output":5}}
+`
+	if err := os.WriteFile(sessionFile, []byte(lines), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := newChildActivityRegistry()
+	// A task already tallied live must not be overwritten by the rebuild.
+	r.handle(childEvent("live", string(types.EventTypeTurnEnd), "", false, 999))
+
+	r.rebuildFromTasks([]extension.TaskSnapshot{
+		{ID: "t1", Kind: "subagent", SessionFile: sessionFile},
+		{ID: "skip-kind", Kind: "other", SessionFile: sessionFile},
+		{ID: "live", Kind: "subagent", SessionFile: sessionFile},
+	})
+
+	got, ok := r.get("t1")
+	if !ok {
+		t.Fatal("expected rebuilt activity for t1")
+	}
+	if got.Turns != 2 {
+		t.Errorf("Turns = %d, want 2", got.Turns)
+	}
+	if got.Tokens != 150 {
+		t.Errorf("Tokens = %d, want 150", got.Tokens)
+	}
+	if got.FailedTools != 1 {
+		t.Errorf("FailedTools = %d, want 1", got.FailedTools)
+	}
+	if _, ok := r.get("skip-kind"); ok {
+		t.Error("non-subagent task should be skipped")
+	}
+	if live, _ := r.get("live"); live.Tokens != 999 {
+		t.Errorf("live task overwritten by rebuild: Tokens = %d, want 999", live.Tokens)
+	}
+}
 
 func childEvent(taskID, reason, tool string, isErr bool, tokens int) types.Event {
 	return types.Event{
