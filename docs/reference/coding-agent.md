@@ -251,6 +251,8 @@ Agent 完成回复 → 记录最新 usage 快照 → 超过阈值？→ 调用 C
 
 system prompt 按变化频率组织：默认/自定义基础提示、项目上下文、附加提示和环境信息组成前部；skills 索引、工具专属说明、memory、临时 mode 放在后部。skills 索引按名称排序，因此文件扫描顺序不会改变提示词。默认 system prompt 的最后一节固定为回复语言约束。用户可见的进度消息、工具调用前后的说明、提问、报错和最终答复都使用当前用户请求的语言；工具说明、工具输出、代码或项目上下文中的英文不会改变回复语言。代码、标识符、路径、命令和引用的命令输出保持原文。自定义 `customSystemPrompt` 会完整替换默认提示词，因此需要自行声明语言规则。
 
+语言约束明确要求在工具调用后沿用用户请求的语言，并用中文示例约束开场白、过渡句和标题；用户明确要求其他输出语言时，以该要求为准。这是模型提示约束，不是输出翻译或强制校验。回归验证应检查每条 assistant 文本，不能只检查最终答复。可用 `go run ./cmd/modu_code -p '只读检查，不修改文件。依次阅读 README.md、pkg/agent/README.md、pkg/providers/README.md，每读完一个文件先简短说明发现，再继续读下一个；最后解释它们之间的调用关系。' --json` 复测英文文件读取后的回复语言。
+
 当前版本只保证请求内容与顺序稳定，尚未向 OpenAI、Anthropic 等 Provider 请求写入显式 cache breakpoint，也未实现 MCP tool 的延迟加载。MCP schema 本身变化时，仍会使 tools 前缀从变化点起失效。
 
 Memory feature 开启时默认仍兼容旧的 global/project/recent notes 注入；当 global 或 project memory 目录存在 `memory_summary.md` 时，主 session 和 subagent/workflow 的 `memory_scope` 注入都会优先使用 bounded summary，并提示模型通过 `memo` 的 `list`、`read`、`search` 操作按需读取详细记忆。`memo` 可用 `write_summary` 覆盖当前 scope 的 `memory_summary.md`；`list`、`read`、`search` 的 tool result details 会包含结构化 path/entry/match/truncation metadata，便于后续 citation 和日志消费。读路径只接受 memory root 内的相对路径，拒绝 `..` 和隐藏路径组件。关闭 `features.memoryTool` 会同时移除 `memo` 工具、主 prompt memory 注入，以及 subagent/workflow `memory_scope` 注入。

@@ -113,6 +113,9 @@ func TestDefaultSystemPromptKeepsResponseLanguageConstraintLast(t *testing.T) {
 		"Use the same language as the user's current request for every user-visible prose message",
 		"before or alongside tool calls",
 		"English tool output must never change the response language",
+		"Carry that language through every tool-call continuation",
+		"用户用中文提问时，所有面向用户的说明都用中文",
+		"If the user explicitly requests another output language, follow that request",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("expected response-language constraint %q, got:\n%s", want, prompt)

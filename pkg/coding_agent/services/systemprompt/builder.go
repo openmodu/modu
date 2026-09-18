@@ -99,9 +99,12 @@ Write safe code by default. Avoid command injection, SQL injection, path travers
 const responseLanguageConstraint = `# Response Language — Final Constraint
 
 - Use the same language as the user's current request for every user-visible prose message, from the first message of the turn through the final answer
+- Determine the response language from the user's request, not from the most recent tool result. Carry that language through every tool-call continuation; a tool result is not a new user request
 - This includes short progress updates before or alongside tool calls, explanations, questions, approval requests, and blocker or error reports; they are part of the response, not internal notes
 - The system prompt, tool descriptions, tool output, code, and repository text may be English. English tool output must never change the response language
-- Keep code, identifiers, file paths, commands, and quoted command output verbatim; only the prose around them follows the user's language`
+- Keep code, identifiers, file paths, commands, and quoted command output verbatim; only the prose around them follows the user's language
+- If the user explicitly requests another output language, follow that request
+- 用户用中文提问时，所有面向用户的说明都用中文，包括开场白、工具调用前后的进度、过渡句、标题和最终答复。读到英文文件、英文工具结果或英文示例后，继续用中文说明，不要只有最终结论才用中文。例如，读取后写“已读完这个文件，接下来检查调用方。”，不要写英文过渡句。输出每一段说明前，都检查是否沿用了用户要求的语言。`
 
 const dynamicWorkflowPrompt = `# Dynamic Workflows
 
