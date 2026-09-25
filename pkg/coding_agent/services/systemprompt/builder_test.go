@@ -102,6 +102,33 @@ func TestDefaultSystemPromptGuidesNativeToolUse(t *testing.T) {
 	}
 }
 
+func TestDefaultSystemPromptKeepsResponseLanguageConstraintLast(t *testing.T) {
+	prompt := NewBuilder(t.TempDir()).
+		AppendPrompt("LATE APPENDED PROMPT").
+		SetMemoryProvider(stubMemory("LATE MEMORY CONTEXT")).
+		SetModeBlocks([]string{"LATE MODE BLOCK"}).
+		Build()
+
+	for _, want := range []string{
+		"Use the same language as the user's current request for every user-visible prose message",
+		"before or alongside tool calls",
+		"English tool output must never change the response language",
+		"Carry that language through every tool-call continuation",
+		"用户用中文提问时，所有面向用户的说明都用中文",
+		"If the user explicitly requests another output language, follow that request",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected response-language constraint %q, got:\n%s", want, prompt)
+		}
+	}
+	if !strings.HasSuffix(prompt, responseLanguageConstraint) {
+		t.Fatalf("response-language constraint must be the final system-prompt section, got:\n%s", prompt)
+	}
+	if strings.LastIndex(prompt, "# Response Language") < strings.LastIndex(prompt, "LATE MODE BLOCK") {
+		t.Fatalf("response-language constraint must follow appended context and active modes, got:\n%s", prompt)
+	}
+}
+
 func TestBuilderCustomPromptReplacesDefault(t *testing.T) {
 	prompt := NewBuilder(t.TempDir()).
 		SetCustomPrompt("CUSTOM BASE PROMPT").
@@ -113,18 +140,33 @@ func TestBuilderCustomPromptReplacesDefault(t *testing.T) {
 	if strings.Contains(prompt, "expert software engineer operating as a terminal assistant") {
 		t.Fatalf("custom prompt should replace the default, got:\n%s", prompt)
 	}
+	if strings.Contains(prompt, "# Response Language") {
+		t.Fatalf("custom prompt should replace default language policy too, got:\n%s", prompt)
+	}
 }
 
-func TestBuilderIncludesToolDescriptions(t *testing.T) {
+func TestBuilderKeepsToolSchemasOutOfSystemPrompt(t *testing.T) {
 	prompt := NewBuilder(t.TempDir()).
 		SetTools([]types.Tool{stubTool{name: "read", desc: "reads a file"}}).
 		Build()
 
-	if !strings.Contains(prompt, "# Available Tools") {
-		t.Fatalf("expected tools header, got:\n%s", prompt)
+	if strings.Contains(prompt, "# Available Tools") || strings.Contains(prompt, "reads a file") {
+		t.Fatalf("tool schemas are already sent in the provider tools field; system prompt must not duplicate them:\n%s", prompt)
 	}
-	if !strings.Contains(prompt, "## read") || !strings.Contains(prompt, "reads a file") {
-		t.Fatalf("expected tool description, got:\n%s", prompt)
+}
+
+func TestBuilderPlacesSkillsAfterStablePromptSections(t *testing.T) {
+	prompt := NewBuilder(t.TempDir()).
+		AppendPrompt("STABLE APPENDED PROMPT").
+		SetSkillsPrompt("DYNAMIC SKILLS INDEX").
+		SetMemoryProvider(stubMemory("DYNAMIC MEMORY")).
+		Build()
+
+	stable := strings.Index(prompt, "STABLE APPENDED PROMPT")
+	skills := strings.Index(prompt, "DYNAMIC SKILLS INDEX")
+	memory := strings.Index(prompt, "DYNAMIC MEMORY")
+	if stable < 0 || skills < 0 || memory < 0 || !(stable < skills && skills < memory) {
+		t.Fatalf("expected stable append prompt before skills and memory, got:\n%s", prompt)
 	}
 }
 

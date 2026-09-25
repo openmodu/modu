@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/openmodu/modu/pkg/mdloader"
@@ -157,6 +158,9 @@ func (m *Manager) FormatForPrompt() string {
 			visible = append(visible, s)
 		}
 	}
+	sort.Slice(visible, func(i, j int) bool {
+		return visible[i].Name < visible[j].Name
+	})
 
 	if len(visible) == 0 {
 		return ""

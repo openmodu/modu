@@ -5,6 +5,37 @@ enough to implement, verify, and commit independently.
 
 ## Done
 
+- 2026-09-18: reproduced English opening/transition prose for a Chinese
+  three-file read request with both installed `modu_code -p --json` and
+  `go run ./cmd/modu_code -p --json` (deepseek-v4-flash-ga-260731).
+  Strengthened the default language constraint with explicit tool-continuation
+  rules and a Chinese example. The systemprompt unit suite passes (the new
+  contract assertions failed before the change). Repeating the same request
+  with `go run` kept all four assistant messages in Chinese; a separate Chinese
+  request explicitly asking for English still returned English. These live
+  checks cover one run each, not a guarantee of model compliance. Reproduction
+  command and prompt-only limitations are recorded in the coding-agent reference.
+
+- 2026-09-03: implemented the first provider-neutral prompt-cache pass. Tool
+  definitions are now canonicalized with non-MCP tools first, MCP tools last,
+  and names sorted within each group. The system prompt no longer duplicates
+  tool descriptions; its stable configuration precedes the sorted skills
+  index, tool-specific guidance, memory, and active modes. Explicit provider
+  cache breakpoints and deferred MCP loading remain out of scope for this
+  pass. Focused `pkg/agent`, `pkg/skills`, and system-prompt tests pass;
+  selected `pkg/coding_agent` integration tests and
+  `go run ./cmd/modu_code --help` also pass. The complete `pkg/agent` suite
+  reaches its existing HTTP integration test but cannot open a loopback port
+  in the restricted sandbox.
+
+- 2026-09-03: moved the default response-language constraint to the final
+  system-prompt section, after project context, skills, memory, and active-mode
+  blocks. The constraint now explicitly covers progress text and
+  explanations around tool calls, so English tool output does not switch a
+  Chinese turn's intermediate replies to English while leaving only the final
+  answer in Chinese. Custom system prompts still replace the complete default
+  policy. `go test ./pkg/coding_agent/services/systemprompt` passes.
+
 - 2026-08-20: added English spell checking to the `modu_code` composer using
   the bundled en_US dictionary and gospell. Ordinary prose misspellings render
   with a red curly underline; commands, file mentions, URLs, paths,

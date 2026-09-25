@@ -62,6 +62,7 @@ err := a.Prompt(ctx, "Hello")
 - LLM 短暂故障使用指数退避重试。
 - `StreamFn` 为空时使用 `StreamDefault`，并按 `model.ProviderID` 查找 Provider。
 - `ConvertToLLM` 为空时，过滤 Provider 无法处理的消息角色。
+- 发送给 Provider 前，工具定义按名称固定排序：普通工具在前，名称以 `mcp__` 开头的 MCP 工具在后。工具注册顺序变化不会扰动请求前缀，MCP 工具增删也不会改变前面普通工具的顺序。
 - 执行工具前，按 JSON Schema 校验参数。
 - 实现 `ParallelTool` 的工具可以并行执行。
 - 并行工具结果会保留 `BatchID` 和 `BatchSize`，便于持久化宿主在恢复会话时重建批次展示。

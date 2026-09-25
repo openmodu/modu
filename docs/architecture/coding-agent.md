@@ -90,6 +90,8 @@ Tools are the model's action surface. They parse arguments, call a focused capab
 
 Filesystem tools share read-state tracking to reject writes based on stale file contents. Rebinding the working directory must update the active tools; a tool that retains an old directory can act on the wrong checkout even when the session prompt shows the new one.
 
+The bash tool isolates each command in a platform-specific process group. Timeout and background-job cancellation terminate the complete process tree: Unix uses process-group signals, while Windows uses a hidden process group and `taskkill /T /F`.
+
 ### Plugins
 
 Plugins add optional behavior through public extension contracts. They may register tools, commands, hooks, or prompts, but the engine and services must not import a concrete plugin.

@@ -327,6 +327,25 @@ func TestFormatForPromptExcludesDisabled(t *testing.T) {
 	}
 }
 
+func TestFormatForPromptSortsSkillsByName(t *testing.T) {
+	m, agentDir, _ := newTestManager(t)
+	writeFile(t, filepath.Join(agentDir, "skills", "zeta.md"),
+		"---\ndescription: last\n---\nbody")
+	writeFile(t, filepath.Join(agentDir, "skills", "alpha.md"),
+		"---\ndescription: first\n---\nbody")
+
+	first := m.FormatForPrompt()
+	second := m.FormatForPrompt()
+	if first != second {
+		t.Fatalf("skill prompt changed without filesystem changes:\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+	alpha := strings.Index(first, "<name>alpha</name>")
+	zeta := strings.Index(first, "<name>zeta</name>")
+	if alpha < 0 || zeta < 0 || alpha > zeta {
+		t.Fatalf("skills are not sorted by name: %s", first)
+	}
+}
+
 func TestExtraPathsDiscovery(t *testing.T) {
 	m, _, _ := newTestManager(t)
 	extraDir := t.TempDir()

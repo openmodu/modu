@@ -62,6 +62,7 @@ err := a.Prompt(ctx, "Hello")
 - Transient LLM errors use exponential-backoff retries.
 - A nil `StreamFn` uses `StreamDefault`, which resolves the Provider through `model.ProviderID`.
 - A nil `ConvertToLLM` removes roles that the Provider cannot consume.
+- Tool definitions are sorted before each provider call: non-MCP tools first, then `mcp__` tools, with each group ordered by name. Registration-order changes therefore do not perturb the request prefix, and MCP changes do not reorder the preceding tools.
 - Tool arguments are checked against JSON Schema before execution.
 - Tools implementing `ParallelTool` may run in parallel.
 - Parallel tool-result messages retain `BatchID` and `BatchSize` so persisted hosts can restore the batch presentation.

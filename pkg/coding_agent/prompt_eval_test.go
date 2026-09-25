@@ -52,14 +52,6 @@ func TestNativeToolPromptGuidanceEval(t *testing.T) {
 				name: "read before edit or overwrite",
 				want: "Read a file before editing or overwriting it",
 			},
-			{
-				name: "bash tool repeats not-for-file-ops guidance",
-				want: "Do not use bash for normal file reads, content search, file-pattern search, source edits, or file creation",
-			},
-			{
-				name: "edit tool repeats read-first guidance",
-				want: "Read the file first so old_text is based on the current contents",
-			},
 		}
 
 		for _, check := range checks {

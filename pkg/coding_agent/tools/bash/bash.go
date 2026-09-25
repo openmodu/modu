@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/openmodu/modu/pkg/coding_agent/tools/common"
@@ -174,7 +173,7 @@ func (t *BashTool) Execute(ctx context.Context, toolCallID string, args map[stri
 		cmd := exec.Command("bash", "-c", command)
 		cmd.Dir = t.cwd
 		cmd.Env = os.Environ()
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		configureProcessGroup(cmd)
 		backgroundTimeout := time.Duration(0)
 		if _, ok := args["timeout"]; ok {
 			backgroundTimeout = timeout
@@ -199,8 +198,15 @@ func (t *BashTool) Execute(ctx context.Context, toolCallID string, args map[stri
 	// Inherit environment
 	cmd.Env = os.Environ()
 
-	// Set process group so we can kill all child processes
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Put the shell in its own process group so cancellation can terminate
+	// the complete command tree rather than only the shell process.
+	configureProcessGroup(cmd)
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return os.ErrProcessDone
+		}
+		return killProcessGroup(cmd.Process.Pid)
+	}
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -236,9 +242,10 @@ func (t *BashTool) Execute(ctx context.Context, toolCallID string, args map[stri
 	if err != nil {
 		if cmdCtx.Err() == context.DeadlineExceeded {
 			timedOut = true
-			// Kill process group
+			// Cancel normally kills the process group. Retry here to cover a
+			// cancellation race after the command has already returned.
 			if cmd.Process != nil {
-				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+				_ = killProcessGroup(cmd.Process.Pid)
 			}
 		}
 

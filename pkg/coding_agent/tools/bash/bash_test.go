@@ -2,6 +2,8 @@ package bash
 
 import (
 	"context"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -115,11 +117,29 @@ func TestExecuteRunsInConfiguredCwd(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 	got := strings.TrimSpace(mustText(t, res))
+	if runtime.GOOS == "windows" {
+		got = windowsBashPathToNative(got)
+		if !strings.EqualFold(filepath.Clean(got), filepath.Clean(dir)) {
+			t.Errorf("pwd output = %q, want %q", got, dir)
+		}
+		return
+	}
 	// macOS temp dirs are often symlinked (/tmp -> /private/tmp); compare
 	// suffixes rather than exact equality to stay portable.
 	if !strings.HasSuffix(got, strings.TrimSuffix(dir, "/")) {
 		t.Errorf("pwd output = %q, want a path ending in %q", got, dir)
 	}
+}
+
+func windowsBashPathToNative(path string) string {
+	path = strings.ReplaceAll(path, "\\", "/")
+	if len(path) >= len("/mnt/c/") && strings.HasPrefix(path, "/mnt/") && path[6] == '/' {
+		return strings.ToUpper(path[5:6]) + ":" + path[6:]
+	}
+	if len(path) >= len("/c/") && path[0] == '/' && path[2] == '/' {
+		return strings.ToUpper(path[1:2]) + ":" + path[2:]
+	}
+	return path
 }
 
 func TestExecuteNoOutputReportsPlaceholder(t *testing.T) {

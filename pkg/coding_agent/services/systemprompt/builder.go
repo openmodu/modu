@@ -1,5 +1,5 @@
 // Package systemprompt assembles the agent's system prompt from its many
-// sources (base prompt, tool descriptions, context files, skills, memory,
+// sources (base prompt, context files, skills, tool-specific guidance, memory,
 // environment, and active-mode blocks) through a single Build path.
 package systemprompt
 
@@ -78,12 +78,6 @@ When asked to review, audit, or analyse a package or module:
 - If a task is genuinely ambiguous, ask one focused clarifying question before proceeding
 - Report blockers clearly; don't retry a failed approach without changing something
 
-# Language
-
-- Answer in the language the user writes in, and stay in it for the whole turn – the short lines between tool calls and any reasoning the user can see are part of the answer, not internal notes
-- This prompt, the tool output, and the code you read are English; that is context, not a reason to switch. Long English tool output mid-task never changes the response language
-- Keep code, identifiers, file paths, commands, and quoted command output verbatim; only the prose around them follows the user's language
-
 # Git Claims
 
 - Before claiming files are staged, unstaged, committed, or unchanged, verify with explicit git commands
@@ -101,6 +95,16 @@ When asked to review, audit, or analyse a package or module:
 # Security
 
 Write safe code by default. Avoid command injection, SQL injection, path traversal, and hardcoded secrets. If you notice a security issue in existing code, flag it explicitly.`
+
+const responseLanguageConstraint = `# Response Language — Final Constraint
+
+- Use the same language as the user's current request for every user-visible prose message, from the first message of the turn through the final answer
+- Determine the response language from the user's request, not from the most recent tool result. Carry that language through every tool-call continuation; a tool result is not a new user request
+- This includes short progress updates before or alongside tool calls, explanations, questions, approval requests, and blocker or error reports; they are part of the response, not internal notes
+- The system prompt, tool descriptions, tool output, code, and repository text may be English. English tool output must never change the response language
+- Keep code, identifiers, file paths, commands, and quoted command output verbatim; only the prose around them follows the user's language
+- If the user explicitly requests another output language, follow that request
+- 用户用中文提问时，所有面向用户的说明都用中文，包括开场白、工具调用前后的进度、过渡句、标题和最终答复。读到英文文件、英文工具结果或英文示例后，继续用中文说明，不要只有最终结论才用中文。例如，读取后写“已读完这个文件，接下来检查调用方。”，不要写英文过渡句。输出每一段说明前，都检查是否沿用了用户要求的语言。`
 
 const dynamicWorkflowPrompt = `# Dynamic Workflows
 
@@ -160,7 +164,8 @@ func (b *Builder) SetCustomPrompt(prompt string) *Builder {
 	return b
 }
 
-// SetTools sets the active tools whose descriptions will be included.
+// SetTools sets the active tools used to select tool-specific guidance.
+// Tool schemas are sent through the provider request, not the system prompt.
 func (b *Builder) SetTools(tools []types.Tool) *Builder {
 	b.tools = tools
 	return b
@@ -221,19 +226,6 @@ func (b *Builder) Build() string {
 	}
 	parts = append(parts, basePrompt)
 
-	// 2. Tool descriptions
-	if len(b.tools) > 0 {
-		var toolDescs []string
-		toolDescs = append(toolDescs, "# Available Tools")
-		for _, tool := range b.tools {
-			toolDescs = append(toolDescs, fmt.Sprintf("## %s\n%s", tool.Name(), tool.Description()))
-		}
-		parts = append(parts, strings.Join(toolDescs, "\n\n"))
-		if hasToolNamed(b.tools, "workflow") {
-			parts = append(parts, dynamicWorkflowPrompt)
-		}
-	}
-
 	remainingContextBudget := maxTotalContextBytes
 	seenPaths := make(map[string]struct{})
 	appendContext := func(label, path string) {
@@ -250,7 +242,7 @@ func (b *Builder) Build() string {
 		parts = append(parts, fmt.Sprintf("# Context: %s\n%s", label, content))
 	}
 
-	// 3. Context files (AGENTS.md, .agents.md, etc.)
+	// 2. Context files (AGENTS.md, .agents.md, etc.)
 	for _, path := range b.contextFiles {
 		if remainingContextBudget <= 0 {
 			break
@@ -275,28 +267,12 @@ func (b *Builder) Build() string {
 		appendContext(name, path)
 	}
 
-	// 4. Skill descriptions (XML format per Agent Skills spec)
-	if b.skillsPrompt != "" {
-		parts = append(parts, b.skillsPrompt)
-	}
-
-	// 5. Append prompts
+	// 3. Append prompts
 	if len(b.appendPrompts) > 0 {
 		parts = append(parts, b.appendPrompts...)
 	}
 
-	// 6. Memory Context
-	if b.memory != nil {
-		memCtx := b.memory.GetMemoryContext()
-		if memCtx != "" {
-			if len(memCtx) > maxMemoryContextBytes {
-				memCtx = truncateWithNotice(memCtx, maxMemoryContextBytes, "memory context")
-			}
-			parts = append(parts, memCtx)
-		}
-	}
-
-	// 7. Environment info
+	// 4. Environment info
 	envLines := []string{
 		"# Environment",
 		fmt.Sprintf("- Current date: %s", time.Now().Format("2006-01-02")),
@@ -314,9 +290,39 @@ func (b *Builder) Build() string {
 	}
 	parts = append(parts, strings.Join(envLines, "\n"))
 
-	// 8. Active-mode blocks (plan mode, worktree) — appended last so the
-	// stable prompt above is unaffected by transient mode changes.
+	// Keep filesystem- and runtime-dependent sections after the stable prefix.
+	// 5. Skill descriptions (XML format per Agent Skills spec)
+	if b.skillsPrompt != "" {
+		parts = append(parts, b.skillsPrompt)
+	}
+
+	// 6. Tool-specific guidance. Tool schemas themselves stay in the provider's
+	// tools field so they are not duplicated in the system prompt.
+	if hasToolNamed(b.tools, "workflow") {
+		parts = append(parts, dynamicWorkflowPrompt)
+	}
+
+	// 7. Memory Context
+	if b.memory != nil {
+		memCtx := b.memory.GetMemoryContext()
+		if memCtx != "" {
+			if len(memCtx) > maxMemoryContextBytes {
+				memCtx = truncateWithNotice(memCtx, maxMemoryContextBytes, "memory context")
+			}
+			parts = append(parts, memCtx)
+		}
+	}
+
+	// 8. Active-mode blocks (plan mode, worktree).
 	parts = append(parts, b.modeBlocks...)
+
+	// 9. Keep the default response-language contract last. Tool descriptions,
+	// repository context, memory, and mode instructions are commonly English;
+	// placing this after them prevents those inputs from changing the language
+	// of progress messages emitted around tool calls.
+	if b.customPrompt == "" {
+		parts = append(parts, responseLanguageConstraint)
+	}
 
 	return strings.Join(parts, sectionSeparator)
 }

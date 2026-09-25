@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/openmodu/modu/pkg/coding_agent/tools/common"
@@ -127,7 +126,7 @@ func (j *Job) kill() (bool, error) {
 	if pid <= 0 {
 		return false, fmt.Errorf("background process has no pid")
 	}
-	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
+	if err := killProcessGroup(pid); err != nil {
 		j.mu.Lock()
 		j.killAsked = false
 		j.mu.Unlock()

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -387,5 +388,13 @@ func toolDefinitions(tools []types.Tool) []types.ToolDefinition {
 			Parameters:  tool.Parameters(),
 		})
 	}
+	sort.SliceStable(defs, func(i, j int) bool {
+		iMCP := strings.HasPrefix(defs[i].Name, "mcp__")
+		jMCP := strings.HasPrefix(defs[j].Name, "mcp__")
+		if iMCP != jMCP {
+			return !iMCP
+		}
+		return defs[i].Name < defs[j].Name
+	})
 	return defs
 }
