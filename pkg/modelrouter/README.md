@@ -41,3 +41,30 @@ go run ./cmd/modu_models restore codex
 ```
 
 Configuration defaults to `~/.modu/modelrouter/config.json`. `MODU_MODELROUTER_CONFIG` overrides that path. `MODU_MODELROUTER_URL` changes the loopback gateway URL (default `http://127.0.0.1:3425`). The gateway uses the provider's configured key or `APIKeyEnv` value, never the client token. Keys are not printed by list commands.
+
+## Verification
+
+First run the local integration tests. They use temporary Codex and Claude Code homes and a fake upstream, so they need no provider key and do not change your agent settings:
+
+```sh
+MODELROUTER_AGENT_INTEGRATION=1 go test ./pkg/modelrouter ./cmd/modu_models -count=1
+```
+
+For a live provider test, set `DEEPSEEK_API_KEY` in the shell that will run `serve`, then add the provider and start the gateway:
+
+```sh
+go run ./cmd/modu_models provider add deepseek --url https://api.deepseek.com/v1 --models deepseek-chat --key-env DEEPSEEK_API_KEY
+go run ./cmd/modu_models models
+go run ./cmd/modu_models serve
+```
+
+In another terminal, inspect the catalog and make one Chat Completions request:
+
+```sh
+curl -fsS http://127.0.0.1:3425/v1/models
+curl -fsS http://127.0.0.1:3425/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"deepseek/deepseek-chat","messages":[{"role":"user","content":"Reply with OK"}]}'
+```
+
+Only after the gateway request works, switch an agent with `use codex` or `use claude` and start a new agent session. `use` changes that agent's configuration; `restore codex` or `restore claude` restores the previous model and endpoint settings. Subscription logins are not available as cross-agent providers yet.

@@ -10,6 +10,7 @@ Work is split into independently verifiable functions as required by the reposit
 - Added `cmd/modu_models` provider, models, use, restore, and serve commands. A CLI test covers provider add, list, and removal.
 - Ran opt-in local end-to-end tests with installed Codex CLI and Claude Code CLI, temporary homes, and a fake upstream. Both completed a turn through the gateway. Codex initially rejected an incomplete model catalog (`support_verbosity` missing); the catalog was corrected and the test passed. A `go run` smoke test also exercised provider add, model listing, server startup, and `/v1/models`.
 - Ran opt-in tool round trips: Codex executed `exec_command` and Claude Code read a temporary file, then both sent the tool result through the gateway to a second upstream Chat request and completed the turn.
+- 2026-09-26: repeated the opt-in local integration suite three times. An initial run exposed a Codex CLI background plugin sync that could race with temporary-home cleanup after the model turn completed. The test now passes `--disable plugins` to Codex, and all three repeats passed. Added a verification path to the library README.
 
 ## Next
 

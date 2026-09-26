@@ -46,7 +46,7 @@ func TestCodexCLIThroughGateway(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, "exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "-m", "fake/model", "-")
+	cmd := exec.CommandContext(ctx, bin, "exec", "--disable", "plugins", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "-m", "fake/model", "-")
 	cmd.Dir = home
 	cmd.Env = append(os.Environ(), "HOME="+home, "CODEX_HOME="+filepath.Join(home, ".codex"))
 	cmd.Stdin = strings.NewReader("Reply hello. Do not use tools.")
@@ -131,7 +131,7 @@ func TestCodexToolRoundTrip(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, "exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "-m", "fake/model", "-")
+	cmd := exec.CommandContext(ctx, bin, "exec", "--disable", "plugins", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "-m", "fake/model", "-")
 	cmd.Dir = home
 	cmd.Env = append(os.Environ(), "HOME="+home, "CODEX_HOME="+filepath.Join(home, ".codex"))
 	cmd.Stdin = strings.NewReader("Print the current directory, then reply done.")
