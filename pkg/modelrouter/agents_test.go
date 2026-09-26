@@ -78,3 +78,15 @@ func TestUseAndRestoreClaudePreservesOtherSettings(t *testing.T) {
 		t.Fatalf("restore: %#v", got)
 	}
 }
+
+func TestClaudeRejectsNativeResponsesProviderBeforeWritingSettings(t *testing.T) {
+	home := t.TempDir()
+	cfg := Config{Providers: []Provider{{ID: "p", BaseURL: "https://example.com/v1", Protocol: "responses", Models: []string{"m"}}}}
+	mgr := AgentManager{Home: home, GatewayURL: "http://127.0.0.1:3425", Config: cfg}
+	if err := mgr.Use("claude", "p/m"); err == nil || !strings.Contains(err.Error(), "requires a Chat-compatible provider") {
+		t.Fatalf("expected unsupported provider error, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".claude", "settings.json")); !os.IsNotExist(err) {
+		t.Fatalf("Claude settings should not be written: %v", err)
+	}
+}

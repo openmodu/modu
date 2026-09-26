@@ -54,7 +54,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return usage(stdout)
 	case "providers":
 		for _, p := range cfg.Providers {
-			fmt.Fprintf(stdout, "%s\t%s\t%s\n", p.ID, p.BaseURL, strings.Join(p.Models, ","))
+			protocol := p.Protocol
+			if protocol == "" {
+				protocol = "chat"
+			}
+			fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\n", p.ID, protocol, p.BaseURL, strings.Join(p.Models, ","))
 		}
 		return nil
 	case "models":
@@ -111,14 +115,15 @@ func providerCommand(cfg modelrouter.Config, path string, args []string, stdout,
 		flags.SetOutput(stderr)
 		url := flags.String("url", "", "provider OpenAI-compatible base URL")
 		models := flags.String("models", "", "comma-separated model IDs")
+		protocol := flags.String("protocol", "chat", "upstream protocol: chat or responses")
 		keyEnv := flags.String("key-env", "", "environment variable containing the API key")
 		if err := flags.Parse(args[2:]); err != nil {
 			return err
 		}
 		if *url == "" || *models == "" || flags.NArg() != 0 {
-			return fmt.Errorf("usage: modu_models provider add <id> --url <url> --models <id,...> [--key-env <name>]")
+			return fmt.Errorf("usage: modu_models provider add <id> --url <url> --models <id,...> [--protocol chat|responses] [--key-env <name>]")
 		}
-		p := modelrouter.Provider{ID: args[1], BaseURL: *url, Models: strings.Split(*models, ","), APIKeyEnv: *keyEnv}
+		p := modelrouter.Provider{ID: args[1], BaseURL: *url, Protocol: *protocol, Models: strings.Split(*models, ","), APIKeyEnv: *keyEnv}
 		found := false
 		for i := range cfg.Providers {
 			if cfg.Providers[i].ID == p.ID {
@@ -181,6 +186,6 @@ func serve(cfg modelrouter.Config, stdout io.Writer) error {
 }
 
 func usage(out io.Writer) error {
-	_, err := fmt.Fprint(out, "modu_models providers | models | provider add <id> --url <url> --models <id,...> [--key-env <name>] | provider rm <id> | use <codex|claude> <provider/model> | restore <codex|claude> | serve\n")
+	_, err := fmt.Fprint(out, "modu_models providers | models | provider add <id> --url <url> --models <id,...> [--protocol chat|responses] [--key-env <name>] | provider rm <id> | use <codex|claude> <provider/model> | restore <codex|claude> | serve\n")
 	return err
 }

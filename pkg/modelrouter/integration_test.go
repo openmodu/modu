@@ -56,6 +56,50 @@ func TestCodexCLIThroughGateway(t *testing.T) {
 	}
 }
 
+func TestCodexCLIThroughNativeResponses(t *testing.T) {
+	if os.Getenv("MODELROUTER_AGENT_INTEGRATION") != "1" {
+		t.Skip("opt-in agent integration")
+	}
+	bin, err := exec.LookPath("codex")
+	if err != nil {
+		t.Skip("codex CLI not installed")
+	}
+	var called atomic.Bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if r.URL.Path != "/v1/responses" || !strings.Contains(string(body), `"model":"model"`) || !strings.Contains(string(body), `Reply hello`) {
+			t.Errorf("native Responses request: %s %s", r.URL.Path, body)
+		}
+		called.Store(true)
+		response := []byte(`{"id":"resp_native","object":"response","status":"completed","model":"model","output":[{"id":"msg_native","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"hello from native model","annotations":[]}]}],"usage":{"input_tokens":4,"output_tokens":5,"total_tokens":9}}`)
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeStream(w, "responses", response)
+	}))
+	defer upstream.Close()
+	cfg := Config{Providers: []Provider{{ID: "fake", BaseURL: upstream.URL + "/v1", Protocol: "responses", Models: []string{"model"}}}}
+	router, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(router.Handler())
+	defer server.Close()
+	home := t.TempDir()
+	manager := AgentManager{Home: home, GatewayURL: server.URL, Config: cfg}
+	if err := manager.Use("codex", "fake/model"); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "exec", "--disable", "plugins", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "-m", "fake/model", "-")
+	cmd.Dir = home
+	cmd.Env = append(os.Environ(), "HOME="+home, "CODEX_HOME="+filepath.Join(home, ".codex"))
+	cmd.Stdin = strings.NewReader("Reply hello. Do not use tools.")
+	out, err := cmd.CombinedOutput()
+	if err != nil || !called.Load() || !strings.Contains(string(out), "hello from native model") {
+		t.Fatalf("native Codex CLI failed: called=%v err=%v\n%s", called.Load(), err, out)
+	}
+}
+
 // Run with MODELROUTER_AGENT_INTEGRATION=1 when Claude Code is installed.
 func TestClaudeCLIThroughGateway(t *testing.T) {
 	if os.Getenv("MODELROUTER_AGENT_INTEGRATION") != "1" {

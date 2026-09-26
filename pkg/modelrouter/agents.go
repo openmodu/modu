@@ -27,8 +27,12 @@ func (m AgentManager) Use(agent, model string) error {
 		return err
 	}
 	r, _ := New(m.Config)
-	if _, _, ok := r.resolve(model); !ok {
+	p, _, ok := r.resolve(model)
+	if !ok {
 		return fmt.Errorf("unknown model %q", model)
+	}
+	if agent == "claude" && p.Protocol == "responses" {
+		return fmt.Errorf("provider %s uses native Responses; Claude Code requires a Chat-compatible provider", p.ID)
 	}
 	if !strings.HasPrefix(m.GatewayURL, "http://127.0.0.1:") && !strings.HasPrefix(m.GatewayURL, "http://[::1]:") && !strings.HasPrefix(m.GatewayURL, "http://localhost:") {
 		return fmt.Errorf("gateway URL must be a loopback HTTP address")

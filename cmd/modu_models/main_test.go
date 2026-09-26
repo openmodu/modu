@@ -32,4 +32,15 @@ func TestProviderCLIFlow(t *testing.T) {
 	if err := run([]string{"models"}, &out, &out); err != nil || out.Len() != 0 {
 		t.Fatalf("models after removal: %q, %v", out.String(), err)
 	}
+	if err := run([]string{"provider", "add", "openai", "--url", "https://api.openai.com/v1", "--models", "gpt-5", "--protocol", "responses"}, &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	b, err = os.ReadFile(path)
+	if err != nil || !strings.Contains(string(b), `"protocol": "responses"`) {
+		t.Fatalf("native protocol missing: %s, %v", b, err)
+	}
+	out.Reset()
+	if err := run([]string{"providers"}, &out, &out); err != nil || !strings.Contains(out.String(), "openai\tresponses\t") {
+		t.Fatalf("native provider listing: %q, %v", out.String(), err)
+	}
 }

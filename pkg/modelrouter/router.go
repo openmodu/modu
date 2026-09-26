@@ -34,6 +34,12 @@ func (r *Router) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/models", r.models)
 	mux.HandleFunc("POST /v1/chat/completions", r.chat)
 	mux.HandleFunc("POST /v1/responses", r.responses)
+	mux.HandleFunc("POST /v1/responses/input_tokens", r.nativeModelOperation)
+	mux.HandleFunc("POST /v1/responses/compact", r.nativeModelOperation)
+	mux.HandleFunc("GET /v1/responses/{responseID}", r.nativeByID)
+	mux.HandleFunc("DELETE /v1/responses/{responseID}", r.nativeByID)
+	mux.HandleFunc("POST /v1/responses/{responseID}/cancel", r.nativeByID)
+	mux.HandleFunc("GET /v1/responses/{responseID}/input_items", r.nativeByID)
 	mux.HandleFunc("POST /v1/messages", r.messages)
 	return mux
 }
@@ -91,7 +97,7 @@ func (r *Router) forward(w http.ResponseWriter, req *http.Request, endpoint stri
 		return
 	}
 	var payload map[string]json.RawMessage
-	if err := json.Unmarshal(body, &payload); err != nil {
+	if err := json.Unmarshal(body, &payload); err != nil || payload == nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
@@ -106,6 +112,14 @@ func (r *Router) forward(w http.ResponseWriter, req *http.Request, endpoint stri
 		return
 	}
 	payload["model"], _ = json.Marshal(model)
+	if p.Protocol == "responses" {
+		if endpoint != "responses" {
+			writeError(w, http.StatusBadRequest, "provider "+p.ID+" supports native Responses requests only")
+			return
+		}
+		r.nativeCreate(w, req, p, payload, id)
+		return
+	}
 	requestedStream := false
 	_ = json.Unmarshal(payload["stream"], &requestedStream)
 	upstreamEndpoint := endpoint

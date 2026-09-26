@@ -11,9 +11,10 @@ Work is split into independently verifiable functions as required by the reposit
 - Ran opt-in local end-to-end tests with installed Codex CLI and Claude Code CLI, temporary homes, and a fake upstream. Both completed a turn through the gateway. Codex initially rejected an incomplete model catalog (`support_verbosity` missing); the catalog was corrected and the test passed. A `go run` smoke test also exercised provider add, model listing, server startup, and `/v1/models`.
 - Ran opt-in tool round trips: Codex executed `exec_command` and Claude Code read a temporary file, then both sent the tool result through the gateway to a second upstream Chat request and completed the turn.
 - 2026-09-26: repeated the opt-in local integration suite three times. An initial run exposed a Codex CLI background plugin sync that could race with temporary-home cleanup after the model turn completed. The test now passes `--disable plugins` to Codex, and all three repeats passed. Added a verification path to the library README.
+- Added a `responses` upstream protocol for native Responses HTTP routing. Creation preserves request fields and live SSE; response IDs carry provider routing information for retrieve, delete, cancel, input-item listing, and subsequent `previous_response_id` requests. Input-token counting and compaction routes are forwarded to native providers. Unit tests cover request fidelity, ID restoration, state routes, and early SSE delivery; the opt-in Codex CLI test covers the native path.
 
 ## Next
 
 - Confirm whether reusing Codex and Claude Code logins means making subscription accounts available as cross-agent providers or only reading existing API key configuration.
-- Complete protocol coverage for reasoning and custom tools where required by live integration tests. Image input is mapped from Responses and Messages into Chat image URLs; output images are not supported.
+- The Chat-to-Responses compatibility path still cannot preserve reasoning or custom tools. Select a native Responses provider for those features. Image input is mapped from Responses and Messages into Chat image URLs; output images are not supported on the compatibility path.
 - Validate an opt-in live provider only after a suitable key and model are configured. Record any compatibility failures here.

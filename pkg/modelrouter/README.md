@@ -2,16 +2,21 @@
 
 `pkg/modelrouter` is a Go library for routing locally installed coding agents through one model catalog. `cmd/modu_models` is its CLI.
 
-The current provider format describes OpenAI Chat Completions compatible upstreams. The local gateway accepts:
+Providers can use `chat` (the default) or `responses` as their upstream protocol. The local gateway accepts:
 
 | Local endpoint | Upstream behavior |
 | --- | --- |
-| `/v1/chat/completions` | Forward Chat Completions, including upstream SSE |
-| `/v1/responses` | Translate request and response to Chat Completions |
+| `/v1/chat/completions` | Forward to a Chat provider, including upstream SSE |
+| `/v1/responses` | Forward natively to a Responses provider, or translate for a Chat provider |
+| `/v1/responses/input_tokens`, `/v1/responses/compact` | Forward to a Responses provider |
+| `/v1/responses/{id}` | Retrieve or delete a native response |
+| `/v1/responses/{id}/cancel`, `/v1/responses/{id}/input_items` | Cancel a native response or list its input items |
 | `/v1/messages` | Translate request and response to Chat Completions |
 | `/v1/models` | List configured `provider/model` IDs |
 
-Responses and Messages streaming requests receive SSE events after the upstream response completes. The conversion handles text, base64 image input, and function tool calls. It does not yet translate reasoning items, custom tools, or incremental upstream deltas. Configure only models and clients whose requests fit this boundary.
+Native Responses requests preserve request fields such as reasoning, built-in and custom tools, structured output, background mode, and `previous_response_id`. Native SSE events are forwarded as they arrive; event types and content remain intact. The gateway prefixes the public response ID with provider routing information and restores the upstream ID on later requests. The `model` field in response objects uses the local `provider/model` name. These routes cover the Responses HTTP API; its separate WebSocket transport is not implemented. A request must include a configured `provider/model` to select its upstream. A native Responses provider currently serves Codex and direct Responses clients; `use claude` requires a Chat provider.
+
+For Chat providers, Responses and Messages use the existing conversion. Their streaming requests receive SSE only after the upstream response completes. This conversion handles text, base64 image input, and function tool calls; it cannot preserve reasoning items, custom tools, or incremental deltas. Use a native Responses provider when those features are required.
 
 ## Library
 
@@ -33,9 +38,11 @@ server := &http.Server{Addr: "127.0.0.1:3425", Handler: router.Handler()}
 
 ```sh
 go run ./cmd/modu_models provider add deepseek --url https://api.deepseek.com/v1 --models deepseek-chat --key-env DEEPSEEK_API_KEY
+go run ./cmd/modu_models provider add openai --url https://api.openai.com/v1 --models YOUR_MODEL --protocol responses --key-env OPENAI_API_KEY
 go run ./cmd/modu_models models
 go run ./cmd/modu_models serve
 go run ./cmd/modu_models use codex deepseek/deepseek-chat
+go run ./cmd/modu_models use codex openai/YOUR_MODEL
 go run ./cmd/modu_models use claude deepseek/deepseek-chat
 go run ./cmd/modu_models restore codex
 ```

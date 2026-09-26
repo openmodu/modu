@@ -1,6 +1,7 @@
 package modelrouter
 
 import (
+	"bufio"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestConfigRoundTripAndValidation(t *testing.T) {
@@ -27,6 +29,9 @@ func TestConfigRoundTripAndValidation(t *testing.T) {
 	}
 	if err := Save(path, Config{Providers: []Provider{{ID: "bad/path", BaseURL: "https://example.com/v1"}}}); err == nil {
 		t.Fatal("expected invalid provider ID")
+	}
+	if err := Save(path, Config{Providers: []Provider{{ID: "p", BaseURL: "https://example.com/v1", Protocol: "other", Models: []string{"m"}}}}); err == nil {
+		t.Fatal("expected invalid protocol")
 	}
 }
 
@@ -200,5 +205,179 @@ func TestMessagesImageInputReachesChatUpstream(t *testing.T) {
 	router.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"p/m","messages":[{"role":"user","content":[{"type":"text","text":"look"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"cG5n"}}]}]}`)))
 	if w.Code != 200 {
 		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestNativeResponsesPreservesRequestAndResponse(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" || r.Header.Get("Authorization") != "Bearer upstream-key" || r.Header.Get("OpenAI-Beta") != "responses=v1" {
+			t.Errorf("upstream route or headers: %s %s %#v", r.Method, r.URL.Path, r.Header)
+		}
+		var body map[string]json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if string(body["model"]) != `"native-model"` || string(body["reasoning"]) != `{"effort":"high"}` || string(body["tools"]) != `[{"type":"web_search"},{"type":"custom","name":"exec","format":{"type":"text"}}]` || string(body["previous_response_id"]) != `"resp_previous"` {
+			t.Errorf("request fields changed: %#v", body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Request-Id", "req_upstream")
+		_, _ = io.WriteString(w, `{"id":"resp_1","object":"response","model":"native-model","output":[{"type":"reasoning","summary":[]},{"type":"custom_tool_call","name":"exec","input":"ls"}],"metadata":{"source":"upstream"}}`)
+	}))
+	defer upstream.Close()
+	router, err := New(Config{Providers: []Provider{{ID: "native", BaseURL: upstream.URL + "/v1", APIKey: "upstream-key", Protocol: "responses", Models: []string{"native-model"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(router.Handler())
+	defer srv.Close()
+	request, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/responses", strings.NewReader(`{"model":"native/native-model","input":"hi","reasoning":{"effort":"high"},"tools":[{"type":"web_search"},{"type":"custom","name":"exec","format":{"type":"text"}}],"previous_response_id":"resp_previous"}`))
+	request.Header.Set("OpenAI-Beta", "responses=v1")
+	request.Header.Set("Authorization", "Bearer client-key")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var got map[string]json.RawMessage
+	if err := json.NewDecoder(response.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != 200 || string(got["model"]) != `"native/native-model"` || !strings.Contains(string(got["id"]), "resp_modu_native~") || !strings.Contains(string(got["output"]), "custom_tool_call") || response.Header.Get("X-Request-Id") != "req_upstream" {
+		t.Fatalf("native response: status=%d headers=%#v body=%#v", response.StatusCode, response.Header, got)
+	}
+}
+
+func TestNativeResponsesStateRoutesAndPreviousID(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/responses":
+			var body map[string]json.RawMessage
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if previous := body["previous_response_id"]; len(previous) > 0 && string(previous) != `"resp_upstream"` {
+				t.Errorf("previous ID was not restored: %s", previous)
+			}
+			_, _ = io.WriteString(w, `{"id":"resp_upstream","object":"response","model":"m","output":[]}`)
+		case "/v1/responses/resp_upstream":
+			if r.Method == http.MethodDelete {
+				_, _ = io.WriteString(w, `{"id":"resp_upstream","object":"response.deleted","deleted":true}`)
+			} else {
+				_, _ = io.WriteString(w, `{"id":"resp_upstream","object":"response","model":"m","output":[]}`)
+			}
+		case "/v1/responses/resp_upstream/cancel":
+			_, _ = io.WriteString(w, `{"id":"resp_upstream","object":"response","model":"m","status":"cancelled"}`)
+		case "/v1/responses/resp_upstream/input_items":
+			_, _ = io.WriteString(w, `{"object":"list","data":[{"id":"msg_1","type":"message"}]}`)
+		case "/v1/responses/input_tokens":
+			var body map[string]json.RawMessage
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if string(body["model"]) != `"m"` {
+				t.Errorf("count model %s", body["model"])
+			}
+			_, _ = io.WriteString(w, `{"object":"response.input_tokens","input_tokens":17}`)
+		case "/v1/responses/compact":
+			var body map[string]json.RawMessage
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if string(body["model"]) != `"m"` {
+				t.Errorf("compact model %s", body["model"])
+			}
+			_, _ = io.WriteString(w, `{"object":"response.compaction","output":[{"type":"compaction","encrypted_content":"opaque"}]}`)
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	router, _ := New(Config{Providers: []Provider{{ID: "p", BaseURL: upstream.URL + "/v1", Protocol: "responses", Models: []string{"m"}}}})
+	srv := httptest.NewServer(router.Handler())
+	defer srv.Close()
+	create, err := http.Post(srv.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"p/m","input":"first"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(create.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	create.Body.Close()
+	if !strings.HasPrefix(result.ID, "resp_modu_p~") {
+		t.Fatalf("namespaced ID %q", result.ID)
+	}
+	for _, tc := range []struct{ method, path, body, want string }{
+		{http.MethodPost, "/v1/responses", `{"model":"p/m","input":"next","previous_response_id":"` + result.ID + `"}`, `"object":"response"`},
+		{http.MethodGet, "/v1/responses/" + result.ID, "", `"model":"p/m"`},
+		{http.MethodPost, "/v1/responses/" + result.ID + "/cancel", "", `"status":"cancelled"`},
+		{http.MethodGet, "/v1/responses/" + result.ID + "/input_items?limit=1", "", `"msg_1"`},
+		{http.MethodDelete, "/v1/responses/" + result.ID, "", `"deleted":true`},
+		{http.MethodPost, "/v1/responses/input_tokens", `{"model":"p/m","input":"count"}`, `"input_tokens":17`},
+		{http.MethodPost, "/v1/responses/compact", `{"model":"p/m","input":"long context"}`, `"encrypted_content":"opaque"`},
+	} {
+		req, _ := http.NewRequest(tc.method, srv.URL+tc.path, strings.NewReader(tc.body))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 || !strings.Contains(string(body), tc.want) {
+			t.Errorf("%s %s: %d %s", tc.method, tc.path, resp.StatusCode, body)
+		}
+	}
+}
+
+func TestNativeResponsesStreamsBeforeUpstreamCompletes(t *testing.T) {
+	finish := make(chan struct{})
+	closed := false
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			t.Errorf("path %s", r.URL.Path)
+		}
+		var body map[string]json.RawMessage
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if string(body["stream"]) != "true" || string(body["model"]) != `"m"` {
+			t.Errorf("stream request: %#v", body)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"object\":\"response\",\"model\":\"m\"}}\n\n")
+		_, _ = io.WriteString(w, "event: response.reasoning_summary_text.delta\ndata: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"thinking\"}\n\n")
+		w.(http.Flusher).Flush()
+		<-finish
+		_, _ = io.WriteString(w, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\"}}\n\n")
+	}))
+	defer func() {
+		if !closed {
+			close(finish)
+		}
+		upstream.Close()
+	}()
+	router, _ := New(Config{Providers: []Provider{{ID: "p", BaseURL: upstream.URL + "/v1", Protocol: "responses", Models: []string{"m"}}}})
+	srv := httptest.NewServer(router.Handler())
+	defer srv.Close()
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Post(srv.URL+"/v1/responses", "application/json", strings.NewReader(`{"model":"p/m","input":"hi","stream":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	reader := bufio.NewReader(resp.Body)
+	var first strings.Builder
+	for {
+		line, readErr := reader.ReadString('\n')
+		first.WriteString(line)
+		if readErr != nil || line == "\n" {
+			err = readErr
+			break
+		}
+	}
+	if err != nil || !strings.Contains(first.String(), "resp_modu_p~") {
+		t.Fatalf("first event before completion: %q, %v", first.String(), err)
+	}
+	close(finish)
+	closed = true
+	rest, err := io.ReadAll(reader)
+	if err != nil || !strings.Contains(string(rest), "response.reasoning_summary_text.delta") {
+		t.Fatalf("reasoning event lost: %q, %v", rest, err)
 	}
 }
